@@ -1408,7 +1408,7 @@ const Builder = struct {
         fn_ty: Type.TypeId,
         evidence: []const SpecEvidence,
     ) Allocator.Error!Ast.DefId {
-        return try self.lowerTemplateWithMonoFor(template_ref, method_scope, source_fn_ty, source_fn_key, fn_ty, evidence, null, null, null, null, null);
+        return try self.lowerTemplateWithMonoFor(template_ref, method_scope, source_fn_ty, source_fn_key, fn_ty, evidence, null, null, null, null, null, null);
     }
 
     /// Specializations of one template family are deduplicated by structural
@@ -1427,6 +1427,7 @@ const Builder = struct {
         evidence: []const SpecEvidence,
         requester: ?*InstGraph,
         requester_fn_node: ?NodeId,
+        requester_fn_ty: ?Type.TypeId,
         reserved_fn_id: ?Ast.FnId,
         source_region_override: ?base.Region,
         current_entry_root: ?EntryRoot,
@@ -1586,6 +1587,7 @@ const Builder = struct {
                         null,
                         null,
                         null,
+                        null,
                     );
                     const adapter_template = Ast.FnTemplate{
                         .fn_def = .{ .checked_generated = template_ref },
@@ -1713,15 +1715,14 @@ const Builder = struct {
         if (requester) |requester_graph| {
             const live_requester_fn_node = requester_fn_node orelse
                 Common.invariant("deferred Monotype specialization lost its requester function type node");
-            const requester_fn_ty = if (body_uses_generated_evidence) body_fn_ty else live_fn_ty;
-            const solved_requester_fn_ty = try graph.sealType(requester_fn_ty);
-            // The requester's side is the node its graph imported when the
-            // request was deferred; the deferred record carries the node, not
-            // the type it was imported from, so nothing here names what the
-            // directed side would compute for it.
+            const solved_source_fn_ty = if (body_uses_generated_evidence) body_fn_ty else live_fn_ty;
+            const solved_requester_fn_ty = try graph.sealType(solved_source_fn_ty);
+            // The requester's side is the type its graph imported when the
+            // request was deferred, which the deferred record carries alongside
+            // the node holding it.
             self.measureUnifySite(
                 .template_requester_adopts_solved,
-                .undescribed,
+                if (requester_fn_ty) |imported| .{ .sealed = imported } else .undescribed,
                 .{ .sealed = solved_requester_fn_ty },
             );
             try requester_graph.unify(
@@ -3437,7 +3438,7 @@ const Builder = struct {
                 // function id so the deferred body resolves the edge that
                 // actually requested it (reunify.md sections 7.2, 11.3).
                 if (self.rehearsal) |rehearsal| rehearsal.claimRequestEdge(@intFromEnum(reserved.localFnId()));
-                try self.pinDeferredTemplateRequestToCheckedRoot(graph, template_ref, request_template.mono_fn_ty);
+                try self.pinDeferredTemplateRequestToCheckedRoot(graph, template_ref, request_template.mono_fn_ty, @intFromEnum(reserved.localFnId()));
                 try graph.deferred_templates.append(self.allocator, .{
                     .fn_id = reserved.localFnId(),
                     .template_ref = template_ref,
@@ -3445,6 +3446,7 @@ const Builder = struct {
                     .source_fn_ty = request_template.source_fn_ty,
                     .source_fn_key = request_template.source_fn_key,
                     .requester_fn_node = requester_fn_node,
+                    .requester_fn_ty = fn_template.mono_fn_ty,
                     .fn_ty = request_template.mono_fn_ty,
                     .source_region_override = null,
                     .current_entry_root = null,
@@ -3471,6 +3473,7 @@ const Builder = struct {
         requester: *InstGraph,
         template_ref: names.ProcTemplate,
         fn_ty: Type.TypeId,
+        reserved_fn_id: u32,
     ) Allocator.Error!void {
         // A request type without a graph view is a sealed snapshot (generated
         // opaque evidence); sealing cannot default anything inside it.
@@ -3484,7 +3487,37 @@ const Builder = struct {
             .template = undefined, // type-only context; type lowering does not read the owner template
         }, requester, &draft);
         defer ctx.deinit();
+        // Debug/probe-only: this constrains the CALLEE's own generalized root,
+        // whose binders the requesting body's binding does not name. The values
+        // they take are the actuals the checker recorded at the edge this
+        // reservation claimed, so the callee's binding is read from there
+        // (reunify.md sections 7.2, 9.1) rather than derived from `fn_ty`.
+        ctx.callee_context = true;
+        const bound = self.openCalleeBindingForTemplate(view, template, reserved_fn_id);
+        defer if (bound) {
+            if (self.rehearsal) |rehearsal| rehearsal.closeCalleeBinding();
+        };
         try ctx.constrainTypeToMono(template.checked_fn_root, fn_ty);
+    }
+
+    /// Debug/probe-only: name the callee scheme a reserved specialization
+    /// instantiates and the reservation whose claimed edge binds it, reporting
+    /// whether a binding scope was opened.
+    fn openCalleeBindingForTemplate(
+        self: *Builder,
+        view: ModuleView,
+        template: checked.CheckedProcedureTemplate,
+        reserved_fn_id: u32,
+    ) bool {
+        if (comptime !census.enabled) return false;
+        const rehearsal = self.rehearsal orelse return false;
+        const scheme = template.schemeId() orelse return false;
+        rehearsal.openCalleeBinding(.{
+            .defining_module_bytes = view.key.bytes,
+            .scheme = scheme,
+            .reserved_fn_id = reserved_fn_id,
+        });
+        return true;
     }
 
     fn lowerFnTemplateDef(self: *Builder, method_scope: ModuleView, fn_template: Ast.FnTemplate, evidence: []const SpecEvidence) Allocator.Error!Ast.FnId {
@@ -3552,7 +3585,7 @@ const Builder = struct {
             // queue, so its edge travels with the reserved function id
             // (reunify.md sections 7.2, 11.3).
             if (self.rehearsal) |rehearsal| rehearsal.claimRequestEdge(@intFromEnum(reserved.localFnId()));
-            try self.pinDeferredTemplateRequestToCheckedRoot(source_ctx.graph, template_ref, request_template.mono_fn_ty);
+            try self.pinDeferredTemplateRequestToCheckedRoot(source_ctx.graph, template_ref, request_template.mono_fn_ty, @intFromEnum(reserved.localFnId()));
             try source_ctx.graph.deferred_templates.append(self.allocator, .{
                 .fn_id = reserved.localFnId(),
                 .template_ref = template_ref,
@@ -3560,6 +3593,7 @@ const Builder = struct {
                 .source_fn_ty = request_template.source_fn_ty,
                 .source_fn_key = request_template.source_fn_key,
                 .requester_fn_node = requester_fn_node,
+                .requester_fn_ty = fn_template.mono_fn_ty,
                 .fn_ty = request_template.mono_fn_ty,
                 .source_region_override = source_ctx.source_region_override,
                 .current_entry_root = source_ctx.current_entry_root,
@@ -3830,6 +3864,7 @@ const Builder = struct {
                 &.{},
                 graph,
                 request.requester_fn_node,
+                request.requester_fn_ty,
                 request.fn_id,
                 request.source_region_override,
                 request.current_entry_root,
@@ -7366,6 +7401,11 @@ const BodyContext = struct {
     /// binding, so only this context's nodes stand for the specialization's own
     /// positions (reunify.md sections 9.2, 11.2).
     spec_root_context: bool = false,
+    /// Debug/probe-only: this context instantiates a CALLEE scheme's own checked
+    /// positions, so its constraint-replay measurements read them under the
+    /// binding the requesting body named for that edge (reunify.md sections
+    /// 7.2, 9.1). It selects nothing about lowering.
+    callee_context: bool = false,
     const PatternLiteralGuard = struct {
         local: DraftLocalId,
         ty: Type.TypeId,
@@ -8443,7 +8483,7 @@ const BodyContext = struct {
             if (try self.builder.monoTypeHasGeneratedOpaqueEvidence(active_local_ty)) {
                 try self.constrainTypeToMono(checkedBinderType(self.view, entry.key_ptr.*), active_local_ty);
             } else {
-                try self.constrainTypeToCell(checkedBinderType(self.view, entry.key_ptr.*), local_ty);
+                try self.constrainTypeToCell(checkedBinderType(self.view, entry.key_ptr.*), local_ty, active_local_ty);
             }
         }
     }
@@ -8994,22 +9034,45 @@ const BodyContext = struct {
     /// into the graph and unify with the (linked or imported) Monotype node.
     /// Pending view refills drain once the outermost constraint returns.
     /// Describe a checked position of THIS instantiation context as one side of a
-    /// constraint-replay measurement (reunify.md sections 9, 13 Slice 7).
+    /// constraint-replay measurement (reunify.md sections 9, 13 Slice 7). A
+    /// context lowering a CALLEE's own checked positions describes them as such,
+    /// so they read under the binding the checker recorded for the edge rather
+    /// than under the requesting body's (reunify.md section 9.1).
     fn checkedUnifyOperand(self: *BodyContext, checked_ty: checked.CheckedTypeId) spec_rehearsal.UnifyOperand {
-        return .{ .checked = .{
+        const address: spec_rehearsal.CheckedAddress = .{
             .module_bytes = self.view.key.bytes,
             .type_id = @intFromEnum(checked_ty),
-        } };
+        };
+        if (self.callee_context) return .{ .callee_checked = address };
+        return .{ .checked = address };
     }
 
     /// Describe a draft type cell as one side of a constraint-replay
-    /// measurement: a sealed cell names its immutable type, while a cell holding
-    /// a graph node names nothing the directed side computes.
-    fn cellUnifyOperand(cell: DraftTypeCell) spec_rehearsal.UnifyOperand {
+    /// measurement by the immutable type it denotes, which the caller has
+    /// already read: a cell holding a graph node names no type of its own, and
+    /// the read is the same one the constraint imports.
+    fn cellUnifyOperand(cell: DraftTypeCell, cell_ty: Type.TypeId) spec_rehearsal.UnifyOperand {
         return switch (cell) {
-            .graph_node => .undescribed,
+            .graph_node => .{ .sealed = cell_ty },
             .sealed => |ty| .{ .sealed = ty },
         };
+    }
+
+    /// Describe one record-field read as one side of a constraint-replay
+    /// measurement: the receiver's checked position and the interned label the
+    /// directed side reads off its translation.
+    fn fieldUnifyOperand(
+        self: *BodyContext,
+        receiver: checked.CheckedExprId,
+        label: names.RecordFieldNameId,
+    ) spec_rehearsal.UnifyOperand {
+        return .{ .field_of = .{
+            .receiver = .{
+                .module_bytes = self.view.key.bytes,
+                .type_id = @intFromEnum(self.view.bodies.expr(receiver).ty),
+            },
+            .label = label,
+        } };
     }
 
     /// Measure, before the constraint runs, whether directed translation already
@@ -9055,13 +9118,14 @@ const BodyContext = struct {
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
         cell: DraftTypeCell,
+        cell_ty: Type.TypeId,
     ) Allocator.Error!void {
         self.builder.constrain_depth += 1;
         defer self.builder.constrain_depth -= 1;
         self.measureUnifySite(
             .constrain_checked_to_cell,
             self.checkedUnifyOperand(checked_ty),
-            cellUnifyOperand(cell),
+            cellUnifyOperand(cell, cell_ty),
         );
         try self.graph.unify(try self.instNode(checked_ty), try cell.toGraphNode(self.graph));
     }
@@ -17880,21 +17944,20 @@ const BodyContext = struct {
         expected_ty: ?Type.TypeId,
     ) Allocator.Error!NodeId {
         const receiver_node = try self.lowerExprTypeNode(receiver);
-        const field_node = try self.graph.recordFieldNode(
-            receiver_node,
-            try self.builder.recordFieldName(self.view, field_name),
-        );
+        const label = try self.builder.recordFieldName(self.view, field_name);
+        const field_node = try self.graph.recordFieldNode(receiver_node, label);
         // The field side is a field-read node the graph derives from the
-        // receiver's node, so nothing at this call names the checked position or
-        // the immutable type the directed side would compute for it.
+        // receiver's node. The directed side names it as the same read: the
+        // receiver's checked position, translated, with this label read off it.
+        const field_operand = self.fieldUnifyOperand(receiver, label);
         self.measureUnifySite(
             .field_access_to_checked,
-            .undescribed,
+            field_operand,
             self.checkedUnifyOperand(checked_ty),
         );
         try self.graph.unify(field_node, try self.instNode(checked_ty));
         if (expected_ty) |expected| {
-            self.measureUnifySite(.field_access_to_expected, .undescribed, .{ .sealed = expected });
+            self.measureUnifySite(.field_access_to_expected, field_operand, .{ .sealed = expected });
             try self.graph.unify(field_node, try self.graph.importMono(expected));
         }
         return field_node;
@@ -20407,8 +20470,7 @@ const BodyContext = struct {
                 return try self.runtimeCrashExpr(crash_ty, "method dispatch failed to check");
             },
         };
-        const target_mono_ty = (try self.generatedIteratorMethodTargetFunctionType(resolved, callable_mono_ty, plan_args, expected_ret_ty)) orelse
-            try self.methodTargetMonoTypeFromPlan(resolved, callable_mono_ty);
+        const target_mono_ty = try self.dispatchTargetMonoTypeFromPlan(resolved, plan, callable_mono_ty, plan_args, expected_ret_ty);
         try call_ctx.constrainTypeToMono(plan.callable_ty, target_mono_ty);
         const refreshed_target_mono_ty = try self.activeTypeFromType(target_mono_ty);
         if (!try self.sameTypeOrPublicOpaque(callable_mono_ty, refreshed_target_mono_ty)) {
@@ -21101,8 +21163,7 @@ const BodyContext = struct {
                 return plan_ret_ty;
             },
         };
-        const target_mono_ty = (try self.generatedIteratorMethodTargetFunctionType(resolved, callable_mono_ty, plan_args, expected_ret_ty)) orelse
-            try self.methodTargetMonoTypeFromPlan(resolved, callable_mono_ty);
+        const target_mono_ty = try self.dispatchTargetMonoTypeFromPlan(resolved, plan, callable_mono_ty, plan_args, expected_ret_ty);
         try call_ctx.constrainTypeToMono(plan.callable_ty, target_mono_ty);
         if (!try self.sameTypeOrPublicOpaque(callable_mono_ty, target_mono_ty)) {
             Common.invariant("checked dispatch target callable type differed from dispatch plan callable type");
@@ -21270,13 +21331,83 @@ const BodyContext = struct {
             },
             .structural => Common.invariant("structural method registry result has no callable body context"),
         };
-        return BodyContext.initWithMethodScope(self.allocator, self.builder, lookup.view, self.method_scope, owner_template, self.graph, self.draft);
+        var target_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, lookup.view, self.method_scope, owner_template, self.graph, self.draft);
+        // Debug/probe-only: this context instantiates the selected target's own
+        // generalized signature, whose binders the requesting body does not name.
+        target_ctx.callee_context = true;
+        return target_ctx;
+    }
+
+    /// Debug/probe-only: name the callee scheme a dispatch target instantiates
+    /// and the checked data that binds it — the checked use site the plan sits
+    /// at, and the declared rule that covers an edge checking recorded no site
+    /// for (reunify.md sections 7.2, 9.6). Reports whether a scope was opened.
+    fn openDispatchTargetBinding(
+        self: *BodyContext,
+        lookup: MethodLookup,
+        use_expr: ?checked.CheckedExprId,
+        rule: ?spec_rehearsal.GeneratedEdge,
+    ) bool {
+        if (comptime !census.enabled) return false;
+        const rehearsal = self.builder.rehearsal orelse return false;
+        const template_ref = switch (lookup.target.kind) {
+            .procedure => |procedure| procedure.template,
+            .local_proc, .structural => return false,
+        };
+        const scheme = lookup.view.templates.get(template_ref.template).schemeId() orelse return false;
+        rehearsal.openCalleeBinding(.{
+            .defining_module_bytes = lookup.view.key.bytes,
+            .scheme = scheme,
+            .request = if (use_expr) |expr| .{ .module_bytes = self.view.key.bytes, .use_expr = expr } else null,
+            .rule = rule,
+        });
+        return true;
+    }
+
+    /// The declared rule that covers a dispatch plan's edge where checking
+    /// recorded no site for it: a `where`-constrained method call chooses its
+    /// callee per specialization edge, so the callee scheme is not known where
+    /// the site would be written (reunify.md sections 7.2, 9.6).
+    fn dispatchPlanCoveringRule(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+    ) ?spec_rehearsal.GeneratedEdge {
+        return switch (plan.resolution) {
+            .constraint => .{
+                .rule = .constraint_dispatch_receiver,
+                .source = .{
+                    .module_bytes = self.view.key.bytes,
+                    .receiver = .{ .checked_ty = plan.dispatcher_ty },
+                    .witness = .{ .callable = plan.callable_ty },
+                },
+            },
+            else => null,
+        };
     }
 
     fn requireLocalMethodTargetInCurrentView(self: *BodyContext, lookup: MethodLookup) void {
         if (!moduleBytesEqual(lookup.view.key.bytes, self.view.key.bytes)) {
             Common.invariant("local method dispatch target belonged to a different checked module view");
         }
+    }
+
+    /// The selected dispatch target's function type at this call, with the
+    /// callee scheme's binding named from the plan's own edge for the duration
+    /// (reunify.md sections 7.2, 9.1, 9.6).
+    fn dispatchTargetMonoTypeFromPlan(
+        self: *BodyContext,
+        lookup: MethodLookup,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        callable_mono_ty: Type.TypeId,
+        plan_args: []const static_dispatch.StaticDispatchOperand,
+        expected_ret_ty: ?Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        const bound = self.openDispatchTargetBinding(lookup, plan.expr, self.dispatchPlanCoveringRule(plan));
+        defer if (bound) {
+            if (self.builder.rehearsal) |rehearsal| rehearsal.closeCalleeBinding();
+        };
+        return (try self.generatedIteratorMethodTargetFunctionType(lookup, callable_mono_ty, plan_args, expected_ret_ty)) orelse
+            try self.methodTargetMonoTypeFromPlan(lookup, callable_mono_ty);
     }
 
     fn methodTargetMonoTypeFromPlan(
@@ -21657,17 +21788,7 @@ const BodyContext = struct {
         // cites section 9.6's constrained-dispatch rule, which covers it where
         // no site was recorded, and hands over the plan's own checked dispatcher
         // and callable types.
-        const covering_rule: ?spec_rehearsal.GeneratedEdge = switch (plan.resolution) {
-            .constraint => .{
-                .rule = .constraint_dispatch_receiver,
-                .source = .{
-                    .module_bytes = self.view.key.bytes,
-                    .receiver = .{ .checked_ty = plan.dispatcher_ty },
-                    .witness = .{ .callable = plan.callable_ty },
-                },
-            },
-            else => null,
-        };
+        const covering_rule = self.dispatchPlanCoveringRule(plan);
         if (self.builder.rehearsal) |rehearsal| rehearsal.openRequestEdge(self.view.key.bytes, plan.expr, covering_rule);
         defer self.closeRequestEdge();
         return .{ .call_proc = .{
@@ -24659,22 +24780,30 @@ const BodyContext = struct {
         ctx: DerivationCtx,
     ) Allocator.Error!DraftExprId {
         const arg_tys = D.methodArgTypes(ty, ctx.result_ty);
-        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &arg_tys, ctx.result_ty);
-        const args = D.callArgs(operand);
         // Debug/probe-only: the component call has no checked use site, so it
         // cites reunify.md section 9.6's derivation rule and hands over the
         // checked type the walk entered at plus the declared path of layers it
         // descended to reach this position. The derivation dispatches on
         // argument zero for both derivations, which is the position the rule's
-        // witness compares.
-        const edge: MethodCallEdge = .{ .generated = .{
+        // witness compares, and the same rule states the callee scheme's binder
+        // values while its signature is instantiated.
+        const rule: spec_rehearsal.GeneratedEdge = .{
             .rule = .structural_derivation_component,
             .source = if (ctx.receiver) |receiver| .{
                 .module_bytes = self.view.key.bytes,
                 .receiver = receiver,
                 .witness = .{ .receiver_at_argument = 0 },
             } else null,
-        } };
+        };
+        const callable_mono_ty = callable: {
+            const bound = self.openDispatchTargetBinding(lookup, null, rule);
+            defer if (bound) {
+                if (self.builder.rehearsal) |rehearsal| rehearsal.closeCalleeBinding();
+            };
+            break :callable try self.methodTargetMonoTypeFromArgs(lookup, &arg_tys, ctx.result_ty);
+        };
+        const args = D.callArgs(operand);
+        const edge: MethodCallEdge = .{ .generated = rule };
         return try self.addExpr(.{ .ty = ctx.result_ty, .data = .{ .call_proc = .{
             .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize, edge))),
             .args = try self.addExprSpan(&args),
@@ -27097,7 +27226,24 @@ const BodyContext = struct {
             .checked_error => return try self.runtimeCrashExpr(plan_fn_data.ret, "method dispatch failed to check"),
         };
 
-        const target_mono_ty = try self.methodTargetMonoTypeFromPlan(lookup, callable_mono_ty);
+        // The iterator dispatch's own synthetic constraint is introduced with no
+        // expression, so no use expression names its edge and reunify.md section
+        // 9.6's iterator rule states the callee's binding instead.
+        const iterator_rule: spec_rehearsal.GeneratedEdge = .{
+            .rule = .iterator_dispatch_receiver,
+            .source = .{
+                .module_bytes = self.view.key.bytes,
+                .receiver = .{ .checked_ty = plan.dispatcher_ty },
+                .witness = .{ .callable = plan.callable_ty },
+            },
+        };
+        const target_mono_ty = target: {
+            const bound = self.openDispatchTargetBinding(lookup, null, iterator_rule);
+            defer if (bound) {
+                if (self.builder.rehearsal) |rehearsal| rehearsal.closeCalleeBinding();
+            };
+            break :target try self.methodTargetMonoTypeFromPlan(lookup, callable_mono_ty);
+        };
         try call_ctx.constrainTypeToMono(plan.callable_ty, target_mono_ty);
         if (!self.sameType(callable_mono_ty, target_mono_ty)) {
             Common.invariant("checked iterator dispatch target callable type differed from dispatch plan callable type");
@@ -27128,14 +27274,7 @@ const BodyContext = struct {
                     lookup,
                     target_mono_ty,
                     try self.evidenceForResolvedTarget(plan.resolution),
-                    .{ .generated = .{
-                        .rule = .iterator_dispatch_receiver,
-                        .source = .{
-                            .module_bytes = self.view.key.bytes,
-                            .receiver = .{ .checked_ty = plan.dispatcher_ty },
-                            .witness = .{ .callable = plan.callable_ty },
-                        },
-                    } },
+                    .{ .generated = iterator_rule },
                 ))),
                 .args = try self.addExprSpan(args),
             } },
@@ -28068,7 +28207,7 @@ const BodyContext = struct {
                 if (try self.builder.monoTypeHasGeneratedOpaqueEvidence(ty)) {
                     try self.constrainTypeToMono(pattern.ty, try self.publicOpaqueUnificationType(ty));
                 } else {
-                    try self.constrainTypeToCell(pattern.ty, ty_cell);
+                    try self.constrainTypeToCell(pattern.ty, ty_cell, ty);
                 }
             },
         }

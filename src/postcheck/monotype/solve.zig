@@ -58,6 +58,10 @@ pub const DeferredTemplate = struct {
     /// sealed specialization-key snapshot, but callee body evidence must flow
     /// back through this node before the requester seals its body draft.
     requester_fn_node: NodeId,
+    /// The immutable type that node was imported from, so the request names the
+    /// type it stands for and not only the cell holding it (reunify.md section
+    /// 13 Slice 7).
+    requester_fn_ty: Type.TypeId,
     fn_ty: Type.TypeId,
     source_region_override: ?base.Region,
     current_entry_root: ?EntryRoot,

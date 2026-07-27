@@ -119,6 +119,13 @@ pub const UnifySiteOutcome = enum {
     /// translation of its operands did not already hold. Every one of these is a
     /// place the flip cannot simply delete the call.
     informative,
+    /// The two sides are ONE logical type that differ only in the
+    /// representation content reunify.md section 10.3's rules move, and the
+    /// shared representation policy covers the pair. What the unify moves here
+    /// is a representation decision the closure engine owns, not logical
+    /// information the checked data has to carry, so the flip reproduces it
+    /// through that engine rather than through a constraint.
+    representation_decision,
     /// At least one side had no directed answer at this execution;
     /// `UnifySiteBlocker` says which.
     unmeasurable,
@@ -698,6 +705,7 @@ pub const Census = struct {
     // delete; the per-site table in the dump says exactly where those sit.
     unify_site_redundant: Counter = Counter.init(0),
     unify_site_informative: Counter = Counter.init(0),
+    unify_site_representation_decision: Counter = Counter.init(0),
     unify_site_unmeasurable: Counter = Counter.init(0),
     unify_site_construction: Counter = Counter.init(0),
 };
@@ -736,6 +744,7 @@ pub fn bumpUnifySite(site: UnifySite, outcome: UnifySiteOutcome) void {
     switch (outcome) {
         .redundant => bump("unify_site_redundant"),
         .informative => bump("unify_site_informative"),
+        .representation_decision => bump("unify_site_representation_decision"),
         .unmeasurable => bump("unify_site_unmeasurable"),
         .construction => bump("unify_site_construction"),
     }
@@ -774,7 +783,7 @@ pub fn dumpText(allocator: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
             const site: UnifySite = @enumFromInt(index);
             const line = try std.fmt.allocPrint(
                 allocator,
-                "unify_site name={s} redundant={d} informative={d} unmeasurable={d} construction={d}" ++
+                "unify_site name={s} redundant={d} informative={d} representation_decision={d} unmeasurable={d} construction={d}" ++
                     " no_environment={d} operand_untranslatable={d} operand_undescribed={d}" ++
                     " representation={d} scheme_binder_unbound={d} unbound_residual={d}" ++
                     " head_tag={d} row_width={d} named_identity={d} unclassified={d}\n",
@@ -782,6 +791,7 @@ pub fn dumpText(allocator: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
                     @tagName(site),
                     outcomes[@intFromEnum(UnifySiteOutcome.redundant)].load(.monotonic),
                     outcomes[@intFromEnum(UnifySiteOutcome.informative)].load(.monotonic),
+                    outcomes[@intFromEnum(UnifySiteOutcome.representation_decision)].load(.monotonic),
                     outcomes[@intFromEnum(UnifySiteOutcome.unmeasurable)].load(.monotonic),
                     outcomes[@intFromEnum(UnifySiteOutcome.construction)].load(.monotonic),
                     blockers[@intFromEnum(UnifySiteBlocker.no_environment)].load(.monotonic),

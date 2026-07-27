@@ -254,8 +254,13 @@ my @categories = (
         name    => 'representation-policy',
         exempt  => [],
         patterns => [
+            # $SREH (Slice 7 flip-prep step b): a constraint-replay site whose two
+            # sides are one logical type carrying two representations asks the
+            # shared policy whether it declares a relation for the pair, so the
+            # site is classified as a section 10 decision only where that policy
+            # covers it. It deletes with the rehearsal at the flip.
             { label => 'iteratorTierRelation', re => qr/\biteratorTierRelation\b/,
-              counts => { $RPOL => 4, $RCLO => 1 } },
+              counts => { $RPOL => 4, $RCLO => 1, $SREH => 1 } },
             { label => 'iteratorJoin', re => qr/\biteratorJoin\b/,
               counts => { $RPOL => 7, $RCLO => 2, $SOLVE => 1, $LS => 3 } },
             { label => 'chooseGeneratedEvidenceBacking', re => qr/\bchooseGeneratedEvidenceBacking\b/,
@@ -263,10 +268,11 @@ my @categories = (
             # $SREH (Slice 7 flip-prep step b): the per-specialization rehearsal
             # decides, rather than mirrors, the representation of each position
             # it emits, so it asks the shared policy which owners select their
-            # backing by score before it builds that position's slot. It deletes
-            # with the rehearsal at the flip.
+            # backing by score before it builds that position's slot. The second
+            # line asks the same question of a constraint-replay site's two
+            # differing named heads. Both delete with the rehearsal at the flip.
             { label => 'evidenceOwnerUsesScoreSelection', re => qr/\bevidenceOwnerUsesScoreSelection\b/,
-              counts => { $RPOL => 7, $LS => 1, $SREH => 1 } },
+              counts => { $RPOL => 7, $LS => 1, $SREH => 2 } },
             # $RMIRR (Slice 7 Stage B): the graph-driven representation-closure
             # shadow cites `applyIteratorJoin` (the graph site it mirrors) in a
             # doc comment; it deletes at the flip.

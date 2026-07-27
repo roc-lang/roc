@@ -86,8 +86,28 @@ pub const CheckedAddress = struct {
 /// is part of the measurement rather than an omission from it.
 pub const UnifyOperand = union(enum) {
     checked: CheckedAddress,
+    /// A checked position of the CALLEE scheme the innermost open callee
+    /// binding names. It translates under the binding the checker recorded for
+    /// that edge rather than under the requesting body's own, which is what
+    /// reunify.md section 9.1 instantiates and section 9.5 refuses to derive
+    /// from the call's argument types. With no binding open it reads exactly as
+    /// `checked`.
+    callee_checked: CheckedAddress,
+    /// The record field a site reads off a receiver: the checked position the
+    /// receiver sits at, and the interned label. The directed side translates
+    /// the receiver and reads the field off it, so a field read names a type
+    /// even though the graph builds it as a derived node.
+    field_of: FieldOperand,
     sealed: Type.TypeId,
     undescribed,
+};
+
+/// One record-field read described in the terms directed translation reads.
+pub const FieldOperand = struct {
+    receiver: CheckedAddress,
+    /// The label interned in the program's name table, which is the table the
+    /// directed emission's record fields are named by.
+    label: names.RecordFieldNameId,
 };
 
 /// reunify.md section 9.6's declared compiler-generated instantiation rules.
@@ -354,6 +374,46 @@ pub const RequestEdge = struct {
     /// the edge instead of being read off whatever frame happens to be active
     /// when the request is finally lowered (reunify.md sections 7.3, 9.1).
     caller: ?CapturedEnvironment,
+};
+
+/// One requesting edge named by the module the request was made in and the
+/// checked expression it was made at — the `use_node` half of reunify.md
+/// section 7.2's edge identity.
+pub const RequestUse = struct {
+    module_bytes: [32]u8,
+    use_expr: checked.CheckedExprId,
+};
+
+/// The checked data that binds one callee scheme a requesting body is
+/// instantiating at a call site (reunify.md sections 7.2, 9.1, 9.6). The
+/// requesting body states where the binding comes from; the binding itself is
+/// read from the checker's records and never derived from the call's argument
+/// types, which is the derivation section 9.5 forbids.
+pub const CalleeBinding = struct {
+    /// The module whose frozen store defines the callee scheme.
+    defining_module_bytes: [32]u8,
+    /// The scheme the callee's checked positions are binders of.
+    scheme: checked.CheckedTypeSchemeId,
+    /// The reservation whose claimed requesting edge binds this callee, for a
+    /// call that already reserved a specialization (reunify.md section 11.3).
+    reserved_fn_id: ?u32 = null,
+    /// The requesting edge, where the requesting body names it directly.
+    request: ?RequestUse = null,
+    /// The declared rule covering an edge checking recorded no site for
+    /// (reunify.md section 9.6).
+    rule: ?GeneratedEdge = null,
+};
+
+/// One callee scheme's binding, resolved from checked data and held for as
+/// long as the requesting body instantiates that callee's checked positions.
+/// An unresolved level stays on the stack so opens and closes stay paired; its
+/// positions then read under the requesting body's own binding, exactly as they
+/// did before the binding was named.
+const CalleeLevel = struct {
+    module_bytes: [32]u8,
+    owner_node: u32,
+    chain: EnvironmentChain,
+    ready: bool,
 };
 
 /// One declared generated edge together with the requesting body's own binding
@@ -891,6 +951,30 @@ const NamedFieldDifference = enum {
         right_store: *const Type.Store,
         right: Type.TypeId,
     ) NamedFieldDifference {
+        return compare(left_store, left, right_store, right, false);
+    }
+
+    /// The first field that differs with the two representation fields
+    /// reunify.md section 10.3's rules move — the generated-owner identity and
+    /// the iterator tier, kind, and depth — skipped. A pair answering `equal`
+    /// here and something else through `of` is one logical type carrying two
+    /// representations.
+    fn ofIgnoringRepresentation(
+        left_store: *const Type.Store,
+        left: Type.TypeId,
+        right_store: *const Type.Store,
+        right: Type.TypeId,
+    ) NamedFieldDifference {
+        return compare(left_store, left, right_store, right, true);
+    }
+
+    fn compare(
+        left_store: *const Type.Store,
+        left: Type.TypeId,
+        right_store: *const Type.Store,
+        right: Type.TypeId,
+        skip_representation: bool,
+    ) NamedFieldDifference {
         const left_named = switch (left_store.get(left)) {
             .named => |named| named,
             else => return .not_named,
@@ -907,12 +991,14 @@ const NamedFieldDifference = enum {
         if (left_named.def.source_decl == null and left_named.def.type_name != right_named.def.type_name) {
             return .type_name;
         }
-        if (!std.meta.eql(left_named.def.generated, right_named.def.generated)) return .generated;
-        if (left_named.def.iterator_representation != right_named.def.iterator_representation or
-            left_named.def.iterator_kind != right_named.def.iterator_kind or
-            left_named.def.iterator_depth != right_named.def.iterator_depth)
-        {
-            return .iterator;
+        if (!skip_representation) {
+            if (!std.meta.eql(left_named.def.generated, right_named.def.generated)) return .generated;
+            if (left_named.def.iterator_representation != right_named.def.iterator_representation or
+                left_named.def.iterator_kind != right_named.def.iterator_kind or
+                left_named.def.iterator_depth != right_named.def.iterator_depth)
+            {
+                return .iterator;
+            }
         }
         if (left_named.kind != right_named.kind) return .kind;
         if (left_named.builtin_owner != right_named.builtin_owner) return .builtin_owner;
@@ -1005,6 +1091,11 @@ pub const Rehearsal = struct {
     /// The requesting edge of each reserved function id: the identity a request
     /// is tied to from reservation until its body lowers (reunify.md 11.3).
     edges_by_fn: std.AutoHashMapUnmanaged(u32, ClaimedRequest),
+    /// The open callee bindings, innermost last. A requesting body opens one
+    /// around the region where it instantiates a callee's checked positions, so
+    /// those positions read under the binding the checker recorded for the
+    /// edge rather than under the requesting body's own (reunify.md 9.1).
+    callees: std.ArrayList(CalleeLevel),
     /// Per declared generated rule, how its edges resolved (reunify.md 9.6).
     generated_outcomes: [generated_rule_count]GeneratedOutcome,
     site_index: std.AutoHashMapUnmanaged([32]u8, SiteIndex),
@@ -1063,6 +1154,7 @@ pub const Rehearsal = struct {
             .frames = .empty,
             .requests = .empty,
             .edges_by_fn = .empty,
+            .callees = .empty,
             .generated_outcomes = [_]GeneratedOutcome{.{}} ** generated_rule_count,
             .site_index = .empty,
             .logical_tokens = .empty,
@@ -1113,6 +1205,8 @@ pub const Rehearsal = struct {
             self.releaseClaim(claim.*);
         }
         self.edges_by_fn.deinit(self.allocator);
+        for (self.callees.items) |*level| level.chain.release(self.allocator);
+        self.callees.deinit(self.allocator);
         self.engine.deinit();
         self.translator.deinit();
         self.store.deinit();
@@ -1187,6 +1281,263 @@ pub const Rehearsal = struct {
                 self.releaseEdge(edge);
             },
         }
+    }
+
+    /// Open a callee binding for the region where the requesting body
+    /// instantiates one callee scheme's checked positions (reunify.md sections
+    /// 7.2, 9.1, 9.6). The binding is resolved once, here, from the recorded
+    /// site or the declared rule the requesting body names; a binding that does
+    /// not resolve is still pushed, so opens and closes stay paired and its
+    /// positions read exactly as they did before it was named.
+    pub fn openCalleeBinding(self: *Rehearsal, binding: CalleeBinding) void {
+        if (comptime !census.enabled) return;
+        if (self.disabled) return;
+        const level = self.resolveCalleeBinding(binding);
+        self.callees.append(self.allocator, level) catch {
+            var owned = level;
+            owned.chain.release(self.allocator);
+            self.fail();
+        };
+    }
+
+    /// Close the innermost callee binding.
+    pub fn closeCalleeBinding(self: *Rehearsal) void {
+        if (comptime !census.enabled) return;
+        // Once the rehearsal disables itself no binding is opened, so none is
+        // closed either and the stack stays balanced across the transition.
+        if (self.disabled) return;
+        var level = self.callees.pop() orelse return;
+        level.chain.release(self.allocator);
+    }
+
+    /// Resolve one callee scheme's dense binding from the checked data the
+    /// requesting body named. Every way the data fails to supply one leaves the
+    /// level unresolved: the binding is read, never inferred.
+    fn resolveCalleeBinding(self: *Rehearsal, binding: CalleeBinding) CalleeLevel {
+        const unresolved = CalleeLevel{
+            .module_bytes = binding.defining_module_bytes,
+            .owner_node = checked.checked_residual_disposition_module_body_owner,
+            .chain = EnvironmentChain.none,
+            .ready = false,
+        };
+        const defining = self.lookup.cursor(binding.defining_module_bytes) orelse return unresolved;
+        const scheme = defining.view.schemeById(binding.scheme) orelse return unresolved;
+        // A callee that captures enclosing binders needs the lexical parents its
+        // own specialization frame links (reunify.md section 7.3); a call-site
+        // binding states this scheme's own binders and nothing else.
+        if (scheme.captured_len != 0) return unresolved;
+
+        var use = binding.request;
+        var rule = binding.rule;
+        var caller_env: ?*const direct_translate.BindingEnvironment = null;
+        var caller_owner_node = checked.checked_residual_disposition_module_body_owner;
+        if (binding.reserved_fn_id) |fn_id| {
+            const claim = self.edges_by_fn.getPtr(fn_id) orelse return unresolved;
+            switch (claim.*) {
+                .checked => |*edge| {
+                    use = .{ .module_bytes = edge.module_bytes, .use_expr = edge.use_expr };
+                    if (edge.covering_rule) |covering| rule = covering;
+                    if (edge.caller) |*held| {
+                        caller_env = held.environment();
+                        caller_owner_node = held.owner_node;
+                    }
+                },
+                .generated => |*request| {
+                    rule = request.edge;
+                    if (request.caller) |*held| {
+                        caller_env = held.environment();
+                        caller_owner_node = held.owner_node;
+                    }
+                },
+            }
+        }
+
+        // Checking records a site wherever it could name the callee scheme, and
+        // the declared rule states the binding exactly where it could not
+        // (reunify.md sections 7.2, 9.6).
+        if (use) |named| resolved_by_site: {
+            const caller = self.lookup.cursor(named.module_bytes) orelse break :resolved_by_site;
+            if (caller_env == null) {
+                if (self.frameForModule(named.module_bytes)) |frame| {
+                    caller_env = frame.environment();
+                    caller_owner_node = frame.owner_node;
+                }
+            }
+            const site = self.siteQuietly(caller, named.use_expr, scheme.owner_node) orelse break :resolved_by_site;
+            const chain = self.bindCalleeFromSite(
+                defining,
+                binding.scheme,
+                scheme,
+                caller,
+                caller_env,
+                caller_owner_node,
+                site,
+            ) orelse break :resolved_by_site;
+            return .{
+                .module_bytes = defining.module_bytes,
+                .owner_node = scheme.owner_node,
+                .chain = chain,
+                .ready = true,
+            };
+        }
+
+        const declared = rule orelse return unresolved;
+        const chain = self.bindCalleeFromRule(
+            defining,
+            binding.scheme,
+            scheme,
+            declared,
+            caller_env,
+            caller_owner_node,
+        ) orelse return unresolved;
+        return .{
+            .module_bytes = defining.module_bytes,
+            .owner_node = scheme.owner_node,
+            .chain = chain,
+            .ready = true,
+        };
+    }
+
+    /// Build one callee scheme's dense binding from a recorded instantiation
+    /// site: `actuals[i]` translated under the requesting body's environment is
+    /// binder `i`'s value (reunify.md sections 7.2, 9.1). A site whose own
+    /// scheme identity is not this callee's is accepted only under section
+    /// 7.5's witness — the callee scheme root emitted under the binding must be
+    /// the site's own instantiated root.
+    fn bindCalleeFromSite(
+        self: *Rehearsal,
+        defining: direct_translate.ModuleCursor,
+        scheme_id: checked.CheckedTypeSchemeId,
+        scheme: checked.CheckedTypeScheme,
+        caller: direct_translate.ModuleCursor,
+        caller_env: ?*const direct_translate.BindingEnvironment,
+        caller_owner_node: u32,
+        site: checked.CheckedInstantiationSite,
+    ) ?EnvironmentChain {
+        const binders = scheme.generalizedVars(defining.view);
+        const actuals = site.actuals(caller.view);
+        if (actuals.len != binders.len) return null;
+
+        const bound = self.allocator.alloc(direct_translate.BoundType, binders.len) catch {
+            self.fail();
+            return null;
+        };
+        defer self.allocator.free(bound);
+        for (actuals, 0..) |actual, index| {
+            if (@intFromEnum(actual) == checked.checked_instantiation_actual_unreached) return null;
+            const translated = self.emitQuietly(caller, caller_env, caller_owner_node, actual) orelse return null;
+            bound[index] = direct_translate.BoundType.of(translated);
+        }
+        var chain = self.copyEnvironmentChain(null, 0, .{
+            .scheme = .{ .module_bytes = defining.module_bytes, .scheme = @intFromEnum(scheme_id) },
+            .binders = binders,
+            .bound = bound,
+            .captured = &.{},
+        }) orelse {
+            self.fail();
+            return null;
+        };
+        if (siteNamesScheme(site, defining, scheme_id)) return chain;
+        const declared = self.emitQuietly(defining, chain.innermost(), scheme.owner_node, scheme.root);
+        const requested = self.emitQuietly(caller, caller_env, caller_owner_node, site.instantiated_root);
+        if (self.quietWitnessAgrees(declared, requested)) return chain;
+        chain.release(self.allocator);
+        return null;
+    }
+
+    /// Build one callee scheme's dense binding from a declared generated rule
+    /// (reunify.md section 9.6): binder `i` takes argument `i` of the rule's
+    /// receiver emitted under the requesting body's environment, accepted only
+    /// under the exact witness the rule declares.
+    fn bindCalleeFromRule(
+        self: *Rehearsal,
+        defining: direct_translate.ModuleCursor,
+        scheme_id: checked.CheckedTypeSchemeId,
+        scheme: checked.CheckedTypeScheme,
+        edge: GeneratedEdge,
+        held_env: ?*const direct_translate.BindingEnvironment,
+        held_owner_node: u32,
+    ) ?EnvironmentChain {
+        if (!edge.rule.declaresBinderSource()) return null;
+        const source = edge.source orelse return null;
+        const caller = self.lookup.cursor(source.module_bytes) orelse return null;
+        var caller_env = held_env;
+        var caller_owner_node = held_owner_node;
+        if (caller_env == null) {
+            if (self.frameForModule(source.module_bytes)) |frame| {
+                caller_env = frame.environment();
+                caller_owner_node = frame.owner_node;
+            }
+        }
+        const binders = scheme.generalizedVars(defining.view);
+        const receiver_root = self.emitQuietly(caller, caller_env, caller_owner_node, source.receiver.checked_ty) orelse return null;
+        const receiver = followEmittedPath(&self.store, receiver_root, &source.receiver.path) orelse return null;
+        const argument_count = receiverArgumentCount(&self.store, receiver) orelse return null;
+        if (argument_count != binders.len) return null;
+
+        const bound = self.allocator.alloc(direct_translate.BoundType, binders.len) catch {
+            self.fail();
+            return null;
+        };
+        defer self.allocator.free(bound);
+        for (0..binders.len) |index| {
+            const argument = receiverArgumentAt(&self.store, receiver, index) orelse return null;
+            bound[index] = direct_translate.BoundType.of(argument);
+        }
+        var chain = self.copyEnvironmentChain(null, 0, .{
+            .scheme = .{ .module_bytes = defining.module_bytes, .scheme = @intFromEnum(scheme_id) },
+            .binders = binders,
+            .bound = bound,
+            .captured = &.{},
+        }) orelse {
+            self.fail();
+            return null;
+        };
+        const declared = self.emitQuietly(defining, chain.innermost(), scheme.owner_node, scheme.root);
+        const left: ?Type.TypeId = switch (source.witness) {
+            .callable => declared,
+            .receiver_at_argument => |index| if (declared) |root| functionArgumentAt(&self.store, root, index) else null,
+        };
+        const right: ?Type.TypeId = switch (source.witness) {
+            .callable => |callable| self.emitQuietly(caller, caller_env, caller_owner_node, callable),
+            .receiver_at_argument => receiver,
+        };
+        if (self.quietWitnessAgrees(left, right)) return chain;
+        chain.release(self.allocator);
+        return null;
+    }
+
+    /// Whether one binding produced the exact witness that accepts it, asked
+    /// without recording anything: the callee-binding path must leave the
+    /// specialization resolver's own per-rule counters exactly where it put
+    /// them. Two rooted recursive graphs entered from different paths store
+    /// different digests for one type (reunify.md section 8.3), so the
+    /// unfolding decides those.
+    fn quietWitnessAgrees(self: *Rehearsal, declared: ?Type.TypeId, requested: ?Type.TypeId) bool {
+        const left = declared orelse return false;
+        const right = requested orelse return false;
+        const left_digest = self.store.typeDigest(self.program_names, left);
+        const right_digest = self.store.typeDigest(self.program_names, right);
+        if (std.mem.eql(u8, &left_digest.bytes, &right_digest.bytes)) return true;
+        const left_unfolded = self.store.unfoldedDigest(self.program_names, left);
+        const right_unfolded = self.store.unfoldedDigest(self.program_names, right);
+        return std.mem.eql(u8, &left_unfolded.bytes, &right_unfolded.bytes);
+    }
+
+    /// The instantiation site one edge identity names, asked without recording
+    /// anything, so the callee-binding path leaves the specialization
+    /// resolver's skip counters exactly where it put them.
+    fn siteQuietly(
+        self: *Rehearsal,
+        caller: direct_translate.ModuleCursor,
+        use_expr: checked.CheckedExprId,
+        scheme_owner_node: u32,
+    ) ?checked.CheckedInstantiationSite {
+        const index = self.siteIndexFor(caller) orelse return null;
+        const key = siteKey(use_expr, scheme_owner_node);
+        if (index.ambiguous.contains(key)) return null;
+        const site_index = index.by_edge.get(key) orelse return null;
+        return caller.view.instantiationSites()[site_index];
     }
 
     /// Bind the innermost open request's edge to the function id that request
@@ -2545,8 +2896,32 @@ pub const Rehearsal = struct {
             census.bumpUnifySite(site, .redundant);
             return;
         }
+        if (self.representationDecisionCovers(resolved_left, resolved_right)) {
+            census.bumpUnifySite(site, .representation_decision);
+            return;
+        }
         census.bumpUnifySite(site, .informative);
         self.classifyInformativeSite(site, resolved_left, resolved_right);
+    }
+
+    /// Whether this site's two sides are one logical type whose difference is
+    /// entirely the representation content reunify.md section 10.3's rules move,
+    /// and the shared representation policy covers the pair that moved. The
+    /// policy is the same one section 10's closure engine applies, so a pair it
+    /// covers is a decision that engine reproduces; a pair it does not stays a
+    /// difference the site really carries.
+    fn representationDecisionCovers(
+        self: *Rehearsal,
+        left: ResolvedOperand,
+        right: ResolvedOperand,
+    ) bool {
+        var visited = std.AutoHashMap(u64, void).init(self.allocator);
+        defer visited.deinit();
+        var covered = false;
+        if (!walkRepresentationOnly(left.store, left.ty, right.store, right.ty, &visited, &covered, 0)) {
+            return false;
+        }
+        return covered;
     }
 
     /// Name what an informative site's two sides disagree about, and keep one
@@ -2641,49 +3016,90 @@ pub const Rehearsal = struct {
                 .unfolded = self.program_types.unfoldedDigest(self.program_names, ty),
                 .source = null,
             },
-            .checked => |address| {
-                const cursor = self.lookup.cursor(address.module_bytes) orelse {
+            .checked => |address| return self.resolveCheckedOperand(address, false, blocker),
+            .callee_checked => |address| return self.resolveCheckedOperand(address, true, blocker),
+            .field_of => |field| {
+                const receiver = self.resolveCheckedOperand(field.receiver, false, blocker) orelse return null;
+                const emitted = fieldOfEmitted(receiver.store, receiver.ty, field.label) orelse {
                     blocker.* = .operand_untranslatable;
                     return null;
                 };
-                const frame = self.frameForModule(address.module_bytes);
-                const env: ?*const direct_translate.BindingEnvironment =
-                    if (frame) |active| active.environment() else null;
-                const owner_node = if (frame) |active|
-                    active.owner_node
-                else
-                    checked.checked_residual_disposition_module_body_owner;
-                const checked_ty: checked.CheckedTypeId = @enumFromInt(address.type_id);
-                var reason: direct_translate.SkipReason = undefined;
-                const emitted = self.translator.translateUnderEnvironment(
-                    cursor,
-                    env,
-                    owner_node,
-                    checked_ty,
-                    &reason,
-                ) catch |err| switch (err) {
-                    error.Skip => {
-                        blocker.* = switch (reason) {
-                            .binder_not_found => .no_environment,
-                            else => .operand_untranslatable,
-                        };
-                        return null;
-                    },
-                    else => {
-                        self.fail();
-                        blocker.* = .operand_untranslatable;
-                        return null;
-                    },
-                };
                 return .{
-                    .store = &self.store,
+                    .store = receiver.store,
                     .ty = emitted,
-                    .stored = self.store.typeDigest(self.program_names, emitted),
-                    .unfolded = self.store.unfoldedDigest(self.program_names, emitted),
-                    .source = .{ .view = cursor.view, .checked_ty = checked_ty, .env = env },
+                    .stored = receiver.store.typeDigest(self.program_names, emitted),
+                    .unfolded = receiver.store.unfoldedDigest(self.program_names, emitted),
+                    .source = null,
                 };
             },
         }
+    }
+
+    /// Translate one checked position. `under_callee` reads it under the
+    /// innermost open callee binding when one resolved for its module, which is
+    /// the binding reunify.md section 9.1 instantiates the callee scheme at;
+    /// otherwise, and for every requesting-body position, it reads under the
+    /// innermost active specialization environment exactly as `comparePosition`
+    /// does.
+    fn resolveCheckedOperand(
+        self: *Rehearsal,
+        address: CheckedAddress,
+        under_callee: bool,
+        blocker: *census.UnifySiteBlocker,
+    ) ?ResolvedOperand {
+        const cursor = self.lookup.cursor(address.module_bytes) orelse {
+            blocker.* = .operand_untranslatable;
+            return null;
+        };
+        var env: ?*const direct_translate.BindingEnvironment = null;
+        var owner_node = checked.checked_residual_disposition_module_body_owner;
+        const callee = if (under_callee) self.innermostCallee(address.module_bytes) else null;
+        if (callee) |level| {
+            env = level.chain.innermost();
+            owner_node = level.owner_node;
+        } else if (self.frameForModule(address.module_bytes)) |frame| {
+            env = frame.environment();
+            owner_node = frame.owner_node;
+        }
+        const checked_ty: checked.CheckedTypeId = @enumFromInt(address.type_id);
+        var reason: direct_translate.SkipReason = undefined;
+        const emitted = self.translator.translateUnderEnvironment(
+            cursor,
+            env,
+            owner_node,
+            checked_ty,
+            &reason,
+        ) catch |err| switch (err) {
+            error.Skip => {
+                blocker.* = switch (reason) {
+                    .binder_not_found => .no_environment,
+                    else => .operand_untranslatable,
+                };
+                return null;
+            },
+            else => {
+                self.fail();
+                blocker.* = .operand_untranslatable;
+                return null;
+            },
+        };
+        return .{
+            .store = &self.store,
+            .ty = emitted,
+            .stored = self.store.typeDigest(self.program_names, emitted),
+            .unfolded = self.store.unfoldedDigest(self.program_names, emitted),
+            .source = .{ .view = cursor.view, .checked_ty = checked_ty, .env = env },
+        };
+    }
+
+    /// The innermost resolved callee binding whose binders name ids in
+    /// `module_bytes`, or null when the innermost binding named none.
+    fn innermostCallee(self: *Rehearsal, module_bytes: [32]u8) ?*const CalleeLevel {
+        if (self.callees.items.len == 0) return null;
+        const level = &self.callees.items[self.callees.items.len - 1];
+        if (!level.ready) return null;
+        if (!std.mem.eql(u8, &level.module_bytes, &module_bytes)) return null;
+        return level;
     }
 
     /// Why one use expression named no usable instantiation site.
@@ -3463,6 +3879,173 @@ fn followEmittedPath(store: *const Type.Store, root: Type.TypeId, path: *const E
         };
     }
     return current;
+}
+
+/// Walk two types in parallel and report whether every difference between them
+/// is representation content reunify.md section 10.3's rules move over a pair
+/// the shared policy covers. `covered` is set once such a pair is reached, so a
+/// walk that returns true without setting it found two identical types and a
+/// walk that returns false found a difference the rules do not move.
+///
+/// Recursion closes on the visited pair set, and a pair deeper than the
+/// difference budget is refused rather than assumed equal.
+fn walkRepresentationOnly(
+    left_store: *const Type.Store,
+    left: Type.TypeId,
+    right_store: *const Type.Store,
+    right: Type.TypeId,
+    visited: *std.AutoHashMap(u64, void),
+    covered: *bool,
+    depth: u32,
+) bool {
+    if (depth >= max_difference_depth) return false;
+    const key = (@as(u64, @intFromEnum(left)) << 32) | @as(u64, @intFromEnum(right));
+    const seen = visited.getOrPut(key) catch return false;
+    if (seen.found_existing) return true;
+
+    const left_content = left_store.get(left);
+    if (std.meta.activeTag(left_content) != std.meta.activeTag(right_store.get(right))) return false;
+    if (left_content == .primitive) {
+        return left_content.primitive == right_store.get(right).primitive;
+    }
+    if (left_content == .named) {
+        if (NamedFieldDifference.ofIgnoringRepresentation(left_store, left, right_store, right) != .equal) {
+            return false;
+        }
+        if (NamedFieldDifference.of(left_store, left, right_store, right) != .equal) {
+            if (!representationPolicyCovers(left_store, left, right_store, right)) return false;
+            covered.* = true;
+        }
+    } else if (!rowLabelsEqual(left_store, left, right_store, right)) {
+        // A row's labels are part of its logical identity and no rule moves
+        // them, so two rows that disagree on labels are two types.
+        return false;
+    }
+    const left_shape = HeadShape.of(left_store, left);
+    const right_shape = HeadShape.of(right_store, right);
+    if (left_shape.children != right_shape.children or left_shape.entries != right_shape.entries) return false;
+    var index: u32 = 0;
+    while (index < left_shape.children) : (index += 1) {
+        const left_child = childAt(left_store, left, index) orelse return false;
+        const right_child = childAt(right_store, right, index) orelse return false;
+        if (!walkRepresentationOnly(
+            left_store,
+            left_child,
+            right_store,
+            right_child,
+            visited,
+            covered,
+            depth + 1,
+        )) return false;
+    }
+    return true;
+}
+
+/// Whether the site's own scheme identity is this callee's, in which case the
+/// positional actuals are a vector over exactly these binders and no further
+/// witness is needed.
+fn siteNamesScheme(
+    site: checked.CheckedInstantiationSite,
+    defining: direct_translate.ModuleCursor,
+    scheme_id: checked.CheckedTypeSchemeId,
+) bool {
+    const named = site.schemeId() orelse return false;
+    if (named != scheme_id) return false;
+    const imported = site.importedDefiningModule() orelse return true;
+    return std.mem.eql(u8, &imported, &defining.module_bytes);
+}
+
+/// Whether two rows carry the same labels in the same order. Records and tag
+/// unions carry them; every other head has none and answers true.
+fn rowLabelsEqual(
+    left_store: *const Type.Store,
+    left: Type.TypeId,
+    right_store: *const Type.Store,
+    right: Type.TypeId,
+) bool {
+    switch (left_store.get(left)) {
+        .record => |left_span| {
+            const right_span = switch (right_store.get(right)) {
+                .record => |span| span,
+                else => return false,
+            };
+            const left_fields = left_store.fieldSpan(left_span);
+            const right_fields = right_store.fieldSpan(right_span);
+            const count = GuardedList.borrowLen(left_fields);
+            if (count != GuardedList.borrowLen(right_fields)) return false;
+            for (0..count) |index| {
+                if (GuardedList.at(left_fields, index).name != GuardedList.at(right_fields, index).name) return false;
+            }
+            return true;
+        },
+        .tag_union => |left_span| {
+            const right_span = switch (right_store.get(right)) {
+                .tag_union => |span| span,
+                else => return false,
+            };
+            const left_tags = left_store.tagSpan(left_span);
+            const right_tags = right_store.tagSpan(right_span);
+            const count = GuardedList.borrowLen(left_tags);
+            if (count != GuardedList.borrowLen(right_tags)) return false;
+            for (0..count) |index| {
+                const left_tag = GuardedList.at(left_tags, index);
+                const right_tag = GuardedList.at(right_tags, index);
+                if (left_tag.name != right_tag.name) return false;
+                if (GuardedList.borrowLen(left_store.span(left_tag.payloads)) !=
+                    GuardedList.borrowLen(right_store.span(right_tag.payloads))) return false;
+            }
+            return true;
+        },
+        else => return true,
+    }
+}
+
+/// Whether the shared representation policy declares a relation for two named
+/// heads that agree on everything except the representation fields: an iterator
+/// tier the policy relates, or a generated evidence owner whose backing it
+/// selects by score (reunify.md section 10.3).
+fn representationPolicyCovers(
+    left_store: *const Type.Store,
+    left: Type.TypeId,
+    right_store: *const Type.Store,
+    right: Type.TypeId,
+) bool {
+    const left_named = switch (left_store.get(left)) {
+        .named => |named| named,
+        else => return false,
+    };
+    const right_named = switch (right_store.get(right)) {
+        .named => |named| named,
+        else => return false,
+    };
+    const left_descriptor = descriptorOf(left_named, GuardedList.borrowLen(left_store.span(left_named.args)));
+    const right_descriptor = descriptorOf(right_named, GuardedList.borrowLen(right_store.span(right_named.args)));
+    if (policy.iteratorTierRelation(left_descriptor, right_descriptor) != .ordinary) return true;
+    return policy.evidenceOwnerUsesScoreSelection(left_named.builtin_owner) and
+        left_named.builtin_owner == right_named.builtin_owner;
+}
+
+/// The type at one record field of an emitted receiver, following named
+/// backings the way a field read reaches the row through them. Null when the
+/// emission carries no record with that label.
+fn fieldOfEmitted(store: *const Type.Store, receiver: Type.TypeId, label: names.RecordFieldNameId) ?Type.TypeId {
+    var current = receiver;
+    var steps: usize = 0;
+    while (steps < max_slot_depth) : (steps += 1) {
+        switch (store.get(current)) {
+            .named => |named| current = (named.backing orelse return null).ty,
+            .record => |fields| {
+                const entries = store.fieldSpan(fields);
+                for (0..GuardedList.borrowLen(entries)) |index| {
+                    const field = GuardedList.at(entries, index);
+                    if (field.name == label) return field.ty;
+                }
+                return null;
+            },
+            else => return null,
+        }
+    }
+    return null;
 }
 
 /// The emitted receiver's argument at `index`, or null when the emission carries
