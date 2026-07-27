@@ -4752,11 +4752,10 @@ const Builder = struct {
         };
         var added_relation = false;
         if (kind == .parser) {
-            added_relation = try ctx.prepareParserInvalidValueCodecCall(
-                boundary.expr,
-                boundary.shape_node,
-                boundary.callable_node,
-            );
+            // `invalid_value` is reached only by an enum dict key, which
+            // `prepareDictKeyCodecCalls` prepares where it occurs. Demanding it
+            // of every parsed shape would require it of formats that never
+            // reach it.
             var required_error_seen = std.AutoHashMap(NodeId, void).init(self.allocator);
             defer required_error_seen.deinit();
             if (try ctx.graphParserShapeNeedsRequiredFieldError(boundary.shape_node, &required_error_seen)) {
@@ -4811,11 +4810,6 @@ const Builder = struct {
         const result = try ctx.graphParserResultNodes(callable.ret);
 
         var added_relation = false;
-        added_relation = try ctx.prepareParserInvalidValueCodecCall(
-            boundary.expr,
-            result.value,
-            constructor_node,
-        );
         var required_error_seen = std.AutoHashMap(NodeId, void).init(self.allocator);
         defer required_error_seen.deinit();
         if (try ctx.graphParserShapeNeedsRequiredFieldError(result.value, &required_error_seen)) {

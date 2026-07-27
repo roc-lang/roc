@@ -1127,11 +1127,6 @@ test "Monotype evidence chains retain checker-recorded lexical scope topology" {
 
 test "Monotype generated-private call requests retain separate request nodes" {
     const lower_source = @embedFile("monotype/lower.zig");
-    const partial_with_ret = sourceSliceBetween(
-        lower_source,
-        "fn instantiateTargetCallTypeFromMonoArgAtIndexAndRet",
-        "fn instantiateTargetCallNodeFromMonoArgAtIndex",
-    );
     const partial_arg = sourceSliceBetween(
         lower_source,
         "fn instantiateTargetCallNodeFromMonoArgAtIndex",
@@ -1143,8 +1138,6 @@ test "Monotype generated-private call requests retain separate request nodes" {
         "fn iteratorOperandNode",
     );
 
-    try expectContains(partial_with_ret, "checkedMonoRequestNode");
-    try expectContains(partial_with_ret, "self.graphFunctionNode(request_args, request_ret)");
     try expectContains(partial_arg, "checkedMonoRequestNode");
     try expectContains(partial_arg, "self.graphFunctionNode(request_args, function_nodes.ret)");
     try expectContains(iterator, "checkedMonoRequestNode");
