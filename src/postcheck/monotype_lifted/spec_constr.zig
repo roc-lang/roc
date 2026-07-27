@@ -1600,29 +1600,8 @@ const Pass = struct {
     }
 
     fn recordCallPatternForValues(self: *Pass, fn_id: Ast.FnId, values: []const Value) Common.LowerError!void {
+        const pattern = (try self.callPatternForValues(fn_id, values)) orelse return;
         const raw = @intFromEnum(fn_id);
-        if (raw >= self.plans.len) return;
-
-        const fn_args = self.program.typedLocalSpan(self.program.getFnAt(raw).args);
-        if (values.len != fn_args.len) Common.invariant("direct call arity differed from lifted function arity");
-
-        const shapes = try self.arena.allocator().alloc(Shape, values.len);
-        var has_constructor = false;
-
-        for (values, 0..) |value, index| {
-            if (self.plans[raw].used_args[index]) {
-                if (try self.shapeFromValue(value)) |shape| {
-                    shapes[index] = shape;
-                    has_constructor = true;
-                    continue;
-                }
-            }
-            shapes[index] = .{ .any = valueType(self.program, value) };
-        }
-
-        if (!has_constructor) return;
-
-        const pattern: CallPattern = .{ .args = shapes };
         for (self.plans[raw].specs.items) |spec| {
             if (patternEql(self.program, spec.pattern, pattern)) return;
         }
@@ -1633,27 +1612,8 @@ const Pass = struct {
     }
 
     fn ensureCallPatternForValues(self: *Pass, fn_id: Ast.FnId, values: []const Value) Common.LowerError!void {
+        const pattern = (try self.callPatternForValues(fn_id, values)) orelse return;
         const raw = @intFromEnum(fn_id);
-        if (raw >= self.plans.len) return;
-
-        const fn_args = self.program.typedLocalSpan(self.program.getFnAt(raw).args);
-        if (values.len != fn_args.len) Common.invariant("direct call arity differed from lifted function arity");
-
-        const shapes = try self.arena.allocator().alloc(Shape, values.len);
-        var has_constructor = false;
-        for (values, 0..) |value, index| {
-            if (self.plans[raw].used_args[index]) {
-                if (try self.shapeFromValue(value)) |shape| {
-                    shapes[index] = shape;
-                    has_constructor = true;
-                    continue;
-                }
-            }
-            shapes[index] = .{ .any = valueType(self.program, value) };
-        }
-        if (!has_constructor) return;
-
-        const pattern: CallPattern = .{ .args = shapes };
         for (self.plans[raw].specs.items) |spec| {
             if (patternEql(self.program, spec.pattern, pattern)) return;
         }
@@ -1674,6 +1634,29 @@ const Pass = struct {
             .fn_id = fn_id_reserved,
         });
         try self.copyProcDebugName(source_fn.symbol, symbol);
+    }
+
+    fn callPatternForValues(self: *Pass, fn_id: Ast.FnId, values: []const Value) Common.LowerError!?CallPattern {
+        const raw = @intFromEnum(fn_id);
+        if (raw >= self.plans.len) return null;
+
+        const fn_args = self.program.typedLocalSpan(self.program.getFnAt(raw).args);
+        if (values.len != fn_args.len) Common.invariant("direct call arity differed from lifted function arity");
+
+        const shapes = try self.arena.allocator().alloc(Shape, values.len);
+        var has_constructor = false;
+        for (values, 0..) |value, index| {
+            if (self.plans[raw].used_args[index]) {
+                if (try self.shapeFromValue(value)) |shape| {
+                    shapes[index] = shape;
+                    has_constructor = true;
+                    continue;
+                }
+            }
+            shapes[index] = .{ .any = valueType(self.program, value) };
+        }
+
+        return if (has_constructor) .{ .args = shapes } else null;
     }
 
     fn writeSpecialization(self: *Pass, source_fn_id: Ast.FnId, spec_index: usize) Common.LowerError!void {
@@ -2930,7 +2913,12 @@ const Pass = struct {
         const loop_expr = self.program.getExpr(loop_expr_id);
         const loop = loop_expr.data.loop_;
         const source_params = self.program.typedLocalSpan(loop.params);
-        const source_initials = self.program.exprSpan(loop.initial_values);
+        const source_initials = try GuardedList.dupe(
+            self.allocator,
+            Ast.ExprId,
+            self.program.exprSpan(loop.initial_values),
+        );
+        defer self.allocator.free(source_initials);
         if (source_params.len == 0 or source_params.len != source_initials.len) return null;
 
         const base_ty = self.program.getLocal(base_local).ty;
@@ -5044,7 +5032,7 @@ const Cloner = struct {
         if (call.is_cold) return;
         const callee = Ast.localDirectCallee(call) orelse return;
         const raw = @intFromEnum(callee);
-        if (raw >= self.pass.plans.len or self.pass.plans[raw].specs.items.len == 0) return;
+        if (raw >= self.pass.plans.len) return;
         if (!self.allow_nonrecursive_value_patterns and
             (raw >= self.pass.self_recursive_fns.len or !self.pass.self_recursive_fns[raw])) return;
 
@@ -5068,6 +5056,21 @@ const Cloner = struct {
                 try self.cloneExprValue(arg);
         }
 
+        // The initial pattern collectors run before every symbolic binding is
+        // available. A recursive call can therefore acquire a specializable
+        // constructor shape only during this substitution-aware walk. Request
+        // a whole-body production clone whenever the explicit values prove
+        // such a shape exists; `cloneCallProc` will reserve the exact worker
+        // while producing that clone.
+        if (self.value_aware_detect_only) {
+            if (try self.pass.callPatternForValues(callee, values) != null) {
+                self.value_aware_rewrite_changed = true;
+            }
+            return;
+        }
+
+        try self.pass.ensureCallPatternForValues(callee, values);
+
         for (self.pass.plans[raw].specs.items) |spec| {
             if (spec.pattern.args.len != values.len) Common.invariant("call-pattern arity differed from direct call arity");
             var matches = true;
@@ -5080,7 +5083,6 @@ const Cloner = struct {
             if (!matches) continue;
 
             self.value_aware_rewrite_changed = true;
-            if (self.value_aware_detect_only) return;
 
             var rewritten_args = std.ArrayList(Ast.ExprId).empty;
             defer rewritten_args.deinit(self.pass.allocator);
