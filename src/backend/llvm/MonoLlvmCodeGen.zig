@@ -189,6 +189,9 @@ pub const MonoLlvmCodeGen = struct {
     args_ptr_arg: ?LlvmBuilder.Value = null,
     capture_ptr_arg: ?LlvmBuilder.Value = null,
     current_ret_layout: layout.Idx = .zst,
+    /// Source statement whose machine instructions are currently being emitted.
+    /// Default-platform crash lowering consumes its explicit inline-scope chain.
+    current_source_stmt: ?CFStmtId = null,
 
     proc_registry: std.AutoHashMap(u32, LlvmBuilder.Function.Index),
     builtin_functions: std.StringHashMap(LlvmBuilder.Function.Index),
@@ -419,6 +422,7 @@ pub const MonoLlvmCodeGen = struct {
         self.debug_globals_fwd_ref = .none;
         self.current_subprogram = .none;
         self.current_debug_file = SourceLoc.no_file;
+        self.current_source_stmt = null;
         self.debug_inline_subprograms.clearRetainingCapacity();
         self.debug_inline_callsites.clearRetainingCapacity();
         self.debug_types.clearRetainingCapacity();
@@ -2424,6 +2428,9 @@ pub const MonoLlvmCodeGen = struct {
     ) Error!void {
         if (self.currentBlockHasTerminator()) return;
         if (try self.enterSharedStmtBlock(stmt_id)) return;
+        const outer_source_stmt = self.current_source_stmt;
+        defer self.current_source_stmt = outer_source_stmt;
+        self.current_source_stmt = stmt_id;
         const stmt = self.store.getCFStmt(stmt_id);
         try self.setStmtDebugLocation(stmt_id);
         switch (stmt) {
@@ -6013,7 +6020,9 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitCrashBytes(self: *MonoLlvmCodeGen, msg: []const u8) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
-        try self.emitStaticRocOpsMessageCall(.crashed, msg);
+        if (!try self.emitDefaultPlatformCrashWithFrames(msg)) {
+            try self.emitStaticRocOpsMessageCall(.crashed, msg);
+        }
         // Linux AArch64 eval tests handle crashes by returning to the Zig host.
         // Longjmping through LLVM-generated frames is not reliable on that target.
         if (self.target.cpu.arch == .aarch64 and self.target.os.tag == .linux) {
@@ -6021,6 +6030,80 @@ pub const MonoLlvmCodeGen = struct {
         } else {
             _ = wip.@"unreachable"() catch return error.OutOfMemory;
         }
+    }
+
+    /// Call the synthetic default platform's diagnostic-only crash entrypoint
+    /// with the exact virtual source-frame chain attached to the current LIR
+    /// statement. This is a lossless backend encoding of LIR inline scopes, not
+    /// a reconstruction from machine procedures or symbol names.
+    fn emitDefaultPlatformCrashWithFrames(self: *MonoLlvmCodeGen, msg: []const u8) Error!bool {
+        if (!self.enable_default_platform_diagnostics) return false;
+        const stmt_id = self.current_source_stmt orelse return false;
+        var scope_id = self.store.stmtInlineScope(stmt_id);
+        if (scope_id == lir.LIR.InlineScopeId.none) return false;
+
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const ptr_ty = try self.ptrType();
+        const usize_ty = self.ptrSizedIntType();
+        const frame_ty = builder.structType(.normal, &.{ ptr_ty, usize_ty, ptr_ty, usize_ty, .i32, .i32 }) catch return error.OutOfMemory;
+
+        var frames = std.ArrayList(LlvmBuilder.Constant).empty;
+        defer frames.deinit(self.allocator);
+        var frame_loc = self.store.stmtLoc(stmt_id);
+        while (scope_id != lir.LIR.InlineScopeId.none) {
+            const scope = self.store.inlineScope(scope_id);
+            try frames.append(self.allocator, try self.defaultPlatformSourceFrameConst(frame_ty, scope, frame_loc));
+            frame_loc = scope.call_site;
+            scope_id = scope.parent;
+        }
+
+        const frames_ty = builder.arrayType(frames.items.len, frame_ty) catch return error.OutOfMemory;
+        const frames_name = builder.strtabStringFmt(".roc.crash_frames.{d}", .{self.string_counter}) catch return error.OutOfMemory;
+        self.string_counter += 1;
+        const frames_var = builder.addVariable(frames_name, frames_ty, .default) catch return error.OutOfMemory;
+        frames_var.ptrConst(builder).global.setLinkage(.internal, builder);
+        frames_var.setMutability(.constant, builder);
+        frames_var.setInitializer(builder.arrayConst(frames_ty, frames.items) catch return error.OutOfMemory, builder) catch return error.OutOfMemory;
+
+        const fn_ty = builder.fnType(.void, &.{ ptr_ty, usize_ty, ptr_ty, usize_ty }, .normal) catch return error.OutOfMemory;
+        const callback = try self.declareExternSymbol(shim_symbols.roc_default_crashed_with_frames, fn_ty);
+        _ = wip.call(.normal, .ccc, .none, fn_ty, callback.toValue(builder), &.{
+            try self.staticBytes(msg),
+            builder.intValue(usize_ty, msg.len) catch return error.OutOfMemory,
+            frames_var.toValue(builder),
+            builder.intValue(usize_ty, frames.items.len) catch return error.OutOfMemory,
+        }, "") catch return error.OutOfMemory;
+        return true;
+    }
+
+    fn defaultPlatformSourceFrameConst(
+        self: *MonoLlvmCodeGen,
+        frame_ty: LlvmBuilder.Type,
+        scope: lir.LIR.InlineScope,
+        loc: SourceLoc,
+    ) Error!LlvmBuilder.Constant {
+        const builder = self.builder orelse return error.CompilationFailed;
+        var allocated_name: ?[]u8 = null;
+        defer if (allocated_name) |name| self.allocator.free(name);
+        const name = if (scope.source_name.isNone()) blk: {
+            const generated = try std.fmt.allocPrint(self.allocator, "roc__proc_{x}", .{scope.source_symbol.raw()});
+            allocated_name = generated;
+            break :blk generated;
+        } else self.store.getString(scope.source_name);
+        const file = if (loc.file == SourceLoc.no_file or loc.file >= self.store.sourceFileCount())
+            ""
+        else
+            self.store.sourceFileName(loc.file);
+
+        return builder.structConst(frame_ty, &.{
+            (try self.staticBytes(name)).toConst().?,
+            builder.intConst(self.ptrSizedIntType(), name.len) catch return error.OutOfMemory,
+            (try self.staticBytes(file)).toConst().?,
+            builder.intConst(self.ptrSizedIntType(), file.len) catch return error.OutOfMemory,
+            builder.intConst(.i32, if (loc.hasLocation()) loc.line else 0) catch return error.OutOfMemory,
+            builder.intConst(.i32, if (loc.hasLocation()) loc.column else 0) catch return error.OutOfMemory,
+        }) catch return error.OutOfMemory;
     }
 
     fn emitRuntimeError(self: *MonoLlvmCodeGen) Error!void {

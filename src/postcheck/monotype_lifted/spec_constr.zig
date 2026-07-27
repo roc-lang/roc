@@ -455,6 +455,7 @@ const BinderIdentity = struct {
 const BindingTarget = union(enum) {
     local: Ast.LocalId,
     binder: BinderIdentity,
+    alias: BinderIdentity,
 };
 
 const BindingChange = struct {
@@ -3313,11 +3314,21 @@ const Pass = struct {
         const fn_index = @intFromEnum(fn_id);
         if (fn_index < self.whole_body_cloned.len and self.whole_body_cloned[fn_index]) return;
 
+        const fn_ = self.program.getFn(fn_id);
         var cloner = Cloner.initForRewrite(self);
         defer cloner.deinit();
         cloner.inline_direct_requires_known_arg = true;
+        const args = self.program.typedLocalSpan(fn_.args);
+        for (0..args.len) |index| {
+            const local = GuardedList.at(args, index).local;
+            try cloner.putLocalAlias(local, local);
+        }
+        const captures = self.program.typedLocalSpan(fn_.captures);
+        for (0..captures.len) |index| {
+            const local = GuardedList.at(captures, index).local;
+            try cloner.putLocalAlias(local, local);
+        }
         const cloned = try cloner.cloneExpr(body);
-        const fn_ = self.program.getFn(fn_id);
         self.program.setFn(fn_id, .{
             .symbol = fn_.symbol,
             .source = fn_.source,
@@ -3834,20 +3845,19 @@ const Pass = struct {
 /// known value through two maps and records every write on an undo log so a
 /// scope's writes can be unwound at its boundary.
 ///
-/// The exact-local map is keyed by `LocalId`; the binder-wide map is keyed by
-/// `BinderIdentity` — the pattern binder together with the digest of the local's
-/// monomorphic type, so two locals that share a binder but were monomorphized at
-/// different types stay distinct bindings. `put` writes the exact entry always,
-/// and additionally the binder-wide entry when the value is a known constructor
-/// (`tag`/`record`/`tuple`/`nominal`) so sibling reads of the same binder see
-/// the same structure, or when the binder is loop-carried, where reassigned and
-/// state-merged copies share the binder but not the local id and binder identity
-/// is the only path they resolve through. `get` consults both maps; `getExact`
-/// consults only the exact-local map, for the shape probes that intend to see
-/// only a directly-substituted local.
+/// The exact-local map is keyed by `LocalId`. The other two maps are keyed by
+/// `BinderIdentity` — the checked pattern binder together with the digest of the
+/// local's monomorphic type, so two locals that share a binder but were
+/// monomorphized at different types stay distinct bindings. `binder_aliases`
+/// resolves every binder-equivalent local while cloning, for opaque and
+/// structural values alike. `binder_subst` exposes only known structure and
+/// loop-carried values to specialization decisions. Keeping those indexes
+/// separate makes lexical identity independent of value shape without turning
+/// an opaque binding into constructor evidence.
 const Subst = struct {
     exact: std.AutoHashMap(Ast.LocalId, Value),
     binder_subst: std.AutoHashMap(BinderIdentity, Value),
+    binder_aliases: std.AutoHashMap(BinderIdentity, Value),
     /// Binder identities carried by an enclosing loop being cloned, with a
     /// nesting refcount. A carried variable's value must survive every `let`
     /// scope inside the loop body: the state-merge lowering binds a merged
@@ -3864,6 +3874,7 @@ const Subst = struct {
         return .{
             .exact = std.AutoHashMap(Ast.LocalId, Value).init(allocator),
             .binder_subst = std.AutoHashMap(BinderIdentity, Value).init(allocator),
+            .binder_aliases = std.AutoHashMap(BinderIdentity, Value).init(allocator),
             .loop_carried_binders = std.AutoHashMap(BinderIdentity, u32).init(allocator),
             .changes = .empty,
             .allocator = allocator,
@@ -3873,6 +3884,7 @@ const Subst = struct {
     fn deinit(self: *Subst) void {
         self.changes.deinit(self.allocator);
         self.loop_carried_binders.deinit();
+        self.binder_aliases.deinit();
         self.binder_subst.deinit();
         self.exact.deinit();
     }
@@ -3900,6 +3912,16 @@ const Subst = struct {
         return null;
     }
 
+    /// Resolve a local for emitted code, including the active value of a
+    /// binder-equivalent Monotype local id.
+    fn getForClone(self: *const Subst, program: *const Ast.Program, local: Ast.LocalId) ?Value {
+        if (self.exact.get(local)) |value| return value;
+        if (binderIdentityOf(program, local)) |identity| {
+            if (self.binder_aliases.get(identity)) |value| return value;
+        }
+        return null;
+    }
+
     /// Resolve a local through the exact-local map only. The shape probes use
     /// this deliberately: they ask whether *this* local was substituted with a
     /// known value here, not whether its binder holds one somewhere.
@@ -3922,11 +3944,7 @@ const Subst = struct {
         try self.exact.put(local, value);
 
         const identity = binderIdentityOf(program, local) orelse return;
-        // A structured value carries binder-wide identity so sibling reads of
-        // the same binder see the same known structure. A loop-carried binder
-        // also takes the binder-wide entry for any value variant: reassigned
-        // and state-merged copies share its binder but not its local id, so
-        // binder identity is the only path a later reference resolves through.
+        try self.putAlias(identity, value);
         const subst_binder = self.isLoopCarried(identity) or switch (value) {
             .tag,
             .record,
@@ -3938,14 +3956,27 @@ const Subst = struct {
             .callable,
             => false,
         };
-        if (subst_binder) {
-            const previous_binder = self.binder_subst.get(identity);
-            try self.changes.append(self.allocator, .{
-                .key = .{ .binder = identity },
-                .previous = previous_binder,
-            });
-            try self.binder_subst.put(identity, value);
-        }
+        if (!subst_binder) return;
+        const previous_binder = self.binder_subst.get(identity);
+        try self.changes.append(self.allocator, .{
+            .key = .{ .binder = identity },
+            .previous = previous_binder,
+        });
+        try self.binder_subst.put(identity, value);
+    }
+
+    fn putAlias(self: *Subst, identity: BinderIdentity, value: Value) Allocator.Error!void {
+        const previous = self.binder_aliases.get(identity);
+        try self.changes.append(self.allocator, .{
+            .key = .{ .alias = identity },
+            .previous = previous,
+        });
+        try self.binder_aliases.put(identity, value);
+    }
+
+    fn putLocalAlias(self: *Subst, program: *const Ast.Program, local: Ast.LocalId, value: Value) Allocator.Error!void {
+        const identity = binderIdentityOf(program, local) orelse return;
+        try self.putAlias(identity, value);
     }
 
     /// Install a binder-wide substitution for a loop-carried slot. Reassigned
@@ -3956,6 +3987,7 @@ const Subst = struct {
     /// pre-loop local and capture recomputation turns the vanished binding into
     /// a phantom root argument.
     fn putLoopCarried(self: *Subst, identity: BinderIdentity, value: Value) Allocator.Error!void {
+        try self.putAlias(identity, value);
         const previous = self.binder_subst.get(identity);
         try self.changes.append(self.allocator, .{
             .key = .{ .binder = identity },
@@ -3975,12 +4007,20 @@ const Subst = struct {
     fn dropCarriedBinder(self: *Subst, program: *const Ast.Program, initial: Ast.ExprId) Allocator.Error!?BinderIdentity {
         const local = localExpr(program, initial) orelse return null;
         const identity = binderIdentityOf(program, local) orelse return null;
-        const previous = self.binder_subst.get(identity) orelse return identity;
-        try self.changes.append(self.allocator, .{
-            .key = .{ .binder = identity },
-            .previous = previous,
-        });
-        _ = self.binder_subst.remove(identity);
+        if (self.binder_subst.get(identity)) |previous| {
+            try self.changes.append(self.allocator, .{
+                .key = .{ .binder = identity },
+                .previous = previous,
+            });
+            _ = self.binder_subst.remove(identity);
+        }
+        if (self.binder_aliases.get(identity)) |previous| {
+            try self.changes.append(self.allocator, .{
+                .key = .{ .alias = identity },
+                .previous = previous,
+            });
+            _ = self.binder_aliases.remove(identity);
+        }
         return identity;
     }
 
@@ -4024,7 +4064,7 @@ const Subst = struct {
         for (self.changes.items[start..]) |change| {
             const identity = switch (change.key) {
                 .binder => |identity| identity,
-                .local => continue,
+                .local, .alias => continue,
             };
             if (!self.isLoopCarried(identity)) continue;
             const value = self.binder_subst.get(identity) orelse continue;
@@ -4059,6 +4099,13 @@ const Subst = struct {
                         self.binder_subst.putAssumeCapacity(identity, previous);
                     } else {
                         _ = self.binder_subst.remove(identity);
+                    }
+                },
+                .alias => |identity| {
+                    if (change.previous) |previous| {
+                        self.binder_aliases.putAssumeCapacity(identity, previous);
+                    } else {
+                        _ = self.binder_aliases.remove(identity);
                     }
                 },
             }
@@ -4584,7 +4631,7 @@ const Cloner = struct {
         const expr = self.pass.program.getExpr(expr_id);
         switch (expr.data) {
             .local => |local| {
-                if (self.subst.get(self.pass.program, local)) |value| return value;
+                if (self.subst.getForClone(self.pass.program, local)) |value| return value;
                 return .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .local = local } }) };
             },
             .fn_ref => |fn_ref| return try self.callableValueFromRef(expr.ty, fn_ref, bindings),
@@ -4761,7 +4808,12 @@ const Cloner = struct {
         for (0..operands.len) |index| {
             const operand = GuardedList.at(operands, index);
             const local = localExpr(self.pass.program, operand.value) orelse return true;
-            if (self.subst.get(self.pass.program, local) != null) return true;
+            const substituted = self.subst.get(self.pass.program, local) orelse continue;
+            const substituted_expr = switch (substituted) {
+                .expr => |expr| expr,
+                else => return true,
+            };
+            if (localExpr(self.pass.program, substituted_expr) != local) return true;
         }
         return false;
     }
@@ -8172,6 +8224,12 @@ const Cloner = struct {
         try self.subst.put(self.pass.program, local, .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .local = local } }) });
     }
 
+    fn putLocalAlias(self: *Cloner, source: Ast.LocalId, target: Ast.LocalId) Common.LowerError!void {
+        const ty = self.pass.program.getLocal(target).ty;
+        const target_expr = try self.addExpr(.{ .ty = ty, .data = .{ .local = target } });
+        try self.subst.putLocalAlias(self.pass.program, source, .{ .expr = target_expr });
+    }
+
     fn shadowPatLocals(self: *Cloner, pat_id: Ast.PatId) Common.LowerError!void {
         const pat = self.pass.program.getPat(pat_id);
         switch (pat.data) {
@@ -8333,7 +8391,7 @@ const Cloner = struct {
     /// than in a child `.local` expression. These fields require a runtime
     /// local, so a structured substitution is an invalid cloned IR state.
     fn cloneLocalRef(self: *Cloner, source: Ast.LocalId) Ast.LocalId {
-        const value = self.subst.get(self.pass.program, source) orelse return source;
+        const value = self.subst.getForClone(self.pass.program, source) orelse return source;
         const expr = switch (value) {
             .expr => |expr| expr,
             else => Common.invariant("SpecConstr local-id field referenced a non-local substituted value"),
@@ -8826,9 +8884,6 @@ const Cloner = struct {
             // type in a callable template. A shared callable worker has one
             // dynamic slot for that identity, so clone every equivalent use
             // through the selected source capture local.
-            if (Subst.binderIdentityOf(self.pass.program, source_capture.local)) |identity| {
-                try self.subst.putLoopCarried(identity, capture_value);
-            }
         }
         for (source_args, args) |source_arg, arg| {
             const arg_expr = try self.addExpr(.{
@@ -9035,9 +9090,10 @@ const BodyLocalScope = struct {
 
     fn checkUse(self: *BodyLocalScope, local: Ast.LocalId) void {
         if (self.bound.contains(local)) return;
+        const func = self.program.getFnAt(self.fn_index);
         Common.invariantFmt(
-            "rewritten fn {d} references local {d} bound by no enclosing scope, argument, or capture",
-            .{ self.fn_index, @intFromEnum(local) },
+            "rewritten fn {d} (symbol {d}) references local {d} (`{s}`) bound by no enclosing scope, argument, or capture",
+            .{ self.fn_index, @intFromEnum(func.symbol), @intFromEnum(local), self.program.localName(local) },
         );
     }
 
@@ -10928,6 +10984,35 @@ test "SpecConstr pattern clones bind fresh local identities" {
     try std.testing.expect(output_local != source_local);
     try std.testing.expect(output_local != known_local);
     cloner.subst.restore(known_change);
+}
+
+test "whole-body normalization resolves binder-equivalent argument locals" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const ty = try program.types.add(.{ .primitive = .u8 });
+    const binder: check.CheckedModule.PatternBinderId = @enumFromInt(1);
+    const argument = try program.addLocalWithBinder(@enumFromInt(1), ty, binder);
+    const equivalent = try program.addLocalWithBinder(@enumFromInt(2), ty, binder);
+    const equivalent_ref = try program.addExpr(.{ .ty = ty, .data = .{ .local = equivalent } });
+    const fn_id = try program.addFn(.{
+        .symbol = @enumFromInt(3),
+        .args = try program.addTypedLocalSpan(&.{.{ .local = argument, .ty = ty }}),
+        .captures = Ast.Span(Ast.TypedLocal).empty(),
+        .body = .{ .roc = equivalent_ref },
+        .ret = ty,
+    });
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    try pass.cloneFnBodyInPlace(fn_id, equivalent_ref);
+
+    const cloned_body = switch (program.getFn(fn_id).body) {
+        .roc => |body| body,
+        .hosted => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(argument, program.getExpr(cloned_body).data.local);
 }
 
 test "known match fold aborts on undecidable branches and trips the invariant when every branch is excluded" {

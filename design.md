@@ -1644,6 +1644,14 @@ parent chain. LLVM emits the graph as standard nested `DISubprogram` and
 consume this graph (or a lossless backend encoding of it); they must not infer
 source frames from the surviving machine procedures.
 
+The synthetic default platform's crash entrypoint receives such a lossless
+encoding directly from LLVM codegen: the current LIR statement's inline-scope
+chain is flattened innermost-first into constant source-frame records, with the
+statement location for the innermost frame and each exact call site for its
+parent. The default platform prints those materialized source frames before
+walking the machine stack. It never scans procedure bodies for crashability or
+reconstructs an inlined source frame from a machine symbol.
+
 Inlining permission never depends on scanning a body for `crash`, `expect`, a
 particular low-level operation, or a transitively reachable failure. Such scans
 are necessarily incomplete for indirect calls and future failure forms. A
@@ -2469,6 +2477,16 @@ adapter-specific transforms match exact stamped calls. The pass does not scan
 whole bodies to classify branch-chosen loops, count construction-call depth,
 recognize iterator types by text, or set a guessed body category that changes
 how a later clone interprets opaque calls.
+
+Monotype can assign distinct local ids to uses of one checked pattern binder at
+one monomorphic type. SpecConstr therefore keeps lexical binder aliases separate
+from known-value evidence. Every active binding records its exact local and an
+alias keyed by checked binder id plus monomorphic type digest; whole-body
+normalization seeds the alias index from the function's arguments and captures.
+A separate value index exposes only known structure and loop-carried state to
+specialization decisions. Consequently an opaque binder use still resolves to
+its active cloned local, but that lexical resolution cannot authorize inlining
+or constructor specialization.
 
 Analysis exhaustion is explicit. A bounded query returns `proven`,
 `disproven`, or `unknown_budget_exhausted`; only `proven` authorizes a rewrite.
@@ -5285,6 +5303,14 @@ the defined copy path and returns a fresh box. The payload move, replacement,
 and old-payload release are all explicit in LIR or in the low-level operation's
 documented RC effect; no backend may infer them from `Box` names or pointer
 shapes.
+
+The pre-ARC box-reuse proof recognizes both a direct producer call and a
+producer that earlier specialization has inlined into one straight-line LIR
+region. It follows only explicit `next` edges from `box_unbox` to the terminal
+`box_box`/`ret`, requires identical committed box and payload layouts, and uses
+proc-wide operand counts to prove that the consumed input box and returned box
+have no consumers outside the rewrite. Control-flow regions or additional box
+consumers are rejected rather than classified from source shape or names.
 
 `reuse_erased_callable` is the erased-callable counterpart. Erased callables are
 not ordinary `Box(T)` payloads; their allocation stores a callable entry, an

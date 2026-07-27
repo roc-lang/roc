@@ -2,11 +2,11 @@
 //! allocation when the LIR shape carries enough explicit information.
 //!
 //! This runs after SolvedLirLower/TRMC and before ARC insertion. It only
-//! accepts an adjacent, straight-line shape:
+//! accepts a straight-line shape:
 //!
 //! ```text
 //! payload0 = box_unbox(boxed)
-//! payload1 = call(payload0)
+//! payload1 = produce(payload0)
 //! result   = box_box(payload1)
 //! ret result
 //! ```
@@ -17,16 +17,19 @@
 //! result   = box_prepare_update(boxed)
 //! payloadp = ptr_cast(result)
 //! payload0 = ptr_load(payloadp)
-//! payload1 = call(payload0)
+//! payload1 = produce(payload0)
 //! _        = ptr_store(payloadp, payload1)
 //! ret result
 //! ```
 //!
-//! It also accepts equivalent wrapper shapes when lowering routes the call
-//! result through a one-parameter join before the final `box_box`, including the
-//! platform-entrypoint form where the unbox and update call live in the join's
-//! remainder. The join matchers only cross local aliases and zero-sized struct
-//! statements, and validate the payload/box layouts before rewriting.
+//! `produce` may be a call or an inlined straight-line producer region. The
+//! rewrite proves from proc-wide operand reads that the consumed box and the
+//! returned box have no consumers outside the matched region. It also accepts
+//! equivalent wrapper shapes when lowering routes a call result through a
+//! one-parameter join before the final `box_box`, including the platform-entrypoint
+//! form where the unbox and update call live in the join's remainder. The join
+//! matchers only cross local aliases and zero-sized struct statements, and
+//! validate the payload/box layouts before rewriting.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -62,10 +65,14 @@ fn transformProc(store: *LirStore, layouts: *layout_mod.Store, proc_id: LIR.LirP
     const proc = store.getProcSpec(proc_id);
     if (proc.body == null or proc.hosted != null or proc.abi != .roc) return;
 
+    var reads = try body_clone.countReachableReads(store, proc.body.?);
+    defer reads.deinit();
+
     var transform = Transform{
         .store = store,
         .layouts = layouts,
         .proc_id = proc_id,
+        .reads = &reads,
         .new_locals = .empty,
     };
     defer transform.new_locals.deinit(store.allocator);
@@ -86,6 +93,7 @@ const Transform = struct {
     store: *LirStore,
     layouts: *layout_mod.Store,
     proc_id: LIR.LirProcSpecId,
+    reads: *const body_clone.ReadCounts,
     new_locals: std.ArrayList(LocalId),
 
     fn rewriteAt(self: *Transform, unbox_stmt_id: CFStmtId) ResourceError!bool {
@@ -114,31 +122,36 @@ const Transform = struct {
         unbox_stmt: @FieldType(LIR.CFStmt, "assign_low_level"),
         boxed: LocalId,
     ) ResourceError!bool {
-        const call_stmt_id = unbox_stmt.next;
-        const call_stmt = switch (self.store.getCFStmt(call_stmt_id)) {
-            .assign_call => |s| s,
-            else => return false,
-        };
-        const call_args = self.store.getLocalSpan(call_stmt.args);
-        if (call_args.len != 1 or GuardedList.at(call_args, 0) != unbox_stmt.target) return false;
+        var box_stmt_id = unbox_stmt.next;
+        var box_stmt: @FieldType(LIR.CFStmt, "assign_low_level") = undefined;
+        var payload_value: LocalId = undefined;
+        var ret_stmt_id: CFStmtId = undefined;
 
-        const payload_alias = body_clone.forwardLocalAliasChain(self.store, call_stmt.target, call_stmt.next);
-        const payload_value = payload_alias.value;
-        const box_stmt_id = payload_alias.next;
-        const box_stmt = switch (self.store.getCFStmt(box_stmt_id)) {
-            .assign_low_level => |s| s,
-            else => return false,
-        };
-        if (box_stmt.op != .box_box) return false;
-        const box_args = self.store.getLocalSpan(box_stmt.args);
-        if (box_args.len != 1 or GuardedList.at(box_args, 0) != payload_value) return false;
+        // Follow only explicit straight-line `next` edges. The statement-count
+        // bound turns a malformed cycle into a declined rewrite rather than an
+        // unbounded compiler loop.
+        var remaining = self.store.getCFStmts().len;
+        while (remaining > 0) : (remaining -= 1) {
+            const candidate = self.store.getCFStmt(box_stmt_id);
+            if (candidate == .assign_low_level and candidate.assign_low_level.op == .box_box) {
+                const candidate_box = candidate.assign_low_level;
+                const box_args = self.store.getLocalSpan(candidate_box.args);
+                if (box_args.len == 1) {
+                    const candidate_ret_id = candidate_box.next;
+                    switch (self.store.getCFStmt(candidate_ret_id)) {
+                        .ret => |ret_stmt| if (ret_stmt.value == candidate_box.target) {
+                            box_stmt = candidate_box;
+                            payload_value = GuardedList.at(box_args, 0);
+                            ret_stmt_id = candidate_ret_id;
+                            break;
+                        },
+                        else => {},
+                    }
+                }
+            }
 
-        const ret_stmt_id = box_stmt.next;
-        const ret_stmt = switch (self.store.getCFStmt(ret_stmt_id)) {
-            .ret => |s| s,
-            else => return false,
-        };
-        if (ret_stmt.value != box_stmt.target) return false;
+            box_stmt_id = self.nextOf(box_stmt_id) orelse return false;
+        } else return false;
 
         const result_box = box_stmt.target;
         if (boxed == result_box) return false;
@@ -153,6 +166,12 @@ const Transform = struct {
         if (self.store.getLocal(unbox_stmt.target).layout_idx != payload_layout) return false;
         if (self.store.getLocal(payload_value).layout_idx != payload_layout) return false;
 
+        // `box_prepare_update` consumes `boxed`, and moving the result-box
+        // definition to the start of the region is valid only when neither
+        // local has another observable consumer.
+        if (self.reads.get(boxed) != 1) return false;
+        if (self.reads.get(result_box) != 1) return false;
+
         const ptr_layout = try self.layouts.insertPtr(payload_layout);
         const payload_ptr = try self.addLocal(ptr_layout);
         const store_unit = try self.addLocal(.zst);
@@ -162,7 +181,7 @@ const Transform = struct {
             .op = .ptr_load,
             .rc_effect = LowLevelOp.ptr_load.rcEffect(),
             .args = try self.store.addLocalSpan(&.{payload_ptr}),
-            .next = call_stmt_id,
+            .next = unbox_stmt.next,
         } });
         const cast_stmt_id = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = payload_ptr,
@@ -476,20 +495,16 @@ const Transform = struct {
 
         if (!self.samePackedErasedPayloadShape(old_stmt.capture_layout, new_stmt.capture_layout)) return false;
 
-        const proc_body = self.store.getProcSpec(self.proc_id).body orelse return false;
-        var reads = try body_clone.countReachableReads(self.store, proc_body);
-        defer reads.deinit();
-
         // The first pack's allocation becomes the reuse target, so its result
         // must have no other consumer: any read would still be live after the
         // second pack overwrote the allocation. An alias of it read elsewhere
         // shows up here as a nonzero count and declines the rewrite.
-        if (reads.get(old_stmt.target) != 0) return false;
+        if (self.reads.get(old_stmt.target) != 0) return false;
         // Each crossed return-chain local (the second pack's result and its
         // aliases) must be read exactly once, so the matched chain is that
         // local's only use and no other statement observes it.
         for (return_chain.items) |local| {
-            if (reads.get(local) != 1) return false;
+            if (self.reads.get(local) != 1) return false;
         }
 
         self.store.getCFStmtPtr(new_stmt_id).* = .{ .assign_packed_erased_fn = .{
@@ -740,6 +755,88 @@ test "box reuse rewrites the direct unbox call rebox return chain" {
 
     const frame_locals = store.getLocalSpan(store.getProcSpec(caller).frame_locals);
     try std.testing.expect(frame_locals.len >= 6);
+}
+
+test "box reuse rewrites an inlined straight-line payload producer" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout_mod.Store.init(allocator, @import("base").target.TargetUsize.native);
+    defer layouts.deinit();
+
+    const box_u64 = try layouts.insertBox(.u64);
+
+    const boxed_arg = try testLocal(&store, box_u64);
+    const old_payload = try testLocal(&store, .u64);
+    const one = try testLocal(&store, .u64);
+    const new_payload = try testLocal(&store, .u64);
+    const result_box = try testLocal(&store, box_u64);
+
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result_box } });
+    const rebox = try testLowLevel(&store, result_box, .box_box, &.{new_payload}, ret);
+    const add = try testLowLevel(&store, new_payload, .num_plus, &.{ old_payload, one }, rebox);
+    const literal = try store.addCFStmt(.{ .assign_literal = .{
+        .target = one,
+        .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
+        .next = add,
+    } });
+    const unbox = try testLowLevel(&store, old_payload, .box_unbox, &.{boxed_arg}, literal);
+    _ = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .args = try store.addLocalSpan(&.{boxed_arg}),
+        .frame_locals = try store.addLocalSpan(&.{ boxed_arg, old_payload, one, new_payload, result_box }),
+        .body = unbox,
+        .ret_layout = box_u64,
+    });
+
+    try run(&store, &layouts);
+
+    const prepare = store.getCFStmt(unbox).assign_low_level;
+    try std.testing.expectEqual(LowLevelOp.box_prepare_update, prepare.op);
+    const cast = store.getCFStmt(prepare.next).assign_low_level;
+    try std.testing.expectEqual(LowLevelOp.ptr_cast, cast.op);
+    const payload_ptr = cast.target;
+    const load = store.getCFStmt(cast.next).assign_low_level;
+    try std.testing.expectEqual(LowLevelOp.ptr_load, load.op);
+    try std.testing.expectEqual(literal, load.next);
+
+    const store_payload = store.getCFStmt(rebox).assign_low_level;
+    try std.testing.expectEqual(LowLevelOp.ptr_store, store_payload.op);
+    const store_args = store.getLocalSpan(store_payload.args);
+    try std.testing.expectEqual(payload_ptr, GuardedList.at(store_args, 0));
+    try std.testing.expectEqual(new_payload, GuardedList.at(store_args, 1));
+}
+
+test "box reuse rejects a straight-line region with another input-box consumer" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout_mod.Store.init(allocator, @import("base").target.TargetUsize.native);
+    defer layouts.deinit();
+
+    const box_u64 = try layouts.insertBox(.u64);
+
+    const boxed_arg = try testLocal(&store, box_u64);
+    const boxed_copy = try testLocal(&store, box_u64);
+    const old_payload = try testLocal(&store, .u64);
+    const result_box = try testLocal(&store, box_u64);
+
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result_box } });
+    const rebox = try testLowLevel(&store, result_box, .box_box, &.{old_payload}, ret);
+    const extra_consumer = try testLocalRef(&store, boxed_copy, boxed_arg, rebox);
+    const unbox = try testLowLevel(&store, old_payload, .box_unbox, &.{boxed_arg}, extra_consumer);
+    _ = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .args = try store.addLocalSpan(&.{boxed_arg}),
+        .frame_locals = try store.addLocalSpan(&.{ boxed_arg, boxed_copy, old_payload, result_box }),
+        .body = unbox,
+        .ret_layout = box_u64,
+    });
+
+    try run(&store, &layouts);
+
+    try std.testing.expectEqual(LowLevelOp.box_unbox, store.getCFStmt(unbox).assign_low_level.op);
+    try std.testing.expectEqual(LowLevelOp.box_box, store.getCFStmt(rebox).assign_low_level.op);
 }
 
 test "box reuse rewrites joined update wrappers" {

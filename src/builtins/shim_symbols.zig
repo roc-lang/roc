@@ -38,6 +38,8 @@ pub const roc_default_echo_line = "roc_default_echo_line";
 pub const roc_default_backtrace_table = "roc_default_backtrace_table";
 /// Number of entries in `roc_default_backtrace_table`.
 pub const roc_default_backtrace_count = "roc_default_backtrace_count";
+/// Synthetic default-platform crash callback with an exact virtual source-frame chain.
+pub const roc_default_crashed_with_frames = "roc_default_crashed_with_frames";
 /// The glue platform's entrypoint resolved by `roc glue`.
 pub const roc_make_glue = "roc_make_glue";
 
