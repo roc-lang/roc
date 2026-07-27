@@ -21996,11 +21996,10 @@ fn freshParseResultOkVar(
     } } }, env, region);
 }
 
-/// The `parse_record_field` event row. The same row is built in two other
-/// representations that must agree with this one: `parseRecordFieldEventType`
-/// (monotype) and `graphParseRecordEvent` (checked-evidence graph), both in
-/// postcheck/monotype/lower.zig. A change here needs the same change there, or
-/// resolving a format's method against the row fails to unify.
+/// The `parse_record_field` event row. `graphParseRecordEvent` in
+/// postcheck/monotype/lower.zig builds the same row for the checked-evidence
+/// boundary and must agree with this one, or resolving a format's method
+/// against the row fails to unify.
 fn freshParseRecordFieldEventVar(
     self: *Self,
     shape_var: Var,

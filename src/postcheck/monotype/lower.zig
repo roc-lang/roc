@@ -15676,67 +15676,6 @@ const BodyContext = struct {
         return try self.wrapLet(field_local, field_ty, field_value, matched, ret_ty);
     }
 
-    fn generatedFieldNamesBackingType(
-        self: *BodyContext,
-        field_count: usize,
-        field_handle_ty: Type.TypeId,
-    ) Allocator.Error!Type.TypeId {
-        const item_fields = try self.allocator.alloc(Type.Field, field_count);
-        defer self.allocator.free(item_fields);
-
-        for (item_fields, 0..) |*field, index| {
-            const label = try std.fmt.allocPrint(self.allocator, "field_{d:0>20}", .{index});
-            defer self.allocator.free(label);
-
-            field.* = .{
-                .name = try self.builder.program.names.internRecordFieldLabel(label),
-                .ty = field_handle_ty,
-            };
-        }
-        const items_ty = try self.builder.program.types.add(.{
-            .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, item_fields),
-        });
-        const u64_ty = try self.builder.primitiveType(.u64);
-        var fields = [_]Type.Field{
-            .{
-                .name = try self.builder.program.names.internRecordFieldLabel("items"),
-                .ty = items_ty,
-            },
-            .{
-                .name = try self.builder.program.names.internRecordFieldLabel("shortest_name"),
-                .ty = u64_ty,
-            },
-            .{
-                .name = try self.builder.program.names.internRecordFieldLabel("longest_name"),
-                .ty = u64_ty,
-            },
-        };
-        return try self.builder.program.types.add(.{
-            .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &fields),
-        });
-    }
-
-    fn generatedFieldHandleBackingType(self: *BodyContext) Allocator.Error!Type.TypeId {
-        const fields = [_]Type.Field{
-            .{
-                .name = try self.builder.program.names.internRecordFieldLabel("index"),
-                .ty = try self.builder.primitiveType(.u64),
-            },
-            .{
-                .name = try self.builder.program.names.internRecordFieldLabel("name"),
-                .ty = try self.builder.primitiveType(.str),
-            },
-            .{
-                .name = try self.builder.program.names.internRecordFieldLabel("name_len"),
-                .ty = try self.builder.primitiveType(.u64),
-            },
-        };
-
-        return try self.builder.program.types.add(.{
-            .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &fields),
-        });
-    }
-
     fn lowerFieldNamesValue(
         self: *BodyContext,
         fields_ty: Type.TypeId,
@@ -17934,39 +17873,6 @@ const BodyContext = struct {
         const label = try std.fmt.allocPrint(self.allocator, "field_{d:0>20}", .{index});
         defer self.allocator.free(label);
         return try self.builder.program.names.internRecordFieldLabel(label);
-    }
-
-    fn generatedParseTagUnionSpecBackingType(
-        self: *BodyContext,
-        record_shapes: []const Type.TypeId,
-    ) Allocator.Error!Type.TypeId {
-        const str_ty = try self.builder.primitiveType(.str);
-        const outer_fields = try self.allocator.alloc(Type.Field, record_shapes.len);
-        defer self.allocator.free(outer_fields);
-
-        for (record_shapes, 0..) |record_shape, record_index| {
-            const record_fields = try self.dupeRecordFieldsForShape(record_shape);
-            defer self.allocator.free(record_fields);
-            const inner_fields = try self.allocator.alloc(Type.Field, record_fields.len);
-            defer self.allocator.free(inner_fields);
-
-            for (inner_fields, 0..) |*field, field_index| {
-                field.* = .{
-                    .name = try self.generatedParseTagUnionSpecBackingFieldName(field_index),
-                    .ty = str_ty,
-                };
-            }
-            outer_fields[record_index] = .{
-                .name = try self.generatedParseTagUnionSpecBackingRecordFieldName(record_index),
-                .ty = try self.builder.program.types.add(.{
-                    .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, inner_fields),
-                }),
-            };
-        }
-
-        return try self.builder.program.types.add(.{
-            .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, outer_fields),
-        });
     }
 
     fn lowerParseTagUnionSpecValue(
@@ -20994,66 +20900,6 @@ const BodyContext = struct {
         return try self.lowLevelExpr(.num_bitwise_or, &.{ current, bit }, presence_ty);
     }
 
-    /// The `parse_record_field` event row. `freshParseRecordFieldEventVar` in
-    /// check/Check.zig and `graphParseRecordEvent` below build the same row in
-    /// their own representations; all three must agree.
-    fn parseRecordFieldEventType(
-        self: *BodyContext,
-        state_ty: Type.TypeId,
-        field_handle_ty: Type.TypeId,
-    ) Allocator.Error!Type.TypeId {
-        const field_name_name = try self.builder.program.names.internRecordFieldLabel("field");
-        const name_name = try self.builder.program.names.internRecordFieldLabel("name");
-        const rest_name = try self.builder.program.names.internRecordFieldLabel("rest");
-        const str_ty = try self.builder.primitiveType(.str);
-
-        const field_fields = [_]Type.Field{
-            .{ .name = field_name_name, .ty = field_handle_ty },
-            .{ .name = rest_name, .ty = state_ty },
-        };
-        const field_payload_ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &field_fields) });
-
-        const try_field_fields = [_]Type.Field{
-            .{ .name = name_name, .ty = str_ty },
-            .{ .name = rest_name, .ty = state_ty },
-        };
-        const try_field_payload_ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &try_field_fields) });
-
-        const continue_name = try self.builder.program.names.internTagLabel("Continue");
-        const done_name = try self.builder.program.names.internTagLabel("Done");
-        const field_name = try self.builder.program.names.internTagLabel("Field");
-        const try_field_name = try self.builder.program.names.internTagLabel("TryField");
-        const try_field_caseless_name = try self.builder.program.names.internTagLabel("TryFieldCaseless");
-        const tags = [_]Type.Tag{
-            .{
-                .name = continue_name,
-                .checked_name = continue_name,
-                .payloads = try self.builder.program.types.addSpan(&[_]Type.TypeId{state_ty}),
-            },
-            .{
-                .name = done_name,
-                .checked_name = done_name,
-                .payloads = try self.builder.program.types.addSpan(&[_]Type.TypeId{state_ty}),
-            },
-            .{
-                .name = field_name,
-                .checked_name = field_name,
-                .payloads = try self.builder.program.types.addSpan(&[_]Type.TypeId{field_payload_ty}),
-            },
-            .{
-                .name = try_field_name,
-                .checked_name = try_field_name,
-                .payloads = try self.builder.program.types.addSpan(&[_]Type.TypeId{try_field_payload_ty}),
-            },
-            .{
-                .name = try_field_caseless_name,
-                .checked_name = try_field_caseless_name,
-                .payloads = try self.builder.program.types.addSpan(&[_]Type.TypeId{try_field_payload_ty}),
-            },
-        };
-        return try self.builder.program.types.add(.{ .tag_union = try self.builder.program.types.addTagVariants(&self.builder.program.names, &tags) });
-    }
-
     /// The event a variable-length container's `parse_*_start` returns: either
     /// the format declared the entry count up front (`Counted`) or the driver
     /// must ask after every entry whether more follow (`Uncounted`).
@@ -22472,55 +22318,6 @@ const BodyContext = struct {
         }
         try self.relateCheckedTypeToMono(function.ret, ret_ty);
         return fn_node;
-    }
-
-    fn instantiateTargetCallTypeFromMonoArgsPreservingArgs(
-        self: *BodyContext,
-        source_fn_ty: checked.CheckedTypeId,
-        arg_tys: []const Type.TypeId,
-        ret_ty: Type.TypeId,
-    ) Allocator.Error!Type.TypeId {
-        const function = self.checkedFunctionType(source_fn_ty);
-        if (function.args.len != arg_tys.len) {
-            Common.invariant("checked synthetic dispatch target arity differs from its function type");
-        }
-        for (function.args, arg_tys) |formal_ty, arg_ty| {
-            try self.relateCheckedTypeToMono(formal_ty, arg_ty);
-        }
-        try self.relateCheckedTypeToMono(function.ret, ret_ty);
-        return try self.activeTypeFromNode(try self.graphFunctionNodeFromMono(arg_tys, ret_ty));
-    }
-
-    fn instantiateTargetCallTypeFromMonoArgAtIndexAndRet(
-        self: *BodyContext,
-        source_fn_ty: checked.CheckedTypeId,
-        arg_index: usize,
-        arg_ty: Type.TypeId,
-        ret_ty: Type.TypeId,
-    ) Allocator.Error!Type.TypeId {
-        const function = self.checkedFunctionType(source_fn_ty);
-        if (arg_index >= function.args.len) {
-            Common.invariant("checked synthetic dispatch target argument index was outside its function type");
-        }
-        const fn_node = try self.instNode(source_fn_ty);
-        const function_nodes = try self.graph.functionNodes(fn_node);
-        const request_args = try self.graph.arena().dupe(NodeId, function_nodes.args);
-        request_args[arg_index] = try checkedMonoRequestNode(
-            self.graph,
-            request_args[arg_index],
-            try self.graph.importMono(arg_ty),
-        );
-        const request_ret = try checkedMonoRequestNode(
-            self.graph,
-            function_nodes.ret,
-            try self.graph.importMono(ret_ty),
-        );
-        if (try self.graph.containsGeneratedPrivate(request_args[arg_index]) or
-            try self.graph.containsGeneratedPrivate(request_ret))
-        {
-            return try self.activeTypeFromNode(try self.graphFunctionNode(request_args, request_ret));
-        }
-        return try self.activeTypeFromNode(fn_node);
     }
 
     fn instantiateTargetCallNodeFromMonoArgAtIndex(
@@ -29271,69 +29068,6 @@ const BodyContext = struct {
         return try target_ctx.instantiateTargetCallTypeFromMonoArgs(lookup.target.callable_ty, arg_tys, ret_ty);
     }
 
-    fn methodTargetMonoTypeFromArgsPreservingArgs(
-        self: *BodyContext,
-        lookup: MethodLookup,
-        arg_tys: []const Type.TypeId,
-        ret_ty: Type.TypeId,
-    ) Allocator.Error!Type.TypeId {
-        if (self.frozen_sealed_emission) {
-            if (try self.frozenCodecCallableFromArgs(lookup, arg_tys, ret_ty)) |prepared| return prepared;
-            Common.invariant("sealed structural codec requested an unprepared preserving callable");
-        }
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        return try target_ctx.instantiateTargetCallTypeFromMonoArgsPreservingArgs(lookup.target.callable_ty, arg_tys, ret_ty);
-    }
-
-    fn methodTargetMonoTypeFromArgAtIndexAndRet(
-        self: *BodyContext,
-        lookup: MethodLookup,
-        arg_index: usize,
-        arg_ty: Type.TypeId,
-        ret_ty: Type.TypeId,
-    ) Allocator.Error!Type.TypeId {
-        if (self.frozen_sealed_emission) {
-            Common.invariant("sealed structural codec requested an unprepared partial callable");
-        }
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        return try target_ctx.instantiateTargetCallTypeFromMonoArgAtIndexAndRet(lookup.target.callable_ty, arg_index, arg_ty, ret_ty);
-    }
-
-    fn methodTargetMonoTypeFromArgsIsolated(
-        self: *BodyContext,
-        lookup: MethodLookup,
-        arg_tys: []const Type.TypeId,
-        ret_ty: Type.TypeId,
-        _: bool,
-    ) Allocator.Error!Type.TypeId {
-        var graph = try InstGraph.create(self.allocator, &self.builder.program.types, &self.builder.program.names);
-        defer graph.destroy();
-        var body_draft = BodyDraftStore.init(self.allocator);
-        defer body_draft.deinit();
-        const owner_template = switch (lookup.target.kind) {
-            .procedure => |procedure| procedure.template,
-            .local_proc => self.owner_template,
-            .structural => Common.invariant("structural method registry result has no callable specialization context"),
-        };
-        var target_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, lookup.view, self.method_scope, owner_template, graph, &body_draft);
-        defer target_ctx.deinit();
-        // The caller owns the exact runtime interface. Relate the checked
-        // target to that interface, but seal the request node itself so a
-        // generated-private argument is not re-expressed through another
-        // public/private backing layer on every recursive helper request.
-        const active = try target_ctx.instantiateTargetCallTypeFromMonoArgsPreservingArgs(
-            lookup.target.callable_ty,
-            arg_tys,
-            ret_ty,
-        );
-        try graph.freezeRelations();
-        var sealer = GraphTypeFinals.init(graph);
-        defer sealer.deinit();
-        return try sealer.sealType(active);
-    }
-
     fn methodTargetMonoTypeFromArgAtIndexIsolated(
         self: *BodyContext,
         lookup: MethodLookup,
@@ -32318,15 +32052,6 @@ const BodyContext = struct {
         );
     }
 
-    fn cloneNamedTypeWithGeneratedBacking(
-        self: *BodyContext,
-        template_ty: Type.TypeId,
-        args: []const Type.TypeId,
-        backing_ty: Type.TypeId,
-    ) Allocator.Error!Type.TypeId {
-        return try self.cloneNamedTypeWithBackingAuthority(template_ty, args, backing_ty, .generated_private);
-    }
-
     fn cloneNamedTypeWithBackingAuthority(
         self: *BodyContext,
         template_ty: Type.TypeId,
@@ -33221,8 +32946,8 @@ const BodyContext = struct {
     }
 
     /// The `parse_record_field` event row at the checked-evidence boundary.
-    /// Mirrors `parseRecordFieldEventType` above and
-    /// `freshParseRecordFieldEventVar` in check/Check.zig.
+    /// `freshParseRecordFieldEventVar` in check/Check.zig builds the same row
+    /// and must agree with this one.
     fn graphParseRecordEvent(
         self: *BodyContext,
         state_node: NodeId,
@@ -33759,7 +33484,95 @@ const BodyContext = struct {
         return true;
     }
 
-    fn prepareParseArrayFormatCodecCalls(
+    /// The key half of a dict's codec. A key the format renders as a key string
+    /// goes through `parse_key_*`/`encode_key_*`; an enum key reads its name as
+    /// a key string and an unmatched name becomes the driver's `invalid_value`;
+    /// any other key is read by its own codec behind `parse_key_start` /
+    /// `encode_key_start`.
+    fn prepareDictKeyCodecCalls(
+        self: *BodyContext,
+        boundary_expr: DraftExprId,
+        kind: CodecKind,
+        key_node: NodeId,
+        boundary_callable_node: NodeId,
+        seen: *std.AutoHashMap(NodeId, void),
+    ) Allocator.Error!bool {
+        switch (kind) {
+            .parser => {
+                if (self.graphJsonParseObjectKeyMethodName(key_node)) |method_name| {
+                    return try self.prepareParseObjectKeyCodecCall(boundary_expr, key_node, key_node, boundary_callable_node, method_name);
+                }
+                if (self.graphNodeIsStringRenderedDictKey(key_node)) {
+                    const str_node = try self.graph.newNode(.{ .primitive = .str });
+                    var added = try self.prepareParseObjectKeyCodecCall(boundary_expr, key_node, str_node, boundary_callable_node, "parse_key_str");
+                    added = try self.prepareParserInvalidValueCodecCall(boundary_expr, key_node, boundary_callable_node) or added;
+                    return added;
+                }
+                var added = try self.prepareParseFormatControlCodecCall(
+                    boundary_expr,
+                    key_node,
+                    boundary_callable_node,
+                    "parse_key_start",
+                    true,
+                );
+                added = try self.prepareCustomCodecCallsAtNode(boundary_expr, kind, key_node, boundary_callable_node, seen) or added;
+                return added;
+            },
+            .encoder => {
+                if (self.graphJsonEncodeObjectKeyMethodName(key_node)) |method_name| {
+                    return try self.prepareEncodeObjectKeyCodecCall(boundary_expr, key_node, key_node, boundary_callable_node, method_name);
+                }
+                if (self.graphNodeIsStringRenderedDictKey(key_node)) {
+                    const str_node = try self.graph.newNode(.{ .primitive = .str });
+                    return try self.prepareEncodeObjectKeyCodecCall(boundary_expr, key_node, str_node, boundary_callable_node, "encode_key_str");
+                }
+                var added = try self.prepareEncodeKeyStartCodecCall(boundary_expr, key_node, boundary_callable_node);
+                added = try self.prepareCustomCodecCallsAtNode(boundary_expr, kind, key_node, boundary_callable_node, seen) or added;
+                return added;
+            },
+        }
+    }
+
+    fn prepareEncodeKeyStartCodecCall(
+        self: *BodyContext,
+        boundary_expr: DraftExprId,
+        key_node: NodeId,
+        boundary_callable_node: NodeId,
+    ) Allocator.Error!bool {
+        const boundary = try self.graph.functionNodes(boundary_callable_node);
+        if (boundary.args.len != 1) Common.invariant("structural encoder constructor did not have one encoding argument");
+        const runtime = try self.graph.functionNodes(boundary.ret);
+        if (runtime.args.len != 2) Common.invariant("structural encoder runtime did not have value and state arguments");
+        const encoding_node = boundary.args[0];
+        const state_node = runtime.args[1];
+        const owner = self.methodOwnerFromNode(encoding_node) orelse
+            Common.invariant("structural encoder encoding node had no checked method owner");
+        const lookup = try self.withLocalProcContext((try self.builder.lookupMethodTargetByName(self.method_scope, owner, "encode_key_start")) orelse
+            Common.invariant("checked encoder registry was missing encode_key_start"));
+        if (self.preparedCodecCallExists(boundary_expr, .encoder, key_node, lookup)) return false;
+
+        var target_ctx = try self.methodTargetContext(lookup);
+        defer target_ctx.deinit();
+        const target_node = try target_ctx.instNode(lookup.target.callable_ty);
+        const target = try self.graph.functionNodes(target_node);
+        if (target.args.len != 2) Common.invariant("encode_key_start target did not have encoding and state arguments");
+        try relateRequestComponent(self.graph, target.args[0], encoding_node);
+        try relateRequestComponent(self.graph, target.args[1], state_node);
+        try relateRequestComponent(self.graph, target.ret, runtime.ret);
+
+        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        try self.draft.prepared_codec_calls.append(self.allocator, .{
+            .boundary_expr = boundary_expr,
+            .kind = .encoder,
+            .shape_node = key_node,
+            .lookup = lookup,
+            .callable_node = target_node,
+            .callee = callee,
+        });
+        return true;
+    }
+
+    fn prepareParseDictFormatCodecCalls(
         self: *BodyContext,
         boundary_expr: DraftExprId,
         shape_node: NodeId,
@@ -33769,37 +33582,157 @@ const BodyContext = struct {
             boundary_expr,
             shape_node,
             boundary_callable_node,
-            "parse_array_start",
-            true,
+            "parse_dict_start",
+            false,
         );
         added = try self.prepareParseFormatControlCodecCall(
             boundary_expr,
             shape_node,
             boundary_callable_node,
-            "parse_array_next",
+            "parse_dict_next",
             false,
         ) or added;
         added = try self.prepareParseFormatControlCodecCall(
             boundary_expr,
             shape_node,
             boundary_callable_node,
-            "parse_array_after_element",
+            "parse_dict_after_key",
+            true,
+        ) or added;
+        added = try self.prepareParseFormatControlCodecCall(
+            boundary_expr,
+            shape_node,
+            boundary_callable_node,
+            "parse_dict_after_entry",
             false,
         ) or added;
         return added;
+    }
+
+    fn prepareParseListFormatCodecCalls(
+        self: *BodyContext,
+        boundary_expr: DraftExprId,
+        shape_node: NodeId,
+        boundary_callable_node: NodeId,
+    ) Allocator.Error!bool {
+        var added = try self.prepareParseFormatControlCodecCall(
+            boundary_expr,
+            shape_node,
+            boundary_callable_node,
+            "parse_list_start",
+            false,
+        );
+        added = try self.prepareParseFormatControlCodecCall(
+            boundary_expr,
+            shape_node,
+            boundary_callable_node,
+            "parse_list_next",
+            false,
+        ) or added;
+        added = try self.prepareParseFormatControlCodecCall(
+            boundary_expr,
+            shape_node,
+            boundary_callable_node,
+            "parse_list_after_element",
+            false,
+        ) or added;
+        return added;
+    }
+
+    /// A tuple's methods carry its static arity, so they take extra `U64`
+    /// arguments the two-argument format-control shape cannot describe.
+    fn prepareParseTupleFormatCodecCalls(
+        self: *BodyContext,
+        boundary_expr: DraftExprId,
+        shape_node: NodeId,
+        boundary_callable_node: NodeId,
+    ) Allocator.Error!bool {
+        var added = try self.prepareParseTupleFormatCodecCall(
+            boundary_expr,
+            shape_node,
+            boundary_callable_node,
+            "parse_tuple_start",
+            1,
+        );
+        added = try self.prepareParseTupleFormatCodecCall(
+            boundary_expr,
+            shape_node,
+            boundary_callable_node,
+            "parse_tuple_next",
+            2,
+        ) or added;
+        added = try self.prepareParseTupleFormatCodecCall(
+            boundary_expr,
+            shape_node,
+            boundary_callable_node,
+            "parse_tuple_end",
+            1,
+        ) or added;
+        return added;
+    }
+
+    fn prepareParseTupleFormatCodecCall(
+        self: *BodyContext,
+        boundary_expr: DraftExprId,
+        shape_node: NodeId,
+        boundary_callable_node: NodeId,
+        method_name: []const u8,
+        arity_arg_count: usize,
+    ) Allocator.Error!bool {
+        const boundary = try self.graph.functionNodes(boundary_callable_node);
+        if (boundary.args.len != 1) Common.invariant("structural parser constructor did not have one encoding argument");
+        const runtime = try self.graph.functionNodes(boundary.ret);
+        if (runtime.args.len != 1) Common.invariant("structural parser runtime did not have one state argument");
+        const encoding_node = boundary.args[0];
+        const state_node = runtime.args[0];
+        const outer_result = try self.graphParserResultNodes(runtime.ret);
+        const owner = self.methodOwnerFromNode(encoding_node) orelse
+            Common.invariant("structural parser encoding node had no checked method owner");
+        const lookup = try self.withLocalProcContext((try self.builder.lookupMethodTargetByName(self.method_scope, owner, method_name)) orelse
+            Common.invariant("checked parser encoding registry was missing a tuple format method"));
+        if (self.preparedCodecCallExists(boundary_expr, .parser, shape_node, lookup)) return false;
+
+        var target_ctx = try self.methodTargetContext(lookup);
+        defer target_ctx.deinit();
+        const target_node = try target_ctx.instNode(lookup.target.callable_ty);
+        const target = try self.graph.functionNodes(target_node);
+        if (target.args.len != 2 + arity_arg_count) Common.invariant("parser tuple format target had an unexpected arity");
+        try relateRequestComponent(self.graph, target.args[0], encoding_node);
+        try relateRequestComponent(self.graph, target.args[1], state_node);
+        for (target.args[2..]) |arity_arg| {
+            const u64_node = try self.graph.newNode(.{ .primitive = .u64 });
+            try relateRequestComponent(self.graph, arity_arg, u64_node);
+        }
+        const target_try = try self.graphTryPayloads(target.ret);
+        try relateRequestComponent(self.graph, target_try.err, outer_result.err);
+        try relateRequestComponent(self.graph, target_try.ok, state_node);
+
+        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        try self.draft.prepared_codec_calls.append(self.allocator, .{
+            .boundary_expr = boundary_expr,
+            .kind = .parser,
+            .shape_node = shape_node,
+            .lookup = lookup,
+            .callable_node = target_node,
+            .callee = callee,
+        });
+        return true;
     }
 
     fn prepareParseObjectKeyCodecCall(
         self: *BodyContext,
         boundary_expr: DraftExprId,
         key_node: NodeId,
+        value_node: NodeId,
         boundary_callable_node: NodeId,
         method_name: []const u8,
     ) Allocator.Error!bool {
         const boundary = try self.graph.functionNodes(boundary_callable_node);
         if (boundary.args.len != 1) Common.invariant("structural parser constructor did not have one encoding argument");
         const runtime = try self.graph.functionNodes(boundary.ret);
+        if (runtime.args.len != 1) Common.invariant("structural parser runtime did not have one state argument");
         const encoding_node = boundary.args[0];
+        const state_node = runtime.args[0];
         const outer_result = try self.graphParserResultNodes(runtime.ret);
         const owner = self.methodOwnerFromNode(encoding_node) orelse
             Common.invariant("structural parser encoding node had no checked method owner");
@@ -33811,13 +33744,13 @@ const BodyContext = struct {
         defer target_ctx.deinit();
         const target_node = try target_ctx.instNode(lookup.target.callable_ty);
         const target = try self.graph.functionNodes(target_node);
-        if (target.args.len != 2) Common.invariant("object-key parser target did not have encoding and Str arguments");
-        const str_node = try self.graph.newNode(.{ .primitive = .str });
+        if (target.args.len != 2) Common.invariant("object-key parser target did not have encoding and state arguments");
         try relateRequestComponent(self.graph, target.args[0], encoding_node);
-        try relateRequestComponent(self.graph, target.args[1], str_node);
-        const target_try = try self.graphTryPayloads(target.ret);
-        try relateRequestComponent(self.graph, target_try.ok, key_node);
-        try relateRequestComponent(self.graph, target_try.err, outer_result.err);
+        try relateRequestComponent(self.graph, target.args[1], state_node);
+        const target_result = try self.graphParserResultNodes(target.ret);
+        try relateRequestComponent(self.graph, target_result.value, value_node);
+        try relateRequestComponent(self.graph, target_result.rest, state_node);
+        try relateRequestComponent(self.graph, target_result.err, outer_result.err);
 
         const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
@@ -33835,13 +33768,16 @@ const BodyContext = struct {
         self: *BodyContext,
         boundary_expr: DraftExprId,
         key_node: NodeId,
+        value_node: NodeId,
         boundary_callable_node: NodeId,
         method_name: []const u8,
     ) Allocator.Error!bool {
         const boundary = try self.graph.functionNodes(boundary_callable_node);
         if (boundary.args.len != 1) Common.invariant("structural encoder constructor did not have one encoding argument");
         const runtime = try self.graph.functionNodes(boundary.ret);
+        if (runtime.args.len != 2) Common.invariant("structural encoder runtime did not have value and state arguments");
         const encoding_node = boundary.args[0];
+        const state_node = runtime.args[1];
         const outer_try = try self.graphTryPayloads(runtime.ret);
         const owner = self.methodOwnerFromNode(encoding_node) orelse
             Common.invariant("structural encoder encoding node had no checked method owner");
@@ -33853,12 +33789,12 @@ const BodyContext = struct {
         defer target_ctx.deinit();
         const target_node = try target_ctx.instNode(lookup.target.callable_ty);
         const target = try self.graph.functionNodes(target_node);
-        if (target.args.len != 2) Common.invariant("object-key encoder target did not have encoding and key arguments");
+        if (target.args.len != 3) Common.invariant("object-key encoder target did not have encoding, key, and state arguments");
         try relateRequestComponent(self.graph, target.args[0], encoding_node);
-        try relateRequestComponent(self.graph, target.args[1], key_node);
+        try relateRequestComponent(self.graph, target.args[1], value_node);
+        try relateRequestComponent(self.graph, target.args[2], state_node);
         const target_try = try self.graphTryPayloads(target.ret);
-        const str_node = try self.graph.newNode(.{ .primitive = .str });
-        try relateRequestComponent(self.graph, target_try.ok, str_node);
+        try relateRequestComponent(self.graph, target_try.ok, state_node);
         try relateRequestComponent(self.graph, target_try.err, outer_try.err);
 
         const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
@@ -34248,7 +34184,7 @@ const BodyContext = struct {
                 .set => {
                     if (named.args.len != 1) Common.invariant("builtin Set graph node had an unexpected arity");
                     var added = if (kind == .parser)
-                        try self.prepareParseArrayFormatCodecCalls(boundary_expr, shape_node, boundary_callable_node)
+                        try self.prepareParseListFormatCodecCalls(boundary_expr, shape_node, boundary_callable_node)
                     else
                         try self.prepareEncodeContainerCodecCall(boundary_expr, shape_node, boundary_callable_node, "encode_list");
                     added = try self.prepareSetCollectionCodecCall(
@@ -34263,26 +34199,16 @@ const BodyContext = struct {
                 .dict => {
                     if (named.args.len != 2) Common.invariant("builtin Dict graph node had an unexpected arity");
                     var added = if (kind == .parser)
-                        try self.prepareParseFormatControlCodecCall(boundary_expr, shape_node, boundary_callable_node, "parse_object_next", false)
+                        try self.prepareParseDictFormatCodecCalls(boundary_expr, shape_node, boundary_callable_node)
                     else
-                        try self.prepareEncodeContainerCodecCall(boundary_expr, shape_node, boundary_callable_node, "encode_record");
-                    if (kind == .parser) {
-                        if (self.graphJsonParseObjectKeyMethodName(named.args[0])) |method_name| {
-                            added = try self.prepareParseObjectKeyCodecCall(
-                                boundary_expr,
-                                named.args[0],
-                                boundary_callable_node,
-                                method_name,
-                            ) or added;
-                        }
-                    } else if (self.graphJsonEncodeObjectKeyMethodName(named.args[0])) |method_name| {
-                        added = try self.prepareEncodeObjectKeyCodecCall(
-                            boundary_expr,
-                            named.args[0],
-                            boundary_callable_node,
-                            method_name,
-                        ) or added;
-                    }
+                        try self.prepareEncodeContainerCodecCall(boundary_expr, shape_node, boundary_callable_node, "encode_dict");
+                    added = try self.prepareDictKeyCodecCalls(
+                        boundary_expr,
+                        kind,
+                        named.args[0],
+                        boundary_callable_node,
+                        seen,
+                    ) or added;
                     added = try self.prepareDictCollectionCodecCalls(
                         boundary_expr,
                         kind,
@@ -34323,7 +34249,7 @@ const BodyContext = struct {
         switch (self.graph.content(structural_node)) {
             .list => |elem| {
                 if (kind == .parser) {
-                    added = try self.prepareParseArrayFormatCodecCalls(
+                    added = try self.prepareParseListFormatCodecCalls(
                         boundary_expr,
                         shape_node,
                         boundary_callable_node,
@@ -34341,7 +34267,7 @@ const BodyContext = struct {
             .box => |elem| added = try self.prepareCustomCodecCallsAtNode(boundary_expr, kind, elem, boundary_callable_node, seen) or added,
             .tuple => |items| {
                 if (kind == .parser) {
-                    added = try self.prepareParseArrayFormatCodecCalls(
+                    added = try self.prepareParseTupleFormatCodecCalls(
                         boundary_expr,
                         shape_node,
                         boundary_callable_node,
@@ -34383,6 +34309,20 @@ const BodyContext = struct {
                         boundary_expr,
                         shape_node,
                         boundary_callable_node,
+                    ) or added;
+                    added = try self.prepareParseFormatControlCodecCall(
+                        boundary_expr,
+                        shape_node,
+                        boundary_callable_node,
+                        "parse_record_start",
+                        false,
+                    ) or added;
+                    added = try self.prepareParseFormatControlCodecCall(
+                        boundary_expr,
+                        shape_node,
+                        boundary_callable_node,
+                        "parse_record_after_field",
+                        false,
                     ) or added;
                 }
                 const fields = switch (self.graph.content(shape_node)) {
