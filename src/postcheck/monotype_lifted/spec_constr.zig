@@ -694,6 +694,7 @@ const LetCaseBuild = struct {
 
 const CallableWorkerIdentity = struct {
     template: names.TypeDigest,
+    callable_abi: names.TypeDigest,
     capture_abi: names.TypeDigest,
 };
 
@@ -713,10 +714,10 @@ const Pass = struct {
     /// scalarization. Those analyses can all request the same clone, but the
     /// clone is one normalization pass and must run at most once per body.
     whole_body_cloned: []bool,
-    /// One rewritten callable body per stable Monotype template identity and
-    /// exact capture ABI. Lifted FnIds are transient products of traversal
-    /// order, while the capture ABI is durable representation data: two uses
-    /// may share a body only when every CaptureId has the same exact type.
+    /// One rewritten callable body per stable Monotype template identity,
+    /// exact callable-use ABI, and exact capture ABI. Lifted FnIds are transient
+    /// products of traversal order; two uses may share a body only when their
+    /// function representations and every CaptureId's type are identical.
     callable_workers: std.AutoHashMap(CallableWorkerIdentity, Ast.FnId),
     /// Reverse index from each rewritten callable body to its source function.
     /// This keeps later materialization rooted at the source instead of cloning
@@ -1656,32 +1657,8 @@ const Pass = struct {
     }
 
     fn recordCallPatternForValues(self: *Pass, fn_id: Ast.FnId, values: []const Value) Common.LowerError!void {
+        const pattern = (try self.callPatternForValues(fn_id, values)) orelse return;
         const raw = @intFromEnum(fn_id);
-        if (raw >= self.plans.len) return;
-
-        const fn_args = self.program.typedLocalSpan(self.program.getFnAt(raw).args);
-        if (values.len != fn_args.len) Common.invariant("direct call arity differed from lifted function arity");
-
-        const shapes = try self.arena.allocator().alloc(Shape, values.len);
-        var has_constructor = false;
-
-        for (values, 0..) |value, index| {
-            if (self.plans[raw].used_args[index]) {
-                switch (try self.shapeFromValue(value)) {
-                    .proven => |shape| {
-                        shapes[index] = shape;
-                        has_constructor = true;
-                        continue;
-                    },
-                    .disproven, .unknown_budget_exhausted => {},
-                }
-            }
-            shapes[index] = .{ .any = valueType(self.program, value) };
-        }
-
-        if (!has_constructor) return;
-
-        const pattern: CallPattern = .{ .args = shapes };
         for (self.plans[raw].specs.items) |spec| {
             if (patternEql(self.program, spec.pattern, pattern)) return;
         }
@@ -1692,30 +1669,8 @@ const Pass = struct {
     }
 
     fn ensureCallPatternForValues(self: *Pass, fn_id: Ast.FnId, values: []const Value) Common.LowerError!void {
+        const pattern = (try self.callPatternForValues(fn_id, values)) orelse return;
         const raw = @intFromEnum(fn_id);
-        if (raw >= self.plans.len) return;
-
-        const fn_args = self.program.typedLocalSpan(self.program.getFnAt(raw).args);
-        if (values.len != fn_args.len) Common.invariant("direct call arity differed from lifted function arity");
-
-        const shapes = try self.arena.allocator().alloc(Shape, values.len);
-        var has_constructor = false;
-        for (values, 0..) |value, index| {
-            if (self.plans[raw].used_args[index]) {
-                switch (try self.shapeFromValue(value)) {
-                    .proven => |shape| {
-                        shapes[index] = shape;
-                        has_constructor = true;
-                        continue;
-                    },
-                    .disproven, .unknown_budget_exhausted => {},
-                }
-            }
-            shapes[index] = .{ .any = valueType(self.program, value) };
-        }
-        if (!has_constructor) return;
-
-        const pattern: CallPattern = .{ .args = shapes };
         for (self.plans[raw].specs.items) |spec| {
             if (patternEql(self.program, spec.pattern, pattern)) return;
         }
@@ -1736,6 +1691,32 @@ const Pass = struct {
             .fn_id = fn_id_reserved,
         });
         try self.copyProcDebugName(source_fn.symbol, symbol);
+    }
+
+    fn callPatternForValues(self: *Pass, fn_id: Ast.FnId, values: []const Value) Common.LowerError!?CallPattern {
+        const raw = @intFromEnum(fn_id);
+        if (raw >= self.plans.len) return null;
+
+        const fn_args = self.program.typedLocalSpan(self.program.getFnAt(raw).args);
+        if (values.len != fn_args.len) Common.invariant("direct call arity differed from lifted function arity");
+
+        const shapes = try self.arena.allocator().alloc(Shape, values.len);
+        var has_constructor = false;
+        for (values, 0..) |value, index| {
+            if (self.plans[raw].used_args[index]) {
+                switch (try self.shapeFromValue(value)) {
+                    .proven => |shape| {
+                        shapes[index] = shape;
+                        has_constructor = true;
+                        continue;
+                    },
+                    .disproven, .unknown_budget_exhausted => {},
+                }
+            }
+            shapes[index] = .{ .any = valueType(self.program, value) };
+        }
+
+        return if (has_constructor) .{ .args = shapes } else null;
     }
 
     fn writeSpecialization(self: *Pass, source_fn_id: Ast.FnId, spec_index: usize) Common.LowerError!void {
@@ -2641,7 +2622,12 @@ const Pass = struct {
         const loop_expr = self.program.getExpr(loop_expr_id);
         const loop = loop_expr.data.loop_;
         const source_params = self.program.typedLocalSpan(loop.params);
-        const source_initials = self.program.exprSpan(loop.initial_values);
+        const source_initials = try GuardedList.dupe(
+            self.allocator,
+            Ast.ExprId,
+            self.program.exprSpan(loop.initial_values),
+        );
+        defer self.allocator.free(source_initials);
         if (source_params.len == 0 or source_params.len != source_initials.len) return null;
 
         const base_ty = self.program.getLocal(base_local).ty;
@@ -7825,6 +7811,17 @@ const Cloner = struct {
         }
 
         const source_fn = self.pass.program.getFn(callable.fn_id);
+        // Replacing the call with its body transfers the body's result value
+        // directly into the caller. Independently specialized Monotype graphs
+        // can make those types related but representation-distinct; only exact
+        // closed-type identity proves that no representation boundary would be
+        // erased by the inline.
+        if (!sameType(self.pass.program, ty, source_fn.ret)) {
+            return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
+                .callee = try self.materialize(.{ .callable = callable }),
+                .args = try self.cloneExprSpan(args_span),
+            } } }) };
+        }
         const body = switch (source_fn.body) {
             .roc => |body| body,
             .hosted => return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
@@ -7915,6 +7912,13 @@ const Cloner = struct {
         }
 
         const source_fn = self.pass.program.getFn(callee);
+        const result_ty = self.pass.program.getExpr(original_expr).ty;
+        // A call and its independently specialized callee can be related
+        // without having the same runtime representation. Keep that explicit
+        // call boundary unless their closed Monotype digests are identical.
+        if (!sameType(self.pass.program, result_ty, source_fn.ret)) {
+            return .{ .expr = try self.cloneExprPlain(original_expr) };
+        }
         const body = switch (source_fn.body) {
             .roc => |body| body,
             .hosted => return .{ .expr = try self.cloneExprPlain(original_expr) },
@@ -8833,6 +8837,7 @@ const Cloner = struct {
                 &self.pass.program.types,
                 &self.pass.program.names,
             ),
+            .callable_abi = self.pass.program.types.typeDigest(&self.pass.program.names, callable.ty),
             .capture_abi = self.callableCaptureAbiDigest(source_captures, callable.captures),
         };
         if (self.pass.callable_workers.get(worker_key)) |worker_fn_id| {
