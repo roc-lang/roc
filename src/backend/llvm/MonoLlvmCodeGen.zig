@@ -232,6 +232,11 @@ pub const MonoLlvmCodeGen = struct {
     debug_globals_fwd_ref: LlvmBuilder.Metadata.Optional = .none,
     current_subprogram: LlvmBuilder.Metadata.Optional = .none,
     current_debug_file: u32 = SourceLoc.no_file,
+    /// Virtual source procedures and call-site chains for LIR inline scopes.
+    /// These are cleared at each physical procedure because the outermost
+    /// call-site scope is that procedure's concrete `DISubprogram`.
+    debug_inline_subprograms: std.AutoHashMap(u32, LlvmBuilder.Metadata),
+    debug_inline_callsites: std.AutoHashMap(u32, LlvmBuilder.Metadata),
     /// Debug type metadata per layout index, memoized per module build.
     debug_types: std.AutoHashMap(u32, LlvmBuilder.Metadata),
 
@@ -349,6 +354,8 @@ pub const MonoLlvmCodeGen = struct {
             .stmt_entry_blocks = std.AutoHashMap(u32, LlvmBuilder.Function.Block.Index).init(allocator),
             .loop_continue_blocks = .empty,
             .loop_break_blocks = .empty,
+            .debug_inline_subprograms = std.AutoHashMap(u32, LlvmBuilder.Metadata).init(allocator),
+            .debug_inline_callsites = std.AutoHashMap(u32, LlvmBuilder.Metadata).init(allocator),
             .debug_types = std.AutoHashMap(u32, LlvmBuilder.Metadata).init(allocator),
         };
     }
@@ -376,6 +383,8 @@ pub const MonoLlvmCodeGen = struct {
     /// Releases backend-owned scratch maps.
     pub fn deinit(self: *MonoLlvmCodeGen) void {
         self.debug_types.deinit();
+        self.debug_inline_callsites.deinit();
+        self.debug_inline_subprograms.deinit();
         self.proc_registry.deinit();
         self.builtin_functions.deinit();
         self.clearStaticBytes();
@@ -410,6 +419,8 @@ pub const MonoLlvmCodeGen = struct {
         self.debug_globals_fwd_ref = .none;
         self.current_subprogram = .none;
         self.current_debug_file = SourceLoc.no_file;
+        self.debug_inline_subprograms.clearRetainingCapacity();
+        self.debug_inline_callsites.clearRetainingCapacity();
         self.debug_types.clearRetainingCapacity();
     }
 
@@ -1432,6 +1443,8 @@ pub const MonoLlvmCodeGen = struct {
         self.stmt_entry_blocks.clearRetainingCapacity();
         self.loop_continue_blocks.clearRetainingCapacity();
         self.loop_break_blocks.clearRetainingCapacity();
+        self.debug_inline_subprograms.clearRetainingCapacity();
+        self.debug_inline_callsites.clearRetainingCapacity();
 
         const outer_subprogram = self.current_subprogram;
         const outer_debug_file = self.current_debug_file;
@@ -2320,30 +2333,87 @@ pub const MonoLlvmCodeGen = struct {
     /// Processes a single statement node, queueing successors and nested-body
     /// continuations onto `work` rather than recursing.
     /// Sets the WIP function's ambient debug location from a statement's LIR
-    /// source location. Statements with no location (or from a different file
-    /// than the subprogram, which plain subprogram scopes cannot express) get
-    /// line 0: the LLVM verifier requires a location on inlinable calls inside
-    /// functions that have debug info, and line 0 marks them compiler-generated.
-    fn setStmtDebugLocation(self: *MonoLlvmCodeGen, stmt_id: CFStmtId) void {
+    /// source location. Inlined statements use their virtual source procedure
+    /// and exact nested call-site chain; compiler-generated statements use line
+    /// zero in the physical procedure.
+    fn setStmtDebugLocation(self: *MonoLlvmCodeGen, stmt_id: CFStmtId) Error!void {
         const wip = self.wip orelse return;
         if (wip.strip) return;
         if (self.current_subprogram.unwrap() == null) return;
         const loc = self.store.stmtLoc(stmt_id);
-        if (loc.hasLocation() and loc.file == self.current_debug_file) {
-            wip.debug_location = .{ .location = .{
-                .line = loc.line,
-                .column = loc.column,
-                .scope = self.current_subprogram,
-                .inlined_at = .none,
-            } };
-        } else {
-            wip.debug_location = .{ .location = .{
-                .line = 0,
-                .column = 0,
-                .scope = self.current_subprogram,
-                .inlined_at = .none,
-            } };
-        }
+        const inline_scope = self.store.stmtInlineScope(stmt_id);
+        const scope = if (inline_scope == lir.LIR.InlineScopeId.none)
+            self.current_subprogram
+        else
+            (try self.debugInlineSubprogram(inline_scope)).toOptional();
+        const inlined_at = if (inline_scope == lir.LIR.InlineScopeId.none)
+            LlvmBuilder.Metadata.Optional.none
+        else
+            (try self.debugInlineCallsite(inline_scope)).toOptional();
+        const has_compatible_location = loc.hasLocation() and
+            (inline_scope != lir.LIR.InlineScopeId.none or loc.file == self.current_debug_file);
+        wip.debug_location = .{ .location = .{
+            .line = if (has_compatible_location) loc.line else 0,
+            .column = if (has_compatible_location) loc.column else 0,
+            .scope = scope,
+            .inlined_at = inlined_at,
+        } };
+    }
+
+    fn debugInlineSubprogram(self: *MonoLlvmCodeGen, id: lir.LIR.InlineScopeId) Error!LlvmBuilder.Metadata {
+        const key = @intFromEnum(id);
+        if (self.debug_inline_subprograms.get(key)) |existing| return existing;
+
+        const builder = self.builder orelse return error.CompilationFailed;
+        const scope = self.store.inlineScope(id);
+        const linkage_name = builder.metadataStringFmt("roc__proc_{x}", .{scope.source_symbol.raw()}) catch return error.OutOfMemory;
+        const name = if (scope.source_name.isNone())
+            linkage_name
+        else
+            builder.metadataString(self.store.getString(scope.source_name)) catch return error.OutOfMemory;
+        const subprogram = builder.debugSubprogram(
+            try self.debugFileFor(builder, scope.source_loc.file),
+            name,
+            linkage_name,
+            scope.source_loc.line,
+            scope.source_loc.line,
+            builder.debugSubroutineType(null) catch return error.OutOfMemory,
+            .{
+                .di_flags = .{},
+                .sp_flags = .{
+                    .Definition = true,
+                    .LocalToUnit = true,
+                    .Optimized = true,
+                },
+            },
+            self.debug_compile_unit.unwrap().?,
+        ) catch return error.OutOfMemory;
+        try self.debug_inline_subprograms.put(key, subprogram);
+        return subprogram;
+    }
+
+    fn debugInlineCallsite(self: *MonoLlvmCodeGen, id: lir.LIR.InlineScopeId) Error!LlvmBuilder.Metadata {
+        const key = @intFromEnum(id);
+        if (self.debug_inline_callsites.get(key)) |existing| return existing;
+
+        const builder = self.builder orelse return error.CompilationFailed;
+        const scope = self.store.inlineScope(id);
+        const parent_scope = if (scope.parent == lir.LIR.InlineScopeId.none)
+            self.current_subprogram.unwrap().?
+        else
+            try self.debugInlineSubprogram(scope.parent);
+        const parent_callsite = if (scope.parent == lir.LIR.InlineScopeId.none)
+            null
+        else
+            try self.debugInlineCallsite(scope.parent);
+        const callsite = builder.debugLocation(
+            if (scope.call_site.hasLocation()) scope.call_site.line else 0,
+            if (scope.call_site.hasLocation()) scope.call_site.column else 0,
+            parent_scope,
+            parent_callsite,
+        ) catch return error.OutOfMemory;
+        try self.debug_inline_callsites.put(key, callsite);
+        return callsite;
     }
 
     fn compileStmtNode(
@@ -2355,7 +2425,7 @@ pub const MonoLlvmCodeGen = struct {
         if (self.currentBlockHasTerminator()) return;
         if (try self.enterSharedStmtBlock(stmt_id)) return;
         const stmt = self.store.getCFStmt(stmt_id);
-        self.setStmtDebugLocation(stmt_id);
+        try self.setStmtDebugLocation(stmt_id);
         switch (stmt) {
             .assign_ref => |assign| {
                 try self.emitAssignRef(assign.target, assign.op);

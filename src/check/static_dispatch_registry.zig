@@ -159,6 +159,35 @@ pub const IteratorProcedureId = enum(u8) {
     numeric_range_inclusive,
     iter_from_step,
     range_done,
+
+    /// Whether this exact checked procedure returns an iterator value. Keep
+    /// this exhaustive: adding an iterator procedure must declare its producer
+    /// role here instead of letting a later pass infer it from result shape.
+    pub fn producesIteratorValue(self: IteratorProcedureId) bool {
+        return switch (self) {
+            .iter_next,
+            .range_done,
+            => false,
+            .iter_iter,
+            .iter_custom,
+            .iter_single,
+            .list_iter,
+            .str_iter_utf8,
+            .iter_map,
+            .iter_keep_if,
+            .iter_drop_if,
+            .iter_take_first,
+            .iter_drop_first,
+            .iter_concat,
+            .iter_append,
+            .iter_exclusive_range,
+            .iter_inclusive_range,
+            .numeric_range_exclusive,
+            .numeric_range_inclusive,
+            .iter_from_step,
+            => true,
+        };
+    }
 };
 
 /// Return the compiler-owned iterator role assigned to a Builtin definition.

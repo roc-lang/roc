@@ -2359,6 +2359,80 @@ test "spec constr does not duplicate opaque known-match payloads" {
     try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, opaqueLetCallWorkerDuplicatesCall));
 }
 
+test "spec constr retains an exact virtual source frame for an inlined procedure" {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModuleWithOptions(allocator,
+        \\State : { n : U64 }
+        \\
+        \\read : State -> U64
+        \\read = |state| state.n
+        \\
+        \\main : U64
+        \\main = Iter.fold([{ n: 1.U64 }, { n: 2 }].iter().map(read), 0, |acc, n| acc + n)
+    , .wrappers, .{ .proc_debug_names = true });
+    defer lowered_source.deinit(allocator);
+
+    const store = &lowered_source.lowered.lir_result.store;
+    try std.testing.expect(store.inlineScopeCount() > 0);
+
+    var found_source_scope = false;
+    for (0..store.cf_stmts.len()) |stmt_index| {
+        const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
+        const scope_id = store.stmtInlineScope(stmt_id);
+        if (scope_id == LIR.InlineScopeId.none) continue;
+        const scope = store.inlineScope(scope_id);
+        if (scope.source_name.isNone()) continue;
+        if (!std.mem.eql(u8, store.getString(scope.source_name), "read")) continue;
+        if (!scope.call_site.hasLocation()) continue;
+
+        found_source_scope = true;
+        try std.testing.expect(!scope.source_symbol.isNone());
+        try std.testing.expect(scope.source_loc.hasLocation());
+        try std.testing.expect(store.stmtLoc(stmt_id).hasLocation());
+    }
+    try std.testing.expect(found_source_scope);
+}
+
+test "interpreter captures the virtual source frame of an inlined crash" {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModuleWithOptions(allocator,
+        \\State : { n : U64 }
+        \\
+        \\read : State -> U64
+        \\read = |_state| {
+        \\    crash "inline boom"
+        \\}
+        \\
+        \\main : U64
+        \\main = Iter.fold([{ n: 1.U64 }].iter().map(read), 0, |acc, n| acc + n)
+    , .wrappers, .{ .proc_debug_names = true });
+    defer lowered_source.deinit(allocator);
+
+    const store = &lowered_source.lowered.lir_result.store;
+    var runtime_env = eval.RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+    var interpreter = try eval.Interpreter.init(
+        allocator,
+        store,
+        &lowered_source.lowered.lir_result.layouts,
+        runtime_env.get_ops(),
+        .preserve,
+    );
+    defer interpreter.deinit();
+
+    _ = interpreter.eval(.{ .proc_id = try rootProc(&lowered_source.lowered) }) catch |err| {
+        try std.testing.expectEqual(error.Crash, err);
+        const scope_id = interpreter.getFailedInlineScope() orelse return error.TestUnexpectedResult;
+        const scope = store.inlineScope(scope_id);
+        try std.testing.expect(!scope.source_name.isNone());
+        try std.testing.expectEqualStrings("read", store.getString(scope.source_name));
+        try std.testing.expect(scope.source_loc.hasLocation());
+        try std.testing.expect(scope.call_site.hasLocation());
+        return;
+    };
+    return error.TestUnexpectedResult;
+}
+
 test "spec constr preserves direct call argument effect order" {
     try expectOptimizedDbgEvents(
         \\State : { n : I64 }
@@ -5183,6 +5257,48 @@ test "iterdiff: branch-chosen append search with early return agrees across inli
         \\    dbg f
         \\    a + b + c + d + e + f
         \\}
+    );
+}
+
+test "iterdiff: branch-chosen append evaluates selection and items before base-loop early return" {
+    // Constructing the chosen iterator is strict: its condition and selected
+    // arm's appended item run before the consuming loop. Even when the loop
+    // returns from the shared base and never pulls the appended item, optimized
+    // lowering must retain that exact ordered trace.
+    try expectSameObservationsAcrossInlineModes(
+        \\Point : { x : I64, y : I64 }
+        \\
+        \\trace : I64 -> I64
+        \\trace = |n| {
+        \\    dbg n
+        \\    n
+        \\}
+        \\
+        \\trace_point : I64, I64 -> Point
+        \\trace_point = |x, y| {
+        \\    dbg x
+        \\    { x, y }
+        \\}
+        \\
+        \\find : I64, I64 -> I64
+        \\find = |selector, target| {
+        \\    base = [{ x: 10, y: 1 }, { x: 20, y: 2 }, { x: 30, y: 3 }].iter()
+        \\    chosen =
+        \\        if trace(selector) == 1 {
+        \\            base.append(trace_point(40, 4))
+        \\        } else {
+        \\            base.append(trace_point(50, 5))
+        \\        }
+        \\    for { x, y } in chosen {
+        \\        if x >= target {
+        \\            return x + y
+        \\        }
+        \\    }
+        \\    -1
+        \\}
+        \\
+        \\main : I64
+        \\main = find(1, 5)
     );
 }
 

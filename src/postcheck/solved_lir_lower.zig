@@ -163,6 +163,7 @@ pub fn run(
     errdefer lowerer.deinit();
 
     try lowerer.result.store.setSourceFiles(owned.lifted.sourceFileNames());
+    try lowerer.lowerInlineScopes();
     try lowerer.lower();
     try lowerer.bindRoots();
     try lowerer.lowerReachableFns();
@@ -613,6 +614,26 @@ const Lowerer = struct {
         }
 
         try self.lowerReachableFns();
+    }
+
+    fn lowerInlineScopes(self: *Lowerer) Common.LowerError!void {
+        const lifted = self.solved.lifted.view();
+        try self.result.store.inline_scopes.ensureTotalCapacity(self.allocator, lifted.inline_scopes.len);
+        for (lifted.inline_scopes, 0..) |scope, index| {
+            const expected: LIR.InlineScopeId = @enumFromInt(@as(u32, @intCast(index)));
+            const source_name = if (self.solved.lifted.procDebugName(scope.source_symbol)) |name|
+                try self.result.store.insertString(self.solved.lifted.names.exportNameText(name))
+            else
+                base.StringLiteral.Idx.none;
+            const actual = try self.result.store.addInlineScope(.{
+                .source_symbol = lirSymbol(scope.source_symbol),
+                .source_name = source_name,
+                .source_loc = scope.source_loc,
+                .call_site = scope.call_site,
+                .parent = lirInlineScopeId(scope.parent),
+            });
+            if (actual != expected) Common.invariant("LIR inline-scope identities diverged from lifted inline-scope identities");
+        }
     }
 
     fn indexSourceFns(self: *Lowerer) Common.LowerError!void {
@@ -2385,6 +2406,9 @@ const Lowerer = struct {
         defer self.result.store.current_loc = saved_loc;
         const saved_region = self.result.store.current_region;
         defer self.result.store.current_region = saved_region;
+        const saved_inline_scope = self.result.store.current_inline_scope;
+        defer self.result.store.current_inline_scope = saved_inline_scope;
+        self.result.store.current_inline_scope = lirInlineScopeId(self.solved.lifted.exprInlineScope(expr_id));
         const expr_loc = self.solved.lifted.exprLoc(expr_id);
         if (expr_loc.hasLocation()) {
             self.result.store.current_loc = expr_loc;
@@ -2523,8 +2547,11 @@ const Lowerer = struct {
         defer self.result.store.current_loc = saved_loc;
         const saved_region = self.result.store.current_region;
         defer self.result.store.current_region = saved_region;
+        const saved_inline_scope = self.result.store.current_inline_scope;
+        defer self.result.store.current_inline_scope = saved_inline_scope;
         self.result.store.current_loc = self.solved.lifted.exprLoc(expr_id);
         self.result.store.current_region = self.solved.lifted.exprRegion(expr_id);
+        self.result.store.current_inline_scope = lirInlineScopeId(self.solved.lifted.exprInlineScope(expr_id));
 
         return switch (expr_data.data) {
             .local => |local| try self.lowerLocalInto(target, local, ty, next),
@@ -4402,6 +4429,9 @@ const Lowerer = struct {
         defer self.result.store.current_loc = saved_loc;
         const saved_region = self.result.store.current_region;
         defer self.result.store.current_region = saved_region;
+        const saved_inline_scope = self.result.store.current_inline_scope;
+        defer self.result.store.current_inline_scope = saved_inline_scope;
+        self.result.store.current_inline_scope = lirInlineScopeId(self.solved.lifted.stmtInlineScope(stmt_id));
         const stmt_loc = self.solved.lifted.stmtLoc(stmt_id);
         if (stmt_loc.hasLocation()) {
             self.result.store.current_loc = stmt_loc;
@@ -8738,6 +8768,9 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         .expr_regions = try clonedLiftedProgramList(base.Region, "expr_regions", allocator, view.expr_regions),
         .stmt_locs = try clonedLiftedProgramList(base.SourceLoc, "stmt_locs", allocator, view.stmt_locs),
         .stmt_regions = try clonedLiftedProgramList(base.Region, "stmt_regions", allocator, view.stmt_regions),
+        .inline_scopes = try clonedLiftedProgramList(Lifted.InlineScope, "inline_scopes", allocator, view.inline_scopes),
+        .expr_inline_scopes = try clonedLiftedProgramList(Lifted.InlineScopeId, "expr_inline_scopes", allocator, view.expr_inline_scopes),
+        .stmt_inline_scopes = try clonedLiftedProgramList(Lifted.InlineScopeId, "stmt_inline_scopes", allocator, view.stmt_inline_scopes),
         .local_names = blk: {
             var names: std.ArrayList([]const u8) = .empty;
             errdefer {
@@ -8754,6 +8787,7 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         },
         .current_loc = program.current_loc,
         .current_region = program.current_region,
+        .current_inline_scope = program.current_inline_scope,
     };
 }
 
@@ -8930,6 +8964,10 @@ fn lirSymbol(symbol: Common.Symbol) LIR.Symbol {
     return LIR.Symbol.fromRaw(@intCast(@intFromEnum(symbol)));
 }
 
+fn lirInlineScopeId(scope: Lifted.InlineScopeId) LIR.InlineScopeId {
+    return @enumFromInt(@intFromEnum(scope));
+}
+
 fn constFnTemplateFromMono(self: *Lowerer, template: Mono.FnTemplate) std.mem.Allocator.Error!LirProgram.FnTemplate {
     requireConstFnEvidenceTopology(template);
     const lifted = self.solved.lifted.view();
@@ -8986,35 +9024,38 @@ fn emptySolvedProgramForTest(allocator: std.mem.Allocator) Solved.Program {
         allocator,
         NameStore.init(allocator),
         MonoType.Store.init(allocator),
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
+        .empty, // imported_fns
+        .empty, // const_fn_evidence
+        .empty, // const_fn_evidence_frames
+        .empty, // exprs
+        .empty, // pats
+        .empty, // stmts
+        .empty, // locals
+        .empty, // expr_ids
+        .empty, // pat_ids
+        .empty, // typed_locals
+        .empty, // stmt_ids
+        .empty, // field_exprs
+        .empty, // fn_def_captures
+        .empty, // capture_operands
+        .empty, // record_destructs
+        .empty, // str_pattern_steps
+        .empty, // branches
+        .empty, // if_branches
+        .empty, // string_literals
         Mono.ProcDebugNameMap.init(allocator),
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        0,
+        .empty, // source_files
+        .empty, // expr_locs
+        .empty, // expr_regions
+        .empty, // stmt_locs
+        .empty, // stmt_regions
+        .empty, // inline_scopes
+        .empty, // expr_inline_scopes
+        .empty, // stmt_inline_scopes
+        .empty, // local_names
+        .empty, // static_data_values
+        .empty, // comptime_sites
+        0, // next_symbol
     );
     return Solved.Program.init(allocator, lifted);
 }

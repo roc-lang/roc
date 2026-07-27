@@ -52,6 +52,13 @@ pub fn run(
     var expr_regions = owned.expr_regions.takeArrayList();
     var stmt_locs = owned.stmt_locs.takeArrayList();
     var stmt_regions = owned.stmt_regions.takeArrayList();
+    var inline_scopes = std.ArrayList(Ast.InlineScope).empty;
+    var expr_inline_scopes = std.ArrayList(Ast.InlineScopeId).empty;
+    try expr_inline_scopes.appendNTimes(allocator, Ast.InlineScopeId.none, exprs.items.len);
+    errdefer expr_inline_scopes.deinit(allocator);
+    var stmt_inline_scopes = std.ArrayList(Ast.InlineScopeId).empty;
+    try stmt_inline_scopes.appendNTimes(allocator, Ast.InlineScopeId.none, stmts.items.len);
+    errdefer stmt_inline_scopes.deinit(allocator);
     var local_names = owned.local_names.takeArrayList();
     var static_data_values = owned.static_data_values.takeArrayList();
 
@@ -84,6 +91,9 @@ pub fn run(
         expr_regions,
         stmt_locs,
         stmt_regions,
+        inline_scopes,
+        expr_inline_scopes,
+        stmt_inline_scopes,
         local_names,
         static_data_values,
         comptime_sites,
@@ -116,6 +126,9 @@ pub fn run(
     expr_regions = undefined;
     stmt_locs = undefined;
     stmt_regions = undefined;
+    inline_scopes = undefined;
+    expr_inline_scopes = undefined;
+    stmt_inline_scopes = undefined;
     local_names = undefined;
     static_data_values = undefined;
     comptime_sites = undefined;
@@ -2445,6 +2458,9 @@ fn initCaptureTestProgram(allocator: Allocator) Ast.Program {
         .empty, // expr_regions
         .empty, // stmt_locs
         .empty, // stmt_regions
+        .empty, // inline_scopes
+        .empty, // expr_inline_scopes
+        .empty, // stmt_inline_scopes
         .empty, // local_names
         .empty, // static_data_values
         .empty, // comptime_sites
@@ -2521,6 +2537,9 @@ test "checkCaptureInvariants accepts a well-formed capture and catches a corrupt
         .empty, // expr_regions
         .empty, // stmt_locs
         .empty, // stmt_regions
+        .empty, // inline_scopes
+        .empty, // expr_inline_scopes
+        .empty, // stmt_inline_scopes
         .empty, // local_names
         .empty, // static_data_values
         .empty, // comptime_sites
@@ -2594,6 +2613,9 @@ test "capture finalization supplies the caller's active binder local" {
         .empty, // expr_regions
         .empty, // stmt_locs
         .empty, // stmt_regions
+        .empty, // inline_scopes
+        .empty, // expr_inline_scopes
+        .empty, // stmt_inline_scopes
         .empty, // local_names
         .empty, // static_data_values
         .empty, // comptime_sites
