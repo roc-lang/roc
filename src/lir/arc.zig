@@ -271,7 +271,17 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     defer read_cache_arena.deinit();
     inserter.read_cache_arena = &read_cache_arena;
     inserter.read_cache_allocator = read_cache_arena.allocator();
-    var reads_before_rebind_cache = std.AutoHashMap(ReadBeforeRebindKey, std.bit_set.DynamicBitSetUnmanaged).init(store.allocator);
+    // Keep-free rows are the overwhelmingly common case and their statement
+    // IDs are already dense, so index them directly. Loop-keyed rows remain
+    // in a map because their key has a second, dynamically-created identity.
+    const keep_free_reads_cache = try store.allocator.alloc(?LivenessSet, store.cfStmtCount());
+    defer store.allocator.free(keep_free_reads_cache);
+    @memset(keep_free_reads_cache, null);
+    inserter.keep_free_reads_cache = keep_free_reads_cache;
+    var keep_free_cached_stmts = std.ArrayList(LIR.CFStmtId).empty;
+    defer keep_free_cached_stmts.deinit(store.allocator);
+    inserter.keep_free_cached_stmts = &keep_free_cached_stmts;
+    var reads_before_rebind_cache = std.AutoHashMap(ReadBeforeRebindKey, LivenessSet).init(store.allocator);
     defer reads_before_rebind_cache.deinit();
     inserter.reads_before_rebind_cache = &reads_before_rebind_cache;
     var active_loop_keep_ids = std.AutoHashMap(usize, u32).init(store.allocator);
@@ -353,11 +363,20 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         inserter.current_proc_body = body;
         inserter.clearReadsBeforeRebindCache();
 
-        var owned_param_override = try OwnedSet.init(store.allocator, &domain);
+        // The ownership-neutral body and emitted LIR outlive this iteration;
+        // all solver and rewrite state does not. A single per-emission arena
+        // gives those exact temporary structures one lifetime and removes
+        // thousands of individually paired allocations and frees.
+        var emission_arena = std.heap.ArenaAllocator.init(store.allocator);
+        defer emission_arena.deinit();
+        inserter.emission_allocator = emission_arena.allocator();
+        inserter.solve_allocator = inserter.emission_allocator;
+
+        var owned_param_override = try OwnedSet.init(inserter.emission_allocator, &domain);
         defer owned_param_override.deinit();
         inserter.owned_param_override = &owned_param_override;
 
-        var unique_param_override = try OwnedSet.init(store.allocator, &domain);
+        var unique_param_override = try OwnedSet.init(inserter.emission_allocator, &domain);
         defer unique_param_override.deinit();
         inserter.unique_param_override = &unique_param_override;
 
@@ -377,14 +396,18 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             }
         }
 
-        var join_bodies = JoinBodyMap.init(store.allocator);
+        var join_bodies = JoinBodyMap.init(inserter.emission_allocator);
         defer join_bodies.deinit();
-        var join_visit = std.AutoHashMap(LIR.CFStmtId, void).init(store.allocator);
-        defer join_visit.deinit();
-        try inserter.collectJoinBodies(body, &join_bodies, &join_visit);
+        for (solution.joinBodiesOf(source_proc)) |join_body| {
+            const entry = try join_bodies.getOrPut(join_body.id);
+            if (entry.found_existing and entry.value_ptr.* != join_body.body) {
+                arcInvariant("ARC solver produced one join id with multiple bodies");
+            }
+            entry.value_ptr.* = join_body.body;
+        }
         inserter.join_bodies = &join_bodies;
         defer inserter.join_bodies = null;
-        var rewritten_joins = RewrittenJoinMap.init(store.allocator);
+        var rewritten_joins = RewrittenJoinMap.init(inserter.emission_allocator);
         defer {
             var iter = rewritten_joins.valueIterator();
             while (iter.next()) |entry| entry.keep.deinit();
@@ -392,7 +415,11 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         }
         inserter.rewritten_joins = &rewritten_joins;
         defer inserter.rewritten_joins = null;
-        var owned = try OwnedSet.init(store.allocator, &domain);
+        var final_joins: FinalJoinMap = .empty;
+        defer final_joins.deinit(inserter.emission_allocator);
+        inserter.final_joins = &final_joins;
+        defer inserter.final_joins = null;
+        var owned = try OwnedSet.init(inserter.emission_allocator, &domain);
         defer owned.deinit();
         const emit_params_for_owned = store.getLocalSpan(emit_args);
         for (0..GuardedList.borrowLen(emit_params_for_owned)) |position| {
@@ -402,11 +429,8 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             }
         }
 
-        var solve_arena = std.heap.ArenaAllocator.init(store.allocator);
-        defer solve_arena.deinit();
-        inserter.solve_allocator = solve_arena.allocator();
-        var join_summaries = JoinSummaryMap.init(solve_arena.allocator());
-        var switch_summaries = SwitchSummaryMap.init(solve_arena.allocator());
+        var join_summaries = JoinSummaryMap.init(inserter.emission_allocator);
+        var switch_summaries = SwitchSummaryMap.init(inserter.emission_allocator);
         inserter.join_summaries = &join_summaries;
         inserter.switch_summaries = &switch_summaries;
         defer {
@@ -420,9 +444,8 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         try inserter.solveProcSummaries(body, &owned);
 
         const rewritten_body = try inserter.rewritePath(body, &owned, .{});
-        const elided_body = try elideImmediateRcPairs(store, rewritten_body);
-        const join_points = try inserter.procJoinPoints(elided_body);
-        store.setProcSpecBodyAndJoinPoints(emit_proc, elided_body, join_points);
+        const join_points = try inserter.finishFinalJoinPoints();
+        store.setProcSpecBodyAndJoinPoints(emit_proc, rewritten_body, join_points);
     }
 
     if (builtin.mode == .Debug) {
@@ -481,6 +504,90 @@ const RewriteBoundary = struct {
 const ReadBeforeRebindKey = struct {
     start: LIR.CFStmtId,
     loop_keep_id: u32,
+};
+
+/// One exact liveness row. Procedure-local liveness domains usually fit in a
+/// machine word; represent those rows inline and allocate words only for the
+/// uncommon larger domain. The representation choice depends solely on the
+/// explicit domain width and does not change the dataflow lattice.
+const LivenessSet = struct {
+    bit_len: usize,
+    storage: union(enum) {
+        inline_word: usize,
+        allocated: std.bit_set.DynamicBitSetUnmanaged,
+    },
+
+    fn initEmpty(allocator: Allocator, bit_len: usize) Allocator.Error!LivenessSet {
+        if (bit_len <= @bitSizeOf(usize)) {
+            return .{ .bit_len = bit_len, .storage = .{ .inline_word = 0 } };
+        }
+        return .{
+            .bit_len = bit_len,
+            .storage = .{ .allocated = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, bit_len) },
+        };
+    }
+
+    fn deinit(self: *LivenessSet, allocator: Allocator) void {
+        switch (self.storage) {
+            .inline_word => {},
+            .allocated => |*bits| bits.deinit(allocator),
+        }
+        self.* = undefined;
+    }
+
+    fn clone(self: *const LivenessSet, allocator: Allocator) Allocator.Error!LivenessSet {
+        return switch (self.storage) {
+            .inline_word => |bits| .{ .bit_len = self.bit_len, .storage = .{ .inline_word = bits } },
+            .allocated => |bits| .{ .bit_len = self.bit_len, .storage = .{ .allocated = try bits.clone(allocator) } },
+        };
+    }
+
+    fn set(self: *LivenessSet, bit: usize) void {
+        std.debug.assert(bit < self.bit_len);
+        switch (self.storage) {
+            .inline_word => |*bits| bits.* |= @as(usize, 1) << @intCast(bit),
+            .allocated => |*bits| bits.set(bit),
+        }
+    }
+
+    fn unset(self: *LivenessSet, bit: usize) void {
+        std.debug.assert(bit < self.bit_len);
+        switch (self.storage) {
+            .inline_word => |*bits| bits.* &= ~(@as(usize, 1) << @intCast(bit)),
+            .allocated => |*bits| bits.unset(bit),
+        }
+    }
+
+    fn isSet(self: *const LivenessSet, bit: usize) bool {
+        std.debug.assert(bit < self.bit_len);
+        return switch (self.storage) {
+            .inline_word => |bits| bits & (@as(usize, 1) << @intCast(bit)) != 0,
+            .allocated => |bits| bits.isSet(bit),
+        };
+    }
+
+    fn unsetAll(self: *LivenessSet) void {
+        switch (self.storage) {
+            .inline_word => |*bits| bits.* = 0,
+            .allocated => |*bits| bits.unsetAll(),
+        }
+    }
+
+    fn setUnion(self: *LivenessSet, other: LivenessSet) void {
+        std.debug.assert(self.bit_len == other.bit_len);
+        switch (self.storage) {
+            .inline_word => |*bits| bits.* |= other.storage.inline_word,
+            .allocated => |*bits| bits.setUnion(other.storage.allocated),
+        }
+    }
+
+    fn eql(self: *const LivenessSet, other: LivenessSet) bool {
+        if (self.bit_len != other.bit_len) return false;
+        return switch (self.storage) {
+            .inline_word => |bits| bits == other.storage.inline_word,
+            .allocated => |bits| bits.eql(other.storage.allocated),
+        };
+    }
 };
 
 // Join-summary solver
@@ -708,7 +815,9 @@ const Inserter = struct {
     /// becomes quadratic. This cache stores the same information under the
     /// statement transfer rules: reads happen before a statement's target
     /// rebinding kills the previous value.
-    reads_before_rebind_cache: *std.AutoHashMap(ReadBeforeRebindKey, std.bit_set.DynamicBitSetUnmanaged) = undefined,
+    keep_free_reads_cache: []?LivenessSet = &.{},
+    keep_free_cached_stmts: *std.ArrayList(LIR.CFStmtId) = undefined,
+    reads_before_rebind_cache: *std.AutoHashMap(ReadBeforeRebindKey, LivenessSet) = undefined,
     read_cache_arena: *std.heap.ArenaAllocator = undefined,
     read_cache_allocator: Allocator = undefined,
     /// Live mapping from an OwnedSet address used as a loop keep-set to its
@@ -728,12 +837,17 @@ const Inserter = struct {
     current_proc_body: LIR.CFStmtId = undefined,
     join_bodies: ?*const JoinBodyMap = null,
     rewritten_joins: ?*RewrittenJoinMap = null,
+    /// Join metadata accumulated at the exact point each final join is
+    /// emitted, avoiding a second discovery walk over the finished graph.
+    final_joins: ?*FinalJoinMap = null,
     /// Per-emission join summaries computed by the solver before rewriting.
     join_summaries: ?*JoinSummaryMap = null,
     /// Per-emission switch-continuation summaries from the same solve.
     switch_summaries: ?*SwitchSummaryMap = null,
     /// Arena backing one emission's solver structures.
     solve_allocator: Allocator = undefined,
+    /// Arena backing all non-output state for the current proc emission.
+    emission_allocator: Allocator = undefined,
 
     const CallArgOwnership = struct {
         retain_args: std.ArrayList(LIR.LocalId) = .empty,
@@ -852,7 +966,7 @@ const Inserter = struct {
         var tasks = std.ArrayList(RewriteTask).empty;
         defer {
             while (tasks.pop()) |task| self.destroyRewriteTask(task);
-            tasks.deinit(self.store.allocator);
+            tasks.deinit(self.emission_allocator);
         }
 
         try self.pushRewritePath(&tasks, start, owned, options, &result);
@@ -879,17 +993,17 @@ const Inserter = struct {
         options: RewriteOptions,
         result: *LIR.CFStmtId,
     ) ResourceError!void {
-        const task = try self.store.allocator.create(RewritePathTask);
-        errdefer self.store.allocator.destroy(task);
+        const task = try self.emission_allocator.create(RewritePathTask);
+        errdefer self.emission_allocator.destroy(task);
         task.* = .{
             .cursor = start,
-            .owned = try owned.clone(),
+            .owned = try cloneOwnedSetWith(self.emission_allocator, owned),
             .options = options,
             .frames = .empty,
             .result = result,
         };
         errdefer task.owned.deinit();
-        try tasks.append(self.store.allocator, .{ .path = task });
+        try tasks.append(self.emission_allocator, .{ .path = task });
     }
 
     fn takeRewriteFrames(path: *RewritePathTask) std.ArrayList(LinearRewriteFrame) {
@@ -940,10 +1054,10 @@ const Inserter = struct {
                         current_start = try self.emitRebindRelease(assign.target, current_start);
                     }
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
+                    errdefer deaths.deinit(self.emission_allocator);
                     const singles = [_]LIR.LocalId{ refOpSource(assign.op), assign.target };
                     try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
+                    try path.frames.append(self.emission_allocator, .{
                         .stmt = path.cursor,
                         .head = current_start,
                         .retain_assign_ref_target = transfer.retain_target,
@@ -956,10 +1070,10 @@ const Inserter = struct {
                         current_start = try self.emitRebindRelease(assign.target, current_start);
                     }
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
+                    errdefer deaths.deinit(self.emission_allocator);
                     const singles = [_]LIR.LocalId{assign.target};
                     try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
+                    try path.frames.append(self.emission_allocator, .{
                         .stmt = path.cursor,
                         .head = current_start,
                         .post_release = try self.takePostReleases(&deaths),
@@ -970,7 +1084,7 @@ const Inserter = struct {
                     if (self.transferForInit(&path.owned, uninit.target)) {
                         current_start = try self.emitRebindRelease(uninit.target, current_start);
                     }
-                    try path.frames.append(self.store.allocator, .{ .stmt = path.cursor, .head = current_start });
+                    try path.frames.append(self.emission_allocator, .{ .stmt = path.cursor, .head = current_start });
                     path.cursor = uninit.next;
                 },
                 .assign_call => |assign| {
@@ -980,17 +1094,17 @@ const Inserter = struct {
                     // whose vectors are ABI contracts.
                     const unique_demand = self.variants.enabled and !self.solution.isPinnedProc(assign.proc);
                     var transfer = try self.transferForCall(&path.owned, assign.proc, callee_sig, unique_demand, assign.args, assign.next, assign.target, null, path.options.loop_keep);
-                    defer transfer.deinit(self.store.allocator);
+                    defer transfer.deinit(self.emission_allocator);
                     const call_target = try self.variantForCall(assign.proc, transfer.args.demanded);
                     if (transfer.release_old_target) {
                         current_start = try self.emitRebindRelease(assign.target, current_start);
                     }
                     current_start = try self.retainArgs(transfer.args.retain_args.items, current_start);
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
+                    errdefer deaths.deinit(self.emission_allocator);
                     try self.noteCallResultDeathIfUnused(&path.owned, assign.target, transfer.args.demanded.ret_mode, assign.next, path.options.loop_keep, &deaths);
                     try self.postStmtDeaths(&path.owned, &.{}, assign.args, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
+                    try path.frames.append(self.emission_allocator, .{
                         .stmt = path.cursor,
                         .head = current_start,
                         .retain_call_result = transfer.retain_call_result,
@@ -1001,18 +1115,18 @@ const Inserter = struct {
                 },
                 .assign_call_erased => |assign| {
                     var transfer = try self.transferForCall(&path.owned, null, arc_sig.RcSig.all_owned, false, assign.args, assign.next, assign.target, assign.closure, path.options.loop_keep);
-                    defer transfer.deinit(self.store.allocator);
+                    defer transfer.deinit(self.emission_allocator);
                     if (transfer.release_old_target) {
                         current_start = try self.emitRebindRelease(assign.target, current_start);
                     }
                     current_start = try self.retainLocalIfRc(assign.closure, current_start);
                     current_start = try self.retainArgs(transfer.args.retain_args.items, current_start);
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
+                    errdefer deaths.deinit(self.emission_allocator);
                     try self.noteCallResultDeathIfUnused(&path.owned, assign.target, .owned, assign.next, path.options.loop_keep, &deaths);
                     const singles = [_]LIR.LocalId{assign.closure};
                     try self.postStmtDeaths(&path.owned, &singles, assign.args, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
+                    try path.frames.append(self.emission_allocator, .{
                         .stmt = path.cursor,
                         .head = current_start,
                         .post_release = try self.takePostReleases(&deaths),
@@ -1025,10 +1139,10 @@ const Inserter = struct {
                         current_start = try self.emitRebindRelease(assign.target, current_start);
                     }
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
+                    errdefer deaths.deinit(self.emission_allocator);
                     const singles = [_]LIR.LocalId{ assign.capture orelse assign.target, assign.target };
                     try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
+                    try path.frames.append(self.emission_allocator, .{
                         .stmt = path.cursor,
                         .head = current_start,
                         .transfer_single = transfer.transfer_single,
@@ -1045,10 +1159,10 @@ const Inserter = struct {
                         current_start = try self.retainMaskedArgs(assign.args, transfer.preserve_consumed_args, current_start);
                     }
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
+                    errdefer deaths.deinit(self.emission_allocator);
                     const singles = [_]LIR.LocalId{assign.target};
                     try self.postStmtDeaths(&path.owned, &singles, assign.args, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
+                    try path.frames.append(self.emission_allocator, .{
                         .stmt = path.cursor,
                         .head = current_start,
                         .transfer_mask = transfer.transfer_mask,
@@ -1060,18 +1174,18 @@ const Inserter = struct {
                 },
                 .assign_list => |assign| {
                     var transfer_positions: std.ArrayList(u32) = .empty;
-                    errdefer transfer_positions.deinit(self.store.allocator);
+                    errdefer transfer_positions.deinit(self.emission_allocator);
                     const transfer = try self.transferForAggregate(&path.owned, assign.elems, assign.target, assign.next, path.options.loop_keep, &transfer_positions);
                     var transferred_positions = try self.takeTransferPositions(&transfer_positions);
-                    errdefer if (transferred_positions.len != 0) self.store.allocator.free(transferred_positions);
+                    errdefer if (transferred_positions.len != 0) self.emission_allocator.free(transferred_positions);
                     if (transfer.release_old_target) {
                         current_start = try self.emitRebindRelease(assign.target, current_start);
                     }
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
+                    errdefer deaths.deinit(self.emission_allocator);
                     const singles = [_]LIR.LocalId{assign.target};
                     try self.postStmtDeaths(&path.owned, &singles, assign.elems, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
+                    try path.frames.append(self.emission_allocator, .{
                         .stmt = path.cursor,
                         .head = current_start,
                         .transfer_positions = transferred_positions,
@@ -1082,18 +1196,18 @@ const Inserter = struct {
                 },
                 .assign_struct => |assign| {
                     var transfer_positions: std.ArrayList(u32) = .empty;
-                    errdefer transfer_positions.deinit(self.store.allocator);
+                    errdefer transfer_positions.deinit(self.emission_allocator);
                     const transfer = try self.transferForAggregate(&path.owned, assign.fields, assign.target, assign.next, path.options.loop_keep, &transfer_positions);
                     var transferred_positions = try self.takeTransferPositions(&transfer_positions);
-                    errdefer if (transferred_positions.len != 0) self.store.allocator.free(transferred_positions);
+                    errdefer if (transferred_positions.len != 0) self.emission_allocator.free(transferred_positions);
                     if (transfer.release_old_target) {
                         current_start = try self.emitRebindRelease(assign.target, current_start);
                     }
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
+                    errdefer deaths.deinit(self.emission_allocator);
                     const singles = [_]LIR.LocalId{assign.target};
                     try self.postStmtDeaths(&path.owned, &singles, assign.fields, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
+                    try path.frames.append(self.emission_allocator, .{
                         .stmt = path.cursor,
                         .head = current_start,
                         .transfer_positions = transferred_positions,
@@ -1108,10 +1222,10 @@ const Inserter = struct {
                         current_start = try self.emitRebindRelease(assign.target, current_start);
                     }
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
+                    errdefer deaths.deinit(self.emission_allocator);
                     const singles = [_]LIR.LocalId{ assign.payload orelse assign.target, assign.target };
                     try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
+                    try path.frames.append(self.emission_allocator, .{
                         .stmt = path.cursor,
                         .head = current_start,
                         .transfer_single = transfer.transfer_single,
@@ -1121,14 +1235,14 @@ const Inserter = struct {
                 },
                 .store_struct => |assign| {
                     var transfer_positions: std.ArrayList(u32) = .empty;
-                    errdefer transfer_positions.deinit(self.store.allocator);
+                    errdefer transfer_positions.deinit(self.emission_allocator);
                     try self.spanTransferPositions(assign.fields, assign.next, assign.dest, &path.owned, path.options.loop_keep, &transfer_positions);
                     var transferred_positions = try self.takeTransferPositions(&transfer_positions);
-                    errdefer if (transferred_positions.len != 0) self.store.allocator.free(transferred_positions);
+                    errdefer if (transferred_positions.len != 0) self.emission_allocator.free(transferred_positions);
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
+                    errdefer deaths.deinit(self.emission_allocator);
                     try self.postStmtDeaths(&path.owned, &.{}, assign.fields, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
+                    try path.frames.append(self.emission_allocator, .{
                         .stmt = path.cursor,
                         .head = current_start,
                         .transfer_positions = transferred_positions,
@@ -1143,10 +1257,10 @@ const Inserter = struct {
                         transfer_single = try self.singleTransfer(payload, assign.next, assign.dest, &path.owned, path.options.loop_keep);
                     }
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
+                    errdefer deaths.deinit(self.emission_allocator);
                     const singles = [_]LIR.LocalId{assign.payload orelse assign.dest};
                     try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
+                    try path.frames.append(self.emission_allocator, .{
                         .stmt = path.cursor,
                         .head = current_start,
                         .transfer_single = transfer_single,
@@ -1160,10 +1274,10 @@ const Inserter = struct {
                         current_start = try self.emitRebindRelease(assign.target, current_start);
                     }
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
+                    errdefer deaths.deinit(self.emission_allocator);
                     const singles = [_]LIR.LocalId{ assign.value, assign.target };
                     try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
+                    try path.frames.append(self.emission_allocator, .{
                         .stmt = path.cursor,
                         .head = current_start,
                         .retain_set_target = transfer.retain_target,
@@ -1173,10 +1287,10 @@ const Inserter = struct {
                 },
                 .debug => |debug_stmt| {
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
+                    errdefer deaths.deinit(self.emission_allocator);
                     const singles = [_]LIR.LocalId{debug_stmt.message};
                     try self.postStmtDeaths(&path.owned, &singles, null, debug_stmt.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
+                    try path.frames.append(self.emission_allocator, .{
                         .stmt = path.cursor,
                         .head = current_start,
                         .post_release = try self.takePostReleases(&deaths),
@@ -1185,10 +1299,10 @@ const Inserter = struct {
                 },
                 .expect => |expect_stmt| {
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
-                    errdefer deaths.deinit(self.store.allocator);
+                    errdefer deaths.deinit(self.emission_allocator);
                     const singles = [_]LIR.LocalId{expect_stmt.condition};
                     try self.postStmtDeaths(&path.owned, &singles, null, expect_stmt.next, path.options.loop_keep, &deaths);
-                    try path.frames.append(self.store.allocator, .{
+                    try path.frames.append(self.emission_allocator, .{
                         .stmt = path.cursor,
                         .head = current_start,
                         .post_release = try self.takePostReleases(&deaths),
@@ -1198,25 +1312,25 @@ const Inserter = struct {
                 .incref => |rc| {
                     if (path.options.boundaries.len == 0) arcInvariant("ARC insertion received already-reference-counted LIR");
                     self.noteEmittedRetain(&path.owned, rc.value);
-                    try path.frames.append(self.store.allocator, .{ .stmt = path.cursor, .head = current_start });
+                    try path.frames.append(self.emission_allocator, .{ .stmt = path.cursor, .head = current_start });
                     path.cursor = rc.next;
                 },
                 .decref => |rc| {
                     if (path.options.boundaries.len == 0) arcInvariant("ARC insertion received already-reference-counted LIR");
                     self.noteEmittedRelease(&path.owned, rc.value);
-                    try path.frames.append(self.store.allocator, .{ .stmt = path.cursor, .head = current_start });
+                    try path.frames.append(self.emission_allocator, .{ .stmt = path.cursor, .head = current_start });
                     path.cursor = rc.next;
                 },
                 .decref_if_initialized => |rc| {
                     if (path.options.boundaries.len == 0) arcInvariant("ARC insertion received already-reference-counted LIR");
                     self.noteEmittedRelease(&path.owned, rc.value);
-                    try path.frames.append(self.store.allocator, .{ .stmt = path.cursor, .head = current_start });
+                    try path.frames.append(self.emission_allocator, .{ .stmt = path.cursor, .head = current_start });
                     path.cursor = rc.next;
                 },
                 .free => |rc| {
                     if (path.options.boundaries.len == 0) arcInvariant("ARC insertion received already-reference-counted LIR");
                     self.noteEmittedRelease(&path.owned, rc.value);
-                    try path.frames.append(self.store.allocator, .{ .stmt = path.cursor, .head = current_start });
+                    try path.frames.append(self.emission_allocator, .{ .stmt = path.cursor, .head = current_start });
                     path.cursor = rc.next;
                 },
                 .switch_stmt => |switch_stmt| {
@@ -1251,7 +1365,7 @@ const Inserter = struct {
                     return;
                 },
                 .comptime_branch_taken => |marker| {
-                    try path.frames.append(self.store.allocator, .{ .stmt = path.cursor, .head = current_start });
+                    try path.frames.append(self.emission_allocator, .{ .stmt = path.cursor, .head = current_start });
                     path.cursor = marker.next;
                 },
                 .loop_continue => {
@@ -1343,10 +1457,10 @@ const Inserter = struct {
         var next = tail_start;
         var cloned: LIR.CFStmtId = undefined;
         defer if (frame.transfer_positions.len != 0) {
-            self.store.allocator.free(frame.transfer_positions);
+            self.emission_allocator.free(frame.transfer_positions);
         };
         defer if (frame.post_release.len != 0) {
-            self.store.allocator.free(frame.post_release);
+            self.emission_allocator.free(frame.post_release);
         };
 
         // Lifetime-ending releases come right after the statement and its
@@ -1521,13 +1635,7 @@ const Inserter = struct {
                 } });
             },
             .incref => |rc| {
-                cloned = try self.store.addCFStmt(.{ .incref = .{
-                    .value = rc.value,
-                    .rc = rc.rc,
-                    .count = rc.count,
-                    .atomicity = self.rcAtomicity(rc.value),
-                    .next = next,
-                } });
+                cloned = try self.retainLocalIfRcCount(rc.value, rc.count, next);
             },
             .decref => |rc| {
                 cloned = try self.store.addCFStmt(.{ .decref = .{
@@ -1635,9 +1743,9 @@ const Inserter = struct {
         }
 
         const summary = self.solveSummaryOf(join_stmt.id);
-        const state = try self.store.allocator.create(RewriteJoinTask);
+        const state = try self.emission_allocator.create(RewriteJoinTask);
         var queued = false;
-        errdefer if (!queued) self.store.allocator.destroy(state);
+        errdefer if (!queued) self.emission_allocator.destroy(state);
         state.* = .{
             .start = start,
             .id = join_stmt.id,
@@ -1646,8 +1754,8 @@ const Inserter = struct {
             .maybe_uninitialized_conditions = join_stmt.maybe_uninitialized_conditions,
             .maybe_uninitialized_condition_masks = join_stmt.maybe_uninitialized_condition_masks,
             .incoming_owned = try path.owned.clone(),
-            .entry_keep = try cloneOwnedSetWith(self.store.allocator, &summary.entry_keep),
-            .body_keep = try cloneOwnedSetWith(self.store.allocator, &summary.body_keep),
+            .entry_keep = try cloneOwnedSetWith(self.emission_allocator, &summary.entry_keep),
+            .body_keep = try cloneOwnedSetWith(self.emission_allocator, &summary.body_keep),
             .body_reachable = summary.body_reachable,
             .loop_keep_id = summary.loop_keep_id,
             .frames = takeRewriteFrames(path),
@@ -1656,7 +1764,7 @@ const Inserter = struct {
         errdefer if (!queued) state.incoming_owned.deinit();
         errdefer if (!queued) state.entry_keep.deinit();
         errdefer if (!queued) state.body_keep.deinit();
-        errdefer if (!queued) state.frames.deinit(self.store.allocator);
+        errdefer if (!queued) state.frames.deinit(self.emission_allocator);
         var loop_keep_registered = false;
         errdefer if (!queued and loop_keep_registered) {
             _ = self.active_loop_keep_ids.remove(@intFromPtr(&state.body_keep));
@@ -1664,7 +1772,7 @@ const Inserter = struct {
         try self.active_loop_keep_ids.put(@intFromPtr(&state.body_keep), state.loop_keep_id);
         loop_keep_registered = true;
 
-        try tasks.append(self.store.allocator, .{ .join = state });
+        try tasks.append(self.emission_allocator, .{ .join = state });
         queued = true;
         const join_options = RewriteOptions{
             .boundaries = path.options.boundaries,
@@ -1698,6 +1806,11 @@ const Inserter = struct {
             .body = state.body,
             .remainder = state.remainder,
         } });
+        try self.recordFinalJoin(.{
+            .id = state.id,
+            .params = state.params,
+            .body = state.body,
+        });
         if (self.rewritten_joins) |rewritten_joins| {
             try rewritten_joins.put(state.start, .{
                 .keep = try state.entry_keep.clone(),
@@ -1737,9 +1850,9 @@ const Inserter = struct {
         path: *RewritePathTask,
         switch_stmt: anytype,
     ) ResourceError!void {
-        const state = try self.store.allocator.create(RewriteInitializedPayloadSwitchTask);
+        const state = try self.emission_allocator.create(RewriteInitializedPayloadSwitchTask);
         var queued = false;
-        errdefer if (!queued) self.store.allocator.destroy(state);
+        errdefer if (!queued) self.emission_allocator.destroy(state);
         state.* = .{
             .cond = switch_stmt.cond,
             .cond_mask = switch_stmt.cond_mask,
@@ -1748,9 +1861,9 @@ const Inserter = struct {
             .frames = takeRewriteFrames(path),
             .result = path.result,
         };
-        errdefer if (!queued) state.frames.deinit(self.store.allocator);
+        errdefer if (!queued) state.frames.deinit(self.emission_allocator);
 
-        try tasks.append(self.store.allocator, .{ .initialized_payload_switch = state });
+        try tasks.append(self.emission_allocator, .{ .initialized_payload_switch = state });
         queued = true;
 
         var initialized_owned = try path.owned.clone();
@@ -1779,11 +1892,11 @@ const Inserter = struct {
         continuation: ?LIR.CFStmtId,
     ) ResourceError!void {
         const branches = self.store.getCFSwitchBranches(branches_span);
-        const state = try self.store.allocator.create(RewriteSwitchNoContinuationTask);
+        const state = try self.emission_allocator.create(RewriteSwitchNoContinuationTask);
         var queued = false;
-        errdefer if (!queued) self.store.allocator.destroy(state);
-        const branch_results = try self.store.allocator.alloc(LIR.CFStmtId, branches.len);
-        errdefer if (!queued) self.store.allocator.free(branch_results);
+        errdefer if (!queued) self.emission_allocator.destroy(state);
+        const branch_results = try self.emission_allocator.alloc(LIR.CFStmtId, branches.len);
+        errdefer if (!queued) self.emission_allocator.free(branch_results);
         state.* = .{
             .start = start,
             .cond = cond,
@@ -1794,9 +1907,9 @@ const Inserter = struct {
             .frames = takeRewriteFrames(path),
             .result = path.result,
         };
-        errdefer if (!queued) state.frames.deinit(self.store.allocator);
+        errdefer if (!queued) state.frames.deinit(self.emission_allocator);
 
-        try tasks.append(self.store.allocator, .{ .switch_no_continuation = state });
+        try tasks.append(self.emission_allocator, .{ .switch_no_continuation = state });
         queued = true;
         try self.pushRewritePath(tasks, default_branch, &path.owned, path.options, &state.default_branch);
         for (0..GuardedList.borrowLen(branches)) |index| {
@@ -1809,8 +1922,8 @@ const Inserter = struct {
         errdefer self.destroyRewriteSwitchNoContinuation(state);
         const branches = self.store.getCFSwitchBranches(state.branches);
         if (branches.len != state.branch_results.len) arcInvariant("ARC switch branch result count changed during rewrite");
-        const rewritten_branches = try self.store.allocator.alloc(LIR.CFSwitchBranch, branches.len);
-        defer self.store.allocator.free(rewritten_branches);
+        const rewritten_branches = try self.emission_allocator.alloc(LIR.CFSwitchBranch, branches.len);
+        defer self.emission_allocator.free(rewritten_branches);
         for (0..GuardedList.borrowLen(branches)) |i| {
             const branch = GuardedList.at(branches, i);
             const rewritten = state.branch_results[i];
@@ -1856,11 +1969,11 @@ const Inserter = struct {
         common: *const OwnedSet,
     ) ResourceError!void {
         const branches = self.store.getCFSwitchBranches(branches_span);
-        const state = try self.store.allocator.create(RewriteSwitchContinuationTask);
+        const state = try self.emission_allocator.create(RewriteSwitchContinuationTask);
         var queued = false;
-        errdefer if (!queued) self.store.allocator.destroy(state);
-        const branch_results = try self.store.allocator.alloc(LIR.CFStmtId, branches.len);
-        errdefer if (!queued) self.store.allocator.free(branch_results);
+        errdefer if (!queued) self.emission_allocator.destroy(state);
+        const branch_results = try self.emission_allocator.alloc(LIR.CFStmtId, branches.len);
+        errdefer if (!queued) self.emission_allocator.free(branch_results);
         state.* = .{
             .start = start,
             .cond = cond,
@@ -1876,9 +1989,9 @@ const Inserter = struct {
         };
         errdefer if (!queued) state.entry_owned.deinit();
         errdefer if (!queued) state.common.deinit();
-        errdefer if (!queued) state.frames.deinit(self.store.allocator);
+        errdefer if (!queued) state.frames.deinit(self.emission_allocator);
 
-        try tasks.append(self.store.allocator, .{ .switch_after_continuation = state });
+        try tasks.append(self.emission_allocator, .{ .switch_after_continuation = state });
         queued = true;
         try self.pushRewritePath(tasks, continuation, &state.common, path.options, &state.continuation);
     }
@@ -1891,7 +2004,7 @@ const Inserter = struct {
         var handed_off = false;
         errdefer if (!handed_off) self.destroyRewriteSwitchContinuation(state);
 
-        state.nested_boundaries = try appendRewriteBoundary(self.store.allocator, state.parent_options.boundaries, .{
+        state.nested_boundaries = try appendRewriteBoundary(self.emission_allocator, state.parent_options.boundaries, .{
             .stop = state.original_continuation,
             .replacement = state.continuation,
             .keep = &state.common,
@@ -1902,7 +2015,7 @@ const Inserter = struct {
             .loop_keep_id = state.parent_options.loop_keep_id,
         };
 
-        try tasks.append(self.store.allocator, .{ .switch_finish_continuation = state });
+        try tasks.append(self.emission_allocator, .{ .switch_finish_continuation = state });
         handed_off = true;
         const switch_stmt = self.store.getCFStmt(state.start).switch_stmt;
         try self.pushRewritePath(tasks, switch_stmt.default_branch, &state.entry_owned, nested_options, &state.default_branch);
@@ -1918,8 +2031,8 @@ const Inserter = struct {
         errdefer self.destroyRewriteSwitchContinuation(state);
         const branches = self.store.getCFSwitchBranches(state.branches);
         if (branches.len != state.branch_results.len) arcInvariant("ARC switch branch result count changed during rewrite");
-        const rewritten_branches = try self.store.allocator.alloc(LIR.CFSwitchBranch, branches.len);
-        defer self.store.allocator.free(rewritten_branches);
+        const rewritten_branches = try self.emission_allocator.alloc(LIR.CFSwitchBranch, branches.len);
+        defer self.emission_allocator.free(rewritten_branches);
         for (0..GuardedList.borrowLen(branches)) |i| {
             const branch = GuardedList.at(branches, i);
             const rewritten = state.branch_results[i];
@@ -1946,9 +2059,9 @@ const Inserter = struct {
         start: LIR.CFStmtId,
         str_match: anytype,
     ) ResourceError!void {
-        const state = try self.store.allocator.create(RewriteStrMatchTask);
+        const state = try self.emission_allocator.create(RewriteStrMatchTask);
         var queued = false;
-        errdefer if (!queued) self.store.allocator.destroy(state);
+        errdefer if (!queued) self.emission_allocator.destroy(state);
         state.* = .{
             .start = start,
             .source = str_match.source,
@@ -1958,9 +2071,9 @@ const Inserter = struct {
             .frames = takeRewriteFrames(path),
             .result = path.result,
         };
-        errdefer if (!queued) state.frames.deinit(self.store.allocator);
+        errdefer if (!queued) state.frames.deinit(self.emission_allocator);
 
-        try tasks.append(self.store.allocator, .{ .str_match = state });
+        try tasks.append(self.emission_allocator, .{ .str_match = state });
         queued = true;
 
         var match_owned = try path.owned.clone();
@@ -2001,11 +2114,11 @@ const Inserter = struct {
         str_match_set: anytype,
     ) ResourceError!void {
         const arms = self.store.getStrMatchArms(str_match_set.arms);
-        const state = try self.store.allocator.create(RewriteStrMatchSetTask);
+        const state = try self.emission_allocator.create(RewriteStrMatchSetTask);
         var queued = false;
-        errdefer if (!queued) self.store.allocator.destroy(state);
-        const on_matches = try self.store.allocator.alloc(LIR.CFStmtId, arms.len);
-        errdefer if (!queued) self.store.allocator.free(on_matches);
+        errdefer if (!queued) self.emission_allocator.destroy(state);
+        const on_matches = try self.emission_allocator.alloc(LIR.CFStmtId, arms.len);
+        errdefer if (!queued) self.emission_allocator.free(on_matches);
 
         state.* = .{
             .start = start,
@@ -2015,9 +2128,9 @@ const Inserter = struct {
             .frames = takeRewriteFrames(path),
             .result = path.result,
         };
-        errdefer if (!queued) state.frames.deinit(self.store.allocator);
+        errdefer if (!queued) state.frames.deinit(self.emission_allocator);
 
-        try tasks.append(self.store.allocator, .{ .str_match_set = state });
+        try tasks.append(self.emission_allocator, .{ .str_match_set = state });
         queued = true;
 
         try self.pushRewritePath(tasks, str_match_set.on_miss, &path.owned, path.options, &state.on_miss);
@@ -2042,8 +2155,8 @@ const Inserter = struct {
         const arms = self.store.getStrMatchArms(state.arms);
         if (arms.len != state.on_matches.len) arcInvariant("ARC string-match-set arm count changed during rewrite");
 
-        const rewritten_arms = try self.store.allocator.alloc(LIR.StrMatchArm, arms.len);
-        defer self.store.allocator.free(rewritten_arms);
+        const rewritten_arms = try self.emission_allocator.alloc(LIR.StrMatchArm, arms.len);
+        defer self.emission_allocator.free(rewritten_arms);
         for (0..GuardedList.borrowLen(arms)) |index| {
             const arm = GuardedList.at(arms, index);
             const rewritten_on_match = state.on_matches[index];
@@ -2151,14 +2264,14 @@ const Inserter = struct {
                     // the unique-demand scan stays off; it has no effect on
                     // the abstract ownership state.
                     var transfer = try self.transferForCall(&segment.owned, null, self.solution.sigOf(assign.proc), false, assign.args, assign.next, assign.target, null, segment.ctx.loop_keep);
-                    defer transfer.deinit(self.store.allocator);
+                    defer transfer.deinit(self.emission_allocator);
                     try self.noteCallResultDeathIfUnused(&segment.owned, assign.target, transfer.args.demanded.ret_mode, assign.next, segment.ctx.loop_keep, null);
                     try self.postStmtDeaths(&segment.owned, &.{}, assign.args, assign.next, segment.ctx.loop_keep, null);
                     segment.cursor = assign.next;
                 },
                 .assign_call_erased => |assign| {
                     var transfer = try self.transferForCall(&segment.owned, null, arc_sig.RcSig.all_owned, false, assign.args, assign.next, assign.target, assign.closure, segment.ctx.loop_keep);
-                    defer transfer.deinit(self.store.allocator);
+                    defer transfer.deinit(self.emission_allocator);
                     try self.noteCallResultDeathIfUnused(&segment.owned, assign.target, .owned, assign.next, segment.ctx.loop_keep, null);
                     const singles = [_]LIR.LocalId{assign.closure};
                     try self.postStmtDeaths(&segment.owned, &singles, assign.args, assign.next, segment.ctx.loop_keep, null);
@@ -2387,10 +2500,10 @@ const Inserter = struct {
     fn purgeLoopKeepLiveness(self: *Inserter, loop_keep_id: u32) ResourceError!bool {
         if (!self.loop_keep_reads_consumed.remove(loop_keep_id)) return false;
         var stale = std.ArrayList(ReadBeforeRebindKey).empty;
-        defer stale.deinit(self.store.allocator);
+        defer stale.deinit(self.emission_allocator);
         var keys = self.reads_before_rebind_cache.keyIterator();
         while (keys.next()) |key| {
-            if (key.loop_keep_id == loop_keep_id) try stale.append(self.store.allocator, key.*);
+            if (key.loop_keep_id == loop_keep_id) try stale.append(self.emission_allocator, key.*);
         }
         for (stale.items) |key| {
             _ = self.reads_before_rebind_cache.remove(key);
@@ -2403,7 +2516,7 @@ const Inserter = struct {
     /// otherwise.
     fn groupUsedFromTable(
         self: *Inserter,
-        reads: *const std.bit_set.DynamicBitSetUnmanaged,
+        reads: *const LivenessSet,
         local: LIR.LocalId,
     ) bool {
         const leader = self.solution.leaderOf(local);
@@ -2671,19 +2784,19 @@ const Inserter = struct {
     fn destroyFrames(self: *Inserter, frames: *std.ArrayList(LinearRewriteFrame)) void {
         for (frames.items) |frame| {
             if (frame.post_release.len != 0) {
-                self.store.allocator.free(frame.post_release);
+                self.emission_allocator.free(frame.post_release);
             }
             if (frame.transfer_positions.len != 0) {
-                self.store.allocator.free(frame.transfer_positions);
+                self.emission_allocator.free(frame.transfer_positions);
             }
         }
-        frames.deinit(self.store.allocator);
+        frames.deinit(self.emission_allocator);
     }
 
     fn destroyRewritePath(self: *Inserter, path: *RewritePathTask) void {
         self.destroyFrames(&path.frames);
         path.owned.deinit();
-        self.store.allocator.destroy(path);
+        self.emission_allocator.destroy(path);
     }
 
     fn destroyRewriteJoin(self: *Inserter, state: *RewriteJoinTask) void {
@@ -2692,38 +2805,38 @@ const Inserter = struct {
         state.incoming_owned.deinit();
         state.entry_keep.deinit();
         state.body_keep.deinit();
-        self.store.allocator.destroy(state);
+        self.emission_allocator.destroy(state);
     }
 
     fn destroyRewriteSwitchNoContinuation(self: *Inserter, state: *RewriteSwitchNoContinuationTask) void {
         self.destroyFrames(&state.frames);
-        self.store.allocator.free(state.branch_results);
-        self.store.allocator.destroy(state);
+        self.emission_allocator.free(state.branch_results);
+        self.emission_allocator.destroy(state);
     }
 
     fn destroyRewriteSwitchContinuation(self: *Inserter, state: *RewriteSwitchContinuationTask) void {
         self.destroyFrames(&state.frames);
         state.entry_owned.deinit();
         state.common.deinit();
-        if (state.nested_boundaries.len != 0) self.store.allocator.free(state.nested_boundaries);
-        self.store.allocator.free(state.branch_results);
-        self.store.allocator.destroy(state);
+        if (state.nested_boundaries.len != 0) self.emission_allocator.free(state.nested_boundaries);
+        self.emission_allocator.free(state.branch_results);
+        self.emission_allocator.destroy(state);
     }
 
     fn destroyRewriteInitializedPayloadSwitch(self: *Inserter, state: *RewriteInitializedPayloadSwitchTask) void {
         self.destroyFrames(&state.frames);
-        self.store.allocator.destroy(state);
+        self.emission_allocator.destroy(state);
     }
 
     fn destroyRewriteStrMatch(self: *Inserter, state: *RewriteStrMatchTask) void {
         self.destroyFrames(&state.frames);
-        self.store.allocator.destroy(state);
+        self.emission_allocator.destroy(state);
     }
 
     fn destroyRewriteStrMatchSet(self: *Inserter, state: *RewriteStrMatchSetTask) void {
         self.destroyFrames(&state.frames);
-        self.store.allocator.free(state.on_matches);
-        self.store.allocator.destroy(state);
+        self.emission_allocator.free(state.on_matches);
+        self.emission_allocator.destroy(state);
     }
 
     fn isBindingBorrowed(self: *const Inserter, local: LIR.LocalId) bool {
@@ -2939,7 +3052,7 @@ const Inserter = struct {
         loop_keep: ?*const OwnedSet,
     ) ResourceError!CallTransfer {
         var arg_ownership = try self.callArgOwnership(callee, owned, callee_sig, unique_demand, args, next, target, loop_keep);
-        errdefer arg_ownership.deinit(self.store.allocator);
+        errdefer arg_ownership.deinit(self.emission_allocator);
         const target_feeds_call = self.spanUsesLocal(args, target) or
             (extra_use != null and extra_use.? == target);
         const release_old_target = if (target_feeds_call)
@@ -3136,7 +3249,7 @@ const Inserter = struct {
             if (try self.groupUsedInPath(next, local, loop_keep)) continue;
             self.unsetOwnedUnit(owned, local);
             if (transferred_positions) |positions| {
-                try positions.append(self.store.allocator, @intCast(i));
+                try positions.append(self.emission_allocator, @intCast(i));
             }
         }
     }
@@ -3203,7 +3316,7 @@ const Inserter = struct {
         if (try self.groupUsedInPath(next, owner, loop_keep)) return;
         owned.unset(owner);
         if (collected) |list| {
-            try list.append(self.store.allocator, owner);
+            try list.append(self.emission_allocator, owner);
         }
     }
 
@@ -3236,18 +3349,18 @@ const Inserter = struct {
         if (try self.valueUsedInPath(next, local, loop_keep)) return;
         owned.unset(local);
         if (collected) |list| {
-            try list.append(self.store.allocator, local);
+            try list.append(self.emission_allocator, local);
         }
     }
 
     fn takePostReleases(self: *Inserter, deaths: *std.ArrayList(LIR.LocalId)) ResourceError![]const LIR.LocalId {
         if (deaths.items.len == 0) return &.{};
-        return try deaths.toOwnedSlice(self.store.allocator);
+        return try deaths.toOwnedSlice(self.emission_allocator);
     }
 
     fn takeTransferPositions(self: *Inserter, positions: *std.ArrayList(u32)) ResourceError![]const u32 {
         if (positions.items.len == 0) return &.{};
-        return try positions.toOwnedSlice(self.store.allocator);
+        return try positions.toOwnedSlice(self.emission_allocator);
     }
 
     fn canMoveSetLocalValue(
@@ -3402,20 +3515,20 @@ const Inserter = struct {
         if (params.len == 0) return 0;
 
         var mask: u64 = 0;
-        var visited = try self.store.allocator.alloc(bool, self.store.cfStmtCount());
-        defer self.store.allocator.free(visited);
+        const visited = try self.emission_allocator.alloc(bool, self.store.cfStmtCount());
+        defer self.emission_allocator.free(visited);
         @memset(visited, false);
 
         var stack = std.ArrayList(LIR.CFStmtId).empty;
-        defer stack.deinit(self.store.allocator);
+        defer stack.deinit(self.emission_allocator);
 
         if (self.variants.original_bodies[@intFromEnum(proc_id)]) |body| {
-            try stack.append(self.store.allocator, body);
+            try stack.append(self.emission_allocator, body);
         }
         const join_points = self.store.getJoinPointSpan(proc.join_points);
         for (0..GuardedList.borrowLen(join_points)) |join_index| {
             const join_point = GuardedList.at(join_points, join_index);
-            try stack.append(self.store.allocator, join_point.body);
+            try stack.append(self.emission_allocator, join_point.body);
         }
 
         while (stack.pop()) |stmt_id| {
@@ -3428,38 +3541,38 @@ const Inserter = struct {
             switch (stmt) {
                 .assign_low_level => |assign| {
                     mask |= self.uniqueSeedMaskForLowLevel(params, assign.args, assign.rc_effect);
-                    try stack.append(self.store.allocator, assign.next);
+                    try stack.append(self.emission_allocator, assign.next);
                 },
                 .switch_stmt => |switch_stmt| {
                     const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
                     for (0..GuardedList.borrowLen(branches)) |branch_index| {
                         const branch = GuardedList.at(branches, branch_index);
-                        try stack.append(self.store.allocator, branch.body);
+                        try stack.append(self.emission_allocator, branch.body);
                     }
-                    try stack.append(self.store.allocator, switch_stmt.default_branch);
+                    try stack.append(self.emission_allocator, switch_stmt.default_branch);
                     if (switch_stmt.continuation) |continuation| {
-                        try stack.append(self.store.allocator, continuation);
+                        try stack.append(self.emission_allocator, continuation);
                     }
                 },
                 .switch_initialized_payload => |switch_stmt| {
-                    try stack.append(self.store.allocator, switch_stmt.initialized_branch);
-                    try stack.append(self.store.allocator, switch_stmt.uninitialized_branch);
+                    try stack.append(self.emission_allocator, switch_stmt.initialized_branch);
+                    try stack.append(self.emission_allocator, switch_stmt.uninitialized_branch);
                 },
                 .str_match => |str_match| {
-                    try stack.append(self.store.allocator, str_match.on_match);
-                    try stack.append(self.store.allocator, str_match.on_miss);
+                    try stack.append(self.emission_allocator, str_match.on_match);
+                    try stack.append(self.emission_allocator, str_match.on_miss);
                 },
                 .str_match_set => |str_match_set| {
                     const arms = self.store.getStrMatchArms(str_match_set.arms);
                     for (0..GuardedList.borrowLen(arms)) |arm_index| {
                         const arm = GuardedList.at(arms, arm_index);
-                        try stack.append(self.store.allocator, arm.on_match);
+                        try stack.append(self.emission_allocator, arm.on_match);
                     }
-                    try stack.append(self.store.allocator, str_match_set.on_miss);
+                    try stack.append(self.emission_allocator, str_match_set.on_miss);
                 },
                 .join => |join_stmt| {
-                    try stack.append(self.store.allocator, join_stmt.body);
-                    try stack.append(self.store.allocator, join_stmt.remainder);
+                    try stack.append(self.emission_allocator, join_stmt.body);
+                    try stack.append(self.emission_allocator, join_stmt.remainder);
                 },
                 inline .init_uninitialized,
                 .assign_ref,
@@ -3480,7 +3593,7 @@ const Inserter = struct {
                 .decref,
                 .decref_if_initialized,
                 .free,
-                => |linear| try stack.append(self.store.allocator, linear.next),
+                => |linear| try stack.append(self.emission_allocator, linear.next),
                 .ret,
                 .jump,
                 .crash,
@@ -3534,8 +3647,8 @@ const Inserter = struct {
         loop_keep: ?*const OwnedSet,
     ) ResourceError!CallArgOwnership {
         var result = CallArgOwnership{};
-        errdefer result.deinit(self.store.allocator);
-        var transferred = try OwnedSet.init(self.store.allocator, owned.domain);
+        errdefer result.deinit(self.emission_allocator);
+        var transferred = try OwnedSet.init(self.emission_allocator, owned.domain);
         defer transferred.deinit();
 
         result.demanded = callee_sig;
@@ -3570,7 +3683,7 @@ const Inserter = struct {
                 if (seeds_unique_param) {
                     result.demanded.unique_params |= bit;
                 }
-                try result.transfer_args.append(self.store.allocator, local);
+                try result.transfer_args.append(self.emission_allocator, local);
                 transferred.set(owner);
                 continue;
             }
@@ -3593,10 +3706,10 @@ const Inserter = struct {
                 {
                     result.demanded.unique_params |= @as(u64, 1) << @as(u6, @intCast(position));
                 }
-                try result.transfer_args.append(self.store.allocator, local);
+                try result.transfer_args.append(self.emission_allocator, local);
                 transferred.set(owner);
             } else {
-                try result.retain_args.append(self.store.allocator, local);
+                try result.retain_args.append(self.emission_allocator, local);
             }
         }
 
@@ -3685,195 +3798,22 @@ const Inserter = struct {
         }
     }
 
-    fn collectJoinBodies(
-        self: *Inserter,
-        start: LIR.CFStmtId,
-        join_bodies: *JoinBodyMap,
-        visited: *std.AutoHashMap(LIR.CFStmtId, void),
-    ) ResourceError!void {
-        var stack = std.ArrayList(LIR.CFStmtId).empty;
-        defer stack.deinit(self.store.allocator);
-        try stack.append(self.store.allocator, start);
-
-        while (stack.pop()) |current| {
-            if (visited.contains(current)) continue;
-            try visited.put(current, {});
-
-            const stmt = self.store.getCFStmt(current);
-            switch (stmt) {
-                .assign_ref => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_literal => |assign| try stack.append(self.store.allocator, assign.next),
-                .init_uninitialized => |uninit| try stack.append(self.store.allocator, uninit.next),
-                .assign_call => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_call_erased => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_packed_erased_fn => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_low_level => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_list => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_struct => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_tag => |assign| try stack.append(self.store.allocator, assign.next),
-                .store_struct => |assign| try stack.append(self.store.allocator, assign.next),
-                .store_tag => |assign| try stack.append(self.store.allocator, assign.next),
-                .set_local => |assign| try stack.append(self.store.allocator, assign.next),
-                .debug => |debug_stmt| try stack.append(self.store.allocator, debug_stmt.next),
-                .expect => |expect_stmt| try stack.append(self.store.allocator, expect_stmt.next),
-                .comptime_branch_taken => |taken| try stack.append(self.store.allocator, taken.next),
-                .decref_if_initialized => |rc| try stack.append(self.store.allocator, rc.next),
-                .switch_stmt => |switch_stmt| {
-                    if (switch_stmt.continuation) |continuation| {
-                        try stack.append(self.store.allocator, continuation);
-                    }
-                    try stack.append(self.store.allocator, switch_stmt.default_branch);
-                    const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
-                    for (0..GuardedList.borrowLen(branches)) |branch_index| {
-                        const branch = GuardedList.at(branches, branch_index);
-                        try stack.append(self.store.allocator, branch.body);
-                    }
-                },
-                .switch_initialized_payload => |switch_stmt| {
-                    try stack.append(self.store.allocator, switch_stmt.initialized_branch);
-                    try stack.append(self.store.allocator, switch_stmt.uninitialized_branch);
-                },
-                .str_match => |str_match| {
-                    try stack.append(self.store.allocator, str_match.on_match);
-                    try stack.append(self.store.allocator, str_match.on_miss);
-                },
-                .str_match_set => |str_match_set| {
-                    const arms = self.store.getStrMatchArms(str_match_set.arms);
-                    for (0..GuardedList.borrowLen(arms)) |arm_index| {
-                        const arm = GuardedList.at(arms, arm_index);
-                        try stack.append(self.store.allocator, arm.on_match);
-                    }
-                    try stack.append(self.store.allocator, str_match_set.on_miss);
-                },
-                .join => |join_stmt| {
-                    const previous = try join_bodies.getOrPut(join_stmt.id);
-                    if (previous.found_existing and previous.value_ptr.* != join_stmt.body) {
-                        arcInvariant("ARC join-body collection saw one join id with multiple bodies");
-                    }
-                    previous.value_ptr.* = join_stmt.body;
-                    try stack.append(self.store.allocator, join_stmt.remainder);
-                    try stack.append(self.store.allocator, join_stmt.body);
-                },
-                .jump,
-                .ret,
-                .runtime_error,
-                .comptime_exhaustiveness_failed,
-                .loop_continue,
-                .loop_break,
-                .crash,
-                .expect_err,
-                => {},
-                .incref, .decref, .free => arcInvariant("ARC join-body collection received already-reference-counted LIR"),
-            }
+    fn recordFinalJoin(self: *Inserter, join_point: LIR.JoinPoint) ResourceError!void {
+        const joins = self.final_joins orelse arcInvariant("ARC emitted a join without a final join table");
+        const entry = try joins.getOrPut(self.emission_allocator, join_point.id);
+        if (entry.found_existing and !joinPointEql(entry.value_ptr.*, join_point)) {
+            arcInvariant("ARC final join-point output saw one join id with different data");
         }
+        entry.value_ptr.* = join_point;
     }
 
-    fn procJoinPoints(self: *Inserter, body: ?LIR.CFStmtId) ResourceError!LIR.JoinPointSpan {
-        const start = body orelse return LIR.JoinPointSpan.empty();
-
-        var joins: FinalJoinMap = .empty;
-        defer joins.deinit(self.store.allocator);
-        var visited = std.AutoHashMap(LIR.CFStmtId, void).init(self.store.allocator);
-        defer visited.deinit();
-        try self.collectFinalJoinPoints(start, &joins, &visited);
-
-        const sorted = try self.store.allocator.alloc(LIR.JoinPoint, joins.count());
-        defer self.store.allocator.free(sorted);
-        for (joins.values(), 0..) |join, index| {
-            sorted[index] = join;
-        }
+    fn finishFinalJoinPoints(self: *Inserter) ResourceError!LIR.JoinPointSpan {
+        const joins = self.final_joins orelse arcInvariant("ARC finished an emission without a final join table");
+        if (joins.count() == 0) return LIR.JoinPointSpan.empty();
+        const sorted = try self.emission_allocator.alloc(LIR.JoinPoint, joins.count());
+        for (joins.values(), 0..) |join, index| sorted[index] = join;
         std.mem.sort(LIR.JoinPoint, sorted, {}, joinPointLessThan);
         return try self.store.addJoinPointSpan(sorted);
-    }
-
-    fn collectFinalJoinPoints(
-        self: *Inserter,
-        start: LIR.CFStmtId,
-        joins: *FinalJoinMap,
-        visited: *std.AutoHashMap(LIR.CFStmtId, void),
-    ) ResourceError!void {
-        var stack = std.ArrayList(LIR.CFStmtId).empty;
-        defer stack.deinit(self.store.allocator);
-        try stack.append(self.store.allocator, start);
-
-        while (stack.pop()) |current| {
-            if (visited.contains(current)) continue;
-            try visited.put(current, {});
-
-            const stmt = self.store.getCFStmt(current);
-            switch (stmt) {
-                .assign_ref => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_literal => |assign| try stack.append(self.store.allocator, assign.next),
-                .init_uninitialized => |uninit| try stack.append(self.store.allocator, uninit.next),
-                .assign_call => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_call_erased => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_packed_erased_fn => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_low_level => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_list => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_struct => |assign| try stack.append(self.store.allocator, assign.next),
-                .assign_tag => |assign| try stack.append(self.store.allocator, assign.next),
-                .store_struct => |assign| try stack.append(self.store.allocator, assign.next),
-                .store_tag => |assign| try stack.append(self.store.allocator, assign.next),
-                .set_local => |assign| try stack.append(self.store.allocator, assign.next),
-                .debug => |debug_stmt| try stack.append(self.store.allocator, debug_stmt.next),
-                .expect => |expect_stmt| try stack.append(self.store.allocator, expect_stmt.next),
-                .incref => |rc| try stack.append(self.store.allocator, rc.next),
-                .decref => |rc| try stack.append(self.store.allocator, rc.next),
-                .decref_if_initialized => |rc| try stack.append(self.store.allocator, rc.next),
-                .free => |rc| try stack.append(self.store.allocator, rc.next),
-                .comptime_branch_taken => |taken| try stack.append(self.store.allocator, taken.next),
-                .switch_stmt => |switch_stmt| {
-                    if (switch_stmt.continuation) |continuation| {
-                        try stack.append(self.store.allocator, continuation);
-                    }
-                    try stack.append(self.store.allocator, switch_stmt.default_branch);
-                    const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
-                    for (0..GuardedList.borrowLen(branches)) |branch_index| {
-                        const branch = GuardedList.at(branches, branch_index);
-                        try stack.append(self.store.allocator, branch.body);
-                    }
-                },
-                .switch_initialized_payload => |switch_stmt| {
-                    try stack.append(self.store.allocator, switch_stmt.initialized_branch);
-                    try stack.append(self.store.allocator, switch_stmt.uninitialized_branch);
-                },
-                .str_match => |str_match| {
-                    try stack.append(self.store.allocator, str_match.on_match);
-                    try stack.append(self.store.allocator, str_match.on_miss);
-                },
-                .str_match_set => |str_match_set| {
-                    const arms = self.store.getStrMatchArms(str_match_set.arms);
-                    for (0..GuardedList.borrowLen(arms)) |arm_index| {
-                        const arm = GuardedList.at(arms, arm_index);
-                        try stack.append(self.store.allocator, arm.on_match);
-                    }
-                    try stack.append(self.store.allocator, str_match_set.on_miss);
-                },
-                .join => |join_stmt| {
-                    const entry = try joins.getOrPut(self.store.allocator, join_stmt.id);
-                    const join_point = LIR.JoinPoint{
-                        .id = join_stmt.id,
-                        .params = join_stmt.params,
-                        .body = join_stmt.body,
-                    };
-                    if (entry.found_existing and !joinPointEql(entry.value_ptr.*, join_point)) {
-                        arcInvariant("ARC final join-point output saw one join id with different data");
-                    }
-                    entry.value_ptr.* = join_point;
-                    try stack.append(self.store.allocator, join_stmt.remainder);
-                    try stack.append(self.store.allocator, join_stmt.body);
-                },
-                .jump,
-                .ret,
-                .runtime_error,
-                .comptime_exhaustiveness_failed,
-                .loop_continue,
-                .loop_break,
-                .crash,
-                .expect_err,
-                => {},
-            }
-        }
     }
 
     /// Kill applied to one successor edge only: value-use bits of string
@@ -3886,8 +3826,8 @@ const Inserter = struct {
 
     const ReadBeforeRebindNode = struct {
         stmt: LIR.CFStmtId,
-        reads: std.bit_set.DynamicBitSetUnmanaged,
-        exposed: std.bit_set.DynamicBitSetUnmanaged,
+        reads: LivenessSet,
+        exposed: LivenessSet,
         successor_start: usize,
         successor_len: u32,
         def: ?LIR.LocalId,
@@ -3911,6 +3851,10 @@ const Inserter = struct {
     };
 
     fn clearReadsBeforeRebindCache(self: *Inserter) void {
+        for (self.keep_free_cached_stmts.items) |stmt| {
+            self.keep_free_reads_cache[@intFromEnum(stmt)] = null;
+        }
+        self.keep_free_cached_stmts.clearRetainingCapacity();
         self.reads_before_rebind_cache.clearRetainingCapacity();
         self.loop_keep_reads_consumed.clearRetainingCapacity();
         self.reaches_loop_edge.clearRetainingCapacity();
@@ -3925,9 +3869,9 @@ const Inserter = struct {
     ) ResourceError!void {
         if (graph.indices.contains(stmt)) return;
 
-        var reads = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph.allocator, self.domain().livenessBitLen());
+        var reads = try LivenessSet.initEmpty(graph.allocator, self.domain().livenessBitLen());
         errdefer reads.deinit(graph.allocator);
-        var exposed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph.allocator, self.domain().livenessBitLen());
+        var exposed = try LivenessSet.initEmpty(graph.allocator, self.domain().livenessBitLen());
         errdefer exposed.deinit(graph.allocator);
 
         const index = graph.nodes.items.len;
@@ -3967,7 +3911,7 @@ const Inserter = struct {
         return self.domain().resourceBitOf(local);
     }
 
-    fn noteReadBeforeRebindLocal(self: *const Inserter, reads: *std.bit_set.DynamicBitSetUnmanaged, local: LIR.LocalId) void {
+    fn noteReadBeforeRebindLocal(self: *const Inserter, reads: *LivenessSet, local: LIR.LocalId) void {
         if (self.rawLivenessBitOf(local)) |bit| reads.set(bit);
     }
 
@@ -3986,13 +3930,13 @@ const Inserter = struct {
     /// group bit, and its value-use bit. Reference-count statements record
     /// only the raw bit through `noteReadBeforeRebindLocal`: they must not
     /// extend group or call-result liveness.
-    fn noteLivenessUseLocal(self: *const Inserter, reads: *std.bit_set.DynamicBitSetUnmanaged, local: LIR.LocalId) void {
+    fn noteLivenessUseLocal(self: *const Inserter, reads: *LivenessSet, local: LIR.LocalId) void {
         if (self.rawLivenessBitOf(local)) |bit| reads.set(bit);
         if (self.groupBitOf(local)) |bit| reads.set(bit);
         if (self.valueUseBitOf(local)) |bit| reads.set(bit);
     }
 
-    fn noteLivenessUseSpan(self: *const Inserter, reads: *std.bit_set.DynamicBitSetUnmanaged, span: LIR.LocalSpan) void {
+    fn noteLivenessUseSpan(self: *const Inserter, reads: *LivenessSet, span: LIR.LocalSpan) void {
         const locals = self.store.getLocalSpan(span);
         for (0..GuardedList.borrowLen(locals)) |index| {
             const local = GuardedList.at(locals, index);
@@ -4000,14 +3944,14 @@ const Inserter = struct {
         }
     }
 
-    fn noteLivenessUseRefOp(self: *const Inserter, reads: *std.bit_set.DynamicBitSetUnmanaged, op: LIR.RefOp) void {
+    fn noteLivenessUseRefOp(self: *const Inserter, reads: *LivenessSet, op: LIR.RefOp) void {
         self.noteLivenessUseLocal(reads, refOpSource(op));
     }
 
     /// Records the loop keep-set as reads at a `loop_continue`/`loop_break`:
     /// kept units, groups with any kept member, and kept call-result locals
     /// all stay live across the loop edge.
-    fn noteLivenessLoopKeep(self: *const Inserter, reads: *std.bit_set.DynamicBitSetUnmanaged, keep: *const OwnedSet) void {
+    fn noteLivenessLoopKeep(self: *const Inserter, reads: *LivenessSet, keep: *const OwnedSet) void {
         // Every kept unit reads as a value use, which also sets its group
         // and value-use bits, so the loop edge keeps a group alive whenever
         // any member is kept.
@@ -4062,12 +4006,18 @@ const Inserter = struct {
         start: LIR.CFStmtId,
         loop_keep: ?*const OwnedSet,
         loop_keep_id: u32,
-    ) ResourceError!*const std.bit_set.DynamicBitSetUnmanaged {
+    ) ResourceError!*const LivenessSet {
         const key = ReadBeforeRebindKey{
             .start = start,
             .loop_keep_id = loop_keep_id,
         };
-        if (self.reads_before_rebind_cache.getPtr(key)) |cached| return cached;
+        if (loop_keep_id == 0) {
+            const stmt_index = @intFromEnum(start);
+            if (stmt_index >= self.keep_free_reads_cache.len) {
+                arcInvariant("ARC liveness queried a generated statement");
+            }
+            if (self.keep_free_reads_cache[stmt_index]) |*cached| return cached;
+        } else if (self.reads_before_rebind_cache.getPtr(key)) |cached| return cached;
 
         var graph_arena = std.heap.ArenaAllocator.init(self.store.allocator);
         defer graph_arena.deinit();
@@ -4304,8 +4254,8 @@ const Inserter = struct {
             }
         }
 
-        var scratch = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph_allocator, self.domain().livenessBitLen());
-        var edge_scratch = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph_allocator, self.domain().livenessBitLen());
+        var scratch = try LivenessSet.initEmpty(graph_allocator, self.domain().livenessBitLen());
+        var edge_scratch = try LivenessSet.initEmpty(graph_allocator, self.domain().livenessBitLen());
         var in_work = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph_allocator, node_count);
         var node_work = std.ArrayList(usize).empty;
         try node_work.ensureTotalCapacity(graph_allocator, node_count);
@@ -4365,13 +4315,28 @@ const Inserter = struct {
                 .start = node.stmt,
                 .loop_keep_id = loop_keep_id,
             };
-            if (self.reads_before_rebind_cache.contains(node_key)) continue;
-            const cached = try node.exposed.clone(self.read_cache_allocator);
-            try self.reads_before_rebind_cache.put(node_key, cached);
+            if (loop_keep_id == 0) {
+                const stmt_index = @intFromEnum(node.stmt);
+                if (stmt_index >= self.keep_free_reads_cache.len) {
+                    arcInvariant("ARC liveness graph contained a generated statement");
+                }
+                if (self.keep_free_reads_cache[stmt_index] != null) continue;
+                self.keep_free_reads_cache[stmt_index] = try node.exposed.clone(self.read_cache_allocator);
+                try self.keep_free_cached_stmts.append(self.store.allocator, node.stmt);
+            } else {
+                if (self.reads_before_rebind_cache.contains(node_key)) continue;
+                const cached = try node.exposed.clone(self.read_cache_allocator);
+                try self.reads_before_rebind_cache.put(node_key, cached);
+            }
         }
 
-        return self.reads_before_rebind_cache.getPtr(key) orelse
-            arcInvariant("ARC read-before-rebind cache did not include requested start");
+        if (loop_keep_id == 0) {
+            return if (self.keep_free_reads_cache[@intFromEnum(start)]) |*cached|
+                cached
+            else
+                arcInvariant("ARC keep-free liveness cache did not include requested start");
+        }
+        return self.reads_before_rebind_cache.getPtr(key) orelse arcInvariant("ARC loop liveness cache did not include requested start");
     }
 
     /// Value liveness for one raw local (no group extension): answered by
@@ -4408,7 +4373,7 @@ const Inserter = struct {
         self: *Inserter,
         start: LIR.CFStmtId,
         loop_keep: ?*const OwnedSet,
-    ) ResourceError!*const std.bit_set.DynamicBitSetUnmanaged {
+    ) ResourceError!*const LivenessSet {
         const loop_keep_id: u32 = if (loop_keep) |keep|
             self.active_loop_keep_ids.get(@intFromPtr(keep)) orelse
                 arcInvariant("ARC liveness query used an unregistered loop keep-set")
@@ -4452,7 +4417,7 @@ const Inserter = struct {
     }
 
     fn releaseAll(self: *Inserter, owned: *const OwnedSet, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
-        var keep = try OwnedSet.init(self.store.allocator, owned.domain);
+        var keep = try OwnedSet.init(self.emission_allocator, owned.domain);
         defer keep.deinit();
         return try self.releaseDifference(owned, &keep, next);
     }
@@ -4481,13 +4446,8 @@ const Inserter = struct {
         if (count == 0) return next;
         if (!self.localContainsRefcounted(local)) return next;
         const rc = self.rcHelperForLocal(.incref, local);
-        return try self.store.addCFStmt(.{ .incref = .{
-            .value = local,
-            .rc = rc,
-            .count = count,
-            .atomicity = self.rcAtomicity(local),
-            .next = next,
-        } });
+        const atomicity = self.rcAtomicity(local);
+        return try addCanonicalRetain(self.store, local, rc, atomicity, count, next);
     }
 
     fn retainStrMatchSourceForCaptures(self: *Inserter, source: LIR.LocalId, steps: LIR.StrMatchStepSpan, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
@@ -4657,96 +4617,36 @@ fn refOpSource(op: LIR.RefOp) LIR.LocalId {
     };
 }
 
-fn elideImmediateRcPairs(store: *LirStore, start: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
-    const new_start = elideImmediateRcPairsAt(store, start);
-    var visited = std.AutoHashMap(LIR.CFStmtId, void).init(store.allocator);
-    defer visited.deinit();
-    var stack = std.ArrayList(LIR.CFStmtId).empty;
-    defer stack.deinit(store.allocator);
-    try stack.append(store.allocator, new_start);
-
-    while (stack.pop()) |current| {
-        if (visited.contains(current)) continue;
-        try visited.put(current, {});
-
-        const stmt = store.getCFStmtPtr(current);
-        switch (stmt.*) {
-            .switch_stmt => |*s| {
-                if (s.continuation) |continuation| {
-                    s.continuation = elideImmediateRcPairsAt(store, continuation);
-                    try stack.append(store.allocator, s.continuation.?);
-                }
-                s.default_branch = elideImmediateRcPairsAt(store, s.default_branch);
-                try stack.append(store.allocator, s.default_branch);
-                const branches = store.getCFSwitchBranchesMut(s.branches);
-                for (0..branches.len) |index| {
-                    const branch = GuardedList.atPtr(branches, index);
-                    branch.body = elideImmediateRcPairsAt(store, branch.body);
-                    try stack.append(store.allocator, branch.body);
-                }
-            },
-            .switch_initialized_payload => |*s| {
-                s.initialized_branch = elideImmediateRcPairsAt(store, s.initialized_branch);
-                s.uninitialized_branch = elideImmediateRcPairsAt(store, s.uninitialized_branch);
-                try stack.append(store.allocator, s.initialized_branch);
-                try stack.append(store.allocator, s.uninitialized_branch);
-            },
-            .str_match => |*s| {
-                s.on_match = elideImmediateRcPairsAt(store, s.on_match);
-                s.on_miss = elideImmediateRcPairsAt(store, s.on_miss);
-                try stack.append(store.allocator, s.on_match);
-                try stack.append(store.allocator, s.on_miss);
-            },
-            .str_match_set => |*s| {
-                const arms = store.getStrMatchArmsMut(s.arms);
-                for (0..arms.len) |index| {
-                    const arm = GuardedList.atPtr(arms, index);
-                    arm.on_match = elideImmediateRcPairsAt(store, arm.on_match);
-                    try stack.append(store.allocator, arm.on_match);
-                }
-                s.on_miss = elideImmediateRcPairsAt(store, s.on_miss);
-                try stack.append(store.allocator, s.on_miss);
-            },
-            .join => |*j| {
-                j.body = elideImmediateRcPairsAt(store, j.body);
-                j.remainder = elideImmediateRcPairsAt(store, j.remainder);
-                try stack.append(store.allocator, j.body);
-                try stack.append(store.allocator, j.remainder);
-            },
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |*s| {
-                s.next = elideImmediateRcPairsAt(store, s.next);
-                try stack.append(store.allocator, s.next);
-            },
-            .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
-        }
+fn addCanonicalRetain(
+    store: *LirStore,
+    local: LIR.LocalId,
+    rc: layout_mod.RcHelper,
+    atomicity: LIR.RcAtomicity,
+    count: u16,
+    next: LIR.CFStmtId,
+) ResourceError!LIR.CFStmtId {
+    std.debug.assert(count > 0);
+    var canonical_count = count;
+    var canonical_next = next;
+    switch (store.getCFStmt(next)) {
+        .decref => |release| if (rcRetainReleasePair(.{
+            .value = local,
+            .rc = rc,
+            .atomicity = atomicity,
+        }, release)) {
+            if (count == 1) return release.next;
+            canonical_count = count - 1;
+            canonical_next = release.next;
+        },
+        else => {},
     }
-
-    return new_start;
-}
-
-fn elideImmediateRcPairsAt(store: *LirStore, start: LIR.CFStmtId) LIR.CFStmtId {
-    var current = start;
-    var remaining = store.cfStmtCount() + 1;
-    while (remaining > 0) : (remaining -= 1) {
-        const retain = switch (store.getCFStmt(current)) {
-            .incref => |rc| rc,
-            else => return current,
-        };
-        const release = switch (store.getCFStmt(retain.next)) {
-            .decref => |rc| rc,
-            else => return current,
-        };
-        if (!rcRetainReleasePair(retain, release)) return current;
-
-        if (retain.count == 1) {
-            current = release.next;
-        } else {
-            const stmt = store.getCFStmtPtr(current);
-            stmt.incref.count = retain.count - 1;
-            stmt.incref.next = release.next;
-        }
-    }
-    arcInvariant("ARC immediate RC elision hit a cyclic retain-release chain");
+    return try store.addCFStmt(.{ .incref = .{
+        .value = local,
+        .rc = rc,
+        .count = canonical_count,
+        .atomicity = atomicity,
+        .next = canonical_next,
+    } });
 }
 
 fn rcRetainReleasePair(retain: anytype, release: anytype) bool {
@@ -4781,13 +4681,16 @@ test "RC elision removes adjacent retain release pairs" {
         .rc = .{ .op = .decref, .layout_idx = .str },
         .next = ret,
     } });
-    const retain = try f.store.addCFStmt(.{ .incref = .{
-        .value = value,
-        .rc = .{ .op = .incref, .layout_idx = .str },
-        .next = release,
-    } });
+    const retain = try addCanonicalRetain(
+        &f.store,
+        value,
+        .{ .op = .incref, .layout_idx = .str },
+        .atomic,
+        1,
+        release,
+    );
 
-    try testing.expectEqual(ret, try elideImmediateRcPairs(&f.store, retain));
+    try testing.expectEqual(ret, retain);
 }
 
 test "RC elision lowers adjacent multi retain count" {
@@ -4800,14 +4703,14 @@ test "RC elision lowers adjacent multi retain count" {
         .rc = .{ .op = .decref, .layout_idx = .str },
         .next = ret,
     } });
-    const retain = try f.store.addCFStmt(.{ .incref = .{
-        .value = value,
-        .rc = .{ .op = .incref, .layout_idx = .str },
-        .count = 3,
-        .next = release,
-    } });
-
-    try testing.expectEqual(retain, try elideImmediateRcPairs(&f.store, retain));
+    const retain = try addCanonicalRetain(
+        &f.store,
+        value,
+        .{ .op = .incref, .layout_idx = .str },
+        .atomic,
+        3,
+        release,
+    );
     const stmt = f.store.getCFStmt(retain).incref;
     try testing.expectEqual(@as(u16, 2), stmt.count);
     try testing.expectEqual(ret, stmt.next);
@@ -6952,6 +6855,46 @@ test "uniqueness: call result of a fresh-list callee elides the check" {
     // The callee's return is born unique and the result's single unit moves
     // into the op, so the runtime check on argument 0 is redundant.
     try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: multiply-defined unique call result keeps the check" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const fresh = try f.local(f.list_i64);
+    const callee_ret = try f.ret(fresh);
+    const callee_body = try f.assignList(fresh, &.{}, callee_ret);
+    const callee = try f.addProc(&.{}, callee_body, f.list_i64);
+
+    // Either branch calls the same unique-returning callee, but the shared
+    // result local has two definitions. The flow-insensitive proof must not
+    // pick one runtime birth and claim that local is statically unique.
+    const cond = try f.local(.bool);
+    const list = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const append = try f.assignLowLevel(appended, &.{ list, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const continuation = try f.assignI64(elem, 5, append);
+    const then_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = list,
+        .proc = callee,
+        .args = try f.span(&.{}),
+        .next = continuation,
+    } });
+    const else_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = list,
+        .proc = callee,
+        .args = try f.span(&.{}),
+        .next = continuation,
+    } });
+    const body = try f.switchStmt(cond, then_call, else_call, continuation);
+    _ = try f.addProc(&.{cond}, body, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(appended));
 }
 
 test "uniqueness: pass-through callee result keeps the caller's check" {

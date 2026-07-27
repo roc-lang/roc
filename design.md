@@ -4820,18 +4820,38 @@ before solving and never weakened:
 ### Interprocedural Solving
 
 The proc call graph is derived from `assign_call` statements over
-`LirStore.getProcSpecs()`. Signatures solve in two phases:
+`LirStore.getProcSpecs()`. The parameter/return solver lifts the
+ownership-neutral bodies into exact facts once: local definitions and static
+demands, pure-alias edges, direct-call argument dependencies, reachable return
+locals, and join bodies. No signature round rescans a proc body. Signatures
+solve in two phases:
 
-1. Parameter modes iterate globally to a fixpoint with returns treated as
-   owned: non-pinned refcounted parameter positions start borrowed and flip
-   to owned when any occurrence demands a unit under the current signatures.
-   The borrowed set only shrinks, so iteration terminates.
+1. Parameter modes reach a fixpoint with returns treated as owned: non-pinned
+   refcounted parameter positions start borrowed and flip to owned when any
+   occurrence demands a unit under the current signatures. One work item is
+   one exact `(callee, parameter position)` bit that just flipped. Its reverse
+   adjacency contains precisely the caller argument locals newly demanded by
+   that flip; those demands propagate through explicit pure-alias edges and
+   may enqueue their owning parameter bits. Every bit flips at most once, so
+   the borrowed set only shrinks and the worklist terminates.
 2. With parameter modes final, a return becomes borrowed when every `ret`
    in the proc returns a borrow anchored on a borrowed parameter of that
    proc, with the parameter positions recorded as the return's lenders. A
    final binding solve then lets callers borrow such results: a call result
    whose lender mask names exactly one refcounted argument is borrow-capable
    in the caller, anchored on that argument.
+
+Unique-return bits use a separate monotone worklist over facts collected by
+the same uniqueness scan. A proc bit feeds only its direct-call result locals;
+a newly born-unique local feeds only its explicit pure-alias dependents; and a
+newly unique local feeds only the procs whose recorded `ret` statements return
+it. Holder-destroy facts are signature-independent and fixed before this
+worklist starts. Proc bits and local birth bits only turn on, each at most once,
+so unique-return solving never reruns whole-store uniqueness analysis.
+
+The reachable join-body facts collected during solving are also the sole input
+for emission's jump resolution. Emission must not rediscover join definitions
+by traversing the ownership-neutral graph again.
 
 Borrowed parameters anchor borrow groups of their own: they are live for the
 whole call by ABI, so payload reads from them borrow without the callee
@@ -4904,6 +4924,25 @@ The table carries exactly the same read-before-rebind decisions as the earlier
 on-demand forward scans. Compile-time performance work may change its storage
 or construction, but must not weaken the liveness questions, omit resource
 bits, or approximate the least fixed point.
+
+Rows whose explicit domain width fits in one machine word are stored inline;
+wider rows use exact allocated words. This is a representation choice made
+solely from the producer-authored domain width, not a heuristic. Keep-free rows
+are indexed directly by dense ownership-neutral statement id, while the less
+common loop-keep rows retain their exact `(statement, loop identity)` key.
+
+All solver-summary and rewrite-task state for one proc emission has the same
+lifetime and is allocated from one proc-scoped arena. Emitted LIR remains in
+the `LirStore`; arena-backed frames, ownership snapshots, branch results, and
+decision slices are discarded together only after the proc body and metadata
+have been committed.
+
+Immediate `incref`/matching-`decref` cancellation is part of retain
+construction: count one cancels the pair and larger counts are reduced by one.
+The completed graph is never rewritten by a later RC-elision traversal. Final
+join metadata is likewise recorded at the exact point each rewritten join is
+emitted, checked for consistent duplicate ids, sorted once, and committed with
+the proc body; it is not recollected from the finished graph.
 
 The debug borrow certifier deliberately spends more: it re-certifies join
 bodies per distinct entry state and summarizes per statement for walk

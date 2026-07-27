@@ -21,15 +21,16 @@
 //!   either an owned local (emission extends its lifetime past the borrow
 //!   group's last use) or a borrowed parameter (live for the whole call)
 //!
-//! Signatures solve interprocedurally in two phases. Phase A iterates
-//! parameter modes to a fixpoint with returns pessimistically owned:
-//! parameters start borrowed and flip to owned when any occurrence demands a
-//! unit, so the borrowed set only shrinks and iteration terminates. Calls in
-//! tail position to procs in the same call-graph strongly-connected component
-//! demand ownership of their arguments so emission never needs a statement
-//! after the call. Phase B then marks returns borrowed when every returned
-//! value is a borrow anchored on a borrowed parameter, and re-solves binding
-//! modes so callers may borrow such results. After signatures settle,
+//! Signatures solve interprocedurally in two phases. Phase A uses exact
+//! reverse dependencies to take parameter modes to a fixpoint with returns
+//! pessimistically owned: parameters start borrowed and flip to owned when
+//! any occurrence demands a unit, so every parameter bit is queued at most
+//! once. Calls in tail position to procs in the same call-graph
+//! strongly-connected component demand ownership of their arguments so
+//! emission never needs a statement after the call. Phase B then marks
+//! returns borrowed when every returned value is a borrow anchored on a
+//! borrowed parameter, and re-solves binding modes so callers may borrow such
+//! results. After signatures settle,
 //! unique returns solve to a fixpoint with the born-unique analysis: a
 //! proc's return is unique when every `ret` returns a born-unique value
 //! surviving to the return with no other holder, and a direct-call result
@@ -66,6 +67,14 @@ pub const MaybeUninitializedCondition = struct {
     mask: u64,
 };
 
+/// Producer-authored join-body fact collected while the solver walks one
+/// ownership-neutral procedure. ARC emission consumes these facts directly
+/// when resolving jumps; it never rediscovers joins from the graph.
+pub const JoinBody = struct {
+    id: LIR.JoinPointId,
+    body: LIR.CFStmtId,
+};
+
 /// Per-local binding-mode solution, liveness groups, and per-proc ownership
 /// signatures. A group is one leader local together with every borrowed
 /// local whose liveness anchors on it; emission keeps the leader's ownership
@@ -88,6 +97,11 @@ pub const Solution = struct {
     alias_source: []u32,
     /// Solved ownership signature per proc.
     sigs: []arc_sig.RcSig,
+    /// Flat join-body facts per source proc, indexed through the adjacent
+    /// offsets and lengths.
+    join_body_offsets: []u32,
+    join_body_lens: []u32,
+    join_bodies: []JoinBody,
     /// Bit set => the local is a join parameter. Join parameters carry one
     /// unit into the join body at every jump; their releases belong to the
     /// body, so emission must not end their lifetime from use scans alone.
@@ -126,6 +140,9 @@ pub const Solution = struct {
         self.allocator.free(self.members);
         self.allocator.free(self.alias_source);
         self.allocator.free(self.sigs);
+        self.allocator.free(self.join_body_offsets);
+        self.allocator.free(self.join_body_lens);
+        self.allocator.free(self.join_bodies);
         self.join_param.deinit(self.allocator);
         self.maybe_uninitialized_join_param.deinit(self.allocator);
         self.allocator.free(self.maybe_uninitialized_condition);
@@ -230,6 +247,14 @@ pub const Solution = struct {
     pub fn sigOf(self: *const Solution, proc: LIR.LirProcSpecId) arc_sig.RcSig {
         return self.sigTable().get(proc);
     }
+
+    pub fn joinBodiesOf(self: *const Solution, proc: LIR.LirProcSpecId) []const JoinBody {
+        const index = @intFromEnum(proc);
+        if (index >= self.join_body_offsets.len) return &.{};
+        const offset = self.join_body_offsets[index];
+        const len = self.join_body_lens[index];
+        return self.join_bodies[offset..][0..len];
+    }
 };
 
 const DefKind = union(enum) {
@@ -237,6 +262,17 @@ const DefKind = union(enum) {
     multi,
     fresh,
     borrow_capable: u32,
+};
+
+const DirectCallFact = struct {
+    callee: LIR.LirProcSpecId,
+    args: LIR.LocalSpan,
+    target: LIR.LocalId,
+};
+
+const ParamUseFact = struct {
+    key: u32,
+    argument: u32,
 };
 
 const Solver = struct {
@@ -267,6 +303,16 @@ const Solver = struct {
     maybe_uninitialized_join_param: std.bit_set.DynamicBitSetUnmanaged,
     maybe_uninitialized_condition: []u32,
     maybe_uninitialized_condition_mask: []u64,
+    /// Exact reverse dependencies from one callee parameter position to the
+    /// caller argument locals whose ownership demand changes when that
+    /// position flips from borrowed to owned.
+    param_uses: std.ArrayList(ParamUseFact),
+    /// Reachable returned locals and joins, partitioned by source proc.
+    proc_returns: []std.ArrayList(u32),
+    proc_join_bodies: []std.ArrayList(JoinBody),
+    /// Reachable direct calls, retained for the return-mode binding update
+    /// and unique-return dependency solve.
+    direct_calls: std.ArrayList(DirectCallFact),
     visited: std.AutoHashMap(LIR.CFStmtId, void),
     stack: std.ArrayList(LIR.CFStmtId),
 };
@@ -297,9 +343,15 @@ pub fn solve(
         .maybe_uninitialized_join_param = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count),
         .maybe_uninitialized_condition = try allocator.alloc(u32, local_count),
         .maybe_uninitialized_condition_mask = try allocator.alloc(u64, local_count),
+        .param_uses = .empty,
+        .proc_returns = try allocator.alloc(std.ArrayList(u32), proc_count),
+        .proc_join_bodies = try allocator.alloc(std.ArrayList(JoinBody), proc_count),
+        .direct_calls = .empty,
         .visited = std.AutoHashMap(LIR.CFStmtId, void).init(allocator),
         .stack = std.ArrayList(LIR.CFStmtId).empty,
     };
+    @memset(solver.proc_returns, .empty);
+    @memset(solver.proc_join_bodies, .empty);
     var solver_sigs_kept = false;
     var solver_alias_source_kept = false;
     defer {
@@ -322,6 +374,12 @@ pub fn solve(
         if (!solver_sigs_kept) solver.maybe_uninitialized_join_param.deinit(allocator);
         if (!solver_sigs_kept) allocator.free(solver.maybe_uninitialized_condition);
         if (!solver_sigs_kept) allocator.free(solver.maybe_uninitialized_condition_mask);
+        solver.param_uses.deinit(allocator);
+        for (solver.proc_returns) |*returns| returns.deinit(allocator);
+        allocator.free(solver.proc_returns);
+        for (solver.proc_join_bodies) |*joins| joins.deinit(allocator);
+        allocator.free(solver.proc_join_bodies);
+        solver.direct_calls.deinit(allocator);
         solver.visited.deinit();
         solver.stack.deinit(allocator);
         if (!solver_sigs_kept) allocator.free(solver.sigs);
@@ -337,7 +395,8 @@ pub fn solve(
 
     // Phase A: parameter-mode fixpoint with returns pessimistically owned.
     // Start non-pinned refcounted parameter positions borrowed; demands can
-    // only flip positions to owned, so the borrowed set shrinks each round.
+    // only flip positions to owned, so the borrowed set shrinks with each
+    // queued change.
     for (0..store.procSpecCount()) |proc_index| {
         const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
         var sig = arc_sig.RcSig.all_owned;
@@ -356,48 +415,24 @@ pub fn solve(
         solver.sigs[proc_index] = sig;
     }
 
-    var rounds: usize = 0;
-    while (true) : (rounds += 1) {
-        if (rounds > 64 * proc_count + 1) {
-            solveInvariant("ARC signature solving did not converge");
-        }
-        try collectAll(&solver, .returns_owned);
-
-        var changed = false;
-        for (0..store.procSpecCount()) |proc_index| {
-            const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
-            if (solver.pinned.isSet(proc_index)) continue;
-            var sig = solver.sigs[proc_index];
-            const params = store.getLocalSpan(proc.args);
-            for (0..GuardedList.borrowLen(params)) |position| {
-                const param = GuardedList.at(params, position);
-                if (position >= 64) break;
-                if (sig.paramMode(position) == .owned) continue;
-                const param_index = @intFromEnum(param);
-                const stays_borrowed = !solver.demand[param_index] and
-                    solver.defs[param_index] != .multi;
-                if (!stays_borrowed) {
-                    sig.borrowed_params &= ~(@as(u64, 1) << @as(u6, @intCast(position)));
-                    changed = true;
-                }
-            }
-            solver.sigs[proc_index] = sig;
-        }
-        if (!changed) break;
-    }
+    // Collect graph facts exactly once with the optimistic parameter modes.
+    // Every later signature change has an explicit reverse dependency: one
+    // callee parameter position points to precisely the caller arguments it
+    // newly demands. Because parameter bits only flip borrowed -> owned, a
+    // simple worklist reaches the same least fixpoint without rescanning any
+    // procedure body.
+    try collectAll(&solver);
+    try solveParameterModes(&solver);
 
     // Phase B: returns become borrowed when every returned value is a borrow
     // anchored on a borrowed parameter of this proc.
-    try collectAll(&solver, .returns_owned);
     {
         var binding = try resolveBindings(&solver, local_count);
         defer binding.deinit(allocator);
 
         for (0..store.procSpecCount()) |proc_index| {
-            const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
             if (solver.pinned.isSet(proc_index)) continue;
-            const body = proc.body orelse continue;
-            if (try retLenders(&solver, &binding, proc_index, body)) |lenders| {
+            if (retLenders(&solver, &binding, proc_index)) |lenders| {
                 solver.sigs[proc_index].ret_mode = .borrowed;
                 solver.sigs[proc_index].ret_lenders = lenders;
             }
@@ -407,44 +442,24 @@ pub fn solve(
     // Final binding solve with the solved signatures: borrowed-return call
     // results become borrow-capable, and returned borrows of borrowed
     // parameters lose their return demand.
-    try collectAll(&solver, .returns_solved);
+    updateDirectCallResultDefs(&solver);
     var binding = try resolveBindings(&solver, local_count);
     errdefer binding.deinit(allocator);
 
     var visible = try computeVisibility(allocator, store, rc_local, &solver.pinned);
     errdefer visible.deinit(allocator);
 
-    // Unique returns solve to a fixpoint against the born-unique analysis.
-    // `ret_unique` bits start false and only ever flip to true: a flip adds
-    // unique births at that callee's call results, and the destroy rules do
-    // not depend on `ret_unique`, so the unique set only grows. Every round
-    // either flips at least one proc or the loop stops, the final round
-    // recomputes uniqueness under the final signatures, and the round count
-    // is bounded by the longest unique-return dependency chain.
-    var uniqueness = try computeUniqueness(allocator, store, rc_local, .{ .sigs = solver.sigs });
+    // Unique returns form a second monotone dependency graph: proc-return
+    // bits feed direct-call result births, births feed exact alias targets,
+    // and newly unique locals feed only the procs that return them. Collect
+    // origin facts alongside the one statement scan and settle that graph by
+    // worklist; no uniqueness rescan is needed.
+    var unique_origins = try UniqueOriginFacts.init(allocator, rc_local, proc_count);
+    defer unique_origins.deinit();
+    var uniqueness = try computeUniquenessDetailed(allocator, store, rc_local, .{ .sigs = solver.sigs }, &unique_origins);
     {
         errdefer uniqueness.deinit(allocator);
-        var unique_rounds: usize = 0;
-        while (true) : (unique_rounds += 1) {
-            if (unique_rounds > proc_count + 1) {
-                solveInvariant("ARC unique-return solving did not converge");
-            }
-            var changed = false;
-            for (0..store.procSpecCount()) |proc_index| {
-                const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
-                if (solver.pinned.isSet(proc_index)) continue;
-                if (solver.sigs[proc_index].ret_unique) continue;
-                const body = proc.body orelse continue;
-                if (try retAllUnique(&solver, &uniqueness.unique, body)) {
-                    solver.sigs[proc_index].ret_unique = true;
-                    changed = true;
-                }
-            }
-            if (!changed) break;
-            const next = try computeUniqueness(allocator, store, rc_local, .{ .sigs = solver.sigs });
-            uniqueness.deinit(allocator);
-            uniqueness = next;
-        }
+        try solveUniqueReturnModes(&solver, &uniqueness, &unique_origins);
     }
     // Emission consumes the final bit and the destroyed set (for variant
     // parameter seeds); the born-unique origin set is re-derived by the
@@ -452,6 +467,23 @@ pub fn solve(
     uniqueness.born_unique.deinit(allocator);
     errdefer uniqueness.unique.deinit(allocator);
     errdefer uniqueness.destroyed.deinit(allocator);
+
+    const join_body_offsets = try allocator.alloc(u32, proc_count);
+    errdefer allocator.free(join_body_offsets);
+    const join_body_lens = try allocator.alloc(u32, proc_count);
+    errdefer allocator.free(join_body_lens);
+    var join_body_count: u32 = 0;
+    for (solver.proc_join_bodies, 0..) |joins, proc_index| {
+        join_body_offsets[proc_index] = join_body_count;
+        join_body_lens[proc_index] = @intCast(joins.items.len);
+        join_body_count += @intCast(joins.items.len);
+    }
+    const join_bodies = try allocator.alloc(JoinBody, join_body_count);
+    errdefer allocator.free(join_bodies);
+    for (solver.proc_join_bodies, 0..) |joins, proc_index| {
+        const start = join_body_offsets[proc_index];
+        @memcpy(join_bodies[start..][0..joins.items.len], joins.items);
+    }
 
     var solution = Solution{
         .allocator = allocator,
@@ -462,6 +494,9 @@ pub fn solve(
         .members = &.{},
         .alias_source = solver.alias_source,
         .sigs = solver.sigs,
+        .join_body_offsets = join_body_offsets,
+        .join_body_lens = join_body_lens,
+        .join_bodies = join_bodies,
         .join_param = solver.join_param,
         .maybe_uninitialized_join_param = solver.maybe_uninitialized_join_param,
         .maybe_uninitialized_condition = solver.maybe_uninitialized_condition,
@@ -478,6 +513,9 @@ pub fn solve(
         allocator.free(solution.leader);
         allocator.free(solution.alias_source);
         allocator.free(solution.sigs);
+        allocator.free(solution.join_body_offsets);
+        allocator.free(solution.join_body_lens);
+        allocator.free(solution.join_bodies);
         solution.join_param.deinit(allocator);
         solution.maybe_uninitialized_join_param.deinit(allocator);
         allocator.free(solution.maybe_uninitialized_condition);
@@ -638,156 +676,210 @@ fn leaderIsInitializedJoinParam(solver: *const Solver, index: u32) bool {
 /// the return occurrence's own demand. Returns null when any path returns an
 /// owned or foreign value.
 fn retLenders(
-    solver: *Solver,
+    solver: *const Solver,
     binding: *const BindingResult,
     proc_index: usize,
-    body: LIR.CFStmtId,
-) SolveError!?u64 {
-    const allocator = solver.allocator;
-    const store = solver.store;
+) ?u64 {
     var lenders: u64 = 0;
-    var saw_ret = false;
-
-    solver.visited.clearRetainingCapacity();
-    solver.stack.clearRetainingCapacity();
-    try solver.stack.append(allocator, body);
-    while (solver.stack.pop()) |current| {
-        if (solver.visited.contains(current)) continue;
-        try solver.visited.put(current, {});
-        switch (store.getCFStmt(current)) {
-            .ret => |ret_stmt| {
-                saw_ret = true;
-                const value_index = @intFromEnum(ret_stmt.value);
-                if (!solver.rc_local[value_index]) continue;
-                // The returned value must be a borrow (or borrowed param)
-                // whose leader is a borrowed parameter of this proc, and its
-                // only ownership demand may be the return itself.
-                const leader = binding.leader[value_index];
-                const anchored = binding.borrowed.isSet(value_index) or value_index == leader;
-                if (!anchored) return null;
-                if (!paramIsBorrowed(solver, leader)) return null;
-                if (solver.param_proc[leader] != proc_index) return null;
-                if (solver.demand[value_index]) return null;
-                const position = solver.param_position[leader];
-                if (position >= 64) return null;
-                lenders |= @as(u64, 1) << @as(u6, @intCast(position));
-            },
-            .switch_stmt => |s| {
-                const branches = store.getCFSwitchBranches(s.branches);
-                for (0..GuardedList.borrowLen(branches)) |branch_index| {
-                    const branch = GuardedList.at(branches, branch_index);
-                    try solver.stack.append(allocator, branch.body);
-                }
-                try solver.stack.append(allocator, s.default_branch);
-                if (s.continuation) |continuation| {
-                    try solver.stack.append(allocator, continuation);
-                }
-            },
-            .switch_initialized_payload => |s| {
-                try solver.stack.append(allocator, s.initialized_branch);
-                try solver.stack.append(allocator, s.uninitialized_branch);
-            },
-            .str_match => |s| {
-                try solver.stack.append(allocator, s.on_match);
-                try solver.stack.append(allocator, s.on_miss);
-            },
-            .str_match_set => |s| {
-                const arms = store.getStrMatchArms(s.arms);
-                for (0..GuardedList.borrowLen(arms)) |arm_index| {
-                    const arm = GuardedList.at(arms, arm_index);
-                    try solver.stack.append(allocator, arm.on_match);
-                }
-                try solver.stack.append(allocator, s.on_miss);
-            },
-            .join => |j| {
-                try solver.stack.append(allocator, j.body);
-                try solver.stack.append(allocator, j.remainder);
-            },
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
-                try solver.stack.append(allocator, s.next);
-            },
-            .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
-        }
+    const returns = solver.proc_returns[proc_index].items;
+    if (returns.len == 0) return null;
+    for (returns) |value_index| {
+        if (!solver.rc_local[value_index]) continue;
+        // The returned value must be a borrow (or borrowed param) whose
+        // leader is a borrowed parameter of this proc, and its only
+        // ownership demand may be the return itself.
+        const leader = binding.leader[value_index];
+        const anchored = binding.borrowed.isSet(value_index) or value_index == leader;
+        if (!anchored) return null;
+        if (!paramIsBorrowed(solver, leader)) return null;
+        if (solver.param_proc[leader] != proc_index) return null;
+        if (solver.demand[value_index]) return null;
+        const position = solver.param_position[leader];
+        if (position >= 64) return null;
+        lenders |= @as(u64, 1) << @as(u6, @intCast(position));
     }
 
-    if (!saw_ret) return null;
     if (lenders == 0) return null;
     return lenders;
 }
 
-/// True when every `ret` in the body returns a refcounted value whose
-/// unique bit is set: born unique and surviving to the return, which is the
-/// value's single consuming use. A body without a `ret` reports false; a
-/// never-returning proc's unique-return bit is never consulted.
-fn retAllUnique(
+const UniqueReturnWork = struct {
     solver: *Solver,
-    unique: *const std.bit_set.DynamicBitSetUnmanaged,
-    body: LIR.CFStmtId,
-) SolveError!bool {
-    const allocator = solver.allocator;
-    const store = solver.store;
-    var saw_ret = false;
+    uniqueness: *Uniqueness,
+    origins: *UniqueOriginFacts,
+    remaining_returns: []u32,
+    return_blocked: []const bool,
+    return_offsets: []const u32,
+    return_lens: []const u32,
+    return_edges: []const u32,
+    alias_offsets: []const u32,
+    alias_lens: []const u32,
+    alias_edges: []const u32,
+    proc_work: *std.ArrayList(u32),
+    born_work: *std.ArrayList(u32),
 
-    solver.visited.clearRetainingCapacity();
-    solver.stack.clearRetainingCapacity();
-    try solver.stack.append(allocator, body);
-    while (solver.stack.pop()) |current| {
-        if (solver.visited.contains(current)) continue;
-        try solver.visited.put(current, {});
-        switch (store.getCFStmt(current)) {
-            .ret => |ret_stmt| {
-                saw_ret = true;
-                const value_index = @intFromEnum(ret_stmt.value);
-                if (value_index >= solver.rc_local.len or !solver.rc_local[value_index]) return false;
-                if (!unique.isSet(value_index)) return false;
-            },
-            .switch_stmt => |s| {
-                const branches = store.getCFSwitchBranches(s.branches);
-                for (0..GuardedList.borrowLen(branches)) |branch_index| {
-                    const branch = GuardedList.at(branches, branch_index);
-                    try solver.stack.append(allocator, branch.body);
-                }
-                try solver.stack.append(allocator, s.default_branch);
-                if (s.continuation) |continuation| {
-                    try solver.stack.append(allocator, continuation);
-                }
-            },
-            .switch_initialized_payload => |s| {
-                try solver.stack.append(allocator, s.initialized_branch);
-                try solver.stack.append(allocator, s.uninitialized_branch);
-            },
-            .str_match => |s| {
-                try solver.stack.append(allocator, s.on_match);
-                try solver.stack.append(allocator, s.on_miss);
-            },
-            .str_match_set => |s| {
-                const arms = store.getStrMatchArms(s.arms);
-                for (0..GuardedList.borrowLen(arms)) |arm_index| {
-                    const arm = GuardedList.at(arms, arm_index);
-                    try solver.stack.append(allocator, arm.on_match);
-                }
-                try solver.stack.append(allocator, s.on_miss);
-            },
-            .join => |j| {
-                try solver.stack.append(allocator, j.body);
-                try solver.stack.append(allocator, j.remainder);
-            },
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
-                try solver.stack.append(allocator, s.next);
-            },
-            .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+    fn seedProc(self: *@This(), proc_index: u32) SolveError!void {
+        if (self.return_blocked[proc_index]) return;
+        if (self.solver.proc_returns[proc_index].items.len == 0) return;
+        if (self.solver.pinned.isSet(proc_index)) return;
+        if (self.solver.sigs[proc_index].ret_unique) return;
+        self.solver.sigs[proc_index].ret_unique = true;
+        try self.proc_work.append(self.solver.allocator, proc_index);
+    }
+
+    fn noteUnique(self: *@This(), local: u32) SolveError!void {
+        const start = self.return_offsets[local];
+        const end = start + self.return_lens[local];
+        for (self.return_edges[start..end]) |proc_index| {
+            if (self.remaining_returns[proc_index] == 0) {
+                solveInvariant("ARC unique-return dependency was satisfied twice");
+            }
+            self.remaining_returns[proc_index] -= 1;
+            if (self.remaining_returns[proc_index] == 0) try self.seedProc(proc_index);
         }
     }
 
-    return saw_ret;
-}
+    fn attemptBorn(self: *@This(), local: u32) SolveError!void {
+        if (self.uniqueness.born_unique.isSet(local)) return;
+        if (self.origins.static_foreign.isSet(local)) return;
+        if (self.origins.remaining_nonunique_calls[local] != 0) return;
 
-const RetTreatment = enum {
-    returns_owned,
-    returns_solved,
+        const source = self.origins.alias_source[local];
+        if (source != no_local) {
+            if (!self.uniqueness.born_unique.isSet(source)) return;
+        } else if (!self.origins.static_birth.isSet(local) and self.origins.call_count[local] == 0) {
+            return;
+        }
+
+        self.uniqueness.born_unique.set(local);
+        try self.born_work.append(self.solver.allocator, local);
+        if (!self.uniqueness.destroyed.isSet(local) and !self.uniqueness.unique.isSet(local)) {
+            self.uniqueness.unique.set(local);
+            try self.noteUnique(local);
+        }
+    }
+
+    fn run(self: *@This()) SolveError!void {
+        while (self.proc_work.items.len != 0 or self.born_work.items.len != 0) {
+            while (self.proc_work.pop()) |proc_index| {
+                for (self.origins.call_targets_by_callee[proc_index].items) |target| {
+                    if (self.origins.remaining_nonunique_calls[target] == 0) {
+                        solveInvariant("ARC unique call dependency was satisfied twice");
+                    }
+                    self.origins.remaining_nonunique_calls[target] -= 1;
+                    if (self.origins.remaining_nonunique_calls[target] == 0) try self.attemptBorn(target);
+                }
+            }
+            while (self.born_work.pop()) |source| {
+                const start = self.alias_offsets[source];
+                const end = start + self.alias_lens[source];
+                for (self.alias_edges[start..end]) |target| try self.attemptBorn(target);
+            }
+        }
+    }
 };
 
-fn collectAll(solver: *Solver, ret_treatment: RetTreatment) SolveError!void {
+/// Settles unique-return bits over exact return, direct-call, and pure-alias
+/// dependencies. Every proc and local bit is enqueued at most once.
+fn solveUniqueReturnModes(
+    solver: *Solver,
+    uniqueness: *Uniqueness,
+    origins: *UniqueOriginFacts,
+) SolveError!void {
+    const allocator = solver.allocator;
+    const local_count = solver.rc_local.len;
+    const proc_count = solver.sigs.len;
+
+    const alias_lens = try allocator.alloc(u32, local_count);
+    defer allocator.free(alias_lens);
+    @memset(alias_lens, 0);
+    for (origins.alias_targets.items) |target| alias_lens[origins.alias_source[target]] += 1;
+    const alias_offsets = try allocator.alloc(u32, local_count);
+    defer allocator.free(alias_offsets);
+    var alias_count: u32 = 0;
+    for (alias_lens, 0..) |len, index| {
+        alias_offsets[index] = alias_count;
+        alias_count += len;
+    }
+    const alias_edges = try allocator.alloc(u32, alias_count);
+    defer allocator.free(alias_edges);
+    const alias_fill = try allocator.alloc(u32, local_count);
+    defer allocator.free(alias_fill);
+    @memset(alias_fill, 0);
+    for (origins.alias_targets.items) |target| {
+        const source = origins.alias_source[target];
+        alias_edges[alias_offsets[source] + alias_fill[source]] = target;
+        alias_fill[source] += 1;
+    }
+
+    const return_lens = try allocator.alloc(u32, local_count);
+    defer allocator.free(return_lens);
+    @memset(return_lens, 0);
+    const remaining_returns = try allocator.alloc(u32, proc_count);
+    defer allocator.free(remaining_returns);
+    @memset(remaining_returns, 0);
+    const return_blocked = try allocator.alloc(bool, proc_count);
+    defer allocator.free(return_blocked);
+    @memset(return_blocked, false);
+    var return_edge_count: u32 = 0;
+    for (solver.proc_returns, 0..) |returns, proc_index| {
+        for (returns.items) |local| {
+            if (local >= local_count or !solver.rc_local[local]) {
+                return_blocked[proc_index] = true;
+                continue;
+            }
+            if (uniqueness.unique.isSet(local)) continue;
+            remaining_returns[proc_index] += 1;
+            return_lens[local] += 1;
+            return_edge_count += 1;
+        }
+    }
+    const return_offsets = try allocator.alloc(u32, local_count);
+    defer allocator.free(return_offsets);
+    var return_offset: u32 = 0;
+    for (return_lens, 0..) |len, index| {
+        return_offsets[index] = return_offset;
+        return_offset += len;
+    }
+    const return_edges = try allocator.alloc(u32, return_edge_count);
+    defer allocator.free(return_edges);
+    const return_fill = try allocator.alloc(u32, local_count);
+    defer allocator.free(return_fill);
+    @memset(return_fill, 0);
+    for (solver.proc_returns, 0..) |returns, proc_index| {
+        for (returns.items) |local| {
+            if (local >= local_count or !solver.rc_local[local] or uniqueness.unique.isSet(local)) continue;
+            return_edges[return_offsets[local] + return_fill[local]] = @intCast(proc_index);
+            return_fill[local] += 1;
+        }
+    }
+
+    var proc_work = std.ArrayList(u32).empty;
+    defer proc_work.deinit(allocator);
+    var born_work = std.ArrayList(u32).empty;
+    defer born_work.deinit(allocator);
+    var work = UniqueReturnWork{
+        .solver = solver,
+        .uniqueness = uniqueness,
+        .origins = origins,
+        .remaining_returns = remaining_returns,
+        .return_blocked = return_blocked,
+        .return_offsets = return_offsets,
+        .return_lens = return_lens,
+        .return_edges = return_edges,
+        .alias_offsets = alias_offsets,
+        .alias_lens = alias_lens,
+        .alias_edges = alias_edges,
+        .proc_work = &proc_work,
+        .born_work = &born_work,
+    };
+    for (0..proc_count) |proc_index| {
+        if (remaining_returns[proc_index] == 0) try work.seedProc(@intCast(proc_index));
+    }
+    try work.run();
+}
+
+fn collectAll(solver: *Solver) SolveError!void {
     @memset(solver.defs, .none);
     @memset(solver.demand, false);
     @memset(solver.alias_source, no_local);
@@ -807,11 +899,100 @@ fn collectAll(solver: *Solver, ret_treatment: RetTreatment) SolveError!void {
         while (solver.stack.pop()) |current| {
             if (solver.visited.contains(current)) continue;
             try solver.visited.put(current, {});
-            try collectStmt(solver, @intCast(proc_index), ret_treatment, current);
+            try collectStmt(solver, @intCast(proc_index), current);
         }
     }
 
     propagateAliasDemands(solver);
+}
+
+/// Settles the borrowed-parameter lattice from the facts collected above.
+/// A work item is one exact `(callee, parameter position)` bit that just
+/// became owned. Its adjacency list contains only the caller argument locals
+/// whose demand depends on that bit.
+fn solveParameterModes(solver: *Solver) SolveError!void {
+    // Compact the collected edge facts into dense offsets. This preserves
+    // exact dependency lookup without one allocation-capable list object for
+    // every possible proc/parameter pair.
+    const key_count = solver.sigs.len * 64;
+    const offsets = try solver.allocator.alloc(u32, key_count + 1);
+    defer solver.allocator.free(offsets);
+    @memset(offsets, 0);
+    for (solver.param_uses.items) |use| offsets[use.key + 1] += 1;
+    for (1..offsets.len) |index| offsets[index] += offsets[index - 1];
+
+    const edges = try solver.allocator.alloc(u32, solver.param_uses.items.len);
+    defer solver.allocator.free(edges);
+    const fill = try solver.allocator.dupe(u32, offsets[0..key_count]);
+    defer solver.allocator.free(fill);
+    for (solver.param_uses.items) |use| {
+        edges[fill[use.key]] = use.argument;
+        fill[use.key] += 1;
+    }
+
+    var work = std.ArrayList(u32).empty;
+    defer work.deinit(solver.allocator);
+
+    // Static demands, alias-propagated demands, and multi-definition params
+    // seed the worklist.
+    for (0..solver.demand.len) |local_index| {
+        try flipParamIfRequired(solver, @intCast(local_index), &work);
+    }
+
+    while (work.pop()) |key| {
+        for (edges[offsets[key]..offsets[key + 1]]) |arg| {
+            try demandAliasChain(solver, arg, &work);
+        }
+    }
+}
+
+fn flipParamIfRequired(solver: *Solver, local_index: u32, work: *std.ArrayList(u32)) SolveError!void {
+    const proc_index = solver.param_proc[local_index];
+    if (proc_index == no_local) return;
+    const position = solver.param_position[local_index];
+    if (position >= 64) return;
+    var sig = &solver.sigs[proc_index];
+    if (sig.paramMode(position) == .owned) return;
+    const required = solver.demand[local_index] or solver.defs[local_index] == .multi;
+    if (!required) return;
+    sig.borrowed_params &= ~(@as(u64, 1) << @as(u6, @intCast(position)));
+    try work.append(solver.allocator, proc_index * 64 + position);
+}
+
+/// Adds one ownership demand and propagates it through the exact pure-alias
+/// chain. Every newly demanded parameter bit is queued immediately.
+fn demandAliasChain(solver: *Solver, start: u32, work: *std.ArrayList(u32)) SolveError!void {
+    var cursor = start;
+    while (true) {
+        if (solver.demand[cursor]) return;
+        solver.demand[cursor] = true;
+        try flipParamIfRequired(solver, cursor, work);
+        if (solver.defs[cursor] == .multi) return;
+        const source = solver.alias_source[cursor];
+        if (source == no_local) return;
+        cursor = source;
+    }
+}
+
+/// Changes only the definition facts whose kind depends on solved return
+/// modes. A non-multi direct-call target has exactly one definition, so its
+/// phase-A `.fresh` fact can be replaced directly; multi-bound targets stay
+/// `.multi` under every return signature.
+fn updateDirectCallResultDefs(solver: *Solver) void {
+    for (solver.direct_calls.items) |call| {
+        const target = @intFromEnum(call.target);
+        if (solver.defs[target] == .multi) continue;
+        const callee_sig = solver.sigs[@intFromEnum(call.callee)];
+        const args = solver.store.getLocalSpan(call.args);
+        const source = if (callee_sig.ret_mode == .borrowed)
+            callRetBorrowSource(solver, callee_sig, args)
+        else
+            no_local;
+        solver.defs[target] = if (source == no_local)
+            .fresh
+        else
+            .{ .borrow_capable = source };
+    }
 }
 
 /// Records a pure same-value alias edge. A local bound more than once stops
@@ -863,7 +1044,6 @@ fn noteDemand(solver: *Solver, local: LIR.LocalId) void {
 fn collectStmt(
     solver: *Solver,
     proc_index: u32,
-    ret_treatment: RetTreatment,
     current: LIR.CFStmtId,
 ) SolveError!void {
     const store = solver.store;
@@ -904,6 +1084,11 @@ fn collectStmt(
         .assign_call => |assign| {
             const callee_sig = solver.sigs[@intFromEnum(assign.proc)];
             const args = store.getLocalSpan(assign.args);
+            try solver.direct_calls.append(allocator, .{
+                .callee = assign.proc,
+                .args = assign.args,
+                .target = assign.target,
+            });
 
             // Tail-position calls within one call-graph component demand
             // ownership of their arguments so emission never needs a
@@ -911,19 +1096,18 @@ fn collectStmt(
             const same_scc = solver.scc[@intFromEnum(assign.proc)] == solver.scc[proc_index];
             const tail_call = same_scc and isTailCall(store, assign.target, assign.next);
 
-            const borrowed_ret_source = if (ret_treatment == .returns_solved and callee_sig.ret_mode == .borrowed)
-                callRetBorrowSource(solver, callee_sig, args)
-            else
-                no_local;
-            if (borrowed_ret_source != no_local) {
-                noteDef(solver.defs, assign.target, .{ .borrow_capable = borrowed_ret_source });
-            } else {
-                noteDef(solver.defs, assign.target, .fresh);
-            }
+            noteDef(solver.defs, assign.target, .fresh);
 
             for (0..GuardedList.borrowLen(args)) |position| {
                 const arg = GuardedList.at(args, position);
                 if (!solver.rc_local[@intFromEnum(arg)]) continue;
+                if (!tail_call and position < 64) {
+                    const key = @intFromEnum(assign.proc) * 64 + position;
+                    try solver.param_uses.append(allocator, .{
+                        .key = @intCast(key),
+                        .argument = @intFromEnum(arg),
+                    });
+                }
                 if (!tail_call and callee_sig.paramMode(position) == .borrowed) continue;
                 noteDemand(solver, arg);
             }
@@ -1090,10 +1274,14 @@ fn collectStmt(
                 solver.maybe_uninitialized_condition[param_index] = @intFromEnum(condition);
                 solver.maybe_uninitialized_condition_mask[param_index] = mask;
             }
+            try solver.proc_join_bodies[proc_index].append(allocator, .{
+                .id = join_stmt.id,
+                .body = join_stmt.body,
+            });
             try solver.stack.append(allocator, join_stmt.body);
             try solver.stack.append(allocator, join_stmt.remainder);
         },
-        .ret => {},
+        .ret => |ret_stmt| try solver.proc_returns[proc_index].append(allocator, @intFromEnum(ret_stmt.value)),
         .jump, .crash, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
     }
 }
@@ -1529,6 +1717,165 @@ pub const Uniqueness = struct {
     }
 };
 
+/// Definition-origin dependencies used only while solving unique-return
+/// signature bits. Holder-destroy facts live in `Uniqueness.destroyed` and
+/// are signature-independent; these tables describe the monotone origins
+/// whose truth can grow when a callee becomes unique-returning.
+const UniqueOriginFacts = struct {
+    allocator: Allocator,
+    rc_local: []const bool,
+    static_birth: std.bit_set.DynamicBitSetUnmanaged,
+    static_foreign: std.bit_set.DynamicBitSetUnmanaged,
+    /// Set after the first definition of each refcounted local. A second
+    /// definition makes the origin foreign: flow-insensitive uniqueness may
+    /// not choose one of several runtime births.
+    has_def: std.bit_set.DynamicBitSetUnmanaged,
+    call_count: []u32,
+    remaining_nonunique_calls: []u32,
+    alias_source: []u32,
+    alias_targets: std.ArrayList(u32),
+    call_targets_by_callee: []std.ArrayList(u32),
+
+    fn init(allocator: Allocator, rc_local: []const bool, proc_count: usize) SolveError!UniqueOriginFacts {
+        const local_count = rc_local.len;
+        var static_birth = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+        errdefer static_birth.deinit(allocator);
+        var static_foreign = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+        errdefer static_foreign.deinit(allocator);
+        var has_def = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+        errdefer has_def.deinit(allocator);
+        const call_count = try allocator.alloc(u32, local_count);
+        errdefer allocator.free(call_count);
+        const remaining_nonunique_calls = try allocator.alloc(u32, local_count);
+        errdefer allocator.free(remaining_nonunique_calls);
+        const alias_source = try allocator.alloc(u32, local_count);
+        errdefer allocator.free(alias_source);
+        const call_targets_by_callee = try allocator.alloc(std.ArrayList(u32), proc_count);
+        errdefer allocator.free(call_targets_by_callee);
+
+        const result = UniqueOriginFacts{
+            .allocator = allocator,
+            .rc_local = rc_local,
+            .static_birth = static_birth,
+            .static_foreign = static_foreign,
+            .has_def = has_def,
+            .call_count = call_count,
+            .remaining_nonunique_calls = remaining_nonunique_calls,
+            .alias_source = alias_source,
+            .alias_targets = .empty,
+            .call_targets_by_callee = call_targets_by_callee,
+        };
+        @memset(result.call_count, 0);
+        @memset(result.remaining_nonunique_calls, 0);
+        @memset(result.alias_source, no_local);
+        @memset(result.call_targets_by_callee, .empty);
+        return result;
+    }
+
+    fn deinit(self: *UniqueOriginFacts) void {
+        self.static_birth.deinit(self.allocator);
+        self.static_foreign.deinit(self.allocator);
+        self.has_def.deinit(self.allocator);
+        self.allocator.free(self.call_count);
+        self.allocator.free(self.remaining_nonunique_calls);
+        self.allocator.free(self.alias_source);
+        self.alias_targets.deinit(self.allocator);
+        for (self.call_targets_by_callee) |*targets| targets.deinit(self.allocator);
+        self.allocator.free(self.call_targets_by_callee);
+    }
+
+    fn noteDefinition(self: *UniqueOriginFacts, local: LIR.LocalId) ?u32 {
+        const index = @intFromEnum(local);
+        if (index >= self.rc_local.len or !self.rc_local[index]) return null;
+        if (self.has_def.isSet(index)) {
+            self.static_foreign.set(index);
+        } else {
+            self.has_def.set(index);
+        }
+        return @intCast(index);
+    }
+
+    fn noteBirth(self: *UniqueOriginFacts, local: LIR.LocalId) void {
+        const index = self.noteDefinition(local) orelse return;
+        self.static_birth.set(index);
+    }
+
+    fn noteForeign(self: *UniqueOriginFacts, local: LIR.LocalId) void {
+        const index = self.noteDefinition(local) orelse return;
+        self.static_foreign.set(index);
+    }
+
+    fn noteAlias(self: *UniqueOriginFacts, target: LIR.LocalId, source: LIR.LocalId) SolveError!void {
+        const target_index = self.noteDefinition(target) orelse return;
+        const source_index = @intFromEnum(source);
+        if (source_index >= self.rc_local.len or !self.rc_local[source_index] or source_index == target_index) {
+            self.static_foreign.set(target_index);
+            return;
+        }
+        if (self.alias_source[target_index] == no_local) {
+            self.alias_source[target_index] = @intCast(source_index);
+            try self.alias_targets.append(self.allocator, @intCast(target_index));
+        } else if (self.alias_source[target_index] != source_index) {
+            self.static_foreign.set(target_index);
+        }
+    }
+
+    fn noteCall(self: *UniqueOriginFacts, callee: LIR.LirProcSpecId, target: LIR.LocalId) SolveError!void {
+        const target_index = self.noteDefinition(target) orelse return;
+        self.call_count[target_index] += 1;
+        self.remaining_nonunique_calls[target_index] += 1;
+        try self.call_targets_by_callee[@intFromEnum(callee)].append(self.allocator, @intCast(target_index));
+    }
+};
+
+fn collectUniqueOriginStmt(facts: *UniqueOriginFacts, store: *const LirStore, stmt: LIR.CFStmt) SolveError!void {
+    switch (stmt) {
+        .assign_ref => |assign| switch (assign.op) {
+            .local => |source| try facts.noteAlias(assign.target, source),
+            .list_reinterpret => |op| try facts.noteAlias(assign.target, op.backing_ref),
+            .nominal => |op| try facts.noteAlias(assign.target, op.backing_ref),
+            .discriminant, .field, .tag_payload, .tag_payload_struct => facts.noteForeign(assign.target),
+        },
+        .assign_literal => |assign| switch (assign.value) {
+            .str_literal, .static_data, .bytes_literal => facts.noteForeign(assign.target),
+            else => facts.noteBirth(assign.target),
+        },
+        .assign_call => |assign| try facts.noteCall(assign.proc, assign.target),
+        .assign_call_erased => |assign| facts.noteForeign(assign.target),
+        .assign_packed_erased_fn => |assign| facts.noteBirth(assign.target),
+        .assign_low_level => |assign| if (assign.rc_effect.result_unique)
+            facts.noteBirth(assign.target)
+        else
+            facts.noteForeign(assign.target),
+        .assign_list => |assign| facts.noteBirth(assign.target),
+        .assign_struct => |assign| facts.noteBirth(assign.target),
+        .assign_tag => |assign| facts.noteBirth(assign.target),
+        .set_local => |assign| facts.noteForeign(assign.target),
+        .str_match => |str_match| {
+            const steps = store.getStrMatchSteps(str_match.steps);
+            for (0..GuardedList.borrowLen(steps)) |step_index| switch (GuardedList.at(steps, step_index).capture) {
+                .discard => {},
+                .view => |local| facts.noteForeign(local),
+            };
+        },
+        .str_match_set => |str_match_set| {
+            const arms = store.getStrMatchArms(str_match_set.arms);
+            for (0..GuardedList.borrowLen(arms)) |arm_index| {
+                const steps = store.getStrMatchSteps(GuardedList.at(arms, arm_index).steps);
+                for (0..GuardedList.borrowLen(steps)) |step_index| switch (GuardedList.at(steps, step_index).capture) {
+                    .discard => {},
+                    .view => |local| facts.noteForeign(local),
+                };
+            }
+        },
+        .join => |join_stmt| {
+            const params = store.getLocalSpan(join_stmt.params);
+            for (0..GuardedList.borrowLen(params)) |param_index| facts.noteForeign(GuardedList.at(params, param_index));
+        },
+        else => {},
+    }
+}
+
 /// Marks every local whose value's outermost allocation provably has count 1
 /// at the local's definition with nothing later adding a holder: born unique
 /// by a fresh allocation or a direct call to a unique-returning callee,
@@ -1557,6 +1904,16 @@ pub fn computeUniqueness(
     store: *const LirStore,
     rc_local: []const bool,
     sigs: arc_sig.SigTable,
+) SolveError!Uniqueness {
+    return computeUniquenessDetailed(allocator, store, rc_local, sigs, null);
+}
+
+fn computeUniquenessDetailed(
+    allocator: Allocator,
+    store: *const LirStore,
+    rc_local: []const bool,
+    sigs: arc_sig.SigTable,
+    origin_facts: ?*UniqueOriginFacts,
 ) SolveError!Uniqueness {
     const local_count = store.localCount();
 
@@ -1684,11 +2041,13 @@ pub fn computeUniqueness(
             const param = GuardedList.at(params, param_index);
             marks.trackDef(&has_def, &multi_def, param);
             marks.destroy(&foreign_def, param);
+            if (origin_facts) |facts| facts.noteForeign(param);
         }
     }
 
     for (0..store.cfStmtCount()) |stmt_index| {
         const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+        if (origin_facts) |facts| try collectUniqueOriginStmt(facts, store, stmt);
         switch (stmt) {
             .assign_ref => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);
