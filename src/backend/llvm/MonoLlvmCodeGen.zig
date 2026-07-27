@@ -4516,10 +4516,6 @@ pub const MonoLlvmCodeGen = struct {
             return;
         }
         if (args.len >= 1) {
-            if (floatDecIntTryUnsafeInfo(op)) |info| {
-                try self.emitFloatDecIntTryUnsafeConversion(target, GuardedList.at(args, 0), info);
-                return;
-            }
             if (floatToIntTruncInfo(op)) |info| {
                 try self.emitFloatToIntTruncConversion(target, GuardedList.at(args, 0), info);
                 return;
