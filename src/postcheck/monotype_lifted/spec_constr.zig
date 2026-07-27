@@ -1224,6 +1224,9 @@ const Pass = struct {
             var cloner = Cloner.initForRewrite(self);
             cloner.rewrite_call_patterns = false;
             cloner.emit_callable_workers = false;
+            // Generic analysis follows only existing constructor evidence.
+            // A used argument below requests result shape explicitly instead.
+            cloner.inline_direct_requires_known_arg = true;
             defer cloner.deinit();
             try cloner.collectCallPatternsInExpr(fn_id, body);
             self.rewindAnalysis(analysis_mark);
@@ -4116,6 +4119,10 @@ const Subst = struct {
 
 const Cloner = struct {
     pass: *Pass,
+    /// Symbolic values, shapes, and strict-binding chains owned by this clone.
+    /// Accepted call patterns are copied into the pass-wide arena before this
+    /// short-lived scratch arena is released.
+    arena: std.heap.ArenaAllocator,
     source_fn: Ast.FnId,
     pattern: CallPattern,
     subst: Subst,
@@ -4176,6 +4183,7 @@ const Cloner = struct {
     fn init(pass: *Pass, source_fn: Ast.FnId, pattern: CallPattern) Cloner {
         return .{
             .pass = pass,
+            .arena = std.heap.ArenaAllocator.init(pass.allocator),
             .source_fn = source_fn,
             .pattern = pattern,
             .subst = Subst.init(pass.allocator),
@@ -4204,6 +4212,7 @@ const Cloner = struct {
     fn initForRewrite(pass: *Pass) Cloner {
         return .{
             .pass = pass,
+            .arena = std.heap.ArenaAllocator.init(pass.allocator),
             .source_fn = undefined, // initForRewrite never calls buildArgs, which is the only reader.
             .pattern = .{ .args = &.{} },
             .subst = Subst.init(pass.allocator),
@@ -4239,6 +4248,7 @@ const Cloner = struct {
         self.rebased_inline_scopes.deinit();
         self.inline_scope_origins.deinit();
         self.subst.deinit();
+        self.arena.deinit();
     }
 
     fn collectCallPatternsInExpr(self: *Cloner, owner: Ast.FnId, expr_id: Ast.ExprId) Common.LowerError!void {
@@ -4292,7 +4302,14 @@ const Cloner = struct {
                 const values = try self.pass.allocator.alloc(Value, args.len);
                 defer self.pass.allocator.free(values);
                 for (args, 0..) |arg, index| {
-                    values[index] = (try self.cloneExprValue(arg)).value;
+                    const callee_raw = @intFromEnum(callee);
+                    const demand_shape = callee_raw < self.pass.plans.len and
+                        index < self.pass.plans[callee_raw].used_args.len and
+                        self.pass.plans[callee_raw].used_args[index];
+                    values[index] = if (demand_shape)
+                        (try self.cloneExprValueDemandingShape(arg)).value
+                    else
+                        (try self.cloneExprValue(arg)).value;
                 }
                 try self.pass.recordCallPatternForValues(callee, values);
             },
@@ -4525,7 +4542,7 @@ const Cloner = struct {
                 }) };
             },
             .tag => |tag| {
-                const payloads = try self.pass.arena.allocator().alloc(Value, tag.payloads.len);
+                const payloads = try self.arena.allocator().alloc(Value, tag.payloads.len);
                 for (tag.payloads, 0..) |payload, index| {
                     payloads[index] = try self.valueFromShapeArgs(payload, args);
                 }
@@ -4536,7 +4553,7 @@ const Cloner = struct {
                 } };
             },
             .record => |record| {
-                const fields = try self.pass.arena.allocator().alloc(FieldValue, record.fields.len);
+                const fields = try self.arena.allocator().alloc(FieldValue, record.fields.len);
                 for (record.fields, 0..) |field, index| {
                     fields[index] = .{
                         .name = field.name,
@@ -4549,7 +4566,7 @@ const Cloner = struct {
                 } };
             },
             .tuple => |tuple| {
-                const items = try self.pass.arena.allocator().alloc(Value, tuple.items.len);
+                const items = try self.arena.allocator().alloc(Value, tuple.items.len);
                 for (tuple.items, 0..) |item, index| {
                     items[index] = try self.valueFromShapeArgs(item, args);
                 }
@@ -4559,7 +4576,7 @@ const Cloner = struct {
                 } };
             },
             .nominal => |nominal| {
-                const backing = try self.pass.arena.allocator().create(Value);
+                const backing = try self.arena.allocator().create(Value);
                 backing.* = try self.valueFromShapeArgs(nominal.backing.*, args);
                 return .{ .nominal = .{
                     .ty = nominal.ty,
@@ -4574,7 +4591,7 @@ const Cloner = struct {
                 if (slots.len != callable.captures.len) {
                     Common.invariant("callable shape capture count differed from its function capture slots");
                 }
-                const captures = try self.pass.arena.allocator().alloc(CaptureValue, callable.captures.len);
+                const captures = try self.arena.allocator().alloc(CaptureValue, callable.captures.len);
                 for (0..callable.captures.len) |index| {
                     const capture = callable.captures[index];
                     const slot = GuardedList.at(slots, index);
@@ -4636,7 +4653,7 @@ const Cloner = struct {
             },
             .fn_ref => |fn_ref| return try self.callableValueFromRef(expr.ty, fn_ref, bindings),
             .static_data_candidate => |candidate| {
-                const runtime = try self.pass.arena.allocator().create(Value);
+                const runtime = try self.arena.allocator().create(Value);
                 runtime.* = try self.cloneExprValueDemandingShapeInto(candidate.runtime_expr, bindings);
                 return .{ .static_data_candidate = .{
                     .ty = expr.ty,
@@ -4648,7 +4665,7 @@ const Cloner = struct {
                 assertStructuralConstructionType(self.pass.program, expr.ty);
                 const payload_exprs = try GuardedList.dupe(self.pass.allocator, Ast.ExprId, self.pass.program.exprSpan(tag.payloads));
                 defer self.pass.allocator.free(payload_exprs);
-                const payloads = try self.pass.arena.allocator().alloc(Value, payload_exprs.len);
+                const payloads = try self.arena.allocator().alloc(Value, payload_exprs.len);
                 for (payload_exprs, 0..) |payload, index| {
                     payloads[index] = try self.cloneExprValueDemandingShapeInto(payload, bindings);
                 }
@@ -4662,7 +4679,7 @@ const Cloner = struct {
                 assertStructuralConstructionType(self.pass.program, expr.ty);
                 const source_fields = try GuardedList.dupe(self.pass.allocator, Ast.FieldExpr, self.pass.program.fieldExprSpan(fields_span));
                 defer self.pass.allocator.free(source_fields);
-                const fields = try self.pass.arena.allocator().alloc(FieldValue, source_fields.len);
+                const fields = try self.arena.allocator().alloc(FieldValue, source_fields.len);
                 for (source_fields, 0..) |field, index| {
                     fields[index] = .{
                         .name = field.name,
@@ -4678,7 +4695,7 @@ const Cloner = struct {
                 assertStructuralConstructionType(self.pass.program, expr.ty);
                 const source_items = try GuardedList.dupe(self.pass.allocator, Ast.ExprId, self.pass.program.exprSpan(items_span));
                 defer self.pass.allocator.free(source_items);
-                const items = try self.pass.arena.allocator().alloc(Value, source_items.len);
+                const items = try self.arena.allocator().alloc(Value, source_items.len);
                 for (source_items, 0..) |item, index| {
                     items[index] = try self.cloneExprValueDemandingShapeInto(item, bindings);
                 }
@@ -4730,7 +4747,7 @@ const Cloner = struct {
             .call_value => |call| {
                 const callee = try self.cloneExprValueDemandingShapeInto(call.callee, bindings);
                 if (callee == .callable) {
-                    return try self.inlineCallableCallValue(expr.ty, callee.callable, call.args, expr_id, bindings);
+                    return try self.inlineCallableCallValue(expr.ty, callee.callable, call.args, expr_id, false, bindings);
                 }
                 return .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .call_value = .{
                     .callee = try self.materialize(callee),
@@ -4761,6 +4778,7 @@ const Cloner = struct {
                     call.args,
                     call.captures,
                     expr_id,
+                    false,
                     bindings,
                 );
             },
@@ -4780,7 +4798,18 @@ const Cloner = struct {
             .call_proc => |call| blk: {
                 if (call.is_cold or !self.inline_direct_calls) break :blk try self.cloneExprValueInto(expr_id, bindings);
                 const callee = Ast.localDirectCallee(call) orelse break :blk try self.cloneExprValueInto(expr_id, bindings);
-                break :blk try self.inlineDirectCallValue(callee, call.args, call.captures, expr_id, bindings);
+                break :blk try self.inlineDirectCallValue(callee, call.args, call.captures, expr_id, true, bindings);
+            },
+            .call_value => |call| blk: {
+                if (!self.inline_direct_calls) break :blk try self.cloneExprValueInto(expr_id, bindings);
+                const callee = try self.cloneExprValueDemandingShapeInto(call.callee, bindings);
+                if (callee == .callable) {
+                    break :blk try self.inlineCallableCallValue(expr.ty, callee.callable, call.args, expr_id, true, bindings);
+                }
+                break :blk .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .call_value = .{
+                    .callee = try self.materialize(callee),
+                    .args = try self.cloneExprSpan(call.args),
+                } } }) };
             },
             .block => |block| if (self.pass.program.stmtSpan(block.statements).len == 0)
                 try self.cloneExprValueDemandingShapeInto(block.final_expr, bindings)
@@ -4963,7 +4992,7 @@ const Cloner = struct {
         bindings: *BindingChain,
     ) Common.LowerError!Value {
         const capture_count: usize = @intCast(fn_ref.captures.len);
-        const captures = try self.pass.arena.allocator().alloc(CaptureValue, capture_count);
+        const captures = try self.arena.allocator().alloc(CaptureValue, capture_count);
         for (0..capture_count) |index| {
             const operand = self.pass.program.captureOperandAt(fn_ref.captures, index);
             captures[index] = .{
@@ -5325,7 +5354,7 @@ const Cloner = struct {
                 .ty = projected_ty,
                 .data = .{ .tuple = try self.pass.program.addPatSpan(kept_pats.items) },
             });
-        const kept = try self.pass.arena.allocator().dupe(u32, kept_indices.items);
+        const kept = try self.arena.allocator().dupe(u32, kept_indices.items);
         const subset = LoopResultTupleSubset{
             .source_arity = source_arity,
             .kept_indices = kept,
@@ -5343,7 +5372,7 @@ const Cloner = struct {
         if (aggregate_local) |local| {
             const source_tys = aggregate_tys orelse Common.invariant("loop result-tuple subset had no source tuple types");
             const locals = projected_locals orelse Common.invariant("loop result-tuple subset had no selected locals");
-            const items = try self.pass.arena.allocator().alloc(Value, source_arity);
+            const items = try self.arena.allocator().alloc(Value, source_arity);
             for (source_tys, locals, 0..) |ty, maybe_local, index| {
                 const item_expr = if (maybe_local) |projected_local|
                     try self.addExpr(.{ .ty = ty, .data = .{ .local = projected_local } })
@@ -5601,7 +5630,7 @@ const Cloner = struct {
             return try self.cloneLetOfCaseShared(let_, value_expr);
         }
 
-        const arena = self.pass.arena.allocator();
+        const arena = self.arena.allocator();
         const value_ty = self.pass.program.getExpr(value_expr).ty;
         const rest_ty = self.pass.program.getExpr(let_.rest).ty;
 
@@ -5999,7 +6028,7 @@ const Cloner = struct {
     /// value of every argument and emit a placeholder jump whose argument
     /// span is patched once the join's parameters are decided.
     fn captureLetCaseJump(self: *Cloner, ty: Type.TypeId, join: *LetCaseJoin, jump: Ast.JumpExpr) Common.LowerError!Ast.ExprId {
-        const arena = self.pass.arena.allocator();
+        const arena = self.arena.allocator();
         const args = try GuardedList.dupe(self.pass.allocator, Ast.ExprId, self.pass.program.exprSpan(jump.args));
         defer self.pass.allocator.free(args);
         const values = try arena.alloc(Value, args.len);
@@ -6069,7 +6098,7 @@ const Cloner = struct {
     /// directly at the site — against the site's full symbolic values — and
     /// no join point is emitted (null).
     fn finalizeLetCaseJoin(self: *Cloner, join: *LetCaseJoin, rest_ty: Type.TypeId) Common.LowerError!?LetCaseJoinPieces {
-        const arena = self.pass.arena.allocator();
+        const arena = self.arena.allocator();
         const sites = join.sites.items;
         if (sites.len == 1) {
             try self.inlineLetCaseJoinAtSite(join, sites[0], rest_ty);
@@ -6308,7 +6337,7 @@ const Cloner = struct {
 
         const values = try self.pass.allocator.alloc(Value, initial_values.len);
         defer self.pass.allocator.free(values);
-        const shapes = try self.pass.arena.allocator().alloc(Shape, initial_values.len);
+        const shapes = try self.arena.allocator().alloc(Shape, initial_values.len);
         var has_constructor = false;
         // An initial value may forward-reference the loop's own params: an
         // `uninitialized_payload` argument names the flag param that carries
@@ -6433,7 +6462,7 @@ const Cloner = struct {
             };
         }
 
-        const whole_shapes = try self.pass.arena.allocator().alloc(Shape, params.len);
+        const whole_shapes = try self.arena.allocator().alloc(Shape, params.len);
         for (params, 0..) |param, index| whole_shapes[index] = .{ .any = param.ty };
 
         const initial_exprs = try self.pass.allocator.alloc(Ast.ExprId, values.len);
@@ -6886,7 +6915,7 @@ const Cloner = struct {
                 {
                     return try self.demoteLoopSlotLeaf(tag.ty, value, out);
                 }
-                const payloads = try self.pass.arena.allocator().alloc(Shape, tag.payloads.len);
+                const payloads = try self.arena.allocator().alloc(Shape, tag.payloads.len);
                 var demoted = false;
                 for (tag.payloads, value_tag.payloads, 0..) |payload_shape, payload_value, index| {
                     const supplied = try self.supplyLoopSlotLeaves(payload_shape, payload_value, out);
@@ -6901,7 +6930,7 @@ const Cloner = struct {
                         if (sameType(self.pass.program, record.ty, value_record.ty) and
                             value_record.fields.len == record.fields.len)
                         {
-                            const fields = try self.pass.arena.allocator().alloc(FieldShape, record.fields.len);
+                            const fields = try self.arena.allocator().alloc(FieldShape, record.fields.len);
                             var demoted = false;
                             for (record.fields, value_record.fields, 0..) |field_shape, field_value, index| {
                                 if (!self.pass.program.names.recordFieldLabelTextEql(field_shape.name, field_value.name)) return try self.demoteLoopSlotLeaf(record.ty, value, out);
@@ -6914,7 +6943,7 @@ const Cloner = struct {
                     },
                     .expr => |receiver| {
                         if (canReadFieldsFromExpr(self.pass.program, receiver)) {
-                            const fields = try self.pass.arena.allocator().alloc(FieldShape, record.fields.len);
+                            const fields = try self.arena.allocator().alloc(FieldShape, record.fields.len);
                             var demoted = false;
                             for (record.fields, 0..) |field_shape, index| {
                                 const field_expr = try self.addExpr(.{ .ty = shapeType(field_shape.shape), .data = .{ .field_access = .{
@@ -6938,7 +6967,7 @@ const Cloner = struct {
                         if (sameType(self.pass.program, tuple.ty, value_tuple.ty) and
                             value_tuple.items.len == tuple.items.len)
                         {
-                            const items = try self.pass.arena.allocator().alloc(Shape, tuple.items.len);
+                            const items = try self.arena.allocator().alloc(Shape, tuple.items.len);
                             var demoted = false;
                             for (tuple.items, value_tuple.items, 0..) |item_shape, item_value, index| {
                                 const supplied = try self.supplyLoopSlotLeaves(item_shape, item_value, out);
@@ -6950,7 +6979,7 @@ const Cloner = struct {
                     },
                     .expr => |receiver| {
                         if (canReadFieldsFromExpr(self.pass.program, receiver)) {
-                            const items = try self.pass.arena.allocator().alloc(Shape, tuple.items.len);
+                            const items = try self.arena.allocator().alloc(Shape, tuple.items.len);
                             var demoted = false;
                             for (tuple.items, 0..) |item_shape, index| {
                                 const item_expr = try self.addExpr(.{ .ty = shapeType(item_shape), .data = .{ .tuple_access = .{
@@ -6973,7 +7002,7 @@ const Cloner = struct {
                     .nominal => |value_nominal| {
                         if (sameType(self.pass.program, nominal.ty, value_nominal.ty)) {
                             const supplied = try self.supplyLoopSlotLeaves(nominal.backing.*, value_nominal.backing.*, out);
-                            const backing = try self.pass.arena.allocator().create(Shape);
+                            const backing = try self.arena.allocator().create(Shape);
                             backing.* = supplied.shape;
                             return .{ .shape = .{ .nominal = .{ .ty = nominal.ty, .backing = backing } }, .demoted = supplied.demoted };
                         }
@@ -6993,7 +7022,7 @@ const Cloner = struct {
                 {
                     return try self.demoteLoopSlotLeaf(callable.ty, value, out);
                 }
-                const captures = try self.pass.arena.allocator().alloc(Shape, callable.captures.len);
+                const captures = try self.arena.allocator().alloc(Shape, callable.captures.len);
                 var demoted = false;
                 for (callable.captures, value_callable.captures, 0..) |capture_shape, capture_value, index| {
                     const supplied = try self.supplyLoopSlotLeaves(capture_shape, capture_value.value, out);
@@ -7167,7 +7196,7 @@ const Cloner = struct {
                         bindings,
                     ),
                     .record => |record| {
-                        const prepared_fields = try self.pass.arena.allocator().alloc(FieldValue, record.fields.len);
+                        const prepared_fields = try self.arena.allocator().alloc(FieldValue, record.fields.len);
                         for (record.fields, 0..) |field, index| {
                             if (recordPatField(self.pass.program, fields, field.name)) |field_pat| {
                                 const prepared = (try self.bindPatToMatchValue(field_pat, field.value, body, bindings)) orelse return null;
@@ -7215,7 +7244,7 @@ const Cloner = struct {
                     ),
                     .tuple => |tuple| {
                         if (pats.len != tuple.items.len) return null;
-                        const items = try self.pass.arena.allocator().alloc(Value, tuple.items.len);
+                        const items = try self.arena.allocator().alloc(Value, tuple.items.len);
                         for (0..pats.len) |index| {
                             const child_pat = GuardedList.at(pats, index);
                             const child_value = tuple.items[index];
@@ -7256,7 +7285,7 @@ const Cloner = struct {
                 if (!self.pass.program.names.tagLabelTextEql(tag.name, tag_pat.name)) return null;
                 const pats = self.pass.program.patSpan(tag_pat.payloads);
                 if (pats.len != tag.payloads.len) return null;
-                const payloads = try self.pass.arena.allocator().alloc(Value, tag.payloads.len);
+                const payloads = try self.arena.allocator().alloc(Value, tag.payloads.len);
                 for (0..pats.len) |index| {
                     const child_pat = GuardedList.at(pats, index);
                     const child_value = tag.payloads[index];
@@ -7281,7 +7310,7 @@ const Cloner = struct {
                     .nominal => |nominal| nominal,
                     else => return null,
                 };
-                const backing = try self.pass.arena.allocator().create(Value);
+                const backing = try self.arena.allocator().create(Value);
                 backing.* = (try self.bindPatToMatchValueStripped(backing_pat, nominal.backing.*, body, bindings)) orelse return null;
                 return Value{ .nominal = .{
                     .ty = nominal.ty,
@@ -7308,7 +7337,7 @@ const Cloner = struct {
         body: Ast.ExprId,
         bindings: *BindingChain,
     ) Common.LowerError!?Value {
-        const runtime = try self.pass.arena.allocator().create(Value);
+        const runtime = try self.arena.allocator().create(Value);
         runtime.* = (try self.bindPatToMatchValueStripped(pat_id, candidate.runtime.*, body, bindings)) orelse return null;
         return Value{ .static_data_candidate = .{
             .ty = candidate.ty,
@@ -7394,9 +7423,13 @@ const Cloner = struct {
     fn cloneInlineValueBoundingCycles(
         self: *Cloner,
         expr_id: Ast.ExprId,
+        demand_shape: bool,
         bindings: *BindingChain,
     ) Common.LowerError!Value {
-        const cloned = try self.cloneExprValue(expr_id);
+        const cloned = if (demand_shape)
+            try self.cloneExprValueDemandingShape(expr_id)
+        else
+            try self.cloneExprValue(expr_id);
         if (self.knownConstructorSize(cloned.value).exactValue() == null) {
             return try self.makeReusableForMatch(.{ .expr = try self.cloneExprPlain(expr_id) }, bindings);
         }
@@ -7529,7 +7562,7 @@ const Cloner = struct {
         if (budget.* == 0) {
             const ty = valueType(self.pass.program, value);
             const local = try self.pass.program.addLocal(self.pass.symbols.fresh(), ty);
-            try bindings.appendBinding(self.pass.arena.allocator(), .{
+            try bindings.appendBinding(self.arena.allocator(), .{
                 .local = local,
                 .ty = ty,
                 .value = try self.materialize(value),
@@ -7542,7 +7575,7 @@ const Cloner = struct {
             .expr => |expr| blk: {
                 const ty = self.pass.program.getExpr(expr).ty;
                 const local = try self.pass.program.addLocal(self.pass.symbols.fresh(), ty);
-                try bindings.appendBinding(self.pass.arena.allocator(), .{
+                try bindings.appendBinding(self.arena.allocator(), .{
                     .local = local,
                     .ty = ty,
                     .value = expr,
@@ -7554,7 +7587,7 @@ const Cloner = struct {
             },
             .static_data_candidate => |candidate| blk: {
                 const local = try self.pass.program.addLocal(self.pass.symbols.fresh(), candidate.ty);
-                try bindings.appendBinding(self.pass.arena.allocator(), .{
+                try bindings.appendBinding(self.arena.allocator(), .{
                     .local = local,
                     .ty = candidate.ty,
                     .value = try self.materialize(value),
@@ -7565,7 +7598,7 @@ const Cloner = struct {
                 }) };
             },
             .tag => |tag| blk: {
-                const payloads = try self.pass.arena.allocator().alloc(Value, tag.payloads.len);
+                const payloads = try self.arena.allocator().alloc(Value, tag.payloads.len);
                 for (tag.payloads, 0..) |payload, index| {
                     payloads[index] = try self.makeReusableForMatchBudgeted(payload, budget, bindings);
                 }
@@ -7576,7 +7609,7 @@ const Cloner = struct {
                 } };
             },
             .record => |record| blk: {
-                const fields = try self.pass.arena.allocator().alloc(FieldValue, record.fields.len);
+                const fields = try self.arena.allocator().alloc(FieldValue, record.fields.len);
                 for (record.fields, 0..) |field, index| {
                     fields[index] = .{
                         .name = field.name,
@@ -7589,7 +7622,7 @@ const Cloner = struct {
                 } };
             },
             .tuple => |tuple| blk: {
-                const items = try self.pass.arena.allocator().alloc(Value, tuple.items.len);
+                const items = try self.arena.allocator().alloc(Value, tuple.items.len);
                 for (tuple.items, 0..) |item, index| {
                     items[index] = try self.makeReusableForMatchBudgeted(item, budget, bindings);
                 }
@@ -7599,7 +7632,7 @@ const Cloner = struct {
                 } };
             },
             .nominal => |nominal| blk: {
-                const backing = try self.pass.arena.allocator().create(Value);
+                const backing = try self.arena.allocator().create(Value);
                 backing.* = try self.makeReusableForMatchBudgeted(nominal.backing.*, budget, bindings);
                 break :blk Value{ .nominal = .{
                     .ty = nominal.ty,
@@ -7607,7 +7640,7 @@ const Cloner = struct {
                 } };
             },
             .callable => |callable| blk: {
-                const captures = try self.pass.arena.allocator().alloc(CaptureValue, callable.captures.len);
+                const captures = try self.arena.allocator().alloc(CaptureValue, callable.captures.len);
                 for (callable.captures, 0..) |capture, index| {
                     captures[index] = .{
                         .id = capture.id,
@@ -7769,6 +7802,7 @@ const Cloner = struct {
         callable: CallableValue,
         args_span: Ast.Span(Ast.ExprId),
         original_expr: Ast.ExprId,
+        result_shape_demanded: bool,
         bindings: *BindingChain,
     ) Common.LowerError!Value {
         var callable_call_size = ConstructorSize{ .exact = 0 };
@@ -7832,8 +7866,12 @@ const Cloner = struct {
 
         const arg_values = try self.pass.allocator.alloc(Value, args.len);
         defer self.pass.allocator.free(arg_values);
+        const callee_raw = @intFromEnum(callable.fn_id);
         for (args, 0..) |arg_expr, index| {
-            arg_values[index] = try self.cloneInlineValueBoundingCycles(arg_expr, bindings);
+            const demand_arg_shape = result_shape_demanded and
+                callee_raw < self.pass.plans.len and
+                self.pass.plans[callee_raw].used_args[index];
+            arg_values[index] = try self.cloneInlineValueBoundingCycles(arg_expr, demand_arg_shape, bindings);
         }
 
         const prepared_args = try self.pass.allocator.alloc(Value, arg_values.len);
@@ -7864,6 +7902,7 @@ const Cloner = struct {
         args_span: Ast.Span(Ast.ExprId),
         captures_span: Ast.Span(Ast.CaptureOperand),
         original_expr: Ast.ExprId,
+        result_shape_demanded: bool,
         bindings: *BindingChain,
     ) Common.LowerError!Value {
         const direct_call_size = self.argsKnownConstructorSize(args_span).plus(self.captureOperandsKnownConstructorSize(captures_span));
@@ -7908,14 +7947,17 @@ const Cloner = struct {
         for (operands, 0..) |operand, index| {
             capture_values[index] = .{
                 .id = operand.id,
-                .value = try self.cloneInlineValueBoundingCycles(operand.value, bindings),
+                .value = try self.cloneInlineValueBoundingCycles(operand.value, false, bindings),
             };
         }
 
         const arg_values = try self.pass.allocator.alloc(Value, args.len);
         defer self.pass.allocator.free(arg_values);
         for (args, 0..) |arg_expr, index| {
-            arg_values[index] = try self.cloneInlineValueBoundingCycles(arg_expr, bindings);
+            const demand_arg_shape = result_shape_demanded and
+                @intFromEnum(callee) < self.pass.plans.len and
+                self.pass.plans[@intFromEnum(callee)].used_args[index];
+            arg_values[index] = try self.cloneInlineValueBoundingCycles(arg_expr, demand_arg_shape, bindings);
         }
 
         const prepared_captures = try self.pass.allocator.alloc(Value, captures.len);
@@ -8989,7 +9031,7 @@ const Cloner = struct {
     }
 
     fn copyValue(self: *Cloner, value: Value) Allocator.Error!*const Value {
-        const out = try self.pass.arena.allocator().create(Value);
+        const out = try self.arena.allocator().create(Value);
         out.* = value;
         return out;
     }
@@ -10604,14 +10646,19 @@ test "issue 10313 value-aware call-pattern collection does not append lifted IR"
     defer program.deinit();
 
     const unit_ty = try program.types.add(.zst);
+    const tuple_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ unit_ty, unit_ty }) });
     const arg_local = try program.addLocal(@enumFromInt(1), unit_ty);
-    const bound_local = try program.addLocal(@enumFromInt(2), unit_ty);
+    const bound_local = try program.addLocal(@enumFromInt(2), tuple_ty);
     const arg_ref = try program.addExpr(.{ .ty = unit_ty, .data = .{ .local = arg_local } });
-    const bind_pat = try program.addPat(.{ .ty = unit_ty, .data = .{ .bind = bound_local } });
     const unit_expr = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+    const tuple_expr = try program.addExpr(.{
+        .ty = tuple_ty,
+        .data = .{ .tuple = try program.addExprSpan(&.{ arg_ref, unit_expr }) },
+    });
+    const bind_pat = try program.addPat(.{ .ty = tuple_ty, .data = .{ .bind = bound_local } });
     const body = try program.addExpr(.{ .ty = unit_ty, .data = .{ .let_ = .{
         .bind = bind_pat,
-        .value = arg_ref,
+        .value = tuple_expr,
         .rest = unit_expr,
     } } });
     _ = try program.addFn(.{
@@ -10632,6 +10679,53 @@ test "issue 10313 value-aware call-pattern collection does not append lifted IR"
     try std.testing.expectEqualDeep(before_collect, program.markSpecConstrAnalysis());
     try std.testing.expectEqual(symbol_before_collect, pass.symbols.next);
     try std.testing.expectEqual(join_before_collect, pass.next_join_point);
+    try std.testing.expectEqual(@as(usize, 0), pass.arena.queryCapacity());
+}
+
+test "generic value cloning preserves a call until its result shape is demanded" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const union_ty = try program.types.add(.{ .tag_union = Type.Span.empty() });
+    const tag_name = try program.names.internTagLabel("Result");
+    const tag = try program.addExpr(.{
+        .ty = union_ty,
+        .data = .{ .tag = .{
+            .name = tag_name,
+            .payloads = Ast.Span(Ast.ExprId).empty(),
+        } },
+    });
+    const callee = try program.addFn(.{
+        .symbol = @enumFromInt(1),
+        .args = Ast.Span(Ast.TypedLocal).empty(),
+        .captures = Ast.Span(Ast.TypedLocal).empty(),
+        .body = .{ .roc = tag },
+        .ret = union_ty,
+    });
+    const call = try program.addExpr(.{
+        .ty = union_ty,
+        .data = .{ .call_proc = .{
+            .callee = .{ .lifted = callee },
+            .args = Ast.Span(Ast.ExprId).empty(),
+        } },
+    });
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+    cloner.inline_direct_requires_known_arg = true;
+
+    const generic = try cloner.cloneExprValue(call);
+    const residual = switch (generic.value) {
+        .expr => |expr| expr,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expect(program.getExpr(residual).data == .call_proc);
+
+    const demanded = try cloner.cloneExprValueDemandingShape(call);
+    try std.testing.expect(demanded.value == .tag);
 }
 
 test "issue 10168 SpecConstr clones every capture when nested cloning grows the capture store" {

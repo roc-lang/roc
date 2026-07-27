@@ -2498,6 +2498,13 @@ of performing independent per-candidate body scans. A source-relative early
 `return` still prevents procedure-to-join localization until lifted returns
 carry explicit continuation targets.
 
+Each normalization or discovery clone owns a short-lived scratch arena. Only
+accepted call patterns are copied into pass-wide storage, so discarded symbolic
+value graphs do not accumulate across functions. Generic analysis follows
+existing constructor evidence; a structural consumer requests a producer's
+result shape through the separate demand path, which propagates through the
+callee's exact used-argument plan.
+
 The useful lesson from GHC's SpecConstr is this separation of concerns. GHC's
 `Value`/`CallPat` data and `ScEnv` substitution/value environments carry
 constructor evidence; simplifier floats own strict work; and specialization
