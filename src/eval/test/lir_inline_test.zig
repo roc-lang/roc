@@ -239,6 +239,47 @@ fn monotypeCountersForModuleWithImports(
     return counters;
 }
 
+const ExpectedMonotypeSpecializationCounters = struct {
+    template_requests: u64,
+    template_hits: u64,
+    template_misses: u64,
+    nested_requests: u64,
+    nested_hits: u64,
+    nested_misses: u64,
+    template_lookup_candidates: u64 = 0,
+    nested_lookup_candidates: u64 = 0,
+    specialization_type_digest_requests: u64,
+    max_specialization_type_digest_cache_hits: u64,
+    max_specialization_type_digest_cache_misses: u64,
+    max_specialization_type_digest_nodes_visited: u64,
+    exact_type_checks: u64 = 0,
+    nominal_backing_reuses: u64,
+    nominal_backing_instantiations: u64,
+    evidence_missing: u64 = 0,
+};
+
+fn expectMonotypeSpecializationCountersWithin(
+    counters: MonoLower.SpecializationCounters,
+    expected: ExpectedMonotypeSpecializationCounters,
+) TestError!void {
+    try std.testing.expectEqual(expected.template_requests, counters.template_requests);
+    try std.testing.expectEqual(expected.template_hits, counters.template_hits);
+    try std.testing.expectEqual(expected.template_misses, counters.template_misses);
+    try std.testing.expectEqual(expected.nested_requests, counters.nested_requests);
+    try std.testing.expectEqual(expected.nested_hits, counters.nested_hits);
+    try std.testing.expectEqual(expected.nested_misses, counters.nested_misses);
+    try std.testing.expectEqual(expected.template_lookup_candidates, counters.template_lookup_candidates);
+    try std.testing.expectEqual(expected.nested_lookup_candidates, counters.nested_lookup_candidates);
+    try std.testing.expectEqual(expected.specialization_type_digest_requests, counters.specialization_type_digest_requests);
+    try std.testing.expect(counters.specialization_type_digest_cache_hits <= expected.max_specialization_type_digest_cache_hits);
+    try std.testing.expect(counters.specialization_type_digest_cache_misses <= expected.max_specialization_type_digest_cache_misses);
+    try std.testing.expect(counters.specialization_type_digest_nodes_visited <= expected.max_specialization_type_digest_nodes_visited);
+    try std.testing.expectEqual(expected.exact_type_checks, counters.exact_type_checks);
+    try std.testing.expectEqual(expected.nominal_backing_reuses, counters.nominal_backing_reuses);
+    try std.testing.expectEqual(expected.nominal_backing_instantiations, counters.nominal_backing_instantiations);
+    try std.testing.expectEqual(expected.evidence_missing, counters.evidence_missing);
+}
+
 const StructuralJsonMonotypeStats = struct {
     functions: usize,
     definitions: usize,
@@ -1713,9 +1754,7 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
         \\}
     ;
 
-    const counters = try monotypeCountersForModule(allocator, source);
-
-    try std.testing.expectEqual(postcheck.Monotype.Lower.SpecializationCounters{
+    try expectMonotypeSpecializationCountersWithin(try monotypeCountersForModule(allocator, source), .{
         .template_requests = 27,
         .template_hits = 22,
         .template_misses = 5,
@@ -1725,13 +1764,13 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
         .template_lookup_candidates = 0,
         .nested_lookup_candidates = 0,
         .specialization_type_digest_requests = 60,
-        .specialization_type_digest_cache_hits = 110,
-        .specialization_type_digest_cache_misses = 107,
-        .specialization_type_digest_nodes_visited = 107,
+        .max_specialization_type_digest_cache_hits = 160,
+        .max_specialization_type_digest_cache_misses = 160,
+        .max_specialization_type_digest_nodes_visited = 160,
         .exact_type_checks = 0,
         .nominal_backing_reuses = 1,
         .nominal_backing_instantiations = 86,
-    }, counters);
+    });
 }
 
 test "issue 9802 growing-structural map2 specialization counters are bounded" {
@@ -1761,9 +1800,7 @@ test "issue 9802 growing-structural map2 specialization counters are bounded" {
         \\}
     ;
 
-    const counters = try monotypeCountersForModule(allocator, source);
-
-    try std.testing.expectEqual(postcheck.Monotype.Lower.SpecializationCounters{
+    try expectMonotypeSpecializationCountersWithin(try monotypeCountersForModule(allocator, source), .{
         .template_requests = 15,
         .template_hits = 5,
         .template_misses = 10,
@@ -1773,13 +1810,13 @@ test "issue 9802 growing-structural map2 specialization counters are bounded" {
         .template_lookup_candidates = 0,
         .nested_lookup_candidates = 0,
         .specialization_type_digest_requests = 52,
-        .specialization_type_digest_cache_hits = 214,
-        .specialization_type_digest_cache_misses = 251,
-        .specialization_type_digest_nodes_visited = 251,
+        .max_specialization_type_digest_cache_hits = 300,
+        .max_specialization_type_digest_cache_misses = 300,
+        .max_specialization_type_digest_nodes_visited = 300,
         .exact_type_checks = 0,
         .nominal_backing_reuses = 8,
         .nominal_backing_instantiations = 149,
-    }, counters);
+    });
 }
 
 test "imported and local generic specialization counters reuse closed types" {

@@ -1064,7 +1064,7 @@ test "Monotype lambda argument patterns retain graph provenance" {
     try expectContains(lambda_args, "self.lowerShapeFreePatternAtCell(pattern_id, arg_cell)");
     try expectContains(lambda_args, "self.lowerPatternAtNode(pattern_id, arg_node)");
     try expectContains(lambda_args, ".ty = arg_cell");
-    try expectContains(lambda_args, "} }, ret_cell);");
+    try expectContains(lambda_args, "} }, body_ret_cell);");
     try expectNotContains(lambda_args, "activeTypeFromNode(arg_node)");
     try expectNotContains(lambda_args, "activeTypeFromNode(ret_node)");
     try expectNotContains(lambda_args, "lowerPatternAtType(pattern_id");
@@ -1077,7 +1077,7 @@ test "Monotype returns consume the active specialization return cell" {
         "fn lowerReturn(",
         "fn lowerComptimeRootExprAtCell(",
     );
-    try expectContains(lower_source, "self.current_return_target = .{ .lambda = lambda_id, .cell = ret_cell }");
+    try expectContains(lower_source, "self.current_return_target = .{ .lambda = lambda_id, .cell = body_ret_cell }");
     try expectContains(lower_return, "ret.lambda != target.lambda");
     try expectContains(lower_return, "self.lowerExprAtTypeCell(ret.expr, target.cell)");
     try expectNotContains(lower_source, "returnTargetTypeCell");
@@ -1140,9 +1140,9 @@ test "Monotype evidence chains retain checker-recorded lexical scope topology" {
 
 test "Monotype generated-private call requests retain separate request nodes" {
     const lower_source = @embedFile("monotype/lower.zig");
-    const partial_with_ret = sourceSliceBetween(
+    const full_request = sourceSliceBetween(
         lower_source,
-        "fn instantiateTargetCallTypeFromMonoArgAtIndexAndRet",
+        "fn instantiateTargetCallNodeFromMonoArgs",
         "fn instantiateTargetCallNodeFromMonoArgAtIndex",
     );
     const partial_arg = sourceSliceBetween(
@@ -1156,8 +1156,8 @@ test "Monotype generated-private call requests retain separate request nodes" {
         "fn iteratorOperandNode",
     );
 
-    try expectContains(partial_with_ret, "checkedMonoRequestNode");
-    try expectContains(partial_with_ret, "self.graphFunctionNode(request_args, request_ret)");
+    try expectContains(full_request, "checkedMonoRequestNode");
+    try expectContains(full_request, "functionRequestNode(self.graph, fn_node, request_args, request_ret)");
     try expectContains(partial_arg, "checkedMonoRequestNode");
     try expectContains(partial_arg, "self.graphFunctionNode(request_args, function_nodes.ret)");
     try expectContains(iterator, "checkedMonoRequestNode");

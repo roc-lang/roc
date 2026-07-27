@@ -7154,6 +7154,20 @@ const Lowerer = struct {
         source_index: u16,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
+        if (self.boxBackingLayoutForDirectConstruction(target)) |backing_layout| {
+            const backing_local = try self.addLocalForLayout(backing_layout);
+            const boundary = try self.assignBoxBoundary(target, backing_local, backing_layout, next);
+            return try self.assignCallableVariantBoundary(
+                backing_local,
+                target_variant,
+                target_index,
+                source,
+                source_variant,
+                source_index,
+                boundary,
+            );
+        }
+
         if (target_variant.capture_ty == null and source_variant.capture_ty == null) {
             return try self.result.store.addCFStmt(.{ .assign_tag = .{
                 .target = target,
@@ -7389,6 +7403,20 @@ const Lowerer = struct {
         if (target_payload_tys.len != source_payload_tys.len) {
             Common.invariant("tag union boundary saw different payload arities");
         }
+        if (self.boxBackingLayoutForDirectConstruction(target)) |backing_layout| {
+            const backing_local = try self.addLocalForLayout(backing_layout);
+            const boundary = try self.assignBoxBoundary(target, backing_local, backing_layout, next);
+            return try self.assignTagUnionVariantBoundary(
+                backing_local,
+                target_tag,
+                target_index,
+                source,
+                source_tag,
+                source_index,
+                boundary,
+            );
+        }
+
         if (target_payload_tys.len == 0) {
             if (self.isZstLocal(target)) return try self.assignZst(target, next);
             return try self.result.store.addCFStmt(.{ .assign_tag = .{
