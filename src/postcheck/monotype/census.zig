@@ -112,8 +112,14 @@ pub const UnifySite = enum {
 
 /// What one execution of a constraint-replay site contributed.
 pub const UnifySiteOutcome = enum {
-    /// Both sides were already the same type by directed translation, so the
-    /// unify decided nothing the flip has to reproduce.
+    /// The unify decided nothing the flip has to reproduce, which happens two
+    /// ways. Either directed translation already makes the two sides one type,
+    /// or every position they differ at is one the graph-built side leaves
+    /// open: the graph's own Monotype import reads an empty tag union in an
+    /// immutable type as a slot no value reached and turns it back into an
+    /// unresolved node, so the constraint fills a hole in the graph's own node
+    /// from content the other side already holds. `open_on_import` counts the
+    /// second way apart from the first.
     redundant,
     /// The two sides differed, so the unify carried information the directed
     /// translation of its operands did not already hold. Every one of these is a
@@ -177,12 +183,56 @@ pub const UnifySiteBlocker = enum {
     operand_undescribed,
 };
 
+/// What one measured operand is. The empty tag union is the stored shape both
+/// the graph and directed translation use for a position no value reached, so
+/// an informative execution's classification turns on which kind of operand
+/// carried it: a directed answer, or a type the graph sealed while one of its
+/// own nodes was still unresolved — which the graph's own Monotype import
+/// reopens as unresolved when the site imports it back in.
+pub const UnifySiteOperandOrigin = enum {
+    /// A checked position, translated under the environment in force.
+    checked_position,
+    /// A record field read off such a position's translation.
+    field_of_checked,
+    /// An immutable type the graph sealed, which the site imports.
+    graph_sealed,
+};
+
+/// What names the value of the checked variable one informative execution's
+/// residual materialization came from.
+pub const UnifySiteResidualState = enum {
+    /// The residual side is graph-sealed, so no checked position stands behind
+    /// it and nothing in the checked data was consulted for it.
+    not_a_checked_position,
+    /// The difference sits under a head whose children the checked side orders
+    /// differently from the emission (a row), so the walk declines to name a
+    /// checked position rather than name the wrong one.
+    position_not_followed,
+    /// The checked position at the difference holds no variable: its empty tag
+    /// union is content the checked data states, not a residual materialization.
+    checked_content,
+    /// The variable at that position is a generalized binder of a checked
+    /// scheme, so a binding names its value.
+    scheme_binder,
+    /// A residual disposition under this body's own scheme owner names it.
+    disposed_contextual,
+    disposed_uninhabited,
+    /// A module-body-scoped residual disposition names it.
+    disposed_module_body,
+    /// A residual disposition names it only under another scheme owner.
+    disposed_other_owner,
+    /// No residual disposition names it.
+    undisposed,
+};
+
 /// How many constraint-replay sites reunify.md's Slice 7 flip has to account
 /// for. Every one is declared in `UnifySite`.
 pub const unify_site_count = @typeInfo(UnifySite).@"enum".fields.len;
 const unify_outcome_count = @typeInfo(UnifySiteOutcome).@"enum".fields.len;
 const unify_blocker_count = @typeInfo(UnifySiteBlocker).@"enum".fields.len;
 const unify_information_count = @typeInfo(UnifySiteInformation).@"enum".fields.len;
+const unify_origin_count = @typeInfo(UnifySiteOperandOrigin).@"enum".fields.len;
+const unify_residual_state_count = @typeInfo(UnifySiteResidualState).@"enum".fields.len;
 
 /// One atomic u64 per classification question. Each field name is the text
 /// the dump writes on its line, so a corpus run reads the names directly.
@@ -704,6 +754,9 @@ pub const Census = struct {
     // much of body lowering's unification the flip must replace rather than
     // delete; the per-site table in the dump says exactly where those sit.
     unify_site_redundant: Counter = Counter.init(0),
+    // How many of the redundant executions were decided by the graph-built
+    // side's open positions rather than by the two sides being equal outright.
+    unify_site_redundant_open_on_import: Counter = Counter.init(0),
     unify_site_informative: Counter = Counter.init(0),
     unify_site_representation_decision: Counter = Counter.init(0),
     unify_site_unmeasurable: Counter = Counter.init(0),
@@ -727,6 +780,23 @@ pub var unify_site_blockers = [_][unify_blocker_count]Counter{
 /// Per constraint-replay site, what its informative executions disagreed about.
 pub var unify_site_information = [_][unify_information_count]Counter{
     [_]Counter{Counter.init(0)} ** unify_information_count,
+} ** unify_site_count;
+
+/// Per constraint-replay site, how many of its redundant executions were
+/// decided by the graph-built side's open positions rather than by the two
+/// sides being equal outright.
+pub var unify_site_open_on_import = [_]Counter{Counter.init(0)} ** unify_site_count;
+
+/// Per constraint-replay site, what kind of operand carried the empty tag union
+/// in its informative executions.
+pub var unify_site_residual_origins = [_][unify_origin_count]Counter{
+    [_]Counter{Counter.init(0)} ** unify_origin_count,
+} ** unify_site_count;
+
+/// Per constraint-replay site, what named the value of that residual's checked
+/// variable in its informative executions.
+pub var unify_site_residual_states = [_][unify_residual_state_count]Counter{
+    [_]Counter{Counter.init(0)} ** unify_residual_state_count,
 } ** unify_site_count;
 
 /// Add one to the named counter. Inert outside Debug builds. `name` is a
@@ -764,6 +834,26 @@ pub fn bumpUnifySiteInformation(site: UnifySite, information: UnifySiteInformati
     _ = unify_site_information[@intFromEnum(site)][@intFromEnum(information)].fetchAdd(1, .monotonic);
 }
 
+/// Record that one redundant execution was decided by the graph-built side's
+/// open positions rather than by outright equality. Inert outside Debug.
+pub fn bumpUnifySiteOpenOnImport(site: UnifySite) void {
+    if (comptime !enabled) return;
+    _ = unify_site_open_on_import[@intFromEnum(site)].fetchAdd(1, .monotonic);
+    bump("unify_site_redundant_open_on_import");
+}
+
+/// Record which kind of operand carried one informative execution's empty tag
+/// union, and what named that residual's checked variable. Inert outside Debug.
+pub fn bumpUnifySiteResidual(
+    site: UnifySite,
+    origin: UnifySiteOperandOrigin,
+    state: UnifySiteResidualState,
+) void {
+    if (comptime !enabled) return;
+    _ = unify_site_residual_origins[@intFromEnum(site)][@intFromEnum(origin)].fetchAdd(1, .monotonic);
+    _ = unify_site_residual_states[@intFromEnum(site)][@intFromEnum(state)].fetchAdd(1, .monotonic);
+}
+
 /// Render every counter as a `name value` line. Inert outside Debug builds.
 /// The caller owns and frees the returned bytes.
 pub fn dumpText(allocator: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
@@ -781,12 +871,20 @@ pub fn dumpText(allocator: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
         // states every declared site rather than only the ones that ran.
         for (unify_site_outcomes, unify_site_blockers, unify_site_information, 0..) |outcomes, blockers, information, index| {
             const site: UnifySite = @enumFromInt(index);
+            const origins = unify_site_residual_origins[index];
+            const states = unify_site_residual_states[index];
             const line = try std.fmt.allocPrint(
                 allocator,
                 "unify_site name={s} redundant={d} informative={d} representation_decision={d} unmeasurable={d} construction={d}" ++
                     " no_environment={d} operand_untranslatable={d} operand_undescribed={d}" ++
                     " representation={d} scheme_binder_unbound={d} unbound_residual={d}" ++
-                    " head_tag={d} row_width={d} named_identity={d} unclassified={d}\n",
+                    " head_tag={d} row_width={d} named_identity={d} unclassified={d}" ++
+                    " open_on_import={d}" ++
+                    " residual_from_checked={d} residual_from_field={d} residual_from_graph={d}" ++
+                    " residual_not_checked={d} residual_not_followed={d} residual_checked_content={d}" ++
+                    " residual_scheme_binder={d}" ++
+                    " residual_contextual={d} residual_uninhabited={d} residual_module_body={d}" ++
+                    " residual_other_owner={d} residual_undisposed={d}\n",
                 .{
                     @tagName(site),
                     outcomes[@intFromEnum(UnifySiteOutcome.redundant)].load(.monotonic),
@@ -804,6 +902,19 @@ pub fn dumpText(allocator: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
                     information[@intFromEnum(UnifySiteInformation.row_width)].load(.monotonic),
                     information[@intFromEnum(UnifySiteInformation.named_identity)].load(.monotonic),
                     information[@intFromEnum(UnifySiteInformation.unclassified)].load(.monotonic),
+                    unify_site_open_on_import[index].load(.monotonic),
+                    origins[@intFromEnum(UnifySiteOperandOrigin.checked_position)].load(.monotonic),
+                    origins[@intFromEnum(UnifySiteOperandOrigin.field_of_checked)].load(.monotonic),
+                    origins[@intFromEnum(UnifySiteOperandOrigin.graph_sealed)].load(.monotonic),
+                    states[@intFromEnum(UnifySiteResidualState.not_a_checked_position)].load(.monotonic),
+                    states[@intFromEnum(UnifySiteResidualState.position_not_followed)].load(.monotonic),
+                    states[@intFromEnum(UnifySiteResidualState.checked_content)].load(.monotonic),
+                    states[@intFromEnum(UnifySiteResidualState.scheme_binder)].load(.monotonic),
+                    states[@intFromEnum(UnifySiteResidualState.disposed_contextual)].load(.monotonic),
+                    states[@intFromEnum(UnifySiteResidualState.disposed_uninhabited)].load(.monotonic),
+                    states[@intFromEnum(UnifySiteResidualState.disposed_module_body)].load(.monotonic),
+                    states[@intFromEnum(UnifySiteResidualState.disposed_other_owner)].load(.monotonic),
+                    states[@intFromEnum(UnifySiteResidualState.undisposed)].load(.monotonic),
                 },
             );
             defer allocator.free(line);

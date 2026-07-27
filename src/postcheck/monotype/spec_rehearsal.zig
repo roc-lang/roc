@@ -710,7 +710,56 @@ const UnifyDetail = struct {
     left: HeadShape,
     right: HeadShape,
     difference: Difference,
+    residual: ResidualTrace,
 };
+
+/// Where an informative execution's empty-tag-union head sits, and what names
+/// the position it stands for. The empty tag union is the stored shape both
+/// sides use for a position no value reached, so saying WHICH side carries it
+/// and what that side is separates two different findings: a checked position
+/// whose variable no recorded value names, and a type the graph sealed while
+/// one of its own nodes was still unresolved.
+const ResidualTrace = struct {
+    side: Side,
+    origin: OperandOrigin,
+    /// The checked position the residual side stands for, when it has one.
+    module_prefix: [8]u8,
+    checked_ty: u32,
+    /// The checked position the difference's own path reaches inside that root,
+    /// or `no_variable` when the path names none.
+    position: u32,
+    state: ResidualState,
+    /// Whether that variable carries a checked default of its own, which is the
+    /// other way its value could be named without a disposition.
+    defaults: VariableDefaults,
+
+    const no_variable: u32 = std.math.maxInt(u32);
+
+    const empty: ResidualTrace = .{
+        .side = .neither,
+        .origin = .graph_sealed,
+        .module_prefix = [_]u8{0} ** 8,
+        .checked_ty = 0,
+        .position = no_variable,
+        .state = .not_a_checked_position,
+        .defaults = .{},
+    };
+};
+
+/// The checked defaults one residual variable carries, so a finding says
+/// whether anything at all names its value.
+const VariableDefaults = struct {
+    rigid: bool = false,
+    numeric_phase: bool = false,
+    row: bool = false,
+    constraints: u32 = 0,
+};
+
+/// Which side of one constraint-replay site a finding sits on.
+const Side = enum { left, right, neither };
+
+const OperandOrigin = census.UnifySiteOperandOrigin;
+const ResidualState = census.UnifySiteResidualState;
 
 /// One recorded mismatch, dumped with the census counters. The head shapes are
 /// carried so a difference can be classified without re-running: two different
@@ -825,6 +874,20 @@ fn isRecursive(store: *const Type.Store, root: Type.TypeId, ty: Type.TypeId, dep
 /// statement about the two types rather than about the bound.
 const max_difference_depth: u32 = 96;
 
+/// How many descent steps a difference records so the position can be followed
+/// back through the checked type the emission came from. A difference deeper
+/// than this records that its path is incomplete rather than a short prefix.
+const max_difference_path: u32 = 8;
+
+/// The child indices one difference walk descended, outermost first.
+const DifferencePath = struct {
+    steps: [max_difference_path]u16 = @splat(0),
+    len: u32 = 0,
+    /// False once the walk descended past `max_difference_path`, so the steps
+    /// no longer name the difference's own position.
+    complete: bool = true,
+};
+
 /// How deep the self-reachability probe searches before answering "not
 /// recursive". A cycle a type actually has closes within a few levels; this only
 /// bounds the search on a deep acyclic spine.
@@ -841,6 +904,21 @@ fn firstDifference(
     name_store: *const names.NameStore,
     depth: u32,
 ) Difference {
+    var path: DifferencePath = .{};
+    return firstDifferenceOnPath(left_store, left, right_store, right, name_store, depth, &path);
+}
+
+/// `firstDifference`, recording the child indices it descended so the position
+/// can be followed back through the checked type the emission came from.
+fn firstDifferenceOnPath(
+    left_store: *const Type.Store,
+    left: Type.TypeId,
+    right_store: *const Type.Store,
+    right: Type.TypeId,
+    name_store: *const names.NameStore,
+    depth: u32,
+    path: *DifferencePath,
+) Difference {
     const here = Difference{
         .depth = depth,
         .left = HeadShape.of(left_store, left),
@@ -849,6 +927,7 @@ fn firstDifference(
         .left_recursive = isRecursive(left_store, left, left, 0),
         .right_recursive = isRecursive(right_store, right, right, 0),
     };
+    path.len = depth;
     if (depth >= max_difference_depth) return here;
     if (here.left.tag != here.right.tag or here.left.children != here.right.children) return here;
     // A named head's own identity fields are part of the difference, so a
@@ -868,7 +947,12 @@ fn firstDifference(
         const left_digest = left_store.unfoldedDigest(name_store, left_child);
         const right_digest = right_store.unfoldedDigest(name_store, right_child);
         if (std.mem.eql(u8, &left_digest.bytes, &right_digest.bytes)) continue;
-        return firstDifference(left_store, left_child, right_store, right_child, name_store, depth + 1);
+        if (depth < max_difference_path) {
+            path.steps[depth] = @intCast(index);
+        } else {
+            path.complete = false;
+        }
+        return firstDifferenceOnPath(left_store, left_child, right_store, right_child, name_store, depth + 1, path);
     }
     return here;
 }
@@ -2852,6 +2936,9 @@ pub const Rehearsal = struct {
         ty: Type.TypeId,
         stored: names.TypeDigest,
         unfolded: names.TypeDigest,
+        /// What kind of operand this was, so a finding says whether it names a
+        /// directed answer or a type the graph produced.
+        origin: OperandOrigin,
         /// The checked position and environment the type came from, for an
         /// operand the site named as a checked type. An imported immutable type
         /// has none: nothing in the checked stores stands behind it here.
@@ -2862,8 +2949,11 @@ pub const Rehearsal = struct {
     /// materialization can be traced back to the variable that produced it.
     const CheckedSource = struct {
         view: checked.CheckedTypeStoreView,
+        module_bytes: [32]u8,
         checked_ty: checked.CheckedTypeId,
         env: ?*const direct_translate.BindingEnvironment,
+        /// The scheme owner the translation read residual dispositions under.
+        owner_node: u32,
     };
 
     /// Measure whether one constraint-replay site's two sides are ALREADY the
@@ -2900,8 +2990,51 @@ pub const Rehearsal = struct {
             census.bumpUnifySite(site, .representation_decision);
             return;
         }
+        if (self.openGraphPositionsCover(resolved_left, resolved_right)) {
+            census.bumpUnifySite(site, .redundant);
+            census.bumpUnifySiteOpenOnImport(site);
+            return;
+        }
         census.bumpUnifySite(site, .informative);
         self.classifyInformativeSite(site, resolved_left, resolved_right);
+    }
+
+    /// Whether every position this site's two sides differ at is one the
+    /// graph-built side leaves open.
+    ///
+    /// A site names an operand as a graph-sealed Monotype when the constraint
+    /// imports that Monotype into the graph, and the graph's own Monotype
+    /// import reads an empty tag union there as a slot no value reached — it
+    /// becomes an
+    /// unresolved node again rather than a closed row, so the content the other
+    /// side holds is what the slot receives. A difference at such a position is
+    /// therefore the graph's own open node being filled, not information the
+    /// constraint carries into the emitted program: the other side already holds
+    /// it, and the flip deletes the node together with the constraint. Only a
+    /// graph-sealed side may be open this way; an empty tag union on a checked
+    /// position is that position's own directed answer, and a difference there
+    /// stays informative.
+    fn openGraphPositionsCover(
+        self: *Rehearsal,
+        left: ResolvedOperand,
+        right: ResolvedOperand,
+    ) bool {
+        const left_open = left.origin == .graph_sealed;
+        const right_open = right.origin == .graph_sealed;
+        if (!left_open and !right_open) return false;
+        var visited = std.AutoHashMap(u64, void).init(self.allocator);
+        defer visited.deinit();
+        var covered = false;
+        if (!walkOpenGraphPositions(.{
+            .name_store = self.program_names,
+            .left_store = left.store,
+            .right_store = right.store,
+            .left_open = left_open,
+            .right_open = right_open,
+        }, left.ty, right.ty, &visited, &covered, 0)) {
+            return false;
+        }
+        return covered;
     }
 
     /// Whether this site's two sides are one logical type whose difference is
@@ -2933,7 +3066,8 @@ pub const Rehearsal = struct {
         left: ResolvedOperand,
         right: ResolvedOperand,
     ) void {
-        const difference = firstDifference(left.store, left.ty, right.store, right.ty, self.program_names, 0);
+        var path: DifferencePath = .{};
+        const difference = firstDifferenceOnPath(left.store, left.ty, right.store, right.ty, self.program_names, 0, &path);
         const information: census.UnifySiteInformation = information: {
             if (self.carriesRepresentation(left.store, left.ty) or
                 self.carriesRepresentation(right.store, right.ty))
@@ -2954,6 +3088,8 @@ pub const Rehearsal = struct {
             break :information .unclassified;
         };
         census.bumpUnifySiteInformation(site, information);
+        const residual = traceResidual(difference, path, left, right);
+        census.bumpUnifySiteResidual(site, residual.origin, residual.state);
         // Two sides that are logically equal but stored under different rootings
         // were already accepted as redundant, so a difference reaching here is a
         // content difference and the detail is worth keeping.
@@ -2964,7 +3100,161 @@ pub const Rehearsal = struct {
             .left = HeadShape.of(left.store, left.ty),
             .right = HeadShape.of(right.store, right.ty),
             .difference = difference,
+            .residual = residual,
         };
+    }
+
+    /// Name the side of an informative execution that carries the empty tag
+    /// union at the difference, and say what stands behind that side: a checked
+    /// position whose variable nothing names a value for, or a type the graph
+    /// sealed with one of its own nodes still unresolved.
+    ///
+    /// The position is followed by the difference walk's own child path, so the
+    /// finding names the checked variable the empty tag union came FROM rather
+    /// than some other variable the operand's root happens to reach.
+    fn traceResidual(
+        difference: Difference,
+        path: DifferencePath,
+        left: ResolvedOperand,
+        right: ResolvedOperand,
+    ) ResidualTrace {
+        const left_residual = difference.left.isEmptyTagUnionHead() and !difference.right.isEmptyTagUnionHead();
+        const right_residual = difference.right.isEmptyTagUnionHead() and !difference.left.isEmptyTagUnionHead();
+        if (!left_residual and !right_residual) return ResidualTrace.empty;
+        const operand = if (left_residual) left else right;
+        var trace = ResidualTrace.empty;
+        trace.side = if (left_residual) .left else .right;
+        trace.origin = operand.origin;
+        const source = operand.source orelse return trace;
+        trace.module_prefix = source.module_bytes[0..8].*;
+        trace.checked_ty = @intFromEnum(source.checked_ty);
+        trace.state = .position_not_followed;
+        if (!path.complete) return trace;
+        const position = checkedPositionAtPath(source.view, source.checked_ty, path) orelse return trace;
+        trace.position = @intFromEnum(position);
+        switch (source.view.payload(position)) {
+            .flex, .rigid => {},
+            else => {
+                trace.state = .checked_content;
+                return trace;
+            },
+        }
+        trace.state = residualState(source, position);
+        trace.defaults = variableDefaults(source.view, position);
+        return trace;
+    }
+
+    /// The checked defaults one residual variable carries. A variable with no
+    /// disposition, no numeric default phase and no row default has nothing at
+    /// all naming its value, which is a different finding from one whose value
+    /// is named and merely read under the wrong scope.
+    fn variableDefaults(
+        view: checked.CheckedTypeStoreView,
+        free: checked.CheckedTypeId,
+    ) VariableDefaults {
+        return switch (view.payload(free)) {
+            .flex => |v| .{
+                .numeric_phase = v.numeric_default_phase != null,
+                .row = v.row_default != null,
+                .constraints = @intCast(v.constraints.len),
+            },
+            .rigid => |v| .{
+                .rigid = true,
+                .numeric_phase = v.numeric_default_phase != null,
+                .row = v.row_default != null,
+                .constraints = @intCast(v.constraints.len),
+            },
+            else => .{},
+        };
+    }
+
+    /// Follow one difference path from a checked root to the checked position
+    /// the emission's differing head came from.
+    ///
+    /// Aliases are transparent, and a function's arguments-then-result and a
+    /// nominal's arguments carry the same child order in both the checked
+    /// payload and the emission. A row does not: the emission flattens
+    /// extension chains, so a step into a record, a tag union, or a nominal's
+    /// backing names no checked child here and the walk stops instead of
+    /// naming the wrong one.
+    fn checkedPositionAtPath(
+        view: checked.CheckedTypeStoreView,
+        root: checked.CheckedTypeId,
+        path: DifferencePath,
+    ) ?checked.CheckedTypeId {
+        var current = transparentCheckedPosition(view, root);
+        var index: u32 = 0;
+        while (index < path.len) : (index += 1) {
+            const step = path.steps[index];
+            const next = switch (view.payload(current)) {
+                .function => |fn_ty| blk: {
+                    if (step < fn_ty.args.len) break :blk fn_ty.args[step];
+                    if (step == fn_ty.args.len) break :blk fn_ty.ret;
+                    return null;
+                },
+                .nominal => |nominal_ty| blk: {
+                    if (step < nominal_ty.args.len) break :blk nominal_ty.args[step];
+                    return null;
+                },
+                .tuple => |items| blk: {
+                    if (step < items.len) break :blk items[step];
+                    return null;
+                },
+                else => return null,
+            };
+            current = transparentCheckedPosition(view, next);
+        }
+        return current;
+    }
+
+    /// One checked position with its aliases walked through, bounded so a
+    /// cyclic alias chain cannot spin.
+    fn transparentCheckedPosition(
+        view: checked.CheckedTypeStoreView,
+        start: checked.CheckedTypeId,
+    ) checked.CheckedTypeId {
+        var current = start;
+        var steps: u32 = 0;
+        while (steps < max_difference_depth) : (steps += 1) {
+            switch (view.payload(current)) {
+                .alias => |alias_ty| current = alias_ty.backing,
+                else => return current,
+            }
+        }
+        return current;
+    }
+
+    /// What names the value of one unbound checked variable: a scheme's binder
+    /// list, a residual disposition under one of the scopes the translation
+    /// reads, or nothing at all.
+    fn residualState(
+        source: CheckedSource,
+        free: checked.CheckedTypeId,
+    ) ResidualState {
+        for (source.view.schemes) |scheme| {
+            for (scheme.generalizedVars(source.view)) |binder| {
+                if (binder == free) return .scheme_binder;
+            }
+        }
+        var module_wide = false;
+        var other_owner = false;
+        for (source.view.residualDispositions()) |disposition| {
+            if (disposition.type_id != @intFromEnum(free)) continue;
+            if (disposition.scheme_owner_node == source.owner_node) {
+                return switch (disposition.kind) {
+                    .contextual => .disposed_contextual,
+                    .uninhabited => .disposed_uninhabited,
+                };
+            }
+            if (disposition.scheme_owner_node == checked.checked_residual_disposition_module_body_owner) {
+                module_wide = true;
+            } else {
+                other_owner = true;
+            }
+        }
+        if (module_wide) return .disposed_module_body;
+        if (other_owner) return .disposed_other_owner;
+        return .undisposed;
     }
 
     /// Record that a site builds one graph node out of a placeholder and its
@@ -3014,6 +3304,7 @@ pub const Rehearsal = struct {
                 .ty = ty,
                 .stored = self.program_types.typeDigest(self.program_names, ty),
                 .unfolded = self.program_types.unfoldedDigest(self.program_names, ty),
+                .origin = .graph_sealed,
                 .source = null,
             },
             .checked => |address| return self.resolveCheckedOperand(address, false, blocker),
@@ -3029,6 +3320,7 @@ pub const Rehearsal = struct {
                     .ty = emitted,
                     .stored = receiver.store.typeDigest(self.program_names, emitted),
                     .unfolded = receiver.store.unfoldedDigest(self.program_names, emitted),
+                    .origin = .field_of_checked,
                     .source = null,
                 };
             },
@@ -3088,7 +3380,14 @@ pub const Rehearsal = struct {
             .ty = emitted,
             .stored = self.store.typeDigest(self.program_names, emitted),
             .unfolded = self.store.unfoldedDigest(self.program_names, emitted),
-            .source = .{ .view = cursor.view, .checked_ty = checked_ty, .env = env },
+            .origin = .checked_position,
+            .source = .{
+                .view = cursor.view,
+                .module_bytes = address.module_bytes,
+                .checked_ty = checked_ty,
+                .env = env,
+                .owner_node = owner_node,
+            },
         };
     }
 
@@ -3733,7 +4032,12 @@ pub const Rehearsal = struct {
             const site: census.UnifySite = @enumFromInt(index);
             const line = std.fmt.allocPrint(
                 self.allocator,
-                "rehearsal_unify_detail site={s} information={s} left={s}:{d}/{d} right={s}:{d}/{d} differs_at_depth={d} {s}:{d}/{d}vs{s}:{d}/{d} named_field={s} recursive={d}/{d}\n",
+                "rehearsal_unify_detail site={s} information={s} left={s}:{d}/{d} right={s}:{d}/{d}" ++
+                    " differs_at_depth={d} {s}:{d}/{d}vs{s}:{d}/{d} named_field={s} recursive={d}/{d}" ++
+                    " residual_side={s} residual_origin={s} residual_state={s}" ++
+                    " residual_module={s} residual_checked_ty={d} residual_position={d}" ++
+                    " residual_rigid={d} residual_numeric_phase={d} residual_row_default={d}" ++
+                    " residual_constraints={d}\n",
                 .{
                     @tagName(site),
                     @tagName(detail.information),
@@ -3753,6 +4057,16 @@ pub const Rehearsal = struct {
                     @tagName(detail.difference.named_field),
                     @intFromBool(detail.difference.left_recursive),
                     @intFromBool(detail.difference.right_recursive),
+                    @tagName(detail.residual.side),
+                    @tagName(detail.residual.origin),
+                    @tagName(detail.residual.state),
+                    &std.fmt.bytesToHex(detail.residual.module_prefix, .lower),
+                    detail.residual.checked_ty,
+                    detail.residual.position,
+                    @intFromBool(detail.residual.defaults.rigid),
+                    @intFromBool(detail.residual.defaults.numeric_phase),
+                    @intFromBool(detail.residual.defaults.row),
+                    detail.residual.defaults.constraints,
                 },
             ) catch return;
             defer self.allocator.free(line);
@@ -3937,6 +4251,73 @@ fn walkRepresentationOnly(
             covered,
             depth + 1,
         )) return false;
+    }
+    return true;
+}
+
+/// The two stores one open-position walk compares, and which side the site
+/// imports as a graph-sealed Monotype.
+const OpenGraphWalk = struct {
+    name_store: *const names.NameStore,
+    left_store: *const Type.Store,
+    right_store: *const Type.Store,
+    left_open: bool,
+    right_open: bool,
+};
+
+/// Walk two types in parallel and report whether every difference between them
+/// is a position the graph-built side leaves open. `covered` is set once such a
+/// position is reached, so a walk that returns true without setting it found two
+/// identical types.
+///
+/// Recursion closes on the visited pair set, and a pair deeper than the
+/// difference budget is refused rather than assumed equal.
+fn walkOpenGraphPositions(
+    walk: OpenGraphWalk,
+    left: Type.TypeId,
+    right: Type.TypeId,
+    visited: *std.AutoHashMap(u64, void),
+    covered: *bool,
+    depth: u32,
+) bool {
+    if (depth >= max_difference_depth) return false;
+    const key = (@as(u64, @intFromEnum(left)) << 32) | @as(u64, @intFromEnum(right));
+    const seen = visited.getOrPut(key) catch return false;
+    if (seen.found_existing) return true;
+
+    const left_digest = walk.left_store.unfoldedDigest(walk.name_store, left);
+    const right_digest = walk.right_store.unfoldedDigest(walk.name_store, right);
+    if (std.mem.eql(u8, &left_digest.bytes, &right_digest.bytes)) return true;
+
+    const left_shape = HeadShape.of(walk.left_store, left);
+    const right_shape = HeadShape.of(walk.right_store, right);
+    if (walk.left_open and left_shape.isEmptyTagUnionHead() and !right_shape.isEmptyTagUnionHead()) {
+        covered.* = true;
+        return true;
+    }
+    if (walk.right_open and right_shape.isEmptyTagUnionHead() and !left_shape.isEmptyTagUnionHead()) {
+        covered.* = true;
+        return true;
+    }
+
+    const left_content = walk.left_store.get(left);
+    if (std.meta.activeTag(left_content) != std.meta.activeTag(walk.right_store.get(right))) return false;
+    if (left_content == .primitive) {
+        return left_content.primitive == walk.right_store.get(right).primitive;
+    }
+    // A named head's declared identity and a row's labels are the type's own
+    // content, so a disagreement there is two types rather than one open slot.
+    if (left_content == .named) {
+        if (NamedFieldDifference.of(walk.left_store, left, walk.right_store, right) != .equal) return false;
+    } else if (!rowLabelsEqual(walk.left_store, left, walk.right_store, right)) {
+        return false;
+    }
+    if (left_shape.children != right_shape.children or left_shape.entries != right_shape.entries) return false;
+    var index: u32 = 0;
+    while (index < left_shape.children) : (index += 1) {
+        const left_child = childAt(walk.left_store, left, index) orelse return false;
+        const right_child = childAt(walk.right_store, right, index) orelse return false;
+        if (!walkOpenGraphPositions(walk, left_child, right_child, visited, covered, depth + 1)) return false;
     }
     return true;
 }
