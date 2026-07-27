@@ -749,9 +749,13 @@ const Solver = struct {
                 try self.bindLowLevelTypes(call.op, expected, arg_tys);
             },
             .field_access => |field| {
-                const receiver_ty = try self.inferExpr(field.receiver);
-                const field_ty = try self.recordField(receiver_ty, field.field);
-                try self.unify(expected, field_ty);
+                var prefix_ty = try self.inferExpr(field.receiver);
+                const segments = self.lifted.fieldAccessSegmentSpan(field.segments);
+                if (segments.len == 0) Common.invariant("field access path had no segments");
+                for (segments) |segment| {
+                    prefix_ty = try self.recordField(prefix_ty, segment.field);
+                }
+                try self.unify(expected, prefix_ty);
             },
             .tuple_access => |access| {
                 const receiver_ty = try self.inferExpr(access.tuple);

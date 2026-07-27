@@ -15,10 +15,10 @@ const ModuleEnv = can.ModuleEnv;
 const types_store = types.store;
 const Ident = base.Ident;
 const Var = types.Var;
-const TypeScope = types.TypeScope;
 const StaticDispatchConstraint = types.StaticDispatchConstraint;
 const Idx = layout_mod.Idx;
 const Store = store_mod.Store;
+const TypeScope = store_mod.TypeScope;
 const LayoutGraph = graph_mod.Graph;
 const GraphField = graph_mod.Field;
 const GraphNode = graph_mod.Node;
@@ -209,7 +209,7 @@ pub const Resolver = struct {
             .flex => |flex| return self.resolveUnboundFlex(current_module_idx, flex.constraints, parent_context, build_state),
             .rigid => |rigid| return self.resolveUnboundRigid(current_module_idx, rigid.constraints, parent_context, build_state),
             .alias => unreachable,
-            .err => return .{ .canonical = .zst },
+            .field_presence, .err => return .{ .canonical = .zst },
             .structure => |flat_type| {
                 const resolved_ref = switch (flat_type) {
                     .empty_record, .empty_tag_union => GraphRef{ .canonical = .zst },
@@ -495,8 +495,11 @@ pub const Resolver = struct {
         defer collected.deinit(self.allocator);
 
         const fields_slice = self.getTypesStore(module_idx).getRecordFieldsSlice(fields_range);
-        for (fields_slice.items(.name), fields_slice.items(.var_)) |name, var_| {
-            try collected.append(self.allocator, .{ .name = name, .var_ = var_ });
+        for (fields_slice.items(.name), fields_slice.items(.var_), fields_slice.items(.presence)) |name, var_, presence| {
+            if (presence == .optional) {
+                std.debug.panic("optional record field layout is not implemented", .{});
+            }
+            try collected.append(self.allocator, .{ .name = name, .var_ = var_, .presence = presence });
         }
 
         if (collected.items.len == 0) return .{ .canonical = .zst };
@@ -668,10 +671,14 @@ pub const Resolver = struct {
             const fields_slice = ts.getRecordFieldsSlice(current_row.fields);
             const names = fields_slice.items(.name);
             const vars = fields_slice.items(.var_);
+            const presences = fields_slice.items(.presence);
 
-            for (names, vars) |name, field_var| {
+            for (names, vars, presences) |name, field_var, presence| {
+                if (presence == .optional) {
+                    std.debug.panic("optional record field layout is not implemented", .{});
+                }
                 if (recordFieldSeen(out.items, name)) continue;
-                try out.append(self.allocator, .{ .name = name, .var_ = field_var });
+                try out.append(self.allocator, .{ .name = name, .var_ = field_var, .presence = presence });
             }
 
             var ext_var = current_row.ext;
@@ -691,9 +698,13 @@ pub const Resolver = struct {
                             const ext_fields = ts.getRecordFieldsSlice(fields_range);
                             const ext_names = ext_fields.items(.name);
                             const ext_vars = ext_fields.items(.var_);
-                            for (ext_names, ext_vars) |name, field_var| {
+                            const ext_presences = ext_fields.items(.presence);
+                            for (ext_names, ext_vars, ext_presences) |name, field_var, presence| {
+                                if (presence == .optional) {
+                                    std.debug.panic("optional record field layout is not implemented", .{});
+                                }
                                 if (recordFieldSeen(out.items, name)) continue;
-                                try out.append(self.allocator, .{ .name = name, .var_ = field_var });
+                                try out.append(self.allocator, .{ .name = name, .var_ = field_var, .presence = presence });
                             }
                             break :rows;
                         },
@@ -708,7 +719,7 @@ pub const Resolver = struct {
                         => unreachable,
                     },
                     .flex, .rigid => break :rows,
-                    .err => unreachable,
+                    .field_presence, .err => unreachable,
                 }
             }
         }
@@ -757,7 +768,7 @@ pub const Resolver = struct {
                         => unreachable,
                     },
                     .flex, .rigid => break :rows,
-                    .err => unreachable,
+                    .field_presence, .err => unreachable,
                 }
             }
         }
@@ -833,7 +844,7 @@ pub const Resolver = struct {
                         }
                     }
                 },
-                .structure, .err => {},
+                .structure, .field_presence, .err => {},
             }
             break;
         }

@@ -122,7 +122,14 @@ pub const Constants = struct {
     /// 48: Source imports retain parser-owned bindings and type-module owners
     ///     instead of reconstructing them from normalized module identities.
     /// 49: Associated lookups retain exact alias-resolution targets in CIR.
-    pub const CACHE_VERSION = 49;
+    /// 50: Optional + defaulted record fields: canonical record annotations
+    ///     carry field presence and default expressions, field-access paths
+    ///     keep source-ordered required/optional segments, type-store fields
+    ///     carry the static kind axis (required/optional/defaulted with a
+    ///     default identity; no `absent` state, `present` renamed
+    ///     `required`), and checked layouts include field kinds and archived
+    ///     defaults (design.md "Field Kinds", "Defaulted Fields").
+    pub const CACHE_VERSION = 50;
 };
 
 /// Configuration for the Roc cache system.

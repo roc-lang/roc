@@ -71,8 +71,9 @@ EndOfFile,
 				(e-apply
 					(e-ident (raw "Str.len"))
 					(e-field-access
-						(e-ident (raw "others"))
-						(e-ident (raw "last_name"))))))))
+						(receiver
+							(e-ident (raw "others")))
+						(segment (mode "required") (field "last_name"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -108,10 +109,12 @@ match person {
 						(args
 							(e-call
 								(e-runtime-error (tag "nested_value_not_found"))
-								(e-field-access (field "last_name")
+								(e-field-access
 									(receiver
 										(e-lookup-local
-											(p-assign (ident "others")))))))))))))
+											(p-assign (ident "others"))))
+									(segments
+										(segment (name "last_name") (mode "required"))))))))))))
 ~~~
 # TYPES
 ~~~clojure

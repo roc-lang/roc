@@ -244,13 +244,376 @@ test "whitespace-separated postfix after pipe applies to pipe result" {
 
     const field_access = ast.store.getExpr(items[4]);
     try std.testing.expectEqual(.field_access, std.meta.activeTag(field_access));
-    try std.testing.expectEqual(.arrow_call, std.meta.activeTag(ast.store.getExpr(field_access.field_access.left)));
+    try std.testing.expectEqual(.arrow_call, std.meta.activeTag(ast.store.getExpr(field_access.field_access.receiver)));
 
     const tuple_access = ast.store.getExpr(items[5]);
     try std.testing.expectEqual(.tuple_access, std.meta.activeTag(tuple_access));
     try std.testing.expectEqual(.arrow_call, std.meta.activeTag(ast.store.getExpr(tuple_access.tuple_access.expr)));
 }
 
+test "optional record type fields preserve their source marker" {
+    const gpa = std.testing.allocator;
+    const source = "value : { x : U32, y : ? U32, z:? U32 }";
+
+    var env = try CommonEnv.init(gpa, source);
+    defer env.deinit(gpa);
+
+    const ast = try statement(gpa, &env);
+    defer ast.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+
+    const stmt_idx: AST.Statement.Idx = @enumFromInt(ast.root_node_idx);
+    const stmt = ast.store.getStatement(stmt_idx);
+    try std.testing.expectEqual(.type_anno, std.meta.activeTag(stmt));
+
+    const anno = ast.store.getTypeAnno(stmt.type_anno.anno);
+    try std.testing.expectEqual(.record, std.meta.activeTag(anno));
+    const fields = ast.store.annoRecordFieldSlice(anno.record.fields);
+    try std.testing.expectEqual(@as(usize, 3), fields.len);
+
+    const x = try ast.store.getAnnoRecordField(fields[0]);
+    const y = try ast.store.getAnnoRecordField(fields[1]);
+    const z = try ast.store.getAnnoRecordField(fields[2]);
+    try std.testing.expectEqualStrings("x", ast.resolve(x.name));
+    try std.testing.expectEqualStrings("y", ast.resolve(y.name));
+    try std.testing.expectEqualStrings("z", ast.resolve(z.name));
+    try std.testing.expectEqual(@as(?AST.Token.Idx, null), x.optional_mark);
+    try std.testing.expectEqual(AST.Token.Tag.OpQuestion, ast.tokens.tokenTag(y.optional_mark.?));
+    try std.testing.expectEqual(AST.Token.Tag.NoSpaceOpQuestion, ast.tokens.tokenTag(z.optional_mark.?));
+}
+
+test "unnamed record type fields cannot be optional" {
+    const gpa = std.testing.allocator;
+
+    for ([_][]const u8{
+        "value : { _ :? U32 }",
+        "value : { _padding :? U32 }",
+    }) |source| {
+        var env = try CommonEnv.init(gpa, source);
+        defer env.deinit(gpa);
+
+        const ast = try statement(gpa, &env);
+        defer ast.deinit();
+
+        try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+        try std.testing.expectEqual(@as(usize, 1), ast.parse_diagnostics.items.len);
+        try std.testing.expectEqual(
+            AST.Diagnostic.Tag.optional_unnamed_record_field,
+            ast.parse_diagnostics.items[0].tag,
+        );
+    }
+}
+
+test "optional field access parses as a one-segment field path" {
+    const gpa = std.testing.allocator;
+    const source = "record.?field";
+
+    var env = try CommonEnv.init(gpa, source);
+    defer env.deinit(gpa);
+
+    const ast = try expr(gpa, &env);
+    defer ast.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+
+    const expr_idx: AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+    const access = ast.store.getExpr(expr_idx).field_access;
+    const segments = ast.store.fieldAccessSegmentSlice(access.segments);
+    try std.testing.expectEqual(@as(usize, 1), segments.len);
+    try std.testing.expectEqual(AST.FieldAccessMode.optional, segments[0].mode);
+    try std.testing.expectEqual(
+        AST.Token.Tag.NoSpaceDotQuestionLowerIdent,
+        ast.tokens.tokenTag(segments[0].field_token),
+    );
+    const field_ident = ast.tokens.resolveIdentifier(segments[0].field_token).?;
+    try std.testing.expectEqualStrings("field", env.getIdent(field_ident));
+
+    const receiver = ast.store.getExpr(access.receiver);
+    try std.testing.expectEqual(.ident, std.meta.activeTag(receiver));
+    try std.testing.expectEqualStrings("record", ast.resolve(receiver.ident.token));
+}
+
+test "optional field access binds before try propagation and defaulting" {
+    const gpa = std.testing.allocator;
+
+    {
+        var env = try CommonEnv.init(gpa, "record.?outer.?inner?");
+        defer env.deinit(gpa);
+
+        const ast = try expr(gpa, &env);
+        defer ast.deinit();
+
+        try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+        const root_idx: AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const root = ast.store.getExpr(root_idx);
+        try std.testing.expectEqual(.suffix_single_question, std.meta.activeTag(root));
+
+        const path = ast.store.getExpr(root.suffix_single_question.expr).field_access;
+        const segments = ast.store.fieldAccessSegmentSlice(path.segments);
+        try std.testing.expectEqual(@as(usize, 2), segments.len);
+        try std.testing.expectEqual(AST.FieldAccessMode.optional, segments[0].mode);
+        try std.testing.expectEqual(AST.FieldAccessMode.optional, segments[1].mode);
+    }
+
+    {
+        var env = try CommonEnv.init(gpa, "record.?field ?? fallback");
+        defer env.deinit(gpa);
+
+        const ast = try expr(gpa, &env);
+        defer ast.deinit();
+
+        try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+        const root_idx: AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const root = ast.store.getExpr(root_idx);
+        try std.testing.expectEqual(.bin_op, std.meta.activeTag(root));
+        try std.testing.expectEqual(AST.Token.Tag.OpDoubleQuestion, ast.tokens.tokenTag(root.bin_op.operator));
+        const path = ast.store.getExpr(root.bin_op.left).field_access;
+        try std.testing.expectEqual(AST.FieldAccessMode.optional, ast.store.fieldAccessSegmentSlice(path.segments)[0].mode);
+    }
+}
+
+test "mixed required and optional field path is one source-ordered AST node" {
+    const gpa = std.testing.allocator;
+    var env = try CommonEnv.init(gpa, "a.b.?c.d.?e.f");
+    defer env.deinit(gpa);
+
+    const ast = try expr(gpa, &env);
+    defer ast.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+
+    const root: AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+    const path = ast.store.getExpr(root).field_access;
+    const segments = ast.store.fieldAccessSegmentSlice(path.segments);
+    try std.testing.expectEqual(@as(usize, 5), segments.len);
+    const expected_modes = [_]AST.FieldAccessMode{ .required, .optional, .required, .optional, .required };
+    const expected_names = [_][]const u8{ "b", "c", "d", "e", "f" };
+    for (segments, expected_modes, expected_names) |segment, expected_mode, expected_name| {
+        try std.testing.expectEqual(expected_mode, segment.mode);
+        const field_ident = ast.tokens.resolveIdentifier(segment.field_token).?;
+        try std.testing.expectEqualStrings(expected_name, env.getIdent(field_ident));
+    }
+    try std.testing.expectEqualStrings("a", ast.resolve(ast.store.getExpr(path.receiver).ident.token));
+    // Reserved root, receiver, and the one path node. No synthetic field-name
+    // identifier expressions are allocated.
+    try std.testing.expectEqual(@as(usize, 3), ast.store.nodeCount());
+
+    var tree = base.SExprTree.init(gpa);
+    defer tree.deinit();
+    try ast.store.getExpr(root).pushToSExprTree(gpa, &env, ast, &tree);
+
+    var output: std.Io.Writer.Allocating = .init(gpa);
+    defer output.deinit();
+    try tree.toStringPretty(&output.writer, .skip_linecol);
+    try std.testing.expect(std.mem.find(u8, output.written(), "(mode \"required\")") != null);
+    try std.testing.expect(std.mem.find(u8, output.written(), "(mode \"optional\")") != null);
+}
+
+test "parentheses and non-field suffixes form field path boundaries" {
+    const gpa = std.testing.allocator;
+
+    {
+        var env = try CommonEnv.init(gpa, "(a.?b).c");
+        defer env.deinit(gpa);
+
+        const ast = try expr(gpa, &env);
+        defer ast.deinit();
+
+        try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+        const root: AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const c = ast.store.getExpr(root).field_access;
+        const c_segments = ast.store.fieldAccessSegmentSlice(c.segments);
+        try std.testing.expectEqual(@as(usize, 1), c_segments.len);
+        try std.testing.expectEqual(AST.FieldAccessMode.required, c_segments[0].mode);
+
+        const grouped = ast.store.getExpr(c.receiver).tuple;
+        try std.testing.expectEqual(@as(u32, 1), grouped.items.span.len);
+        const grouped_expr = ast.store.exprSlice(grouped.items)[0];
+        const grouped_path = ast.store.getExpr(grouped_expr).field_access;
+        try std.testing.expectEqual(AST.FieldAccessMode.optional, ast.store.fieldAccessSegmentSlice(grouped_path.segments)[0].mode);
+    }
+
+    {
+        var env = try CommonEnv.init(gpa, "a.?b.0.c");
+        defer env.deinit(gpa);
+
+        const ast = try expr(gpa, &env);
+        defer ast.deinit();
+
+        try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+        const root: AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const c = ast.store.getExpr(root).field_access;
+        const c_segments = ast.store.fieldAccessSegmentSlice(c.segments);
+        try std.testing.expectEqual(@as(usize, 1), c_segments.len);
+        try std.testing.expectEqual(AST.FieldAccessMode.required, c_segments[0].mode);
+        const tuple_access = ast.store.getExpr(c.receiver).tuple_access;
+        const inner_path = ast.store.getExpr(tuple_access.expr).field_access;
+        try std.testing.expectEqual(AST.FieldAccessMode.optional, ast.store.fieldAccessSegmentSlice(inner_path.segments)[0].mode);
+    }
+}
+
+test "malformed optional field access reports the accessor diagnostic" {
+    const gpa = std.testing.allocator;
+
+    for ([_][]const u8{
+        "record.?",
+        "record.? field",
+        "record.?Field",
+    }) |source| {
+        var env = try CommonEnv.init(gpa, source);
+        defer env.deinit(gpa);
+
+        const ast = try expr(gpa, &env);
+        defer ast.deinit();
+
+        try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+        try std.testing.expectEqual(@as(usize, 1), ast.parse_diagnostics.items.len);
+        try std.testing.expectEqual(
+            AST.Diagnostic.Tag.expr_dot_suffix_not_allowed,
+            ast.parse_diagnostics.items[0].tag,
+        );
+    }
+}
+
+test "optional function fields must be propagated before application" {
+    const gpa = std.testing.allocator;
+
+    {
+        var env = try CommonEnv.init(gpa, "record.?callback(arg)");
+        defer env.deinit(gpa);
+
+        const ast = try expr(gpa, &env);
+        defer ast.deinit();
+
+        try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+        try std.testing.expectEqual(@as(usize, 1), ast.parse_diagnostics.items.len);
+        try std.testing.expectEqual(
+            AST.Diagnostic.Tag.optional_field_access_cannot_be_called_directly,
+            ast.parse_diagnostics.items[0].tag,
+        );
+    }
+
+    {
+        var env = try CommonEnv.init(gpa, "record.?callback?(arg)");
+        defer env.deinit(gpa);
+
+        const ast = try expr(gpa, &env);
+        defer ast.deinit();
+
+        try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+        try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+
+        const root_idx: AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const root = ast.store.getExpr(root_idx);
+        try std.testing.expectEqual(.apply, std.meta.activeTag(root));
+        const propagated = ast.store.getExpr(root.apply.@"fn");
+        try std.testing.expectEqual(.suffix_single_question, std.meta.activeTag(propagated));
+        const path = ast.store.getExpr(propagated.suffix_single_question.expr).field_access;
+        try std.testing.expectEqual(AST.FieldAccessMode.optional, ast.store.fieldAccessSegmentSlice(path.segments)[0].mode);
+    }
+
+    {
+        var env = try CommonEnv.init(gpa, "record.?container.callback(arg).field");
+        defer env.deinit(gpa);
+
+        const ast = try expr(gpa, &env);
+        defer ast.deinit();
+
+        try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+        try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+
+        const field = ast.store.getExpr(@enumFromInt(ast.root_node_idx)).field_access;
+        try std.testing.expectEqual(AST.FieldAccessMode.required, ast.store.fieldAccessSegmentSlice(field.segments)[0].mode);
+        const method = ast.store.getExpr(field.receiver).method_call;
+        const receiver_path = ast.store.getExpr(method.receiver).field_access;
+        try std.testing.expectEqual(AST.FieldAccessMode.optional, ast.store.fieldAccessSegmentSlice(receiver_path.segments)[0].mode);
+    }
+
+    {
+        var env = try CommonEnv.init(gpa, "record.?callback?(arg).field");
+        defer env.deinit(gpa);
+
+        const ast = try expr(gpa, &env);
+        defer ast.deinit();
+
+        try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+        try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+
+        const field = ast.store.getExpr(@enumFromInt(ast.root_node_idx)).field_access;
+        try std.testing.expectEqual(AST.FieldAccessMode.required, ast.store.fieldAccessSegmentSlice(field.segments)[0].mode);
+        const apply = ast.store.getExpr(field.receiver).apply;
+        const propagated = ast.store.getExpr(apply.@"fn");
+        try std.testing.expectEqual(.suffix_single_question, std.meta.activeTag(propagated));
+        const path = ast.store.getExpr(propagated.suffix_single_question.expr).field_access;
+        try std.testing.expectEqual(AST.FieldAccessMode.optional, ast.store.fieldAccessSegmentSlice(path.segments)[0].mode);
+    }
+}
+
+test "deep optional field access chains parse stack-safely" {
+    const gpa = std.testing.allocator;
+    const depth = 4096;
+
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(gpa);
+    try source.appendSlice(gpa, "record");
+    for (0..depth) |_| try source.appendSlice(gpa, ".?field");
+
+    var env = try CommonEnv.init(gpa, source.items);
+    defer env.deinit(gpa);
+
+    const ast = try expr(gpa, &env);
+    defer ast.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+
+    const path = ast.store.getExpr(@enumFromInt(ast.root_node_idx)).field_access;
+    const segments = ast.store.fieldAccessSegmentSlice(path.segments);
+    try std.testing.expectEqual(@as(usize, depth), segments.len);
+    for (segments) |segment| {
+        try std.testing.expectEqual(AST.FieldAccessMode.optional, segment.mode);
+        const field_ident = ast.tokens.resolveIdentifier(segment.field_token).?;
+        try std.testing.expectEqualStrings("field", env.getIdent(field_ident));
+    }
+    try std.testing.expectEqual(.ident, std.meta.activeTag(ast.store.getExpr(path.receiver)));
+    try std.testing.expectEqual(@as(usize, 3), ast.store.nodeCount());
+}
+
+test "deep mixed field access chains stay flat and source-ordered" {
+    const gpa = std.testing.allocator;
+    const depth = 4096;
+
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(gpa);
+    try source.ensureTotalCapacity(gpa, "record".len + depth * ".?field".len);
+    try source.appendSlice(gpa, "record");
+    for (0..depth) |i| {
+        try source.appendSlice(gpa, if (i % 2 == 0) ".?field" else ".field");
+    }
+
+    var env = try CommonEnv.init(gpa, source.items);
+    defer env.deinit(gpa);
+
+    const ast = try expr(gpa, &env);
+    defer ast.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+
+    const path = ast.store.getExpr(@enumFromInt(ast.root_node_idx)).field_access;
+    const segments = ast.store.fieldAccessSegmentSlice(path.segments);
+    try std.testing.expectEqual(@as(usize, depth), segments.len);
+    for (segments, 0..) |segment, i| {
+        const expected: AST.FieldAccessMode = if (i % 2 == 0) .optional else .required;
+        try std.testing.expectEqual(expected, segment.mode);
+    }
+    try std.testing.expectEqual(.ident, std.meta.activeTag(ast.store.getExpr(path.receiver)));
+    try std.testing.expectEqual(@as(usize, 3), ast.store.nodeCount());
+}
 test "dollar-prefixed record field names are rejected with a single diagnostic" {
     const gpa = std.testing.allocator;
 

@@ -162,6 +162,28 @@ rigid_var_substitutions: std.AutoHashMapUnmanaged(Ident.Idx, Var),
 /// Used to resolve rigid vars in local type decl bodies that were not
 /// rewritten as rigid_var_lookup during canonicalization.
 type_decl_rigid_vars: std.AutoHashMapUnmanaged(Ident.Idx, Var),
+/// Default expressions recorded at annotation/type-decl materialization and
+/// CHECKED at finalize (design.md "Defaulted Fields"): materialization can
+/// run before check order exists (type-decl generation, scheme
+/// predeclaration) and before callee effects resolve, so typing the default
+/// against its field, judging purity, and (later) concreteness all wait
+/// until every def is checked. Deduplicated by expression node.
+pending_default_checks: std.ArrayList(PendingDefaultCheck),
+/// `.?field` accesses, judged at every generalization boundary (and at
+/// finalize as backstop): a required/defaulted receiver field is rejected
+/// (`.?` on an always-present field), and a still-flex kind pins to
+/// `optional` BEFORE the scheme forms, so instantiated copies of a
+/// generalized function's rows carry the concrete kind (design.md "Field
+/// Kinds"). `optional_access_watermark` tracks the judged prefix.
+optional_field_accesses: std.ArrayList(OptionalFieldAccess),
+optional_access_watermark: usize = 0,
+pending_default_seen: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{},
+/// True while `predeclareAnnotationScheme` materializes an annotation ahead
+/// of all body checking: a defaulted field's kind (identity) is minted as
+/// usual, but its default EXPRESSION is not checked — the body-pass
+/// generation types it exactly once, after dependency-ordered defs are
+/// checked (design.md "Defaulted Fields").
+predeclaring_annotation: bool = false,
 /// Type declaration bodies are generated on demand so forward references
 /// instantiate fully generated declarations instead of predeclared shells.
 type_decl_generation_states: std.ArrayListUnmanaged(TypeDeclGenerationState) = .empty,
@@ -179,6 +201,11 @@ scratch_vars: base.Scratch(Var),
 scratch_tags: base.Scratch(types_mod.Tag),
 /// scratch record fields used to build up intermediate lists, used for various things
 scratch_record_fields: base.Scratch(types_mod.RecordField),
+/// scratch record-field value-type vars, copied out of the record-fields store
+/// so a graph walk can iterate them while its loop body reallocates that store
+/// (see `dupeRecordFieldTypeVars`). Used as a stack: each copy pushes a batch and
+/// its caller releases it with `clearFrom`, so nested/recursive copies compose.
+scratch_record_field_vars: base.Scratch(Var),
 /// scratch static dispatch constraints used to build up intermediate lists, used for various things
 scratch_static_dispatch_constraints: base.Scratch(ScratchStaticDispatchConstraint),
 /// scratch deferred static dispatch constraints
@@ -1568,6 +1595,8 @@ fn initAssumePrepared(
         .var_set = std.AutoHashMap(Var, void).init(gpa),
         .rigid_var_substitutions = std.AutoHashMapUnmanaged(Ident.Idx, Var){},
         .type_decl_rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, Var){},
+        .pending_default_checks = .empty,
+        .optional_field_accesses = .empty,
         .type_decl_generation_states = try initNodeSlots(TypeDeclGenerationState, gpa, node_count, .not_generated),
         .type_decl_dense_indices = try initNodeSlots(u32, gpa, node_count, no_type_decl_dense_index),
         .type_decl_statements = .empty,
@@ -1576,6 +1605,7 @@ fn initAssumePrepared(
         .scratch_vars = try base.Scratch(types_mod.Var).init(gpa),
         .scratch_tags = try base.Scratch(types_mod.Tag).init(gpa),
         .scratch_record_fields = try base.Scratch(types_mod.RecordField).init(gpa),
+        .scratch_record_field_vars = try base.Scratch(types_mod.Var).init(gpa),
         .scratch_static_dispatch_constraints = try base.Scratch(ScratchStaticDispatchConstraint).init(gpa),
         .scratch_deferred_static_dispatch_constraints = try base.Scratch(DeferredConstraintCheck).init(gpa),
         .import_cache = ImportCache{},
@@ -1664,6 +1694,9 @@ fn initAssumePrepared(
 /// This is needed because returning Check by value invalidates the pointer set during init.
 pub fn fixupTypeWriter(self: *Self) void {
     self.type_writer.setImportMapping(&self.import_mapping);
+    // Defaulted fields render their default's source snippet when it was
+    // declared in this module (design.md "Defaulted Fields").
+    self.type_writer.setDefaultSourceResolver(self.cir, ModuleEnv.typeWriterDefaultSource);
 }
 
 /// Deinit owned fields
@@ -1715,6 +1748,9 @@ pub fn deinit(self: *Self) void {
     self.var_set.deinit();
     self.rigid_var_substitutions.deinit(self.gpa);
     self.type_decl_rigid_vars.deinit(self.gpa);
+    self.pending_default_checks.deinit(self.gpa);
+    self.optional_field_accesses.deinit(self.gpa);
+    self.pending_default_seen.deinit(self.gpa);
     self.type_decl_generation_states.deinit(self.gpa);
     self.type_decl_dense_indices.deinit(self.gpa);
     self.type_decl_statements.deinit(self.gpa);
@@ -1723,6 +1759,7 @@ pub fn deinit(self: *Self) void {
     self.scratch_vars.deinit();
     self.scratch_tags.deinit();
     self.scratch_record_fields.deinit();
+    self.scratch_record_field_vars.deinit();
     self.scratch_static_dispatch_constraints.deinit();
     self.scratch_deferred_static_dispatch_constraints.deinit();
     self.import_cache.deinit(self.gpa);
@@ -3908,7 +3945,7 @@ fn resolvePendingTupleAccess(
             };
             return try self.resolvePendingTupleAccess(alias_pending, env, final);
         },
-        .err => {
+        .err, .field_presence => {
             try self.unifyWith(pending.result_var, .err, env);
             return true;
         },
@@ -4002,6 +4039,31 @@ fn instantiateVarOrphan(
     return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior);
 }
 
+/// Like `instantiateVarOrphan`, but rigids in the copy become fresh FLEX
+/// vars: the copy is a strictly looser view of the type. Used to seed a
+/// branch accumulator from the expected type — the copy carries the
+/// annotation's concrete structural facts (e.g. `optional` field kinds) into
+/// the branch meet without capturing its rigids, which the branches' own
+/// types bind (design.md "Field Kinds (All-Dynamic Optional Fields)").
+fn instantiateVarOrphanFlexed(
+    self: *Self,
+    var_to_instantiate: Var,
+    env: *Env,
+    region_behavior: InstantiateRegionBehavior,
+) std.mem.Allocator.Error!Var {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+    var instantiate_ctx = Instantiator{
+        .store = self.types,
+        .idents = self.cir.getIdentStoreConst(),
+        .var_map = &self.var_map,
+        .current_rank = env.rank(),
+        .rigid_behavior = .fresh_flex,
+        .rank_behavior = .ignore_rank,
+    };
+    return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior);
+}
+
 /// Instantiate a variable, substituting any encountered rigids with
 /// user-provided variables.
 ///
@@ -4089,7 +4151,7 @@ fn instantiateVarHelp(
             const fresh_constraints_len = switch (fresh_resolved.desc.content) {
                 .flex => |flex| flex.constraints.len(),
                 .rigid => |rigid| rigid.constraints.len(),
-                .alias, .structure, .err => 0,
+                .alias, .field_presence, .structure, .err => 0,
             };
             if (fresh_constraints_len > 0) {
                 try self.scratch_evidence_pairs.append(self.gpa, .{
@@ -4100,7 +4162,7 @@ fn instantiateVarHelp(
                 const old_constraints_range = switch (old_resolved.desc.content) {
                     .flex => |flex| flex.constraints,
                     .rigid => |rigid| rigid.constraints,
-                    .alias, .structure, .err => types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
+                    .alias, .field_presence, .structure, .err => types_mod.StaticDispatchConstraint.SafeList.Range.empty(),
                 };
                 for (self.types.sliceStaticDispatchConstraints(old_constraints_range)) |old_constraint| {
                     // `var_map` keys are resolved roots (see `Instantiator`).
@@ -4636,8 +4698,8 @@ fn mkIteratorStepContent(self: *Self, item_var: Var, iter_var: Var, env: *Env) A
     const rest_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("rest"));
     const record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, Region.zero());
     const record_fields = [_]types_mod.RecordField{
-        .{ .name = item_ident, .var_ = item_var },
-        .{ .name = rest_ident, .var_ = iter_var },
+        .{ .name = item_ident, .presence = .{ .required = item_var } },
+        .{ .name = rest_ident, .presence = .{ .required = iter_var } },
     };
     const record_fields_range = try self.types.appendRecordFields(&record_fields);
     const payload_record = try self.freshFromContent(.{ .structure = .{ .record = .{
@@ -4647,7 +4709,7 @@ fn mkIteratorStepContent(self: *Self, item_var: Var, iter_var: Var, env: *Env) A
 
     const skip_record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, Region.zero());
     const skip_record_fields = [_]types_mod.RecordField{
-        .{ .name = rest_ident, .var_ = iter_var },
+        .{ .name = rest_ident, .presence = .{ .required = iter_var } },
     };
     const skip_record_fields_range = try self.types.appendRecordFields(&skip_record_fields);
     const skip_payload_record = try self.freshFromContent(.{ .structure = .{ .record = .{
@@ -4966,7 +5028,7 @@ fn contentConstraintRange(content: Content) ?StaticDispatchConstraint.SafeList.R
     return switch (content) {
         .flex => |flex| flex.constraints,
         .rigid => |rigid| rigid.constraints,
-        .alias, .structure, .err => null,
+        .alias, .field_presence, .structure, .err => null,
     };
 }
 
@@ -5255,6 +5317,20 @@ fn mkTryContent(self: *Self, ok_var: Var, err_var: Var) Allocator.Error!Content 
     );
 }
 
+/// The error type of an optional field access: the closed tag union
+/// `[MissingField]`, used as the Err side of `Try(field_type, [MissingField])`.
+///
+/// Closed (empty ext), matching the other builtin error unions minted by the
+/// checker (`[InvalidNumeral(Str)]`, `[BadQuotedBytes(Str)]`): the access
+/// itself can only fail one way, and a consumer's open union can still absorb
+/// it at the use site.
+fn makeFieldMissingTag(self: *Self, env: *Env, region: Region) Allocator.Error!Var {
+    const missing_field_tag = try self.types.mkTag(self.cir.idents.missing_field, &.{});
+    const err_ext_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
+    const err_type = try self.types.mkTagUnion(&.{missing_field_tag}, err_ext_var);
+    return try self.freshFromContent(err_type, env, region);
+}
+
 fn mkParseSpecVar(
     self: *Self,
     decl: BuiltinParseSpecDecl,
@@ -5540,6 +5616,20 @@ fn ensureBuiltinNominalDeclEntries(self: *Self) Allocator.Error!void {
 }
 
 /// Public `checkFile` function.
+const OptionalFieldAccess = struct {
+    presence_var: Var,
+    field_name: Ident.Idx,
+    region: Region,
+};
+
+const PendingDefaultCheck = struct {
+    default_expr: CIR.Expr.Idx,
+    field_type_var: Var,
+    field_name: Ident.Idx,
+};
+
+/// Type-check every def in the module, including the numeric-literal
+/// defaulting rounds at finalize (see `checkFileInternal`).
 pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     return self.checkFileInternal(false);
 }
@@ -5940,6 +6030,29 @@ fn nominalDeclBackingTemplate(self: *const Self, nominal: types_mod.NominalType)
 /// checked, so they count as concrete).
 const HoistedConstWalk = enum { value_graph, decl_template };
 
+/// Copy a record's field value-type variables onto `scratch_record_field_vars`
+/// and return the start mark of the pushed batch. The batch is
+/// `[mark, scratch_record_field_vars.top())`; the caller reads it *by index* and
+/// releases it with `scratch_record_field_vars.clearFrom(mark)` (typically via
+/// `defer`). The presence axis is never runtime data, so it is not collected
+/// here (one value-type var per field, in field order).
+///
+/// The copy exists because a caller's loop body may reallocate the record-fields
+/// store — a borrowed column view into `self.types` would then dangle — so the
+/// vars must be read out first. Every caller here also *recurses back into this
+/// function* from inside that loop, pushing a nested batch on top of the parent's.
+/// Because the scratch is index-addressed and each nested batch is released before
+/// the parent resumes, stacked use composes. The caller must therefore iterate by
+/// index rather than hold a `[]Var` view: a nested push that grows the backing
+/// buffer relocates it, which would invalidate a borrowed slice but not an index.
+fn dupeRecordFieldTypeVars(self: *Self, presences: []const types_mod.RecordField.Presence) Allocator.Error!u32 {
+    const mark = self.scratch_record_field_vars.top();
+    for (presences) |presence| {
+        try self.scratch_record_field_vars.append(presence.typeVar());
+    }
+    return mark;
+}
+
 fn varIsConcreteHoistedConstTypeInternal(
     self: *Self,
     comptime walk: HoistedConstWalk,
@@ -5953,6 +6066,7 @@ fn varIsConcreteHoistedConstTypeInternal(
     return switch (resolved.desc.content) {
         .err,
         .flex,
+        .field_presence,
         => false,
         .rigid => walk == .decl_template,
         .alias => |alias| (try self.varsAreConcreteHoistedConstTypes(walk, self.types.sliceAliasArgs(alias), visited)) and
@@ -5989,12 +6103,23 @@ fn flatTypeIsConcreteHoistedConst(
         => false,
         .record => |record| blk: {
             const fields = self.types.getRecordFieldsSlice(record.fields);
-            if (!try self.varsAreConcreteHoistedConstTypes(walk, fields.items(.var_), visited)) break :blk false;
+            for (fields.items(.presence)) |presence| {
+                {
+                    const field_var = presence.typeVar();
+                    if (!try self.varIsConcreteHoistedConstTypeInternal(walk, field_var, visited)) break :blk false;
+                }
+            }
             break :blk try self.varIsConcreteHoistedConstTypeInternal(walk, record.ext, visited);
         },
         .record_unbound => |fields| blk: {
             const fields_slice = self.types.getRecordFieldsSlice(fields);
-            break :blk try self.varsAreConcreteHoistedConstTypes(walk, fields_slice.items(.var_), visited);
+            for (fields_slice.items(.presence)) |presence| {
+                {
+                    const field_var = presence.typeVar();
+                    if (!try self.varIsConcreteHoistedConstTypeInternal(walk, field_var, visited)) break :blk false;
+                }
+            }
+            break :blk true;
         },
         .tuple => |tuple| try self.varsAreConcreteHoistedConstTypes(walk, self.types.sliceVars(tuple.elems), visited),
         .tag_union => |tag_union| blk: {
@@ -6658,6 +6783,7 @@ fn varIsBuiltinLiteralTarget(self: *Self, var_: Var) bool {
             .err,
             .flex,
             .rigid,
+            .field_presence,
             => return false,
         }
     }
@@ -7840,7 +7966,7 @@ fn collectReachableVars(self: *Self, var_: Var, out: *std.AutoHashMap(Var, void)
     try out.put(resolved.var_, {});
 
     switch (resolved.desc.content) {
-        .err => {},
+        .err, .field_presence => {},
         // A constrained type variable's `where` constraints relate it to other
         // type variables through the constraint method's signature. For example
         // `c.is_eq : c, d -> f` makes `d` and `f` reachable from `c`; following
@@ -7875,15 +8001,21 @@ fn collectReachableVars(self: *Self, var_: Var, out: *std.AutoHashMap(Var, void)
             },
             .record => |record| {
                 const fields = self.types.getRecordFieldsSlice(record.fields);
-                for (fields.items(.var_)) |field_var| {
-                    try self.collectReachableVars(field_var, out);
+                for (fields.items(.presence)) |presence| {
+                    {
+                        const field_var = presence.typeVar();
+                        try self.collectReachableVars(field_var, out);
+                    }
                 }
                 try self.collectReachableVars(record.ext, out);
             },
             .record_unbound => |fields_range| {
                 const fields = self.types.getRecordFieldsSlice(fields_range);
-                for (fields.items(.var_)) |field_var| {
-                    try self.collectReachableVars(field_var, out);
+                for (fields.items(.presence)) |presence| {
+                    {
+                        const field_var = presence.typeVar();
+                        try self.collectReachableVars(field_var, out);
+                    }
                 }
             },
             .tag_union => |tag_union| {
@@ -7933,15 +8065,21 @@ fn collectDataReachableVars(self: *Self, var_: Var, out: *std.AutoHashMap(Var, v
             .fn_pure, .fn_effectful, .fn_unbound => {},
             .record => |record| {
                 const fields = self.types.getRecordFieldsSlice(record.fields);
-                for (fields.items(.var_)) |field_var| {
-                    try self.collectDataReachableVars(field_var, out);
+                for (fields.items(.presence)) |presence| {
+                    {
+                        const field_var = presence.typeVar();
+                        try self.collectDataReachableVars(field_var, out);
+                    }
                 }
                 try self.collectDataReachableVars(record.ext, out);
             },
             .record_unbound => |fields_range| {
                 const fields = self.types.getRecordFieldsSlice(fields_range);
-                for (fields.items(.var_)) |field_var| {
-                    try self.collectDataReachableVars(field_var, out);
+                for (fields.items(.presence)) |presence| {
+                    {
+                        const field_var = presence.typeVar();
+                        try self.collectDataReachableVars(field_var, out);
+                    }
                 }
             },
             .tag_union => |tag_union| {
@@ -7955,7 +8093,7 @@ fn collectDataReachableVars(self: *Self, var_: Var, out: *std.AutoHashMap(Var, v
             },
             .empty_record, .empty_tag_union => {},
         },
-        .flex, .rigid, .err => {},
+        .flex, .rigid, .field_presence, .err => {},
     }
 }
 
@@ -8046,7 +8184,7 @@ fn varIsFunctionType(self: *Self, var_: Var) bool {
                 .fn_pure, .fn_effectful, .fn_unbound => true,
                 .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => false,
             },
-            .err, .flex, .rigid => return false,
+            .err, .flex, .rigid, .field_presence => return false,
         }
     }
 }
@@ -8064,7 +8202,7 @@ fn zeroArgFunctionReturnVar(self: *Self, var_: Var) ?Var {
                 .fn_pure, .fn_effectful, .fn_unbound => |func| if (func.args.len() == 0) func.ret else null,
                 .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => null,
             },
-            .err, .flex, .rigid => return null,
+            .err, .flex, .rigid, .field_presence => return null,
         }
     }
 }
@@ -8091,7 +8229,7 @@ fn functionEffectStateHelp(self: *Self, var_: Var) Allocator.Error!FunctionEffec
     try self.function_effect_resolution.put(root, .visiting);
     const state: FunctionEffectState = switch (resolved.desc.content) {
         .alias => |alias| try self.functionEffectStateHelp(self.types.getAliasBackingVar(alias)),
-        .err => .pure,
+        .err, .field_presence => .pure,
         .flex, .rigid => .unresolved,
         .structure => |flat| switch (flat) {
             .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
@@ -8222,7 +8360,7 @@ fn varHasUnresolvedContent(
 
     return switch (resolved.desc.content) {
         .flex, .rigid => true,
-        .err => false,
+        .err, .field_presence => false,
         .alias => |alias| try self.varHasUnresolvedContent(self.types.getAliasBackingVar(alias), visited),
         .structure => |flat_type| try self.flatTypeHasUnresolvedContent(flat_type, visited),
     };
@@ -8239,12 +8377,23 @@ fn flatTypeHasUnresolvedContent(
         .fn_pure, .fn_effectful, .fn_unbound => false,
         .record => |record| blk: {
             const fields = self.types.getRecordFieldsSlice(record.fields);
-            if (try self.varsHaveUnresolvedContent(fields.items(.var_), visited)) break :blk true;
+            for (fields.items(.presence)) |presence| {
+                {
+                    const field_var = presence.typeVar();
+                    if (try self.varHasUnresolvedContent(field_var, visited)) break :blk true;
+                }
+            }
             break :blk try self.varHasUnresolvedContent(record.ext, visited);
         },
         .record_unbound => |fields_range| blk: {
             const fields = self.types.getRecordFieldsSlice(fields_range);
-            break :blk try self.varsHaveUnresolvedContent(fields.items(.var_), visited);
+            for (fields.items(.presence)) |presence| {
+                {
+                    const field_var = presence.typeVar();
+                    if (try self.varHasUnresolvedContent(field_var, visited)) break :blk true;
+                }
+            }
+            break :blk false;
         },
         .tag_union => |tag_union| blk: {
             const tags = self.types.getTagsSlice(tag_union.tags);
@@ -8280,7 +8429,7 @@ fn varHasUnresolvedStaticDispatchConstraints(
     return switch (resolved.desc.content) {
         .flex => |flex| flex.constraints.len() > 0,
         .rigid => |rigid| rigid.constraints.len() > 0,
-        .err => false,
+        .err, .field_presence => false,
         .alias => |alias| try self.varHasUnresolvedStaticDispatchConstraints(self.types.getAliasBackingVar(alias), visited),
         .structure => |flat_type| try self.flatTypeHasUnresolvedStaticDispatchConstraints(flat_type, visited),
     };
@@ -8297,12 +8446,23 @@ fn flatTypeHasUnresolvedStaticDispatchConstraints(
         .fn_pure, .fn_effectful, .fn_unbound => false,
         .record => |record| blk: {
             const fields = self.types.getRecordFieldsSlice(record.fields);
-            if (try self.varsHaveUnresolvedStaticDispatchConstraints(fields.items(.var_), visited)) break :blk true;
+            for (fields.items(.presence)) |presence| {
+                {
+                    const field_var = presence.typeVar();
+                    if (try self.varHasUnresolvedStaticDispatchConstraints(field_var, visited)) break :blk true;
+                }
+            }
             break :blk try self.varHasUnresolvedStaticDispatchConstraints(record.ext, visited);
         },
         .record_unbound => |fields_range| blk: {
             const fields = self.types.getRecordFieldsSlice(fields_range);
-            break :blk try self.varsHaveUnresolvedStaticDispatchConstraints(fields.items(.var_), visited);
+            for (fields.items(.presence)) |presence| {
+                {
+                    const field_var = presence.typeVar();
+                    if (try self.varHasUnresolvedStaticDispatchConstraints(field_var, visited)) break :blk true;
+                }
+            }
+            break :blk false;
         },
         .tag_union => |tag_union| blk: {
             const tags = self.types.getTagsSlice(tag_union.tags);
@@ -8338,7 +8498,7 @@ fn varHasUnresolvedNonLiteralStaticDispatchConstraints(
     return switch (resolved.desc.content) {
         .flex => |flex| self.rangeHasNonLiteralConstraint(flex.constraints),
         .rigid => |rigid| self.rangeHasNonLiteralConstraint(rigid.constraints),
-        .err => false,
+        .err, .field_presence => false,
         .alias => |alias| try self.varHasUnresolvedNonLiteralStaticDispatchConstraints(self.types.getAliasBackingVar(alias), visited),
         .structure => |flat_type| try self.flatTypeHasUnresolvedNonLiteralStaticDispatchConstraints(flat_type, visited),
     };
@@ -8355,12 +8515,23 @@ fn flatTypeHasUnresolvedNonLiteralStaticDispatchConstraints(
         .fn_pure, .fn_effectful, .fn_unbound => false,
         .record => |record| blk: {
             const fields = self.types.getRecordFieldsSlice(record.fields);
-            if (try self.varsHaveUnresolvedNonLiteralStaticDispatchConstraints(fields.items(.var_), visited)) break :blk true;
+            for (fields.items(.presence)) |presence| {
+                {
+                    const field_var = presence.typeVar();
+                    if (try self.varHasUnresolvedNonLiteralStaticDispatchConstraints(field_var, visited)) break :blk true;
+                }
+            }
             break :blk try self.varHasUnresolvedNonLiteralStaticDispatchConstraints(record.ext, visited);
         },
         .record_unbound => |fields_range| blk: {
             const fields = self.types.getRecordFieldsSlice(fields_range);
-            break :blk try self.varsHaveUnresolvedNonLiteralStaticDispatchConstraints(fields.items(.var_), visited);
+            for (fields.items(.presence)) |presence| {
+                {
+                    const field_var = presence.typeVar();
+                    if (try self.varHasUnresolvedNonLiteralStaticDispatchConstraints(field_var, visited)) break :blk true;
+                }
+            }
+            break :blk false;
         },
         .tag_union => |tag_union| blk: {
             const tags = self.types.getTagsSlice(tag_union.tags);
@@ -8707,7 +8878,7 @@ fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
         // Then, generate the type for the actual required type
         //   { [Model : model] for main : { init : model, ... } }
         //                                ^^^^^^^^^^^^^^^^^^^^^^
-        try self.generateAnnoTypeInPlace(required_type.type_anno, env, .{ .annotation = null });
+        try self.generateAnnoTypeInPlace(required_type.type_anno, env, .{ .annotation = null }, .pos);
     }
 }
 
@@ -9185,7 +9356,7 @@ fn generateForClauseAliasApplication(
             try self.unifyWith(anno_var, .err, env);
             return;
         },
-        .flex, .rigid, .structure => {
+        .flex, .rigid, .field_presence, .structure => {
             std.debug.assert(false);
             try self.unifyWith(anno_var, .err, env);
             return;
@@ -9331,10 +9502,13 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
     // have incompatible constraints (e.g. !3) or be infinite/anonymously
     // recursive, neither of which is covered by the per-def checks above.
     const expr_var = ModuleEnv.varFrom(expr_idx);
+    try self.checkPendingDefaults(&env);
+    try self.judgeOptionalFieldAccesses(&env);
     _ = try self.checkFlexVarConstraintCompatibility(expr_var, &env, true, .{});
     try self.validateResolvedOpenNumeralLiterals(&env);
     try self.resolvePendingTupleAccesses(&env, true);
     try self.checkAllConstraints(&env);
+    try self.checkDefaultRestrictions();
     try self.checkForInfiniteType(CIR.Expr.Idx, expr_idx);
 
     try self.reportPolymorphicConstrainedExpr(expr_idx);
@@ -9560,6 +9734,9 @@ fn predeclareAnnotationScheme(self: *Self, annotation_idx: CIR.Annotation.Idx, e
     const snapshots_mark = self.snapshots.mark();
 
     try env.var_pool.pushRank();
+    const saved_predeclaring = self.predeclaring_annotation;
+    self.predeclaring_annotation = true;
+    defer self.predeclaring_annotation = saved_predeclaring;
     try self.generateAnnotationType(annotation_idx, env);
     const scheme_var = try self.instantiateVarOrphan(
         ModuleEnv.varFrom(annotation_idx),
@@ -9567,6 +9744,7 @@ fn predeclareAnnotationScheme(self: *Self, annotation_idx: CIR.Annotation.Idx, e
         env.rank(),
         .use_last_var,
     );
+    try self.judgeOptionalFieldAccesses(env);
     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
     env.var_pool.popRank();
 
@@ -9826,6 +10004,7 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
                 try self.checkEffectfulFunctionName(member_def.pattern, member_def.expr);
             }
         }
+        try self.judgeOptionalFieldAccesses(env);
         try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
         try self.judgeAmbiguityCandidatesAtGeneralizationMultiRoot(member_roots);
         env.var_pool.popRank();
@@ -9874,7 +10053,7 @@ fn finalizeFunctionEffectsAtBoundary(self: *Self, roots: []const Var, env: *Env)
         const resolved = self.types.resolveVar(root);
         const flat = switch (resolved.desc.content) {
             .structure => |flat| flat,
-            .flex, .rigid, .alias, .err => continue,
+            .flex, .rigid, .alias, .field_presence, .err => continue,
         };
         if (try self.functionEffectState(resolved.var_) != .effectful) continue;
         switch (flat) {
@@ -10224,7 +10403,7 @@ fn generateAliasDecl(
         .backing_var = backing_var,
         .is_opaque = false,
         .num_args = @intCast(header_args.len),
-    } });
+    } }, .pos);
 
     if (!try self.validateAliasRows(backing_var, env, self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(alias.anno)))) {
         self.markTypeDeclInvalid(decl_idx);
@@ -10262,9 +10441,9 @@ fn generateWhereAliasDecl(
     // parameter and must end up on that parameter's own variable.
     const header = self.cir.store.getTypeHeader(where_alias.header);
     for (self.cir.store.sliceTypeAnnos(header.args)) |param_idx| {
-        try self.generateAnnoTypeInPlace(param_idx, env, ctx);
+        try self.generateAnnoTypeInPlace(param_idx, env, ctx, .pos);
     }
-    try self.generateAnnoTypeInPlace(where_alias.receiver, env, ctx);
+    try self.generateAnnoTypeInPlace(where_alias.receiver, env, ctx, .pos);
 
     if (try self.generateRemainingWhereConstraintOwners(where_alias.where, env, ctx)) {
         try self.unifyWithTargetRank(decl_var, .err, env);
@@ -10340,7 +10519,19 @@ fn generateNominalDecl(
         .backing_var = backing_var,
         .is_opaque = nominal.is_opaque,
         .num_args = @intCast(header_args.len),
-    } });
+    } }, .pos);
+
+    // A malformed backing (its error was already reported while generating
+    // the annotation) invalidates the declaration: mark it in the table and
+    // poison the decl var so every use instantiates `.err` and is suppressed
+    // (declaration validity replaced the unifier's err-backed-nominal
+    // short-circuit).
+    if (self.types.resolveVar(backing_var).desc.content == .err) {
+        if (self.types.lookupNominalDeclByKey(self.cir.selfModuleIdentity(), @intFromEnum(decl_idx))) |table_idx| {
+            self.types.markNominalDeclInvalid(table_idx);
+        }
+        try self.unifyWithTargetRank(decl_var, .err, env);
+    }
 }
 
 /// Generate types for a standalone type annotation (one without a corresponding definition).
@@ -10364,7 +10555,7 @@ fn generateStandaloneTypeAnno(
     // Generate the type from the annotation
     const anno_var: Var = ModuleEnv.varFrom(type_anno.anno);
     const ctx = GenTypeAnnoCtx{ .annotation = type_anno.where };
-    try self.generateAnnoTypeInPlace(type_anno.anno, env, ctx);
+    try self.generateAnnoTypeInPlace(type_anno.anno, env, ctx, .pos);
     if (type_anno.where) |where_span| {
         if (try self.generateRemainingWhereConstraintOwners(where_span, env, ctx)) {
             try self.unifyWith(anno_var, .err, env);
@@ -10486,7 +10677,7 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
 
     // Then, generate the type for the annotation
     const ctx = GenTypeAnnoCtx{ .annotation = annotation.where };
-    try self.generateAnnoTypeInPlace(annotation.anno, env, ctx);
+    try self.generateAnnoTypeInPlace(annotation.anno, env, ctx, .pos);
     if (annotation.where) |where_span| {
         if (try self.generateRemainingWhereConstraintOwners(where_span, env, ctx)) {
             try self.unifyWith(ModuleEnv.varFrom(annotation.anno), .err, env);
@@ -10547,15 +10738,15 @@ fn completeOwnedStaticDispatchConstraint(
         return;
     }
 
-    try self.generateAnnoTypeInPlace(method.var_, env, ctx);
+    try self.generateAnnoTypeInPlace(method.var_, env, ctx, .pos);
 
     const args_anno_slice = self.cir.store.sliceTypeAnnos(method.args);
     for (args_anno_slice) |arg_anno_idx| {
-        try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx);
+        try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx, .pos);
     }
     const anno_arg_vars: []Var = @ptrCast(args_anno_slice);
 
-    try self.generateAnnoTypeInPlace(method.ret, env, ctx);
+    try self.generateAnnoTypeInPlace(method.ret, env, ctx, .pos);
     const ret_var = ModuleEnv.varFrom(method.ret);
 
     const func_content = if (method.effectful)
@@ -10575,7 +10766,7 @@ fn generateRemainingWhereConstraintOwners(
     var invalid_receiver = false;
     for (self.cir.store.sliceWhereClauseOwners(where_span)) |owner| {
         if (owner.owned_by_annotation) {
-            try self.generateAnnoTypeInPlace(@enumFromInt(owner.rigid_var), env, ctx);
+            try self.generateAnnoTypeInPlace(@enumFromInt(owner.rigid_var), env, ctx, .pos);
             continue;
         }
 
@@ -10859,7 +11050,7 @@ fn generateWhereAliasReferenceArgs(
     ctx: GenTypeAnnoCtx,
 ) std.mem.Allocator.Error!void {
     for (self.whereAliasReferenceArgs(alias)) |arg_anno_idx| {
-        try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx);
+        try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx, .pos);
     }
 }
 
@@ -10888,7 +11079,7 @@ fn instantiateWhereAliasConstraint(
 fn resolvedRigid(self: *Self, var_: Var) ?Rigid {
     return switch (self.types.resolveVar(var_).desc.content) {
         .rigid => |rigid| rigid,
-        .flex, .alias, .structure, .err => null,
+        .flex, .alias, .field_presence, .structure, .err => null,
     };
 }
 
@@ -10905,7 +11096,7 @@ fn resolvedRigid(self: *Self, var_: Var) ?Rigid {
 /// So `a` get the node CIR.TypeAnno.rigid_var{ .. }
 /// And `b` & `c` get the node CIR.TypeAnno.rigid_var_lookup{ .ref = <a_id> }
 /// Then, any reference to `b` or `c` are replaced with `a` in `generateAnnoTypeInPlace`.
-fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, ctx: GenTypeAnnoCtx) std.mem.Allocator.Error!void {
+fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, ctx: GenTypeAnnoCtx, pol: types_mod.Polarity) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -11130,7 +11321,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             // Generate the types for the arguments
             const anno_args = self.cir.store.sliceTypeAnnos(a.args);
             for (anno_args) |anno_arg| {
-                try self.generateAnnoTypeInPlace(anno_arg, env, ctx);
+                try self.generateAnnoTypeInPlace(anno_arg, env, ctx, pol);
             }
             const anno_arg_vars: []Var = @ptrCast(anno_args);
 
@@ -11297,7 +11488,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                         return;
                                     }
                                 },
-                                .err => {
+                                .err, .field_presence => {
                                     try self.unifyWith(anno_var, .err, env);
                                     return;
                                 },
@@ -11370,11 +11561,11 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
         .@"fn" => |func| {
             const args_anno_slice = self.cir.store.sliceTypeAnnos(func.args);
             for (args_anno_slice) |arg_anno_idx| {
-                try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx);
+                try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx, pol.flip());
             }
             const args_var_slice: []Var = @ptrCast(args_anno_slice);
 
-            try self.generateAnnoTypeInPlace(func.ret, env, ctx);
+            try self.generateAnnoTypeInPlace(func.ret, env, ctx, pol);
 
             const fn_type = inner_blk: {
                 if (func.effectful) {
@@ -11406,7 +11597,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 // Generate the types for each tag arg
                 const tag_anno_args_slice = self.cir.store.sliceTypeAnnos(tag.args);
                 for (tag_anno_args_slice) |tag_arg_idx| {
-                    try self.generateAnnoTypeInPlace(tag_arg_idx, env, ctx);
+                    try self.generateAnnoTypeInPlace(tag_arg_idx, env, ctx, pol);
                 }
                 const tag_vars_slice: []Var = @ptrCast(tag_anno_args_slice);
 
@@ -11435,7 +11626,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             // Process the ext if it exists. Absence means it's a closed union
             const ext_var = inner_blk: {
                 if (tag_union.ext) |ext_anno_idx| {
-                    try self.generateAnnoTypeInPlace(ext_anno_idx, env, ctx);
+                    try self.generateAnnoTypeInPlace(ext_anno_idx, env, ctx, pol);
                     break :inner_blk ModuleEnv.varFrom(ext_anno_idx);
                 } else {
                     break :inner_blk try self.freshFromContent(.{ .structure = .empty_tag_union }, env, anno_region);
@@ -11463,7 +11654,6 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             defer self.scratch_record_fields.clearFrom(scratch_record_fields_top);
 
             const recs_anno_slice = self.cir.store.sliceAnnoRecordFields(rec.fields);
-
             for (recs_anno_slice) |rec_anno_idx| {
                 const rec_field = self.cir.store.getAnnoRecordField(rec_anno_idx);
 
@@ -11472,29 +11662,68 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 // not real record fields: keep them out of the structural row so
                 // they are never unified, name-resolved, or required at
                 // construction (and so repeated `_` names cannot collide).
-                try self.generateAnnoTypeInPlace(rec_field.ty, env, ctx);
+                try self.generateAnnoTypeInPlace(rec_field.ty, env, ctx, pol);
                 if (rec_field.is_unnamed) continue;
                 const record_field_var = ModuleEnv.varFrom(rec_field.ty);
 
-                // Add the processed tag to scratch
+                // Add the processed field to scratch.
+                //
+                // Annotations pin field kinds CONCRETELY, in every syntactic
+                // position and context: `:?` is the `optional` kind (tagged
+                // slot, read with `.?`) and `:` is the `required` kind
+                // (`present`), with no polarity split — layout is a function
+                // of the annotation alone (design.md "Field Kinds
+                // (All-Dynamic Optional Fields)").
+                const presence: types_mod.RecordField.Presence = if (rec_field.is_optional) blk: {
+                    const presence_var = try self.freshFromContent(
+                        .{ .field_presence = .optional },
+                        env,
+                        anno_region,
+                    );
+                    break :blk .{ .unknown = .{ .presence = presence_var, .var_ = record_field_var } };
+                } else if (rec_field.default_value) |default_expr_idx| blk: {
+                    // A DEFAULTED field (design.md "Defaulted Fields"): pin
+                    // the kind to `defaulted` carrying the default's stable
+                    // identity, and RECORD the default expression for the
+                    // finalize check — materialization can run before check
+                    // order exists and before callee effects resolve, so
+                    // typing and purity wait for finalize. Predeclaration's
+                    // side effects are unwound, so only the body-pass
+                    // materialization records.
+                    if (!self.predeclaring_annotation) {
+                        const seen = try self.pending_default_seen.getOrPut(self.gpa, default_expr_idx);
+                        if (!seen.found_existing) {
+                            try self.pending_default_checks.append(self.gpa, .{
+                                .default_expr = default_expr_idx,
+                                .field_type_var = record_field_var,
+                                .field_name = rec_field.name,
+                            });
+                        }
+                    }
+                    const presence_var = try self.freshFromContent(
+                        .{ .field_presence = .{ .defaulted = .{
+                            .origin_module = self.cir.selfModuleIdentity(),
+                            .expr_node = @intFromEnum(default_expr_idx),
+                        } } },
+                        env,
+                        anno_region,
+                    );
+                    break :blk .{ .unknown = .{ .presence = presence_var, .var_ = record_field_var } };
+                } else .{ .required = record_field_var };
                 try self.scratch_record_fields.append(types_mod.RecordField{
                     .name = rec_field.name,
-                    .var_ = record_field_var,
+                    .presence = presence,
                 });
             }
 
             // Get the slice of record_fields
             const record_fields_slice = self.scratch_record_fields.sliceFromStart(scratch_record_fields_top);
-            std.mem.sort(types_mod.RecordField, record_fields_slice, self, struct {
-                fn less(checker: *const Self, a: types_mod.RecordField, b: types_mod.RecordField) bool {
-                    return std.mem.order(u8, checker.cir.getIdentStoreConst().getText(a.name), checker.cir.getIdentStoreConst().getText(b.name)) == .lt;
-                }
-            }.less);
+            std.mem.sort(types_mod.RecordField, record_fields_slice, self.cir.getIdentStore(), types_mod.RecordField.sortByNameAsc);
             const fields_type_range = try self.types.appendRecordFields(record_fields_slice);
 
             // Process the ext if it exists. Absence (null) means it's a closed record.
             const ext_var = if (rec.ext) |ext_anno_idx| blk: {
-                try self.generateAnnoTypeInPlace(ext_anno_idx, env, ctx);
+                try self.generateAnnoTypeInPlace(ext_anno_idx, env, ctx, pol);
                 break :blk ModuleEnv.varFrom(ext_anno_idx);
             } else blk: {
                 break :blk try self.freshFromContent(.{ .structure = .empty_record }, env, anno_region);
@@ -11516,14 +11745,14 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
             const elems_anno_slice = self.cir.store.sliceTypeAnnos(tuple.elems);
             for (elems_anno_slice) |arg_anno_idx| {
-                try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx);
+                try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx, pol);
                 try self.scratch_vars.append(ModuleEnv.varFrom(arg_anno_idx));
             }
             const elems_range = try self.types.appendVars(self.scratch_vars.sliceFromStart(scratch_vars_top));
             try self.unifyWith(anno_var, .{ .structure = .{ .tuple = .{ .elems = elems_range } } }, env);
         },
         .parens => |parens| {
-            try self.generateAnnoTypeInPlace(parens.anno, env, ctx);
+            try self.generateAnnoTypeInPlace(parens.anno, env, ctx, pol);
             _ = try self.unify(anno_var, ModuleEnv.varFrom(parens.anno), env);
         },
         .malformed => {
@@ -11568,7 +11797,7 @@ fn validateAliasRowsHelp(
             .tag_union => |tag_union| try self.validateTagUnionRow(tag_union.tags, tag_union.ext, env, region, visited),
             .empty_record, .empty_tag_union => true,
         },
-        .flex, .rigid, .err => true,
+        .flex, .rigid, .err, .field_presence => true,
     };
 }
 
@@ -11593,8 +11822,11 @@ fn validateRecordFields(
     visited: *std.AutoHashMap(Var, void),
 ) Allocator.Error!bool {
     const field_slice = self.types.getRecordFieldsSlice(fields);
-    for (field_slice.items(.var_)) |field_var| {
-        if (!try self.validateAliasRowsHelp(field_var, env, region, visited)) return false;
+    for (field_slice.items(.presence)) |presence| {
+        {
+            const field_var = presence.typeVar();
+            if (!try self.validateAliasRowsHelp(field_var, env, region, visited)) return false;
+        }
     }
     return true;
 }
@@ -11612,13 +11844,19 @@ fn validateRecordRow(
     defer names.deinit();
 
     const field_slice = self.types.getRecordFieldsSlice(fields);
-    for (field_slice.items(.name), field_slice.items(.var_)) |name, field_var| {
+    for (field_slice.items(.name), field_slice.items(.presence)) |name, presence| {
         const entry = try names.getOrPut(name);
         if (entry.found_existing) {
-            try self.reportInvalidAliasRow(.record, field_var, env, region);
+            {
+                const field_var = presence.typeVar();
+                try self.reportInvalidAliasRow(.record, field_var, env, region);
+            }
             return false;
         }
-        if (!try self.validateAliasRowsHelp(field_var, env, region, visited)) return false;
+        {
+            const field_var = presence.typeVar();
+            if (!try self.validateAliasRowsHelp(field_var, env, region, visited)) return false;
+        }
     }
 
     return try self.validateRecordExt(ext_var, &names, env, region, visited);
@@ -11662,7 +11900,7 @@ fn validateRecordExt(
                     return false;
                 },
             },
-            .flex, .rigid, .err => return true,
+            .flex, .rigid, .err, .field_presence => return true,
         }
     }
 }
@@ -11677,13 +11915,16 @@ fn validateRecordExtFields(
     visited: *std.AutoHashMap(Var, void),
 ) Allocator.Error!bool {
     const field_slice = self.types.getRecordFieldsSlice(fields);
-    for (field_slice.items(.name), field_slice.items(.var_)) |name, field_var| {
+    for (field_slice.items(.name), field_slice.items(.presence)) |name, presence| {
         const entry = try names.getOrPut(name);
         if (entry.found_existing) {
             try self.reportInvalidAliasRow(.record, ext_source_var, env, region);
             return false;
         }
-        if (!try self.validateAliasRowsHelp(field_var, env, region, visited)) return false;
+        {
+            const field_var = presence.typeVar();
+            if (!try self.validateAliasRowsHelp(field_var, env, region, visited)) return false;
+        }
     }
     return true;
 }
@@ -11749,7 +11990,7 @@ fn validateTagUnionExt(
                     return false;
                 },
             },
-            .flex, .rigid, .err => return true,
+            .flex, .rigid, .err, .field_presence => return true,
         }
     }
 }
@@ -12335,19 +12576,15 @@ fn checkPatternHelp(
                 // Append it to the scratch records array
                 try self.scratch_record_fields.append(types_mod.RecordField{
                     .name = destruct.label,
-                    .var_ = ModuleEnv.varFrom(destruct_var),
+                    .presence = .{ .required = ModuleEnv.varFrom(destruct_var) },
                 });
             }
 
             // Copy the scratch record fields into the types store
             const record_fields_scratch = self.scratch_record_fields.sliceFromStart(scratch_records_top);
-            std.mem.sort(types_mod.RecordField, record_fields_scratch, self, struct {
-                fn less(checker: *const Self, a: types_mod.RecordField, b: types_mod.RecordField) bool {
-                    return std.mem.order(u8, checker.cir.getIdentStoreConst().getText(a.name), checker.cir.getIdentStoreConst().getText(b.name)) == .lt;
-                }
-            }.less);
-            const record_fields_range = try self.types.appendRecordFields(record_fields_scratch);
+            std.mem.sort(types_mod.RecordField, record_fields_scratch, self.cir.getIdentStore(), types_mod.RecordField.sortByNameAsc);
 
+            const record_fields_range = try self.types.appendRecordFields(record_fields_scratch);
             // Update the pattern var. A `..` rest pattern makes the record open
             // (its extension absorbs any remaining fields); without one, the
             // pattern is closed, so destructuring a record that has extra fields
@@ -13009,10 +13246,16 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     .anno_var_backup = anno_var_backup,
                     .context = .type_annotation,
                 },
+                // The annotation is also the expected result of any `if`/
+                // `match` at the body's root: each branch checks against it
+                // directly (instead of pairwise against the previous branch),
+                // so annotation-declared facts — e.g. an `optional` field
+                // kind — pin branch types before the branches merge
+                // (design.md "Field Kinds (All-Dynamic Optional Fields)").
                 expected.withMaterializedAnnotation(.{
                     .var_ = anno_var,
                     .context = .type_annotation,
-                }),
+                }).withBranchResult(anno_var),
             };
         } else if (expected.expected_type) |expected_type| {
             const expected_var_backup = try self.instantiateVarOrphan(
@@ -13029,7 +13272,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     .anno_var_backup = expected_var_backup,
                     .context = expected_type.context,
                 },
-                expected,
+                // As in the annotation path above: the expected type is the
+                // expected result of any `if`/`match` at the body's root, so
+                // branches check against it directly and annotation-declared
+                // facts pin branch types before the branches merge.
+                expected.withBranchResult(expected_type.var_),
             };
         } else {
             break :blk .{ expr_var_raw, null, expected };
@@ -13182,6 +13429,38 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const list_content = try self.mkListContent(elem_var);
                 try self.unifyWith(expr_var, list_content, env);
             } else {
+                // Element accumulator seed, mirroring the if/match branch
+                // accumulator (`instantiateVarOrphanFlexed` seeding in
+                // `checkIfElseExpr`/`checkMatchExpr`): when this list literal
+                // is checked directly against an expected type (its def's
+                // annotation or a platform requirement), seed the element
+                // meet with the element of a rigids-flexed ORPHAN COPY of
+                // that type, so annotation-declared facts — e.g. an
+                // `optional` field kind — constrain every element as it
+                // folds in, instead of the elements meeting each other first
+                // with kinds still undetermined (design.md "Field Kinds
+                // (All-Dynamic Optional Fields)"). The copy is unpacked to
+                // its element through one unification with `List(seed)`
+                // inside a CommitProbe: if the expected type is not a List
+                // at all, the rollback discards the attempt (no problem is
+                // recorded) and the annotation mismatch is reported after
+                // the switch, exactly as without seeding.
+                const mb_seed_elem_var: ?Var = seed: {
+                    const expected_type = nested_expected.expected_type orelse break :seed null;
+                    const expected_copy = try self.instantiateVarOrphanFlexed(expected_type.var_, env, .use_last_var);
+                    const seed_elem_var = try self.fresh(env, expr_region);
+                    const seed_list_var = try self.freshFromContent(try self.mkListContent(seed_elem_var), env, expr_region);
+
+                    var commit_probe = try self.beginCommitProbe(env);
+                    var committed = false;
+                    defer if (!committed) commit_probe.rollback();
+                    const result = try self.unify(expected_copy, seed_list_var, env);
+                    if (!result.isOk()) break :seed null;
+                    committed = true;
+                    commit_probe.commit();
+                    break :seed seed_elem_var;
+                };
+
                 // Here, we use the list's 1st element as the element var to
                 // constrain the rest of the list
 
@@ -13189,34 +13468,57 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const first_elem = try self.checkStoredValueExpr(elems[0], env, child_expected);
                 does_fx = first_elem.does_fx or does_fx;
 
-                // Iterate over the remaining elements
-                const elem_var = first_elem.var_;
-                var last_elem_expr_idx = elems[0];
-                for (elems[1..], 1..) |elem_expr_idx, i| {
-                    const current_elem = try self.checkStoredValueExpr(elem_expr_idx, env, child_expected);
-                    does_fx = current_elem.does_fx or does_fx;
-                    const cur_elem_var = current_elem.var_;
+                // Fold the first element into the seeded accumulator: one
+                // real unify merges the seed and the element into the same
+                // var, so element-to-element consistency below still flows
+                // through one shared accumulator. A mismatch here is the
+                // element failing the annotation, so it is reported in the
+                // expected type's own context, at the element's region.
+                var first_elem_ok = true;
+                const elem_var = if (mb_seed_elem_var) |seed_elem_var| acc: {
+                    const result = try self.unifyInContext(seed_elem_var, first_elem.var_, env, nested_expected.expected_type.?.context);
+                    first_elem_ok = result.isOk();
+                    break :acc seed_elem_var;
+                } else first_elem.var_;
 
-                    // Unify each element's var with the list's elem var
-                    const result = try self.unifyInContext(elem_var, cur_elem_var, env, .{ .list_entry = .{
-                        .elem_index = @intCast(i),
-                        .list_length = @intCast(elems.len),
-                        .last_elem_idx = ModuleEnv.nodeIdxFrom(last_elem_expr_idx),
-                    } });
+                if (first_elem_ok) {
+                    // Iterate over the remaining elements
+                    var last_elem_expr_idx = elems[0];
+                    for (elems[1..], 1..) |elem_expr_idx, i| {
+                        const current_elem = try self.checkStoredValueExpr(elem_expr_idx, env, child_expected);
+                        does_fx = current_elem.does_fx or does_fx;
+                        const cur_elem_var = current_elem.var_;
 
-                    // If we errored, check the rest of the elements without comparing
-                    // to the elem_var to catch their individual errors
-                    if (!result.isOk()) {
-                        for (elems[i + 1 ..]) |remaining_elem_expr_idx| {
-                            const remaining_elem = try self.checkStoredValueExpr(remaining_elem_expr_idx, env, child_expected);
-                            does_fx = remaining_elem.does_fx or does_fx;
+                        // Unify each element's var with the list's elem var
+                        const result = try self.unifyInContext(elem_var, cur_elem_var, env, .{ .list_entry = .{
+                            .elem_index = @intCast(i),
+                            .list_length = @intCast(elems.len),
+                            .last_elem_idx = ModuleEnv.nodeIdxFrom(last_elem_expr_idx),
+                        } });
+
+                        // If we errored, check the rest of the elements without comparing
+                        // to the elem_var to catch their individual errors
+                        if (!result.isOk()) {
+                            for (elems[i + 1 ..]) |remaining_elem_expr_idx| {
+                                const remaining_elem = try self.checkStoredValueExpr(remaining_elem_expr_idx, env, child_expected);
+                                does_fx = remaining_elem.does_fx or does_fx;
+                            }
+
+                            // Break to avoid cascading errors
+                            break;
                         }
 
-                        // Break to avoid cascading errors
-                        break;
+                        last_elem_expr_idx = elem_expr_idx;
                     }
-
-                    last_elem_expr_idx = elem_expr_idx;
+                } else {
+                    // The first element failed the seeded expectation: check
+                    // the remaining elements without comparing to the elem_var
+                    // to catch their individual errors (mirrors the loop's
+                    // failure path above).
+                    for (elems[1..]) |remaining_elem_expr_idx| {
+                        const remaining_elem = try self.checkStoredValueExpr(remaining_elem_expr_idx, env, child_expected);
+                        does_fx = remaining_elem.does_fx or does_fx;
+                    }
                 }
 
                 // Create a nominal List type with the inferred element type
@@ -13279,12 +13581,23 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     does_fx = field_value.does_fx or does_fx;
 
                     // Create an unbound record with this field
-                    const single_field_record = try self.freshFromContent(.{ .structure = .{
-                        .record_unbound = try self.types.appendRecordFields(&.{types_mod.RecordField{
-                            .name = field.name,
-                            .var_ = field_value.var_,
-                        }}),
-                    } }, env, expr_region);
+                    const single_field_record = try self.freshFromContent(.{
+                        .structure = .{
+                            .record_unbound = try self.types.appendRecordFields(&.{types_mod.RecordField{
+                                .name = field.name,
+                                // A supplied update field is definitionally
+                                // present: `:?` is annotation-only syntax, so
+                                // updating a field both demands it on the base
+                                // (present ~ rigid/flex π forces or fails) and
+                                // keeps it present in the result.
+                                //
+                                // TODO(optional-fields): `{ x: _ }` UNSET syntax
+                                // is designed in design.md "Deferred: Unsetting
+                                // an Optional Field (`{ ..r, x: _ }`)".
+                                .presence = .{ .required = field_value.var_ },
+                            }}),
+                        },
+                    }, env, expr_region);
 
                     // Unify this record update with the record we're updating
                     _ = try self.unifyInContext(record_being_updated_var, single_field_record, env, .{ .record_update = .{
@@ -13313,17 +13626,23 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // Append it to the scratch records array
                     try self.scratch_record_fields.append(types_mod.RecordField{
                         .name = field.name,
-                        .var_ = field_value.var_,
+                        // A literal field's KIND is undetermined: the literal
+                        // can serve as a required field or as an optional one
+                        // (construction wraps the tag exactly when the solved
+                        // kind is `optional`). Unification pins the kind to
+                        // whichever concrete kind the context demands
+                        // (design.md "Field Kinds (All-Dynamic Optional
+                        // Fields)").
+                        .presence = .{ .unknown = .{
+                            .presence = try self.fresh(env, expr_region),
+                            .var_ = field_value.var_,
+                        } },
                     });
                 }
 
                 // Copy the scratch fields into the types store
                 const record_fields_scratch = self.scratch_record_fields.sliceFromStart(record_fields_top);
-                std.mem.sort(types_mod.RecordField, record_fields_scratch, self, struct {
-                    fn less(checker: *const Self, a: types_mod.RecordField, b: types_mod.RecordField) bool {
-                        return std.mem.order(u8, checker.cir.getIdentStoreConst().getText(a.name), checker.cir.getIdentStoreConst().getText(b.name)) == .lt;
-                    }
-                }.less);
+                std.mem.sort(types_mod.RecordField, record_fields_scratch, self.cir.getIdentStore(), types_mod.RecordField.sortByNameAsc);
                 const record_fields_range = try self.types.appendRecordFields(record_fields_scratch);
 
                 // Create an unbound record with the provided fields
@@ -13695,7 +14014,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             .alias => |alias| {
                                 var_ = self.types.getAliasBackingVar(alias);
                             },
-                            .flex, .rigid, .err => break :blk null,
+                            .flex, .rigid, .field_presence, .err => break :blk null,
                         }
                     }
                 } else {
@@ -13991,7 +14310,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                     .alias => |alias| {
                                         var_ = self.types.getAliasBackingVar(alias);
                                     },
-                                    .flex, .rigid, .err => break :inner_blk null,
+                                    .flex, .rigid, .field_presence, .err => break :inner_blk null,
                                 }
                             }
                         };
@@ -14172,7 +14491,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                     .empty_tag_union,
                                     => .unresolved,
                                 },
-                                .flex, .rigid, .alias, .err => .unresolved,
+                                .flex, .rigid, .alias, .field_presence, .err => .unresolved,
                             };
                         } else try self.functionEffectState(func_var);
                         switch (call_effect_state) {
@@ -14231,24 +14550,104 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             does_fx = try self.checkUnaryNotExpr(expr_idx, expr_region, env, unary, nested_expected) or does_fx;
         },
         .e_field_access => |field_access| {
+            std.debug.assert(field_access.segments.len > 0);
+
+            // Check the receiver (LHS)
             does_fx = try self.checkExpr(field_access.receiver, env, child_expected) or does_fx;
-            const receiver_var = ModuleEnv.varFrom(field_access.receiver);
 
-            const record_field_var = try self.fresh(env, expr_region);
-            const record_field_range = try self.types.appendRecordFields(&.{types_mod.RecordField{
-                .name = field_access.field_name,
-                .var_ = record_field_var,
-            }});
-            const record_ext_var = try self.fresh(env, expr_region);
-            const record_being_accessed = try self.freshFromContent(.{ .structure = .{
-                .record = .{ .fields = record_field_range, .ext = record_ext_var },
-            } }, env, expr_region);
+            // The var that's receiving the record field
+            var acc_receiver_var = ModuleEnv.varFrom(field_access.receiver);
 
-            _ = try self.unifyInContext(record_being_accessed, receiver_var, env, .{ .record_access = .{
-                .field_name = field_access.field_name,
-                .field_region = field_access.field_name_region,
-            } });
-            _ = try self.unify(expr_var, record_field_var, env);
+            // Whether any segment so far was a `.?` access. The Try wrapper is
+            // per-CHAIN, not per-segment: one optional segment anywhere makes
+            // the whole chain produce a single `Try(τ_final, [MissingField])`,
+            // with later segments (required or optional) riding in the Ok
+            // path. The runtime semantics are the monadic short-circuit — the
+            // first missing optional slot yields `Err(MissingField)`.
+            var saw_optional = false;
+
+            // Then iterate over the access segments, resolving & unifying
+            for (0..field_access.segments.len) |i| {
+                // Get the field access segment
+                const access_idx = self.cir.store.fieldAccessSegmentAt(field_access.segments, @intCast(i));
+                const access = self.cir.store.getFieldAccessSegment(access_idx);
+
+                // Setup the CIR node
+                const access_var = ModuleEnv.varFrom(access_idx);
+                const access_region = self.getRegionAt(access_var);
+                try self.setVarRank(access_var, env);
+
+                // Every segment's var is the FIELD's value type — for `.?`
+                // segments too, so chains keep accessing the underlying value.
+                // The chain-level Try wrapper is added once, after the loop.
+                try self.unifyWith(access_var, .{ .flex = Flex.init() }, env);
+                const record_field_range = try self.types.appendRecordFields(&.{types_mod.RecordField{
+                    .name = access.name,
+                    .presence = blk: {
+                        switch (access.mode) {
+                            .required => break :blk .{ .required = access_var },
+                            .optional => {
+                                // The row constrains the FIELD's value type
+                                // (`name :? τ` with a fresh flex kind — a
+                                // concrete `optional` demand would let
+                                // absorption admit the field into a closed
+                                // receiver, accepting `.?` on undeclared
+                                // fields and mutating annotated rows). The
+                                // access is recorded and JUDGED at every
+                                // generalization boundary (and finalize as
+                                // backstop): a required receiver field is
+                                // rejected, a still-flex kind pins to
+                                // `optional` BEFORE the scheme forms — so
+                                // instantiated copies carry the concrete
+                                // kind and cannot escape the judgment
+                                // (design.md "Field Kinds").
+                                const presence_var = try self.fresh(env, access_region);
+                                try self.optional_field_accesses.append(self.gpa, .{
+                                    .presence_var = presence_var,
+                                    .field_name = access.name,
+                                    .region = access_region,
+                                });
+                                saw_optional = true;
+                                break :blk .{ .unknown = .{
+                                    .presence = presence_var,
+                                    .var_ = access_var,
+                                } };
+                            },
+                        }
+                    },
+                }});
+                const record_ext_var = try self.fresh(env, access_region);
+                const record_being_accessed = try self.freshFromContent(.{ .structure = .{
+                    .record = .{ .fields = record_field_range, .ext = record_ext_var },
+                } }, env, expr_region);
+
+                // Unify the record being accessed with the acc receiver var
+                _ = try self.unifyInContext(record_being_accessed, acc_receiver_var, env, .{ .record_access = .{
+                    .field_name = access.name,
+                    .field_region = access_region,
+                    .mode = switch (access.mode) {
+                        .required => .required,
+                        .optional => .optional,
+                    },
+                } });
+
+                // For the next iteration, we set the field we just accessed to
+                // be the new receiver. This lets us chain access, like: a.b.c
+                acc_receiver_var = access_var;
+            }
+
+            // The chain's type: the final field's value type, wrapped in one
+            // `Try(τ, [MissingField])` when any segment was optional.
+            if (saw_optional) {
+                const missing_err_var = try self.makeFieldMissingTag(env, expr_region);
+                try self.unifyWith(
+                    expr_var,
+                    try self.mkTryContent(acc_receiver_var, missing_err_var),
+                    env,
+                );
+            } else {
+                _ = try self.unify(expr_var, acc_receiver_var, env);
+            }
         },
         .e_interpolation => |interpolation| {
             self.checking_call_arg = true;
@@ -14707,6 +15106,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // frame and stay live for the group boundary.
             try self.defaultLiteralsAtGeneralizationBoundary(expr_var, env);
         }
+        try self.judgeOptionalFieldAccesses(env);
         try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
         // The scheme's vars froze at generalized rank: judge this def's
         // dispatch-constrained receivers now, while the judgment is a
@@ -14793,6 +15193,7 @@ fn validateToInspectMethodTypeForArg(
         .flex,
         .rigid,
         .err,
+        .field_presence,
         => {},
     }
 }
@@ -15444,7 +15845,7 @@ fn payloadVarCanResolveToEmpty(content: Content) bool {
     return switch (content) {
         .flex => |flex| flex.constraints.len() == 0 and if (flex.name) |name| name.attributes.ignored else true,
         .rigid => |rigid| rigid.constraints.len() == 0 and rigid.name.attributes.ignored,
-        .alias, .structure, .err => false,
+        .alias, .field_presence, .structure, .err => false,
     };
 }
 
@@ -15764,6 +16165,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     // pops so the statement's own var unifies with the
                     // finished scheme below.
                     try self.defaultLiteralsAtGeneralizationBoundary(decl_pattern_var, env);
+                    try self.judgeOptionalFieldAccesses(env);
                     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
                     env.var_pool.popRank();
                 }
@@ -16126,7 +16528,7 @@ fn singleParameterWrapperPayload(self: *Self, wrapper_var: Var) ?Var {
             },
             .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => null,
         },
-        .flex, .rigid, .err => null,
+        .flex, .rigid, .field_presence, .err => null,
     };
 }
 
@@ -16142,7 +16544,7 @@ fn functionTypeFromVar(self: *Self, fn_var: Var) ?Func {
                 .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => return null,
             },
             .alias => |alias| current = self.types.getAliasBackingVar(alias),
-            .flex, .rigid, .err => return null,
+            .flex, .rigid, .field_presence, .err => return null,
         }
     }
 }
@@ -16164,7 +16566,7 @@ fn tryArgsFromVar(self: *Self, try_var: Var) ?TryArgs {
                 .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => return null,
             },
             .alias => |alias| current = self.types.getAliasBackingVar(alias),
-            .flex, .rigid, .err => return null,
+            .flex, .rigid, .field_presence, .err => return null,
         }
     }
 }
@@ -16279,7 +16681,7 @@ fn actualTagRowIsIncludedInExpected(
             .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return false,
         },
         .err => return true,
-        .flex, .rigid => return false,
+        .flex, .rigid, .field_presence => return false,
     }
 }
 
@@ -16326,7 +16728,7 @@ fn findVisibleTagInRow(
             .empty_tag_union => return null,
             .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return null,
         },
-        .err, .flex, .rigid => return null,
+        .err, .flex, .rigid, .field_presence => return null,
     }
 }
 
@@ -16360,10 +16762,20 @@ fn checkIfElseExpr(
     const expected_branch_ret = expected.branch_result;
     const child_expected = expected.forStatement();
 
-    // Fresh accumulator for the meet of all compatible branch bodies. Branches
-    // fold into this instead of into the shared `expected_ret`, which is unified
-    // with the whole expr (and hence the accumulator) exactly once, at the end.
-    const branch_acc: ?Var = if (expected_branch_ret != null) try self.fresh(env, expr_region) else null;
+    // Accumulator for the meet of all compatible branch bodies. Branches fold
+    // into this instead of into the shared `expected_ret`, which is unified
+    // with the whole expr (and hence the accumulator) exactly once, at the
+    // end. Seeded with an ORPHAN COPY of the expected type (never the shared
+    // var itself): the accumulator is the meet of the branches AND the
+    // annotation, so annotation-declared facts — e.g. an `optional` field
+    // kind — constrain every branch as it folds in, while the pristine
+    // `expected_ret` stays the untouched reference that step-(1) probes and
+    // error reports compare against (design.md "Field Kinds (All-Dynamic
+    // Optional Fields)").
+    const branch_acc: ?Var = if (expected_branch_ret) |expected_ret|
+        try self.instantiateVarOrphanFlexed(expected_ret, env, .use_last_var)
+    else
+        null;
 
     const branches = self.cir.store.sliceIfBranches(if_.branches);
 
@@ -16522,10 +16934,20 @@ fn checkMatchExpr(
     const expected_branch_ret = expected.branch_result;
     const child_expected = expected.forStatement();
 
-    // Fresh accumulator for the meet of all compatible branch bodies. Branches
-    // fold into this instead of into the shared `expected_ret`, which is unified
-    // with the whole expr (and hence the accumulator) exactly once, at the end.
-    const branch_acc: ?Var = if (expected_branch_ret != null) try self.fresh(env, expr_region) else null;
+    // Accumulator for the meet of all compatible branch bodies. Branches fold
+    // into this instead of into the shared `expected_ret`, which is unified
+    // with the whole expr (and hence the accumulator) exactly once, at the
+    // end. Seeded with an ORPHAN COPY of the expected type (never the shared
+    // var itself): the accumulator is the meet of the branches AND the
+    // annotation, so annotation-declared facts — e.g. an `optional` field
+    // kind — constrain every branch as it folds in, while the pristine
+    // `expected_ret` stays the untouched reference that step-(1) probes and
+    // error reports compare against (design.md "Field Kinds (All-Dynamic
+    // Optional Fields)").
+    const branch_acc: ?Var = if (expected_branch_ret) |expected_ret|
+        try self.instantiateVarOrphanFlexed(expected_ret, env, .use_last_var)
+    else
+        null;
 
     // Check the match's condition
     var does_fx = try self.checkExpr(match.cond, env, child_expected);
@@ -17336,7 +17758,7 @@ fn varIsDefinitelyNonNumericOperand(self: *Self, var_: Var) bool {
                 => true,
                 .nominal_type => false,
             },
-            .err, .flex, .rigid => false,
+            .err, .flex, .rigid, .field_presence => false,
         };
     }
 }
@@ -18169,7 +18591,7 @@ fn resolveAssociatedLookup(
                 }
                 break flat.nominal_type;
             },
-            .err, .flex, .rigid => {
+            .err, .flex, .rigid, .field_presence => {
                 try self.associated_lookup_cache.put(self.gpa, cache_key, null);
                 return null;
             },
@@ -18511,6 +18933,9 @@ fn checkNominalTypeUsage(
                 _ = try self.unify(target_var, nominal_var, env);
                 return .ok;
             },
+            // `.mismatch` cannot occur here (this path never passes
+            // `write_no_report`), but a reported problem and an unreported
+            // mismatch both mean the constructor is incompatible.
             .problem, .mismatch => {
                 // Unification failed - the constructor is incompatible with the nominal type
                 // Context is already set by unifyInContext
@@ -18844,6 +19269,104 @@ const FinalizeScope = union(enum) {
     repl_expr: CIR.Expr.Idx,
 };
 
+/// Judge the recorded `.?field` accesses now that the module's types have
+/// settled: an access whose presence variable resolved to the concrete
+/// `present` kind is rejected — the field can never be missing, so the
+/// optional access is almost certainly not what the user intended (design.md
+/// "Field Kinds (All-Dynamic Optional Fields)").
+///
+/// The same walk pins a kind still undetermined here to `optional`: only
+/// `.?` ever constrained the field, so the program treats it as optional.
+/// Judged at finalize (recorded per access, resolved after types settle) so
+/// both judgments are order-independent within the module.
+/// Judge every not-yet-judged `.?` access (design.md "Field Kinds"):
+/// rejects `.?` on a field whose kind resolved required/defaulted (always
+/// present — use `.`), and pins a still-flex kind to `optional`. Called at
+/// every generalization boundary — receivers are settled by then, and
+/// pinning BEFORE the scheme forms is what makes the judgment survive
+/// instantiation — and at finalize as the monomorphic backstop.
+fn judgeOptionalFieldAccesses(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    while (self.optional_access_watermark < self.optional_field_accesses.items.len) {
+        const access = self.optional_field_accesses.items[self.optional_access_watermark];
+        self.optional_access_watermark += 1;
+        switch (self.types.resolveVar(access.presence_var).desc.content) {
+            .field_presence => |field_presence| switch (field_presence) {
+                .required, .defaulted => {
+                    _ = try self.problems.appendProblem(self.gpa, .{ .optional_access_of_required_field = .{
+                        .region = access.region,
+                        .field_name = access.field_name,
+                    } });
+                },
+                .optional => {},
+            },
+            .flex => {
+                const optional_var = try self.freshFromContent(
+                    .{ .field_presence = .optional },
+                    env,
+                    access.region,
+                );
+                _ = try self.unify(access.presence_var, optional_var, env);
+            },
+            .rigid, .alias, .structure, .err => {},
+        }
+    }
+}
+
+/// Check every recorded default expression (design.md "Defaulted Fields"),
+/// once, after all defs are checked and callee effects are resolved: type
+/// the default against an INSTANTIATED copy of its field's type (a
+/// generalized annotation scheme must not be mutated at finalize), and
+/// reject effectful defaults — the compiler materializes a default at
+/// every construction site that omits the field, so it must be pure.
+fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    for (self.pending_default_checks.items) |pending| {
+        const default_does_fx = try self.checkExpr(pending.default_expr, env, .{});
+        if (default_does_fx) {
+            _ = try self.problems.appendProblem(self.gpa, .{ .effectful_default_value = .{
+                .region = self.getRegionAt(ModuleEnv.varFrom(pending.default_expr)),
+                .field_name = pending.field_name,
+            } });
+            // Diagnostic recovery after the reported problem (the standard
+            // poisoning convention): the default's var becomes `.err`, so
+            // downstream judgments treat it as an already-reported error
+            // instead of a well-typed default. Unifying the poisoned var
+            // against the field type would be a no-op (err absorbs), so
+            // skip it.
+            try self.unifyWith(ModuleEnv.varFrom(pending.default_expr), .err, env);
+            continue;
+        }
+        const expected_field_type = try self.instantiateVar(pending.field_type_var, env, .use_last_var);
+        _ = try self.unify(ModuleEnv.varFrom(pending.default_expr), expected_field_type, env);
+    }
+    // The list is kept for `checkDefaultRestrictions`, which runs after the
+    // defaulting rounds and constraint validation settle the types.
+}
+
+/// Post-settlement restriction on defaults (design.md "Defaulted Fields"):
+/// the default's type must be CONCRETE (it is evaluated once at compile
+/// time and materialized at construction sites, so it must have exactly one
+/// runtime representation — judged after the defaulting rounds so numeral
+/// defaults have committed). The scope restrictions are judged earlier, at
+/// canonicalization, where name resolution is explicit: a local-binding
+/// reference and a reference to the very def the annotation defaults are
+/// both rejected there.
+fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
+    for (self.pending_default_checks.items) |pending| {
+        // An erroring default already reported (effectful poisoning above, or
+        // a unify mismatch against its field type — both leave the var `.err`);
+        // judging concreteness of an err var would cascade a second problem
+        // onto the same default.
+        if (self.types.resolveVar(ModuleEnv.varFrom(pending.default_expr)).desc.content == .err) continue;
+        if (!try self.varIsConcreteHoistedConstType(ModuleEnv.varFrom(pending.default_expr))) {
+            _ = try self.problems.appendProblem(self.gpa, .{ .non_concrete_default_value = .{
+                .region = self.getRegionAt(ModuleEnv.varFrom(pending.default_expr)),
+                .field_name = pending.field_name,
+            } });
+        }
+    }
+    self.pending_default_checks.clearRetainingCapacity();
+}
+
 /// THE type-finalization point: every checking entry point (module check and
 /// both REPL flavors) lands here exactly once, after its own constraint
 /// traversal. Literal defaults are decided here—by the defaulting oracle
@@ -18859,6 +19382,14 @@ const FinalizeScope = union(enum) {
 /// constraint (the leak warning and let-polymorphism filtering must see
 /// pre-promotion ranks), not a separate policy.
 fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator.Error!void {
+    // Defaults check first: every def is checked (so their references
+    // instantiate finished schemes and callee effects are resolved), and the
+    // default expressions' own numerals/constraints must still flow through
+    // the defaulting rounds and constraint validation below (design.md
+    // "Defaulted Fields").
+    try self.checkPendingDefaults(env);
+    try self.judgeOptionalFieldAccesses(env);
+
     try self.checkAllConstraints(env);
     try self.resolvePendingTupleAccesses(env, false);
     try self.checkAllConstraints(env);
@@ -18898,6 +19429,7 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     }
     try self.resolvePendingTupleAccesses(env, true);
     try self.checkAllConstraints(env);
+    try self.checkDefaultRestrictions();
 }
 
 /// The candidate universe `runLiteralDefaultingRounds` gathers from—the only
@@ -19672,7 +20204,8 @@ fn varHasPendingOpenLiteralForDerivedParse(
     return switch (resolved.desc.content) {
         .structure => |structure| try self.structureHasPendingOpenLiteralForDerivedParse(structure, env, visited),
         .alias => |alias| try self.varHasPendingOpenLiteralForDerivedParse(self.types.getAliasBackingVar(alias), env, visited),
-        .err, .rigid => false,
+        // A presence variable is a field-kind fact, never a literal carrier.
+        .err, .rigid, .field_presence => false,
         .flex => resolved.desc.rank != .generalized and self.varLiteralKind(resolved.var_) != null,
     };
 }
@@ -19706,8 +20239,8 @@ fn recordHasPendingOpenLiteralForDerivedParse(
     visited: *std.AutoHashMap(Var, void),
 ) Allocator.Error!bool {
     const fields = self.types.getRecordFieldsSlice(fields_range);
-    for (fields.items(.var_)) |field_var| {
-        if (try self.varHasPendingOpenLiteralForDerivedParse(field_var, env, visited)) return true;
+    for (fields.items(.presence)) |presence| {
+        if (try self.varHasPendingOpenLiteralForDerivedParse(presence.typeVar(), env, visited)) return true;
     }
     return false;
 }
@@ -19739,7 +20272,7 @@ fn tagExtHasPendingOpenLiteralForDerivedParse(
             .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => false,
         },
         .alias => |alias| try self.tagExtHasPendingOpenLiteralForDerivedParse(self.types.getAliasBackingVar(alias), env, visited),
-        .flex, .rigid, .err => false,
+        .flex, .rigid, .field_presence, .err => false,
     };
 }
 
@@ -19789,7 +20322,7 @@ fn varHasPendingOpenLiteralForDerivedEncode(
     return switch (resolved.desc.content) {
         .structure => |structure| try self.structureHasPendingOpenLiteralForDerivedEncode(structure, env, visited),
         .alias => |alias| try self.varHasPendingOpenLiteralForDerivedEncode(self.types.getAliasBackingVar(alias), env, visited),
-        .err, .rigid => false,
+        .err, .rigid, .field_presence => false,
         .flex => resolved.desc.rank != .generalized and self.varLiteralKind(resolved.var_) != null,
     };
 }
@@ -19823,9 +20356,12 @@ fn recordHasPendingOpenLiteralForDerivedEncode(
     visited: *std.AutoHashMap(Var, void),
 ) Allocator.Error!bool {
     const fields = self.types.getRecordFieldsSlice(fields_range);
-    for (fields.items(.var_)) |field_var| {
-        const child_var = if (try self.missingTryInfoForVar(field_var)) |info| info.ok_var else field_var;
-        if (try self.varHasPendingOpenLiteralForDerivedEncode(child_var, env, visited)) return true;
+    for (fields.items(.presence)) |presence| {
+        {
+            const field_var = presence.typeVar();
+            const child_var = if (try self.missingTryInfoForVar(field_var)) |info| info.ok_var else field_var;
+            if (try self.varHasPendingOpenLiteralForDerivedEncode(child_var, env, visited)) return true;
+        }
     }
     return false;
 }
@@ -19857,7 +20393,7 @@ fn tagExtHasPendingOpenLiteralForDerivedEncode(
             .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => false,
         },
         .alias => |alias| try self.tagExtHasPendingOpenLiteralForDerivedEncode(self.types.getAliasBackingVar(alias), env, visited),
-        .flex, .rigid, .err => false,
+        .flex, .rigid, .field_presence, .err => false,
     };
 }
 
@@ -21828,8 +22364,11 @@ fn typeSupportsStructuralDeriveInternal(
         // Records qualify if all field types qualify.
         .record => |record| {
             const fields_slice = self.types.getRecordFieldsSlice(record.fields);
-            for (fields_slice.items(.var_)) |field_var| {
-                if (!try self.varSupportsStructuralDeriveInternal(field_var, derivation, visited)) return false;
+            for (fields_slice.items(.presence)) |presence| {
+                {
+                    const field_var = presence.typeVar();
+                    if (!try self.varSupportsStructuralDeriveInternal(field_var, derivation, visited)) return false;
+                }
             }
             return true;
         },
@@ -21874,8 +22413,11 @@ fn typeSupportsStructuralDeriveInternal(
         // Unbound records: check each field.
         .record_unbound => |fields| {
             const fields_slice = self.types.getRecordFieldsSlice(fields);
-            for (fields_slice.items(.var_)) |field_var| {
-                if (!try self.varSupportsStructuralDeriveInternal(field_var, derivation, visited)) return false;
+            for (fields_slice.items(.presence)) |presence| {
+                {
+                    const field_var = presence.typeVar();
+                    if (!try self.varSupportsStructuralDeriveInternal(field_var, derivation, visited)) return false;
+                }
             }
             return true;
         },
@@ -21959,7 +22501,7 @@ fn varContainsOpenRowInHostBoundaryInternal(
 ) std.mem.Allocator.Error!bool {
     const resolved = self.types.resolveVar(var_);
     switch (resolved.desc.content) {
-        .flex, .rigid, .err => return false,
+        .flex, .rigid, .field_presence, .err => return false,
         .alias, .structure => {},
     }
     if (visited.contains(resolved.var_)) return false;
@@ -21971,7 +22513,7 @@ fn varContainsOpenRowInHostBoundaryInternal(
             if (try self.varsContainOpenRowInHostBoundary(self.types.sliceAliasArgs(alias), visited)) break :blk true;
             break :blk try self.varContainsOpenRowInHostBoundaryInternal(self.types.getAliasBackingVar(alias), visited);
         },
-        .flex, .rigid, .err => unreachable,
+        .flex, .rigid, .err, .field_presence => unreachable,
     };
 }
 
@@ -21992,7 +22534,13 @@ fn recordFieldsContainOpenRowInHostBoundary(
     visited: *std.AutoHashMap(Var, void),
 ) std.mem.Allocator.Error!bool {
     const fields_slice = self.types.getRecordFieldsSlice(fields);
-    return try self.varsContainOpenRowInHostBoundary(fields_slice.items(.var_), visited);
+    for (fields_slice.items(.presence)) |presence| {
+        {
+            const field_var = presence.typeVar();
+            if (try self.varContainsOpenRowInHostBoundaryInternal(field_var, visited)) return true;
+        }
+    }
+    return false;
 }
 
 fn tagsContainOpenRowInHostBoundary(
@@ -22079,7 +22627,7 @@ fn recordExtIsClosedForHostBoundary(
                 .empty_tag_union,
                 => return false,
             },
-            .flex, .rigid => return false,
+            .flex, .rigid, .field_presence => return false,
             .err => return true,
         }
     }
@@ -22119,7 +22667,7 @@ fn tagUnionExtIsClosedForHostBoundary(
                 .empty_record,
                 => return false,
             },
-            .flex, .rigid => return false,
+            .flex, .rigid, .field_presence => return false,
             .err => return true,
         }
     }
@@ -22158,7 +22706,7 @@ fn varContainsUnboxedFunctionInHostedSignatureInternal(
             => try self.flatTypeContainsUnboxedFunction(s, false, visited),
         },
         .alias => |alias| try self.varContainsUnboxedFunctionInHostedSignatureInternal(self.types.getAliasBackingVar(alias), allow_top_fn, visited),
-        .flex, .rigid, .err => false,
+        .flex, .rigid, .err, .field_presence => false,
     };
 }
 
@@ -22174,7 +22722,7 @@ fn varContainsUnboxedFunctionInternal(
     return switch (resolved.desc.content) {
         .structure => |s| try self.flatTypeContainsUnboxedFunction(s, boxed_allowed, visited),
         .alias => |alias| try self.varContainsUnboxedFunctionInternal(self.types.getAliasBackingVar(alias), boxed_allowed, visited),
-        .flex, .rigid, .err => false,
+        .flex, .rigid, .err, .field_presence => false,
     };
 }
 
@@ -22189,15 +22737,21 @@ fn flatTypeContainsUnboxedFunction(
         .empty_record, .empty_tag_union => false,
         .record => |record| blk: {
             const fields_slice = self.types.getRecordFieldsSlice(record.fields);
-            for (fields_slice.items(.var_)) |field_var| {
-                if (try self.varContainsUnboxedFunctionInternal(field_var, boxed_allowed, visited)) break :blk true;
+            for (fields_slice.items(.presence)) |presence| {
+                {
+                    const field_var = presence.typeVar();
+                    if (try self.varContainsUnboxedFunctionInternal(field_var, boxed_allowed, visited)) break :blk true;
+                }
             }
             break :blk false;
         },
         .record_unbound => |fields| blk: {
             const fields_slice = self.types.getRecordFieldsSlice(fields);
-            for (fields_slice.items(.var_)) |field_var| {
-                if (try self.varContainsUnboxedFunctionInternal(field_var, boxed_allowed, visited)) break :blk true;
+            for (fields_slice.items(.presence)) |presence| {
+                {
+                    const field_var = presence.typeVar();
+                    if (try self.varContainsUnboxedFunctionInternal(field_var, boxed_allowed, visited)) break :blk true;
+                }
             }
             break :blk false;
         },
@@ -22256,7 +22810,7 @@ fn varSupportsStructuralDeriveInternal(
         .structure => |s| try self.typeSupportsStructuralDeriveInternal(s, derivation, visited),
         .flex, .rigid => true,
         .alias => |alias| try self.varSupportsStructuralDeriveInternal(self.types.getAliasBackingVar(alias), derivation, visited),
-        .err => true,
+        .err, .field_presence => true,
     };
 }
 
@@ -22307,7 +22861,7 @@ fn varSupportsStringRenderedDictKey(self: *Self, var_: Var) std.mem.Allocator.Er
         .structure => |structure| try self.typeSupportsStringRenderedDictKey(structure),
         .alias => |alias| try self.varSupportsStringRenderedDictKey(self.types.getAliasBackingVar(alias)),
         .err => true,
-        .flex, .rigid => false,
+        .flex, .rigid, .field_presence => false,
     };
 }
 
@@ -22353,7 +22907,7 @@ fn varSupportsStringRenderedKeyForDerivedEncode(self: *Self, var_: Var) std.mem.
         .alias => |alias| try self.varSupportsStringRenderedKeyForDerivedEncode(self.types.getAliasBackingVar(alias)),
         .err => .supported,
         .flex => .unresolved,
-        .rigid => .unsupported,
+        .rigid, .field_presence => .unsupported,
     };
 }
 
@@ -22373,7 +22927,7 @@ fn varIsClosedUnitTagUnion(self: *Self, var_: Var) std.mem.Allocator.Error!bool 
             => false,
         },
         .alias => |alias| try self.varIsClosedUnitTagUnion(self.types.getAliasBackingVar(alias)),
-        .flex, .rigid, .err => false,
+        .flex, .rigid, .field_presence, .err => false,
     };
 }
 
@@ -22403,7 +22957,7 @@ fn tagExtIsClosedAndUnit(self: *Self, ext_var: Var) std.mem.Allocator.Error!bool
         },
         .alias => |alias| try self.tagExtIsClosedAndUnit(self.types.getAliasBackingVar(alias)),
         .err => true,
-        .flex, .rigid => false,
+        .flex, .rigid, .field_presence => false,
     };
 }
 
@@ -22431,7 +22985,7 @@ fn varResolvesToBuiltinScalarNominal(self: *const Self, var_: Var) bool {
             => false,
         },
         .alias => |alias| self.varResolvesToBuiltinScalarNominal(self.types.getAliasBackingVar(alias)),
-        .flex, .rigid, .err => false,
+        .flex, .rigid, .field_presence, .err => false,
     };
 }
 
@@ -22466,9 +23020,9 @@ fn typeSupportsDerivedParse(
     return switch (flat_type) {
         .record => |record| blk: {
             const fields_slice = self.types.getRecordFieldsSlice(record.fields);
-            const field_vars = fields_slice.items(.var_);
             var support: DerivedSupport = .supported;
-            for (field_vars) |field_var| {
+            for (fields_slice.items(.presence)) |presence| {
+                const field_var = presence.typeVar();
                 support = combineDerivedSupport(support, try self.varSupportsDerivedParseField(field_var, env, region));
                 if (support == .unsupported) break;
             }
@@ -22476,9 +23030,9 @@ fn typeSupportsDerivedParse(
         },
         .record_unbound => |fields| blk: {
             const fields_slice = self.types.getRecordFieldsSlice(fields);
-            const field_vars = fields_slice.items(.var_);
             var support: DerivedSupport = .supported;
-            for (field_vars) |field_var| {
+            for (fields_slice.items(.presence)) |presence| {
+                const field_var = presence.typeVar();
                 support = combineDerivedSupport(support, try self.varSupportsDerivedParseField(field_var, env, region));
                 if (support == .unsupported) break;
             }
@@ -22528,7 +23082,7 @@ fn varSupportsDerivedParseShape(
         .alias => |alias| try self.varSupportsDerivedParseShape(self.types.getAliasBackingVar(alias), env, region),
         .err => .supported,
         .flex => .unresolved,
-        .rigid => .unsupported,
+        .rigid, .field_presence => .unsupported,
     };
 }
 
@@ -22555,7 +23109,7 @@ fn derivedParseExtHasAnyTag(self: *Self, ext_var: Var) Allocator.Error!DerivedSu
         .alias => |alias| try self.derivedParseExtHasAnyTag(self.types.getAliasBackingVar(alias)),
         .err => .supported,
         .flex => .unresolved,
-        .rigid => .unsupported,
+        .rigid, .field_presence => .unsupported,
     };
 }
 
@@ -22581,7 +23135,7 @@ fn varSupportsDerivedParseTagExt(
         },
         .alias => |alias| try self.varSupportsDerivedParseTagExt(self.types.getAliasBackingVar(alias), env, region),
         .err, .flex => .supported,
-        .rigid => .unsupported,
+        .rigid, .field_presence => .unsupported,
     };
 }
 
@@ -22605,7 +23159,7 @@ fn varSupportsDerivedParseField(
         .alias => |alias| try self.varSupportsDerivedParseField(self.types.getAliasBackingVar(alias), env, region),
         .err => .supported,
         .flex => .unresolved,
-        .rigid => .unsupported,
+        .rigid, .field_presence => .unsupported,
     };
 }
 
@@ -22716,18 +23270,24 @@ fn typeSupportsDerivedEncode(
         .record => |record| blk: {
             const fields_slice = self.types.getRecordFieldsSlice(record.fields);
             var support: DerivedSupport = .supported;
-            for (fields_slice.items(.var_)) |field_var| {
-                support = combineDerivedSupport(support, try self.varSupportsDerivedEncodeRecordField(field_var, encoding_var, env, region));
-                if (support == .unsupported) break;
+            for (fields_slice.items(.presence)) |presence| {
+                {
+                    const field_var = presence.typeVar();
+                    support = combineDerivedSupport(support, try self.varSupportsDerivedEncodeRecordField(field_var, encoding_var, env, region));
+                    if (support == .unsupported) break;
+                }
             }
             break :blk support;
         },
         .record_unbound => |fields| blk: {
             const fields_slice = self.types.getRecordFieldsSlice(fields);
             var support: DerivedSupport = .supported;
-            for (fields_slice.items(.var_)) |field_var| {
-                support = combineDerivedSupport(support, try self.varSupportsDerivedEncodeRecordField(field_var, encoding_var, env, region));
-                if (support == .unsupported) break;
+            for (fields_slice.items(.presence)) |presence| {
+                {
+                    const field_var = presence.typeVar();
+                    support = combineDerivedSupport(support, try self.varSupportsDerivedEncodeRecordField(field_var, encoding_var, env, region));
+                    if (support == .unsupported) break;
+                }
             }
             break :blk support;
         },
@@ -22801,7 +23361,7 @@ fn varSupportsDerivedEncodeShape(
         .alias => |alias| try self.varSupportsDerivedEncodeShape(self.types.getAliasBackingVar(alias), encoding_var, env, region),
         .err => .supported,
         .flex => .unresolved,
-        .rigid => .unsupported,
+        .rigid, .field_presence => .unsupported,
     };
 }
 
@@ -22829,7 +23389,7 @@ fn varSupportsDerivedEncodeTagExt(
         .alias => |alias| try self.varSupportsDerivedEncodeTagExt(self.types.getAliasBackingVar(alias), encoding_var, env, region),
         .err => .supported,
         .flex => .supported,
-        .rigid => .unsupported,
+        .rigid, .field_presence => .unsupported,
     };
 }
 
@@ -22885,7 +23445,7 @@ fn missingTryInfoForVar(
         },
         .alias => |alias| try self.missingTryInfoForVar(self.types.getAliasBackingVar(alias)),
         .err => null,
-        .flex, .rigid => null,
+        .flex, .rigid, .field_presence => null,
     };
 }
 
@@ -22936,7 +23496,7 @@ fn unboundTryInfoFromNominal(
     const try_info = (try self.builtinTryInfoFromNominal(nominal)) orelse return null;
     return switch (self.types.resolveVar(try_info.err_var).desc.content) {
         .flex => try_info,
-        .rigid, .alias, .structure, .err => null,
+        .rigid, .alias, .field_presence, .structure, .err => null,
     };
 }
 
@@ -22956,7 +23516,7 @@ fn unboundTryInfoForVar(self: *Self, var_: Var) Allocator.Error!?BuiltinTryInfo 
             => null,
         },
         .alias => |alias| try self.unboundTryInfoForVar(self.types.getAliasBackingVar(alias)),
-        .err, .flex, .rigid => null,
+        .err, .flex, .rigid, .field_presence => null,
     };
 }
 
@@ -22993,7 +23553,7 @@ fn varIsExactUnitTagUnion(
             .empty_tag_union,
             => false,
         },
-        .err, .flex, .rigid => false,
+        .err, .flex, .rigid, .field_presence => false,
     };
 }
 
@@ -23001,7 +23561,7 @@ fn tagExtIsClosedEmpty(self: *Self, var_: Var) Allocator.Error!bool {
     return switch (self.types.resolveVar(var_).desc.content) {
         .alias => |alias| try self.tagExtIsClosedEmpty(self.types.getAliasBackingVar(alias)),
         .structure => |structure| structure == .empty_tag_union,
-        .err, .flex, .rigid => false,
+        .err, .flex, .rigid, .field_presence => false,
     };
 }
 
@@ -23210,7 +23770,7 @@ fn validateResolvedOpenNumeralLiterals(
                 => continue,
             },
             .err => continue,
-            .flex, .rigid, .alias => continue,
+            .flex, .rigid, .alias, .field_presence => continue,
         };
         const num_kind = self.builtinNumKindFromNominalType(nominal_type) orelse continue;
         _ = try self.reportInvalidBuiltinFromNumeralInfo(resolved.var_, num_kind, entry.constraint.origin.numeralInfo().?, env);
@@ -23228,7 +23788,7 @@ fn literalTargetContainsIdentity(
 
     return switch (resolved.desc.content) {
         .flex, .rigid => true,
-        .err => false,
+        .err, .field_presence => false,
         .alias => |alias| blk: {
             if (try self.literalTargetContainsIdentity(self.types.getAliasBackingVar(alias), visited)) break :blk true;
             for (self.types.sliceAliasArgs(alias)) |arg| {
@@ -23258,15 +23818,15 @@ fn literalTargetContainsIdentity(
             },
             .record => |record| blk: {
                 const fields = self.types.getRecordFieldsSlice(record.fields);
-                for (fields.items(.var_)) |field| {
-                    if (try self.literalTargetContainsIdentity(field, visited)) break :blk true;
+                for (fields.items(.presence)) |presence| {
+                    if (try self.literalTargetContainsIdentity(presence.typeVar(), visited)) break :blk true;
                 }
                 break :blk try self.literalTargetContainsIdentity(record.ext, visited);
             },
             .record_unbound => |record_fields| blk: {
                 const fields = self.types.getRecordFieldsSlice(record_fields);
-                for (fields.items(.var_)) |field| {
-                    if (try self.literalTargetContainsIdentity(field, visited)) break :blk true;
+                for (fields.items(.presence)) |presence| {
+                    if (try self.literalTargetContainsIdentity(presence.typeVar(), visited)) break :blk true;
                 }
                 break :blk false;
             },
@@ -23315,7 +23875,7 @@ fn literalTargetIsBuiltinDirect(
             .empty_tag_union,
             => false,
         },
-        .err, .flex, .rigid => false,
+        .err, .flex, .rigid, .field_presence => false,
     };
 }
 
@@ -23405,11 +23965,11 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
             const callable = self.types.resolveVar(fn_var);
             const target_shape = switch (target.desc.content) {
                 .structure => |structure| @tagName(structure),
-                .flex, .rigid, .alias, .err => @tagName(target.desc.content),
+                .flex, .rigid, .alias, .field_presence, .err => @tagName(target.desc.content),
             };
             const callable_shape = switch (callable.desc.content) {
                 .structure => |structure| @tagName(structure),
-                .flex, .rigid, .alias, .err => @tagName(callable.desc.content),
+                .flex, .rigid, .alias, .field_presence, .err => @tagName(callable.desc.content),
             };
             const target_name = switch (target.desc.content) {
                 .structure => |structure| switch (structure) {
@@ -23426,7 +23986,7 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
                     => "<unnamed>",
                 },
                 .alias => |alias| self.cir.getIdent(alias.ident.ident_idx),
-                .flex, .rigid, .err => "<unnamed>",
+                .flex, .rigid, .field_presence, .err => "<unnamed>",
             };
             std.debug.panic(
                 "live concrete {s} literal plan for node {d} has no checked builtin or custom resolution (target var {d}: {s} {s}, callable var {d}: {s})",
@@ -23603,7 +24163,7 @@ fn collectDerivedMapTags(
             open_ext.* = resolved.var_;
             return true;
         },
-        .err => false,
+        .err, .field_presence => false,
     };
 }
 
@@ -23621,16 +24181,19 @@ fn varIsDerivedMapZst(
     defer _ = visited_vars.remove(resolved.var_);
 
     return switch (resolved.desc.content) {
-        .flex, .rigid, .err => false,
+        .flex, .rigid, .err, .field_presence => false,
         .alias => |alias| try self.varIsDerivedMapZst(self.types.getAliasBackingVar(alias), env, region, visited_vars, visited_nominals),
         .structure => |structure| switch (structure) {
             .empty_record, .empty_tag_union => true,
             .fn_pure, .fn_effectful, .fn_unbound => false,
             .record => |record| blk: {
                 const fields_slice = self.types.getRecordFieldsSlice(record.fields);
-                const fields = try self.gpa.dupe(Var, fields_slice.items(.var_));
-                defer self.gpa.free(fields);
-                for (fields) |field| {
+                const vars_top = try self.dupeRecordFieldTypeVars(fields_slice.items(.presence));
+                defer self.scratch_record_field_vars.clearFrom(vars_top);
+                const vars_end = self.scratch_record_field_vars.top();
+                var i: u32 = vars_top;
+                while (i < vars_end) : (i += 1) {
+                    const field = self.scratch_record_field_vars.items.items[i];
                     if (!try self.varIsDerivedMapZst(field, env, region, visited_vars, visited_nominals)) break :blk false;
                 }
                 break :blk try self.varIsDerivedMapZst(record.ext, env, region, visited_vars, visited_nominals);
@@ -23696,7 +24259,7 @@ fn collectDerivedMapTypeVars(
             try found.put(resolved.var_, {});
             return;
         },
-        .err => return,
+        .field_presence, .err => return,
         .alias, .structure => {},
     }
     if (visited.contains(resolved.var_)) return;
@@ -23712,16 +24275,24 @@ fn collectDerivedMapTypeVars(
         .structure => |structure| switch (structure) {
             .record => |record| {
                 const fields_slice = self.types.getRecordFieldsSlice(record.fields);
-                const fields = try self.gpa.dupe(Var, fields_slice.items(.var_));
-                defer self.gpa.free(fields);
-                for (fields) |field| try self.collectDerivedMapTypeVars(field, found, visited);
+                const vars_top = try self.dupeRecordFieldTypeVars(fields_slice.items(.presence));
+                defer self.scratch_record_field_vars.clearFrom(vars_top);
+                const vars_end = self.scratch_record_field_vars.top();
+                var i: u32 = vars_top;
+                while (i < vars_end) : (i += 1) {
+                    try self.collectDerivedMapTypeVars(self.scratch_record_field_vars.items.items[i], found, visited);
+                }
                 try self.collectDerivedMapTypeVars(record.ext, found, visited);
             },
             .record_unbound => |range| {
                 const fields_slice = self.types.getRecordFieldsSlice(range);
-                const fields = try self.gpa.dupe(Var, fields_slice.items(.var_));
-                defer self.gpa.free(fields);
-                for (fields) |field| try self.collectDerivedMapTypeVars(field, found, visited);
+                const vars_top = try self.dupeRecordFieldTypeVars(fields_slice.items(.presence));
+                defer self.scratch_record_field_vars.clearFrom(vars_top);
+                const vars_end = self.scratch_record_field_vars.top();
+                var i: u32 = vars_top;
+                while (i < vars_end) : (i += 1) {
+                    try self.collectDerivedMapTypeVars(self.scratch_record_field_vars.items.items[i], found, visited);
+                }
             },
             .tuple => |tuple| {
                 const elems = try self.gpa.dupe(Var, self.types.sliceVars(tuple.elems));
@@ -23752,7 +24323,7 @@ fn collectDerivedMapTypeVars(
             },
             .empty_record, .empty_tag_union => {},
         },
-        .flex, .rigid, .err => unreachable,
+        .flex, .rigid, .err, .field_presence => unreachable,
     }
 }
 
@@ -23793,7 +24364,7 @@ fn analyzeDerivedMap(
             if (!try self.declaredMapArgsAreEligible(alias_args, env, region)) return null;
             backing_var = self.types.getAliasBackingVar(alias);
         },
-        .flex, .rigid, .err => {},
+        .flex, .rigid, .field_presence, .err => {},
     }
 
     var open_ext: ?Var = null;
@@ -24208,8 +24779,8 @@ fn freshParseResultOkVar(
     const rest_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("rest"));
     const value_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("value"));
     const fields = [_]types_mod.RecordField{
-        .{ .name = rest_name, .var_ = rest_var },
-        .{ .name = value_name, .var_ = value_var },
+        .{ .name = rest_name, .presence = .{ .required = rest_var } },
+        .{ .name = value_name, .presence = .{ .required = value_var } },
     };
     const fields_range = try self.types.appendRecordFields(&fields);
     const ext_var = try self.freshFromContent(.{ .structure = .empty_record }, env, region);
@@ -24238,8 +24809,8 @@ fn freshParseRecordFieldEventVar(
     const field_handle_var = try self.mkFieldVar(shape_var, env, region);
     const field_record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, region);
     const field_record_fields = [_]types_mod.RecordField{
-        .{ .name = field_name, .var_ = field_handle_var },
-        .{ .name = rest_name, .var_ = state_var },
+        .{ .name = field_name, .presence = .{ .required = field_handle_var } },
+        .{ .name = rest_name, .presence = .{ .required = state_var } },
     };
     const field_record = try self.freshFromContent(.{ .structure = .{ .record = .{
         .fields = try self.types.appendRecordFields(&field_record_fields),
@@ -24248,8 +24819,8 @@ fn freshParseRecordFieldEventVar(
 
     const try_field_record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, region);
     const try_field_record_fields = [_]types_mod.RecordField{
-        .{ .name = name_name, .var_ = str_var },
-        .{ .name = rest_name, .var_ = state_var },
+        .{ .name = name_name, .presence = .{ .required = str_var } },
+        .{ .name = rest_name, .presence = .{ .required = state_var } },
     };
     const try_field_record = try self.freshFromContent(.{ .structure = .{ .record = .{
         .fields = try self.types.appendRecordFields(&try_field_record_fields),
@@ -24288,8 +24859,8 @@ fn freshParseCountedStartEventVar(
     const len_var = try self.freshU64(env, region);
     const counted_record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, region);
     const counted_record_fields = [_]types_mod.RecordField{
-        .{ .name = len_name, .var_ = len_var },
-        .{ .name = rest_name, .var_ = state_var },
+        .{ .name = len_name, .presence = .{ .required = len_var } },
+        .{ .name = rest_name, .presence = .{ .required = state_var } },
     };
     const counted_record = try self.freshFromContent(.{ .structure = .{ .record = .{
         .fields = try self.types.appendRecordFields(&counted_record_fields),
@@ -24511,7 +25082,7 @@ fn parseDictKeyMethodText(self: *Self, key_var: Var) Allocator.Error!?[]const u8
         },
         .alias => |alias| try self.parseDictKeyMethodText(self.types.getAliasBackingVar(alias)),
         .err => null,
-        .flex, .rigid => null,
+        .flex, .rigid, .field_presence => null,
     };
 }
 
@@ -24554,7 +25125,7 @@ fn encodeDictKeyMethodText(self: *Self, key_var: Var) Allocator.Error!?[]const u
         },
         .alias => |alias| try self.encodeDictKeyMethodText(self.types.getAliasBackingVar(alias)),
         .err => null,
-        .flex, .rigid => null,
+        .flex, .rigid, .field_presence => null,
     };
 }
 
@@ -24676,7 +25247,7 @@ fn parseFormatMethodVarForEncoding(
             };
         },
         .err => null,
-        .flex, .rigid => null,
+        .flex, .rigid, .field_presence => null,
     };
 }
 
@@ -24715,7 +25286,7 @@ fn reportDerivedParseMissingMethodAt(
             .empty_tag_union,
             => return .unsupported,
         },
-        .flex, .err => return .unsupported,
+        .flex, .field_presence, .err => return .unsupported,
     };
     var derived_constraint = constraint;
     derived_constraint.fn_name = method_name;
@@ -25023,7 +25594,7 @@ fn constrainDerivedParserErrorRowIncludes(
             const result = try self.unify(resolved.var_, empty, env);
             break :blk if (result.isOk()) .ok else .reported_error;
         },
-        .rigid => .unsupported,
+        .rigid, .field_presence => .unsupported,
         .err => .ok,
     };
 }
@@ -25168,7 +25739,7 @@ fn validateDerivedParseVar(
         },
         .alias => |alias| try self.validateDerivedParseVar(self.types.getAliasBackingVar(alias), encoding_var, state_var, err_var, constraint, env, region, visited, context, failure_expr),
         .err => .ok,
-        .flex, .rigid => .unsupported,
+        .flex, .rigid, .field_presence => .unsupported,
     };
 }
 
@@ -25209,10 +25780,13 @@ fn validateDerivedParseRecord(
         .unsupported, .reported_error => |result| return result,
     }
     const fields = self.types.getRecordFieldsSlice(fields_range);
-    const field_vars = try self.gpa.dupe(Var, fields.items(.var_));
-    defer self.gpa.free(field_vars);
+    const vars_top = try self.dupeRecordFieldTypeVars(fields.items(.presence));
+    defer self.scratch_record_field_vars.clearFrom(vars_top);
+    const vars_end = self.scratch_record_field_vars.top();
 
-    for (field_vars) |field_var| {
+    var i: u32 = vars_top;
+    while (i < vars_end) : (i += 1) {
+        const field_var = self.scratch_record_field_vars.items.items[i];
         switch (try self.pinWildcardOptionalParseField(field_var, env, region)) {
             .ok => {},
             .unsupported, .reported_error => |result| return result,
@@ -25225,7 +25799,9 @@ fn validateDerivedParseRecord(
         }
     }
 
-    for (field_vars) |field_var| {
+    i = vars_top;
+    while (i < vars_end) : (i += 1) {
+        const field_var = self.scratch_record_field_vars.items.items[i];
         switch (try self.validateDerivedParseVar(field_var, encoding_var, state_var, err_var, constraint, env, region, visited, .record_field, failure_expr)) {
             .ok => {},
             .unsupported, .reported_error => |result| return result,
@@ -25285,8 +25861,11 @@ fn recordParseNeedsRequiredFieldError(
     fields_range: types_mod.RecordField.SafeMultiList.Range,
 ) Allocator.Error!bool {
     const fields = self.types.getRecordFieldsSlice(fields_range);
-    for (fields.items(.var_)) |field_var| {
-        if (!try self.varIsOptionalParseField(field_var)) return true;
+    for (fields.items(.presence)) |presence| {
+        {
+            const field_var = presence.typeVar();
+            if (!try self.varIsOptionalParseField(field_var)) return true;
+        }
     }
     return false;
 }
@@ -25311,7 +25890,7 @@ fn varIsOptionalParseField(
         },
         .alias => |alias| try self.varIsOptionalParseField(self.types.getAliasBackingVar(alias)),
         .err => true,
-        .flex, .rigid => false,
+        .flex, .rigid, .field_presence => false,
     };
 }
 
@@ -25391,7 +25970,7 @@ fn validateDerivedParseTagExt(
             const result = try self.unify(ext_var, empty_tu_var, env);
             break :blk if (result.isOk()) .ok else .reported_error;
         },
-        .rigid => .unsupported,
+        .rigid, .field_presence => .unsupported,
     };
 }
 
@@ -25569,7 +26148,7 @@ fn validateDerivedEncodeVar(
         },
         .alias => |alias| try self.validateDerivedEncodeVar(self.types.getAliasBackingVar(alias), encoding_var, state_var, err_var, constraint, env, region, visited),
         .err => .ok,
-        .flex, .rigid => .unsupported,
+        .flex, .rigid, .field_presence => .unsupported,
     };
 }
 
@@ -25591,10 +26170,13 @@ fn validateDerivedEncodeRecord(
     }
 
     const fields = self.types.getRecordFieldsSlice(fields_range);
-    const field_vars = try self.gpa.dupe(Var, fields.items(.var_));
-    defer self.gpa.free(field_vars);
+    const vars_top = try self.dupeRecordFieldTypeVars(fields.items(.presence));
+    defer self.scratch_record_field_vars.clearFrom(vars_top);
+    const vars_end = self.scratch_record_field_vars.top();
 
-    for (field_vars) |field_var| {
+    var i: u32 = vars_top;
+    while (i < vars_end) : (i += 1) {
+        const field_var = self.scratch_record_field_vars.items.items[i];
         if (try self.missingTryInfoForVar(field_var)) |info| {
             switch (try self.validateDerivedEncodeVar(info.ok_var, encoding_var, state_var, err_var, constraint, env, region, visited)) {
                 .ok => {},
@@ -25705,7 +26287,7 @@ fn validateDerivedEncodeTagExt(
             const result = try self.unify(ext_var, empty_tu_var, env);
             break :blk if (result.isOk()) .ok else .reported_error;
         },
-        .rigid => .unsupported,
+        .rigid, .field_presence => .unsupported,
     };
 }
 
@@ -26301,7 +26883,7 @@ fn varContainsError(self: *Self, var_: Var, visited: *std.AutoHashMap(Var, void)
 
     return switch (resolved.desc.content) {
         .err => true,
-        .flex, .rigid => false,
+        .flex, .rigid, .field_presence => false,
         .alias => |alias| blk: {
             if (try self.varContainsError(self.types.getAliasBackingVar(alias), visited)) break :blk true;
             break :blk try self.varsContainError(self.types.sliceAliasArgs(alias), visited);
@@ -26329,12 +26911,23 @@ fn flatTypeContainsError(self: *Self, flat_type: FlatType, visited: *std.AutoHas
         },
         .record => |record| blk: {
             const fields = self.types.getRecordFieldsSlice(record.fields);
-            if (try self.varsContainError(fields.items(.var_), visited)) break :blk true;
+            for (fields.items(.presence)) |presence| {
+                {
+                    const field_var = presence.typeVar();
+                    if (try self.varContainsError(field_var, visited)) break :blk true;
+                }
+            }
             break :blk try self.varContainsError(record.ext, visited);
         },
         .record_unbound => |fields| blk: {
             const fields_slice = self.types.getRecordFieldsSlice(fields);
-            break :blk try self.varsContainError(fields_slice.items(.var_), visited);
+            for (fields_slice.items(.presence)) |presence| {
+                {
+                    const field_var = presence.typeVar();
+                    if (try self.varContainsError(field_var, visited)) break :blk true;
+                }
+            }
+            break :blk false;
         },
         .tag_union => |tag_union| blk: {
             const tags = self.types.getTagsSlice(tag_union.tags);

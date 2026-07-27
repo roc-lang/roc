@@ -25,6 +25,63 @@ fn destroyTestEnv(allocator: std.mem.Allocator, module_env: *ModuleEnv) void {
     allocator.destroy(module_env);
 }
 
+fn addLocalLookup(module_env: *ModuleEnv, name: []const u8) Allocator.Error!CIR.Expr.Idx {
+    const ident = try module_env.insertIdent(base.Ident.for_text(name));
+    const pattern = try module_env.store.addPattern(.{
+        .assign = .{ .ident = ident },
+    }, base.Region.zero());
+    return module_env.store.addExpr(.{
+        .e_lookup_local = .{ .pattern_idx = pattern },
+    }, base.Region.zero());
+}
+
+const TestFieldAccessSegment = struct {
+    name: []const u8,
+    mode: CIR.Expr.FieldAccessMode,
+};
+
+fn addFieldAccessPath(
+    module_env: *ModuleEnv,
+    receiver: CIR.Expr.Idx,
+    path_segments: []const TestFieldAccessSegment,
+) Allocator.Error!CIR.Expr.Idx {
+    std.debug.assert(path_segments.len > 0);
+
+    const path_builder = try module_env.startFieldAccessPath(@intCast(path_segments.len));
+    errdefer module_env.rollbackFieldAccessPath(path_builder);
+
+    for (path_segments) |path_segment| {
+        const ident = try module_env.insertIdent(base.Ident.for_text(path_segment.name));
+        _ = module_env.appendFieldAccessPathSegmentAssumeCapacity(path_builder, .{
+            .name = ident,
+            .mode = path_segment.mode,
+        }, base.Region.zero());
+    }
+    const segments = module_env.finishFieldAccessPath(path_builder);
+
+    return module_env.addExpr(.{
+        .e_field_access = .{
+            .receiver = receiver,
+            .segments = segments,
+        },
+    }, base.Region.zero());
+}
+
+fn addCall(
+    module_env: *ModuleEnv,
+    func: CIR.Expr.Idx,
+    args: []const CIR.Expr.Idx,
+) Allocator.Error!CIR.Expr.Idx {
+    const args_start = module_env.store.scratchExprTop();
+    for (args) |arg| try module_env.store.addScratchExpr(arg);
+    const args_span = try module_env.store.exprSpanFrom(args_start);
+    return module_env.addExpr(.{ .e_call = .{
+        .func = func,
+        .args = args_span,
+        .called_via = .apply,
+    } }, base.Region.zero());
+}
+
 // Basic expression tests
 
 test "emit integer literal" {
@@ -78,6 +135,235 @@ test "emit empty record" {
 
     try emitter.emitExpr(expr_idx);
     try testing.expectEqualStrings("{}", emitter.getOutput());
+}
+
+test "emit optional field access path" {
+    const module_env = try createTestEnv(test_allocator, "record.?outer.?inner");
+    defer destroyTestEnv(test_allocator, module_env);
+
+    const receiver = try addLocalLookup(module_env, "record");
+    const expr_idx = try addFieldAccessPath(module_env, receiver, &.{
+        .{ .name = "outer", .mode = .optional },
+        .{ .name = "inner", .mode = .optional },
+    });
+
+    var emitter = Emitter.init(test_allocator, module_env);
+    defer emitter.deinit();
+    try emitter.emitExpr(expr_idx);
+    try testing.expectEqualStrings("record.?outer.?inner", emitter.getOutput());
+}
+
+test "emit required field access path" {
+    const module_env = try createTestEnv(test_allocator, "record.outer.inner");
+    defer destroyTestEnv(test_allocator, module_env);
+
+    const receiver = try addLocalLookup(module_env, "record");
+    const expr_idx = try addFieldAccessPath(module_env, receiver, &.{
+        .{ .name = "outer", .mode = .required },
+        .{ .name = "inner", .mode = .required },
+    });
+
+    var emitter = Emitter.init(test_allocator, module_env);
+    defer emitter.deinit();
+    try emitter.emitExpr(expr_idx);
+    try testing.expectEqualStrings("record.outer.inner", emitter.getOutput());
+}
+
+test "emit mixed required and optional field access path" {
+    const module_env = try createTestEnv(test_allocator, "record.required.?optional.required_after");
+    defer destroyTestEnv(test_allocator, module_env);
+
+    const receiver = try addLocalLookup(module_env, "record");
+    const expr_idx = try addFieldAccessPath(module_env, receiver, &.{
+        .{ .name = "required", .mode = .required },
+        .{ .name = "optional", .mode = .optional },
+        .{ .name = "required_after", .mode = .required },
+    });
+
+    var emitter = Emitter.init(test_allocator, module_env);
+    defer emitter.deinit();
+    try emitter.emitExpr(expr_idx);
+    try testing.expectEqualStrings("record.required.?optional.required_after", emitter.getOutput());
+}
+
+test "emit parentheses between distinct optional field access paths" {
+    const module_env = try createTestEnv(test_allocator, "(record.?outer).?inner");
+    defer destroyTestEnv(test_allocator, module_env);
+
+    const receiver = try addLocalLookup(module_env, "record");
+    const outer_access = try addFieldAccessPath(module_env, receiver, &.{.{ .name = "outer", .mode = .optional }});
+    const expr_idx = try addFieldAccessPath(module_env, outer_access, &.{.{ .name = "inner", .mode = .optional }});
+
+    var emitter = Emitter.init(test_allocator, module_env);
+    defer emitter.deinit();
+    try emitter.emitExpr(expr_idx);
+    try testing.expectEqualStrings("(record.?outer).?inner", emitter.getOutput());
+}
+
+test "emit parentheses between a required access and an outer optional-containing path" {
+    const module_env = try createTestEnv(test_allocator, "(record.required).?optional");
+    defer destroyTestEnv(test_allocator, module_env);
+
+    const receiver = try addLocalLookup(module_env, "record");
+    const required = try addFieldAccessPath(module_env, receiver, &.{.{ .name = "required", .mode = .required }});
+    const expr_idx = try addFieldAccessPath(module_env, required, &.{.{ .name = "optional", .mode = .optional }});
+
+    var emitter = Emitter.init(test_allocator, module_env);
+    defer emitter.deinit();
+    try emitter.emitExpr(expr_idx);
+    try testing.expectEqualStrings("(record.required).?optional", emitter.getOutput());
+}
+
+test "emit parentheses between an optional-containing path and an outer required access" {
+    const module_env = try createTestEnv(test_allocator, "(record.?optional).required");
+    defer destroyTestEnv(test_allocator, module_env);
+
+    const receiver = try addLocalLookup(module_env, "record");
+    const optional = try addFieldAccessPath(module_env, receiver, &.{.{ .name = "optional", .mode = .optional }});
+    const expr_idx = try addFieldAccessPath(module_env, optional, &.{.{ .name = "required", .mode = .required }});
+
+    var emitter = Emitter.init(test_allocator, module_env);
+    defer emitter.deinit();
+    try emitter.emitExpr(expr_idx);
+    try testing.expectEqualStrings("(record.?optional).required", emitter.getOutput());
+}
+
+test "emit optional access parenthesizes a numeric receiver" {
+    const module_env = try createTestEnv(test_allocator, "(1).?field");
+    defer destroyTestEnv(test_allocator, module_env);
+
+    const one = try module_env.store.addExpr(.{
+        .e_num = .{
+            .value = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 },
+            .kind = .i64,
+        },
+    }, base.Region.zero());
+    const expr_idx = try addFieldAccessPath(module_env, one, &.{.{ .name = "field", .mode = .optional }});
+
+    var emitter = Emitter.init(test_allocator, module_env);
+    defer emitter.deinit();
+    try emitter.emitExpr(expr_idx);
+    try testing.expectEqualStrings("(1).?field", emitter.getOutput());
+}
+
+test "emit required access parenthesizes a numeric receiver" {
+    const module_env = try createTestEnv(test_allocator, "(1).field");
+    defer destroyTestEnv(test_allocator, module_env);
+
+    const one = try module_env.store.addExpr(.{
+        .e_num = .{
+            .value = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 },
+            .kind = .i64,
+        },
+    }, base.Region.zero());
+    const expr_idx = try addFieldAccessPath(module_env, one, &.{.{ .name = "field", .mode = .required }});
+
+    var emitter = Emitter.init(test_allocator, module_env);
+    defer emitter.deinit();
+    try emitter.emitExpr(expr_idx);
+    try testing.expectEqualStrings("(1).field", emitter.getOutput());
+}
+
+test "emit optional access parenthesizes a binary receiver" {
+    const module_env = try createTestEnv(test_allocator, "(1 + 2).?field");
+    defer destroyTestEnv(test_allocator, module_env);
+
+    const one = try module_env.store.addExpr(.{
+        .e_num = .{
+            .value = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 },
+            .kind = .i64,
+        },
+    }, base.Region.zero());
+    const two = try module_env.store.addExpr(.{
+        .e_num = .{
+            .value = .{ .bytes = @bitCast(@as(i128, 2)), .kind = .i128 },
+            .kind = .i64,
+        },
+    }, base.Region.zero());
+    const sum = try module_env.store.addExpr(.{
+        .e_binop = CIR.Expr.Binop.init(.add, one, two),
+    }, base.Region.zero());
+    const expr_idx = try addFieldAccessPath(module_env, sum, &.{.{ .name = "field", .mode = .optional }});
+
+    var emitter = Emitter.init(test_allocator, module_env);
+    defer emitter.deinit();
+    try emitter.emitExpr(expr_idx);
+    try testing.expectEqualStrings("(1 + 2).?field", emitter.getOutput());
+}
+
+test "emit optional access parenthesizes a unary receiver" {
+    const module_env = try createTestEnv(test_allocator, "(-value).?field");
+    defer destroyTestEnv(test_allocator, module_env);
+
+    const value = try addLocalLookup(module_env, "value");
+    const negated = try module_env.store.addExpr(.{
+        .e_unary_minus = CIR.Expr.UnaryMinus.init(value),
+    }, base.Region.zero());
+    const expr_idx = try addFieldAccessPath(module_env, negated, &.{.{ .name = "field", .mode = .optional }});
+
+    var emitter = Emitter.init(test_allocator, module_env);
+    defer emitter.deinit();
+    try emitter.emitExpr(expr_idx);
+    try testing.expectEqualStrings("(-value).?field", emitter.getOutput());
+}
+
+test "emit optional access parenthesizes an if receiver" {
+    const module_env = try createTestEnv(test_allocator, "(if (condition) then_value else else_value).?field");
+    defer destroyTestEnv(test_allocator, module_env);
+
+    const condition = try addLocalLookup(module_env, "condition");
+    const then_value = try addLocalLookup(module_env, "then_value");
+    const else_value = try addLocalLookup(module_env, "else_value");
+
+    const branches_start = module_env.store.scratchIfBranchTop();
+    const branch = try module_env.addIfBranch(.{
+        .cond = condition,
+        .body = then_value,
+    }, base.Region.zero());
+    try module_env.store.addScratchIfBranch(branch);
+    const branches = try module_env.store.ifBranchSpanFrom(branches_start);
+    const if_expr = try module_env.store.addExpr(.{
+        .e_if = .{
+            .branches = branches,
+            .final_else = else_value,
+            .warn_unused_branches = true,
+        },
+    }, base.Region.zero());
+    const expr_idx = try addFieldAccessPath(module_env, if_expr, &.{.{ .name = "field", .mode = .optional }});
+
+    var emitter = Emitter.init(test_allocator, module_env);
+    defer emitter.deinit();
+    try emitter.emitExpr(expr_idx);
+    try testing.expectEqualStrings("(if (condition) then_value else else_value).?field", emitter.getOutput());
+}
+
+test "emit optional access parenthesizes a lambda receiver" {
+    const module_env = try createTestEnv(test_allocator, "(|value| value).?field");
+    defer destroyTestEnv(test_allocator, module_env);
+
+    const value_ident = try module_env.insertIdent(base.Ident.for_text("value"));
+    const value_pattern = try module_env.store.addPattern(.{
+        .assign = .{ .ident = value_ident },
+    }, base.Region.zero());
+    const body = try module_env.store.addExpr(.{
+        .e_lookup_local = .{ .pattern_idx = value_pattern },
+    }, base.Region.zero());
+
+    const args_start = module_env.store.scratchPatternTop();
+    try module_env.store.addScratchPattern(value_pattern);
+    const args = try module_env.store.patternSpanFrom(args_start);
+    const lambda = try module_env.store.addExpr(.{
+        .e_lambda = .{
+            .args = args,
+            .body = body,
+        },
+    }, base.Region.zero());
+    const expr_idx = try addFieldAccessPath(module_env, lambda, &.{.{ .name = "field", .mode = .optional }});
+
+    var emitter = Emitter.init(test_allocator, module_env);
+    defer emitter.deinit();
+    try emitter.emitExpr(expr_idx);
+    try testing.expectEqualStrings("(|value| value).?field", emitter.getOutput());
 }
 
 test "emit empty list" {
@@ -227,6 +513,48 @@ test "emit function application" {
 
     try emitter.emitExpr(call_idx);
     try testing.expectEqualStrings("f(42)", emitter.getOutput());
+}
+
+test "emit required field value application preserves the field-call boundary" {
+    const module_env = try createTestEnv(test_allocator, "(record.callback)(42)");
+    defer destroyTestEnv(test_allocator, module_env);
+
+    const receiver = try addLocalLookup(module_env, "record");
+    const field = try addFieldAccessPath(module_env, receiver, &.{.{
+        .name = "callback",
+        .mode = .required,
+    }});
+    const arg = try module_env.addExpr(.{ .e_num = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
+        .kind = .i64,
+    } }, base.Region.zero());
+    const call = try addCall(module_env, field, &.{arg});
+
+    var emitter = Emitter.init(test_allocator, module_env);
+    defer emitter.deinit();
+    try emitter.emitExpr(call);
+    try testing.expectEqualStrings("(record.callback)(42)", emitter.getOutput());
+}
+
+test "emit optional field value application preserves the query boundary" {
+    const module_env = try createTestEnv(test_allocator, "(record.?callback)(42)");
+    defer destroyTestEnv(test_allocator, module_env);
+
+    const receiver = try addLocalLookup(module_env, "record");
+    const field = try addFieldAccessPath(module_env, receiver, &.{.{
+        .name = "callback",
+        .mode = .optional,
+    }});
+    const arg = try module_env.addExpr(.{ .e_num = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
+        .kind = .i64,
+    } }, base.Region.zero());
+    const call = try addCall(module_env, field, &.{arg});
+
+    var emitter = Emitter.init(test_allocator, module_env);
+    defer emitter.deinit();
+    try emitter.emitExpr(call);
+    try testing.expectEqualStrings("(record.?callback)(42)", emitter.getOutput());
 }
 
 test "emit unary minus over negative typed numeral parenthesizes receiver" {

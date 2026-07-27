@@ -19,10 +19,10 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (e-field-access
-	(e-field-access
-		(e-ident (raw "person"))
-		(e-ident (raw "address")))
-	(e-ident (raw "street")))
+	(receiver
+		(e-ident (raw "person")))
+	(segment (mode "required") (field "address"))
+	(segment (mode "required") (field "street")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -30,11 +30,12 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-field-access (field "street")
+(e-field-access
 	(receiver
-		(e-field-access (field "address")
-			(receiver
-				(e-runtime-error (tag "ident_not_in_scope"))))))
+		(e-runtime-error (tag "ident_not_in_scope")))
+	(segments
+		(segment (name "address") (mode "required"))
+		(segment (name "street") (mode "required"))))
 ~~~
 # TYPES
 ~~~clojure

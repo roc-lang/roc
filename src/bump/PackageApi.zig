@@ -106,10 +106,14 @@ pub const Record = struct {
     ext: ?TypeId,
 };
 
-/// One record field.
+/// One record field. `optional` carries the field's published kind axis
+/// (design.md "Field Kinds (All-Dynamic Optional Fields)"): an `optional`
+/// (`name :? T`) field is a different type from a required one, so a kind
+/// change must surface as an API change.
 pub const Field = struct {
     name: []const u8,
     ty: TypeId,
+    optional: bool = false,
 };
 
 /// A structural tag union type.
@@ -365,7 +369,9 @@ fn writeTypeSExpr(self: *const PackageApi, id: TypeId, writer: *std.Io.Writer, s
         .record => |record| {
             try writer.writeAll("(record");
             for (record.fields) |field| {
-                try writer.writeAll(" (field \"");
+                // The field kind is part of the canonical form: flipping a
+                // field between required and optional is a signature change.
+                try writer.writeAll(if (field.optional) " (optional-field \"" else " (field \"");
                 try writeEscaped(writer, field.name);
                 try writer.writeAll("\" ");
                 try self.writeTypeSExpr(field.ty, writer, state);
@@ -562,7 +568,7 @@ fn renderType(self: *const PackageApi, id: TypeId, writer: *std.Io.Writer, state
             try writer.writeAll("{ ");
             for (record.fields, 0..) |field, i| {
                 if (i > 0) try writer.writeAll(", ");
-                try writer.print("{s} : ", .{field.name});
+                try writer.print("{s}{s}", .{ field.name, if (field.optional) " :? " else " : " });
                 try self.renderType(field.ty, writer, state);
             }
             if (record.ext) |ext| {
@@ -729,6 +735,47 @@ test "record fields and tags are sorted during normalization" {
     defer gpa.free(str_b);
 
     try std.testing.expectEqualStrings(str_a, str_b);
+}
+
+test "optional field kind is part of the canonical form" {
+    const gpa = std.testing.allocator;
+
+    // Two records differing only in one field's kind (required vs optional,
+    // design.md "Field Kinds (All-Dynamic Optional Fields)") must canonicalize
+    // differently: flipping the kind is a signature change.
+    var api_a = PackageApi.init(gpa);
+    defer api_a.deinit();
+    const a_str = try api_a.addType(.{ .named = .{ .origin = .builtin, .path = "Str", .args = &.{} } });
+    const a_fields = try api_a.allocator().dupe(Field, &.{
+        .{ .name = "world", .ty = a_str },
+    });
+    const a_rec = try api_a.addType(.{ .record = .{ .fields = a_fields, .ext = null } });
+    const module_a = try api_a.addModule("M");
+    try api_a.addItem(module_a, .{ .path = "M.r", .kind = .{ .value = a_rec } });
+    try api_a.normalize();
+
+    var api_b = PackageApi.init(gpa);
+    defer api_b.deinit();
+    const b_str = try api_b.addType(.{ .named = .{ .origin = .builtin, .path = "Str", .args = &.{} } });
+    const b_fields = try api_b.allocator().dupe(Field, &.{
+        .{ .name = "world", .ty = b_str, .optional = true },
+    });
+    const b_rec = try api_b.addType(.{ .record = .{ .fields = b_fields, .ext = null } });
+    const module_b = try api_b.addModule("M");
+    try api_b.addItem(module_b, .{ .path = "M.r", .kind = .{ .value = b_rec } });
+    try api_b.normalize();
+
+    const str_a = try api_a.itemCanonicalString(gpa, api_a.modules.items[0].items.items[0]);
+    defer gpa.free(str_a);
+    const str_b = try api_b.itemCanonicalString(gpa, api_b.modules.items[0].items.items[0]);
+    defer gpa.free(str_b);
+    try std.testing.expect(!std.mem.eql(u8, str_a, str_b));
+
+    // And the human rendering shows the kind (`world :? Str`).
+    var rendered = std.Io.Writer.Allocating.init(gpa);
+    defer rendered.deinit();
+    try api_b.renderItemSignature(gpa, api_b.modules.items[0].items.items[0], &rendered.writer);
+    try std.testing.expect(std.mem.find(u8, rendered.written(), "world :? Str") != null);
 }
 
 test "self-referential constraint does not loop" {

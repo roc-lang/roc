@@ -2215,6 +2215,24 @@ test "Repl - issue 9258 opaque type param field access" {
     try expectStepsFinal(.dev, steps, "\"hello\"");
 }
 
+test "Repl - optional record field renders <missing> and plain present values" {
+    const missing_steps = &[_][]const u8{
+        "r : { a :? U8, b : U8 }",
+        "r = { b: 2 }",
+        "r",
+    };
+    try expectStepsFinal(.interpreter, missing_steps, "{ a: <missing>, b: 2 }");
+    try expectStepsFinal(.dev, missing_steps, "{ a: <missing>, b: 2 }");
+
+    const present_steps = &[_][]const u8{
+        "s : { a :? U8, b : U8 }",
+        "s = { a: 5, b: 2 }",
+        "s",
+    };
+    try expectStepsFinal(.interpreter, present_steps, "{ a: 5, b: 2 }");
+    try expectStepsFinal(.dev, present_steps, "{ a: 5, b: 2 }");
+}
+
 test "Repl - polymorphic numeric in comparison snapshot sequence" {
     const steps = &[_][2][]const u8{
         .{ "is_positive = |x| x > 0", "assigned `is_positive`" },

@@ -35,7 +35,7 @@ const LayoutGraph = graph_mod.Graph;
 const GraphNodeId = graph_mod.NodeId;
 const GraphRef = graph_mod.Ref;
 const Var = types.Var;
-const TypeScope = types.TypeScope;
+const VarMap = types.VarMap;
 pub const ModuleVarKey = work_mod.ModuleVarKey;
 
 fn assertAppendIdx(expected: usize, idx: anytype) void {
@@ -2636,6 +2636,36 @@ pub const Store = struct {
 
     pub fn resolvedListLayoutIdx(self: *const Self, layout_idx: Idx) ?Idx {
         return self.resolved_list_layouts.items[@intFromEnum(layout_idx)];
+    }
+};
+
+/// TypeScope represents nested type scopes for resolving polymorphic type variables.
+/// Each HashMap in the list represents a scope level, mapping polymorphic type variables
+/// to their resolved monomorphic equivalents.
+pub const TypeScope = struct {
+    scopes: std.array_list.Managed(VarMap),
+
+    pub fn init(allocator: std.mem.Allocator) TypeScope {
+        return .{
+            .scopes = std.array_list.Managed(VarMap).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *TypeScope) void {
+        for (self.scopes.items) |*scope| {
+            scope.deinit();
+        }
+        self.scopes.deinit();
+    }
+
+    /// Look up a type variable in all nested scopes, returning the mapped variable if found
+    pub fn lookup(self: *const TypeScope, var_to_find: Var) ?Var {
+        for (self.scopes.items) |*scope| {
+            if (scope.get(var_to_find)) |mapped_var| {
+                return mapped_var;
+            }
+        }
+        return null;
     }
 };
 

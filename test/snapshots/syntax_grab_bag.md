@@ -283,12 +283,13 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
  │  ‾‾‾                                                                       │
  └────────────────────────────────────────────────── syntax_grab_bag.md:154:2 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `...` here.
@@ -1714,19 +1715,20 @@ EndOfFile,
 							(p-ident (raw "static_dispatch_style"))
 							(e-question-suffix
 								(e-field-access
-									(e-question-suffix
-										(e-method-call (method ".next_static_dispatch_method")
-											(receiver
-												(e-question-suffix
-													(e-method-call (method ".static_dispatch_method")
-														(receiver
-															(e-question-suffix
-																(e-apply
-																	(e-ident (raw "some_fn"))
-																	(e-ident (raw "arg1")))))
-														(args))))
-											(args)))
-									(e-ident (raw "record_field")))))
+									(receiver
+										(e-question-suffix
+											(e-method-call (method ".next_static_dispatch_method")
+												(receiver
+													(e-question-suffix
+														(e-method-call (method ".static_dispatch_method")
+															(receiver
+																(e-question-suffix
+																	(e-apply
+																		(e-ident (raw "some_fn"))
+																		(e-ident (raw "arg1")))))
+															(args))))
+												(args))))
+									(segment (mode "required") (field "record_field")))))
 						(e-question-suffix
 							(e-apply
 								(e-ident (raw "Stdout.line!"))
@@ -2064,7 +2066,7 @@ expect {
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 1533) (dispatcher-var 376)
+						(e-interpolation (constraint-fn-var 1534) (dispatcher-var 376)
 							(first
 								(e-literal (string "Hello, ")))
 							(parts
@@ -2082,7 +2084,7 @@ expect {
 							(e-runtime-error (tag "erroneous_value_expr")))
 						(s-reassign
 							(p-assign (ident "number"))
-							(e-dispatch-call (method "plus") (constraint-fn-var 1615)
+							(e-dispatch-call (method "plus") (constraint-fn-var 1616)
 								(receiver
 									(e-runtime-error (tag "erroneous_value_use")))
 								(args
@@ -2102,11 +2104,11 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 1751)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 1757)
 									(receiver
 										(e-runtime-error (tag "erroneous_value_expr")))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 1748)
+										(e-dispatch-call (method "times") (constraint-fn-var 1754)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -2121,18 +2123,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 1784)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 1790)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 1774)
+															(e-dispatch-call (method "plus") (constraint-fn-var 1780)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 1811)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 1817)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 1801)
+															(e-dispatch-call (method "minus") (constraint-fn-var 1807)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2147,11 +2149,11 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 1848)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 1854)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 1845)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 1851)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -2161,17 +2163,17 @@ expect {
 					(e-match
 						(match
 							(cond
-								(e-field-access (field "record_field")
+								(e-field-access
 									(receiver
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 1906)
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 1912)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 1877)
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 1883)
 																			(receiver
 																				(e-runtime-error (tag "erroneous_value_expr")))
 																			(args)))
@@ -2218,7 +2220,9 @@ expect {
 																	(e-tag (name "Err")
 																		(args
 																			(e-lookup-local
-																				(p-assign (ident "#err")))))))))))))))
+																				(p-assign (ident "#err")))))))))))))
+									(segments
+										(segment (name "record_field") (mode "required")))))
 							(branches
 								(branch
 									(patterns

@@ -61,8 +61,9 @@ EndOfFile,
 					(field (field "y")
 						(e-binop (op "+")
 							(e-field-access
-								(e-ident (raw "robot"))
-								(e-ident (raw "y")))
+								(receiver
+									(e-ident (raw "robot")))
+								(segment (mode "required") (field "y")))
 							(e-int (raw "1")))))))
 		(s-type-anno (name "retreat")
 			(ty-fn
@@ -79,8 +80,9 @@ EndOfFile,
 					(field (field "y")
 						(e-binop (op "-")
 							(e-field-access
-								(e-ident (raw "robot"))
-								(e-ident (raw "y")))
+								(receiver
+									(e-ident (raw "robot")))
+								(segment (mode "required") (field "y")))
 							(e-int (raw "1")))))))
 		(s-expect
 			(e-binop (op "==")
@@ -145,12 +147,14 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "y")
-						(e-dispatch-call (method "plus") (constraint-fn-var 347)
+						(e-dispatch-call (method "plus") (constraint-fn-var 348)
 							(receiver
-								(e-field-access (field "y")
+								(e-field-access
 									(receiver
 										(e-lookup-local
-											(p-assign (ident "robot"))))))
+											(p-assign (ident "robot"))))
+									(segments
+										(segment (name "y") (mode "required")))))
 							(args
 								(e-num (value "1"))))))))
 		(annotation
@@ -170,10 +174,12 @@ NO CHANGE
 					(field (name "y")
 						(e-dispatch-call (method "minus") (constraint-fn-var 389)
 							(receiver
-								(e-field-access (field "y")
+								(e-field-access
 									(receiver
 										(e-lookup-local
-											(p-assign (ident "robot"))))))
+											(p-assign (ident "robot"))))
+									(segments
+										(segment (name "y") (mode "required")))))
 							(args
 								(e-num (value "1"))))))))
 		(annotation
@@ -190,7 +196,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 413)
+				(e-call (constraint-fn-var 417)
 					(e-lookup-local
 						(p-assign (ident "advance")))
 					(e-record
@@ -209,7 +215,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 449)
+				(e-call (constraint-fn-var 459)
 					(e-lookup-local
 						(p-assign (ident "retreat")))
 					(e-record
@@ -228,10 +234,10 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 486)
+				(e-call (constraint-fn-var 500)
 					(e-lookup-local
 						(p-assign (ident "advance")))
-					(e-call (constraint-fn-var 485)
+					(e-call (constraint-fn-var 499)
 						(e-lookup-local
 							(p-assign (ident "retreat")))
 						(e-record

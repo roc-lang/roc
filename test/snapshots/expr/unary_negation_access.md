@@ -32,8 +32,9 @@ EndOfFile,
 ~~~clojure
 (unary "-"
 	(e-field-access
-		(e-ident (raw "rec1"))
-		(e-ident (raw "field"))))
+		(receiver
+			(e-ident (raw "rec1")))
+		(segment (mode "required") (field "field"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -43,9 +44,11 @@ NO CHANGE
 ~~~clojure
 (e-dispatch-call (method "negate") (constraint-fn-var 197)
 	(receiver
-		(e-field-access (field "field")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))))
+				(e-runtime-error (tag "ident_not_in_scope")))
+			(segments
+				(segment (name "field") (mode "required")))))
 	(args))
 ~~~
 # TYPES

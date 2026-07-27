@@ -978,7 +978,7 @@ fn getUnionFromType(
                 => return .not_a_union,
             }
         },
-        .err => {},
+        .field_presence, .err => {},
     }
 
     // Not a tag union
@@ -1085,7 +1085,7 @@ fn buildUnionFromTagUnion(
                 current_ext = type_store.getAliasBackingVar(alias);
                 // Don't break - continue with the resolved alias
             },
-            .err => {
+            .field_presence, .err => {
                 // Other content types = treat as closed
                 is_open = false;
                 has_flex = false;
@@ -1243,8 +1243,10 @@ fn isTypeInhabitedWithKnownEmpty(
                 }
 
                 switch (content) {
-                    // Flex and rigid variables are unconstrained - assume inhabited
-                    .flex, .rigid => try results.append(gpa, true),
+                    // Flex and rigid variables are unconstrained - assume
+                    // inhabited. A presence fact is atomic and never a value
+                    // type reached here; treat it as inhabited for safety.
+                    .flex, .rigid, .field_presence => try results.append(gpa, true),
 
                     // Error types are treated as inhabited (we don't want to cascade errors)
                     .err => try results.append(gpa, true),
@@ -1298,15 +1300,23 @@ fn isTypeInhabitedWithKnownEmpty(
 
                         // Records - all fields must be inhabited (AND semantics)
                         .record => |record| {
-                            const fields_slice = type_store.getRecordFieldsSlice(record.fields);
-                            const field_vars = fields_slice.items(.var_);
-                            try pushAndWork(gpa, &work_list, field_vars);
+                            const presences = type_store.getRecordFieldsSlice(record.fields).items(.presence);
+                            var field_vars = std.ArrayList(Var).empty;
+                            defer field_vars.deinit(gpa);
+                            for (presences) |presence| {
+                                try field_vars.append(gpa, presence.typeVar());
+                            }
+                            try pushAndWork(gpa, &work_list, field_vars.items);
                         },
 
                         .record_unbound => |fields| {
-                            const fields_slice = type_store.getRecordFieldsSlice(fields);
-                            const field_vars = fields_slice.items(.var_);
-                            try pushAndWork(gpa, &work_list, field_vars);
+                            const presences = type_store.getRecordFieldsSlice(fields).items(.presence);
+                            var field_vars = std.ArrayList(Var).empty;
+                            defer field_vars.deinit(gpa);
+                            for (presences) |presence| {
+                                try field_vars.append(gpa, presence.typeVar());
+                            }
+                            try pushAndWork(gpa, &work_list, field_vars.items);
                         },
 
                         // Tuples - all elements must be inhabited (AND semantics)
@@ -1415,7 +1425,7 @@ fn isCtorPayloadTypeInhabitedHelp(
     switch (content) {
         .flex => |flex| return !isUnresolvedUnboundFlex(flex),
         .rigid => |rigid| return !isUnresolvedUnboundRigid(rigid),
-        .err => return true,
+        .field_presence, .err => return true,
         .alias, .structure => {},
     }
 
@@ -1423,7 +1433,7 @@ fn isCtorPayloadTypeInhabitedHelp(
     if (gop.found_existing) return true;
 
     return switch (content) {
-        .flex, .rigid, .err => unreachable,
+        .flex, .rigid, .err, .field_presence => unreachable,
         .alias => |alias| blk: {
             if (builtin_idents.isBuiltinNumericIdent(alias.ident.ident_idx)) {
                 break :blk true;
@@ -1458,7 +1468,7 @@ fn isCtorPayloadTypeInhabitedHelp(
             },
             .record => |record| blk: {
                 for (0..record.fields.count) |offset| {
-                    const field_var = type_store.getRecordFieldAt(record.fields, @intCast(offset)).var_;
+                    const field_var = type_store.getRecordFieldAt(record.fields, @intCast(offset)).presence.typeVar();
                     if (!try isCtorPayloadTypeInhabitedHelp(type_store, builtin_idents, field_var, seen)) {
                         break :blk false;
                     }
@@ -1467,7 +1477,7 @@ fn isCtorPayloadTypeInhabitedHelp(
             },
             .record_unbound => |fields| blk: {
                 for (0..fields.count) |offset| {
-                    const field_var = type_store.getRecordFieldAt(fields, @intCast(offset)).var_;
+                    const field_var = type_store.getRecordFieldAt(fields, @intCast(offset)).presence.typeVar();
                     if (!try isCtorPayloadTypeInhabitedHelp(type_store, builtin_idents, field_var, seen)) {
                         break :blk false;
                     }
@@ -1540,7 +1550,7 @@ fn isCtorPayloadTagUnionInhabited(
             .alias => |alias| {
                 current_ext = type_store.getAliasBackingVar(alias);
             },
-            .err => return false,
+            .field_presence, .err => return false,
         }
     }
 }
@@ -1580,7 +1590,7 @@ fn collectCtorPayloadBlockersHelp(
             }
             return;
         },
-        .err => return,
+        .field_presence, .err => return,
         .alias, .structure => {},
     }
 
@@ -1588,7 +1598,7 @@ fn collectCtorPayloadBlockersHelp(
     if (gop.found_existing) return;
 
     switch (content) {
-        .flex, .rigid, .err => unreachable,
+        .flex, .rigid, .err, .field_presence => unreachable,
         .alias => |alias| {
             if (builtin_idents.isBuiltinNumericIdent(alias.ident.ident_idx)) return;
             try collectCtorPayloadBlockersHelp(
@@ -1621,7 +1631,7 @@ fn collectCtorPayloadBlockersHelp(
             },
             .record => |record| {
                 for (0..record.fields.count) |offset| {
-                    const field_var = type_store.getRecordFieldAt(record.fields, @intCast(offset)).var_;
+                    const field_var = type_store.getRecordFieldAt(record.fields, @intCast(offset)).presence.typeVar();
                     if (!try isCtorPayloadTypeInhabited(type_store, builtin_idents, field_var)) {
                         try collectCtorPayloadBlockersHelp(type_store, builtin_idents, field_var, out, seen);
                     }
@@ -1629,7 +1639,7 @@ fn collectCtorPayloadBlockersHelp(
             },
             .record_unbound => |fields| {
                 for (0..fields.count) |offset| {
-                    const field_var = type_store.getRecordFieldAt(fields, @intCast(offset)).var_;
+                    const field_var = type_store.getRecordFieldAt(fields, @intCast(offset)).presence.typeVar();
                     if (!try isCtorPayloadTypeInhabited(type_store, builtin_idents, field_var)) {
                         try collectCtorPayloadBlockersHelp(type_store, builtin_idents, field_var, out, seen);
                     }
@@ -1718,7 +1728,7 @@ fn collectCtorPayloadTagUnionBlockers(
             .alias => |alias| {
                 current_ext = type_store.getAliasBackingVar(alias);
             },
-            .err => return,
+            .field_presence, .err => return,
         }
     }
 }
@@ -1748,7 +1758,7 @@ fn isKnownAbsentCtorPayloadTypeInhabitedHelp(
     switch (content) {
         .flex => return false,
         .rigid => |rigid| return !rigid.name.attributes.ignored,
-        .err => return true,
+        .field_presence, .err => return true,
         .alias, .structure => {},
     }
 
@@ -1756,7 +1766,7 @@ fn isKnownAbsentCtorPayloadTypeInhabitedHelp(
     if (gop.found_existing) return true;
 
     return switch (content) {
-        .flex, .rigid, .err => unreachable,
+        .flex, .rigid, .err, .field_presence => unreachable,
         .alias => |alias| blk: {
             if (builtin_idents.isBuiltinNumericIdent(alias.ident.ident_idx)) break :blk true;
             break :blk try isKnownAbsentCtorPayloadTypeInhabitedHelp(
@@ -1804,7 +1814,7 @@ fn isKnownAbsentCtorPayloadTypeInhabitedHelp(
             },
             .record => |record| blk: {
                 for (0..record.fields.count) |offset| {
-                    const field_var = type_store.getRecordFieldAt(record.fields, @intCast(offset)).var_;
+                    const field_var = type_store.getRecordFieldAt(record.fields, @intCast(offset)).presence.typeVar();
                     if (!try isKnownAbsentCtorPayloadTypeInhabitedHelp(
                         allocator,
                         type_store,
@@ -1819,7 +1829,7 @@ fn isKnownAbsentCtorPayloadTypeInhabitedHelp(
             },
             .record_unbound => |fields| blk: {
                 for (0..fields.count) |offset| {
-                    const field_var = type_store.getRecordFieldAt(fields, @intCast(offset)).var_;
+                    const field_var = type_store.getRecordFieldAt(fields, @intCast(offset)).presence.typeVar();
                     if (!try isKnownAbsentCtorPayloadTypeInhabitedHelp(
                         allocator,
                         type_store,
@@ -1887,7 +1897,7 @@ fn collectKnownAbsentCtorPayloadBlockersHelp(
             }
             return;
         },
-        .err => return,
+        .field_presence, .err => return,
         .alias, .structure => {},
     }
 
@@ -1895,7 +1905,7 @@ fn collectKnownAbsentCtorPayloadBlockersHelp(
     if (gop.found_existing) return;
 
     switch (content) {
-        .flex, .rigid, .err => unreachable,
+        .flex, .rigid, .err, .field_presence => unreachable,
         .alias => |alias| {
             if (builtin_idents.isBuiltinNumericIdent(alias.ident.ident_idx)) return;
             try collectKnownAbsentCtorPayloadBlockersHelp(
@@ -1961,7 +1971,7 @@ fn collectKnownAbsentCtorPayloadBlockersHelp(
             },
             .record => |record| {
                 for (0..record.fields.count) |offset| {
-                    const field_var = type_store.getRecordFieldAt(record.fields, @intCast(offset)).var_;
+                    const field_var = type_store.getRecordFieldAt(record.fields, @intCast(offset)).presence.typeVar();
                     if (!try isKnownAbsentCtorPayloadTypeInhabited(allocator, type_store, builtin_idents, field_var)) {
                         try collectKnownAbsentCtorPayloadBlockersHelp(allocator, type_store, builtin_idents, field_var, out, seen);
                     }
@@ -1969,7 +1979,7 @@ fn collectKnownAbsentCtorPayloadBlockersHelp(
             },
             .record_unbound => |fields| {
                 for (0..fields.count) |offset| {
-                    const field_var = type_store.getRecordFieldAt(fields, @intCast(offset)).var_;
+                    const field_var = type_store.getRecordFieldAt(fields, @intCast(offset)).presence.typeVar();
                     if (!try isKnownAbsentCtorPayloadTypeInhabited(allocator, type_store, builtin_idents, field_var)) {
                         try collectKnownAbsentCtorPayloadBlockersHelp(allocator, type_store, builtin_idents, field_var, out, seen);
                     }
@@ -2074,7 +2084,7 @@ fn pushTagUnionWork(gpa: std.mem.Allocator, type_store: *TypeStore, work_list: *
                 // Follow alias
                 current_ext = type_store.getAliasBackingVar(alias);
             },
-            .err => break,
+            .field_presence, .err => break,
         }
     }
 
@@ -2152,7 +2162,7 @@ fn isExtensionOpen(type_store: *TypeStore, ext_var: Var) error{OutOfMemory}!bool
             .alias => |alias| {
                 current_ext = type_store.getAliasBackingVar(alias);
             },
-            .err => return false,
+            .field_presence, .err => return false,
         }
     }
 }
@@ -2290,7 +2300,8 @@ fn isOpenExtension(type_store: *TypeStore, ext: Var) bool {
             const backing = type_store.getAliasBackingVar(alias);
             return isOpenExtension(type_store, backing);
         },
-        .err => false,
+        // A presence variable can never be a tag-union extension tail.
+        .field_presence, .err => false,
     };
 }
 
@@ -2385,7 +2396,7 @@ const CtorArgTypes = union(enum) {
     fn get(self: CtorArgTypes, type_store: *TypeStore, offset: usize) Var {
         return switch (self) {
             .vars => |range| type_store.getVarAt(range, @intCast(offset)),
-            .record_fields => |range| type_store.getRecordFieldAt(range, @intCast(offset)).var_,
+            .record_fields => |range| type_store.getRecordFieldAt(range, @intCast(offset)).presence.typeVar(),
             .none => unreachable,
         };
     }
@@ -2447,7 +2458,7 @@ fn getCtorArgTypes(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_v
                 .alias => |alias| {
                     current_ext = type_store.getAliasBackingVar(alias);
                 },
-                .flex, .rigid, .err => break,
+                .flex, .rigid, .field_presence, .err => break,
             }
         }
     }
@@ -2488,7 +2499,7 @@ fn getCtorArgTypes(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_v
             .empty_tag_union,
             => {},
         },
-        .flex, .rigid, .err => {},
+        .flex, .rigid, .field_presence, .err => {},
     }
 
     return .none;
@@ -2521,11 +2532,11 @@ fn getRecordFieldTypeByName(type_store: *TypeStore, record_type: Var, field_name
                 .record => |record| {
                     const fields_slice = type_store.getRecordFieldsSlice(record.fields);
                     const field_names = fields_slice.items(.name);
-                    const field_vars = fields_slice.items(.var_);
+                    const field_presences = fields_slice.items(.presence);
 
-                    for (field_names, field_vars) |name, var_| {
+                    for (field_names, field_presences) |name, presence| {
                         if (name.eql(field_name)) {
-                            return var_;
+                            return presence.typeVar();
                         }
                     }
                     // Field not found in this record - check extension
@@ -2535,11 +2546,11 @@ fn getRecordFieldTypeByName(type_store: *TypeStore, record_type: Var, field_name
                 .record_unbound => |fields| {
                     const fields_slice = type_store.getRecordFieldsSlice(fields);
                     const field_names = fields_slice.items(.name);
-                    const field_vars = fields_slice.items(.var_);
+                    const field_presences = fields_slice.items(.presence);
 
-                    for (field_names, field_vars) |name, var_| {
+                    for (field_names, field_presences) |name, presence| {
                         if (name.eql(field_name)) {
-                            return var_;
+                            return presence.typeVar();
                         }
                     }
                     return null;
@@ -2558,7 +2569,7 @@ fn getRecordFieldTypeByName(type_store: *TypeStore, record_type: Var, field_name
                 current_type = type_store.getAliasBackingVar(alias);
                 continue;
             },
-            .flex, .rigid, .err => return null,
+            .flex, .rigid, .field_presence, .err => return null,
         }
     }
 }
@@ -2582,7 +2593,7 @@ fn getListElemType(type_store: *TypeStore, type_var: Var) ?Var {
             const backing_var = type_store.getAliasBackingVar(alias);
             return getListElemType(type_store, backing_var);
         },
-        .flex, .rigid, .structure, .err => {},
+        .flex, .rigid, .field_presence, .structure, .err => {},
     }
 
     return null;
@@ -3187,7 +3198,7 @@ fn collectFlexExtVars(
             .alias => |alias| {
                 current_ext = type_store.getAliasBackingVar(alias);
             },
-            .rigid, .err => break,
+            .rigid, .field_presence, .err => break,
         }
     }
 }

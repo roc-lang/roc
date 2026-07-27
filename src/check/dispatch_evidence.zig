@@ -201,11 +201,7 @@ fn walk(
             .structure => |flat_type| switch (flat_type) {
                 .record => |record| try pushRecordChildren(gpa, scratch, entry, store, record.fields, record.ext),
                 .record_unbound => |fields_range| {
-                    scratch.children.clearRetainingCapacity();
-                    const fields = store.getRecordFieldsSlice(fields_range);
-                    for (fields.items(.name), fields.items(.var_)) |name, field_var| {
-                        try scratch.children.append(gpa, child(field_var, step(.record_field, @bitCast(name))));
-                    }
+                    try collectRecordFieldChildren(gpa, scratch, store, fields_range);
                     try pushChildren(gpa, scratch, entry);
                 },
                 .tuple => |tuple| {
@@ -238,6 +234,9 @@ fn walk(
                 .tag_union => |tag_union| try pushTagChildren(gpa, scratch, entry, store, tag_union),
                 .empty_record, .empty_tag_union => {},
             },
+            // A presence variable carries no static-dispatch constraints and has
+            // no children; it is a leaf like `.err`.
+            .field_presence => {},
             .err => {},
         }
     }
@@ -270,11 +269,7 @@ fn walkRowContinuation(
             .record => switch (flat_type) {
                 .record => |record| try pushRecordChildren(gpa, scratch, entry, store, record.fields, record.ext),
                 .record_unbound => |fields_range| {
-                    scratch.children.clearRetainingCapacity();
-                    const fields = store.getRecordFieldsSlice(fields_range);
-                    for (fields.items(.name), fields.items(.var_)) |name, field_var| {
-                        try scratch.children.append(gpa, child(field_var, step(.record_field, @bitCast(name))));
-                    }
+                    try collectRecordFieldChildren(gpa, scratch, store, fields_range);
                     try pushChildren(gpa, scratch, entry);
                 },
                 .empty_record => {},
@@ -302,6 +297,9 @@ fn walkRowContinuation(
             },
             .none => unreachable,
         },
+        // A presence variable carries no static-dispatch constraints and has no
+        // children; it is a leaf like `.err`.
+        .field_presence => {},
         .err => {},
     }
 }
@@ -361,6 +359,39 @@ fn pushChildren(gpa: Allocator, scratch: *Scratch, entry: StackEntry) Allocator.
     }
 }
 
+/// Collect one child per record field, addressed by label. Shared by the
+/// `record` and `record_unbound` branches of both walkers so the two row kinds
+/// cannot diverge.
+///
+/// Only the field's VALUE-axis var is walked. An undetermined-kind field
+/// (`RecordField.Presence.unknown`) also carries a presence-axis var, but a
+/// presence var is an evidence leaf exactly like the `.field_presence` arms
+/// above: static-dispatch constraints attach to expression receivers, a
+/// presence var is never addressable from an expression, and unification only
+/// ever pairs it with other presence-axis content — `unify.zig`'s
+/// `unifyFlex`/`unifyFieldPresence` assert that a flex meeting a presence fact
+/// carries zero constraints (and still `recordDeferredConstraint` it), so no
+/// constraint can hide behind a presence var.
+///
+/// `.unknown` fields occur in `record` rows (literals, `.?` accesses, `:?`
+/// annotations). `record_unbound` rows carry only `.required` fields: their
+/// sole producer is the record-update probe in `Check.zig` (`e_record` with an
+/// ext), and every later appearance is a verbatim copy (`instantiate.zig`,
+/// `copy_import.zig`). Both row kinds still share this walk because the
+/// evidence-bearing axis is identical either way.
+fn collectRecordFieldChildren(
+    gpa: Allocator,
+    scratch: *Scratch,
+    store: *const types_mod.Store,
+    fields_range: types_mod.RecordField.SafeMultiList.Range,
+) Allocator.Error!void {
+    scratch.children.clearRetainingCapacity();
+    const fields = store.getRecordFieldsSlice(fields_range);
+    for (fields.items(.name), fields.items(.presence)) |name, presence| {
+        try scratch.children.append(gpa, child(presence.typeVar(), step(.record_field, @bitCast(name))));
+    }
+}
+
 fn pushRecordChildren(
     gpa: Allocator,
     scratch: *Scratch,
@@ -369,11 +400,7 @@ fn pushRecordChildren(
     fields_range: types_mod.RecordField.SafeMultiList.Range,
     ext: Var,
 ) Allocator.Error!void {
-    scratch.children.clearRetainingCapacity();
-    const fields = store.getRecordFieldsSlice(fields_range);
-    for (fields.items(.name), fields.items(.var_)) |name, field_var| {
-        try scratch.children.append(gpa, child(field_var, step(.record_field, @bitCast(name))));
-    }
+    try collectRecordFieldChildren(gpa, scratch, store, fields_range);
     try scratch.children.append(gpa, rowContinuation(ext, .record));
     try pushChildren(gpa, scratch, entry);
 }

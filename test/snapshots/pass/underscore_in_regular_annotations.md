@@ -159,8 +159,9 @@ EndOfFile,
 				(args
 					(p-ident (raw "record")))
 				(e-field-access
-					(e-ident (raw "record"))
-					(e-ident (raw "other")))))
+					(receiver
+						(e-ident (raw "record")))
+					(segment (mode "required") (field "other")))))
 		(s-type-anno (name "handle_result")
 			(ty-fn
 				(ty-apply
@@ -292,10 +293,12 @@ transform = |_, b| b
 		(e-lambda
 			(args
 				(p-assign (ident "record")))
-			(e-field-access (field "other")
+			(e-field-access
 				(receiver
 					(e-lookup-local
-						(p-assign (ident "record"))))))
+						(p-assign (ident "record"))))
+				(segments
+					(segment (name "other") (mode "required")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-record

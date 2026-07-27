@@ -948,7 +948,7 @@ pub const CompletionBuilder = struct {
             .structure => |flat_type| {
                 self.logDebug("addFieldsFromContent: structure, flat_type tag={s}", .{@tagName(flat_type)});
             },
-            .flex, .rigid, .err => {
+            .flex, .rigid, .field_presence, .err => {
                 self.logDebug("addFieldsFromContent: not a record or alias, tag={s}", .{@tagName(content)});
             },
         }
@@ -961,7 +961,7 @@ pub const CompletionBuilder = struct {
         // Get the record fields
         const fields_slice = type_store.getRecordFieldsSlice(record.fields);
         const field_names = fields_slice.items(.name);
-        const field_vars = fields_slice.items(.var_);
+        const field_presences = fields_slice.items(.presence);
 
         self.logDebug("addFieldsFromRecord: record.fields={}, fields_slice.len={}, field_names.len={d}", .{ record.fields, fields_slice.len, field_names.len });
 
@@ -970,10 +970,13 @@ pub const CompletionBuilder = struct {
         defer if (type_writer) |*tw| tw.deinit();
 
         // Iterate over record fields
-        for (field_names, field_vars) |field_name_idx, field_var| {
+        for (field_names, field_presences) |field_name_idx, field_presence| {
             const field_name = module_env.getIdentText(field_name_idx);
             self.logDebug("addFieldsFromRecord: field '{s}'", .{field_name});
             if (field_name.len == 0) continue;
+
+            // An absent field is not on the record, so it is never a completion.
+            const field_var = field_presence.typeVar();
 
             // Get field type for detail
             var detail: ?[]const u8 = null;
@@ -1004,12 +1007,13 @@ pub const CompletionBuilder = struct {
         const type_store = &module_env.types;
         const fields_slice = type_store.getRecordFieldsSlice(record.fields);
         const field_names = fields_slice.items(.name);
-        const field_vars = fields_slice.items(.var_);
+        const field_presences = fields_slice.items(.presence);
 
-        for (field_names, field_vars) |field_name_idx, field_var| {
+        for (field_names, field_presences) |field_name_idx, field_presence| {
             const name = module_env.getIdentText(field_name_idx);
             if (std.mem.eql(u8, name, field_name)) {
-                return field_var;
+                // An absent field carries no type var.
+                return field_presence.typeVar();
             }
         }
 
@@ -1164,7 +1168,7 @@ pub const CompletionBuilder = struct {
                     content = resolved.desc.content;
                     continue;
                 },
-                .structure, .err => break,
+                .structure, .field_presence, .err => break,
             }
         }
     }

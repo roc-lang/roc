@@ -110,6 +110,7 @@ const EmitFrame = union(enum) {
     pattern: CIR.Pattern.Idx,
     statement: CIR.Statement.Idx,
     binop_operand: struct { expr_idx: Expr.Idx, outer_op: Expr.Binop.Op, side: BinopSide },
+    field_access_suffix: Expr.FieldAccessSegment.Span,
     write: []const u8,
     indent,
     inc_indent,
@@ -134,6 +135,7 @@ fn emitFromFrame(self: *Self, first: EmitFrame) EmitError!void {
             .pattern => |idx| try self.emitPatternFrame(idx, &frames, stack_allocator),
             .statement => |idx| try self.emitStatementFrame(idx, &frames, stack_allocator),
             .binop_operand => |operand| try self.emitBinopOperandFrame(operand.expr_idx, operand.outer_op, operand.side, &frames, stack_allocator),
+            .field_access_suffix => |segments| try self.emitFieldAccessSuffix(segments),
             .pattern_record_field => |field| try self.emitPatternRecordFieldFrame(field.destruct_idx, field.index, &frames, stack_allocator),
         }
     }
@@ -267,6 +269,168 @@ fn pushUnaryReceiverFrames(
     }
 }
 
+/// Whether a field-access path receiver needs parentheses to reparse as the
+/// same CIR expression.
+///
+/// Field access is a postfix operator, so prefix and lower-precedence
+/// expressions need parentheses. Numeric literals need them independently of
+/// precedence so their trailing text cannot fuse with the accessor's leading
+/// dot. A nested field-access node also needs parentheses: it denotes a source
+/// path boundary which would otherwise flatten into one canonical path.
+fn fieldAccessPathReceiverNeedsParens(self: *Self, receiver_idx: Expr.Idx) bool {
+    var current_idx = receiver_idx;
+    while (true) {
+        switch (self.module_env.store.getExpr(current_idx)) {
+            .e_num,
+            .e_frac_f32,
+            .e_frac_f64,
+            .e_dec,
+            .e_dec_small,
+            .e_num_from_numeral,
+            .e_typed_int,
+            .e_typed_frac,
+            .e_typed_num_from_numeral,
+            => return true,
+
+            .e_if,
+            .e_match,
+            .e_closure,
+            .e_lambda,
+            .e_binop,
+            .e_unary_minus,
+            .e_unary_not,
+            .e_field_access,
+            .e_structural_eq,
+            .e_method_eq,
+            .e_crash,
+            .e_dbg,
+            .e_expect,
+            .e_return,
+            .e_for,
+            => return true,
+
+            .e_dispatch_call => |call| return switch (call.surface_origin) {
+                .binop, .unary_minus, .unary_not => true,
+                .method_call => false,
+            },
+
+            // Nominal nodes emit only their transparent backing expression,
+            // so iteratively peel them before classifying surface precedence.
+            .e_nominal => |nominal| current_idx = nominal.backing_expr,
+            .e_nominal_external => |nominal| current_idx = nominal.backing_expr,
+
+            .e_str_segment,
+            .e_str,
+            .e_bytes_literal,
+            .e_lookup_local,
+            .e_lookup_external,
+            .e_lookup_required,
+            .e_lookup_associated_local,
+            .e_lookup_associated,
+            .e_lookup_associated_resolved,
+            .e_list,
+            .e_empty_list,
+            .e_tuple,
+            .e_call,
+            .e_record,
+            .e_empty_record,
+            .e_block,
+            .e_tag,
+            .e_zero_argument_tag,
+            .e_method_call,
+            .e_interpolation,
+            .e_structural_hash,
+            .e_type_method_call,
+            .e_type_dispatch_call,
+            .e_tuple_access,
+            .e_runtime_error,
+            .e_expect_err,
+            .e_ellipsis,
+            .e_anno_only,
+            .e_derived_method,
+            .e_break,
+            .e_hosted_lambda,
+            .e_run_low_level,
+            => return false,
+        }
+    }
+}
+
+/// Push a field-access path receiver with the parentheses required by
+/// `fieldAccessPathReceiverNeedsParens`.
+fn pushFieldAccessPathReceiverFrames(
+    self: *Self,
+    receiver_idx: Expr.Idx,
+    frames: *std.ArrayList(EmitFrame),
+    allocator: std.mem.Allocator,
+) EmitError!void {
+    if (self.fieldAccessPathReceiverNeedsParens(receiver_idx)) {
+        try frames.append(allocator, .{ .write = ")" });
+        try frames.append(allocator, .{ .expr = receiver_idx });
+        try frames.append(allocator, .{ .write = "(" });
+    } else {
+        try frames.append(allocator, .{ .expr = receiver_idx });
+    }
+}
+
+/// Whether emitting a call callee without parentheses would select different
+/// source syntax.
+///
+/// A record-field path followed immediately by an argument list is method-call
+/// syntax. Ordinary application of a function stored in a record field must
+/// therefore retain the source boundary as `(value.field)(arg)`. Nominal CIR
+/// nodes emit only their transparent backing expression, so inspect through
+/// them before deciding.
+fn callCalleeNeedsParens(self: *Self, callee_idx: Expr.Idx) bool {
+    var current_idx = callee_idx;
+    while (true) {
+        const expr = self.module_env.store.getExpr(current_idx);
+        if (expr == .e_field_access) return true;
+        if (expr == .e_nominal) {
+            current_idx = expr.e_nominal.backing_expr;
+            continue;
+        }
+        if (expr == .e_nominal_external) {
+            current_idx = expr.e_nominal_external.backing_expr;
+            continue;
+        }
+        return false;
+    }
+}
+
+/// Push a call callee while preserving any field-path boundary required to
+/// keep ordinary application distinct from method dispatch.
+fn pushCallCalleeFrames(
+    self: *Self,
+    callee_idx: Expr.Idx,
+    frames: *std.ArrayList(EmitFrame),
+    allocator: std.mem.Allocator,
+) EmitError!void {
+    if (self.callCalleeNeedsParens(callee_idx)) {
+        try frames.append(allocator, .{ .write = ")" });
+        try frames.append(allocator, .{ .expr = callee_idx });
+        try frames.append(allocator, .{ .write = "(" });
+    } else {
+        try frames.append(allocator, .{ .expr = callee_idx });
+    }
+}
+
+/// Emit every segment of one flattened field-access path.
+/// Keeping the span in one frame makes emitter stack usage independent of path
+/// length.
+fn emitFieldAccessSuffix(self: *Self, segments: Expr.FieldAccessSegment.Span) EmitError!void {
+    const segment_count = segments.len;
+    for (0..segment_count) |position| {
+        const segment_idx = self.module_env.store.fieldAccessSegmentAt(segments, @intCast(position));
+        const segment = self.module_env.store.getFieldAccessSegment(segment_idx);
+        try self.write(switch (segment.mode) {
+            .required => ".",
+            .optional => ".?",
+        });
+        try self.write(self.module_env.getIdent(segment.name));
+    }
+}
+
 fn emitExprFrame(
     self: *Self,
     expr_idx: Expr.Idx,
@@ -383,7 +547,7 @@ fn emitExprFrame(
             try self.write("");
             try pushExprList(frames, allocator, self.module_env.store.sliceExpr(call.args), ")", ", ");
             try frames.append(allocator, .{ .write = "(" });
-            try frames.append(allocator, .{ .expr = call.func });
+            try self.pushCallCalleeFrames(call.func, frames, allocator);
         },
         .e_record => |record| {
             try self.write("{ ");
@@ -461,9 +625,8 @@ fn emitExprFrame(
             try frames.append(allocator, .{ .write = "!" });
         },
         .e_field_access => |field_access| {
-            try frames.append(allocator, .{ .write = self.module_env.getIdent(field_access.field_name) });
-            try frames.append(allocator, .{ .write = "." });
-            try frames.append(allocator, .{ .expr = field_access.receiver });
+            try frames.append(allocator, .{ .field_access_suffix = field_access.segments });
+            try self.pushFieldAccessPathReceiverFrames(field_access.receiver, frames, allocator);
         },
         .e_method_call => |method_call| {
             try pushExprList(frames, allocator, self.module_env.store.sliceExpr(method_call.args), ")", ", ");

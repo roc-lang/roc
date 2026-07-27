@@ -319,6 +319,44 @@ const DemandAnalyzer = struct {
         try self.walkDemand(def.expr, out, &local_callables);
     }
 
+    /// Add the demand contributions of a VALUE def's annotation (design.md
+    /// "Defaulted Fields"): a record-field default declared by the def's own
+    /// annotation is materialized when a construction in the def's RHS omits
+    /// the field, so evaluating the def's constant may demand everything the
+    /// default expression demands. The edge belongs to the annotated def —
+    /// the annotation is its explicit, canonicalized property — not to the
+    /// construction site, whose absorption of the default is a type-level
+    /// fact invisible here.
+    ///
+    /// Function defs contribute nothing: evaluating a function def yields a
+    /// closure without constructing the annotated type, so its annotation's
+    /// defaults are materialized (if ever) by its callers' constructions,
+    /// which this walk cannot see.
+    fn collectDefAnnotationDefaultDependencies(
+        self: *DemandAnalyzer,
+        def_idx: CIR.Def.Idx,
+        out: *DemandSummary,
+        default_exprs: *std.ArrayList(CIR.Expr.Idx),
+        anno_stack: *std.ArrayList(CIR.TypeAnno.Idx),
+    ) std.mem.Allocator.Error!void {
+        const def = self.cir.store.getDef(def_idx);
+        const annotation_idx = def.annotation orelse return;
+
+        const def_expr = self.cir.store.getExpr(def.expr);
+        if (def_expr == .e_lambda or def_expr == .e_closure or def_expr == .e_anno_only or
+            def_expr == .e_derived_method or def_expr == .e_hosted_lambda) return;
+
+        const annotation = self.cir.store.getAnnotation(annotation_idx);
+        default_exprs.clearRetainingCapacity();
+        try collectAnnotationDefaultExprs(self.cir, annotation.anno, default_exprs, anno_stack, self.allocator);
+
+        for (default_exprs.items) |default_expr| {
+            var local_callables = LocalCallables{};
+            defer local_callables.deinit(self.allocator);
+            try self.walkDemand(default_expr, out, &local_callables);
+        }
+    }
+
     fn addGraphDep(self: *DemandAnalyzer, out: *DemandSummary, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
         if (self.graph_def_set.contains(def_idx)) {
             _ = try out.addDep(self.allocator, def_idx);
@@ -845,6 +883,68 @@ const DemandAnalyzer = struct {
     }
 };
 
+/// Collect every record-field DEFAULT expression (`a : U8 ?? expr`, design.md
+/// "Defaulted Fields") declared anywhere in the type annotation tree rooted at
+/// `root_anno`, in the explicit `TypeAnno.RecordField.default_value` slots
+/// canonicalization produced.
+///
+/// Only the INLINE annotation tree is walked. A `lookup`/`apply` reference to
+/// a type declaration is not followed: the declaration's defaults belong to
+/// the declaration, and whether a construction site materializes them is a
+/// type-level fact this name-level walk cannot see (see the alias-mediated
+/// limitation note on `collectDefAnnotationDefaultDependencies`).
+///
+/// The walk is an explicit worklist (zero-recursion policy).
+fn collectAnnotationDefaultExprs(
+    cir: *const ModuleEnv,
+    root_anno: CIR.TypeAnno.Idx,
+    out: *std.ArrayList(CIR.Expr.Idx),
+    scratch_stack: *std.ArrayList(CIR.TypeAnno.Idx),
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!void {
+    scratch_stack.clearRetainingCapacity();
+    try scratch_stack.append(allocator, root_anno);
+
+    while (scratch_stack.pop()) |anno_idx| {
+        switch (cir.store.getTypeAnno(anno_idx)) {
+            .record => |record| {
+                for (cir.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
+                    const field = cir.store.getAnnoRecordField(field_idx);
+                    if (field.default_value) |default_expr| {
+                        try out.append(allocator, default_expr);
+                    }
+                    try scratch_stack.append(allocator, field.ty);
+                }
+                if (record.ext) |ext_idx| try scratch_stack.append(allocator, ext_idx);
+            },
+            .apply => |apply| {
+                for (cir.store.sliceTypeAnnos(apply.args)) |arg| try scratch_stack.append(allocator, arg);
+            },
+            .tag_union => |tag_union| {
+                for (cir.store.sliceTypeAnnos(tag_union.tags)) |tag| try scratch_stack.append(allocator, tag);
+                if (tag_union.ext) |ext_idx| try scratch_stack.append(allocator, ext_idx);
+            },
+            .tag => |tag| {
+                for (cir.store.sliceTypeAnnos(tag.args)) |arg| try scratch_stack.append(allocator, arg);
+            },
+            .tuple => |tuple| {
+                for (cir.store.sliceTypeAnnos(tuple.elems)) |elem| try scratch_stack.append(allocator, elem);
+            },
+            .@"fn" => |func| {
+                for (cir.store.sliceTypeAnnos(func.args)) |arg| try scratch_stack.append(allocator, arg);
+                try scratch_stack.append(allocator, func.ret);
+            },
+            .parens => |parens| try scratch_stack.append(allocator, parens.anno),
+            .rigid_var,
+            .rigid_var_lookup,
+            .underscore,
+            .lookup,
+            .malformed,
+            => {},
+        }
+    }
+}
+
 /// Build a dependency graph for all definitions
 pub fn buildDependencyGraph(
     cir: *const ModuleEnv,
@@ -860,11 +960,17 @@ pub fn buildDependencyGraph(
 
     try analyzer.computeSummaries();
 
+    var default_exprs: std.ArrayList(CIR.Expr.Idx) = .empty;
+    defer default_exprs.deinit(allocator);
+    var anno_stack: std.ArrayList(CIR.TypeAnno.Idx) = .empty;
+    defer anno_stack.deinit(allocator);
+
     for (defs_slice) |def_idx| {
         var deps = DemandSummary{};
         defer deps.deinit(allocator);
 
         try analyzer.collectDefDependencies(def_idx, &deps);
+        try analyzer.collectDefAnnotationDefaultDependencies(def_idx, &deps, &default_exprs, &anno_stack);
 
         var dep_iter = deps.deps.keyIterator();
         while (dep_iter.next()) |dep_def_idx| {
@@ -971,11 +1077,17 @@ pub fn getConstantsInDependencyOrder(
 
     try analyzer.computeSummaries();
 
+    var default_exprs: std.ArrayList(CIR.Expr.Idx) = .empty;
+    defer default_exprs.deinit(allocator);
+    var anno_stack: std.ArrayList(CIR.TypeAnno.Idx) = .empty;
+    defer anno_stack.deinit(allocator);
+
     for (constants) |def_idx| {
         var deps = DemandSummary{};
         defer deps.deinit(allocator);
 
         try analyzer.collectDefDependencies(def_idx, &deps);
+        try analyzer.collectDefAnnotationDefaultDependencies(def_idx, &deps, &default_exprs, &anno_stack);
 
         var dep_iter = deps.deps.keyIterator();
         while (dep_iter.next()) |dep_def_idx| {
@@ -1005,7 +1117,7 @@ pub fn getConstantsInDependencyOrder(
 /// dependencies during inference and resolves them at group boundaries.
 ///
 /// The walk is an explicit worklist (zero-recursion policy).
-fn collectNameReferences(
+pub fn collectNameReferences(
     cir: *const ModuleEnv,
     pattern_to_def: *const std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Def.Idx),
     root_expr: CIR.Expr.Idx,

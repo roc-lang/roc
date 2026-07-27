@@ -2511,7 +2511,7 @@ fn computeTransformedExprType(
                 const field = can_ir.store.getRecordField(field_idx);
                 // Get the type of the field value expression
                 const field_type = try computeTransformedExprType(can_ir, field.value);
-                try type_fields.append(can_ir.gpa, .{ .name = field.name, .var_ = field_type });
+                try type_fields.append(can_ir.gpa, .{ .name = field.name, .presence = .{ .present = field_type } });
             }
 
             const fields_range = try can_ir.types.appendRecordFields(type_fields.items);
@@ -2782,13 +2782,31 @@ fn getDefaultedTypeStringWithSeen(
                     try result.appendSlice("{ ");
                     const fields_slice = can_ir.types.getRecordFieldsSlice(record.fields);
                     const field_names = fields_slice.items(.name);
-                    const field_vars = fields_slice.items(.var_);
-                    for (field_names, field_vars, 0..) |field_name_idx, field_var, i| {
-                        if (i > 0) try result.appendSlice(", ");
+                    const field_presences = fields_slice.items(.presence);
+                    var wrote_any = false;
+                    for (field_names, field_presences) |field_name_idx, field_presence| {
+                        // An absent field is not on the record, so it is never rendered.
+                        const field_var = field_presence.typeVar();
+                        if (wrote_any) try result.appendSlice(", ");
+                        wrote_any = true;
 
                         const field_name = can_ir.getIdent(field_name_idx);
                         try result.appendSlice(field_name);
-                        try result.appendSlice(" : ");
+                        // Resolve the kind var like TypeWriter does: a
+                        // wrapper whose kind solved required/defaulted is a
+                        // plain field; only a solved `optional` renders `:?`
+                        // (a still-flex kind defaults to required at read
+                        // boundaries — design.md "Field Kinds").
+                        try result.appendSlice(switch (field_presence) {
+                            .required => " : ",
+                            .unknown => |unknown| switch (can_ir.types.resolveVar(unknown.presence).desc.content) {
+                                .field_presence => |fp| switch (fp) {
+                                    .required, .defaulted => " : ",
+                                    .optional => " :? ",
+                                },
+                                .flex, .rigid, .alias, .structure, .err => " : ",
+                            },
+                        });
 
                         const field_type = try getDefaultedTypeStringWithSeen(allocator, can_ir, field_var, seen, false);
                         defer allocator.free(field_type);
@@ -2806,7 +2824,7 @@ fn getDefaultedTypeStringWithSeen(
                 => {},
             }
         },
-        .rigid, .alias, .err => {},
+        .rigid, .alias, .field_presence, .err => {},
     }
 
     // Use TypeWriter for all other cases - it has proper cycle detection.
@@ -5938,6 +5956,30 @@ test "snapshot markdown avoids removed keyword text" {
 
     try std.testing.expectEqualStrings("mod Mod MOD type_mod", actual);
     try std.testing.expect(!containsModuleText(actual));
+}
+
+test "snapshot tool formats optional record fields" {
+    const allocator = std.testing.allocator;
+    var module_env = try ModuleEnv.init(allocator, "");
+    defer module_env.deinit();
+
+    const required_name = try module_env.insertIdent(base.Ident.for_text("required"));
+    const optional_name = try module_env.insertIdent(base.Ident.for_text("optional"));
+    const field_var = try module_env.types.freshFromContent(.{ .structure = .empty_record });
+    const ext_var = try module_env.types.freshFromContent(.{ .structure = .empty_record });
+    const optional_presence = try module_env.types.freshFromContent(.{ .field_presence = .optional });
+    const fields = try module_env.types.appendRecordFields(&.{
+        .{ .name = required_name, .presence = .{ .required = field_var } },
+        .{ .name = optional_name, .presence = .{ .unknown = .{ .presence = optional_presence, .var_ = field_var } } },
+    });
+    const record_var = try module_env.types.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = fields,
+        .ext = ext_var,
+    } } });
+
+    const formatted = try getDefaultedTypeString(allocator, &module_env, record_var);
+    defer allocator.free(formatted);
+    try std.testing.expectEqualStrings("{ required : {}, optional :? {} }", formatted);
 }
 
 test "no Builtin module leaks in snapshots" {

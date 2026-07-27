@@ -20,6 +20,567 @@ const simd_tests = @import("eval_simd_tests.zig");
 ///
 /// Every value-producing test is observed solely through `Str.inspect(...)`.
 const core_tests = [_]TestCase{
+    .{
+        .name = "defaulted record field: omitted at construction materializes the default",
+        .source_kind = .module,
+        .source =
+        \\my_record : { hello : Str, count : U8 ?? 10 }
+        \\my_record = { hello: "hi" }
+        \\
+        \\main = my_record.count
+        ,
+        .expected = .{ .inspect_str = "10" },
+    },
+    .{
+        .name = "defaulted record field: supplied value wins over the default",
+        .source_kind = .module,
+        .source =
+        \\my_record : { count : U8 ?? 10 }
+        \\my_record = { count: 5 }
+        \\
+        \\main = my_record.count
+        ,
+        .expected = .{ .inspect_str = "5" },
+    },
+    .{
+        .name = "defaulted record field: alias-carried default materializes",
+        .source_kind = .module,
+        .source =
+        \\Cfg : { retries : U8 ?? 3, verbose : U8 ?? 0 }
+        \\
+        \\cfg : Cfg
+        \\cfg = { verbose: 1 }
+        \\
+        \\main = cfg.retries + cfg.verbose
+        ,
+        .expected = .{ .inspect_str = "4" },
+    },
+    .{
+        .name = "defaulted record field: empty literal materializes the default",
+        .source_kind = .module,
+        .source =
+        \\x : { a : U8 ?? 10 }
+        \\x = {}
+        \\
+        \\main = x.a
+        ,
+        .expected = .{ .inspect_str = "10" },
+    },
+    .{
+        .name = "defaulted record field: empty literal materializes every alias-carried default",
+        .source_kind = .module,
+        .source =
+        \\Cfg : { retries : U8 ?? 3, verbose : U8 ?? 40 }
+        \\
+        \\cfg : Cfg
+        \\cfg = {}
+        \\
+        \\main = cfg.retries + cfg.verbose
+        ,
+        .expected = .{ .inspect_str = "43" },
+    },
+    .{
+        .name = "defaulted record field: empty literal in a function body materializes the default",
+        .source_kind = .module,
+        .source =
+        \\make : U8 -> { a : U8 ?? 10 }
+        \\make = |_n| {}
+        \\
+        \\main = make(1).a + make(2).a
+        ,
+        .expected = .{ .inspect_str = "20" },
+    },
+    .{
+        .name = "defaulted record field: partial literal in a function body keeps supplied and defaults omitted",
+        .source_kind = .module,
+        .source =
+        \\make : U8 -> { supplied : U8 ?? 1, defaulted : U8 ?? 7 }
+        \\make = |n| { supplied: n }
+        \\
+        \\main = make(30).supplied + make(30).defaulted
+        ,
+        .expected = .{ .inspect_str = "37" },
+    },
+    .{
+        .name = "optional record field: supplied at construction and .? hits",
+        .source_kind = .module,
+        .source =
+        \\my_record : { name : Str, age :? U8 }
+        \\my_record = { name: "a", age: 30 }
+        \\
+        \\main = my_record.?age ?? 5
+        ,
+        .expected = .{ .inspect_str = "30" },
+    },
+    .{
+        .name = "optional record field: omitted at construction and .? misses to the fallback",
+        .source_kind = .module,
+        .source =
+        \\my_record : { name : Str, age :? U8 }
+        \\my_record = { name: "a" }
+        \\
+        \\main = my_record.?age ?? 5
+        ,
+        .expected = .{ .inspect_str = "5" },
+    },
+    .{
+        .name = "optional record field: .? produces a real Try to match on",
+        .source_kind = .module,
+        .source =
+        \\my_record : { age :? U8 }
+        \\my_record = { age: 2 }
+        \\
+        \\main = match my_record.?age {
+        \\    Ok(v) => v
+        \\    Err(MissingField) => 0
+        \\}
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        .name = "optional record field: empty literal against an all-optional row is all missing",
+        .source_kind = .module,
+        .source =
+        \\x : { a :? U8, b :? U8 }
+        \\x = {}
+        \\
+        \\main = (x.?a ?? 7) + (x.?b ?? 8)
+        ,
+        .expected = .{ .inspect_str = "15" },
+    },
+    .{
+        .name = "optional record field: required segment after .? rides the Ok path",
+        .source_kind = .module,
+        .source =
+        \\o : { b :? { c : U8 } }
+        \\o = { b: { c: 42 } }
+        \\
+        \\main = o.?b.c ?? 0
+        ,
+        .expected = .{ .inspect_str = "42" },
+    },
+    .{
+        .name = "optional record field: required segment after a missing .? falls back",
+        .source_kind = .module,
+        .source =
+        \\o : { b :? { c : U8 } }
+        \\o = {}
+        \\
+        \\main = o.?b.c ?? 9
+        ,
+        .expected = .{ .inspect_str = "9" },
+    },
+    .{
+        .name = "optional record field: two-optional chain hit",
+        .source_kind = .module,
+        .source =
+        \\o : { b :? { c :? U8 } }
+        \\o = { b: { c: 4 } }
+        \\
+        \\main = o.?b.?c ?? 11
+        ,
+        .expected = .{ .inspect_str = "4" },
+    },
+    .{
+        .name = "optional record field: two-optional chain short-circuits on the inner missing slot",
+        .source_kind = .module,
+        .source =
+        \\o : { b :? { c :? U8 } }
+        \\o = { b: {} }
+        \\
+        \\main = o.?b.?c ?? 11
+        ,
+        .expected = .{ .inspect_str = "11" },
+    },
+    .{
+        .name = "optional record field: required, defaulted, and optional slots in one record (omitting sides)",
+        .source_kind = .module,
+        .source =
+        \\r : { req : U8, def : U8 ?? 10, opt :? U8 }
+        \\r = { req: 1 }
+        \\
+        \\main = r.req + r.def + (r.?opt ?? 100)
+        ,
+        .expected = .{ .inspect_str = "111" },
+    },
+    .{
+        .name = "optional record field: required, defaulted, and optional slots in one record (all supplied)",
+        .source_kind = .module,
+        .source =
+        \\r : { req : U8, def : U8 ?? 10, opt :? U8 }
+        \\r = { req: 1, def: 2, opt: 3 }
+        \\
+        \\main = r.req + r.def + (r.?opt ?? 100)
+        ,
+        .expected = .{ .inspect_str = "6" },
+    },
+    .{
+        .name = "optional record field: conditional presence executes both branches",
+        .source_kind = .module,
+        .source =
+        \\make : Bool -> { a :? U8 }
+        \\make = |cond| if cond { a: 5 } else {}
+        \\
+        \\main = (make(True).?a ?? 0) + (make(False).?a ?? 30)
+        ,
+        .expected = .{ .inspect_str = "35" },
+    },
+    .{
+        .name = "optional record field: heap Str payload supplied and .? hits",
+        .source_kind = .module,
+        .source =
+        \\my_record : { name :? Str }
+        \\my_record = { name: Str.repeat("ab", 15) }
+        \\
+        \\main = my_record.?name ?? "anon"
+        ,
+        .expected = .{ .inspect_str = "\"ababababababababababababababab\"" },
+    },
+    .{
+        .name = "optional record field: omitted heap Str payload misses to a heap fallback",
+        .source_kind = .module,
+        .source =
+        \\my_record : { name :? Str }
+        \\my_record = {}
+        \\
+        \\main = my_record.?name ?? Str.repeat("no", 14)
+        ,
+        .expected = .{ .inspect_str = "\"nononononononononononononono\"" },
+    },
+    .{
+        .name = "optional record field: present heap Str payload dropped without being read",
+        .source_kind = .module,
+        .source =
+        \\make : U8 -> { keep : U8, name :? Str }
+        \\make = |n| { keep: n, name: Str.repeat("xy", 20) }
+        \\
+        \\main = make(7).keep
+        ,
+        .expected = .{ .inspect_str = "7" },
+    },
+    .{
+        .name = "optional record field: List(U8) payload supplied and omitted",
+        .source_kind = .module,
+        .source =
+        \\r : { xs :? List(U8) }
+        \\r = { xs: [1, 2, 3] }
+        \\
+        \\s : { xs :? List(U8) }
+        \\s = {}
+        \\
+        \\main = List.len(r.?xs ?? []) + List.len(s.?xs ?? [9])
+        ,
+        .expected = .{ .inspect_str = "4" },
+    },
+    .{
+        .name = "optional record field: nested record's optional reached through a required segment",
+        .source_kind = .module,
+        .source =
+        \\o : { inner : { a :? U8 } }
+        \\o = { inner: { a: 6 } }
+        \\
+        \\p : { inner : { a :? U8 } }
+        \\p = { inner: {} }
+        \\
+        \\main = (o.inner.?a ?? 1) + (p.inner.?a ?? 20)
+        ,
+        .expected = .{ .inspect_str = "26" },
+    },
+    .{
+        .name = "optional record field: function taking an optional-field record serves supplying and omitting callers",
+        .source_kind = .module,
+        .source =
+        \\get : { name :? Str } -> Str
+        \\get = |r| r.?name ?? "anon"
+        \\
+        \\main = Str.concat(Str.concat(get({ name: "amy" }), "/"), get({}))
+        ,
+        .expected = .{ .inspect_str = "\"amy/anon\"" },
+    },
+    .{
+        .name = "optional record field: record keeps its slots through a generic identity function",
+        .source_kind = .module,
+        .source =
+        \\id : a -> a
+        \\id = |x| x
+        \\
+        \\r : { tag :? U8 }
+        \\r = { tag: 9 }
+        \\
+        \\s : { tag :? U8 }
+        \\s = {}
+        \\
+        \\main = (id(r).?tag ?? 1) + (id(s).?tag ?? 20)
+        ,
+        .expected = .{ .inspect_str = "29" },
+    },
+    .{
+        .name = "optional record field: runtime miss takes the Err(MissingField) match branch",
+        .source_kind = .module,
+        .source =
+        \\my_record : { age :? U8 }
+        \\my_record = {}
+        \\
+        \\main = match my_record.?age {
+        \\    Ok(v) => v
+        \\    Err(MissingField) => 33
+        \\}
+        ,
+        .expected = .{ .inspect_str = "33" },
+    },
+    .{
+        .name = "optional record field: chain result passed to a function expecting Try",
+        .source_kind = .module,
+        .source =
+        \\handle : Try(U8, [MissingField]) -> U8
+        \\handle = |t| match t {
+        \\    Ok(v) => v
+        \\    Err(MissingField) => 50
+        \\}
+        \\
+        \\r : { a :? U8 }
+        \\r = { a: 4 }
+        \\
+        \\s : { a :? U8 }
+        \\s = {}
+        \\
+        \\main = handle(r.?a) + handle(s.?a)
+        ,
+        .expected = .{ .inspect_str = "54" },
+    },
+    .{
+        .name = "optional record field: chain result propagates with the ? suffix",
+        .source_kind = .module,
+        .source =
+        \\bump : { a :? U8 } -> Try(U8, [MissingField])
+        \\bump = |r| Ok(r.?a? + 1)
+        \\
+        \\unwrap : Try(U8, [MissingField]), U8 -> U8
+        \\unwrap = |t, fallback| match t {
+        \\    Ok(v) => v
+        \\    Err(MissingField) => fallback
+        \\}
+        \\
+        \\main = unwrap(bump({ a: 4 }), 0) + unwrap(bump({}), 90)
+        ,
+        .expected = .{ .inspect_str = "95" },
+    },
+    .{
+        .name = "optional record field: record update copies unmentioned optional and defaulted slots verbatim",
+        .source_kind = .module,
+        .source =
+        \\Rec : { req : U8, def : U8 ?? 10, name :? Str }
+        \\
+        \\base1 : Rec
+        \\base1 = { req: 1, name: Str.repeat("amy", 9) }
+        \\
+        \\base2 : Rec
+        \\base2 = { req: 1 }
+        \\
+        \\main = {
+        \\    u1 = { ..base1, req: 2 }
+        \\    u2 = { ..base2, req: 3 }
+        \\    (u1.req + u1.def, Str.count_utf8_bytes(u1.?name ?? ""), u2.req + u2.def, u2.?name ?? "anon")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(12, 27, 13, \"anon\")" },
+    },
+    .{
+        .name = "optional record field: records with optional slots compare by presence and payload",
+        .source_kind = .module,
+        .source =
+        \\Rec : { a :? U8 }
+        \\
+        \\x : Rec
+        \\x = { a: 1 }
+        \\
+        \\y : Rec
+        \\y = {}
+        \\
+        \\z : Rec
+        \\z = { a: 1 }
+        \\
+        \\w : Rec
+        \\w = {}
+        \\
+        \\main = (x == z, y == w, x == y)
+        ,
+        .expected = .{ .inspect_str = "(True, True, False)" },
+    },
+    .{
+        .name = "optional record field: list of records with mixed presence",
+        .source_kind = .module,
+        .source =
+        \\make : Bool -> { a :? U8 }
+        \\make = |cond| if cond { a: 5 } else {}
+        \\
+        \\main = List.map([make(True), make(False), make(True)], |r| r.?a ?? 10)
+        ,
+        .expected = .{ .inspect_str = "[5, 10, 5]" },
+    },
+    .{
+        // The annotation's element type seeds the list literal's element
+        // accumulator, so `{}` absorbs `a` as an optional (constructed
+        // missing) slot; at runtime the first element's `a` is present and
+        // the second's is missing (design.md "Field Kinds (All-Dynamic
+        // Optional Fields)").
+        .name = "optional record field: annotated list literal with mixed presence elements",
+        .source_kind = .module,
+        .source =
+        \\xs : List({ a :? U8 })
+        \\xs = [{ a: 1 }, {}]
+        \\
+        \\main = List.map(xs, |r| r.?a ?? 10)
+        ,
+        .expected = .{ .inspect_str = "[1, 10]" },
+    },
+    .{
+        // Same shape for the defaulted kind: the omitting element's slot is
+        // constructed missing, and a direct read materializes the default.
+        .name = "defaulted record field: annotated list literal materializes the default for omitting elements",
+        .source_kind = .module,
+        .source =
+        \\xs : List({ a : U8 ?? 7 })
+        \\xs = [{ a: 1 }, {}]
+        \\
+        \\main = List.map(xs, |r| r.a)
+        ,
+        .expected = .{ .inspect_str = "[1, 7]" },
+    },
+    .{
+        .name = "optional record field: inspect renders a present slot as the plain value",
+        .source_kind = .module,
+        .source =
+        \\r : { a :? U8, b : U8 }
+        \\r = { a: 5, b: 2 }
+        \\
+        \\main = r
+        ,
+        .expected = .{ .inspect_str = "{ a: 5, b: 2 }" },
+    },
+    .{
+        .name = "optional record field: inspect renders a missing slot as <missing>",
+        .source_kind = .module,
+        .source =
+        \\r : { a :? U8, b : U8 }
+        \\r = { b: 2 }
+        \\
+        \\main = r
+        ,
+        .expected = .{ .inspect_str = "{ a: <missing>, b: 2 }" },
+    },
+    .{
+        .name = "optional record field: inspect quotes a present Str payload like a required Str field",
+        .source_kind = .module,
+        .source =
+        \\r : { name :? Str, tag : Str }
+        \\r = { name: "hi", tag: "ok" }
+        \\
+        \\main = r
+        ,
+        .expected = .{ .inspect_str = "{ name: \"hi\", tag: \"ok\" }" },
+    },
+    .{
+        .name = "optional record field: inspect of required+defaulted+optional record (omitting sides)",
+        .source_kind = .module,
+        .source =
+        \\r : { req : U8, def : U8 ?? 10, opt :? U8 }
+        \\r = { req: 1 }
+        \\
+        \\main = r
+        ,
+        .expected = .{ .inspect_str = "{ def: 10, opt: <missing>, req: 1 }" },
+    },
+    .{
+        .name = "optional record field: inspect of required+defaulted+optional record (all supplied)",
+        .source_kind = .module,
+        .source =
+        \\r : { req : U8, def : U8 ?? 10, opt :? U8 }
+        \\r = { req: 1, def: 2, opt: 3 }
+        \\
+        \\main = r
+        ,
+        .expected = .{ .inspect_str = "{ def: 2, opt: 3, req: 1 }" },
+    },
+    .{
+        .name = "optional record field: inspect reaches a nested optional through a present outer slot",
+        .source_kind = .module,
+        .source =
+        \\o : { b :? { c :? U8 } }
+        \\o = { b: {} }
+        \\
+        \\main = o
+        ,
+        .expected = .{ .inspect_str = "{ b: { c: <missing> } }" },
+    },
+    .{
+        .name = "defaulted record field: heap Str default materializes from the empty literal",
+        .source_kind = .module,
+        .source =
+        \\x : { greeting : Str ?? "this default greeting string is long" }
+        \\x = {}
+        \\
+        \\main = Str.concat(x.greeting, "!")
+        ,
+        .expected = .{ .inspect_str = "\"this default greeting string is long!\"" },
+    },
+    .{
+        .name = "defaulted record field: record-literal default materializes",
+        .source_kind = .module,
+        .source =
+        \\Cfg : { pos : { x : U8, y : U8 } ?? { x: 3, y: 4 } }
+        \\
+        \\c : Cfg
+        \\c = {}
+        \\
+        \\main = c.pos.x + c.pos.y
+        ,
+        .expected = .{ .inspect_str = "7" },
+    },
+    .{
+        .name = "defaulted record field: alias-carried list default materializes at two sites",
+        .source_kind = .module,
+        .source =
+        \\Cfg : { xs : List(U8) ?? [1, 2, 3] }
+        \\
+        \\a : Cfg
+        \\a = {}
+        \\
+        \\b : Cfg
+        \\b = { xs: [5] }
+        \\
+        \\d : Cfg
+        \\d = {}
+        \\
+        \\main = List.len(a.xs) + List.len(b.xs) + List.len(d.xs)
+        ,
+        .expected = .{ .inspect_str = "7" },
+    },
+    .{
+        .name = "defaulted record field: default referencing a module constant materializes",
+        .source_kind = .module,
+        .source =
+        \\ten : U8
+        \\ten = 10
+        \\
+        \\x : { a : U8 ?? ten }
+        \\x = {}
+        \\
+        \\main = x.a
+        ,
+        .expected = .{ .inspect_str = "10" },
+    },
+    .{
+        .name = "defaulted record field: computed default materializes",
+        .source_kind = .module,
+        .source =
+        \\x : { a : U8 ?? (5.U8 + 5.U8) }
+        \\x = {}
+        \\
+        \\main = x.a + 1
+        ,
+        .expected = .{ .inspect_str = "11" },
+    },
     // Frontend problems
     .{ .name = "problem: name not in scope", .source = "undefinedVar", .expected = .{ .problem = {} } },
     .{ .name = "problem: dec plus int type mismatch", .source = "1.0.Dec + 2.I64", .expected = .{ .problem = {} } },

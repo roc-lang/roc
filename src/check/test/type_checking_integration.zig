@@ -396,7 +396,7 @@ test "check type - record - field missing" {
         \\
         \\It has the type:
         \\
-        \\    { hello: a } where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
+        \\    { hello: Str }
         \\
         \\But the annotation says it should be:
         \\
@@ -428,13 +428,936 @@ test "check type - record - ext - field missing" {
         \\
         \\It has the type:
         \\
-        \\    { hello: a } where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
+        \\    { hello: Str }
         \\
         \\But the annotation says it should be:
         \\
         \\    MyRecord({ world: U8 })
         \\
         \\**Hint:** This record is missing the field: `world`
+        \\
+        \\
+    );
+}
+
+// optional fields //
+
+test "check type - record - opt - field" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord : { hello: Str, world :? U8 }
+        \\
+        \\my_record : MyRecord
+        \\my_record = { hello : "world" }
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "my_record" } },
+        \\MyRecord
+    );
+}
+
+test "check type - record - opt - field supplied" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord : { hello: Str, world :? U8 }
+        \\
+        \\my_record : MyRecord
+        \\my_record = { hello : "world", world : 5 }
+    ;
+    // Supplying an optional field is allowed — `:?` is an upper bound, so the
+    // (use-site, flex) presence binds to present.
+    try checkTypesModule(source, .{ .pass = .{ .def = "my_record" } },
+        \\MyRecord
+    );
+}
+
+test "check type - record - opt - field supplied with wrong type" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord : { hello: Str, world :? U8 }
+        \\
+        \\my_record : MyRecord
+        \\my_record = { hello : "world", world : "nope" }
+    ;
+    // The optional field's type still applies when it is supplied: Str vs U8.
+    try checkTypesModule(source, .fail_with,
+        \\**Type Mismatch**
+        \\This string literal is being used where a non-string type is needed.
+        \\**test:6:40:6:46:**
+        \\```roc
+        \\my_record = { hello : "world", world : "nope" }
+        \\```
+        \\                                       ^^^^^^
+        \\
+        \\The type was determined to be:
+        \\
+        \\    U8
+        \\
+        \\
+    );
+}
+
+test "check type - record - opt - direct access rejected" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\get_world : { world :? U8 } -> U8
+        \\get_world = |r| r.world
+    ;
+    // Direct access demands the field be present, but the signature's presence
+    // is rigid (skolemized while checking the body), so `r.world` must fail —
+    // the caller may not have supplied `world`.
+    try checkTypesModule(source, .fail_with,
+        \\**Type Mismatch**
+        \\The `world` field is optional, but it is being accessed as if it is always present.
+        \\**test:4:18:4:24:**
+        \\```roc
+        \\get_world = |r| r.world
+        \\```
+        \\                 ^^^^^^
+        \\
+        \\An optional field may be missing from the record. Use `.?` to access it — that produces a `Try` you can match on or default with `??`.
+        \\
+        \\
+    );
+}
+
+test "check type - record - opt - optional access allowed" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\get_world : { world :? U8 } -> U8
+        \\get_world = |r| r.?world ?? 0
+    ;
+    // The optional accessor introduces a fresh flex presence, which unifies
+    // with the rigid presence, so the body type-checks and defaults on absence.
+    try checkTypesModule(source, .{ .pass = .{ .def = "get_world" } },
+        \\{ world :? U8 } -> U8
+    );
+}
+
+test "check type - record - opt - local annotation is a use site" {
+    const source =
+        \\main! = |_| {
+        \\    r : { world :? U8 }
+        \\    r = { world : 5 }
+        \\    r
+        \\}
+    ;
+    // Existential sealing (design.md "Existential Presence"): the body freely
+    // supplies the optional field (flex while checking), but the annotation
+    // wins in the exported type — the presence is sealed, so the row still
+    // renders `world :? U8` rather than the body-solved `world: U8`.
+    try checkTypesModule(source, .{ .pass = .{ .def = "main!" } },
+        \\_arg -> { world :? U8 }
+    );
+}
+
+test "check type - record - opt - sealed field direct access rejected" {
+    // spellchecker:off
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_record : { hello: Str, world :? U8 }
+        \\my_record = { hello : "hi", world : 5 }
+        \\
+        \\use_it : U8
+        \\use_it = my_record.world
+    ;
+    // The rejected side of existential sealing: even though the body supplied
+    // `world`, the annotation sealed its presence, so a consumer may not
+    // direct-read it (it must use `.?world`).
+    try checkTypesModule(source, .fail_with,
+        \\**Type Mismatch**
+        \\The `world` field is optional, but it is being accessed as if it is always present.
+        \\**test:7:19:7:25:**
+        \\```roc
+        \\use_it = my_record.world
+        \\```
+        \\                  ^^^^^^
+        \\
+        \\An optional field may be missing from the record. Use `.?` to access it — that produces a `Try` you can match on or default with `??`.
+        \\
+        \\
+    );
+}
+
+test "check type - record - opt - sealed field optional access allowed" {
+    // spellchecker:off
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_record : { hello: Str, world :? U8 }
+        \\my_record = { hello : "hi", world : 5 }
+        \\
+        \\use_it = my_record.?world
+    ;
+    // The accepted side of existential sealing: `.?world` introduces a fresh
+    // flex presence, which binds to the seal, yielding
+    // Try(U8, [MissingField]) that `?? 0` unwraps.
+    try checkTypesModule(source, .{ .pass = .{ .def = "use_it" } },
+        \\Try(U8, [MissingField])
+    );
+}
+
+test "check type - record - opt - chained optional accesses collapse to one Try" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Outer : { b :? { c :? U8 } }
+        \\
+        \\get : Outer -> Try(U8, [MissingField])
+        \\get = |o| o.?b.?c
+    ;
+    // The Try wrapper is per-CHAIN, not per-segment (design.md: a contiguous
+    // access chain with at least one optional segment produces ONE flat
+    // `Try`, never `Try(Try(..))`); the first missing slot short-circuits to
+    // the shared `MissingField` error.
+    try checkTypesModule(source, .{ .pass = .{ .def = "get" } },
+        \\Outer -> Try(U8, [MissingField])
+    );
+}
+
+test "check type - record - opt - required segment after optional rides the Ok path" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Outer : { b :? { c : U8 } }
+        \\
+        \\get : Outer -> Try(U8, [MissingField])
+        \\get = |o| o.?b.c
+    ;
+    // A required segment after an optional one reads the successful payload
+    // of the preceding segment — it performs no presence check of its own,
+    // but the chain still wraps in the single shared Try.
+    try checkTypesModule(source, .{ .pass = .{ .def = "get" } },
+        \\Outer -> Try(U8, [MissingField])
+    );
+}
+
+test "check type - record - opt - chain then default unwraps to the field type" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Outer : { b :? { c :? U8 } }
+        \\
+        \\get : Outer -> U8
+        \\get = |o| o.?b.?c ?? 0
+    ;
+    // Because the chain is one flat Try, a single `??` handles every missing
+    // slot along it.
+    try checkTypesModule(source, .{ .pass = .{ .def = "get" } },
+        \\Outer -> U8
+    );
+}
+
+test "check type - record - opt - parenthesized receiver ends the chain (nested stays error)" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\outer : { b :? { c :? U8 } }
+        \\outer = {}
+        \\
+        \\bad = (outer.?b).?c
+    ;
+    // Parentheses end the access path (design.md): `(x.?b)` is a closed
+    // chain producing a nominal `Try`, so a further `.?c` demands a record
+    // from a `Try` and is rejected — the flat collapse never crosses an
+    // explicit chain boundary.
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - record - opt - conditional presence accepted (annotated)" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\with_y = { x: 1, y: 2, z: 7 }
+        \\without_y = { x: 1, z: 7 }
+        \\
+        \\y_optional : { x : U32, y :? U32, z : U32 }
+        \\y_optional = if True with_y else without_y
+    ;
+    // Pins the accepted side of design.md "Field Kinds (All-Dynamic Optional
+    // Fields)": under a `:?` annotation, one definition may supply the
+    // optional field on one control-flow branch and omit it on the other.
+    // The annotation's concrete `optional` kind seeds the branch
+    // accumulator, so the supplying branch's undetermined kind pins to
+    // `optional` and the omitting branch absorbs the field as an optional
+    // (tagged, constructed-missing) slot. Width absorption is OPT-IN: the
+    // same program without the `:?` annotation stays rejected (see
+    // "conditional presence rejected (unannotated)").
+    try checkTypesModule(source, .{ .pass = .{ .def = "y_optional" } },
+        \\{ x: U32, y :? U32, z: U32 }
+    );
+}
+
+test "check type - record - opt - conditional presence rejected (unannotated)" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\with_y = { x: 1, y: 2, z: 7 }
+        \\without_y = { x: 1, z: 7 }
+        \\
+        \\y_maybe = if True with_y else without_y
+    ;
+    // The rejected side of opt-in width absorption: with no `:?` annotation
+    // in scope, an undetermined field kind does NOT absorb into the closed
+    // sibling row — optionality must be declared, so the unannotated
+    // conditional stays a branch mismatch.
+    try checkTypesModule(source, .fail_with,
+        \\**Type Mismatch**
+        \\The second branch of this `if` does not match the previous branch .
+        \\**test:6:31:6:40:**
+        \\```roc
+        \\y_maybe = if True with_y else without_y
+        \\```
+        \\                              ^^^^^^^^^
+        \\
+        \\The second branch is:
+        \\
+        \\    { x: a, z: b }
+        \\      where [
+        \\        a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\        b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+        \\      ]
+        \\
+        \\But the previous branch results in:
+        \\
+        \\    { x: a, y: b, z: c }
+        \\      where [
+        \\        a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\        b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+        \\        c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
+        \\      ]
+        \\
+        \\**Hint:** This record is missing the field: `y`
+        \\
+        \\
+    );
+}
+
+test "check type - record - opt - list literal absorbs omitted optional field (annotated)" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\xs : List({ a :? U8 })
+        \\xs = [{ a: 1 }, {}]
+    ;
+    // The list analog of "conditional presence accepted (annotated)": the
+    // annotation's element type seeds the list's element accumulator (a
+    // rigids-flexed orphan copy, same machinery as the if/match branch
+    // accumulator), so `a`'s concrete `optional` kind is resolved BEFORE the
+    // elements meet. The supplying element's undetermined kind pins to
+    // `optional` and the omitting element absorbs the field as an optional
+    // (tagged, constructed-missing) slot (design.md "Field Kinds
+    // (All-Dynamic Optional Fields)").
+    try checkTypesModule(source, .{ .pass = .{ .def = "xs" } },
+        \\List({ a :? U8 })
+    );
+}
+
+test "check type - record - default - list literal absorbs omitted defaulted field (annotated)" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\xs : List({ a : U8 ?? 7 })
+        \\xs = [{ a: 1 }, {}]
+    ;
+    // Same as the optional-kind list test above, for the `defaulted` kind:
+    // the annotation-seeded element accumulator lets `{}` absorb `a` as a
+    // defaulted slot (constructed missing; reads materialize 7).
+    try checkTypesModule(source, .{ .pass = .{ .def = "xs" } },
+        \\List({ a: U8 ?? 7 })
+    );
+}
+
+test "check type - record - opt - list literal conditional presence rejected (unannotated)" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\xs = [{ a: 1 }, {}]
+    ;
+    // The rejected side of opt-in width absorption for lists: with no
+    // annotation in scope there is no expected type to seed the element
+    // accumulator, `a`'s kind never resolves, and an undetermined kind does
+    // NOT absorb into the closed sibling row — typo protection stands.
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - record - list literal with annotated required field still rejects omission" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\xs : List({ a : U8 })
+        \\xs = [{ a: 1 }, {}]
+    ;
+    // Seeding must not loosen required fields: under a `:` (required)
+    // annotation, an element that omits the field is still a mismatch, and
+    // the diagnostic points at the offending element (`{}`), not at the
+    // annotation.
+    try checkTypesModule(source, .fail_with,
+        \\**Type Mismatch**
+        \\The two elements in this list have incompatible types.
+        \\**test:4:17:4:19:**
+        \\```roc
+        \\xs = [{ a: 1 }, {}]
+        \\```
+        \\                ^^
+        \\
+        \\The first element has this type:
+        \\
+        \\    { a: U8 }
+        \\
+        \\However, the second element has this type:
+        \\
+        \\    {}
+        \\
+        \\All elements in a list must have compatible types.
+        \\__Note:__ You can wrap each element in a tag to make them compatible.
+        \\To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
+        \\
+        \\
+    );
+}
+
+test "check type - list literal with annotated elem type rejects wrong element" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\xs : List(U8)
+        \\xs = [1, "x"]
+    ;
+    // Seeding must not change which programs typecheck for ordinary
+    // (kind-free) mismatches: a genuinely wrong element is still an error,
+    // and the diagnostic stays on the offending element (`"x"`), not on the
+    // annotation.
+    try checkTypesModule(source, .fail_with,
+        \\**Type Mismatch**
+        \\This string literal is being used where a non-string type is needed.
+        \\**test:4:10:4:13:**
+        \\```roc
+        \\xs = [1, "x"]
+        \\```
+        \\         ^^^
+        \\
+        \\The type was determined to be:
+        \\
+        \\    U8
+        \\
+        \\
+    );
+}
+
+test "check type - record - opt - optional access on required field" {
+    // spellchecker:off
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_record : { hello: Str }
+        \\my_record = { hello : "hi" }
+        \\
+        \\use_it : Str
+        \\use_it = my_record.?hello ?? "default"
+    ;
+    // The inverse direction: `.?` on a REQUIRED field is rejected. It is
+    // sound (the Try would always be Ok), but it is almost certainly not what
+    // the user intended — the field can never be missing, so direct access is
+    // the right tool (design.md "Existential Presence", definitely-present
+    // optional access).
+    try checkTypesModule(source, .fail_with,
+        \\**Optional Access Of Required Field**
+        \\The `hello` field is always present, but it is being accessed as if it were optional.
+        \\**test:7:19:7:26:**
+        \\```roc
+        \\use_it = my_record.?hello ?? "default"
+        \\```
+        \\                  ^^^^^^^
+        \\
+        \\An optional access produces a `Try` for a field that may be missing — but this field can never be missing, so the `Try` would always be `Ok`. Use `.` to access it directly.
+        \\
+        \\
+    );
+}
+
+test "check type - record - default - construction may omit, access is direct" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_record : { hello: Str, count: U8 ?? 10 }
+        \\my_record = { hello: "hi" }
+        \\
+        \\use_it : U8
+        \\use_it = my_record.count
+    ;
+    // The accepted side of design.md "Defaulted Fields": construction omits
+    // `count` (the closed literal absorbs the RESOLVED `defaulted` kind, to
+    // be materialized from the default), and access is plain `.count` — a
+    // defaulted field is a required field at runtime.
+    try checkTypesModule(source, .{ .pass = .{ .def = "use_it" } },
+        \\U8
+    );
+}
+
+test "check type - record - default - rendered type shows the default" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_record : { count: U8 ?? 10 }
+        \\my_record = {}
+    ;
+    // A defaulted field renders its default's source snippet when the
+    // default was declared in this module (design.md "Defaulted Fields") —
+    // both for discoverability and so default-identity mismatches render
+    // distinguishable types.
+    try checkTypesModule(source, .{ .pass = .{ .def = "my_record" } },
+        \\{ count: U8 ?? 10 }
+    );
+}
+
+test "check type - record - default - supplied value wins over default" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_record : { count: U8 ?? 10 }
+        \\my_record = { count: 5 }
+        \\
+        \\use_it : U8
+        \\use_it = my_record.count
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "use_it" } },
+        \\U8
+    );
+}
+
+test "check type - record - default - defaulted flows where required expected" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_record : { count: U8 ?? 10 }
+        \\my_record = {}
+        \\
+        \\needs_count : { count: U8 } -> U8
+        \\needs_count = |r| r.count
+        \\
+        \\use_it : U8
+        \\use_it = needs_count(my_record)
+    ;
+    // present ~ defaulted merges to defaulted: same inline layout, strictly
+    // more information, so the call typechecks (design.md "Defaulted
+    // Fields" lattice).
+    try checkTypesModule(source, .{ .pass = .{ .def = "use_it" } },
+        \\U8
+    );
+}
+
+test "check type - record - default - default must match field type" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_record : { count: U8 ?? "hi" }
+        \\my_record = {}
+    ;
+    // The default expression is typed against the field's annotated type
+    // where the annotation is materialized. (`.fail_first`: the mismatch can
+    // report more than once — once at materialization and once via the
+    // body's use of the poisoned annotation.)
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - record - default - optional access on defaulted field rejected" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_record : { count: U8 ?? 10 }
+        \\my_record = {}
+        \\
+        \\use_it = my_record.?count ?? 3
+    ;
+    // A defaulted field is always present at runtime, so `.?` on it is
+    // rejected by the same finalize judgment as on a required field.
+    try checkTypesModule(source, .fail, "Optional Access Of Required Field");
+}
+
+test "check type - record - opt - optional access through generalized function accepted (review H3)" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\getx = |r| r.?x
+        \\
+        \\ok = getx({ x: 5 })
+    ;
+    // The `.?` inside `getx` pins its arg-row kind to `optional` AT THE
+    // GENERALIZATION BOUNDARY, so the scheme carries the concrete kind and
+    // a literal caller's flex kind pins optional at the call.
+    try checkTypesModule(source, .{ .pass = .{ .def = "ok" } },
+        \\Try(Dec, [MissingField])
+    );
+}
+
+test "check type - record - opt - optional access through generalized function rejects required (review H3)" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\getx = |r| r.?x
+        \\
+        \\bad_rec : { x: U8 }
+        \\bad_rec = { x: 5 }
+        \\
+        \\bad = getx(bad_rec)
+    ;
+    // The let-generalization escape (review H3): instantiated copies of the
+    // scheme carry CONCRETE `optional`, so an annotated-required receiver
+    // mismatches at the call instead of being silently accepted.
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - record - default - type-decl default does not pin a referenced def (review H4)" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Cfg : { a: U8 ?? foo }
+        \\
+        \\foo = 10
+        \\
+        \\other : U64
+        \\other = foo
+    ;
+    // Defaults are checked at finalize, after every def: `Cfg`'s default
+    // reference instantiates `foo`'s finished scheme instead of pinning the
+    // unchecked def monomorphically. `other` legitimately pins `foo := U64`,
+    // so the DEFAULT (typed U8) is what errors — not `other`.
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - record - default - type-decl default referencing a def typechecks (review H4)" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Cfg : { a: U8 ?? foo }
+        \\
+        \\foo : U8
+        \\foo = 10
+        \\
+        \\c : Cfg
+        \\c = {}
+        \\
+        \\use_it = c.a
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "use_it" } },
+        \\U8
+    );
+}
+
+test "check type - record - default - effectful default via type decl rejected (review H5)" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\eff! : {} => U8
+        \\eff! = |_| 5
+        \\
+        \\Cfg : { a: U8 ?? eff!({}) }
+        \\
+        \\c : Cfg
+        \\c = {}
+    ;
+    // Type-decl generation runs before any def is checked, so purity is
+    // judged at finalize when the callee's effect is resolved. Exactly ONE
+    // problem: the poisoned (err) default var must not cascade a second
+    // non-concreteness or field-type error (review R6).
+    try checkTypesModule(source, .fail, "Effectful Default Value");
+}
+
+test "check type - record - default - parametric default rejected (review H6)" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Pair(x) : { items: List(x) ?? [] }
+        \\
+        \\p : Pair(U8)
+        \\p = {}
+    ;
+    // A default is evaluated once at compile time: a non-concrete default
+    // type has no single runtime representation, so it is rejected instead
+    // of panicking at cross-module construction (design.md "Defaulted
+    // Fields").
+    try checkTypesModule(source, .fail_first, "Default Value Not Concrete");
+}
+
+test "check type - record - default - indirect self-reference cycle is a def cycle (review R9)" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\x : { a: U8 ?? helper }
+        \\x = {}
+        \\
+        \\helper = x.a
+    ;
+    // Direct self-reference is a Can diagnostic (the default's lookups are
+    // judged as Can resolves them, and Can can only ever see the direct
+    // shape). This indirect cycle — the default references `helper`, whose
+    // body reads the very field the default fills — is caught by the general
+    // def-dependency machinery: `x`'s annotation default demands `helper`,
+    // `helper`'s body demands `x`, so the two form a recursive non-function
+    // SCC and both are poisoned exactly like `a = b; b = a`.
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{
+        "Circular Value Definition",
+        "Circular Value Definition",
+    });
+
+    // The poison must not cascade: both defs' exprs are runtime errors, so
+    // the finalize-time default judgment sees an err-typed default and skips
+    // it (the R6 convention) instead of piling on type problems.
+    try std.testing.expectEqual(0, test_env.checker.problems.problems.items.len);
+}
+
+test "check type - record - default - non-cycling default helper is accepted" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\ten : U8
+        \\ten = 10
+        \\
+        \\x : { a: U8 ?? ten }
+        \\x = {}
+        \\
+        \\use_it = x.a
+    ;
+    // The annotation-default demand edge (`x` -> `ten`) alone is not a
+    // cycle: `ten` never references `x`, so the SCCs stay singletons and
+    // the module checks cleanly.
+    try checkTypesModule(source, .{ .pass = .{ .def = "use_it" } }, "U8");
+}
+
+test "check type - record - default - effectful default rejected" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\get_default! : {} => U8
+        \\get_default! = |_| 5
+        \\
+        \\my_record : { count: U8 ?? get_default!({}) }
+        \\my_record = {}
+    ;
+    // A default is materialized by the compiler at construction sites, so it
+    // must be pure: an effectful default expression is rejected (design.md
+    // "Defaulted Fields"). Exactly ONE problem: the default's var is poisoned
+    // to err at the report, which must suppress the downstream concreteness
+    // judgment and the field-type unify rather than cascade (review R6).
+    try checkTypesModule(source, .fail, "Effectful Default Value");
+}
+
+test "check type - record - default - separately written defaults do not merge" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\a : { x: U8 ?? 1 }
+        \\a = {}
+        \\
+        \\b : { x: U8 ?? 2 }
+        \\b = {}
+        \\
+        \\lst = [a, b]
+    ;
+    // Two separately written defaults are two default identities even when
+    // the rest of the shape matches; merging them would leave no coherent
+    // default for construction sites (design.md "Defaulted Fields"). The
+    // report renders both defaults and points at both declarations.
+    try checkTypesModule(source, .fail_with,
+        \\**Type Mismatch**
+        \\The two elements in this list have incompatible types.
+        \\**test:9:11:9:12:**
+        \\```roc
+        \\lst = [a, b]
+        \\```
+        \\          ^
+        \\
+        \\The first element has this type:
+        \\
+        \\    { x: U8 ?? 1 }
+        \\
+        \\However, the second element has this type:
+        \\
+        \\    { x: U8 ?? 2 }
+        \\
+        \\All elements in a list must have compatible types.
+        \\__Note:__ You can wrap each element in a tag to make them compatible.
+        \\To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
+        \\**Hint:** The `x` field has a `??` default in both types, but they are two DIFFERENT defaults — two separately written defaults never merge, even when their values look the same. To share one default, declare the record type once (e.g. as a type alias) and annotate both values with it.
+        \\One default is declared here:
+        \\**test:6:16:6:17:**
+        \\```roc
+        \\b : { x: U8 ?? 2 }
+        \\```
+        \\               ^
+        \\
+        \\And the other is declared here:
+        \\**test:3:16:3:17:**
+        \\```roc
+        \\a : { x: U8 ?? 1 }
+        \\```
+        \\               ^
+        \\
+        \\
+        \\
+    );
+}
+
+test "check type - record - default - alias-shared default is one identity" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Cfg : { x: U8 ?? 1 }
+        \\
+        \\a : Cfg
+        \\a = {}
+        \\
+        \\b : Cfg
+        \\b = {}
+        \\
+        \\lst = [a, b]
+    ;
+    // One written default is one identity: both annotations instantiate the
+    // same declaration, so the defaulted kinds carry equal identities and
+    // the values mix freely.
+    try checkTypesModule(source, .{ .pass = .{ .def = "lst" } },
+        \\List(Cfg)
+    );
+}
+
+test "check type - record - opt - optional access on missing field" {
+    // spellchecker:off
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_record : { hello: Str }
+        \\my_record = { hello : "hi" }
+        \\
+        \\use_it : U8
+        \\use_it = my_record.?world ?? 7
+    ;
+    // `.?` on a field a closed record does not declare AT ALL is a
+    // missing-field error: optionality is opt-in via `:?`, so an undeclared
+    // field cannot be absorbed as optional and probing for it is almost
+    // certainly a bug (design.md "Field Kinds (All-Dynamic Optional
+    // Fields)", width absorption).
+    try checkTypesModule(source, .fail_with,
+        \\**Type Mismatch**
+        \\This record does not have a `world` field.
+        \\**test:7:19:7:26:**
+        \\```roc
+        \\use_it = my_record.?world ?? 7
+        \\```
+        \\                  ^^^^^^^
+        \\
+        \\This is often due to a typo. The most similar fields are:
+        \\
+        \\    - `hello`
+        \\
+        \\So maybe `world` should be `hello`?
+        \\
+        \\
+    );
+}
+
+test "check type - record - opt - sealed omitted field keeps row" {
+    // spellchecker:off
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_record : { world :? U8 }
+        \\my_record = {}
+    ;
+    // The omit side of design.md "Existential Presence": the body may omit the
+    // optional field, and the exported type still keeps `world :? U8` — the
+    // row survives unification with the empty record (each undetermined
+    // presence binds absent, then the seal hides that fact), rather than the
+    // def's type collapsing to `{}`.
+    try checkTypesModule(source, .{ .pass = .{ .def = "my_record" } },
+        \\{ world :? U8 }
+    );
+}
+
+test "check type - record - opt - sealed omitted field optional access defaults" {
+    // spellchecker:off
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_record : { world :? U8 }
+        \\my_record = {}
+        \\
+        \\use_it : U8
+        \\use_it = my_record.?world ?? 7
+    ;
+    // The always-Err side of sealing: the body omitted the optional field, so
+    // the consumer's `.?world` is always Err and the default is taken —
+    // still well-typed, exactly like the always-Ok side.
+    try checkTypesModule(source, .{ .pass = .{ .def = "use_it" } },
+        \\U8
+    );
+}
+
+test "check type - record - opt - function arg caller may omit or supply" {
+    // spellchecker:off
+    const source =
+        \\main! = |_| {}
+        \\
+        \\get_world : { world :? U8 } -> U8
+        \\get_world = |r| r.?world ?? 0
+        \\
+        \\use_a : U8
+        \\use_a = get_world({})
+        \\
+        \\use_b : U8
+        \\use_b = get_world({ world : 3 })
+    ;
+    // The forall side at call sites: each call instantiates a fresh flex
+    // presence, so one caller may omit `world` (presence binds absent) and
+    // another may supply it (presence binds present) — independently.
+    try checkTypesModule(source, .{ .pass = .{ .def = "use_b" } },
+        \\U8
+    );
+}
+
+test "check type - record - opt - sealed optional passed where required expected (fail)" {
+    // spellchecker:off
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_record : { world :? U8 }
+        \\my_record = { world : 5 }
+        \\
+        \\needs_world : { world : U8 } -> U8
+        \\needs_world = |r| r.world
+        \\
+        \\use_it : U8
+        \\use_it = needs_world(my_record)
+    ;
+    // The actual-direction presence hint: the sealed value's `world` may be
+    // missing (as far as consumers know), so it cannot satisfy a parameter
+    // that requires `world` to always be present.
+    try checkTypesModule(source, .fail_with,
+        \\**Type Mismatch**
+        \\The first argument being passed to this function has the wrong type.
+        \\**test:10:10:**
+        \\```roc
+        \\use_it = needs_world(my_record)
+        \\```
+        \\                     ^^^^^^^^^
+        \\
+        \\This argument has the type:
+        \\
+        \\    { world :? U8 }
+        \\
+        \\But `needs_world` needs the first argument to be:
+        \\
+        \\    { world: U8 }
+        \\
+        \\**Hint:** The `world` field is optional here, so it may be missing — but I expected a record whose `world` field is always present.
         \\
         \\
     );

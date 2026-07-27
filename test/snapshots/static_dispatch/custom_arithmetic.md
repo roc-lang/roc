@@ -91,19 +91,23 @@ EndOfFile,
 							(field (field "x")
 								(e-binop (op "+")
 									(e-field-access
-										(e-ident (raw "a"))
-										(e-ident (raw "x")))
+										(receiver
+											(e-ident (raw "a")))
+										(segment (mode "required") (field "x")))
 									(e-field-access
-										(e-ident (raw "b"))
-										(e-ident (raw "x")))))
+										(receiver
+											(e-ident (raw "b")))
+										(segment (mode "required") (field "x")))))
 							(field (field "y")
 								(e-binop (op "+")
 									(e-field-access
-										(e-ident (raw "a"))
-										(e-ident (raw "y")))
+										(receiver
+											(e-ident (raw "a")))
+										(segment (mode "required") (field "y")))
 									(e-field-access
-										(e-ident (raw "b"))
-										(e-ident (raw "y"))))))))
+										(receiver
+											(e-ident (raw "b")))
+										(segment (mode "required") (field "y"))))))))
 				(s-type-anno (name "minus")
 					(ty-fn
 						(ty (name "Vec"))
@@ -119,19 +123,23 @@ EndOfFile,
 							(field (field "x")
 								(e-binop (op "-")
 									(e-field-access
-										(e-ident (raw "a"))
-										(e-ident (raw "x")))
+										(receiver
+											(e-ident (raw "a")))
+										(segment (mode "required") (field "x")))
 									(e-field-access
-										(e-ident (raw "b"))
-										(e-ident (raw "x")))))
+										(receiver
+											(e-ident (raw "b")))
+										(segment (mode "required") (field "x")))))
 							(field (field "y")
 								(e-binop (op "-")
 									(e-field-access
-										(e-ident (raw "a"))
-										(e-ident (raw "y")))
+										(receiver
+											(e-ident (raw "a")))
+										(segment (mode "required") (field "y")))
 									(e-field-access
-										(e-ident (raw "b"))
-										(e-ident (raw "y"))))))))
+										(receiver
+											(e-ident (raw "b")))
+										(segment (mode "required") (field "y"))))))))
 				(s-type-anno (name "times")
 					(ty-fn
 						(ty (name "Vec"))
@@ -147,19 +155,23 @@ EndOfFile,
 							(field (field "x")
 								(e-binop (op "*")
 									(e-field-access
-										(e-ident (raw "a"))
-										(e-ident (raw "x")))
+										(receiver
+											(e-ident (raw "a")))
+										(segment (mode "required") (field "x")))
 									(e-field-access
-										(e-ident (raw "b"))
-										(e-ident (raw "x")))))
+										(receiver
+											(e-ident (raw "b")))
+										(segment (mode "required") (field "x")))))
 							(field (field "y")
 								(e-binop (op "*")
 									(e-field-access
-										(e-ident (raw "a"))
-										(e-ident (raw "y")))
+										(receiver
+											(e-ident (raw "a")))
+										(segment (mode "required") (field "y")))
 									(e-field-access
-										(e-ident (raw "b"))
-										(e-ident (raw "y"))))))))))
+										(receiver
+											(e-ident (raw "b")))
+										(segment (mode "required") (field "y"))))))))))
 		(s-type-anno (name "v1")
 			(ty (name "Vec")))
 		(s-decl
@@ -254,29 +266,37 @@ main = (added, subtracted, multiplied)
 			(e-record
 				(fields
 					(field (name "x")
-						(e-dispatch-call (method "plus") (constraint-fn-var 379)
+						(e-dispatch-call (method "plus") (constraint-fn-var 389)
 							(receiver
-								(e-field-access (field "x")
+								(e-field-access
 									(receiver
 										(e-lookup-local
-											(p-assign (ident "a"))))))
+											(p-assign (ident "a"))))
+									(segments
+										(segment (name "x") (mode "required")))))
 							(args
-								(e-field-access (field "x")
+								(e-field-access
 									(receiver
 										(e-lookup-local
-											(p-assign (ident "b"))))))))
+											(p-assign (ident "b"))))
+									(segments
+										(segment (name "x") (mode "required")))))))
 					(field (name "y")
-						(e-dispatch-call (method "plus") (constraint-fn-var 401)
+						(e-dispatch-call (method "plus") (constraint-fn-var 410)
 							(receiver
-								(e-field-access (field "y")
+								(e-field-access
 									(receiver
 										(e-lookup-local
-											(p-assign (ident "a"))))))
+											(p-assign (ident "a"))))
+									(segments
+										(segment (name "y") (mode "required")))))
 							(args
-								(e-field-access (field "y")
+								(e-field-access
 									(receiver
 										(e-lookup-local
-											(p-assign (ident "b")))))))))))
+											(p-assign (ident "b"))))
+									(segments
+										(segment (name "y") (mode "required"))))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Vec") (local))
@@ -291,29 +311,37 @@ main = (added, subtracted, multiplied)
 			(e-record
 				(fields
 					(field (name "x")
-						(e-dispatch-call (method "minus") (constraint-fn-var 434)
+						(e-dispatch-call (method "minus") (constraint-fn-var 444)
 							(receiver
-								(e-field-access (field "x")
+								(e-field-access
 									(receiver
 										(e-lookup-local
-											(p-assign (ident "a"))))))
+											(p-assign (ident "a"))))
+									(segments
+										(segment (name "x") (mode "required")))))
 							(args
-								(e-field-access (field "x")
+								(e-field-access
 									(receiver
 										(e-lookup-local
-											(p-assign (ident "b"))))))))
+											(p-assign (ident "b"))))
+									(segments
+										(segment (name "x") (mode "required")))))))
 					(field (name "y")
-						(e-dispatch-call (method "minus") (constraint-fn-var 456)
+						(e-dispatch-call (method "minus") (constraint-fn-var 465)
 							(receiver
-								(e-field-access (field "y")
+								(e-field-access
 									(receiver
 										(e-lookup-local
-											(p-assign (ident "a"))))))
+											(p-assign (ident "a"))))
+									(segments
+										(segment (name "y") (mode "required")))))
 							(args
-								(e-field-access (field "y")
+								(e-field-access
 									(receiver
 										(e-lookup-local
-											(p-assign (ident "b")))))))))))
+											(p-assign (ident "b"))))
+									(segments
+										(segment (name "y") (mode "required"))))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Vec") (local))
@@ -328,29 +356,37 @@ main = (added, subtracted, multiplied)
 			(e-record
 				(fields
 					(field (name "x")
-						(e-dispatch-call (method "times") (constraint-fn-var 489)
+						(e-dispatch-call (method "times") (constraint-fn-var 499)
 							(receiver
-								(e-field-access (field "x")
+								(e-field-access
 									(receiver
 										(e-lookup-local
-											(p-assign (ident "a"))))))
+											(p-assign (ident "a"))))
+									(segments
+										(segment (name "x") (mode "required")))))
 							(args
-								(e-field-access (field "x")
+								(e-field-access
 									(receiver
 										(e-lookup-local
-											(p-assign (ident "b"))))))))
+											(p-assign (ident "b"))))
+									(segments
+										(segment (name "x") (mode "required")))))))
 					(field (name "y")
-						(e-dispatch-call (method "times") (constraint-fn-var 511)
+						(e-dispatch-call (method "times") (constraint-fn-var 520)
 							(receiver
-								(e-field-access (field "y")
+								(e-field-access
 									(receiver
 										(e-lookup-local
-											(p-assign (ident "a"))))))
+											(p-assign (ident "a"))))
+									(segments
+										(segment (name "y") (mode "required")))))
 							(args
-								(e-field-access (field "y")
+								(e-field-access
 									(receiver
 										(e-lookup-local
-											(p-assign (ident "b")))))))))))
+											(p-assign (ident "b"))))
+									(segments
+										(segment (name "y") (mode "required"))))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Vec") (local))
@@ -378,7 +414,7 @@ main = (added, subtracted, multiplied)
 			(ty-lookup (name "Vec") (local))))
 	(d-let
 		(p-assign (ident "added"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 567)
+		(e-dispatch-call (method "plus") (constraint-fn-var 587)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "v1"))))
@@ -389,7 +425,7 @@ main = (added, subtracted, multiplied)
 			(ty-lookup (name "Vec") (local))))
 	(d-let
 		(p-assign (ident "subtracted"))
-		(e-dispatch-call (method "minus") (constraint-fn-var 572)
+		(e-dispatch-call (method "minus") (constraint-fn-var 592)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "v1"))))
@@ -400,7 +436,7 @@ main = (added, subtracted, multiplied)
 			(ty-lookup (name "Vec") (local))))
 	(d-let
 		(p-assign (ident "multiplied"))
-		(e-dispatch-call (method "times") (constraint-fn-var 577)
+		(e-dispatch-call (method "times") (constraint-fn-var 597)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "v1"))))

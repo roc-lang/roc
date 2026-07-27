@@ -225,11 +225,17 @@ pub const Tag = enum {
     /// * rhs - RHS DESCRIPTION
     ty_parens,
 
-    /// DESCRIPTION
-    /// Example: EXAMPLE
-    /// * lhs - LHS DESCRIPTION
-    /// * rhs - RHS DESCRIPTION
+    /// A field in a record type annotation.
+    /// * main_token - packed optional `?` token (`0` means required, otherwise token index + 1)
+    /// * lhs - field name token
+    /// * rhs - field type annotation
     ty_record_field,
+
+    /// A DEFAULTED field in a record type annotation (`a : U8 ?? 10`).
+    /// * main_token - packed optional `?` token (as `ty_record_field`)
+    /// * lhs - field name token
+    /// * rhs - extra_data start: [field type annotation, default value expr]
+    ty_record_field_defaulted,
 
     // Where Clauses
 
@@ -432,9 +438,10 @@ pub const Tag = enum {
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     record_update,
-    /// Record field access.
+    /// Maximal contiguous record-field access path.
+    /// * main_token - number of field-access segments
     /// * lhs - receiver expr
-    /// * rhs - field ident expr
+    /// * rhs - first index in the field-access segment store
     field_access,
     /// Attached method call syntax `a.foo(...)`.
     /// * main_token - dotted method token

@@ -1466,6 +1466,9 @@ fn extractTypeAnnoAsDocType(
                         while (i > 0) {
                             i -= 1;
                             const field = module_env.store.getAnnoRecordField(fields_slice[i]);
+                            if (field.is_optional) {
+                                std.debug.panic("optional record field documentation is not implemented", .{});
+                            }
                             try frames.append(gpa, .{ .visit = field.ty });
                         }
                     },
@@ -2056,6 +2059,12 @@ fn extractDocTypeInner(
         .structure => |flat_type| {
             return try extractFlatType(ctx, flat_type);
         },
+        .field_presence => {
+            // A presence variable is never a documentable type in its own
+            // right; it only appears on a record field's presence axis. Render
+            // as the error type, consistent with `.err`.
+            return try allocDocType(gpa, .@"error");
+        },
         .err => {
             return try allocDocType(gpa, .@"error");
         },
@@ -2182,6 +2191,30 @@ fn extractNominalType(
     }
 }
 
+/// Normalize a field's presence for documentation: a required field (concrete
+/// `present`, or an undetermined kind that solved `present` or stayed flex —
+/// flex defaults to required, design.md "Field Kinds (All-Dynamic Optional
+/// Fields)") documents as `.present` with its value type. A kind that solved
+/// `optional` has no doc rendering yet.
+fn docFieldPresence(
+    types: *const TypeStore,
+    presence: types_mod.RecordField.Presence,
+) types_mod.RecordField.Presence {
+    return switch (presence) {
+        .required => presence,
+        .unknown => |unknown| switch (types.resolveVar(unknown.presence).desc.content) {
+            .field_presence => |fp| switch (fp) {
+                // A defaulted field is a required slot at runtime; it
+                // documents as a plain required field (rendering the default
+                // value in docs is deferred — design.md "Defaulted Fields").
+                .required, .defaulted => .{ .required = unknown.var_ },
+                .optional => std.debug.panic("optional record field documentation is not implemented", .{}),
+            },
+            .flex, .rigid, .alias, .structure, .err => .{ .required = unknown.var_ },
+        },
+    };
+}
+
 fn extractRecord(
     ctx: *ExtractContext,
     record: types_mod.Record,
@@ -2196,8 +2229,8 @@ fn extractRecord(
 
     // Get fields from the initial record
     const initial_slice = types.getRecordFieldsSlice(record.fields);
-    for (initial_slice.items(.name), initial_slice.items(.var_)) |name, field_var| {
-        try all_fields.append(gpa, .{ .name = name, .var_ = field_var });
+    for (initial_slice.items(.name), initial_slice.items(.presence)) |name, presence| {
+        try all_fields.append(gpa, .{ .name = name, .presence = docFieldPresence(types, presence) });
     }
 
     // Follow the extension chain
@@ -2266,15 +2299,15 @@ fn extractRecord(
                 switch (ft) {
                     .record => |ext_record| {
                         const ext_slice = types.getRecordFieldsSlice(ext_record.fields);
-                        for (ext_slice.items(.name), ext_slice.items(.var_)) |name, field_var| {
-                            try all_fields.append(gpa, .{ .name = name, .var_ = field_var });
+                        for (ext_slice.items(.name), ext_slice.items(.presence)) |name, presence| {
+                            try all_fields.append(gpa, .{ .name = name, .presence = docFieldPresence(types, presence) });
                         }
                         ext = ext_record.ext;
                     },
                     .record_unbound => |ext_fields| {
                         const ext_slice = types.getRecordFieldsSlice(ext_fields);
-                        for (ext_slice.items(.name), ext_slice.items(.var_)) |name, field_var| {
-                            try all_fields.append(gpa, .{ .name = name, .var_ = field_var });
+                        for (ext_slice.items(.name), ext_slice.items(.presence)) |name, presence| {
+                            try all_fields.append(gpa, .{ .name = name, .presence = docFieldPresence(types, presence) });
                         }
                         break;
                     },
@@ -2289,6 +2322,8 @@ fn extractRecord(
                     => break,
                 }
             },
+            // A presence variable can never be a record extension tail.
+            .field_presence => break,
             .err => break,
         }
     }
@@ -2301,7 +2336,9 @@ fn extractRecord(
     for (all_fields.items, 0..) |field, i| {
         doc_fields[i] = .{
             .name = try gpa.dupe(u8, idents.getText(field.name)),
-            .type = try extractDocTypeInner(ctx, field.var_) orelse
+            .type = try extractDocTypeInner(ctx, field.typeVar() orelse {
+                std.debug.panic("optional record field documentation is not implemented", .{});
+            }) orelse
                 try allocDocType(gpa, .@"error"),
         };
     }
@@ -2331,12 +2368,15 @@ fn extractRecordUnbound(
 
     const slice = ctx.types.getRecordFieldsSlice(fields_range);
     const names = slice.items(.name);
-    const vars = slice.items(.var_);
+    const presences = slice.items(.presence);
     var fields = try gpa.alloc(DocType.Field, names.len);
-    for (names, vars, 0..) |name, field_var, i| {
+    for (names, presences, 0..) |name, presence, i| {
+        if (presence != .required) {
+            std.debug.panic("optional record field documentation is not implemented", .{});
+        }
         fields[i] = .{
             .name = try gpa.dupe(u8, ctx.idents.getText(name)),
-            .type = try extractDocTypeInner(ctx, field_var) orelse
+            .type = try extractDocTypeInner(ctx, presence.required) orelse
                 try allocDocType(gpa, .@"error"),
         };
     }
@@ -2471,6 +2511,9 @@ fn extractTagUnion(
             is_open = true;
             ext_type = try extractDocTypeInner(ctx, tag_union.ext);
         },
+        // A presence variable is never a tag-union tail; treat it as a closed
+        // union like `.err`.
+        .field_presence => {},
         .err => {},
     }
 

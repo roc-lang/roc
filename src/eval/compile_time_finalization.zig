@@ -825,7 +825,7 @@ fn lowerEvalAndFinishRoots(
             .numeral_conversion, .quote_conversion => {
                 payload = try finishLiteralConversionRoot(allocator, module, problem_store, compile_time_root, payload);
             },
-            .constant, .hoisted_constant, .callable_binding, .expect => {},
+            .constant, .hoisted_constant, .callable_binding, .expect, .field_default => {},
         }
 
         module.compile_time_roots.fillPayload(root_id, payload);
@@ -835,6 +835,7 @@ fn lowerEvalAndFinishRoots(
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .field_default,
             => null,
         };
         finishConstRoot(module, compile_time_root, payload, stored_root_type);
@@ -1414,7 +1415,7 @@ fn lowerDevEvalAndFinishRoots(
                 payload = conversion.payload;
                 if (conversion.had_problem) had_problem = true;
             },
-            .constant, .hoisted_constant, .callable_binding, .expect => {},
+            .constant, .hoisted_constant, .callable_binding, .expect, .field_default => {},
         }
 
         module.compile_time_roots.fillPayload(job.root_id, payload);
@@ -1424,6 +1425,7 @@ fn lowerDevEvalAndFinishRoots(
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .field_default,
             => null,
         };
         finishConstRoot(module, job.compile_time_root, payload, stored_root_type);
@@ -1724,6 +1726,7 @@ fn finishLiteralConversionRootDetailed(
             .hoisted_constant,
             .callable_binding,
             .expect,
+            .field_default,
             => finalizationInvariant("non literal-conversion root reported a conversion problem"),
         }
         return .{
@@ -1859,6 +1862,7 @@ fn reportsUnusedBranches(kind: checked.CompileTimeRootKind) bool {
         .expect,
         .numeral_conversion,
         .quote_conversion,
+        .field_default,
         => true,
         .hoisted_constant => false,
     };
@@ -2000,6 +2004,7 @@ fn failedRootPayload(
         .callable_binding,
         .numeral_conversion,
         .quote_conversion,
+        .field_default,
         => .{ .const_node = try appendCrashConst(module, message) },
     };
 }
@@ -2059,7 +2064,7 @@ fn compileTimeRootForRequest(
 ) checked.ComptimeRootId {
     for (module.compile_time_roots.roots) |root| {
         const kind_matches = switch (request.kind) {
-            .compile_time_constant => root.kind == .constant or root.kind == .hoisted_constant or root.kind == .numeral_conversion or root.kind == .quote_conversion,
+            .compile_time_constant => root.kind == .constant or root.kind == .hoisted_constant or root.kind == .numeral_conversion or root.kind == .quote_conversion or root.kind == .field_default,
             .compile_time_callable => root.kind == .callable_binding,
             .runtime_entrypoint,
             .provided_export,
@@ -2109,6 +2114,7 @@ fn finishConstRoot(
         .expect,
         .numeral_conversion,
         .quote_conversion,
+        .field_default,
         => unreachable,
     };
     const stored = checked.StoredConstTemplate{

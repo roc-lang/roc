@@ -443,7 +443,7 @@ pub const Resolver = struct {
                     const match = backingFieldByName(lookup.artifact, backing_fields.items, field_name) orelse unreachable;
                     graph_fields.appendAssumeCapacity(.{
                         .index = match.index,
-                        .child = try self.buildRefForType(lookup.artifact, match.field.ty, .ordinary, build_state),
+                        .child = try self.buildFieldSlotRef(lookup.artifact, match.field, build_state),
                     });
                 },
                 .padding => |padding_ty| {
@@ -484,10 +484,39 @@ pub const Resolver = struct {
         for (fields.items, 0..) |field, index| {
             graph_fields.appendAssumeCapacity(.{
                 .index = @intCast(index),
-                .child = try self.buildRefForType(artifact, field.ty, .ordinary, build_state),
+                .child = try self.buildFieldSlotRef(artifact, field, build_state),
             });
         }
         return self.buildStructNode(build_state, graph_fields.items, false);
+    }
+
+    /// The layout slot of one checked record field (design.md "Field Kinds
+    /// (All-Dynamic Optional Fields)"): `required` and `defaulted` kinds are
+    /// the field's own layout inline, while an `optional` kind is the tagged
+    /// slot — a two-variant union laid out exactly like the Monotype slot
+    /// union `[Missing, Present(value)]` (variants in sorted tag-name order:
+    /// 0 = Missing with no payload, 1 = Present carrying the value), so the
+    /// glue/host view of a `:?` field agrees byte-for-byte with the
+    /// compiler's.
+    fn buildFieldSlotRef(
+        self: *Resolver,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        field: CheckedArtifact.CheckedRecordField,
+        build_state: *BuildState,
+    ) Error!GraphRef {
+        switch (field.kind.tag) {
+            .required, .defaulted => return try self.buildRefForType(artifact, field.ty, .ordinary, build_state),
+            .optional => {
+                const variants = [_]GraphRef{
+                    try self.buildPayloadRef(artifact, &.{}, build_state),
+                    try self.buildPayloadRef(artifact, &.{field.ty}, build_state),
+                };
+                const node_id = try build_state.graph.reserveNode(self.allocator);
+                const span = try build_state.graph.appendRefs(self.allocator, &variants);
+                build_state.graph.setNode(node_id, .{ .tag_union = span });
+                return .{ .local = node_id };
+            },
+        }
     }
 
     fn buildTupleRef(

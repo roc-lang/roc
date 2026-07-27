@@ -495,8 +495,9 @@ EndOfFile,
 							(e-apply
 								(e-ident (raw "Json.decode"))
 								(e-field-access
-									(e-ident (raw "req"))
-									(e-ident (raw "body")))))
+									(receiver
+										(e-ident (raw "req")))
+									(segment (mode "required") (field "body")))))
 						(e-match
 							(e-ident (raw "result"))
 							(branches
@@ -573,8 +574,9 @@ EndOfFile,
 					(p-ident (raw "response")))
 				(e-match
 					(e-field-access
-						(e-ident (raw "response"))
-						(e-ident (raw "status")))
+						(receiver
+							(e-ident (raw "response")))
+						(segment (mode "required") (field "status")))
 					(branches
 						(branch
 							(p-tag (raw "Ok")
@@ -741,9 +743,11 @@ combineTrys = |jsonTry, httpStatus|
 			(e-match
 				(match
 					(cond
-						(e-field-access (field "status")
+						(e-field-access
 							(receiver
-								(e-runtime-error (tag "erroneous_value_use")))))
+								(e-runtime-error (tag "erroneous_value_use")))
+							(segments
+								(segment (name "status") (mode "required")))))
 					(branches
 						(branch
 							(patterns
