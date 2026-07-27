@@ -4513,6 +4513,10 @@ pub const MonoLlvmCodeGen = struct {
                 try self.emitDecToF32TryUnsafeConversion(target, GuardedList.at(args, 0));
                 return;
             },
+            .i128_to_dec_try_unsafe, .u128_to_dec_try_unsafe => {
+                try self.emitInt128ToDecTryUnsafeConversion(target, GuardedList.at(args, 0), op == .i128_to_dec_try_unsafe);
+                return;
+            },
             .dec_to_f32_wrap, .dec_to_f64 => {
                 try self.emitDecToFloatConversion(target, GuardedList.at(args, 0), op == .dec_to_f32_wrap);
                 return;
@@ -4806,6 +4810,25 @@ pub const MonoLlvmCodeGen = struct {
 
         try self.callBuiltinVoid(
             builtinSymbol(.dec_to_f32_try_unsafe),
+            &.{ try self.ptrType(), .i64, .i64, .i32, .i32 },
+            &.{
+                allocated.ptr,
+                parts.low,
+                parts.high,
+                builder.intValue(.i32, allocated.success_offset) catch return error.OutOfMemory,
+                builder.intValue(.i32, allocated.value_offset) catch return error.OutOfMemory,
+            },
+        );
+    }
+
+    fn emitInt128ToDecTryUnsafeConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, is_signed: bool) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const allocated = try self.allocTryUnsafeTarget(target);
+        const value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
+        const parts = try self.splitI128Value(value);
+
+        try self.callBuiltinVoid(
+            LowLevelBuiltins.int128ToDec(is_signed).symbolName(),
             &.{ try self.ptrType(), .i64, .i64, .i32, .i32 },
             &.{
                 allocated.ptr,
