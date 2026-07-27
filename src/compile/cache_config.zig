@@ -74,7 +74,10 @@ pub const Constants = struct {
     /// 43: a residual whose `uninhabited` disposition a resolved dispatch target's
     ///     own signature contradicts is published `contextual` at that signature's
     ///     type instead.
-    pub const CACHE_VERSION = 43;
+    /// 44: a specialized static-dispatch plan callable keeps the identity every
+    ///     variable the target's signature does not substitute already had,
+    ///     instead of reserving a fresh root the artifact names nowhere.
+    pub const CACHE_VERSION = 44;
 };
 
 /// Configuration for the Roc cache system.

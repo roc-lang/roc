@@ -8077,6 +8077,77 @@ fn checkedSchemeBinderCoverage(
     return .bound;
 }
 
+/// Coverage walk for one published dispatch-plan callable (reunify.md
+/// 6.5/7.4/7.5). It answers the same question as `SchemeBinderCoverageScan` and
+/// additionally holds the dispatcher-constrained flex apart: that shape is the
+/// population `publishResidualDispositions` declares undisposed and counts
+/// itself, so folding it into `unaccounted` would mask the class this
+/// measurement targets.
+const PlanCallableCoverageScan = struct {
+    store: *const CheckedTypeStore,
+    bound: *const std.AutoHashMap(CheckedTypeId, void),
+    disposed: *const std.AutoHashMap(CheckedTypeId, void),
+    reached_variable: bool = false,
+    reached_disposed: bool = false,
+    reached_constrained: bool = false,
+    reached_unaccounted: bool = false,
+
+    pub fn visit(self: *@This(), traversal: anytype, root: CheckedTypeId) Allocator.Error!bool {
+        const payload = self.store.payload(root);
+        switch (payload) {
+            .flex, .rigid => |v| {
+                self.reached_variable = true;
+                if (self.bound.contains(root)) return true;
+                if (v.numeric_default_phase != null or v.row_default != null or self.disposed.contains(root)) {
+                    self.reached_disposed = true;
+                } else if (payload == .flex and v.constraints.len != 0) {
+                    self.reached_constrained = true;
+                } else {
+                    self.reached_unaccounted = true;
+                }
+                return true;
+            },
+            else => return try checked_traverse.checkedTypePayloadVisitAllChildren(
+                .forbid,
+                traversal,
+                self.store,
+                root,
+                payload,
+                self,
+            ),
+        }
+    }
+};
+
+/// Classify one published dispatch-plan callable against the same rule
+/// `checkedSchemeBinderCoverage` applies to a scheme root (reunify.md
+/// 6.5/7.4/7.5). A plan callable belongs to no single scheme body, so the
+/// accounting is deliberately the most permissive one the rule allows: a
+/// variable is `bound` when any published scheme names it as a binder, and
+/// `disposed` when it carries a checked default or any published residual
+/// disposition. `unaccounted` therefore means no reading of the published data
+/// settles the variable — the exact shape publication leaves behind when it
+/// copies a callable under a substitution and gives a solved variable a fresh
+/// identity. The worst class the callable reaches is the one reported.
+fn checkedPlanCallableCoverage(
+    allocator: Allocator,
+    store: *const CheckedTypeStore,
+    binder_set: *const std.AutoHashMap(CheckedTypeId, void),
+    disposed: *const std.AutoHashMap(CheckedTypeId, void),
+    callable: CheckedTypeId,
+) Allocator.Error!reunify_census.DispatchPlanCallableCoverage {
+    var scan = PlanCallableCoverageScan{ .store = store, .bound = binder_set, .disposed = disposed };
+    var traversal = checked_traverse.BoolPredicateTraversal(CheckedTypeId, PlanCallableCoverageScan).init(allocator, &scan);
+    defer traversal.deinit();
+    _ = try traversal.visit(callable);
+
+    if (!scan.reached_variable) return .ground;
+    if (scan.reached_unaccounted) return .unaccounted;
+    if (scan.reached_constrained) return .constrained;
+    if (scan.reached_disposed) return .disposed;
+    return .bound;
+}
+
 /// reunify Slice 2 checked-boundary verifier (reunify.md 7.5). A Debug-only pass
 /// over a published checked type store that proves the structural invariants later
 /// slices build on. Invariants the committed data fully supports are hard —
@@ -8084,11 +8155,13 @@ fn checkedSchemeBinderCoverage(
 /// Slice 2 gap (a local site's dense actual count versus its scheme binder count,
 /// and imported-site scheme resolution) are measured through the opt-in census
 /// rather than failed. When the census is active it also drives the validation
-/// matcher (reunify.md 7.6). Runs at publication and, census-gated, on cached load.
+/// matcher (reunify.md 7.6) and the resolved-dispatch-plan callable coverage
+/// (reunify.md 6.5/7.4). Runs at publication and, census-gated, on cached load.
 fn debugVerifyCheckedBoundary(
     allocator: Allocator,
     store: *const CheckedTypeStore,
     executable_roots: []const RootRequest,
+    plans: *const static_dispatch.StaticDispatchPlanTable,
 ) Allocator.Error!void {
     if (comptime builtin.mode != .Debug) return;
     const census_on = reunify_census.active();
@@ -8227,6 +8300,39 @@ fn debugVerifyCheckedBoundary(
         if (disposition_by_key.get(target_key)) |target_disposition| {
             if (target_disposition.kind == .contextual) {
                 checkedArtifactInvariant("boundary verifier: contextual disposition chains to another contextual", .{});
+            }
+        }
+    }
+
+    // Resolved dispatch plan callables carry the same coverage obligation as a
+    // scheme root (reunify.md 6.5/7.4/7.5), and are the family publication itself
+    // writes, so a specialization pass that rebuilds one and drops the identity a
+    // solved variable had is measured here rather than found downstream. Measured
+    // through the opt-in census; `unaccounted` is the forbidden class.
+    if (census_on) {
+        var disposed_ids = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+        defer disposed_ids.deinit();
+        for (store.residual_dispositions.items) |disposition| {
+            try disposed_ids.put(disposition.typeId(), {});
+        }
+        for (plans.plans) |plan| {
+            switch (plan.resolution) {
+                .direct => {},
+                .constraint, .structural, .checked_error, .unreachable_dispatch => continue,
+            }
+            reunify_census.recordDispatchPlanCallableCoverage(
+                try checkedPlanCallableCoverage(allocator, store, &binder_set, &disposed_ids, plan.callable_ty),
+            );
+        }
+        for (plans.iterator_for_plans) |iterator_plan| {
+            for ([_]static_dispatch.IteratorDispatchCall{ iterator_plan.iter, iterator_plan.next }) |call| {
+                switch (call.resolution) {
+                    .direct => {},
+                    .constraint, .structural, .checked_error, .unreachable_dispatch => continue,
+                }
+                reunify_census.recordDispatchPlanCallableCoverage(
+                    try checkedPlanCallableCoverage(allocator, store, &binder_set, &disposed_ids, call.callable_ty),
+                );
             }
         }
     }
@@ -19012,6 +19118,13 @@ fn instantiateResolvedDispatchTargetCallable(
     }
 
     clone_active.clearRetainingCapacity();
+    try keepPlanCallableIdentityVariables(
+        allocator,
+        store,
+        plan_callable,
+        plan_formals.items,
+        &clone_active,
+    );
     return try store.cloneCheckedTypeRootSubstituting(
         allocator,
         names,
@@ -19020,6 +19133,65 @@ fn instantiateResolvedDispatchTargetCallable(
         plan_actuals.items,
         &clone_active,
     );
+}
+
+/// Records every identity variable one checked root reaches as its own clone
+/// image, so `cloneCheckedTypeRootSubstituting` hands each one back unchanged
+/// instead of reserving a new root for it.
+const PlanCallableIdentityVariableScan = struct {
+    store: *const CheckedTypeStore,
+    kept: *std.AutoHashMap(CheckedTypeId, CheckedTypeId),
+
+    pub fn visit(self: *@This(), traversal: anytype, root: CheckedTypeId) Allocator.Error!bool {
+        const payload = self.store.payload(root);
+        switch (payload) {
+            .flex, .rigid => {
+                try self.kept.put(root, root);
+                return true;
+            },
+            else => return try checked_traverse.checkedTypePayloadVisitAllChildren(
+                .forbid,
+                traversal,
+                self.store,
+                root,
+                payload,
+                self,
+            ),
+        }
+    }
+};
+
+/// Seed a dispatch-plan callable's clone map so every variable the callable
+/// carries keeps the identity checking gave it (reunify.md 7.4, 15.1).
+///
+/// The specialized callable is published, so each variable it still names must
+/// be one the artifact also names: a binder of a visible scheme, or a residual
+/// `publishResidualDispositions` already disposed. A clone reserves a root per
+/// source node, and for a variable that root is a new identity nothing else in
+/// the artifact mentions — a residual minted after the dispositions were
+/// recorded, so no published data says what value the position takes. Seeding
+/// the map makes the clone return the source variable at every such position;
+/// the substituted positions are unaffected, because `formals` are consulted
+/// before the map is.
+///
+/// Only the identity leaves are kept. Every other node still takes its
+/// structural key, so two positions whose keys agree still land on one root and
+/// the callable's published node structure is exactly what it was.
+fn keepPlanCallableIdentityVariables(
+    allocator: Allocator,
+    store: *const CheckedTypeStore,
+    plan_callable: CheckedTypeId,
+    formals: []const CheckedTypeId,
+    clone_active: *std.AutoHashMap(CheckedTypeId, CheckedTypeId),
+) Allocator.Error!void {
+    var scan = PlanCallableIdentityVariableScan{ .store = store, .kept = clone_active };
+    var traversal = checked_traverse.BoolPredicateTraversal(
+        CheckedTypeId,
+        PlanCallableIdentityVariableScan,
+    ).init(allocator, &scan);
+    defer traversal.deinit();
+    _ = try traversal.visit(plan_callable);
+    for (formals) |formal| _ = clone_active.remove(formal);
 }
 
 fn checkedFunctionPayload(
@@ -25930,7 +26102,12 @@ pub const CheckedModuleArtifact = struct {
     // `contextual` at that signature's type. The struct shape is unchanged; the
     // bump forces re-bake of the baked builtin artifact whose disposition content
     // the layout fingerprint alone cannot observe.
-    const serialized_layout_version: u32 = 36;
+    // v37 (reunify.md 7.4, 15.1): a specialized static-dispatch plan callable now
+    // keeps the identity every variable the target's signature does not
+    // substitute already had, rather than reserving a fresh root the artifact
+    // names nowhere. The struct shape is unchanged; the bump forces re-bake of
+    // the baked builtin artifact whose callable content moves.
+    const serialized_layout_version: u32 = 37;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -26482,7 +26659,12 @@ pub const CheckedModuleArtifact = struct {
         if (builtin.mode != .Debug) return;
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
-        debugVerifyCheckedBoundary(arena.allocator(), &self.checked_types, self.root_requests.runtime_requests) catch |err| switch (err) {
+        debugVerifyCheckedBoundary(
+            arena.allocator(),
+            &self.checked_types,
+            self.root_requests.runtime_requests,
+            &self.static_dispatch_plans,
+        ) catch |err| switch (err) {
             error.OutOfMemory => {},
         };
     }
@@ -30547,6 +30729,64 @@ test "a resolved dispatch target's own signature replaces the uninhabited dispos
     try std.testing.expectEqual(CheckedResidualDispositionKind.uninhabited, store.residual_dispositions.items[1].kind);
 }
 
+test "a specialized dispatch plan callable keeps the variables checking solved" {
+    const gpa = std.testing.allocator;
+
+    var names = canonical.CanonicalNameStore.init(gpa);
+    defer names.deinit();
+
+    var store = CheckedTypeStore{};
+    defer store.deinit(gpa);
+
+    // Two callables of the shape the gap was measured on: one variable named at
+    // both the argument and the return, as `List.get`'s `elem` is. The target
+    // states it with its own binder; the plan states it with the variable
+    // checking solved at the site.
+    const target_elem: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    const plan_elem: CheckedTypeId = @enumFromInt(@intFromEnum(target_elem) + 1);
+    const target_callable: CheckedTypeId = @enumFromInt(@intFromEnum(target_elem) + 2);
+    const plan_callable: CheckedTypeId = @enumFromInt(@intFromEnum(target_elem) + 3);
+
+    for ([_]CheckedTypeId{ target_elem, plan_elem }) |id| {
+        const rigid = try store.commitPayload(gpa, .{ .rigid = .{} });
+        try store.roots.append(gpa, .{ .id = id, .key = .{ .bytes = [_]u8{@intCast(@intFromEnum(id))} ** 32 } });
+        try store.payloads.append(gpa, rigid);
+    }
+    for ([_]CheckedTypeId{ target_callable, plan_callable }) |id| {
+        const elem: CheckedTypeId = if (id == target_callable) target_elem else plan_elem;
+        const args = try gpa.dupe(CheckedTypeId, &.{elem});
+        const function = try store.commitPayload(gpa, .{ .function = .{
+            .kind = .pure,
+            .args = args,
+            .ret = elem,
+        } });
+        try store.roots.append(gpa, .{ .id = id, .key = .{ .bytes = [_]u8{@intCast(@intFromEnum(id))} ** 32 } });
+        try store.payloads.append(gpa, function);
+    }
+
+    var pins = std.ArrayList(ResolvedDispatchOperandPin).empty;
+    defer pins.deinit(gpa);
+
+    const published = try instantiateResolvedDispatchTargetCallable(
+        gpa,
+        &names,
+        &store,
+        target_callable,
+        plan_callable,
+        &pins,
+    );
+
+    // The target's signature named no type the plan callable did not already
+    // state, so nothing is substituted and the published callable still names
+    // the one variable checking solved at both positions — the artifact already
+    // says what that variable is, where a freshly reserved root would not.
+    try std.testing.expectEqual(@as(usize, 0), pins.items.len);
+    const published_fn = checkedFunctionPayload(&store, published, "test published callable");
+    try std.testing.expectEqual(@as(usize, 1), published_fn.args.len);
+    try std.testing.expectEqual(plan_elem, published_fn.args[0]);
+    try std.testing.expectEqual(plan_elem, published_fn.ret);
+}
+
 test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, ranges" {
     const gpa = std.testing.allocator;
     const CW = collections.CompactWriter;
@@ -31147,8 +31387,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xBB, 0x71, 0x06, 0xF7, 0x24, 0x53, 0xF6, 0xF8, 0x72, 0x79, 0x5E, 0x48, 0x3E, 0xE3, 0x37, 0xFF,
-        0x59, 0x52, 0x96, 0x64, 0xD7, 0x65, 0x2E, 0xB3, 0x04, 0x33, 0x2F, 0x13, 0x53, 0xFB, 0x48, 0xE2,
+        0x0D, 0xEA, 0x77, 0x5D, 0x37, 0xBA, 0x18, 0xE4, 0x21, 0xBB, 0x5E, 0x90, 0xA5, 0xD6, 0x74, 0xCC,
+        0x6F, 0xEB, 0xF6, 0xBF, 0x9B, 0x4B, 0x9D, 0x8D, 0xA0, 0x80, 0x8A, 0x86, 0xB0, 0x1A, 0xC5, 0x31,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

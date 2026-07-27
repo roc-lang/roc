@@ -170,6 +170,21 @@ var scheme_unaccounted_nested = std.atomic.Value(u64).init(0);
 var scheme_unaccounted_required = std.atomic.Value(u64).init(0);
 var scheme_unaccounted_synthetic = std.atomic.Value(u64).init(0);
 
+// The same coverage question asked of every resolved dispatch plan's published
+// callable (reunify.md 6.5/7.4/7.5). A plan callable is written by publication
+// rather than by solving, so it is the one published type a specialization pass
+// can mint a variable into that no scheme binds and no disposition settles.
+// `plan_callable_constrained` is the dispatcher-constrained flex that
+// `publishResidualDispositions` already declares undisposed and counts as
+// `residual_undisposed`; `plan_callable_unaccounted` is everything else and must
+// stay zero, since a variable of that shape reachable from a published callable
+// is one publication minted after the dispositions were recorded.
+var plan_callable_ground = std.atomic.Value(u64).init(0);
+var plan_callable_bound = std.atomic.Value(u64).init(0);
+var plan_callable_disposed = std.atomic.Value(u64).init(0);
+var plan_callable_constrained = std.atomic.Value(u64).init(0);
+var plan_callable_unaccounted = std.atomic.Value(u64).init(0);
+
 // Slice 2 validation matcher (reunify.md 7.6). For each local site whose scheme is
 // verified-pristine (snapshot_root != none) and whose actuals carry no unreached
 // sentinel, the matcher applies the published substitution to the scheme structure
@@ -534,6 +549,39 @@ pub fn recordSchemeBinderCoverage(coverage: SchemeBinderCoverage, owner: SchemeO
     }
 }
 
+/// How one resolved dispatch plan's published callable is accounted for
+/// (reunify.md 6.5/7.4/7.5), as the boundary verifier classifies it. The first
+/// three mirror `SchemeBinderCoverage`; `constrained` is the dispatcher-
+/// constrained flex `publishResidualDispositions` declares undisposed, held
+/// apart so it does not mask the class this measurement targets; `unaccounted`
+/// is a variable of any other shape that no binder names and no disposition or
+/// default settles. The worst class a callable reaches is the one recorded.
+pub const DispatchPlanCallableCoverage = enum {
+    ground,
+    bound,
+    disposed,
+    constrained,
+    unaccounted,
+};
+
+/// Record one resolved dispatch plan's published callable against the same
+/// coverage rule the scheme roots answer (reunify.md 6.5/7.4/7.5). Publication
+/// writes these callables — projecting an imported target and specializing it
+/// against the site — so they are the one published type family whose residuals
+/// no solving step produced, and `unaccounted` names exactly that: a variable
+/// publication left in a callable after the dispositions were recorded, so
+/// nothing published says what value the position takes.
+pub fn recordDispatchPlanCallableCoverage(coverage: DispatchPlanCallableCoverage) void {
+    if (comptime !enabled) return;
+    switch (coverage) {
+        .ground => _ = plan_callable_ground.fetchAdd(1, .monotonic),
+        .bound => _ = plan_callable_bound.fetchAdd(1, .monotonic),
+        .disposed => _ = plan_callable_disposed.fetchAdd(1, .monotonic),
+        .constrained => _ = plan_callable_constrained.fetchAdd(1, .monotonic),
+        .unaccounted => _ = plan_callable_unaccounted.fetchAdd(1, .monotonic),
+    }
+}
+
 /// Which validation-matcher (reunify.md 7.6) outcome a census record counts.
 pub const MatcherOutcome = enum {
     match,
@@ -692,6 +740,11 @@ pub fn dumpAppend() void {
     sink.print("scheme_unaccounted_nested={d}\n", .{scheme_unaccounted_nested.load(.monotonic)});
     sink.print("scheme_unaccounted_required={d}\n", .{scheme_unaccounted_required.load(.monotonic)});
     sink.print("scheme_unaccounted_synthetic={d}\n", .{scheme_unaccounted_synthetic.load(.monotonic)});
+    sink.print("plan_callable_ground={d}\n", .{plan_callable_ground.load(.monotonic)});
+    sink.print("plan_callable_bound={d}\n", .{plan_callable_bound.load(.monotonic)});
+    sink.print("plan_callable_disposed={d}\n", .{plan_callable_disposed.load(.monotonic)});
+    sink.print("plan_callable_constrained={d}\n", .{plan_callable_constrained.load(.monotonic)});
+    sink.print("plan_callable_unaccounted={d}\n", .{plan_callable_unaccounted.load(.monotonic)});
     sink.print("matcher_sites_total={d}\n", .{matcher_sites_total.load(.monotonic)});
     sink.print("matcher_match={d}\n", .{matcher_match.load(.monotonic)});
     sink.print("matcher_mismatch={d}\n", .{matcher_mismatch.load(.monotonic)});
