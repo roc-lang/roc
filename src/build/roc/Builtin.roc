@@ -7783,6 +7783,24 @@ Builtin :: [].{
 			## ```
 			count_one_bits : U16 -> U8
 
+			## Read a little-endian [U16] from the two bytes at the given byte
+			## index. Returns `Err(OutOfBounds)` unless
+			## `index + 2 <= List.len(bytes)`.
+			## ```roc
+			## expect U16.from_le_bytes([0x34, 0x12], 0) == Ok(0x1234)
+			##
+			## expect U16.from_le_bytes([0x34], 0) == Err(OutOfBounds)
+			## ```
+			from_le_bytes : List(U8), U64 -> Try(U16, [OutOfBounds, ..])
+			from_le_bytes = |bytes, index|
+			# Saturating, so an index past the end folds into this same
+			# check instead of needing a separate guard before it.
+				if List.len(bytes).minus_saturated(index) < 2 {
+					Err(OutOfBounds)
+				} else {
+					Ok(u16_from_le_bytes_unchecked(bytes, index))
+				}
+
 			## Iterator of integers beginning with this `U16` and ending with the other `U16`.
 			## (Use [U16.until] instead to end with the other `U16` minus one.)
 			## Returns an empty iterator if this `U16` is greater than the other.
@@ -8551,6 +8569,24 @@ Builtin :: [].{
 			## ```
 			count_one_bits : I16 -> U8
 
+			## Read a little-endian [I16] from the two bytes at the given byte
+			## index. Returns `Err(OutOfBounds)` unless
+			## `index + 2 <= List.len(bytes)`.
+			## ```roc
+			## expect I16.from_le_bytes([0x00, 0x80], 0) == Ok(I16.lowest)
+			##
+			## expect I16.from_le_bytes([0x00], 0) == Err(OutOfBounds)
+			## ```
+			from_le_bytes : List(U8), U64 -> Try(I16, [OutOfBounds, ..])
+			from_le_bytes = |bytes, index|
+			# Saturating, so an index past the end folds into this same
+			# check instead of needing a separate guard before it.
+				if List.len(bytes).minus_saturated(index) < 2 {
+					Err(OutOfBounds)
+				} else {
+					Ok(i16_from_le_bytes_unchecked(bytes, index))
+				}
+
 			## Iterator of integers beginning with this `I16` and ending with the other `I16`.
 			## (Use [I16.until] instead to end with the other `I16` minus one.)
 			## Returns an empty iterator if this `I16` is greater than the other.
@@ -9282,6 +9318,24 @@ Builtin :: [].{
 			## expect U32.count_one_bits(0) == 0
 			## ```
 			count_one_bits : U32 -> U8
+
+			## Read a little-endian [U32] from the four bytes at the given byte
+			## index. Returns `Err(OutOfBounds)` unless
+			## `index + 4 <= List.len(bytes)`.
+			## ```roc
+			## expect U32.from_le_bytes([0x78, 0x56, 0x34, 0x12], 0) == Ok(0x12345678)
+			##
+			## expect U32.from_le_bytes([0x78, 0x56, 0x34], 0) == Err(OutOfBounds)
+			## ```
+			from_le_bytes : List(U8), U64 -> Try(U32, [OutOfBounds, ..])
+			from_le_bytes = |bytes, index|
+			# Saturating, so an index past the end folds into this same
+			# check instead of needing a separate guard before it.
+				if List.len(bytes).minus_saturated(index) < 4 {
+					Err(OutOfBounds)
+				} else {
+					Ok(u32_from_le_bytes_unchecked(bytes, index))
+				}
 
 			## Iterator of integers beginning with this `U32` and ending with the other `U32`.
 			## (Use [U32.until] instead to end with the other `U32` minus one.)
@@ -10083,6 +10137,24 @@ Builtin :: [].{
 			## ```
 			count_one_bits : I32 -> U8
 
+			## Read a little-endian [I32] from the four bytes at the given byte
+			## index. Returns `Err(OutOfBounds)` unless
+			## `index + 4 <= List.len(bytes)`.
+			## ```roc
+			## expect I32.from_le_bytes([0x00, 0x00, 0x00, 0x80], 0) == Ok(I32.lowest)
+			##
+			## expect I32.from_le_bytes([0x00, 0x00, 0x00], 0) == Err(OutOfBounds)
+			## ```
+			from_le_bytes : List(U8), U64 -> Try(I32, [OutOfBounds, ..])
+			from_le_bytes = |bytes, index|
+			# Saturating, so an index past the end folds into this same
+			# check instead of needing a separate guard before it.
+				if List.len(bytes).minus_saturated(index) < 4 {
+					Err(OutOfBounds)
+				} else {
+					Ok(i32_from_le_bytes_unchecked(bytes, index))
+				}
+
 			## Iterator of integers beginning with this `I32` and ending with the other `I32`.
 			## (Use [I32.until] instead to end with the other `I32` minus one.)
 			## Returns an empty iterator if this `I32` is greater than the other.
@@ -10834,6 +10906,24 @@ Builtin :: [].{
 			## expect U64.count_one_bits(0) == 0
 			## ```
 			count_one_bits : U64 -> U8
+
+			## Read a little-endian [U64] from the eight bytes at the given byte
+			## index. Returns `Err(OutOfBounds)` unless
+			## `index + 8 <= List.len(bytes)`.
+			## ```roc
+			## expect U64.from_le_bytes([1, 0, 0, 0, 0, 0, 0, 0], 0) == Ok(1)
+			##
+			## expect U64.from_le_bytes([1, 0, 0, 0, 0, 0, 0], 0) == Err(OutOfBounds)
+			## ```
+			from_le_bytes : List(U8), U64 -> Try(U64, [OutOfBounds, ..])
+			from_le_bytes = |bytes, index|
+			# Saturating, so an index past the end folds into this same
+			# check instead of needing a separate guard before it.
+				if List.len(bytes).minus_saturated(index) < 8 {
+					Err(OutOfBounds)
+				} else {
+					Ok(u64_from_le_bytes_unchecked(bytes, index))
+				}
 
 			## Iterator of integers beginning with this `U64` and ending with the other `U64`.
 			## (Use [U64.until] instead to end with the other `U64` minus one.)
@@ -11677,6 +11767,24 @@ Builtin :: [].{
 			## ```
 			count_one_bits : I64 -> U8
 
+			## Read a little-endian [I64] from the eight bytes at the given byte
+			## index. Returns `Err(OutOfBounds)` unless
+			## `index + 8 <= List.len(bytes)`.
+			## ```roc
+			## expect I64.from_le_bytes([0, 0, 0, 0, 0, 0, 0, 0x80], 0) == Ok(I64.lowest)
+			##
+			## expect I64.from_le_bytes([0, 0, 0, 0, 0, 0, 0], 0) == Err(OutOfBounds)
+			## ```
+			from_le_bytes : List(U8), U64 -> Try(I64, [OutOfBounds, ..])
+			from_le_bytes = |bytes, index|
+			# Saturating, so an index past the end folds into this same
+			# check instead of needing a separate guard before it.
+				if List.len(bytes).minus_saturated(index) < 8 {
+					Err(OutOfBounds)
+				} else {
+					Ok(i64_from_le_bytes_unchecked(bytes, index))
+				}
+
 			## Iterator of integers beginning with this `I64` and ending with the other `I64`.
 			## (Use [I64.until] instead to end with the other `I64` minus one.)
 			## Returns an empty iterator if this `I64` is greater than the other.
@@ -12456,6 +12564,24 @@ Builtin :: [].{
 			## expect U128.count_one_bits(0) == 0
 			## ```
 			count_one_bits : U128 -> U8
+
+			## Read a little-endian [U128] from the sixteen bytes at the given
+			## byte index. Returns `Err(OutOfBounds)` unless
+			## `index + 16 <= List.len(bytes)`.
+			## ```roc
+			## expect U128.from_le_bytes(List.repeat(0.U8, 16), 0) == Ok(0)
+			##
+			## expect U128.from_le_bytes(List.repeat(0.U8, 15), 0) == Err(OutOfBounds)
+			## ```
+			from_le_bytes : List(U8), U64 -> Try(U128, [OutOfBounds, ..])
+			from_le_bytes = |bytes, index|
+			# Saturating, so an index past the end folds into this same
+			# check instead of needing a separate guard before it.
+				if List.len(bytes).minus_saturated(index) < 16 {
+					Err(OutOfBounds)
+				} else {
+					Ok(u128_from_le_bytes_unchecked(bytes, index))
+				}
 
 			## Iterator of integers beginning with this `U128` and ending with the other `U128`.
 			## (Use [U128.until] instead to end with the other `U128` minus one.)
@@ -13343,6 +13469,24 @@ Builtin :: [].{
 			## expect I128.count_one_bits(0) == 0
 			## ```
 			count_one_bits : I128 -> U8
+
+			## Read a little-endian [I128] from the sixteen bytes at the given
+			## byte index. Returns `Err(OutOfBounds)` unless
+			## `index + 16 <= List.len(bytes)`.
+			## ```roc
+			## expect I128.from_le_bytes(List.repeat(0.U8, 16), 0) == Ok(0)
+			##
+			## expect I128.from_le_bytes(List.repeat(0.U8, 15), 0) == Err(OutOfBounds)
+			## ```
+			from_le_bytes : List(U8), U64 -> Try(I128, [OutOfBounds, ..])
+			from_le_bytes = |bytes, index|
+			# Saturating, so an index past the end folds into this same
+			# check instead of needing a separate guard before it.
+				if List.len(bytes).minus_saturated(index) < 16 {
+					Err(OutOfBounds)
+				} else {
+					Ok(i128_from_le_bytes_unchecked(bytes, index))
+				}
 
 			## Iterator of integers beginning with this `I128` and ending with the other `I128`.
 			## (Use [I128.until] instead to end with the other `I128` minus one.)
@@ -16934,7 +17078,8 @@ Builtin :: [].{
 			## For each lane of `indices`: the lane of `table` it names, or 0
 			## if the index is 16 or greater. This dynamic byte shuffle powers
 			## palette lookups, nibble-table tricks, and byte rearrangement
-			## with runtime patterns.
+			## with runtime patterns. Other libraries call this operation a
+			## swizzle, a shuffle, or a permute.
 			##
 			## Lowers to `pshufb` plus a one-instruction fixup on x86-64
 			## (`pshufb` alone wraps indices 16-127), `tbl` on AArch64 NEON,
@@ -17027,7 +17172,8 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-				} else if len - index < 16 {
+					# We already checked that (index <= len), so (len - index) can't wrap
+				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u8x16_load_16_unchecked(bytes, index))
@@ -17046,7 +17192,8 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-				} else if len - index < 16 {
+					# We already checked that (index <= len), so (len - index) can't wrap
+				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u8x16_store_16_unchecked(vector, bytes, index))
@@ -17068,7 +17215,10 @@ Builtin :: [].{
 					0.U64,
 					Known(chunk_count),
 					|start|
-						if len - start >= 16 {
+						if start > len {
+							Err(NoMore)
+							# We already checked that (start <= len), so (len - start) can't wrap
+						} else if len.minus_wrap(start) >= 16 {
 							Ok((simd_u8x16_load_16_unchecked(bytes, start), start + 16))
 						} else {
 							Err(NoMore)
@@ -17515,7 +17665,8 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-				} else if len - index < 16 {
+					# We already checked that (index <= len), so (len - index) can't wrap
+				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i8x16_load_16_unchecked(bytes, index))
@@ -17534,7 +17685,8 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-				} else if len - index < 16 {
+					# We already checked that (index <= len), so (len - index) can't wrap
+				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i8x16_store_16_unchecked(vector, bytes, index))
@@ -17995,7 +18147,8 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-				} else if len - index < 16 {
+					# We already checked that (index <= len), so (len - index) can't wrap
+				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u16x8_load_16_unchecked(bytes, index))
@@ -18014,7 +18167,8 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-				} else if len - index < 16 {
+					# We already checked that (index <= len), so (len - index) can't wrap
+				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u16x8_store_16_unchecked(vector, bytes, index))
@@ -18521,7 +18675,8 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-				} else if len - index < 16 {
+					# We already checked that (index <= len), so (len - index) can't wrap
+				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i16x8_load_16_unchecked(bytes, index))
@@ -18540,7 +18695,8 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-				} else if len - index < 16 {
+					# We already checked that (index <= len), so (len - index) can't wrap
+				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i16x8_store_16_unchecked(vector, bytes, index))
@@ -18947,7 +19103,8 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-				} else if len - index < 16 {
+					# We already checked that (index <= len), so (len - index) can't wrap
+				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u32x4_load_16_unchecked(bytes, index))
@@ -18966,7 +19123,8 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-				} else if len - index < 16 {
+					# We already checked that (index <= len), so (len - index) can't wrap
+				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u32x4_store_16_unchecked(vector, bytes, index))
@@ -19401,7 +19559,8 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-				} else if len - index < 16 {
+					# We already checked that (index <= len), so (len - index) can't wrap
+				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i32x4_load_16_unchecked(bytes, index))
@@ -19420,7 +19579,8 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-				} else if len - index < 16 {
+					# We already checked that (index <= len), so (len - index) can't wrap
+				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i32x4_store_16_unchecked(vector, bytes, index))
@@ -19755,7 +19915,8 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-				} else if len - index < 16 {
+					# We already checked that (index <= len), so (len - index) can't wrap
+				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u64x2_load_16_unchecked(bytes, index))
@@ -19774,7 +19935,8 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-				} else if len - index < 16 {
+					# We already checked that (index <= len), so (len - index) can't wrap
+				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u64x2_store_16_unchecked(vector, bytes, index))
@@ -20118,7 +20280,8 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-				} else if len - index < 16 {
+					# We already checked that (index <= len), so (len - index) can't wrap
+				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i64x2_load_16_unchecked(bytes, index))
@@ -20137,7 +20300,8 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-				} else if len - index < 16 {
+					# We already checked that (index <= len), so (len - index) can't wrap
+				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i64x2_store_16_unchecked(vector, bytes, index))
@@ -20940,6 +21104,25 @@ u8_list_len : List(U8) -> U64
 u8_list_with_capacity : U64 -> List(U8)
 
 u8_list_get_unsafe : List(U8), U64 -> U8
+
+# Little-endian integer loads out of a byte list. Each requires the caller to
+# have already proven that the full width is in range; the bounds check lives
+# in the `from_le_bytes` wrapper on each numeric type.
+u16_from_le_bytes_unchecked : List(U8), U64 -> U16
+
+i16_from_le_bytes_unchecked : List(U8), U64 -> I16
+
+u32_from_le_bytes_unchecked : List(U8), U64 -> U32
+
+i32_from_le_bytes_unchecked : List(U8), U64 -> I32
+
+u64_from_le_bytes_unchecked : List(U8), U64 -> U64
+
+i64_from_le_bytes_unchecked : List(U8), U64 -> I64
+
+u128_from_le_bytes_unchecked : List(U8), U64 -> U128
+
+i128_from_le_bytes_unchecked : List(U8), U64 -> I128
 
 u8_list_append_unsafe : List(U8), U8 -> List(U8)
 

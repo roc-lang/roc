@@ -1602,6 +1602,64 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         },
                     };
                 },
+                .num_from_le_bytes_unchecked => {
+                    // Read a little-endian integer out of a byte list. The result
+                    // layout supplies the width, and the Roc wrapper has already
+                    // bounds-checked, so this is address arithmetic plus one
+                    // sized load.
+                    if (comptime arch.endian() == .big) {
+                        // A plain load would read the bytes in the wrong order, and
+                        // neither emitter has a byte-swap yet. Fail loudly rather
+                        // than silently disagreeing with every other backend.
+                        @compileError("num_from_le_bytes_unchecked needs a byte-swap on big-endian targets");
+                    }
+                    std.debug.assert(args.len >= 2);
+                    const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
+                    const index_loc = try self.emitValueLocal(GuardedList.at(args, 1));
+
+                    const list_base: i32 = switch (list_loc) {
+                        .stack => |s| s.offset,
+                        .list_stack => |ls_info| ls_info.struct_offset,
+                        else => unreachable,
+                    };
+
+                    const width: u32 = self.layout_store.layoutSize(self.layout_store.getLayout(ll.ret_layout));
+
+                    const addr_reg = try self.allocTempGeneral();
+                    switch (index_loc) {
+                        .immediate_i64 => |val| try self.codegen.emitLoadImm(addr_reg, val),
+                        .general_reg => |reg| {
+                            try self.emitMovRegReg(addr_reg, reg);
+                            self.codegen.freeGeneral(reg);
+                        },
+                        .stack => |s| try self.codegen.emitLoadStack(.w64, addr_reg, s.offset),
+                        else => unreachable,
+                    }
+
+                    // Byte index, so the list pointer is added without scaling.
+                    const ptr_reg = try self.allocTempGeneral();
+                    try self.codegen.emitLoadStack(.w64, ptr_reg, list_base);
+                    try self.emitAddRegs(.w64, addr_reg, addr_reg, ptr_reg);
+                    self.codegen.freeGeneral(ptr_reg);
+
+                    const result_slot = self.codegen.allocStackSlot(@intCast(width));
+                    const temp_reg = try self.allocTempGeneral();
+                    if (width <= 8) {
+                        const vs = ValueSize.fromByteCount(@intCast(width));
+                        try self.emitSizedLoadMem(temp_reg, addr_reg, 0, vs);
+                        try self.emitSizedStoreMem(frame_ptr, result_slot, temp_reg, vs);
+                    } else {
+                        try self.copyChunked(temp_reg, addr_reg, 0, frame_ptr, result_slot, width);
+                    }
+                    self.codegen.freeGeneral(temp_reg);
+                    self.codegen.freeGeneral(addr_reg);
+
+                    const result_loc: ValueLocation = if (width == 16)
+                        .{ .stack_i128 = result_slot }
+                    else
+                        .{ .stack = .{ .offset = result_slot, .layout_idx = ll.ret_layout } };
+                    return try self.stabilize(result_loc);
+                },
                 .list_get_unsafe => {
                     // list_get_unsafe(list, index) -> element
                     std.debug.assert(args.len >= 2);

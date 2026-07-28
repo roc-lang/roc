@@ -5578,6 +5578,7 @@ pub const Interpreter = struct {
             .num_count_trailing_zero_bits => self.numBitCountOp(args[0], ll.ret_layout, arg_layout, .count_trailing_zeros),
 
             // ── Fixed-width integer SIMD ──
+            .num_from_le_bytes_unchecked => self.evalNumFromLeBytes(ll),
             .simd_load_16_unchecked => self.evalSimdLoad(ll),
             .simd_store_16_unchecked => self.evalSimdStore(ll),
             .simd_append_16 => self.evalSimdAppend(ll),
@@ -6255,6 +6256,23 @@ pub const Interpreter = struct {
         const result = try self.alloc(ll.ret_layout);
         const result_size = @min(self.helper.sizeOf(ll.ret_layout), @sizeOf(u128));
         @memcpy(result.ptr[0..result_size], std.mem.asBytes(&result_bits)[0..result_size]);
+        return result;
+    }
+
+    /// Read a little-endian integer out of a byte list. The result layout gives
+    /// the width; the bounds check already happened in the Roc wrapper. The
+    /// bytes are assembled least-significant-first regardless of host
+    /// endianness, so this agrees with every backend on every target.
+    fn evalNumFromLeBytes(self: *LirInterpreter, ll: LowLevelEvalInput) Error!Value {
+        const list = self.valueToRocListForLayout(ll.args[0], try self.lowLevelArgLayout(ll, 0));
+        const index: usize = @intCast(ll.args[1].read(u64));
+        const result = try self.alloc(ll.ret_layout);
+        const width = self.layout_store.layoutSize(self.layout_store.getLayout(ll.ret_layout));
+        var value: u128 = 0;
+        for (0..width) |byte| {
+            value |= @as(u128, list.bytes.?[index + byte]) << @intCast(byte * 8);
+        }
+        @memcpy(result.ptr[0..width], std.mem.asBytes(&std.mem.nativeToLittle(u128, value))[0..width]);
         return result;
     }
 
