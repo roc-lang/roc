@@ -6320,3 +6320,47 @@ test "issue 10253 optimized tail recursion preserves the previous scalar argumen
         &.{"1"},
     );
 }
+
+// Repro for https://github.com/roc-lang/roc/issues/10435: SpecConstr must
+// preserve the two observed loop results without mutating frozen Monotype type
+// data while removing the unused third result.
+test "issue 10435 SpecConstr preserves frozen types for partially used while state" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : U64
+        \\main = {
+        \\    var $x = 0.U64
+        \\    var $y = 0.U64
+        \\    var $unused = 0.U64
+        \\    while $x < 3 {
+        \\        $x = $x + 1
+        \\        $y = $y + 2
+        \\        $unused = $unused + 3
+        \\    }
+        \\    $x + $y
+        \\}
+    ;
+
+    var lifted = try liftModuleAfterSpecConstr(allocator, source);
+    defer lifted.deinit(allocator);
+    try std.testing.expect(lifted.lifted.types.isFrozen());
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    var runtime_env = eval.RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+    var interpreter = try eval.Interpreter.init(
+        allocator,
+        &optimized.lowered.lir_result.store,
+        &optimized.lowered.lir_result.layouts,
+        runtime_env.get_ops(),
+        .preserve,
+    );
+    defer interpreter.deinit();
+
+    const result = try interpreter.eval(.{ .proc_id = try rootProc(&optimized.lowered) });
+    switch (result) {
+        .value => |value| try std.testing.expectEqual(@as(u64, 9), value.read(u64)),
+    }
+}
