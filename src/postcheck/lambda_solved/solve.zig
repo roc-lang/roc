@@ -1440,7 +1440,8 @@ const Solver = struct {
                         self.program.types.set(b, .{ .link = a });
                         return;
                     }
-                    try self.unifyTags(left_tags, right_tags);
+                    const merged = try self.unifyTags(left_tags, right_tags);
+                    self.program.types.set(a, .{ .tag_union = merged });
                     self.program.types.set(b, .{ .link = a });
                 },
                 else => Common.invariant("tag-union type failed Lambda Solved unification"),
@@ -1457,7 +1458,6 @@ const Solver = struct {
                         if (try self.unifyPublicGeneratedIterator(a, b, left_named, right_named)) return;
                         Common.invariant("named type identity failed Lambda Solved unification");
                     }
-                    try self.unifySpans(left_named.args, right_named.args, "named type arguments failed Lambda Solved unification");
                     if (left_named.backing) |left_backing| {
                         const right_backing = right_named.backing orelse Common.invariant("named type backing differed during Lambda Solved unification");
                         if (left_backing.use != right_backing.use) Common.invariant("named type backing use differed during Lambda Solved unification");
@@ -1476,6 +1476,7 @@ const Solver = struct {
                     } else if (right_named.backing != null) {
                         Common.invariant("named type backing differed during Lambda Solved unification");
                     } else {
+                        try self.unifySpans(left_named.args, right_named.args, "named type arguments failed Lambda Solved unification");
                         self.program.types.set(b, .{ .link = a });
                     }
                 },
@@ -1931,14 +1932,35 @@ const Solver = struct {
         }
     }
 
-    fn unifyTags(self: *Solver, lhs: Type.Span, rhs: Type.Span) Allocator.Error!void {
-        if (lhs.count() != rhs.count()) Common.invariant("tag count failed Lambda Solved unification");
-        for (0..lhs.count()) |i| {
-            const left_tag = self.program.types.tagItem(lhs, i);
-            const right_tag = self.program.types.tagItem(rhs, i);
-            if (left_tag.name != right_tag.name) Common.invariant("tag order failed Lambda Solved unification");
-            try self.unifySpans(left_tag.payloads, right_tag.payloads, "tag payload count failed Lambda Solved unification");
+    fn unifyTags(self: *Solver, lhs: Type.Span, rhs: Type.Span) Allocator.Error!Type.Span {
+        var merged = std.ArrayList(Type.Tag).empty;
+        defer merged.deinit(self.allocator);
+        var shared_count: usize = 0;
+
+        for (0..lhs.count()) |left_index| {
+            const left_tag = self.program.types.tagItem(lhs, left_index);
+            try merged.append(self.allocator, left_tag);
+            for (0..rhs.count()) |right_index| {
+                const right_tag = self.program.types.tagItem(rhs, right_index);
+                if (left_tag.name != right_tag.name) continue;
+                try self.unifySpans(left_tag.payloads, right_tag.payloads, "tag payload count failed Lambda Solved unification");
+                shared_count += 1;
+                break;
+            }
         }
+
+        if (shared_count == 0) Common.invariant("disjoint tag unions failed Lambda Solved unification");
+
+        for (0..rhs.count()) |right_index| {
+            const right_tag = self.program.types.tagItem(rhs, right_index);
+            for (0..lhs.count()) |left_index| {
+                if (self.program.types.tagItem(lhs, left_index).name == right_tag.name) break;
+            } else {
+                try merged.append(self.allocator, right_tag);
+            }
+        }
+
+        return try self.program.types.addTags(merged.items);
     }
 
     fn mergeLambdaSets(self: *Solver, lhs: Type.Span, rhs: Type.Span) Allocator.Error!Type.Span {
