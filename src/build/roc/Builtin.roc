@@ -7794,10 +7794,13 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(U16, [OutOfBounds, ..])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# Wrapping, not saturating: the first check rules out `index > len`, and a
-				# saturating subtract lowers to a conditional select, which blocks the range
-				# analysis that otherwise deletes this check inside an already-bounded loop.
-				if index > len or len.minus_wrap(index) < 2 {
+				# Saturating, so the whole check is one comparison. Proving `index <= len`
+				# first and then subtracting with wraparound is one instruction cheaper on
+				# its own, but it lowers to two conditional branches: the middle end folds
+				# it to a single `and` of two comparisons, and instruction selection then
+				# expands that back into two branches. The saturating select is a plain ALU
+				# operation with no branch at all.
+				if len.minus_saturated(index) < 2 {
 					Err(OutOfBounds)
 				} else {
 					Ok(u16_from_le_bytes_unchecked(bytes, index))
@@ -8583,10 +8586,13 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(I16, [OutOfBounds, ..])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# Wrapping, not saturating: the first check rules out `index > len`, and a
-				# saturating subtract lowers to a conditional select, which blocks the range
-				# analysis that otherwise deletes this check inside an already-bounded loop.
-				if index > len or len.minus_wrap(index) < 2 {
+				# Saturating, so the whole check is one comparison. Proving `index <= len`
+				# first and then subtracting with wraparound is one instruction cheaper on
+				# its own, but it lowers to two conditional branches: the middle end folds
+				# it to a single `and` of two comparisons, and instruction selection then
+				# expands that back into two branches. The saturating select is a plain ALU
+				# operation with no branch at all.
+				if len.minus_saturated(index) < 2 {
 					Err(OutOfBounds)
 				} else {
 					Ok(i16_from_le_bytes_unchecked(bytes, index))
@@ -9336,10 +9342,13 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(U32, [OutOfBounds, ..])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# Wrapping, not saturating: the first check rules out `index > len`, and a
-				# saturating subtract lowers to a conditional select, which blocks the range
-				# analysis that otherwise deletes this check inside an already-bounded loop.
-				if index > len or len.minus_wrap(index) < 4 {
+				# Saturating, so the whole check is one comparison. Proving `index <= len`
+				# first and then subtracting with wraparound is one instruction cheaper on
+				# its own, but it lowers to two conditional branches: the middle end folds
+				# it to a single `and` of two comparisons, and instruction selection then
+				# expands that back into two branches. The saturating select is a plain ALU
+				# operation with no branch at all.
+				if len.minus_saturated(index) < 4 {
 					Err(OutOfBounds)
 				} else {
 					Ok(u32_from_le_bytes_unchecked(bytes, index))
@@ -10157,10 +10166,13 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(I32, [OutOfBounds, ..])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# Wrapping, not saturating: the first check rules out `index > len`, and a
-				# saturating subtract lowers to a conditional select, which blocks the range
-				# analysis that otherwise deletes this check inside an already-bounded loop.
-				if index > len or len.minus_wrap(index) < 4 {
+				# Saturating, so the whole check is one comparison. Proving `index <= len`
+				# first and then subtracting with wraparound is one instruction cheaper on
+				# its own, but it lowers to two conditional branches: the middle end folds
+				# it to a single `and` of two comparisons, and instruction selection then
+				# expands that back into two branches. The saturating select is a plain ALU
+				# operation with no branch at all.
+				if len.minus_saturated(index) < 4 {
 					Err(OutOfBounds)
 				} else {
 					Ok(i32_from_le_bytes_unchecked(bytes, index))
@@ -10930,10 +10942,13 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(U64, [OutOfBounds, ..])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# Wrapping, not saturating: the first check rules out `index > len`, and a
-				# saturating subtract lowers to a conditional select, which blocks the range
-				# analysis that otherwise deletes this check inside an already-bounded loop.
-				if index > len or len.minus_wrap(index) < 8 {
+				# Saturating, so the whole check is one comparison. Proving `index <= len`
+				# first and then subtracting with wraparound is one instruction cheaper on
+				# its own, but it lowers to two conditional branches: the middle end folds
+				# it to a single `and` of two comparisons, and instruction selection then
+				# expands that back into two branches. The saturating select is a plain ALU
+				# operation with no branch at all.
+				if len.minus_saturated(index) < 8 {
 					Err(OutOfBounds)
 				} else {
 					Ok(u64_from_le_bytes_unchecked(bytes, index))
@@ -11793,10 +11808,13 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(I64, [OutOfBounds, ..])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# Wrapping, not saturating: the first check rules out `index > len`, and a
-				# saturating subtract lowers to a conditional select, which blocks the range
-				# analysis that otherwise deletes this check inside an already-bounded loop.
-				if index > len or len.minus_wrap(index) < 8 {
+				# Saturating, so the whole check is one comparison. Proving `index <= len`
+				# first and then subtracting with wraparound is one instruction cheaper on
+				# its own, but it lowers to two conditional branches: the middle end folds
+				# it to a single `and` of two comparisons, and instruction selection then
+				# expands that back into two branches. The saturating select is a plain ALU
+				# operation with no branch at all.
+				if len.minus_saturated(index) < 8 {
 					Err(OutOfBounds)
 				} else {
 					Ok(i64_from_le_bytes_unchecked(bytes, index))
@@ -12594,10 +12612,13 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(U128, [OutOfBounds, ..])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# Wrapping, not saturating: the first check rules out `index > len`, and a
-				# saturating subtract lowers to a conditional select, which blocks the range
-				# analysis that otherwise deletes this check inside an already-bounded loop.
-				if index > len or len.minus_wrap(index) < 16 {
+				# Saturating, so the whole check is one comparison. Proving `index <= len`
+				# first and then subtracting with wraparound is one instruction cheaper on
+				# its own, but it lowers to two conditional branches: the middle end folds
+				# it to a single `and` of two comparisons, and instruction selection then
+				# expands that back into two branches. The saturating select is a plain ALU
+				# operation with no branch at all.
+				if len.minus_saturated(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(u128_from_le_bytes_unchecked(bytes, index))
@@ -13502,10 +13523,13 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(I128, [OutOfBounds, ..])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# Wrapping, not saturating: the first check rules out `index > len`, and a
-				# saturating subtract lowers to a conditional select, which blocks the range
-				# analysis that otherwise deletes this check inside an already-bounded loop.
-				if index > len or len.minus_wrap(index) < 16 {
+				# Saturating, so the whole check is one comparison. Proving `index <= len`
+				# first and then subtracting with wraparound is one instruction cheaper on
+				# its own, but it lowers to two conditional branches: the middle end folds
+				# it to a single `and` of two comparisons, and instruction selection then
+				# expands that back into two branches. The saturating select is a plain ALU
+				# operation with no branch at all.
+				if len.minus_saturated(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(i128_from_le_bytes_unchecked(bytes, index))
@@ -17194,10 +17218,13 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(U8x16, [OutOfBounds, ..])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# Wrapping, not saturating: the first check rules out `index > len`, and a
-				# saturating subtract lowers to a conditional select, which blocks the range
-				# analysis that otherwise deletes this check inside an already-bounded loop.
-				if index > len or len.minus_wrap(index) < 16 {
+				# Saturating, so the whole check is one comparison. Proving `index <= len`
+				# first and then subtracting with wraparound is one instruction cheaper on
+				# its own, but it lowers to two conditional branches: the middle end folds
+				# it to a single `and` of two comparisons, and instruction selection then
+				# expands that back into two branches. The saturating select is a plain ALU
+				# operation with no branch at all.
+				if len.minus_saturated(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u8x16_load_16_unchecked(bytes, index))
@@ -17214,10 +17241,13 @@ Builtin :: [].{
 			store : U8x16, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# Wrapping, not saturating: the first check rules out `index > len`, and a
-				# saturating subtract lowers to a conditional select, which blocks the range
-				# analysis that otherwise deletes this check inside an already-bounded loop.
-				if index > len or len.minus_wrap(index) < 16 {
+				# Saturating, so the whole check is one comparison. Proving `index <= len`
+				# first and then subtracting with wraparound is one instruction cheaper on
+				# its own, but it lowers to two conditional branches: the middle end folds
+				# it to a single `and` of two comparisons, and instruction selection then
+				# expands that back into two branches. The saturating select is a plain ALU
+				# operation with no branch at all.
+				if len.minus_saturated(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u8x16_store_16_unchecked(vector, bytes, index))
@@ -17239,10 +17269,13 @@ Builtin :: [].{
 					0.U64,
 					Known(chunk_count),
 					|start|
-					# Wrapping, not saturating: the first check rules out `start > len`, and a
-					# saturating subtract lowers to a conditional select, which blocks the range
-					# analysis that otherwise deletes this check inside an already-bounded loop.
-						if start <= len and len.minus_wrap(start) >= 16 {
+					# Saturating, so the whole check is one comparison. Proving `start <= len`
+					# first and then subtracting with wraparound is one instruction cheaper on
+					# its own, but it lowers to two conditional branches: the middle end folds
+					# it to a single `and` of two comparisons, and instruction selection then
+					# expands that back into two branches. The saturating select is a plain ALU
+					# operation with no branch at all.
+						if len.minus_saturated(start) >= 16 {
 							Ok((simd_u8x16_load_16_unchecked(bytes, start), start + 16))
 						} else {
 							Err(NoMore)
@@ -17687,10 +17720,13 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(I8x16, [OutOfBounds, ..])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# Wrapping, not saturating: the first check rules out `index > len`, and a
-				# saturating subtract lowers to a conditional select, which blocks the range
-				# analysis that otherwise deletes this check inside an already-bounded loop.
-				if index > len or len.minus_wrap(index) < 16 {
+				# Saturating, so the whole check is one comparison. Proving `index <= len`
+				# first and then subtracting with wraparound is one instruction cheaper on
+				# its own, but it lowers to two conditional branches: the middle end folds
+				# it to a single `and` of two comparisons, and instruction selection then
+				# expands that back into two branches. The saturating select is a plain ALU
+				# operation with no branch at all.
+				if len.minus_saturated(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i8x16_load_16_unchecked(bytes, index))
@@ -17707,10 +17743,13 @@ Builtin :: [].{
 			store : I8x16, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# Wrapping, not saturating: the first check rules out `index > len`, and a
-				# saturating subtract lowers to a conditional select, which blocks the range
-				# analysis that otherwise deletes this check inside an already-bounded loop.
-				if index > len or len.minus_wrap(index) < 16 {
+				# Saturating, so the whole check is one comparison. Proving `index <= len`
+				# first and then subtracting with wraparound is one instruction cheaper on
+				# its own, but it lowers to two conditional branches: the middle end folds
+				# it to a single `and` of two comparisons, and instruction selection then
+				# expands that back into two branches. The saturating select is a plain ALU
+				# operation with no branch at all.
+				if len.minus_saturated(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i8x16_store_16_unchecked(vector, bytes, index))
@@ -18169,10 +18208,13 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(U16x8, [OutOfBounds, ..])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# Wrapping, not saturating: the first check rules out `index > len`, and a
-				# saturating subtract lowers to a conditional select, which blocks the range
-				# analysis that otherwise deletes this check inside an already-bounded loop.
-				if index > len or len.minus_wrap(index) < 16 {
+				# Saturating, so the whole check is one comparison. Proving `index <= len`
+				# first and then subtracting with wraparound is one instruction cheaper on
+				# its own, but it lowers to two conditional branches: the middle end folds
+				# it to a single `and` of two comparisons, and instruction selection then
+				# expands that back into two branches. The saturating select is a plain ALU
+				# operation with no branch at all.
+				if len.minus_saturated(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u16x8_load_16_unchecked(bytes, index))
@@ -18189,10 +18231,13 @@ Builtin :: [].{
 			store : U16x8, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# Wrapping, not saturating: the first check rules out `index > len`, and a
-				# saturating subtract lowers to a conditional select, which blocks the range
-				# analysis that otherwise deletes this check inside an already-bounded loop.
-				if index > len or len.minus_wrap(index) < 16 {
+				# Saturating, so the whole check is one comparison. Proving `index <= len`
+				# first and then subtracting with wraparound is one instruction cheaper on
+				# its own, but it lowers to two conditional branches: the middle end folds
+				# it to a single `and` of two comparisons, and instruction selection then
+				# expands that back into two branches. The saturating select is a plain ALU
+				# operation with no branch at all.
+				if len.minus_saturated(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u16x8_store_16_unchecked(vector, bytes, index))
@@ -18697,10 +18742,13 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(I16x8, [OutOfBounds, ..])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# Wrapping, not saturating: the first check rules out `index > len`, and a
-				# saturating subtract lowers to a conditional select, which blocks the range
-				# analysis that otherwise deletes this check inside an already-bounded loop.
-				if index > len or len.minus_wrap(index) < 16 {
+				# Saturating, so the whole check is one comparison. Proving `index <= len`
+				# first and then subtracting with wraparound is one instruction cheaper on
+				# its own, but it lowers to two conditional branches: the middle end folds
+				# it to a single `and` of two comparisons, and instruction selection then
+				# expands that back into two branches. The saturating select is a plain ALU
+				# operation with no branch at all.
+				if len.minus_saturated(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i16x8_load_16_unchecked(bytes, index))
@@ -18717,10 +18765,13 @@ Builtin :: [].{
 			store : I16x8, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# Wrapping, not saturating: the first check rules out `index > len`, and a
-				# saturating subtract lowers to a conditional select, which blocks the range
-				# analysis that otherwise deletes this check inside an already-bounded loop.
-				if index > len or len.minus_wrap(index) < 16 {
+				# Saturating, so the whole check is one comparison. Proving `index <= len`
+				# first and then subtracting with wraparound is one instruction cheaper on
+				# its own, but it lowers to two conditional branches: the middle end folds
+				# it to a single `and` of two comparisons, and instruction selection then
+				# expands that back into two branches. The saturating select is a plain ALU
+				# operation with no branch at all.
+				if len.minus_saturated(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i16x8_store_16_unchecked(vector, bytes, index))
@@ -19125,10 +19176,13 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(U32x4, [OutOfBounds, ..])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# Wrapping, not saturating: the first check rules out `index > len`, and a
-				# saturating subtract lowers to a conditional select, which blocks the range
-				# analysis that otherwise deletes this check inside an already-bounded loop.
-				if index > len or len.minus_wrap(index) < 16 {
+				# Saturating, so the whole check is one comparison. Proving `index <= len`
+				# first and then subtracting with wraparound is one instruction cheaper on
+				# its own, but it lowers to two conditional branches: the middle end folds
+				# it to a single `and` of two comparisons, and instruction selection then
+				# expands that back into two branches. The saturating select is a plain ALU
+				# operation with no branch at all.
+				if len.minus_saturated(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u32x4_load_16_unchecked(bytes, index))
@@ -19145,10 +19199,13 @@ Builtin :: [].{
 			store : U32x4, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# Wrapping, not saturating: the first check rules out `index > len`, and a
-				# saturating subtract lowers to a conditional select, which blocks the range
-				# analysis that otherwise deletes this check inside an already-bounded loop.
-				if index > len or len.minus_wrap(index) < 16 {
+				# Saturating, so the whole check is one comparison. Proving `index <= len`
+				# first and then subtracting with wraparound is one instruction cheaper on
+				# its own, but it lowers to two conditional branches: the middle end folds
+				# it to a single `and` of two comparisons, and instruction selection then
+				# expands that back into two branches. The saturating select is a plain ALU
+				# operation with no branch at all.
+				if len.minus_saturated(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u32x4_store_16_unchecked(vector, bytes, index))
@@ -19581,10 +19638,13 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(I32x4, [OutOfBounds, ..])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# Wrapping, not saturating: the first check rules out `index > len`, and a
-				# saturating subtract lowers to a conditional select, which blocks the range
-				# analysis that otherwise deletes this check inside an already-bounded loop.
-				if index > len or len.minus_wrap(index) < 16 {
+				# Saturating, so the whole check is one comparison. Proving `index <= len`
+				# first and then subtracting with wraparound is one instruction cheaper on
+				# its own, but it lowers to two conditional branches: the middle end folds
+				# it to a single `and` of two comparisons, and instruction selection then
+				# expands that back into two branches. The saturating select is a plain ALU
+				# operation with no branch at all.
+				if len.minus_saturated(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i32x4_load_16_unchecked(bytes, index))
@@ -19601,10 +19661,13 @@ Builtin :: [].{
 			store : I32x4, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# Wrapping, not saturating: the first check rules out `index > len`, and a
-				# saturating subtract lowers to a conditional select, which blocks the range
-				# analysis that otherwise deletes this check inside an already-bounded loop.
-				if index > len or len.minus_wrap(index) < 16 {
+				# Saturating, so the whole check is one comparison. Proving `index <= len`
+				# first and then subtracting with wraparound is one instruction cheaper on
+				# its own, but it lowers to two conditional branches: the middle end folds
+				# it to a single `and` of two comparisons, and instruction selection then
+				# expands that back into two branches. The saturating select is a plain ALU
+				# operation with no branch at all.
+				if len.minus_saturated(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i32x4_store_16_unchecked(vector, bytes, index))
@@ -19937,10 +20000,13 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(U64x2, [OutOfBounds, ..])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# Wrapping, not saturating: the first check rules out `index > len`, and a
-				# saturating subtract lowers to a conditional select, which blocks the range
-				# analysis that otherwise deletes this check inside an already-bounded loop.
-				if index > len or len.minus_wrap(index) < 16 {
+				# Saturating, so the whole check is one comparison. Proving `index <= len`
+				# first and then subtracting with wraparound is one instruction cheaper on
+				# its own, but it lowers to two conditional branches: the middle end folds
+				# it to a single `and` of two comparisons, and instruction selection then
+				# expands that back into two branches. The saturating select is a plain ALU
+				# operation with no branch at all.
+				if len.minus_saturated(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u64x2_load_16_unchecked(bytes, index))
@@ -19957,10 +20023,13 @@ Builtin :: [].{
 			store : U64x2, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# Wrapping, not saturating: the first check rules out `index > len`, and a
-				# saturating subtract lowers to a conditional select, which blocks the range
-				# analysis that otherwise deletes this check inside an already-bounded loop.
-				if index > len or len.minus_wrap(index) < 16 {
+				# Saturating, so the whole check is one comparison. Proving `index <= len`
+				# first and then subtracting with wraparound is one instruction cheaper on
+				# its own, but it lowers to two conditional branches: the middle end folds
+				# it to a single `and` of two comparisons, and instruction selection then
+				# expands that back into two branches. The saturating select is a plain ALU
+				# operation with no branch at all.
+				if len.minus_saturated(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u64x2_store_16_unchecked(vector, bytes, index))
@@ -20302,10 +20371,13 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(I64x2, [OutOfBounds, ..])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# Wrapping, not saturating: the first check rules out `index > len`, and a
-				# saturating subtract lowers to a conditional select, which blocks the range
-				# analysis that otherwise deletes this check inside an already-bounded loop.
-				if index > len or len.minus_wrap(index) < 16 {
+				# Saturating, so the whole check is one comparison. Proving `index <= len`
+				# first and then subtracting with wraparound is one instruction cheaper on
+				# its own, but it lowers to two conditional branches: the middle end folds
+				# it to a single `and` of two comparisons, and instruction selection then
+				# expands that back into two branches. The saturating select is a plain ALU
+				# operation with no branch at all.
+				if len.minus_saturated(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i64x2_load_16_unchecked(bytes, index))
@@ -20322,10 +20394,13 @@ Builtin :: [].{
 			store : I64x2, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# Wrapping, not saturating: the first check rules out `index > len`, and a
-				# saturating subtract lowers to a conditional select, which blocks the range
-				# analysis that otherwise deletes this check inside an already-bounded loop.
-				if index > len or len.minus_wrap(index) < 16 {
+				# Saturating, so the whole check is one comparison. Proving `index <= len`
+				# first and then subtracting with wraparound is one instruction cheaper on
+				# its own, but it lowers to two conditional branches: the middle end folds
+				# it to a single `and` of two comparisons, and instruction selection then
+				# expands that back into two branches. The saturating select is a plain ALU
+				# operation with no branch at all.
+				if len.minus_saturated(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i64x2_store_16_unchecked(vector, bytes, index))
