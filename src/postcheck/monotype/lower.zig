@@ -8456,6 +8456,28 @@ const DraftTemplateSpec = struct {
     lexical_context_key: ?names.TypeDigest = null,
     fn_id: DraftFnId,
     resolved_slot: ?Ast.FnSlot = null,
+    independent_demand: ?*IndependentTemplateDemand = null,
+};
+
+/// One context-free procedure body lowered exactly once in its
+/// specialization-owned solve-session partition. Its requesting draft owns
+/// this record and keeps it alive until the connected demand component seals.
+const IndependentTemplateDemand = struct {
+    graph: *InstGraph,
+    draft: *BodyDraftStore,
+    root_node: NodeId,
+    root_fn: DraftFnId,
+    root_def: DraftDefId,
+    lowered: LoweredTemplateBody,
+    prepared: bool = false,
+    resolved_slot: ?Ast.FnSlot = null,
+
+    fn deinit(self: *IndependentTemplateDemand, allocator: Allocator) void {
+        self.draft.deinit();
+        allocator.destroy(self.draft);
+        self.graph.destroy();
+        allocator.destroy(self);
+    }
 };
 
 const DraftConstUseProvenance = union(enum) {
@@ -8886,6 +8908,7 @@ const BodyDraftStore = struct {
     def_owners: std.ArrayList(DraftOwner),
     nested_defs: std.ArrayList(DraftNestedDef),
     template_specs: std.ArrayList(DraftTemplateSpec),
+    independent_demands: std.ArrayList(*IndependentTemplateDemand),
     template_spec_lookup: std.AutoHashMap(DraftTemplateLookupAddress, std.ArrayList(u32)),
     active_callable_eval_bindings: std.ArrayList(ActiveCallableEvalBinding),
     deferred_const_uses: std.ArrayList(DraftDeferredConstUse),
@@ -8953,6 +8976,7 @@ const BodyDraftStore = struct {
             .def_owners = .empty,
             .nested_defs = .empty,
             .template_specs = .empty,
+            .independent_demands = .empty,
             .template_spec_lookup = std.AutoHashMap(DraftTemplateLookupAddress, std.ArrayList(u32)).init(allocator),
             .active_callable_eval_bindings = .empty,
             .deferred_const_uses = .empty,
@@ -9013,6 +9037,8 @@ const BodyDraftStore = struct {
     }
 
     fn deinit(self: *BodyDraftStore) void {
+        for (self.independent_demands.items) |demand| demand.deinit(self.allocator);
+        self.independent_demands.deinit(self.allocator);
         for (self.template_specs.items) |spec| {
             if (spec.lexical) |lexical| {
                 self.allocator.free(lexical.binders);
