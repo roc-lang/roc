@@ -10386,35 +10386,41 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             });
         }
 
-        /// Emit a 3-instruction PC-relative address calculation on aarch64.
-        /// Layout (12 bytes): ADR Xd, anchor (offset 0) — ADD/SUB Xd, Xd, #hi12, LSL #12 — ADD/SUB Xd, Xd, #lo12.
-        /// `anchor` is the address of the ADR instruction. The final value of Xd equals
-        /// `anchor + (target_off - anchor)`. Caller must ensure |target_off - anchor| ≤ 0xFFFFFF.
+        /// Emit a 2-instruction PC-relative address calculation on aarch64:
+        /// ADRP Xd, page — ADD Xd, Xd, #lo12. Reaches ±4 GiB, so it covers any
+        /// distance within a single generated image.
+        ///
+        /// ADRP is relative to the page containing it, so the sequence is only
+        /// position-independent if the code loads at a page boundary. Every path
+        /// that runs this code satisfies that: the dev backend maps it with mmap,
+        /// and object files place executable sections on page boundaries.
         fn emitAarch64PcRelAddress(self: *Self, dst: GeneralReg, anchor: usize, target_off: usize) Allocator.Error!void {
-            const rel: i64 = @as(i64, @intCast(target_off)) - @as(i64, @intCast(anchor));
-            const negative = rel < 0;
-            const abs_rel: u64 = if (negative) @intCast(-rel) else @intCast(rel);
-            const hi12: u12 = @truncate(abs_rel >> 12);
-            const lo12: u12 = @truncate(abs_rel);
+            const parts = aarch64PcRelParts(anchor, target_off);
+            try self.codegen.emit.adrpPage(dst, parts.page_delta);
+            try self.codegen.emit.addRegRegImm12(.w64, dst, dst, parts.lo12);
+        }
 
-            try self.codegen.emit.adr(dst, 0);
-            if (negative) {
-                try self.codegen.emit.subRegRegImm12Shifted(.w64, dst, dst, hi12, true);
-                try self.codegen.emit.subRegRegImm12(.w64, dst, dst, lo12);
-            } else {
-                try self.codegen.emit.addRegRegImm12Shifted(.w64, dst, dst, hi12, true);
-                try self.codegen.emit.addRegRegImm12(.w64, dst, dst, lo12);
-            }
+        /// How to reach `target_off` from an ADRP at `anchor`. Shared by the
+        /// emitter and the patcher so a rewritten sequence is encoded exactly as a
+        /// freshly emitted one.
+        fn aarch64PcRelParts(anchor: usize, target_off: usize) struct { page_delta: i21, lo12: u12 } {
+            const target_page: i64 = @intCast(target_off >> 12);
+            const anchor_page: i64 = @intCast(anchor >> 12);
+            const page_delta = target_page - anchor_page;
+            // An image large enough to overflow ADRP's reach would already have
+            // overflowed the branch offsets, so trap rather than silently encoding
+            // the wrong address.
+            std.debug.assert(page_delta >= std.math.minInt(i21) and page_delta <= std.math.maxInt(i21));
+            return .{ .page_delta = @intCast(page_delta), .lo12 = @truncate(target_off) };
         }
 
         fn emitPendingProcAddress(self: *Self, target_proc: lir.LIR.LirProcSpecId, dst_reg: GeneralReg) Allocator.Error!void {
             const current = self.codegen.currentOffset();
             if (comptime target.toCpuArch() == .aarch64) {
-                // Reserve a 3-instruction (12-byte) PC-relative address sequence so the
-                // patcher can rewrite ADR + ADD/SUB(hi) + ADD/SUB(lo) once the target
-                // proc's code offset is known. See emitAarch64PcRelAddress.
-                try self.codegen.emit.adr(dst_reg, 0);
-                try self.codegen.emit.addRegRegImm12Shifted(.w64, dst_reg, dst_reg, 0, true);
+                // Reserve the 2-instruction (8-byte) PC-relative address sequence so
+                // the patcher can rewrite ADRP + ADD once the target proc's code
+                // offset is known. See emitAarch64PcRelAddress.
+                try self.codegen.emit.adrp(dst_reg);
                 try self.codegen.emit.addRegRegImm12(.w64, dst_reg, dst_reg, 0);
             } else {
                 try self.codegen.emit.leaRegRipRel(dst_reg, 0);
@@ -10451,8 +10457,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn emitPendingRcAddr(self: *Self, helper: RcHelperVariant, dst_reg: GeneralReg) Allocator.Error!void {
             const current = self.codegen.currentOffset();
             if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.adr(dst_reg, 0);
-                try self.codegen.emit.addRegRegImm12Shifted(.w64, dst_reg, dst_reg, 0, true);
+                // Same 2-instruction ADRP + ADD sequence the patcher rewrites; see
+                // emitAarch64PcRelAddress.
+                try self.codegen.emit.adrp(dst_reg);
                 try self.codegen.emit.addRegRegImm12(.w64, dst_reg, dst_reg, 0);
             } else {
                 try self.codegen.emit.leaRegRipRel(dst_reg, 0);
@@ -14518,43 +14525,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn patchInternalCodeAddress(self: *Self, instr_offset: usize, target_offset: usize) void {
             const buf = self.codegen.emit.buf.items;
             if (comptime target.toCpuArch() == .aarch64) {
-                // The emit reserves a 3-instruction PC-relative sequence (ADR + two
-                // ADD/SUB imm12) starting at instr_offset. Re-derive the relative offset
-                // from the new instr_offset and rewrite all three instructions. The
-                // existing ADR's Rd is preserved so the patched sequence targets the
-                // same register the caller originally chose.
-                const rel: i64 = @as(i64, @intCast(target_offset)) - @as(i64, @intCast(instr_offset));
-                const negative = rel < 0;
-                const abs_rel: u64 = if (negative) @intCast(-rel) else @intCast(rel);
-                const hi12: u32 = @as(u32, @as(u12, @truncate(abs_rel >> 12)));
-                const lo12: u32 = @as(u32, @as(u12, @truncate(abs_rel)));
-
-                const adr_existing: u32 = @bitCast(buf[instr_offset..][0..4].*);
-                const rd_bits: u32 = adr_existing & 0x1F;
-
-                // Rewrite the ADR with offset 0 so Xd holds the anchor PC.
-                const adr_inst: u32 = (0 << 31) |
-                    (0b10000 << 24) |
-                    rd_bits;
-                @memcpy(buf[instr_offset..][0..4], &@as([4]u8, @bitCast(adr_inst)));
-
-                // ADD/SUB Xd, Xd, #hi12, LSL #12
-                const op_bits: u32 = if (negative) 0b1010001 else 0b0010001;
-                const rn_rd_bits: u32 = (rd_bits << 5) | rd_bits;
-                const hi_inst: u32 = (1 << 31) |
-                    (op_bits << 24) |
-                    (1 << 22) |
-                    (hi12 << 10) |
-                    rn_rd_bits;
-                @memcpy(buf[instr_offset + 4 ..][0..4], &@as([4]u8, @bitCast(hi_inst)));
-
-                // ADD/SUB Xd, Xd, #lo12
-                const lo_inst: u32 = (1 << 31) |
-                    (op_bits << 24) |
-                    (0 << 22) |
-                    (lo12 << 10) |
-                    rn_rd_bits;
-                @memcpy(buf[instr_offset + 8 ..][0..4], &@as([4]u8, @bitCast(lo_inst)));
+                // The emit reserves a 2-instruction PC-relative sequence (ADRP + ADD)
+                // starting at instr_offset. The existing ADRP's Rd is preserved so the
+                // patched sequence targets the register the caller originally chose.
+                const adrp_existing: u32 = @bitCast(buf[instr_offset..][0..4].*);
+                const dst: GeneralReg = @enumFromInt(@as(u5, @truncate(adrp_existing & 0x1F)));
+                const parts = aarch64PcRelParts(instr_offset, target_offset);
+                const adrp_inst = aarch64.Emit(target).encodeAdrp(dst, parts.page_delta);
+                const add_inst = aarch64.Emit(target).encodeAddImm12(dst, dst, parts.lo12);
+                @memcpy(buf[instr_offset..][0..4], &@as([4]u8, @bitCast(adrp_inst)));
+                @memcpy(buf[instr_offset + 4 ..][0..4], &@as([4]u8, @bitCast(add_inst)));
             } else {
                 const new_rel: i64 = @as(i64, @intCast(target_offset)) - @as(i64, @intCast(instr_offset));
                 const lea_size: i64 = 7;

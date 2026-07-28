@@ -799,8 +799,36 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         pub fn adrp(self: *Self, rd: GeneralReg) Allocator.Error!void {
-            const inst: u32 = 0x90000000 | @as(u32, rd.enc());
-            try self.emit32(inst);
+            try self.emit32(encodeAdrp(rd, 0));
+        }
+
+        /// ADRP Xd, #page_delta — see `encodeAdrp`.
+        pub fn adrpPage(self: *Self, rd: GeneralReg, page_delta: i21) Allocator.Error!void {
+            try self.emit32(encodeAdrp(rd, page_delta));
+        }
+
+        /// ADRP Xd, #imm — the 4 KiB page containing the ADRP, plus `page_delta`
+        /// pages. Reaches ±4 GiB, which is why address materialization uses it in
+        /// preference to ADR's ±1 MiB.
+        pub fn encodeAdrp(rd: GeneralReg, page_delta: i21) u32 {
+            const imm: u21 = @bitCast(page_delta);
+            const immlo: u2 = @truncate(imm);
+            const immhi: u19 = @truncate(imm >> 2);
+            return (1 << 31) |
+                (@as(u32, immlo) << 29) |
+                (0b10000 << 24) |
+                (@as(u32, immhi) << 5) |
+                @as(u32, rd.enc());
+        }
+
+        /// ADD Xd, Xn, #imm12, matching `addRegRegImm12` but returning the word so
+        /// a patcher can rewrite an already-emitted instruction.
+        pub fn encodeAddImm12(rd: GeneralReg, rn: GeneralReg, imm: u12) u32 {
+            return (1 << 31) |
+                (0b0010001 << 24) |
+                (@as(u32, imm) << 10) |
+                (@as(u32, rn.enc()) << 5) |
+                rd.enc();
         }
 
         /// BLR Xn (branch with link to register - call to address in register)
@@ -1971,4 +1999,52 @@ test "CC.returnI128ByPointer is false for all aarch64 targets" {
     try std.testing.expect(!LinuxEmit.CC.returnI128ByPointer());
     try std.testing.expect(!WinEmit.CC.returnI128ByPointer());
     try std.testing.expect(!MacEmit.CC.returnI128ByPointer());
+}
+
+/// What an ADRP + ADD pair actually computes at run time, given where the pair
+/// sits in a page-aligned image. Mirrors the hardware so the test below checks
+/// the resulting address rather than just the bits.
+fn evalAdrpAdd(base: u64, instr_offset: u64, adrp_inst: u32, add_inst: u32) u64 {
+    const immlo: u64 = (adrp_inst >> 29) & 0b11;
+    const immhi: u64 = (adrp_inst >> 5) & 0x7FFFF;
+    const imm21: i21 = @bitCast(@as(u21, @truncate((immhi << 2) | immlo)));
+    const page_base = (base + instr_offset) & ~@as(u64, 0xFFF);
+    const paged = @as(i64, @intCast(page_base)) + (@as(i64, imm21) << 12);
+    const imm12: u64 = (add_inst >> 10) & 0xFFF;
+    return @as(u64, @intCast(paged)) + imm12;
+}
+
+test "adrp + add reaches targets past ADR's range" {
+    // A pair of 12-bit immediates could only express 16 MiB, so an image larger
+    // than that silently computed the wrong address. These distances are the
+    // ones that used to be misencoded.
+    const cases = [_]struct { instr: u64, target: u64 }{
+        .{ .instr = 0, .target = 0 },
+        .{ .instr = 0x1000, .target = 0 },
+        .{ .instr = 0, .target = 0xFFF },
+        .{ .instr = 0x40, .target = 0x1_000_000 },
+        .{ .instr = 0x1_000_000, .target = 0x40 },
+        .{ .instr = 0x100, .target = 0x22E_4B2C },
+        .{ .instr = 0x22E_4B2C, .target = 0x100 },
+        .{ .instr = 0, .target = 0x7FFF_F000 },
+    };
+
+    for (cases) |case| {
+        for ([_]u64{ 0x1_0000_0000, 0x4000 }) |base| {
+            var asm_buf = LinuxEmit.init(std.testing.allocator);
+            defer asm_buf.deinit();
+
+            const target_page: i64 = @intCast(case.target >> 12);
+            const instr_page: i64 = @intCast(case.instr >> 12);
+            try asm_buf.adrpPage(.X3, @intCast(target_page - instr_page));
+            try asm_buf.addRegRegImm12(.w64, .X3, .X3, @truncate(case.target));
+
+            const adrp_inst: u32 = @bitCast(asm_buf.buf.items[0..4].*);
+            const add_inst: u32 = @bitCast(asm_buf.buf.items[4..8].*);
+            try std.testing.expectEqual(
+                base + case.target,
+                evalAdrpAdd(base, case.instr, adrp_inst, add_inst),
+            );
+        }
+    }
 }
