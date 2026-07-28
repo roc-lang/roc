@@ -3881,8 +3881,7 @@ const Inserter = struct {
                     _ = try self.ensureReadBeforeRebindNode(&graph, &work, join_stmt.body);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, join_stmt.remainder);
                 },
-                .jump => |jump_stmt| {
-                    _ = jump_stmt;
+                .jump => {
                     const join_index = self.solution.jumpTargetJoinIndexOf(graph.nodes.items[node_index].stmt);
                     if (join_index >= self.join_bodies.len) arcInvariant("ARC liveness jump index exceeded its lifted join table");
                     const target_body = self.join_bodies[join_index].body;
@@ -4811,7 +4810,8 @@ test "ARC stale plan visit cannot overwrite a newer slot version" {
     var plans = ArcPlans{};
     defer plans.plans.deinit(testing.allocator);
     defer plans.metadata.deinit(testing.allocator);
-    const start: LIR.CFStmtId = @enumFromInt(0);
+    // The stale version returns before either stored statement id is read.
+    const start: LIR.CFStmtId = undefined;
     try plans.plans.append(testing.allocator, .{ .start = start, .step_count = 7 });
     try plans.metadata.append(testing.allocator, .{ .version = 2, .scheduled = true });
 

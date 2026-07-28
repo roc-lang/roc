@@ -4945,22 +4945,23 @@ before solving and never weakened:
 
 The solver performs one exact structural walk of every ownership-neutral proc
 body and records its reachable statements as a per-proc inventory. A neutral
-body may back several proc specs: caller-context facts are recorded once per
-proc, while definition and occurrence facts are recorded once per structurally
-distinct statement. Pinned-proc escapes, call-graph SCCs, binding and signature
-facts, visibility edges, uniqueness facts, reachable returns, and join bodies
-are typed projections of this lift; none independently rediscovers CFG
-reachability or decodes the same statements again. The inventory is
+body may back several proc specs: direct calls, returns, join bodies, and
+parameter uses are recorded once per proc, while definitions, local
+occurrences, visibility links, and uniqueness operations are recorded once per
+structurally distinct statement. Pinned-proc escapes, call-graph SCCs,
+bindings, signatures, visibility, uniqueness, returns, and join summaries all
+consume these typed tables; none independently rediscovers CFG reachability or
+decodes the same statements again. The inventory is
 stage-local and exact: it records every reachable statement and no unreachable
 statement, with no cap or approximation.
 
-Caller-context projections also record direct-call tailness and, for each
-proc, the parameter positions that can reach consuming low-level runtime
-uniqueness checks. Variant planning consumes those solved masks directly; it
-does not rescan a proc body or allocate a module-sized visited table. The final
-binding expansion also publishes the exact borrowed call-result set used by
-per-proc liveness domains, so ARC insertion performs no second module-wide
-statement scan to reconstruct call-result kinds.
+The caller-indexed tables also record direct-call tailness and, for each proc,
+the parameter positions that can reach consuming low-level runtime uniqueness
+checks. Variant planning consumes those solved masks directly; it does not
+rescan a proc body or allocate a module-sized visited table. After binding
+reaches its fixed point, `Solution.borrowed_call_result` stores the exact set
+used by per-proc liveness domains, so ARC insertion performs no second
+module-wide statement scan to reconstruct call-result kinds.
 
 The module solver constructs one dense domain containing exactly locals whose
 committed layouts participate in ARC. Binding tables, dependency edges,
@@ -4990,11 +4991,12 @@ Signatures solve in two phases:
    whose lender mask names exactly one refcounted argument is borrow-capable
    in the caller, anchored on that argument.
 
-Unique-return bits use a separate monotone worklist over facts collected by
-the same uniqueness scan. A proc bit feeds only its direct-call result locals;
+Unique-return bits use a separate monotone worklist over typed uniqueness
+entries collected by the same structural walk. A proc bit feeds only its
+direct-call result locals;
 a newly born-unique local feeds only its explicit pure-alias dependents; and a
 newly unique local feeds only the procs whose recorded `ret` statements return
-it. Holder-destroy facts are signature-independent and fixed before this
+it. Holder-destroy entries are signature-independent and fixed before this
 worklist starts. Proc bits and local birth bits only turn on, each at most once,
 so unique-return solving never reruns whole-store uniqueness analysis.
 
@@ -5005,9 +5007,9 @@ newly changed origin enter its worklist. After return modes settle, the second
 binding phase likewise revisits only changed borrowed-return call results and
 their transitive reverse borrow dependents.
 
-The reachable join-body facts collected during solving are also the sole input
-for emission's jump resolution. Emission must not rediscover join definitions
-by traversing the ownership-neutral graph again.
+The reachable `JoinBody` entries collected during solving are also the sole
+input for emission's jump resolution. Emission must not rediscover join
+definitions by traversing the ownership-neutral graph again.
 
 Borrowed parameters anchor borrow groups of their own: they are live for the
 whole call by ABI, so payload reads from them borrow without the callee
@@ -5112,8 +5114,8 @@ at their compact graph nodes and the active source graph supplies their direct
 dense statement-to-node lookup.
 
 Each join receives a compact loop identity whose direct cache covers the
-forward closure of its explicit body and remainder roots. The join keep-set is
-an additional boundary fact on reachable loop-edge nodes. When that keep-set
+forward closure of its explicit body and remainder roots. The join keep-set
+adds a boundary row to each reachable loop-edge node. When that keep-set
 shrinks, ARC computes the exact new boundary row, seeds only loop edges whose
 rows actually changed, and propagates the delta through changed predecessors;
 it neither rebuilds the graph nor discards unaffected rows. Every loop-keyed
