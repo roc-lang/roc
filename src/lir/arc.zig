@@ -276,6 +276,15 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     @memset(stmt_node_indices, no_stmt_node_index);
     inserter.stmt_node_indices = stmt_node_indices;
 
+    const base_proc_count = store.procSpecCount();
+    var liveness_arena = std.heap.ArenaAllocator.init(store.allocator);
+    defer liveness_arena.deinit();
+    inserter.liveness_allocator = liveness_arena.allocator();
+    const liveness_graphs = try store.allocator.alloc(?Inserter.ReadBeforeRebindGraph, base_proc_count);
+    defer store.allocator.free(liveness_graphs);
+    @memset(liveness_graphs, null);
+    inserter.liveness_graphs = liveness_graphs;
+
     var read_cache_arena = std.heap.ArenaAllocator.init(store.allocator);
     defer read_cache_arena.deinit();
     inserter.read_cache_arena = &read_cache_arena;
@@ -300,7 +309,6 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     // Original (ownership-neutral) bodies stay valid after each proc's base
     // emission because rewriting clones statements; specialized variants
     // re-emit from these.
-    const base_proc_count = store.procSpecCount();
     var original_bodies = try store.allocator.alloc(?LIR.CFStmtId, base_proc_count);
     defer store.allocator.free(original_bodies);
     for (0..base_proc_count) |proc_index| {
@@ -364,6 +372,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         const emit_args = store.getProcSpec(emit_proc).args;
         inserter.current_sig = emit_sig;
         inserter.current_proc_body = body;
+        inserter.current_source_proc = source_proc;
         inserter.clearReadsBeforeRebindCache();
 
         // The ownership-neutral body and emitted LIR outlive this iteration;
@@ -408,29 +417,17 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             }
         }
 
-        var join_bodies = JoinBodyMap.init(inserter.emission_allocator);
-        defer join_bodies.deinit();
-        for (solution.joinBodiesOf(source_proc)) |join_body| {
-            const entry = try join_bodies.getOrPut(join_body.id);
-            if (entry.found_existing and entry.value_ptr.* != join_body.body) {
-                arcInvariant("ARC solver produced one join id with multiple bodies");
-            }
-            entry.value_ptr.* = join_body.body;
-        }
-        inserter.join_bodies = &join_bodies;
-        defer inserter.join_bodies = null;
-        var rewritten_joins = RewrittenJoinMap.init(inserter.emission_allocator);
-        defer {
-            var iter = rewritten_joins.valueIterator();
-            while (iter.next()) |entry| entry.keep.deinit();
-            rewritten_joins.deinit();
-        }
-        inserter.rewritten_joins = &rewritten_joins;
-        defer inserter.rewritten_joins = null;
-        var final_joins: FinalJoinMap = .empty;
-        defer final_joins.deinit(inserter.emission_allocator);
-        inserter.final_joins = &final_joins;
-        defer inserter.final_joins = null;
+        const join_bodies = solution.joinBodiesOf(source_proc);
+        inserter.join_bodies = join_bodies;
+        defer inserter.join_bodies = &.{};
+        const rewritten_joins = try inserter.emission_allocator.alloc(?RewrittenJoin, join_bodies.len);
+        @memset(rewritten_joins, null);
+        inserter.rewritten_joins = rewritten_joins;
+        defer inserter.rewritten_joins = &.{};
+        const final_joins = try inserter.emission_allocator.alloc(?LIR.JoinPoint, join_bodies.len);
+        @memset(final_joins, null);
+        inserter.final_joins = final_joins;
+        defer inserter.final_joins = &.{};
         var owned = try OwnedSet.init(inserter.emission_allocator, &domain);
         defer owned.deinit();
         const emit_params_for_owned = store.getLocalSpan(emit_args);
@@ -441,13 +438,15 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             }
         }
 
-        var join_summaries = JoinSummaryMap.init(inserter.emission_allocator);
-        var switch_summaries = SwitchSummaryMap.init(inserter.emission_allocator);
-        inserter.join_summaries = &join_summaries;
-        inserter.switch_summaries = &switch_summaries;
+        const join_summaries = try inserter.emission_allocator.alloc(?*JoinSummary, join_bodies.len);
+        @memset(join_summaries, null);
+        const switch_summaries = try inserter.emission_allocator.alloc(?*SwitchSummary, solution.switchCountOf(source_proc));
+        @memset(switch_summaries, null);
+        inserter.join_summaries = join_summaries;
+        inserter.switch_summaries = switch_summaries;
         defer {
-            inserter.join_summaries = null;
-            inserter.switch_summaries = null;
+            inserter.join_summaries = &.{};
+            inserter.switch_summaries = &.{};
         }
         try inserter.solveProcSummaries(body, &owned);
 
@@ -696,6 +695,7 @@ const ExactBitSet = struct {
 //   continuation statement without crossing a join frame.
 
 const JoinSummary = struct {
+    index: u32,
     id: LIR.JoinPointId,
     start: LIR.CFStmtId,
     params: LIR.LocalSpan,
@@ -719,12 +719,13 @@ const JoinSummary = struct {
     /// segments derive theirs from it.
     origin_ctx: SolveContext,
     /// Must-owned state per eligible jump statement targeting this join.
-    jump_states: std.AutoHashMap(LIR.CFStmtId, OwnedSet),
+    jump_states: []?OwnedSet,
     process_queued: bool = false,
     body_walk_queued: bool = false,
 };
 
 const SwitchSummary = struct {
+    index: u32,
     start: LIR.CFStmtId,
     continuation: LIR.CFStmtId,
     /// Intersection of branch exit states reaching the continuation; only
@@ -748,7 +749,7 @@ const SolveStop = struct {
 /// Join bodies the current segment is nested inside; jumps targeting one of
 /// these are loop back edges and do not feed that join's body keep.
 const SolveBodyScope = struct {
-    join: LIR.JoinPointId,
+    join_index: u32,
     parent: ?*const SolveBodyScope,
 };
 
@@ -758,9 +759,6 @@ const SolveContext = struct {
     body_scope: ?*const SolveBodyScope = null,
 };
 
-const JoinSummaryMap = std.AutoHashMap(LIR.JoinPointId, *JoinSummary);
-const SwitchSummaryMap = std.AutoHashMap(LIR.CFStmtId, *SwitchSummary);
-
 const SolveSegment = struct {
     cursor: LIR.CFStmtId,
     owned: OwnedSet,
@@ -769,9 +767,9 @@ const SolveSegment = struct {
 
 const SolveTask = union(enum) {
     segment: *SolveSegment,
-    join_process: LIR.JoinPointId,
-    body_walk: LIR.JoinPointId,
-    switch_resume: LIR.CFStmtId,
+    join_process: u32,
+    body_walk: u32,
+    switch_resume: u32,
 };
 
 fn cloneOwnedSetWith(allocator: Allocator, source: *const OwnedSet) ResourceError!OwnedSet {
@@ -921,17 +919,22 @@ const Inserter = struct {
     reaches_loop_edge: *std.bit_set.DynamicBitSetUnmanaged = undefined,
     /// Reusable dense original-statement id -> active liveness-node index.
     stmt_node_indices: []u32 = &.{},
+    /// Immutable ownership-neutral liveness graph per source proc. Variants
+    /// share their source graph and its keep-free fixed point.
+    liveness_graphs: []?ReadBeforeRebindGraph = &.{},
+    liveness_allocator: Allocator = undefined,
+    current_source_proc: LIR.LirProcSpecId = undefined,
     next_loop_keep_id: u32 = 1,
     current_proc_body: LIR.CFStmtId = undefined,
-    join_bodies: ?*const JoinBodyMap = null,
-    rewritten_joins: ?*RewrittenJoinMap = null,
+    join_bodies: []const arc_solve.JoinBody = &.{},
+    rewritten_joins: []?RewrittenJoin = &.{},
     /// Join metadata accumulated at the exact point each final join is
     /// emitted, avoiding a second discovery walk over the finished graph.
-    final_joins: ?*FinalJoinMap = null,
+    final_joins: []?LIR.JoinPoint = &.{},
     /// Per-emission join summaries computed by the solver before rewriting.
-    join_summaries: ?*JoinSummaryMap = null,
+    join_summaries: []?*JoinSummary = &.{},
     /// Per-emission switch-continuation summaries from the same solve.
-    switch_summaries: ?*SwitchSummaryMap = null,
+    switch_summaries: []?*SwitchSummary = &.{},
     /// Arena backing one emission's solver structures.
     solve_allocator: Allocator = undefined,
     /// Arena backing all non-output state for the current proc emission.
@@ -971,6 +974,7 @@ const Inserter = struct {
 
     const RewriteJoinTask = struct {
         start: LIR.CFStmtId,
+        join_index: u32,
         id: LIR.JoinPointId,
         params: LIR.LocalSpan,
         maybe_uninitialized_params: LIR.LocalSpan = .empty(),
@@ -1469,7 +1473,7 @@ const Inserter = struct {
                     return;
                 },
                 .jump => |jump_stmt| {
-                    const summary = self.solveSummaryOf(jump_stmt.target);
+                    const summary = self.solveSummaryOf(self.solution.jumpTargetJoinIndexOf(path.cursor));
                     const jump = try self.store.addCFStmt(.{ .jump = .{ .target = jump_stmt.target } });
                     const tail = try self.releaseDifference(&path.owned, &summary.body_keep, jump);
                     path.result.* = try self.finishLinearRewrite(&path.frames, tail);
@@ -1822,20 +1826,21 @@ const Inserter = struct {
         start: LIR.CFStmtId,
         join_stmt: anytype,
     ) ResourceError!void {
-        if (self.rewritten_joins) |rewritten_joins| {
-            if (rewritten_joins.get(start)) |rewritten| {
-                const tail = try self.releaseDifference(&path.owned, &rewritten.keep, rewritten.stmt);
-                path.result.* = try self.finishLinearRewrite(&path.frames, tail);
-                return;
-            }
+        const join_index = self.solution.joinIndexOfStmt(start);
+        if (join_index >= self.rewritten_joins.len) arcInvariant("ARC rewrite join index exceeded its lifted table");
+        if (self.rewritten_joins[join_index]) |rewritten| {
+            const tail = try self.releaseDifference(&path.owned, &rewritten.keep, rewritten.stmt);
+            path.result.* = try self.finishLinearRewrite(&path.frames, tail);
+            return;
         }
 
-        const summary = self.solveSummaryOf(join_stmt.id);
+        const summary = self.solveSummaryOf(join_index);
         const state = try self.emission_allocator.create(RewriteJoinTask);
         var queued = false;
         errdefer if (!queued) self.emission_allocator.destroy(state);
         state.* = .{
             .start = start,
+            .join_index = join_index,
             .id = join_stmt.id,
             .params = join_stmt.params,
             .maybe_uninitialized_params = join_stmt.maybe_uninitialized_params,
@@ -1885,17 +1890,19 @@ const Inserter = struct {
             .body = state.body,
             .remainder = state.remainder,
         } });
-        try self.recordFinalJoin(.{
+        try self.recordFinalJoin(state.join_index, .{
             .id = state.id,
             .params = state.params,
             .body = state.body,
         });
-        if (self.rewritten_joins) |rewritten_joins| {
-            try rewritten_joins.put(state.start, .{
-                .keep = try state.entry_keep.clone(),
-                .stmt = join,
-            });
+        if (state.join_index >= self.rewritten_joins.len) arcInvariant("ARC final rewrite join index exceeded its table");
+        if (self.rewritten_joins[state.join_index] != null) {
+            arcInvariant("ARC rewrote one lifted join twice before using its cached result");
         }
+        self.rewritten_joins[state.join_index] = .{
+            .keep = try state.entry_keep.clone(),
+            .stmt = join,
+        };
         const tail = try self.releaseDifference(&state.incoming_owned, &state.entry_keep, join);
         state.result.* = try self.finishLinearRewrite(&state.frames, tail);
         self.destroyRewriteJoin(state);
@@ -1909,8 +1916,9 @@ const Inserter = struct {
         switch_stmt: anytype,
     ) ResourceError!void {
         if (switch_stmt.continuation) |continuation| {
-            const summaries = self.switch_summaries orelse arcInvariant("ARC rewrite ran without switch summaries");
-            const summary = summaries.get(start) orelse arcInvariant("ARC rewrite reached a switch without a summary");
+            const switch_index = self.solution.switchIndexOfStmt(start);
+            if (switch_index >= self.switch_summaries.len) arcInvariant("ARC rewrite switch index exceeded its lifted table");
+            const summary = self.switch_summaries[switch_index] orelse arcInvariant("ARC rewrite reached a switch without a summary");
 
             if (!summary.reached) {
                 try self.scheduleRewriteSwitchNoContinuation(tasks, path, start, switch_stmt.cond, switch_stmt.branches, switch_stmt.default_branch, switch_stmt.default_is_cold, switch_stmt.continuation);
@@ -2269,9 +2277,9 @@ const Inserter = struct {
                 if (builtin.mode == .Debug) solver_iterations += 1;
                 switch (task) {
                     .segment => |segment| try self.processSolveSegment(&tasks, segment),
-                    .join_process => |join_id| try self.processSolveJoin(&tasks, join_id),
-                    .body_walk => |join_id| try self.processSolveBodyWalk(&tasks, join_id),
-                    .switch_resume => |switch_stmt| try self.processSolveSwitchResume(&tasks, switch_stmt),
+                    .join_process => |join_index| try self.processSolveJoin(&tasks, join_index),
+                    .body_walk => |join_index| try self.processSolveBodyWalk(&tasks, join_index),
+                    .switch_resume => |switch_index| try self.processSolveSwitchResume(&tasks, switch_index),
                 }
             }
             // Jump reachability is structural, so once the tasks drain, a
@@ -2280,9 +2288,8 @@ const Inserter = struct {
             // for unreachable bodies; the shrink can ripple through
             // loop-keyed liveness, so drain again until nothing adjusts.
             var adjusted = false;
-            var summaries = self.join_summaries.?.valueIterator();
-            while (summaries.next()) |summary_ptr| {
-                const summary = summary_ptr.*;
+            for (self.join_summaries) |maybe_summary| {
+                const summary = maybe_summary orelse continue;
                 if (summary.body_reachable) continue;
                 var params_only = try OwnedSet.init(self.solve_allocator, self.domain());
                 self.placeSolveJoinParamsInto(summary, &params_only);
@@ -2305,7 +2312,7 @@ const Inserter = struct {
             while (stop_entry) |entry| : (stop_entry = entry.parent) {
                 if (entry.stmt != segment.cursor) continue;
                 if (entry.summary) |switch_summary| {
-                    try self.contributeSolveSwitchExit(tasks, switch_summary, switch_summary.start, &segment.owned);
+                    try self.contributeSolveSwitchExit(tasks, switch_summary, &segment.owned);
                 }
                 return;
             }
@@ -2421,22 +2428,23 @@ const Inserter = struct {
                 .incref, .decref, .free => arcInvariant("ARC summary solver received already-reference-counted LIR"),
                 .switch_stmt => |switch_stmt| {
                     if (switch_stmt.continuation) |continuation| {
-                        const summaries = self.switch_summaries orelse arcInvariant("ARC solver ran without a switch table");
-                        const gop = try summaries.getOrPut(segment.cursor);
-                        if (!gop.found_existing) {
+                        const switch_index = self.solution.switchIndexOfStmt(segment.cursor);
+                        if (switch_index >= self.switch_summaries.len) arcInvariant("ARC solver switch index exceeded its lifted table");
+                        if (self.switch_summaries[switch_index] == null) {
                             const switch_summary = try self.solve_allocator.create(SwitchSummary);
                             switch_summary.* = .{
+                                .index = switch_index,
                                 .start = segment.cursor,
                                 .continuation = continuation,
                                 .common = try OwnedSet.init(self.solve_allocator, self.domain()),
                                 .resume_ctx = segment.ctx,
                             };
-                            gop.value_ptr.* = switch_summary;
+                            self.switch_summaries[switch_index] = switch_summary;
                         }
-                        const switch_summary = gop.value_ptr.*;
+                        const switch_summary = self.switch_summaries[switch_index].?;
                         if (!switch_summary.resume_queued) {
                             switch_summary.resume_queued = true;
-                            try tasks.append(self.solve_allocator, .{ .switch_resume = segment.cursor });
+                            try tasks.append(self.solve_allocator, .{ .switch_resume = switch_index });
                         }
                         const stop = try self.solve_allocator.create(SolveStop);
                         stop.* = .{ .stmt = continuation, .summary = switch_summary, .parent = segment.ctx.stops };
@@ -2508,8 +2516,8 @@ const Inserter = struct {
                     try self.solveArriveAtJoin(tasks, segment, join_stmt);
                     return;
                 },
-                .jump => |jump_stmt| {
-                    try self.solveJumpContribution(tasks, segment, jump_stmt.target);
+                .jump => {
+                    try self.solveJumpContribution(tasks, segment);
                     return;
                 },
                 .runtime_error,
@@ -2527,9 +2535,9 @@ const Inserter = struct {
         }
     }
 
-    fn solveSummaryOf(self: *Inserter, join_id: LIR.JoinPointId) *JoinSummary {
-        const summaries = self.join_summaries orelse arcInvariant("ARC solver ran without a summary table");
-        return summaries.get(join_id) orelse arcInvariant("ARC solver referenced a join without a summary");
+    fn solveSummaryOf(self: *Inserter, join_index: u32) *JoinSummary {
+        if (join_index >= self.join_summaries.len) arcInvariant("ARC solver join index exceeded its lifted table");
+        return self.join_summaries[join_index] orelse arcInvariant("ARC solver referenced a join before its summary was initialized");
     }
 
     fn pushSolveSegment(
@@ -2551,13 +2559,13 @@ const Inserter = struct {
     fn scheduleSolveJoinProcess(self: *Inserter, tasks: *std.ArrayList(SolveTask), summary: *JoinSummary) ResourceError!void {
         if (summary.process_queued) return;
         summary.process_queued = true;
-        try tasks.append(self.solve_allocator, .{ .join_process = summary.id });
+        try tasks.append(self.solve_allocator, .{ .join_process = summary.index });
     }
 
     fn scheduleSolveBodyWalk(self: *Inserter, tasks: *std.ArrayList(SolveTask), summary: *JoinSummary) ResourceError!void {
         if (summary.body_walk_queued) return;
         summary.body_walk_queued = true;
-        try tasks.append(self.solve_allocator, .{ .body_walk = summary.id });
+        try tasks.append(self.solve_allocator, .{ .body_walk = summary.index });
     }
 
     /// Rebuilds a stop chain with contributions disabled: segments inside a
@@ -2704,8 +2712,8 @@ const Inserter = struct {
         };
     }
 
-    fn processSolveJoin(self: *Inserter, tasks: *std.ArrayList(SolveTask), join_id: LIR.JoinPointId) ResourceError!void {
-        const summary = self.solveSummaryOf(join_id);
+    fn processSolveJoin(self: *Inserter, tasks: *std.ArrayList(SolveTask), join_index: u32) ResourceError!void {
+        const summary = self.solveSummaryOf(join_index);
         summary.process_queued = false;
         if (!summary.body_keep_seeded) {
             summary.body_keep_seeded = true;
@@ -2719,19 +2727,19 @@ const Inserter = struct {
         if (summary.body_reachable) try self.scheduleSolveBodyWalk(tasks, summary);
     }
 
-    fn processSolveBodyWalk(self: *Inserter, tasks: *std.ArrayList(SolveTask), join_id: LIR.JoinPointId) ResourceError!void {
-        const summary = self.solveSummaryOf(join_id);
+    fn processSolveBodyWalk(self: *Inserter, tasks: *std.ArrayList(SolveTask), join_index: u32) ResourceError!void {
+        const summary = self.solveSummaryOf(join_index);
         summary.body_walk_queued = false;
         if (!summary.body_reachable) return;
         const scope = try self.solve_allocator.create(SolveBodyScope);
-        scope.* = .{ .join = summary.id, .parent = summary.origin_ctx.body_scope };
+        scope.* = .{ .join_index = summary.index, .parent = summary.origin_ctx.body_scope };
         const body_ctx = try self.solveRegionCtx(summary, scope);
         try self.pushSolveSegment(tasks, summary.body, &summary.body_keep, body_ctx);
     }
 
-    fn processSolveSwitchResume(self: *Inserter, tasks: *std.ArrayList(SolveTask), switch_stmt: LIR.CFStmtId) ResourceError!void {
-        const summaries = self.switch_summaries orelse arcInvariant("ARC solver ran without a switch table");
-        const summary = summaries.get(switch_stmt) orelse arcInvariant("ARC solver resumed an unknown switch");
+    fn processSolveSwitchResume(self: *Inserter, tasks: *std.ArrayList(SolveTask), switch_index: u32) ResourceError!void {
+        if (switch_index >= self.switch_summaries.len) arcInvariant("ARC solver resumed a switch beyond its lifted table");
+        const summary = self.switch_summaries[switch_index] orelse arcInvariant("ARC solver resumed an uninitialized switch");
         summary.resume_queued = false;
         if (!summary.reached) return;
         try self.pushSolveSegment(tasks, summary.continuation, &summary.common, summary.resume_ctx);
@@ -2743,7 +2751,6 @@ const Inserter = struct {
         self: *Inserter,
         tasks: *std.ArrayList(SolveTask),
         summary: *SwitchSummary,
-        switch_stmt: LIR.CFStmtId,
         owned: *const OwnedSet,
     ) ResourceError!void {
         var changed = false;
@@ -2756,7 +2763,7 @@ const Inserter = struct {
         }
         if (changed and !summary.resume_queued) {
             summary.resume_queued = true;
-            try tasks.append(self.solve_allocator, .{ .switch_resume = switch_stmt });
+            try tasks.append(self.solve_allocator, .{ .switch_resume = summary.index });
         }
     }
 
@@ -2768,12 +2775,15 @@ const Inserter = struct {
         segment: *SolveSegment,
         join_stmt: anytype,
     ) ResourceError!void {
-        const summaries = self.join_summaries orelse arcInvariant("ARC solver ran without a summary table");
-        const gop = try summaries.getOrPut(join_stmt.id);
-        if (!gop.found_existing) {
-            errdefer _ = summaries.remove(join_stmt.id);
+        const join_index = self.solution.joinIndexOfStmt(segment.cursor);
+        if (join_index >= self.join_summaries.len) arcInvariant("ARC solver join index exceeded its lifted table");
+        if (self.join_summaries[join_index] == null) {
             const summary = try self.solve_allocator.create(JoinSummary);
+            const join_fact = self.join_bodies[join_index];
+            const jump_states = try self.solve_allocator.alloc(?OwnedSet, join_fact.jump_count);
+            @memset(jump_states, null);
             summary.* = .{
+                .index = join_index,
                 .id = join_stmt.id,
                 .start = segment.cursor,
                 .params = join_stmt.params,
@@ -2786,16 +2796,16 @@ const Inserter = struct {
                 .jump_common = try OwnedSet.init(self.solve_allocator, self.domain()),
                 .loop_keep_id = self.next_loop_keep_id,
                 .origin_ctx = segment.ctx,
-                .jump_states = std.AutoHashMap(LIR.CFStmtId, OwnedSet).init(self.solve_allocator),
+                .jump_states = jump_states,
             };
             try self.registerLoopKeep(summary.loop_keep_id);
             self.next_loop_keep_id += 1;
-            gop.value_ptr.* = summary;
+            self.join_summaries[join_index] = summary;
             try self.scheduleSolveJoinProcess(tasks, summary);
             return;
         }
 
-        const summary = gop.value_ptr.*;
+        const summary = self.join_summaries[join_index].?;
         if (summary.body != join_stmt.body or summary.remainder != join_stmt.remainder or
             !localSpanEql(summary.params, join_stmt.params) or
             !localSpanEql(summary.maybe_uninitialized_params, join_stmt.maybe_uninitialized_params))
@@ -2813,29 +2823,31 @@ const Inserter = struct {
         self: *Inserter,
         tasks: *std.ArrayList(SolveTask),
         segment: *SolveSegment,
-        target: LIR.JoinPointId,
     ) ResourceError!void {
+        const target_index = self.solution.jumpTargetJoinIndexOf(segment.cursor);
         var scope = segment.ctx.body_scope;
         while (scope) |entry| {
-            if (entry.join == target) return;
+            if (entry.join_index == target_index) return;
             scope = entry.parent;
         }
-        const summary = self.solveSummaryOf(target);
+        const summary = self.solveSummaryOf(target_index);
+        const site_index = self.solution.jumpSiteIndexOf(segment.cursor);
+        if (site_index >= summary.jump_states.len) arcInvariant("ARC jump-site index exceeded its lifted join table");
         var changed = false;
-        const site = try summary.jump_states.getOrPut(segment.cursor);
-        if (!site.found_existing) {
-            site.value_ptr.* = try cloneOwnedSetWith(self.solve_allocator, &segment.owned);
+        if (summary.jump_states[site_index] == null) {
+            summary.jump_states[site_index] = try cloneOwnedSetWith(self.solve_allocator, &segment.owned);
             changed = true;
         } else {
-            changed = intersectOwnedSetChanged(site.value_ptr, &segment.owned);
+            changed = intersectOwnedSetChanged(&summary.jump_states[site_index].?, &segment.owned);
         }
+        const site = &summary.jump_states[site_index].?;
         const first_reach = !summary.body_reachable;
         if (!changed and !first_reach) return;
         const common_changed = if (first_reach) blk: {
             summary.body_reachable = true;
-            assignOwnedSet(&summary.jump_common, site.value_ptr);
+            assignOwnedSet(&summary.jump_common, site);
             break :blk true;
-        } else intersectOwnedSetChanged(&summary.jump_common, site.value_ptr);
+        } else intersectOwnedSetChanged(&summary.jump_common, site);
         if (!common_changed) return;
         const update = try self.recomputeSolveBodyKeep(summary);
         if (update.purged) {
@@ -3887,20 +3899,26 @@ const Inserter = struct {
         }
     }
 
-    fn recordFinalJoin(self: *Inserter, join_point: LIR.JoinPoint) ResourceError!void {
-        const joins = self.final_joins orelse arcInvariant("ARC emitted a join without a final join table");
-        const entry = try joins.getOrPut(self.emission_allocator, join_point.id);
-        if (entry.found_existing and !joinPointEql(entry.value_ptr.*, join_point)) {
+    fn recordFinalJoin(self: *Inserter, join_index: u32, join_point: LIR.JoinPoint) ResourceError!void {
+        if (join_index >= self.final_joins.len) arcInvariant("ARC emitted a join beyond its lifted final-join table");
+        if (self.final_joins[join_index]) |existing| {
+            if (joinPointEql(existing, join_point)) return;
             arcInvariant("ARC final join-point output saw one join id with different data");
         }
-        entry.value_ptr.* = join_point;
+        self.final_joins[join_index] = join_point;
     }
 
     fn finishFinalJoinPoints(self: *Inserter) ResourceError!LIR.JoinPointSpan {
-        const joins = self.final_joins orelse arcInvariant("ARC finished an emission without a final join table");
-        if (joins.count() == 0) return LIR.JoinPointSpan.empty();
-        const sorted = try self.emission_allocator.alloc(LIR.JoinPoint, joins.count());
-        for (joins.values(), 0..) |join, index| sorted[index] = join;
+        var count: usize = 0;
+        for (self.final_joins) |join| count += @intFromBool(join != null);
+        if (count == 0) return LIR.JoinPointSpan.empty();
+        const sorted = try self.emission_allocator.alloc(LIR.JoinPoint, count);
+        var next: usize = 0;
+        for (self.final_joins) |maybe_join| {
+            const join = maybe_join orelse continue;
+            sorted[next] = join;
+            next += 1;
+        }
         std.mem.sort(LIR.JoinPoint, sorted, {}, joinPointLessThan);
         return try self.store.addJoinPointSpan(sorted);
     }
@@ -3928,6 +3946,9 @@ const Inserter = struct {
         nodes: std.ArrayList(ReadBeforeRebindNode),
         /// Node indices, resolved exactly once while each edge is appended.
         successors: std.ArrayList(u32),
+        predecessor_starts: []const usize = &.{},
+        predecessors: []const usize = &.{},
+        loop_edges: []const usize = &.{},
 
         fn init(allocator: Allocator) ReadBeforeRebindGraph {
             return .{
@@ -3936,25 +3957,10 @@ const Inserter = struct {
                 .successors = .empty,
             };
         }
-
-        fn clearStmtIndices(self: *const ReadBeforeRebindGraph, indices: []u32) void {
-            for (self.nodes.items) |node| {
-                const stmt_index = @intFromEnum(node.stmt);
-                if (stmt_index >= indices.len or indices[stmt_index] == no_stmt_node_index) {
-                    arcInvariant("ARC liveness statement index was not active");
-                }
-                indices[stmt_index] = no_stmt_node_index;
-            }
-        }
     };
 
     fn clearReadsBeforeRebindCache(self: *Inserter) void {
-        for (self.keep_free_cached_stmts.items) |stmt| {
-            self.keep_free_reads_cache[@intFromEnum(stmt)] = null;
-        }
-        self.keep_free_cached_stmts.clearRetainingCapacity();
         self.reads_before_rebind_cache.clearRetainingCapacity();
-        self.reaches_loop_edge.unsetAll();
         _ = self.read_cache_arena.reset(.retain_capacity);
     }
 
@@ -4123,12 +4129,17 @@ const Inserter = struct {
             if (self.keep_free_reads_cache[stmt_index]) |*cached| return cached;
         } else if (self.reads_before_rebind_cache.getPtr(key)) |cached| return cached;
 
-        var graph_arena = std.heap.ArenaAllocator.init(self.store.allocator);
-        defer graph_arena.deinit();
-        const graph_allocator = graph_arena.allocator();
+        if (loop_keep) |keep| {
+            return self.computeLoopReadsBeforeRebind(start, keep, loop_keep_id);
+        }
 
-        var graph = ReadBeforeRebindGraph.init(graph_allocator);
-        defer graph.clearStmtIndices(self.stmt_node_indices);
+        const source_index = @intFromEnum(self.current_source_proc);
+        if (source_index >= self.liveness_graphs.len) arcInvariant("ARC liveness source proc exceeded its graph table");
+        const graph_slot = &self.liveness_graphs[source_index];
+        if (graph_slot.* != null) arcInvariant("ARC keep-free liveness graph existed without its requested row");
+        graph_slot.* = ReadBeforeRebindGraph.init(self.liveness_allocator);
+        var graph = graph_slot.*.?;
+        const graph_allocator = graph.allocator;
         var work = std.ArrayList(u32).empty;
         // Loop-edge nodes found by a keep-free build seed the backward
         // reachability sweep that decides which statements ever need
@@ -4140,9 +4151,7 @@ const Inserter = struct {
         // loop keep-set, the keep-set semantics belong to one loop body, so
         // root the graph at the queried statement instead of applying that
         // loop's exits to unrelated loops elsewhere in the proc.
-        if (loop_keep == null) {
-            _ = try self.ensureReadBeforeRebindNode(&graph, &work, self.current_proc_body);
-        }
+        _ = try self.ensureReadBeforeRebindNode(&graph, &work, self.current_proc_body);
         _ = try self.ensureReadBeforeRebindNode(&graph, &work, start);
 
         while (work.pop()) |node_index_u32| {
@@ -4290,8 +4299,10 @@ const Inserter = struct {
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, join_stmt.remainder);
                 },
                 .jump => |jump_stmt| {
-                    const join_bodies = self.join_bodies orelse arcInvariant("ARC read-before-rebind reached jump without collected join bodies");
-                    const target_body = join_bodies.get(jump_stmt.target) orelse arcInvariant("ARC read-before-rebind reached jump to unknown join point");
+                    _ = jump_stmt;
+                    const join_index = self.solution.jumpTargetJoinIndexOf(graph.nodes.items[node_index].stmt);
+                    if (join_index >= self.join_bodies.len) arcInvariant("ARC liveness jump index exceeded its lifted join table");
+                    const target_body = self.join_bodies[join_index].body;
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, target_body);
                 },
                 .ret => |ret_stmt| {
@@ -4299,15 +4310,7 @@ const Inserter = struct {
                 },
                 .loop_continue,
                 .loop_break,
-                => if (loop_keep) |keep| {
-                    self.noteLivenessLoopKeep(&graph.nodes.items[node_index].reads, keep.set);
-                    if (loop_keep_id >= self.loop_keep_reads_consumed.items.len) {
-                        arcInvariant("ARC liveness consumed an unknown loop identity");
-                    }
-                    self.loop_keep_reads_consumed.items[loop_keep_id] = true;
-                } else {
-                    try loop_edge_nodes.append(graph_allocator, node_index);
-                },
+                => try loop_edge_nodes.append(graph_allocator, node_index),
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
                 .crash,
@@ -4347,6 +4350,9 @@ const Inserter = struct {
                 pred_writes[successor_index] += 1;
             }
         }
+        graph.predecessor_starts = pred_starts;
+        graph.predecessors = predecessors;
+        graph.loop_edges = try graph_allocator.dupe(usize, loop_edge_nodes.items);
 
         if (loop_edge_nodes.items.len != 0) {
             var reached = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph_allocator, node_count);
@@ -4363,40 +4369,241 @@ const Inserter = struct {
             }
         }
 
-        var scratch = try ExactBitSet.initEmpty(graph_allocator, self.domain().livenessBitLen());
-        var edge_scratch = try ExactBitSet.initEmpty(graph_allocator, self.domain().livenessBitLen());
-        var in_work = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph_allocator, node_count);
-        var node_work = std.ArrayList(usize).empty;
-        try node_work.ensureTotalCapacity(graph_allocator, node_count);
-        for (0..node_count) |node_index| {
-            node_work.appendAssumeCapacity(node_index);
-            in_work.set(node_index);
+        try self.solveKeepFreeLiveness(&graph);
+
+        for (graph.nodes.items) |node| {
+            const stmt_index = @intFromEnum(node.stmt);
+            if (stmt_index >= self.keep_free_reads_cache.len) {
+                arcInvariant("ARC liveness graph contained a generated statement");
+            }
+            if (self.keep_free_reads_cache[stmt_index] != null) {
+                arcInvariant("ARC liveness statement belonged to multiple source graphs");
+            }
+            self.keep_free_reads_cache[stmt_index] = node.exposed;
+        }
+        graph_slot.* = graph;
+        return if (self.keep_free_reads_cache[@intFromEnum(start)]) |*cached|
+            cached
+        else
+            arcInvariant("ARC keep-free liveness cache did not include requested start");
+    }
+
+    fn solveKeepFreeLiveness(self: *Inserter, graph: *ReadBeforeRebindGraph) ResourceError!void {
+        const allocator = graph.allocator;
+        const node_count = graph.nodes.items.len;
+        const Frame = struct { node: usize, next_successor: usize };
+        var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
+        var frames = std.ArrayList(Frame).empty;
+        var finish_order = std.ArrayList(usize).empty;
+        for (0..node_count) |start| {
+            if (seen.isSet(start)) continue;
+            seen.set(start);
+            try frames.append(allocator, .{ .node = start, .next_successor = 0 });
+            while (frames.items.len != 0) {
+                const frame = &frames.items[frames.items.len - 1];
+                const node = graph.nodes.items[frame.node];
+                if (frame.next_successor < node.successor_len) {
+                    const successor = graph.successors.items[node.successor_start + frame.next_successor];
+                    frame.next_successor += 1;
+                    if (!seen.isSet(successor)) {
+                        seen.set(successor);
+                        try frames.append(allocator, .{ .node = successor, .next_successor = 0 });
+                    }
+                    continue;
+                }
+                try finish_order.append(allocator, frame.node);
+                _ = frames.pop();
+            }
         }
 
+        const no_scc = std.math.maxInt(u32);
+        const scc_of = try allocator.alloc(u32, node_count);
+        @memset(scc_of, no_scc);
+        var scc_nodes = std.ArrayList(usize).empty;
+        var scc_offsets = std.ArrayList(usize).empty;
+        var reverse_work = std.ArrayList(usize).empty;
+        var order_index = finish_order.items.len;
+        while (order_index > 0) {
+            order_index -= 1;
+            const start = finish_order.items[order_index];
+            if (scc_of[start] != no_scc) continue;
+            const scc_id: u32 = @intCast(scc_offsets.items.len);
+            try scc_offsets.append(allocator, scc_nodes.items.len);
+            scc_of[start] = scc_id;
+            try reverse_work.append(allocator, start);
+            while (reverse_work.pop()) |node_index| {
+                try scc_nodes.append(allocator, node_index);
+                const pred_start = graph.predecessor_starts[node_index];
+                const pred_end = graph.predecessor_starts[node_index + 1];
+                for (graph.predecessors[pred_start..pred_end]) |predecessor| {
+                    if (scc_of[predecessor] != no_scc) continue;
+                    scc_of[predecessor] = scc_id;
+                    try reverse_work.append(allocator, predecessor);
+                }
+            }
+        }
+        try scc_offsets.append(allocator, scc_nodes.items.len);
+
+        var scratch = try ExactBitSet.initEmpty(allocator, self.domain().livenessBitLen());
+        var edge_scratch = try ExactBitSet.initEmpty(allocator, self.domain().livenessBitLen());
+        var in_work = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
+        var node_work = std.ArrayList(usize).empty;
+
+        var scc_cursor = scc_offsets.items.len - 1;
+        while (scc_cursor > 0) {
+            scc_cursor -= 1;
+            const members = scc_nodes.items[scc_offsets.items[scc_cursor]..scc_offsets.items[scc_cursor + 1]];
+            var cyclic = members.len > 1;
+            if (!cyclic) {
+                const node = graph.nodes.items[members[0]];
+                const successor_end = node.successor_start + @as(usize, node.successor_len);
+                for (graph.successors.items[node.successor_start..successor_end]) |successor| {
+                    if (successor == members[0]) {
+                        cyclic = true;
+                        break;
+                    }
+                }
+            }
+            if (!cyclic) {
+                _ = self.recomputeLivenessNode(graph, members[0], &scratch, &edge_scratch);
+                continue;
+            }
+            for (members) |node_index| {
+                if (in_work.isSet(node_index)) continue;
+                in_work.set(node_index);
+                try node_work.append(allocator, node_index);
+            }
+            while (node_work.pop()) |node_index| {
+                in_work.unset(node_index);
+                if (!self.recomputeLivenessNode(graph, node_index, &scratch, &edge_scratch)) continue;
+                const pred_start = graph.predecessor_starts[node_index];
+                const pred_end = graph.predecessor_starts[node_index + 1];
+                for (graph.predecessors[pred_start..pred_end]) |predecessor| {
+                    if (scc_of[predecessor] != scc_cursor or in_work.isSet(predecessor)) continue;
+                    in_work.set(predecessor);
+                    try node_work.append(allocator, predecessor);
+                }
+            }
+        }
+    }
+
+    fn recomputeLivenessNode(
+        self: *Inserter,
+        graph: *ReadBeforeRebindGraph,
+        node_index: usize,
+        scratch: *ExactBitSet,
+        edge_scratch: *ExactBitSet,
+    ) bool {
+        const node = &graph.nodes.items[node_index];
+        scratch.unsetAll();
+        const successor_end = node.successor_start + @as(usize, node.successor_len);
+        for (graph.successors.items[node.successor_start..successor_end], 0..) |successor, successor_offset| {
+            var edge_killed = false;
+            for (node.edge_kills) |kill| {
+                if (kill.successor_offset != successor_offset) continue;
+                if (!edge_killed) {
+                    edge_scratch.unsetAll();
+                    edge_scratch.setUnion(graph.nodes.items[successor].exposed);
+                    edge_killed = true;
+                }
+                edge_scratch.unset(kill.bit);
+            }
+            scratch.setUnion(if (edge_killed) edge_scratch.* else graph.nodes.items[successor].exposed);
+        }
+        if (node.def) |local| {
+            if (self.rawLivenessBitOf(local)) |bit| scratch.unset(bit);
+            if (self.groupBitOf(local)) |bit| scratch.unset(bit);
+            if (self.valueUseBitOf(local)) |bit| scratch.unset(bit);
+        }
+        scratch.setUnion(node.reads);
+        if (node.exposed.eql(scratch.*)) return false;
+        node.exposed.unsetAll();
+        node.exposed.setUnion(scratch.*);
+        return true;
+    }
+
+    fn computeLoopReadsBeforeRebind(
+        self: *Inserter,
+        start: LIR.CFStmtId,
+        keep: LoopKeep,
+        loop_keep_id: u32,
+    ) ResourceError!*const ExactBitSet {
+        if (loop_keep_id == 0 or loop_keep_id >= self.loop_cached_stmts.items.len or
+            loop_keep_id >= self.loop_keep_reads_consumed.items.len)
+        {
+            arcInvariant("ARC loop liveness referenced an unknown loop identity");
+        }
+        const source_index = @intFromEnum(self.current_source_proc);
+        if (source_index >= self.liveness_graphs.len) arcInvariant("ARC loop liveness source proc exceeded its graph table");
+        const graph = if (self.liveness_graphs[source_index]) |*entry|
+            entry
+        else
+            arcInvariant("ARC loop liveness ran before keep-free graph construction");
+        const start_stmt_index = @intFromEnum(start);
+        if (start_stmt_index >= self.stmt_node_indices.len) arcInvariant("ARC loop liveness queried a generated statement");
+        const start_node = self.stmt_node_indices[start_stmt_index];
+        if (start_node == no_stmt_node_index or start_node >= graph.nodes.items.len) {
+            arcInvariant("ARC loop liveness start was outside its source graph");
+        }
+
+        const allocator = self.read_cache_allocator;
+        const node_count = graph.nodes.items.len;
+        var active = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
+        var walk = std.ArrayList(usize).empty;
+        try walk.append(allocator, start_node);
+        active.set(start_node);
+        while (walk.pop()) |node_index| {
+            const node = graph.nodes.items[node_index];
+            const successor_end = node.successor_start + @as(usize, node.successor_len);
+            for (graph.successors.items[node.successor_start..successor_end]) |successor| {
+                if (active.isSet(successor)) continue;
+                active.set(successor);
+                try walk.append(allocator, successor);
+            }
+        }
+
+        var keep_reads = try ExactBitSet.initEmpty(allocator, self.domain().livenessBitLen());
+        self.noteLivenessLoopKeep(&keep_reads, keep.set);
+        self.loop_keep_reads_consumed.items[loop_keep_id] = true;
+
+        const rows = try allocator.alloc(?ExactBitSet, node_count);
+        @memset(rows, null);
+        var in_work = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
+        var node_work = std.ArrayList(usize).empty;
+        for (graph.loop_edges) |loop_node| {
+            if (!active.isSet(loop_node)) continue;
+            var row = try graph.nodes.items[loop_node].exposed.clone(allocator);
+            row.setUnion(keep_reads);
+            rows[loop_node] = row;
+            const pred_start = graph.predecessor_starts[loop_node];
+            const pred_end = graph.predecessor_starts[loop_node + 1];
+            for (graph.predecessors[pred_start..pred_end]) |predecessor| {
+                if (!active.isSet(predecessor) or in_work.isSet(predecessor)) continue;
+                in_work.set(predecessor);
+                try node_work.append(allocator, predecessor);
+            }
+        }
+
+        var scratch = try ExactBitSet.initEmpty(allocator, self.domain().livenessBitLen());
+        var edge_scratch = try ExactBitSet.initEmpty(allocator, self.domain().livenessBitLen());
         while (node_work.pop()) |node_index| {
             in_work.unset(node_index);
-            const node = &graph.nodes.items[node_index];
-
+            const node = graph.nodes.items[node_index];
             scratch.unsetAll();
-            const successor_start = node.successor_start;
-            const successor_end = successor_start + @as(usize, node.successor_len);
-            for (graph.successors.items[successor_start..successor_end], 0..) |successor, successor_offset| {
-                const successor_index: usize = successor;
+            const successor_end = node.successor_start + @as(usize, node.successor_len);
+            for (graph.successors.items[node.successor_start..successor_end], 0..) |successor, successor_offset| {
+                const successor_row = if (rows[successor]) |*row| row else &graph.nodes.items[successor].exposed;
                 var edge_killed = false;
                 for (node.edge_kills) |kill| {
                     if (kill.successor_offset != successor_offset) continue;
                     if (!edge_killed) {
                         edge_scratch.unsetAll();
-                        edge_scratch.setUnion(graph.nodes.items[successor_index].exposed);
+                        edge_scratch.setUnion(successor_row.*);
                         edge_killed = true;
                     }
                     edge_scratch.unset(kill.bit);
                 }
-                if (edge_killed) {
-                    scratch.setUnion(edge_scratch);
-                } else {
-                    scratch.setUnion(graph.nodes.items[successor_index].exposed);
-                }
+                scratch.setUnion(if (edge_killed) edge_scratch else successor_row.*);
             }
             if (node.def) |local| {
                 if (self.rawLivenessBitOf(local)) |bit| scratch.unset(bit);
@@ -4404,52 +4611,34 @@ const Inserter = struct {
                 if (self.valueUseBitOf(local)) |bit| scratch.unset(bit);
             }
             scratch.setUnion(node.reads);
-
-            if (!node.exposed.eql(scratch)) {
-                node.exposed.unsetAll();
-                node.exposed.setUnion(scratch);
-
-                const pred_start = pred_starts[node_index];
-                const pred_end = pred_starts[node_index + 1];
-                for (predecessors[pred_start..pred_end]) |predecessor_index| {
-                    if (in_work.isSet(predecessor_index)) continue;
-                    try node_work.append(graph_allocator, predecessor_index);
-                    in_work.set(predecessor_index);
-                }
-            }
-        }
-
-        for (graph.nodes.items) |node| {
-            const node_key = ReadBeforeRebindKey{
-                .start = node.stmt,
-                .loop_keep_id = loop_keep_id,
-            };
-            if (loop_keep_id == 0) {
-                const stmt_index = @intFromEnum(node.stmt);
-                if (stmt_index >= self.keep_free_reads_cache.len) {
-                    arcInvariant("ARC liveness graph contained a generated statement");
-                }
-                if (self.keep_free_reads_cache[stmt_index] != null) continue;
-                self.keep_free_reads_cache[stmt_index] = try node.exposed.clone(self.read_cache_allocator);
-                try self.keep_free_cached_stmts.append(self.store.allocator, node.stmt);
+            const previous = if (rows[node_index]) |*row| row else &node.exposed;
+            if (previous.eql(scratch)) continue;
+            if (rows[node_index]) |*row| {
+                row.unsetAll();
+                row.setUnion(scratch);
             } else {
-                if (self.reads_before_rebind_cache.contains(node_key)) continue;
-                if (loop_keep_id >= self.loop_cached_stmts.items.len) {
-                    arcInvariant("ARC cached a row for an unknown loop identity");
-                }
-                const cached = try node.exposed.clone(self.read_cache_allocator);
-                try self.reads_before_rebind_cache.put(node_key, cached);
-                try self.loop_cached_stmts.items[loop_keep_id].append(self.emission_allocator, node.stmt);
+                rows[node_index] = try scratch.clone(allocator);
+            }
+            const pred_start = graph.predecessor_starts[node_index];
+            const pred_end = graph.predecessor_starts[node_index + 1];
+            for (graph.predecessors[pred_start..pred_end]) |predecessor| {
+                if (!active.isSet(predecessor) or in_work.isSet(predecessor)) continue;
+                in_work.set(predecessor);
+                try node_work.append(allocator, predecessor);
             }
         }
 
-        if (loop_keep_id == 0) {
-            return if (self.keep_free_reads_cache[@intFromEnum(start)]) |*cached|
-                cached
-            else
-                arcInvariant("ARC keep-free liveness cache did not include requested start");
+        var active_iter = active.iterator(.{});
+        while (active_iter.next()) |node_index| {
+            const node = graph.nodes.items[node_index];
+            const cached = if (rows[node_index]) |row| row else try node.exposed.clone(allocator);
+            const key = ReadBeforeRebindKey{ .start = node.stmt, .loop_keep_id = loop_keep_id };
+            try self.reads_before_rebind_cache.put(key, cached);
+            try self.loop_cached_stmts.items[loop_keep_id].append(self.emission_allocator, node.stmt);
         }
-        return self.reads_before_rebind_cache.getPtr(key) orelse arcInvariant("ARC loop liveness cache did not include requested start");
+        const key = ReadBeforeRebindKey{ .start = start, .loop_keep_id = loop_keep_id };
+        return self.reads_before_rebind_cache.getPtr(key) orelse
+            arcInvariant("ARC loop liveness cache did not include its requested start");
     }
 
     /// Value liveness for one raw local (no group extension): answered by
@@ -4642,9 +4831,6 @@ const Inserter = struct {
     }
 };
 
-const JoinBodyMap = std.AutoHashMap(LIR.JoinPointId, LIR.CFStmtId);
-const FinalJoinMap = std.AutoArrayHashMapUnmanaged(LIR.JoinPointId, LIR.JoinPoint);
-
 fn joinPointLessThan(_: void, a: LIR.JoinPoint, b: LIR.JoinPoint) bool {
     return @intFromEnum(a.id) < @intFromEnum(b.id);
 }
@@ -4661,8 +4847,6 @@ const RewrittenJoin = struct {
     keep: OwnedSet,
     stmt: LIR.CFStmtId,
 };
-
-const RewrittenJoinMap = std.AutoHashMap(LIR.CFStmtId, RewrittenJoin);
 
 const OwnedSet = struct {
     allocator: std.mem.Allocator,
