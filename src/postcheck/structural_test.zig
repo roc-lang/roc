@@ -1206,6 +1206,26 @@ test "Monotype generated-private call requests retain separate request nodes" {
     try expectNotContains(lower_source, "fn instantiateTargetCallTypeFromMonoArgAtIndexAndRet");
 }
 
+test "Monotype record construction retains explicitly related child witnesses" {
+    const lower_source = @embedFile("monotype/lower.zig");
+    const constructor_entry = sourceSliceBetween(
+        lower_source,
+        "fn lowerRecordConstructorAtNode(",
+        "fn recordUpdateFieldValue(",
+    );
+    const record_constructor = sourceSliceBetween(
+        lower_source,
+        "fn lowerRecordExprAtNode(",
+        "fn lowerTagConstructorAtNode(",
+    );
+    try expectContains(constructor_entry, "prepareConstructorChildrenAtNodes");
+    try expectContains(constructor_entry, "lowerRecordExprAtNode");
+    try expectContains(record_constructor, "produced_fields[index] = .{ .name = field.name, .ty = child_node }");
+    try expectContains(record_constructor, "if (!self.graph.sameClass(field.ty, child_node))");
+    try expectNotContains(record_constructor, "containsGeneratedPrivate");
+    try expectNotContains(record_constructor, "differed without generated-private evidence");
+}
+
 test "hosted Try adaptation consumes checker-recorded nominal provenance" {
     const lower_source = @embedFile("monotype/lower.zig");
     const graph_relation = sourceSliceBetween(

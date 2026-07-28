@@ -26591,18 +26591,15 @@ const BodyContext = struct {
                     Common.invariant("record graph constructor lost its pre-lowered field child");
                 const child_node = try self.exprTypeCell(pre).toGraphNode(self.graph);
                 if (!self.graph.sameClass(field.ty, child_node)) {
-                    // Either side may carry the generated-private
-                    // representation: a producer-authored child adopted by a
-                    // checked-public construction, or a construction whose
-                    // field slot was selected private by generated codec
-                    // machinery while the user's opaque handle value stays
-                    // checked-public (e.g. a FieldName passed through
-                    // user-authored parse_record_field).
-                    if (!try self.graph.containsGeneratedPrivate(child_node) and
-                        !try self.graph.containsGeneratedPrivate(field.ty))
-                    {
-                        Common.invariant("record graph constructor child differed without generated-private evidence");
-                    }
+                    // `prepareConstructorChildrenAtNodes` has already related
+                    // this exact produced cell to the requested field
+                    // interface. Keep the producer cell in the construction
+                    // witness whenever the relation preserves distinct roots:
+                    // transparent nominal backings and generated-private
+                    // representations are both valid examples. Requiring a
+                    // shared union class here would discard the explicit
+                    // interface relation and compare graph identities that
+                    // intentionally remain distinct.
                     requires_distinct_witness = true;
                 }
                 produced_fields[index] = .{ .name = field.name, .ty = child_node };

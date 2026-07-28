@@ -2351,12 +2351,16 @@ compile-time wrapper carries the private result cell as its exact output
 witness. ConstStore preserves that witness beside the stored value, and restore
 relates the checked public interface to it without ordinary unification.
 
-Record constructors preserve that distinction structurally. If a field is a
-finished generated-private witness, the constructor emits a distinct record
-witness that references the field directly and relates that record to the
-checked-public container. It never merges the child into the public field cell
-or asks a later consumer to recover the child's runtime representation from the
-public container shape.
+Record constructors preserve every explicit child-interface distinction
+structurally. Relation production first relates each exact produced child cell
+to its requested checked field interface. If that relation intentionally keeps
+distinct roots—for example, a transparent nominal backing or a finished
+generated-private witness—the constructor emits a distinct record witness that
+references the produced child directly and relates that record to the
+checked-public container. It never compares independently owned graph cells to
+infer compatibility, merges a generated-private child into the public field
+cell, or asks a later consumer to recover the child's runtime representation
+from the public container shape.
 
 Each generated-private request also retains its exact checked-source function
 node. That source node can itself contain upstream private arguments, so a
