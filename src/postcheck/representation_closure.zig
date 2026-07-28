@@ -15,8 +15,8 @@
 //! on this type. `relate` also refuses two slots whose logical tokens differ,
 //! so it cannot join logically unequal inputs. The only things the engine does
 //! are: create a slot, relate two slots under a declared rule, relate a
-//! nominal's backing at a sanctioned edge, and read the equivalence class of a
-//! slot.
+//! nominal's backing at a sanctioned edge, adopt a representation the producer
+//! created at a slot's position, and read the equivalence class of a slot.
 //!
 //! Termination (reunify.md section 10.4). Every relate step either:
 //!   - resolves to a pair already in one equivalence class (idempotent, no new
@@ -41,6 +41,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const MonoType = @import("monotype/type.zig");
 const policy = @import("representation_policy.zig");
 
 /// A fixed logical identity token carried by a slot. In this slice it is an
@@ -98,15 +99,31 @@ pub const RepresentationRule = enum(u8) {
 /// from the shared policy so callers of this engine cite one.
 pub const NominalBackingEdge = policy.NominalBackingEdge;
 
+/// Addresses one iterator slot's component slots inside the engine's component
+/// pool. `recordComponents` is the only way to obtain one.
+pub const ComponentSpan = struct {
+    start: u32 = 0,
+    len: u32 = 0,
+};
+
+/// A named iterator slot: the representation descriptor the policy classifies,
+/// the two child slots its rules relate, and the producer's minted component
+/// slots. The components are what makes the descriptor's minting identity
+/// answerable: two representations one producer is still minting denote the
+/// same representation only when their components are already one
+/// representation (reunify.md section 10.3).
+pub const IteratorShape = struct {
+    descriptor: policy.NamedDescriptor,
+    item: RepresentationSlotId,
+    backing: RepresentationSlotId,
+    components: ComponentSpan = .{},
+};
+
 /// The shape a slot represents. This is the engine's own compact model of the
 /// representation forms that join; it is not a store type from another stage.
 pub const SlotShape = union(enum) {
     /// A named iterator with a public item slot and a backing slot.
-    iterator: struct {
-        descriptor: policy.NamedDescriptor,
-        item: RepresentationSlotId,
-        backing: RepresentationSlotId,
-    },
+    iterator: IteratorShape,
     /// A generated evidence owner whose backing is selected by score.
     evidence: struct {
         score: u8,
@@ -143,10 +160,22 @@ const DerivedId = struct {
 /// engine refuses logically unequal inputs.
 pub const RelateError = error{LogicallyUnequal} || Allocator.Error;
 
+/// Why a representation the producer created could not be adopted at a slot.
+/// Both are precondition violations surfaced as errors so tests can prove the
+/// engine refuses them.
+pub const ProducerRepresentationError = error{
+    /// The slot does not model a representation the producer owns.
+    NotAProducerRepresentation,
+    /// The incoming representation sits at a lower tier than the one the slot's
+    /// class already carries, and section 10.4 allows only upward moves.
+    TierMovedDown,
+};
+
 /// The representation slot store plus the relation's closure state.
 pub const Engine = struct {
     allocator: Allocator,
     slots: std.ArrayList(Slot),
+    components: std.ArrayList(RepresentationSlotId),
     active: std.AutoHashMapUnmanaged(PairId, void),
     derived: std.AutoHashMapUnmanaged(DerivedId, void),
 
@@ -154,6 +183,7 @@ pub const Engine = struct {
         return .{
             .allocator = allocator,
             .slots = .empty,
+            .components = .empty,
             .active = .empty,
             .derived = .empty,
         };
@@ -161,8 +191,21 @@ pub const Engine = struct {
 
     pub fn deinit(self: *Engine) void {
         self.slots.deinit(self.allocator);
+        self.components.deinit(self.allocator);
         self.active.deinit(self.allocator);
         self.derived.deinit(self.allocator);
+    }
+
+    /// Record an iterator's producer-minted component slots and return the span
+    /// that addresses them. The engine owns the storage for the rest of its
+    /// life, so an iterator shape can carry its components by value.
+    pub fn recordComponents(
+        self: *Engine,
+        components: []const RepresentationSlotId,
+    ) Allocator.Error!ComponentSpan {
+        const start: u32 = @intCast(self.components.items.len);
+        try self.components.appendSlice(self.allocator, components);
+        return .{ .start = start, .len = @intCast(components.len) };
     }
 
     /// Create a slot carrying a fixed logical identity token. The token is
@@ -255,7 +298,11 @@ pub const Engine = struct {
         const left = self.slotConst(l).shape;
         const right = self.slotConst(r).shape;
         if (left == .iterator and right == .iterator) {
-            return switch (policy.iteratorTierRelation(left.iterator.descriptor, right.iterator.descriptor)) {
+            return switch (policy.iteratorTierRelation(
+                left.iterator.descriptor,
+                right.iterator.descriptor,
+                self.componentAgreement(left.iterator, right.iterator),
+            )) {
                 .ordinary => .component_equality,
                 .public_minted => .iterator_public_minted,
                 .forced_dynamic => .iterator_forced_dynamic,
@@ -263,6 +310,25 @@ pub const Engine = struct {
             };
         }
         return .component_equality;
+    }
+
+    /// This engine's answer to the policy's component question: two iterator
+    /// slots agree on their components exactly when this engine has already
+    /// related their public item slots and each of their producer-minted
+    /// component slots into one class.
+    fn componentAgreement(
+        self: *Engine,
+        left: IteratorShape,
+        right: IteratorShape,
+    ) policy.ComponentAgreement {
+        if (!self.related(left.item, right.item)) return .differ;
+        if (left.components.len != right.components.len) return .differ;
+        for (0..left.components.len) |index| {
+            const left_component = self.components.items[left.components.start + index];
+            const right_component = self.components.items[right.components.start + index];
+            if (!self.related(left_component, right_component)) return .differ;
+        }
+        return .agree;
     }
 
     /// Relate a nominal's backing at a sanctioned edge. Distinct from `relate`:
@@ -292,6 +358,36 @@ pub const Engine = struct {
         // The backing child and the incoming backing are the same
         // representation, related as equal components.
         try self.relate(nominal_backing, backing, .component_equality);
+    }
+
+    /// Adopt a representation the producer created directly at a slot's
+    /// position. Section 10.1: Monotype deliberately creates generated iterator
+    /// chains and forced-dynamic fixed points, so those are producer decisions
+    /// the engine takes as declared inputs rather than results it derives. The
+    /// slot keeps its logical token, its producer atom, and its equivalence
+    /// class; only the representation the class carries moves, and section 10.4
+    /// allows that move only upward in the declared tier order.
+    pub fn adoptProducerRepresentation(
+        self: *Engine,
+        slot: RepresentationSlotId,
+        descriptor: policy.NamedDescriptor,
+    ) ProducerRepresentationError!void {
+        const root = self.find(slot);
+        const current = switch (self.slotConst(root).shape) {
+            .iterator => |iter| iter,
+            else => return error.NotAProducerRepresentation,
+        };
+        if (tierRank(descriptor.def.iterator_representation) <
+            tierRank(current.descriptor.def.iterator_representation))
+        {
+            return error.TierMovedDown;
+        }
+        self.slotMut(root).shape = .{ .iterator = .{
+            .descriptor = descriptor,
+            .item = current.item,
+            .backing = current.backing,
+            .components = current.components,
+        } };
     }
 
     fn step(
@@ -325,7 +421,11 @@ pub const Engine = struct {
             else => return error.LogicallyUnequal,
         };
 
-        const join = policy.iteratorJoin(left.descriptor, right.descriptor);
+        const join = policy.iteratorJoin(
+            left.descriptor,
+            right.descriptor,
+            self.componentAgreement(left, right),
+        );
         std.debug.assert(join.relation == tierFor(rule));
 
         self.link(self.representativeFor(rule, l, r), l, r);
@@ -415,7 +515,11 @@ pub const Engine = struct {
             => blk: {
                 const left = self.slotConst(l).shape.iterator;
                 const right = self.slotConst(r).shape.iterator;
-                break :blk policy.iteratorJoin(left.descriptor, right.descriptor).representative;
+                break :blk policy.iteratorJoin(
+                    left.descriptor,
+                    right.descriptor,
+                    self.componentAgreement(left, right),
+                ).representative;
             },
             .generated_evidence_selection => blk: {
                 const left = self.slotConst(l).shape.evidence;
@@ -471,6 +575,15 @@ fn pairId(a: RepresentationSlotId, b: RepresentationSlotId) PairId {
     return .{ .lo = @min(x, y), .hi = @max(x, y) };
 }
 
+/// The declared tier order representations move upward through (section 10.4).
+fn tierRank(tier: MonoType.IteratorRepresentation) u8 {
+    return switch (tier) {
+        .none => 0,
+        .minted => 1,
+        .forced_dynamic => 2,
+    };
+}
+
 fn tierFor(rule: RepresentationRule) policy.IteratorTierRelation {
     return switch (rule) {
         .iterator_public_minted => .public_minted,
@@ -483,8 +596,6 @@ fn tierFor(rule: RepresentationRule) policy.IteratorTierRelation {
 // --- Tests: accepted/rejected pairs, algebra properties, termination ---
 
 const testing = std.testing;
-
-const MonoType = @import("monotype/type.zig");
 
 const IterOptions = struct {
     representation: MonoType.IteratorRepresentation,
@@ -507,8 +618,6 @@ fn iterDescriptor(options: IterOptions) policy.NamedDescriptor {
         .kind = .@"opaque",
         .def = def,
         .builtin_owner = .iter,
-        .arg_count = 1,
-        .backing_use = .inspectable,
     };
 }
 
@@ -652,6 +761,40 @@ test "relate is idempotent" {
     try engine.relate(a, b, .iterator_minted_join);
     try engine.relate(b, a, .iterator_minted_join);
     try testing.expectEqual(roots_after_first, distinctRoots(&engine));
+}
+
+test "a producer-created representation is adopted upward and never downward" {
+    var engine = Engine.init(testing.allocator);
+    defer engine.deinit();
+
+    const logical: LogicalToken = @enumFromInt(80);
+    const minted = try buildRecursiveMinted(&engine, logical, 1, 0x31);
+    const peer = try buildRecursiveMinted(&engine, logical, 2, 0x32);
+    try engine.relate(minted, peer, .iterator_minted_join);
+
+    // The producer finalized this position to the dynamic fixed point, so the
+    // class carries the representation it created rather than the minted one.
+    var dynamic = iterDescriptor(.{ .representation = .forced_dynamic });
+    dynamic.def.iterator_kind = .forced_dynamic;
+    try engine.adoptProducerRepresentation(peer, dynamic);
+    try testing.expectEqual(
+        MonoType.IteratorRepresentation.forced_dynamic,
+        engine.shapeOf(minted).iterator.descriptor.def.iterator_representation,
+    );
+
+    // Moving back down a tier is refused, so adoption cannot undo a decision.
+    const back_down = iterDescriptor(.{ .representation = .minted, .generated = 0x33 });
+    try testing.expectError(
+        error.TierMovedDown,
+        engine.adoptProducerRepresentation(minted, back_down),
+    );
+
+    // A slot that models no producer representation is refused outright.
+    const leaf = try engine.createSlot(logical, @enumFromInt(900), .{ .leaf = 1 });
+    try testing.expectError(
+        error.NotAProducerRepresentation,
+        engine.adoptProducerRepresentation(leaf, dynamic),
+    );
 }
 
 test "relateNominalBacking relates the backing without requiring equal logical tokens" {

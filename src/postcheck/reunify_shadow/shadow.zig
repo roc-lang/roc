@@ -1339,8 +1339,6 @@ test "sealed component round-trips through the relocatable format and replays ou
                 .iterator_depth = 1,
             },
             .builtin_owner = .iter,
-            .arg_count = 1,
-            .backing_use = .inspectable,
         },
         .item = item,
         .backing = backing,

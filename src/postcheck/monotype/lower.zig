@@ -2797,6 +2797,11 @@ const Builder = struct {
                             request_fn_node,
                         );
                     } else {
+                        source_ctx.noteUnifySite(
+                            .draft_template_recursive_root_to_request,
+                            active_root.request_fn_node,
+                            request_fn_node,
+                        );
                         try source_ctx.graph.unify(active_root.request_fn_node, request_fn_node);
                     }
                     if (!source_ctx.graph.sameFunctionInterface(active_root.request_fn_node, request_fn_node)) {
@@ -2942,6 +2947,11 @@ const Builder = struct {
                     request_fn_node,
                 );
             } else {
+                source_ctx.noteUnifySite(
+                    .draft_template_spec_to_request,
+                    spec.request_fn_node,
+                    request_fn_node,
+                );
                 try source_ctx.graph.unify(spec.request_fn_node, request_fn_node);
             }
             if (!source_ctx.graph.sameFunctionInterface(spec.request_fn_node, request_fn_node)) {
@@ -3083,6 +3093,7 @@ const Builder = struct {
                 }
                 try relateFunctionRequestInterface(source_ctx.graph, root_node, request_fn_node);
             } else {
+                source_ctx.noteUnifySite(.draft_template_root_to_request, root_node, request_fn_node);
                 try source_ctx.graph.unify(root_node, request_fn_node);
             }
         }
@@ -4350,6 +4361,23 @@ const Builder = struct {
                 continue;
             }
 
+            // A stored digest encodes a recursive back reference by the position
+            // on the visiting stack the walk entered the cycle at, so one rooted
+            // graph reached through two entry paths digests two ways (reunify.md
+            // section 8.3). The graph roots such a knot wherever unification
+            // joined two nodes, which differs between call sites of one nominal;
+            // the directed translation roots it at the nominal every time. Equal
+            // unfoldings say the two are the same type under a different
+            // rooting, which is the same notion the rehearsal counts as
+            // `rehearsal_type_equal_under_rerooting`: a deliberate difference in
+            // the emitted stored form, not a content difference.
+            const translated_unfolded = snapshot.unfoldedDigest(&self.program.names, translated);
+            const graph_unfolded = self.program.types.unfoldedDigest(&self.program.names, mono_ty);
+            if (std.mem.eql(u8, &translated_unfolded.bytes, &graph_unfolded.bytes)) {
+                census.bump("direct_stored_equal_under_rerooting");
+                continue;
+            }
+
             census.bump("direct_stored_mismatch");
             if (try self.monoTypeCarriesRepresentation(mono_ty)) {
                 census.bump("direct_stored_mismatch_representation");
@@ -5121,6 +5149,11 @@ const Builder = struct {
                     const anchor = &source_ctx.draft.nested_specs.items[anchor_raw];
                     const candidate_request = try source_ctx.graph.functionNodes(spec.request_fn_node);
                     try source_ctx.graph.markRecursiveValueSlot(candidate_request.ret);
+                    source_ctx.noteUnifySite(
+                        .draft_nested_capture_anchor_to_spec,
+                        anchor.request_fn_node,
+                        spec.request_fn_node,
+                    );
                     try source_ctx.graph.unify(anchor.request_fn_node, spec.request_fn_node);
                 } else {
                     capture_anchor = raw_spec;
@@ -5168,6 +5201,7 @@ const Builder = struct {
                 }
             } else {
                 const spec_fn_node = try draftNestedSpecRequestNode(source_ctx.draft, source_ctx.graph, spec);
+                source_ctx.noteUnifySite(.draft_nested_spec_to_request, spec_fn_node, request_fn_node);
                 try source_ctx.graph.unify(spec_fn_node, request_fn_node);
                 if (!source_ctx.graph.sameFunctionInterface(spec_fn_node, request_fn_node)) {
                     Common.invariant("draft nested request did not join its complete function interface");
@@ -5252,7 +5286,9 @@ const Builder = struct {
         defer nested_ctx.deinit();
         const root_node = try nested_ctx.instNode(source_fn_ty);
         if (owned_scope) |scope| {
-            try nested_ctx.graph.unify(root_node, try nested_ctx.lowerExprTypeNode(expr_id));
+            const owned_body_node = try nested_ctx.lowerExprTypeNode(expr_id);
+            nested_ctx.noteUnifySite(.draft_nested_root_to_body, root_node, owned_body_node);
+            try nested_ctx.graph.unify(root_node, owned_body_node);
             try nested_ctx.instantiateTemplateDispatchRelations(
                 nested_ctx.view.templates.get(nested_ctx.owner_template.template),
                 scope,
@@ -14109,6 +14145,26 @@ const BodyContext = struct {
         } };
     }
 
+    /// Describe one graph node as a side of a constraint-replay measurement. A
+    /// node the graph imported an immutable type at stands for exactly that
+    /// type; any other node is one the graph built, which the directed pipeline
+    /// has no expression for at this call.
+    fn nodeUnifyOperand(self: *BodyContext, node: NodeId) spec_rehearsal.UnifyOperand {
+        if (comptime !census.enabled) return .undescribed;
+        if (self.graph.importedMonoAtNode(node)) |ty| return .{ .sealed = ty };
+        return .undescribed;
+    }
+
+    /// Describe one draft type cell as a side of a constraint-replay
+    /// measurement. A sealed cell is the immutable type the relation imports; a
+    /// live graph node is read the same way a node operand is.
+    fn cellUnifyOperand(self: *BodyContext, cell: DraftTypeCell) spec_rehearsal.UnifyOperand {
+        return switch (cell) {
+            .sealed => |ty| .{ .sealed = ty },
+            .graph_node => |node| self.nodeUnifyOperand(node),
+        };
+    }
+
     /// Measure, before the constraint runs, whether directed translation already
     /// makes this site's two sides one type (reunify.md section 13 Slice 7).
     /// Measurement only: the constraint that follows still decides lowering, and
@@ -14122,6 +14178,18 @@ const BodyContext = struct {
         if (comptime !census.enabled) return;
         const rehearsal = self.builder.rehearsal orelse return;
         rehearsal.measureUnifySite(site, left, right);
+    }
+
+    /// Measure a site whose two sides are both graph nodes, reading each node's
+    /// directed description from the graph itself.
+    fn noteUnifySite(
+        self: *BodyContext,
+        site: census.UnifySite,
+        left_node: NodeId,
+        right_node: NodeId,
+    ) void {
+        if (comptime !census.enabled) return;
+        self.measureUnifySite(site, self.nodeUnifyOperand(left_node), self.nodeUnifyOperand(right_node));
     }
 
     /// Record that a site builds one graph node rather than relating two
@@ -14147,11 +14215,16 @@ const BodyContext = struct {
         try self.graph.unify(try self.instNode(checked_ty), try self.graph.importMono(mono_ty));
     }
 
-    fn constrainTypeToCell(
+    /// Constrain a checked type to a draft cell, naming which relation the
+    /// constraint states and how directed translation reads the cell's side.
+    fn constrainTypeToCellAt(
         self: *BodyContext,
+        site: census.UnifySite,
         checked_ty: checked.CheckedTypeId,
         cell: DraftTypeCell,
+        cell_operand: spec_rehearsal.UnifyOperand,
     ) Allocator.Error!void {
+        self.measureUnifySite(site, self.checkedUnifyOperand(checked_ty), cell_operand);
         try self.graph.unify(try self.instNode(checked_ty), try cell.toGraphNode(self.graph));
     }
 
@@ -14165,11 +14238,31 @@ const BodyContext = struct {
         checked_ty: checked.CheckedTypeId,
         cell: DraftTypeCell,
     ) Allocator.Error!void {
+        try self.constrainCheckedInterfaceToCellAt(
+            .constrain_checked_to_cell,
+            checked_ty,
+            cell,
+            self.cellUnifyOperand(cell),
+        );
+    }
+
+    /// The same relation, with the caller naming which relation it states and
+    /// how directed translation reads the value side. A record field read is the
+    /// case that gains from this: the graph builds it as a node derived from the
+    /// receiver, while the directed side names it as the same read off the
+    /// receiver's own translation.
+    fn constrainCheckedInterfaceToCellAt(
+        self: *BodyContext,
+        site: census.UnifySite,
+        checked_ty: checked.CheckedTypeId,
+        cell: DraftTypeCell,
+        cell_operand: spec_rehearsal.UnifyOperand,
+    ) Allocator.Error!void {
         const value_node = try cell.toGraphNode(self.graph);
         if (try self.graph.containsGeneratedPrivate(value_node)) {
             try self.graph.relateOpaqueInterface(try self.freshInstNode(checked_ty), value_node);
         } else {
-            try self.constrainTypeToCell(checked_ty, cell);
+            try self.constrainTypeToCellAt(site, checked_ty, cell, cell_operand);
         }
     }
 
@@ -15080,6 +15173,7 @@ const BodyContext = struct {
         if (try self.relateMatchingProducedValueContainers(checked_root, produced_root, visiting)) |witness| {
             return witness;
         }
+        self.noteUnifySite(.checked_to_produced_value, checked_root, produced_root);
         try self.graph.unify(checked_root, produced_root);
         return checked_node;
     }
@@ -15968,7 +16062,13 @@ const BodyContext = struct {
                     },
                     else => {},
                 }
-                try self.graph.unify(expr_node, try self.graph.importMono(try self.builder.primitiveType(.str)));
+                const str_ty = try self.builder.primitiveType(.str);
+                self.measureUnifySite(
+                    .str_literal_expr_to_primitive,
+                    self.checkedUnifyOperand(self.view.bodies.expr(expr_id).ty),
+                    .{ .sealed = str_ty },
+                );
+                try self.graph.unify(expr_node, try self.graph.importMono(str_ty));
                 return try self.addExprWithTypeCell(
                     DraftTypeCell.fromGraphNode(expr_node),
                     try self.lowerStr(segments),
@@ -16231,6 +16331,11 @@ const BodyContext = struct {
                 );
             },
             .eval_template => |eval| blk: {
+                self.measureUnifySite(
+                    .hoisted_const_checked_to_request,
+                    self.checkedUnifyOperand(entry.checked_type),
+                    self.nodeUnifyOperand(request_node),
+                );
                 try self.graph.unify(try self.instNode(entry.checked_type), request_node);
                 break :blk try self.lowerConstEvalTemplateUseAtNode(
                     self.view,
@@ -17135,8 +17240,23 @@ const BodyContext = struct {
         body_ctx.current_fn_key = root_fn_key;
 
         const wrapper_fn_node = try body_ctx.graphFunctionNode(&.{}, request_fn_node);
+        body_ctx.measureUnifySite(
+            .callable_eval_wrapper_root_to_wrapper_fn,
+            body_ctx.checkedUnifyOperand(wrapper.checked_fn_root),
+            body_ctx.nodeUnifyOperand(wrapper_fn_node),
+        );
         try self.graph.unify(try body_ctx.instNode(wrapper.checked_fn_root), wrapper_fn_node);
+        body_ctx.measureUnifySite(
+            .callable_eval_template_root_to_request,
+            body_ctx.checkedUnifyOperand(template.checked_fn_root),
+            body_ctx.nodeUnifyOperand(request_fn_node),
+        );
         try self.graph.unify(try body_ctx.instNode(template.checked_fn_root), request_fn_node);
+        body_ctx.measureUnifySite(
+            .callable_eval_comptime_root_to_request,
+            body_ctx.checkedUnifyOperand(root.checked_type),
+            body_ctx.nodeUnifyOperand(request_fn_node),
+        );
         try self.graph.unify(try body_ctx.instNode(root.checked_type), request_fn_node);
 
         return try body_ctx.lowerPendingCallableEvalRoot(
@@ -23423,12 +23543,34 @@ const BodyContext = struct {
     /// private content never enters ordinary public unification: the formal
     /// gets a fresh public interface related opaquely, and the private node
     /// itself becomes the request argument.
+    /// Measure the call's result relation: the callee's checked return against
+    /// the caller's checked result position, whichever of the interface nodes
+    /// the relation below ends up stating it on.
+    fn measureCallReturnToCaller(
+        self: *BodyContext,
+        caller: *BodyContext,
+        callee_ret_ty: checked.CheckedTypeId,
+        checked_ret_ty: checked.CheckedTypeId,
+    ) void {
+        self.measureUnifySite(
+            .request_component_call_ret_callee_to_caller,
+            self.checkedUnifyOperand(callee_ret_ty),
+            caller.checkedUnifyOperand(checked_ret_ty),
+        );
+    }
+
     fn unifyFormalWithCallerArgNode(
         self: *BodyContext,
         caller: *BodyContext,
         formal_node: NodeId,
+        formal_ty: checked.CheckedTypeId,
         arg_ty: checked.CheckedTypeId,
     ) Allocator.Error!NodeId {
+        self.measureUnifySite(
+            .request_component_call_arg_formal_to_actual,
+            self.checkedUnifyOperand(formal_ty),
+            caller.checkedUnifyOperand(arg_ty),
+        );
         const arg_node = try caller.instNode(arg_ty);
         if (try self.graph.containsGeneratedPrivate(arg_node)) {
             const public_node = try caller.freshInstNode(arg_ty);
@@ -23462,21 +23604,31 @@ const BodyContext = struct {
             Common.invariant("checked direct call graph arity differed from its argument span");
         }
         const request_args = try self.graph.arena().alloc(NodeId, function.args.len);
-        for (fn_graph.args, checked_args, 0..) |formal_node, checked_arg, index| {
+        for (fn_graph.args, function.args, checked_args, 0..) |formal_node, formal_ty, checked_arg, index| {
             const arg_ty = caller.view.bodies.expr(checked_arg).ty;
             if (try caller.callArgumentEvidenceNode(checked_arg, null)) |evidence_node| {
                 if (try self.graph.containsGeneratedPrivate(evidence_node)) {
                     const public_node = try caller.freshInstNode(arg_ty);
                     try self.graph.relateOpaqueInterface(public_node, evidence_node);
+                    self.measureUnifySite(
+                        .request_component_call_arg_formal_to_public_evidence,
+                        self.checkedUnifyOperand(formal_ty),
+                        caller.checkedUnifyOperand(arg_ty),
+                    );
                     try relateRequestComponent(self.graph, formal_node, public_node);
                     request_args[index] = evidence_node;
                 } else {
-                    const request = try self.unifyFormalWithCallerArgNode(caller, formal_node, arg_ty);
+                    const request = try self.unifyFormalWithCallerArgNode(caller, formal_node, formal_ty, arg_ty);
+                    self.measureUnifySite(
+                        .request_component_call_arg_formal_to_evidence,
+                        self.checkedUnifyOperand(formal_ty),
+                        self.nodeUnifyOperand(evidence_node),
+                    );
                     try relateRequestComponent(self.graph, formal_node, evidence_node);
                     request_args[index] = request;
                 }
             } else {
-                request_args[index] = try self.unifyFormalWithCallerArgNode(caller, formal_node, arg_ty);
+                request_args[index] = try self.unifyFormalWithCallerArgNode(caller, formal_node, formal_ty, arg_ty);
             }
         }
         if (expected_ret_node) |expected| {
@@ -23489,6 +23641,7 @@ const BodyContext = struct {
             // the checked result as a fresh public interface: its cached cell
             // may already contain private evidence from another occurrence.
             const public_ret = try caller.freshInstNode(checked_ret_ty);
+            self.measureCallReturnToCaller(caller, function.ret, checked_ret_ty);
             try relateRequestComponent(self.graph, fn_graph.ret, public_ret);
         } else {
             const caller_ret = try caller.instNode(checked_ret_ty);
@@ -23497,6 +23650,7 @@ const BodyContext = struct {
                     return request_fn;
                 }
             }
+            self.measureCallReturnToCaller(caller, function.ret, checked_ret_ty);
             if (try self.graph.containsGeneratedPrivate(caller_ret)) {
                 // A prior occurrence may already have refined this cached cell
                 // to a private producer representation. Preserve its public
@@ -23511,6 +23665,11 @@ const BodyContext = struct {
         }
         var request_ret = fn_graph.ret;
         if (expected_ret_node) |expected| {
+            self.measureUnifySite(
+                .checked_mono_request_call_ret_to_expected,
+                self.checkedUnifyOperand(function.ret),
+                self.nodeUnifyOperand(expected),
+            );
             request_ret = if (try self.graph.containsGeneratedPrivate(expected))
                 expected
             else
@@ -23583,12 +23742,17 @@ const BodyContext = struct {
             .arg => |index| {
                 if (index >= fn_graph.args.len) Common.invariant("dispatch plan dispatcher argument index was outside the callable graph");
                 const dispatcher_node = try caller.instNode(plan.dispatcher_ty);
+                self.measureUnifySite(
+                    .request_component_dispatch_receiver_to_formal,
+                    self.checkedUnifyOperand(function.args[index]),
+                    caller.checkedUnifyOperand(plan.dispatcher_ty),
+                );
                 try relateRequestComponent(self.graph, fn_graph.args[index], dispatcher_node);
             },
             .type_only => {},
         }
         const request_args = try self.graph.arena().alloc(NodeId, function.args.len);
-        for (fn_graph.args, operands, request_args) |formal_node, operand, *request_arg| {
+        for (fn_graph.args, function.args, operands, request_args) |formal_node, formal_ty, operand, *request_arg| {
             request_arg.* = formal_node;
             switch (operand) {
                 .checked_expr => |checked_arg| {
@@ -23598,14 +23762,34 @@ const BodyContext = struct {
                         if (try self.graph.containsGeneratedPrivate(evidence_node)) {
                             const public_node = try caller.freshInstNode(arg_ty);
                             try self.graph.relateOpaqueInterface(public_node, evidence_node);
+                            self.measureUnifySite(
+                                .request_component_dispatch_arg_formal_to_public_evidence,
+                                self.checkedUnifyOperand(formal_ty),
+                                caller.checkedUnifyOperand(arg_ty),
+                            );
                             try relateRequestComponent(self.graph, formal_node, public_node);
                             request_arg.* = evidence_node;
                         } else {
                             const public_node = try caller.instNode(arg_ty);
+                            self.measureUnifySite(
+                                .request_component_dispatch_arg_formal_to_actual,
+                                self.checkedUnifyOperand(formal_ty),
+                                caller.checkedUnifyOperand(arg_ty),
+                            );
                             try relateRequestComponent(self.graph, formal_node, public_node);
+                            self.measureUnifySite(
+                                .request_component_dispatch_arg_formal_to_evidence,
+                                self.checkedUnifyOperand(formal_ty),
+                                self.nodeUnifyOperand(evidence_node),
+                            );
                             try relateRequestComponent(self.graph, formal_node, evidence_node);
                         }
                     } else {
+                        self.measureUnifySite(
+                            .request_component_dispatch_arg_formal_to_actual,
+                            self.checkedUnifyOperand(formal_ty),
+                            caller.checkedUnifyOperand(arg_ty),
+                        );
                         try relateRequestComponent(self.graph, formal_node, try caller.instNode(arg_ty));
                     }
                 },
@@ -23616,8 +23800,18 @@ const BodyContext = struct {
             }
         }
         var request_ret = fn_graph.ret;
+        self.measureUnifySite(
+            .request_component_dispatch_ret_callee_to_caller,
+            self.checkedUnifyOperand(function.ret),
+            caller.checkedUnifyOperand(checked_ret_ty),
+        );
         if (expected_ret_node) |expected| {
             try relateRequestComponent(self.graph, fn_graph.ret, try caller.freshInstNode(checked_ret_ty));
+            self.measureUnifySite(
+                .checked_mono_request_call_ret_to_expected,
+                self.checkedUnifyOperand(function.ret),
+                self.nodeUnifyOperand(expected),
+            );
             request_ret = if (try self.graph.containsGeneratedPrivate(expected))
                 expected
             else
@@ -23638,12 +23832,18 @@ const BodyContext = struct {
     fn relateFormalToOperand(
         self: *BodyContext,
         formal_node: NodeId,
+        formal_ty: checked.CheckedTypeId,
         caller: *BodyContext,
         operand: static_dispatch.StaticDispatchOperand,
     ) Allocator.Error!void {
         switch (operand) {
             .checked_expr => |checked_arg| {
                 const arg_ty = caller.view.bodies.expr(checked_arg).ty;
+                self.measureUnifySite(
+                    .request_component_numeral_formal_to_operand,
+                    self.checkedUnifyOperand(formal_ty),
+                    caller.checkedUnifyOperand(arg_ty),
+                );
                 try relateRequestComponent(self.graph, formal_node, try caller.instNode(arg_ty));
             },
             .generated_interpolation_iter,
@@ -23687,8 +23887,8 @@ const BodyContext = struct {
             .{ .sealed = target_ty },
         );
         try self.graph.unify(try self.instNode(checked_ret_ty), try self.graph.importMono(target_ty));
-        for (fn_graph.args, operands) |formal_node, operand| {
-            try self.relateFormalToOperand(formal_node, caller, operand);
+        for (fn_graph.args, function.args, operands) |formal_node, formal_ty, operand| {
+            try self.relateFormalToOperand(formal_node, formal_ty, caller, operand);
         }
         return fn_node;
     }
@@ -23706,6 +23906,11 @@ const BodyContext = struct {
         }
         const fn_node = try self.instNode(source_fn_ty);
         const plan_node = try plan_ctx.instNode(plan_fn_ty);
+        self.measureUnifySite(
+            .function_request_interface_target_to_plan,
+            self.checkedUnifyOperand(source_fn_ty),
+            plan_ctx.checkedUnifyOperand(plan_fn_ty),
+        );
         try relateFunctionRequestInterface(self.graph, fn_node, plan_node);
         return fn_node;
     }
@@ -23738,7 +23943,7 @@ const BodyContext = struct {
         const request_args = try self.graph.arena().alloc(NodeId, function_nodes.args.len);
         for (function_nodes.args, arg_tys, function.args, request_args) |formal_node, arg_ty, formal_ty, *request_arg| {
             self.measureUnifySite(
-                .target_node_formal_to_mono_arg,
+                .checked_mono_request_target_formal_to_mono_arg,
                 self.checkedUnifyOperand(formal_ty),
                 .{ .sealed = arg_ty },
             );
@@ -23749,7 +23954,7 @@ const BodyContext = struct {
             );
         }
         self.measureUnifySite(
-            .target_node_ret_to_mono,
+            .checked_mono_request_target_ret_to_mono,
             self.checkedUnifyOperand(function.ret),
             .{ .sealed = ret_ty },
         );
@@ -23775,7 +23980,7 @@ const BodyContext = struct {
         const function_nodes = try self.graph.functionNodes(fn_node);
         const request_args = try self.graph.arena().dupe(NodeId, function_nodes.args);
         self.measureUnifySite(
-            .target_indexed_node_formal_to_mono_arg,
+            .checked_mono_request_target_indexed_formal_to_mono_arg,
             self.checkedUnifyOperand(function.args[arg_index]),
             .{ .sealed = arg_ty },
         );
@@ -23936,7 +24141,14 @@ const BodyContext = struct {
             .sealed => |ty| try self.activeNodeFromType(ty),
         };
         try self.constrainCheckedInterfaceToCell(checked_ty, cell);
-        if (expected_ty) |expected| try self.graph.unify(node, try self.graph.importMono(expected));
+        if (expected_ty) |expected| {
+            self.measureUnifySite(
+                .local_argument_evidence_to_expected,
+                self.cellUnifyOperand(cell),
+                .{ .sealed = expected },
+            );
+            try self.graph.unify(node, try self.graph.importMono(expected));
+        }
         return if (try self.graph.containsGeneratedPrivate(node)) node else null;
     }
 
@@ -24040,17 +24252,18 @@ const BodyContext = struct {
         // receiver's node. The directed side names it as the same read: the
         // receiver's checked position, translated, with this label read off it.
         const field_operand = self.fieldUnifyOperand(receiver, mono_field_name);
-        self.measureUnifySite(
+        try self.constrainCheckedInterfaceToCellAt(
             .field_access_to_checked,
-            field_operand,
-            self.checkedUnifyOperand(checked_ty),
-        );
-        try self.constrainCheckedInterfaceToCell(
             checked_ty,
             DraftTypeCell.fromGraphNode(field_node),
+            field_operand,
         );
         if (expected_ty) |expected| {
-            self.measureUnifySite(.field_access_to_expected, field_operand, .{ .sealed = expected });
+            self.measureUnifySite(
+                .request_component_field_access_to_expected,
+                field_operand,
+                .{ .sealed = expected },
+            );
             try relateRequestComponent(self.graph, try self.graph.importMono(expected), field_node);
         }
         return field_node;
@@ -25279,6 +25492,11 @@ const BodyContext = struct {
             },
             .reserved => Common.invariant("reserved checked const template reached Monotype"),
             .eval_template => |eval| blk: {
+                self.measureUnifySite(
+                    .const_use_requested_to_request,
+                    self.checkedUnifyOperand(requested_ty),
+                    self.nodeUnifyOperand(request_node),
+                );
                 try self.graph.unify(try self.instNode(requested_ty), request_node);
                 break :blk try self.lowerConstEvalTemplateUseAtNode(
                     store_view,
@@ -25463,9 +25681,19 @@ const BodyContext = struct {
         body_ctx.current_fn_key = root_fn_key;
 
         const wrapper_fn_node = try body_ctx.graphFunctionNode(&.{}, request_node);
+        body_ctx.measureUnifySite(
+            .const_eval_entry_root_to_wrapper_fn,
+            body_ctx.checkedUnifyOperand(entry_template.checked_fn_root),
+            body_ctx.nodeUnifyOperand(wrapper_fn_node),
+        );
         try self.graph.unify(
             try body_ctx.instNode(entry_template.checked_fn_root),
             wrapper_fn_node,
+        );
+        body_ctx.measureUnifySite(
+            .const_eval_body_to_request,
+            body_ctx.checkedUnifyOperand(body.checked_type),
+            body_ctx.nodeUnifyOperand(request_node),
         );
         try self.graph.unify(try body_ctx.instNode(body.checked_type), request_node);
 
@@ -27433,6 +27661,11 @@ const BodyContext = struct {
             },
             else => {},
         }
+        self.measureUnifySite(
+            .lookup_expr_expected_to_checked,
+            self.nodeUnifyOperand(expected_node),
+            self.checkedUnifyOperand(expr.ty),
+        );
         try self.graph.unify(expected_node, try self.instNode(expr.ty));
     }
 
@@ -27474,7 +27707,15 @@ const BodyContext = struct {
                     Common.invariant("checked callable relation received a non-function request node");
                 }
             },
-            else => try self.graph.unify(expected_node, try self.lowerExprTypeNode(checked_expr)),
+            else => {
+                const lowered_node = try self.lowerExprTypeNode(checked_expr);
+                self.measureUnifySite(
+                    .expr_expected_to_lowered,
+                    self.nodeUnifyOperand(expected_node),
+                    self.checkedUnifyOperand(expr.ty),
+                );
+                try self.graph.unify(expected_node, lowered_node);
+            },
         }
     }
 
@@ -31519,6 +31760,7 @@ const BodyContext = struct {
         root_node: NodeId,
         request_fn_node: NodeId,
     ) Allocator.Error!void {
+        self.noteUnifySite(.evidence_target_root_to_request, root_node, request_fn_node);
         if (try self.graph.containsGeneratedPrivate(request_fn_node)) {
             try relateFunctionRequestInterface(self.graph, root_node, request_fn_node);
         } else {
@@ -31673,6 +31915,7 @@ const BodyContext = struct {
         if (fn_nodes.args.len != 2) {
             Common.invariant("structural equality callable graph node must have two operands");
         }
+        self.noteUnifySite(.structural_equality_operands_equal, fn_nodes.args[0], fn_nodes.args[1]);
         try self.graph.unify(fn_nodes.args[0], fn_nodes.args[1]);
 
         const ret_ty = try self.resolvedTypeViewForNode(fn_nodes.ret);
@@ -31729,6 +31972,7 @@ const BodyContext = struct {
         if (fn_nodes.args.len != 2) {
             Common.invariant("structural hash callable graph node must have two operands");
         }
+        self.noteUnifySite(.structural_hash_hasher_to_result, fn_nodes.args[1], fn_nodes.ret);
         try self.graph.unify(fn_nodes.args[1], fn_nodes.ret);
 
         const ret_ty = try self.resolvedTypeViewForNode(fn_nodes.ret);
@@ -36393,8 +36637,14 @@ const BodyContext = struct {
         other_expr_id: checked.CheckedExprId,
         other_checked_ty: checked.CheckedTypeId,
     ) Allocator.Error!StructuralEqualityOperand {
+        self.measureUnifySite(
+            .structural_equality_operand_to_checked,
+            self.nodeUnifyOperand(operand_node),
+            self.checkedUnifyOperand(other_checked_ty),
+        );
         try self.graph.unify(operand_node, try self.instNode(other_checked_ty));
         if (try self.structuralEqualityExprResultNode(other_expr_id)) |other_node| {
+            self.noteUnifySite(.structural_equality_operand_to_result, operand_node, other_node);
             try self.graph.unify(operand_node, other_node);
         }
         return try self.structuralEqualityOperandFromNode(operand_node);
@@ -38256,7 +38506,9 @@ const BodyContext = struct {
     ) Allocator.Error!void {
         const rest_fields = (try self.graph.recordNodes(rest_node)).fields;
         for (rest_fields) |field| {
-            try self.graph.unify(field.ty, try self.graph.recordFieldNode(source_node, field.name));
+            const source_field_node = try self.graph.recordFieldNode(source_node, field.name);
+            self.noteUnifySite(.record_rest_field_to_source_field, field.ty, source_field_node);
+            try self.graph.unify(field.ty, source_field_node);
         }
     }
 
@@ -38288,6 +38540,11 @@ const BodyContext = struct {
                 .fields = try self.graph.arena().dupe(InstField, remaining.items),
                 .ext = try self.graph.newNode(.empty_record),
             } });
+        self.measureUnifySite(
+            .record_rest_pattern_to_row,
+            self.checkedUnifyOperand(self.view.bodies.pattern(rest_pattern).ty),
+            self.nodeUnifyOperand(rest_node),
+        );
         try self.graph.unify(
             try self.lowerTypeNode(self.view.bodies.pattern(rest_pattern).ty),
             rest_node,
@@ -38957,6 +39214,7 @@ const BodyContext = struct {
                 Common.invariant("control-flow result mixed explicit generated-private and checked-public runtime representations");
             }
             if (join.private_node) |existing| {
+                self.noteUnifySite(.control_flow_private_results_join, existing, node);
                 try self.graph.unify(existing, node);
             } else {
                 join.private_node = node;
@@ -40478,13 +40736,23 @@ const BodyContext = struct {
         const function_nodes = try self.graph.functionNodes(fn_node);
         const request_args = try self.graph.arena().alloc(NodeId, function.args.len);
         var contains_generated_private = false;
-        for (function_nodes.args, operands, request_args) |formal_node, operand, *request_arg| {
+        for (function_nodes.args, function.args, operands, request_args) |formal_node, formal_ty, operand, *request_arg| {
             switch (operand) {
                 .checked_expr => |checked_arg| {
                     const arg_ty = caller.view.bodies.expr(checked_arg).ty;
                     const public_node = try caller.instNode(arg_ty);
+                    self.measureUnifySite(
+                        .request_component_iterator_formal_to_actual,
+                        self.checkedUnifyOperand(formal_ty),
+                        caller.checkedUnifyOperand(arg_ty),
+                    );
                     try relateRequestComponent(self.graph, formal_node, public_node);
                     if (try caller.callArgumentEvidenceNode(checked_arg, null)) |evidence_node| {
+                        self.measureUnifySite(
+                            .checked_mono_request_iterator_arg_to_evidence,
+                            caller.checkedUnifyOperand(arg_ty),
+                            self.nodeUnifyOperand(evidence_node),
+                        );
                         request_arg.* = try checkedMonoRequestNode(
                             self.graph,
                             public_node,
@@ -40496,6 +40764,11 @@ const BodyContext = struct {
                 },
                 .loop_iterator_state => {
                     const iterator = loop_iterator orelse Common.invariant("iterator .next dispatch reached Monotype without a loop iterator local");
+                    self.measureUnifySite(
+                        .checked_mono_request_iterator_formal_to_loop_state,
+                        self.checkedUnifyOperand(formal_ty),
+                        self.cellUnifyOperand(iterator.ty),
+                    );
                     request_arg.* = try checkedMonoRequestNode(
                         self.graph,
                         formal_node,
@@ -40508,6 +40781,11 @@ const BodyContext = struct {
         var request_ret = function_nodes.ret;
         if (expected_ret_ty) |expected| {
             const expected_node = try expected.toGraphNode(self.graph);
+            self.measureUnifySite(
+                .checked_mono_request_iterator_ret_to_expected,
+                self.checkedUnifyOperand(function.ret),
+                self.cellUnifyOperand(expected),
+            );
             request_ret = if (try self.graph.containsGeneratedPrivate(expected_node))
                 expected_node
             else
@@ -40543,6 +40821,11 @@ const BodyContext = struct {
             .loop_iterator_state => blk: {
                 const iterator = loop_iterator orelse Common.invariant("iterator .next dispatch reached Monotype without a loop iterator local");
                 const iterator_node = try iterator.ty.toGraphNode(self.graph);
+                self.measureUnifySite(
+                    .iterator_loop_state_to_formal,
+                    self.cellUnifyOperand(iterator.ty),
+                    self.nodeUnifyOperand(node),
+                );
                 try self.graph.unify(iterator_node, node);
                 if (!self.graph.sameClass(iterator_node, node)) Common.invariant("iterator .next operand type differed from instantiated callable argument type");
                 break :blk try self.addExprWithTypeCell(iterator.ty, .{ .local = iterator.local });

@@ -295,20 +295,24 @@ authoritative.
     `evidenceOwnerUsesScoreSelection`), which no production stage consults
     — its readers are the closure engine and the Debug rehearsal, and both
     real producers pass `.score = 0`.
-  - **[main]** Monotype no longer calls the shared tier function at unify
-    time. `InstGraph.iteratorRelation` wraps `Type.iteratorRelation` and,
-    for two `.minted` operands, refines the answer using in-graph
-    provenance the shared descriptors cannot see:
+  - **[main]** Tier classification became graph-aware. For two `.minted`
+    operands, `InstGraph.iteratorRelation` decided the answer from in-graph
+    provenance the shared descriptors did not carry:
     `InstNamed.generated_iterator` presence and `callable_evidence` digest
     equality, `def.iterator_kind`, and `sameNamedArgs`. Tier inputs are
     also no longer minted at node creation:
     `finalizeGeneratedIteratorRepresentations` computes
     `generatedIteratorDepth` and `iteratorRootRequiresForcedDynamic` after
-    relation production and before any durable Monotype is sealed. The
-    graph is therefore strictly better informed than a descriptor-only
-    policy, which §10 must state rather than assume away — the Debug
-    representation mirror still asserts the two agree, and on the merged
-    tree that assertion fires (§13.3).
+    relation production and before any durable Monotype is sealed. §10.3
+    already required generated identity to be an explicit input, so those
+    provenance reads are now descriptor inputs of the shared policy: a
+    representation whose producer has not sealed it states its **minting
+    identity** (the callable evidence it is being minted under) and the
+    caller states its own **component agreement** for the pair. The graph
+    calls `iteratorTierRelation` with those inputs and holds no second copy
+    of the rule; the depth and forced-dynamic pass stays a producer
+    decision, taken by the closure engine as a declared input rather than
+    derived by the relation (§10.1, §10.3).
 - **"A production matching walk is the right way to compute bindings."**
   Rejected in this consolidation. A matching walk must re-implement type
   equality (alias transparency, head canonicalization, nominal backing
@@ -654,7 +658,8 @@ Every class of work the graph performs, mapped to its target home:
    carries over with its scoping unchanged (§9.7).
 5. **Representation decisions** — postcheck-minted content joined by
    explicit policy: the iterator tier relation (`InstGraph.iteratorRelation`
-   over the shared `Type.iteratorRelation`, plus the pre-seal
+   and `Type.iteratorRelation`, both adapters onto the shared
+   `iteratorTierRelation`, plus the pre-seal
    `finalizeGeneratedIteratorRepresentations` pass), generated-evidence
    backing selection **[main]** by producer `BackingAuthority` rather than
    by score, and nominal-wraps-structural root selection
@@ -1382,6 +1387,12 @@ dependencies without changing the specialization's logical type (§11.1).
 Cross-specialization representation edges are explicit unpublished graph
 edges, not late rewrites of cached immutable ids.
 
+Minting representations is not part of the relation. §10.1's generated
+iterator chains and forced-dynamic fixed points are producer decisions, so the
+closure engine takes each finalized representation as a declared input at the
+position the producer placed it, and the declared tier order (§10.4) refuses
+any move back down.
+
 The implementation may use a worklist or disjoint-set structure for its
 equality closure, but its API makes "not a type solver" mechanically true:
 it cannot create a logical unknown, bind a scheme variable, add or remove a
@@ -1418,7 +1429,17 @@ Monotype and LambdaSolved — keep it single-sourced):
 
 Compatibility requires the same public source declaration and equal logical
 item type; generated identity, kind, depth, and tier are explicit inputs,
-never inferred from backing shape or names.
+never inferred from backing shape or names. Generated identity is explicit at
+every point in a representation's life: a finished representation states its
+recorded producer digest, and one the producer has not sealed states its
+**minting identity** — the callable evidence it is being minted under. "Equal
+minted identity" for two still-minting operands means equal minting identity,
+equal producer kind, and **component agreement**: the caller's own explicit
+answer, over its own store, about whether the two operands' public item and
+producer-minted component types already denote one representation. The policy
+takes that answer as an input rather than reading a store, and a `minted_join`
+keeps the still-minting side as representative, since only that side can still
+be finalized to the dynamic fixed point.
 
 **Generated opaque evidence** (`FieldNames`, `FieldName`,
 `ParseTagUnionSpec`, and kin): one declared backing policy — the higher
@@ -1882,10 +1903,12 @@ Invariants, each the negation of a plausible "simplification":
    them.
 
    Several of the survivors are the LambdaSolved face of the §10 algebra.
-   Note the asymmetry main introduced: Lambda Solved reads the shared
-   descriptor-only tier function, while Monotype reads the graph-refined
-   `InstGraph.iteratorRelation` (§3). The two stages therefore no longer
-   classify from the same inputs, and §10 owns reconciling that.
+   The asymmetry main introduced is closed: `Type.iteratorRelation` is now
+   the adapter that carries a finished named type's recorded identity into
+   the shared `iteratorTierRelation`, and `InstGraph.iteratorRelation` is
+   the adapter that carries the graph's still-minting identities and its own
+   component answer into the same function. Both stages classify from one
+   implementation again (§10.3).
 
 ### 12.5 The cloning boundary: occurrence identity, before interning
 
@@ -2152,11 +2175,11 @@ plan. Status of each slice on the merged tree:
 
 | slice | status |
 |---|---|
-| 0 — declare and measure | **done**; the manifest, the architecture gate, and the census are in the tree and re-measured (§13.3). |
+| 0 — declare and measure | **done**; the manifest, the architecture gate, and the census are in the tree, the census is re-sited onto the merged tree's constraint surface, and both corpora are re-measured (§13.3). |
 | 1 — occurrence-based lambda cloning | **done**; the cloner keeps an active-path map behind a `containsCallableOccurrence` proof. |
 | 2 — schemes and use-site substitutions | **done**; binders, nested owners, captured binders, positional actuals, and evidence ranges are all written and verified, and nothing lowers from them. |
 | 3 — isolate graph mutation, promote the interner | **mostly done.** **[main]** deleted the refill API and closed imported rows; the `intern*` constructors are the production construction boundary with dedup switched off. Still open: head canonicalization (§8.4), the alias identity split across digest/equality/dispatch-head/verification (§8.2), entry-order-independent recursive identity (§8.3), and the digest-stability assertions. |
-| 4 — representation policy and closure engine | **built, and now behind the graph.** `representation_policy.zig` and `representation_closure.zig` exist and are directly tested, but **[main]** made Monotype's own classification graph-aware (`InstGraph.iteratorRelation`, `finalizeGeneratedIteratorRepresentations`) and replaced score selection with producer backing authority. The descriptor-only policy no longer reproduces the graph's answers: the Debug mirror's `join.relation == tierFor(rule)` assertion in `representation_closure.stepIterator` fires on three eval cases, and 24 sealed `minted_join` descriptors disagree (§13.3). Slice 4 must be re-landed against the graph-aware inputs before Slice 7 can lean on it. |
+| 4 — representation policy and closure engine | **re-landed against the graph-aware inputs.** **[main]** had made Monotype's own classification graph-aware (`InstGraph.iteratorRelation`, `finalizeGeneratedIteratorRepresentations`) and replaced score selection with producer backing authority. The provenance the graph read is now a declared descriptor input — the minting identity plus the caller's component agreement (§10.3) — and the producer's depth and forced-dynamic pass is a declared engine input (§10.2), so `InstGraph.iteratorRelation` and `Type.iteratorRelation` are both adapters onto one `iteratorTierRelation`. Under `ROC_REUNIFY_SHADOW` the mirror is at 0 mismatches on both corpora and the `stepIterator` assertion no longer fires (§13.3). Backing selection is still by producer authority in production and by score only in the policy's unused readers. |
 | 5 — direct instantiation as Debug shadow | **done, with new drift.** The shadow runs; its scheme comparison, which was at zero mismatches pre-merge, now reports 3 own-module and 13 imported mismatches. |
 | 6 — shadow expanded to full specialization | **done, with new drift.** The rehearsal reaches 254888 compared positions at 254179 match; 48 logical mismatches remain, all newly introduced (§13.3). |
 | 7 — delete logical solving | **open.** This is the whole remaining project; §13.2 states the shortest path. |
@@ -2167,48 +2190,57 @@ plan. Status of each slice on the merged tree:
 The precondition Slice 7 waits on is that no constraint-replay execution
 carries logical information the checked data lacks. The pre-merge run
 established that over 53 measured sites; the merged tree's constraint
-surface is differently shaped, so that result does not carry over and the
-first job is to restore the measurement, not to redo the argument.
+surface is differently shaped, so that result did not carry over and the
+census was re-sited onto it before the argument could be redone.
 
-1. **Re-site the constraint census.** `lower.zig` has 42 `.unify(` calls
-   and `solve.zig` 19; only 11 hooks survive, covering 10 sites the corpora
-   reach. Main funnelled most relations through a handful of shared
-   relaters — `relateFunctionRequestInterface`, `relateRequestComponent`,
-   `relateCheckedMonoRequestNodeAt`, `checkedMonoRequestNode`,
-   `functionRequestNode`, `relateOpaqueInterface` — so the census hooks
-   belong at those relaters' call sites rather than at the raw
-   `graph.unify` calls, and `UnifySite` needs re-declaring against them.
-   Until that lands, 43 of 53 declared members are dead names and the
-   redundancy result covers a fraction of the surface.
-2. **Close the one checked-data gap the census still shows.** Every
-   informative execution and every seam divergence on the merged tree is
-   one shape: a rigid binder of a checked scheme that the requesting
-   frame's binding does not name, so directed translation materializes the
-   empty tag union where the graph obtains the value by unifying against
-   the caller. It shows up at `target_node_formal_to_mono_arg` (a
-   compiler-generated dispatch-target edge whose actuals arrive as
-   Monotypes, not as a `CheckedInstantiationSite`) and as
-   `rehearsal_unbound_binder_scheme_unrelated`. §9.6's declared
-   generated-edge rules are where it is fixed.
-3. **Re-land Slice 4 against graph-aware inputs.** Either the closure
-   engine takes the provenance `InstGraph.iteratorRelation` reads, or §10
-   states the graph as the authority and the mirror stops asserting
-   agreement. Today it asserts, and the assertion aborts compilation on
-   three eval cases under `ROC_REUNIFY_SHADOW`.
-4. **Give the direct-translate probe a re-rooting class.** All 585 of its
-   stored-form mismatches are recursive types the two sides root at
-   different entry points — §8.3's known phenomenon, which the rehearsal
-   already classifies as `rehearsal_type_equal_under_rerooting` and the
-   probe does not. This is a measurement gap, not a translation bug, and
-   until it is closed the probe's required-zero counter cannot be read.
+1. **Re-site the constraint census.** *Done.* `UnifySite` is re-declared
+   against the merged tree's constraint surface: every one of `lower.zig`'s
+   42 `.unify(` calls has an identity, named by the relater that carries
+   the relation plus the relation it states. Main funnelled most relations
+   through shared relaters, so `relateRequestComponent`,
+   `relateFunctionRequestInterface` and `checkedMonoRequestNode` each carry
+   several distinct relations and each gets one member per relation
+   (`request_component_*`, `function_request_interface_*`,
+   `checked_mono_request_*`); the rest are stated as a bare `graph.unify`
+   and keep a member named for the lowering step that states them. 43 of
+   the 55 members are reached on eval, 36 on snapshots (§13.3). The hook
+   counts are pinned in `ci/check_reunify_manifest.pl` alongside the
+   `.unify(` counts, so hooks cannot silently disappear from a re-taken pin
+   again. `solve.zig`'s 19 `.unify(` calls are not replay sites: 11 are unit
+   tests and 8 are steps inside the unifier, reached only while executing a
+   relation a `lower.zig` site already named.
+2. **Close the one checked-data gap the census shows.** Every informative
+   execution and every seam divergence on the merged tree is one shape: a
+   rigid binder of a checked scheme that the requesting frame's binding
+   does not name, so directed translation materializes the empty tag union
+   where the graph obtains the value by unifying against the caller. Over
+   the re-sited surface it is 165143 of 165225 informative executions on
+   snapshots and 135672 of 136139 on eval — `scheme_binder_unbound` at
+   every site that carries a callee formal or a checked interface — and it
+   is the same shape as `rehearsal_unbound_binder_scheme_unrelated` and the
+   seam's 8 divergences. §9.6's declared generated-edge rules and §7.1's
+   binder resolution are where it is fixed; nothing else in the census
+   asks for information the checked data lacks.
+3. **Re-land Slice 4 against graph-aware inputs.** *Done.* The closure
+   engine takes the provenance `InstGraph.iteratorRelation` read, as the
+   minting identity and component-agreement inputs of §10.3, and the graph
+   calls the shared policy instead of holding a second copy of the rule.
+4. **Give the direct-translate probe a re-rooting class.** *Done.* The
+   probe compares unfolded digests when stored digests differ, which is the
+   same notion the rehearsal counts as
+   `rehearsal_type_equal_under_rerooting`. All 585 of its former stored-form
+   mismatches are §8.3 re-rooting: `direct_stored_equal_under_rerooting` is
+   585 and `direct_stored_mismatch`, `direct_stored_mismatch_logical`,
+   `direct_stored_mismatch_representation` and
+   `direct_stored_skip_context_variant` are all zero on both corpora.
 5. **Then flip.** Delete `InstGraph` logical variables and row nodes,
    `unify`/`unifyRoots`/`unifyConcrete`/`unifyThroughBacking`/
    `unifyTagRows`/`unifyRecordRows`/`unifyRowWithEmpty`/`writeOrQueue*`,
    logical graph sealing, `DraftTemplateSpec` deferral, `refineRequest`
    and the solved-shape logical aliases, and `importMono`.
 
-Steps 1 and 2 are the only ones that can change the answer; 3 and 4 are
-measurement debt that hides it.
+Step 2 is the only one that can still change the answer; step 3 is the
+remaining measurement debt.
 
 ### 13.3 Corpus measurement (2026-07-28, merged tree)
 
@@ -2221,28 +2253,56 @@ corpus total is the sum over processes of each process's last block; the
 block now opens with `census_writer <pid>` so that sum is exact under the
 eval runner's fork pool.
 
-**Constraint replay.** The census reaches 10 of its 53 declared
-`UnifySite` members, because main's restructuring left only 11 hooks
-against 42 `.unify(` calls in `lower.zig` and 19 in `solve.zig`
-(§13.2 step 1). Over what it does reach:
+**Constraint replay.** The census is re-sited onto the merged tree's
+constraint surface (§13.2 step 1): 55 declared `UnifySite` members over
+every `.unify(` call `lower.zig` still states, 43 of them reached on eval
+and 36 on snapshots.
 
 | corpus | redundant | open_on_import | informative | representation_decision | unmeasurable | construction |
 |---|---|---|---|---|---|---|
-| snapshots | 22857 | 0 | 8 | 0 | 4 | 1871546 |
-| eval | 6508 | 0 | 24 | 0 | 96 | 2068936 |
+| snapshots | 722181 | 0 | 165225 | 0 | 320193 | 1871546 |
+| eval | 554100 | 0 | 136139 | 0 | 278408 | 2068936 |
 
-The informative executions are two shapes. All 28 at
-`target_node_formal_to_mono_arg` are `scheme_binder_unbound`: the checked
-formal reaches a **rigid** variable that is a generalized binder carrying
-one static-dispatch constraint, which the site's binding does not name, so
-directed translation emits the empty tag union where the graph takes the
-value from the supplied Monotype argument. The 4 at
-`numeral_caller_ret_to_target` / `numeral_callee_ret_to_target` are
-`head_tag` with `residual_origin=graph_sealed`: the graph's sealed numeral
-target is a named type and the checked return is the bare primitive, so
-the difference is the wrapper the graph's own target carries, not checked
-data the directed side lacks. The 100 unmeasurable executions are all
-`field_access_to_checked` with `operand_untranslatable`.
+Of the executions with a directed answer on both sides, 81% on snapshots
+and 80% on eval are redundant. The informative remainder is one shape:
+165143 of 165225 on snapshots and 135672 of 136139 on eval are
+`scheme_binder_unbound`, and their residual state is `scheme_binder` — the
+checked side reaches a generalized binder of a checked scheme that the
+site's binding does not name, so directed translation emits the empty tag
+union where the graph takes the value from the other operand. They
+concentrate at `constrain_checked_to_cell` (105018 on eval),
+`request_component_dispatch_arg_formal_to_evidence` (15843) and
+`function_request_interface_target_to_plan` (15201). What is left over is
+small and named: 222 `unclassified`, 155 `named_identity` (two nominal
+heads differing only in `kind`), 66 `head_tag`, 17 `row_width`, 4
+`representation`, 3 `unbound_residual` on eval; 82 `unclassified` and
+nothing else on snapshots. No execution on either corpus classifies as a
+`representation_decision`.
+
+The unmeasurable executions are two named causes and nothing else.
+`operand_undescribed` (313569 snapshots, 253800 eval) is a side the graph
+built as a bare node with no checked address and no imported immutable
+type behind it, so the directed pipeline has no expression for it at that
+call — the draft template/nested request nodes, the produced-value
+relations, the structural-derivation callable nodes, and the expected-type
+nodes a request supplies. `operand_engine_input_needed` (6624 snapshots,
+24608 eval) is a checked operand whose translation needs representation
+content the checked data cannot dictate, which is the §10 closure-engine
+input bound, not a translation gap. Every other blocker — module absent,
+recursive, open row, pending/erroneous, numeric default, malformed arity,
+missing backing, field receiver not a record, field label absent — is zero
+on both corpora.
+
+The 94 unmeasurable executions at `field_access_to_checked` on eval (4 on
+snapshots) are all `operand_engine_input_needed`, and the operand is the
+field read's **receiver**: its checked type reaches a nominal whose
+builtin runtime encoding is generated opaque evidence, whose backing the
+§10 closure engine mints and the checked data does not carry, so the walk
+skips rather than emit a backing the checked data does not contain. The
+read off the receiver is never the blocker —
+`field_receiver_not_a_record` and `field_label_absent` are zero on both
+corpora — so this is the same representation bound as everywhere else, not
+an instrument limitation to close.
 
 **The lowering seam.** `seam_direct` 629 reads on snapshots and 757 on
 eval, `seam_direct_absent` 0 on both — every checked position the seam
@@ -2265,26 +2325,35 @@ only in `kind`, and 2 `row_width` (a 1-field record against a 2-field
 one). Snapshots are at zero logical mismatches.
 
 **The direct-translate probe.** 90151 roots on eval (28230 on snapshots),
-71026 stored-form matches (8771), and **585 mismatches, 351 of them in the
-required-zero `mismatch_logical` bucket**. Snapshots have none. Every one
-of the 108 eval processes that reports a logical mismatch also reports
-`rehearsal_type_equal_under_rerooting > 0` and
-`direct_stored_skip_context_variant > 0`, while only 13 of the other 1631
-report the first and none report the second; single-process runs
-attribute them to recursive-nominal programs specifically. The probe
-compares raw stored digests and has no equal-under-rerooting class, so
-§8.3's recursive re-rooting lands in its required-zero bucket. This is a
-measurement gap, not a translation bug.
+71026 stored-form matches (8771), **585 equal under re-rooting on eval and
+zero mismatches of any class on either corpus**. The probe now compares
+unfolded digests when stored digests differ, which is the same notion the
+rehearsal counts as `rehearsal_type_equal_under_rerooting`: §8.3's
+recursive re-rooting is a deliberate difference in the emitted stored form,
+so it no longer lands in the required-zero `mismatch_logical` bucket.
+`direct_stored_mismatch`, `direct_stored_mismatch_logical`,
+`direct_stored_mismatch_representation` and
+`direct_stored_skip_context_variant` are all zero.
 
-**Representation.** 35211 sealed descriptors match on eval and **24
-disagree, all `minted_join`**, across 12 processes; snapshots have none.
-The same divergence hits harder in `representation_closure.stepIterator`,
-whose `join.relation == tierFor(rule)` assertion aborts three eval
-programs under `ROC_REUNIFY_SHADOW` (`inspect: closure capturing for loop
-element with equality`, `inspect: recursive custom iterator take_first
-works in for loop`, `iter alloc: captured range map folds are
-zero-alloc`); all three pass with the shadow off. The Slice 5 shadow's
-scheme comparison, at zero pre-merge, now reports 3 own-module and 13
+**Representation.** The measurement that produced 24 sealed `minted_join`
+disagreements and three aborted eval programs was taken before Slice 4 was
+re-landed (§13.1). Two separate defects produced it. The tier gap: for two
+representations the graph was still minting, the descriptors carried no
+generated identity at all, because the durable digest is stamped only at
+sealing — 5 join sites classified differently, 3 of them on a
+producer-minted component the engine did not model. The seal gap: all 24
+disagreements were one shape, a node the producer finalized to the dynamic
+fixed point after the join, which the mirror never mirrored, so the engine
+still carried the pre-finalization minted descriptor. With the minting
+identity, component agreement, modelled components, and the producer-input
+adoption in place, eval reports 35612 matches and **0 mismatches** (29 of
+29 `minted_join` sites agree, up from 5), snapshots 28984 matches and 0
+mismatches, `representation_mirror_adopt_rejected` is 0 on both, and the
+full eval corpus is 1787/0/0 with the shadow on as well as off. Production
+classification is unchanged: `iter_minted_join` (29) and
+`iter_public_minted` (14) are identical to the pre-change run, and the
+snapshot corpus regenerates with no tracked diff. The Slice 5 shadow's
+scheme comparison, at zero pre-merge, still reports 3 own-module and 13
 imported mismatches.
 
 **What is not comparable to the pre-merge run.** The pre-merge figures
@@ -2293,9 +2362,9 @@ divergent; eval seam 3561 divergent; 23769 rehearsal specializations,
 108430 positions, 4718 equal-under-rerooting; 9289 probe matches) were
 taken against a `lower.zig` with 53 measured constraint sites and a
 different graph. The absolute totals moved because the measured surface
-moved, so the honest reading is per-class: zero informative became 28,
-zero unmeasurable became 100, zero rehearsal-logical became 48, and zero
-probe-logical became 351.
+moved, so the honest reading is per-class: zero informative became
+165225 / 136139, all but 82 / 467 of them the one `scheme_binder_unbound`
+shape §13.2 step 2 closes, and zero rehearsal-logical became 48.
 
 ---
 

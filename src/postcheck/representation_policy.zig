@@ -33,6 +33,32 @@ const MonoType = @import("monotype/type.zig");
 const static_dispatch = check.StaticDispatchRegistry;
 const names = check.CheckedNames;
 
+/// The explicit identity of a representation the producer is still minting.
+/// Section 10.3 requires generated identity to be an explicit input, and a
+/// representation whose producer has not sealed it yet has no recorded digest
+/// in `TypeDef.generated`, so the producer states what it is minting under
+/// instead of presenting an empty identity.
+pub const MintingIdentity = struct {
+    /// The callable evidence this representation is being minted under, or null
+    /// when the producer minted it without callable evidence.
+    callable_evidence: ?names.TypeDigest,
+};
+
+/// What the caller has proved about two operands' shared component types.
+/// Section 10.3 states component agreement as a compatibility requirement met
+/// at the call site: only the caller's own store decides whether two positions
+/// already denote one representation, so the policy takes that answer as an
+/// explicit input rather than reading a store. `differ` is the honest answer
+/// whenever the caller has proved nothing.
+pub const ComponentAgreement = enum(u8) {
+    /// Every declared component of the two operands — the public item type and
+    /// the producer's minted components — is already one representation in the
+    /// caller's store.
+    agree,
+    /// At least one declared component still differs in the caller's store.
+    differ,
+};
+
 /// Immutable view of a named type's representation-relevant fields, copied out
 /// of a stage store. The policy never dereferences a store; it reads only
 /// these fields.
@@ -44,11 +70,10 @@ pub const NamedDescriptor = struct {
     def: MonoType.TypeDef,
     /// The exact builtin producer/adapter that owns this representation.
     builtin_owner: ?static_dispatch.BuiltinOwner,
-    /// Number of type arguments; index 0 is the public item type for an
-    /// iterator.
-    arg_count: usize,
-    /// Backing read authority, or null when the type carries no backing.
-    backing_use: ?MonoType.BackingUse,
+    /// The identity the producer is minting this representation under, while
+    /// `def.generated` does not carry one yet. Null on every finished
+    /// representation, whose identity is the recorded `def.generated` digest.
+    minting: ?MintingIdentity = null,
 };
 
 /// The representation-tier relation between two named iterator types. Equal
@@ -100,12 +125,16 @@ pub const IteratorJoin = struct {
 /// Classify the representation-tier relation between two named types. This is
 /// the single source for the tier decision shared by both stages.
 ///
-/// Compatibility requires the same named kind and declared identity, an
-/// iterator builtin owner consistent on both sides, and equal declared item
-/// type at the call site. Generated identity, tier, and mint depth are
-/// explicit descriptor inputs; they are never inferred from backing shape or
-/// names.
-pub fn iteratorTierRelation(left: NamedDescriptor, right: NamedDescriptor) IteratorTierRelation {
+/// Compatibility requires the same named kind and declared identity and an
+/// iterator builtin owner consistent on both sides. Generated identity, kind,
+/// tier, and mint depth are explicit descriptor inputs and `components` is the
+/// caller's explicit answer about the operands' shared component types; none of
+/// them is inferred from backing shape or names.
+pub fn iteratorTierRelation(
+    left: NamedDescriptor,
+    right: NamedDescriptor,
+    components: ComponentAgreement,
+) IteratorTierRelation {
     if (left.kind != right.kind) return .ordinary;
     if (left.def.module != right.def.module or
         left.def.type_name != right.def.type_name or
@@ -127,11 +156,30 @@ pub fn iteratorTierRelation(left: NamedDescriptor, right: NamedDescriptor) Itera
     }
     if (left_representation == .minted and
         right_representation == .minted and
-        !optionalDigestEql(left.def.generated, right.def.generated))
+        !sameMintedRepresentation(left, right, components))
     {
         return .minted_join;
     }
     return .ordinary;
+}
+
+/// Whether two minted representations of one iterator declaration are the same
+/// representation. The recorded `def.generated` digest decides for finished
+/// representations; when neither side records a different one, the producer's
+/// stated minting identity decides, and two minting identities denote one
+/// representation only under the same callable evidence, the same producer
+/// iterator kind, and components the caller proved equal.
+fn sameMintedRepresentation(
+    left: NamedDescriptor,
+    right: NamedDescriptor,
+    components: ComponentAgreement,
+) bool {
+    if (!optionalDigestEql(left.def.generated, right.def.generated)) return false;
+    const left_minting = left.minting orelse return right.minting == null;
+    const right_minting = right.minting orelse return false;
+    return optionalDigestEql(left_minting.callable_evidence, right_minting.callable_evidence) and
+        left.def.iterator_kind == right.def.iterator_kind and
+        components == .agree;
 }
 
 /// The full join outcome for a pair of named descriptors. Returns
@@ -143,11 +191,17 @@ pub fn iteratorTierRelation(left: NamedDescriptor, right: NamedDescriptor) Itera
 ///   minted);
 /// - `forced_dynamic` keeps the forced-dynamic side (both directions collapse
 ///   to forced dynamic);
-/// - `minted_join` keeps the iterator-owner side, preferring the left operand
-///   when both are iterator owners, so distinct minted owners join under one
-///   declared owner without dropping a step implementation.
-pub fn iteratorJoin(left: NamedDescriptor, right: NamedDescriptor) IteratorJoin {
-    const relation = iteratorTierRelation(left, right);
+/// - `minted_join` keeps the side that still states a minting identity, since
+///   only that side can still be finalized to the dynamic fixed point, and
+///   otherwise the iterator-owner side, preferring the left operand when both
+///   are iterator owners, so distinct minted owners join under one declared
+///   owner without dropping a step implementation.
+pub fn iteratorJoin(
+    left: NamedDescriptor,
+    right: NamedDescriptor,
+    components: ComponentAgreement,
+) IteratorJoin {
+    const relation = iteratorTierRelation(left, right, components);
     return switch (relation) {
         .ordinary => .{
             .relation = .ordinary,
@@ -169,7 +223,7 @@ pub fn iteratorJoin(left: NamedDescriptor, right: NamedDescriptor) IteratorJoin 
         },
         .minted_join => .{
             .relation = .minted_join,
-            .representative = mintedOwnerRepresentative(left),
+            .representative = mintedRepresentative(left, right),
             .relate_item = true,
             .relate_backing = .relate_pair,
         },
@@ -218,7 +272,10 @@ pub const NominalBackingEdge = enum(u8) {
     runtime_layout,
 };
 
-fn mintedOwnerRepresentative(left: NamedDescriptor) Representative {
+fn mintedRepresentative(left: NamedDescriptor, right: NamedDescriptor) Representative {
+    const left_minting = left.minting != null;
+    const right_minting = right.minting != null;
+    if (left_minting != right_minting) return if (left_minting) .left else .right;
     const owner = left.builtin_owner orelse return .right;
     return if (static_dispatch.isIteratorOwner(owner)) .left else .right;
 }
@@ -248,7 +305,7 @@ test "public and minted iterators collapse to the minted side, backings kept sep
     const left = testDescriptor(.{ .representation = .none });
     const right = testDescriptor(.{ .representation = .minted, .generated = 0x11 });
 
-    const join = iteratorJoin(left, right);
+    const join = iteratorJoin(left, right, .differ);
     try std.testing.expectEqual(IteratorTierRelation.public_minted, join.relation);
     try std.testing.expectEqual(Representative.right, join.representative);
     try std.testing.expect(join.relate_item);
@@ -256,7 +313,7 @@ test "public and minted iterators collapse to the minted side, backings kept sep
 
     // The relation is symmetric in classification and picks the minted side
     // regardless of operand order.
-    const swapped = iteratorJoin(right, left);
+    const swapped = iteratorJoin(right, left, .differ);
     try std.testing.expectEqual(IteratorTierRelation.public_minted, swapped.relation);
     try std.testing.expectEqual(Representative.left, swapped.representative);
 }
@@ -265,13 +322,13 @@ test "forced dynamic meets minted, forced-dynamic side stands, step callable flo
     const dynamic = testDescriptor(.{ .representation = .forced_dynamic });
     const minted = testDescriptor(.{ .representation = .minted, .generated = 0x22 });
 
-    const join = iteratorJoin(dynamic, minted);
+    const join = iteratorJoin(dynamic, minted, .differ);
     try std.testing.expectEqual(IteratorTierRelation.forced_dynamic, join.relation);
     try std.testing.expectEqual(Representative.left, join.representative);
     try std.testing.expect(join.relate_item);
     try std.testing.expectEqual(BackingFollowUp.step_callable_flow, join.relate_backing);
 
-    const swapped = iteratorJoin(minted, dynamic);
+    const swapped = iteratorJoin(minted, dynamic, .differ);
     try std.testing.expectEqual(Representative.right, swapped.representative);
 }
 
@@ -279,7 +336,7 @@ test "distinct minted owners join under the iterator owner and relate backings" 
     const list = testDescriptor(.{ .representation = .minted, .generated = 0x33 });
     const concat = testDescriptor(.{ .representation = .minted, .generated = 0x44 });
 
-    const join = iteratorJoin(list, concat);
+    const join = iteratorJoin(list, concat, .differ);
     try std.testing.expectEqual(IteratorTierRelation.minted_join, join.relation);
     try std.testing.expectEqual(Representative.left, join.representative);
     try std.testing.expect(join.relate_item);
@@ -288,11 +345,60 @@ test "distinct minted owners join under the iterator owner and relate backings" 
 
 test "equal minted identity and unrelated types are ordinary" {
     const one = testDescriptor(.{ .representation = .minted, .generated = 0x55 });
-    try std.testing.expectEqual(IteratorTierRelation.ordinary, iteratorTierRelation(one, one));
+    try std.testing.expectEqual(IteratorTierRelation.ordinary, iteratorTierRelation(one, one, .agree));
 
     var other = testDescriptor(.{ .representation = .minted, .generated = 0x55 });
     other.def.type_name = @enumFromInt(999);
-    try std.testing.expectEqual(IteratorTierRelation.ordinary, iteratorTierRelation(one, other));
+    try std.testing.expectEqual(IteratorTierRelation.ordinary, iteratorTierRelation(one, other, .agree));
+}
+
+test "two representations under one minting identity are the same representation" {
+    const left = testDescriptor(.{ .representation = .minted, .minting = 0x66 });
+    const right = testDescriptor(.{ .representation = .minted, .minting = 0x66 });
+
+    // Same callable evidence, same producer kind, components the caller proved
+    // equal: one representation, so ordinary named handling relates it.
+    try std.testing.expectEqual(
+        IteratorTierRelation.ordinary,
+        iteratorTierRelation(left, right, .agree),
+    );
+    // The same pair over components the caller has not proved equal is two
+    // representations of one declaration, which join.
+    try std.testing.expectEqual(
+        IteratorTierRelation.minted_join,
+        iteratorTierRelation(left, right, .differ),
+    );
+
+    // Different callable evidence is two representations whatever the
+    // components do.
+    const other_evidence = testDescriptor(.{ .representation = .minted, .minting = 0x77 });
+    try std.testing.expectEqual(
+        IteratorTierRelation.minted_join,
+        iteratorTierRelation(left, other_evidence, .agree),
+    );
+
+    // So is a different producer kind.
+    var other_kind = right;
+    other_kind.def.iterator_kind = .concat;
+    try std.testing.expectEqual(
+        IteratorTierRelation.minted_join,
+        iteratorTierRelation(left, other_kind, .agree),
+    );
+}
+
+test "a minting identity and a recorded identity are different representations" {
+    const minting = testDescriptor(.{ .representation = .minted, .minting = 0x88 });
+    const recorded = testDescriptor(.{ .representation = .minted, .generated = 0x99 });
+
+    const join = iteratorJoin(minting, recorded, .agree);
+    try std.testing.expectEqual(IteratorTierRelation.minted_join, join.relation);
+    // Only the still-minting side can still be finalized, so it stands in both
+    // operand orders.
+    try std.testing.expectEqual(Representative.left, join.representative);
+    try std.testing.expectEqual(
+        Representative.right,
+        iteratorJoin(recorded, minting, .agree).representative,
+    );
 }
 
 test "generated evidence backing selection is score-directed with a left-operand tie rule" {
@@ -314,6 +420,7 @@ test "iterator owners are excluded from score selection" {
 const TestDescriptorOptions = struct {
     representation: MonoType.IteratorRepresentation,
     generated: ?u8 = null,
+    minting: ?u8 = null,
     builtin_owner: ?static_dispatch.BuiltinOwner = .iter,
 };
 
@@ -327,11 +434,14 @@ fn testDescriptor(options: TestDescriptorOptions) NamedDescriptor {
     if (options.generated) |byte| {
         def.generated = .{ .bytes = [_]u8{byte} ** 32 };
     }
+    if (options.minting != null) def.iterator_kind = .list;
     return .{
         .kind = .@"opaque",
         .def = def,
         .builtin_owner = options.builtin_owner,
-        .arg_count = 1,
-        .backing_use = .inspectable,
+        .minting = if (options.minting) |byte|
+            .{ .callable_evidence = .{ .bytes = [_]u8{byte} ** 32 } }
+        else
+            null,
     };
 }

@@ -41,6 +41,13 @@ const InstNamed = solve.InstNamed;
 /// nominal wrappers, box/list) are shallow; this only bounds pathological input.
 const max_slot_depth: u32 = 64;
 
+/// The maximum number of producer-minted components the mirror models on one
+/// iterator slot. A generated iterator declares its item plus the components
+/// its producer minted it over; the deepest adapter chain the producer builds
+/// stays far inside this, and an operand past it disables the mirror rather
+/// than modelling an iterator whose identity inputs are incomplete.
+const max_modelled_components: usize = 16;
+
 /// The rule a mirrored relation cited, remembered per participating node so the
 /// seal comparison can tag its match/mismatch by rule.
 const SiteRule = enum {
@@ -178,6 +185,27 @@ pub const RepresentationMirror = struct {
     pub fn evidenceSelection(self: *RepresentationMirror, left: NodeId, right: NodeId) void {
         if (self.disabled) return;
         self.relateNodes(left, right, .generated_evidence_selection, .generated_evidence_selection);
+    }
+
+    /// Mirror the producer's own representation decision for one generated
+    /// iterator: the graph decides each minted chain's depth and selects the
+    /// forced-dynamic fixed point where the chain does not terminate. Section
+    /// 10.1 owns that as a producer decision rather than a rule of the relation,
+    /// so the engine takes the finalized representation as a declared input at
+    /// the position the graph placed it, and its declared tier order refuses any
+    /// move back down.
+    pub fn producerFinalizedRepresentation(self: *RepresentationMirror, node: NodeId) void {
+        if (self.disabled) return;
+        const root = self.graph.rootNode(node);
+        const slot = self.node_slots.get(root) orelse return;
+        const named = switch (self.graph.content(root)) {
+            .named => |named| named,
+            else => return,
+        };
+        self.engine.adoptProducerRepresentation(slot, solve.instDescriptor(named)) catch |err| switch (err) {
+            error.NotAProducerRepresentation => census.bump("representation_mirror_adopt_rejected"),
+            error.TierMovedDown => census.bump("representation_mirror_adopt_rejected"),
+        };
     }
 
     fn relateNodes(
@@ -396,10 +424,12 @@ pub const RepresentationMirror = struct {
                 (self.slotForNode(backing_node.node, depth + 1) orelse return null)
             else
                 (self.placeholderBacking() orelse return null);
+            const components = self.componentSlots(named.args[1..], depth) orelse return null;
             return .{ .iterator = .{
-                .descriptor = descriptorOf(named),
+                .descriptor = solve.instDescriptor(named),
                 .item = item,
                 .backing = backing,
+                .components = components,
             } };
         }
         if (owner != null and owner.? == .fields and named.backing != null) {
@@ -418,6 +448,24 @@ pub const RepresentationMirror = struct {
         }
         const token = self.tokenForNode(root) orelse return null;
         return .{ .leaf = @intFromEnum(token) };
+    }
+
+    /// Build one engine slot per producer-minted component of an iterator (its
+    /// declared type arguments after the public item) and hand them to the
+    /// engine. These are the components the graph's own identity test walks, so
+    /// modelling them is what lets the engine answer the policy's component
+    /// question the same way the graph does.
+    fn componentSlots(
+        self: *RepresentationMirror,
+        component_nodes: []const NodeId,
+        depth: u32,
+    ) ?closure.ComponentSpan {
+        var slots: [max_modelled_components]closure.RepresentationSlotId = undefined;
+        if (component_nodes.len > slots.len) return null;
+        for (component_nodes, 0..) |component, index| {
+            slots[index] = self.slotForNode(component, depth + 1) orelse return null;
+        }
+        return self.engine.recordComponents(slots[0..component_nodes.len]) catch null;
     }
 
     fn freshLeaf(self: *RepresentationMirror, root: NodeId) ?closure.RepresentationSlotId {
@@ -493,18 +541,6 @@ pub const RepresentationMirror = struct {
         self.disabled = true;
     }
 };
-
-/// The immutable descriptor the shared policy reads, copied out of a graph named
-/// node exactly as the graph's own adapter does.
-fn descriptorOf(named: InstNamed) policy.NamedDescriptor {
-    return .{
-        .kind = named.kind,
-        .def = named.def,
-        .builtin_owner = named.builtin_owner,
-        .arg_count = named.args.len,
-        .backing_use = if (named.backing) |backing| backing.use else null,
-    };
-}
 
 /// Whether the engine's sealed iterator descriptor agrees with the graph node's
 /// final representation content across every representation field the flip must

@@ -64,6 +64,7 @@ my $DTRAN = 'src/postcheck/monotype/direct_translate.zig';
 my $RMIRR = 'src/postcheck/monotype/representation_mirror.zig';
 my $FSID  = 'src/postcheck/monotype/final_spec_id.zig';
 my $SREH  = 'src/postcheck/monotype/spec_rehearsal.zig';
+my $MTYPE = 'src/postcheck/monotype/type.zig';
 
 # Every category scans all .zig files under src/postcheck. `exempt` lists
 # path prefixes whose matches are intentionally outside the manifest.
@@ -89,6 +90,26 @@ my @categories = (
             # $RMIRR's two `.unify(` calls are in the Stage B mirror tests, which
             # drive the graph's join path so the shadow reflects it; they delete
             # with the shadow at the flip.
+            #
+            # Every one of $LOWER's 42 has a `census.UnifySite` identity
+            # (reunify.md sections 9, 13 Slice 7), so the constraint-replay table
+            # states the whole surface rather than the part that happens to carry
+            # a hook. The mapping is not one member per call: 7 of the 42 sit
+            # inside the shared relaters `relateFunctionRequestInterface`,
+            # `relateRequestComponent` and `relateCheckedMonoRequestNodeAt`,
+            # which state a relation named at their own call sites (the
+            # `request_component_*`, `function_request_interface_*` and
+            # `checked_mono_request_*` members), and 1 is a unit test. One call
+            # carries two members, because `constrainTypeToCellAt` states both a
+            # general checked-to-cell relation and the record-field read.
+            #
+            # $SOLVE's 19 are not constraint-replay sites: 11 are unit tests and
+            # the other 8 are steps inside the unifier itself
+            # (`unifyRecursiveFunctionInterface`,
+            # `finalizeGeneratedIteratorRepresentations`,
+            # `relateOpaqueInterfacePair`, `relateOpaqueChild`,
+            # `unifyRowWithEmpty`), reached only while executing a relation a
+            # $LOWER site already named. They delete with the unifier.
             { label => '.unify(', re => qr/\.unify\(/,
               counts => { $SOLVE => 19, $LOWER => 42, $RMIRR => 2 } },
             { label => 'unifyRoots', re => qr/\bunifyRoots\b/,
@@ -107,6 +128,32 @@ my @categories = (
               counts => { $SOLVE => 11 } },
             { label => 'writeOrQueueRecordRest', re => qr/\bwriteOrQueueRecordRest\b/,
               counts => { $SOLVE => 11 } },
+        ],
+    },
+    {
+        # The constraint-replay census (reunify.md sections 9, 13 Slice 7). The
+        # `.unify(` pins above say how many relations body lowering still
+        # replays; these pins say how many of them are measured. Both must move
+        # together: when origin/main funnelled body lowering's relations through
+        # shared relaters, the `.unify(` pins were re-taken while the hooks were
+        # not, and 45 of 53 declared sites silently lost their only hook, so the
+        # table read as "every execution redundant" over a tenth of the surface.
+        # Pinning the hook counts makes that failure a gate failure.
+        #
+        # `measureUnifySite` is the two-sided measurement (one definition in
+        # $SREH, one forwarding definition plus its call sites in $LOWER);
+        # `noteUnifySite` is the same measurement for a site whose two sides are
+        # both graph nodes; `noteUnifyConstruction` is the node-building class.
+        # All three delete with the rehearsal at the flip.
+        name    => 'constraint-replay-census',
+        exempt  => [],
+        patterns => [
+            { label => 'measureUnifySite', re => qr/\bmeasureUnifySite\b/,
+              counts => { $LOWER => 44, $SREH => 1 } },
+            { label => 'noteUnifySite', re => qr/\bnoteUnifySite\b/,
+              counts => { $LOWER => 14 } },
+            { label => 'noteUnifyConstruction', re => qr/\bnoteUnifyConstruction\b/,
+              counts => { $LOWER => 4, $SREH => 1 } },
         ],
     },
     {
@@ -216,13 +263,14 @@ my @categories = (
         # descriptors; the closure `relate` sites are the engine's own recursion
         # plus its direct tests (the engine is not yet wired into production).
         #
-        # The two production stages classify representation relations through
-        # `Type.iteratorRelation` and backing authority, not through this
-        # policy: the graph refines the classification with generated-iterator
-        # provenance the policy's descriptors cannot see, and named backings are
-        # selected by producer authority rather than by score. The policy is now
-        # the descriptor-only statement of the rules that the closure engine and
-        # the rehearsal read, so $SOLVE and $LS no longer appear below.
+        # Both production stages classify representation relations through this
+        # policy. `Type.iteratorRelation` in $MTYPE is the adapter that finished
+        # named types reach it through, and Lambda Solved classifies through
+        # that adapter; $SOLVE builds its own descriptors because the graph also
+        # holds representations its producer has not sealed yet, and states each
+        # one's minting identity and its own component answer. Named backings
+        # are still selected by producer authority rather than by score, which
+        # is why the evidence-selection pins below stay off $SOLVE and $LS.
         name    => 'representation-policy',
         exempt  => [],
         patterns => [
@@ -231,10 +279,14 @@ my @categories = (
             # shared policy whether it declares a relation for the pair, so the
             # site is classified as a section 10 decision only where that policy
             # covers it. It deletes with the rehearsal at the flip.
+            # $MTYPE holds the adapter every finished named type reaches the
+            # policy through, and $SOLVE the graph's own call for the
+            # representations it is still minting; both stay past the flip
+            # because the tier relation is section 10's, not logical solving's.
             { label => 'iteratorTierRelation', re => qr/\biteratorTierRelation\b/,
-              counts => { $RPOL => 4, $RCLO => 1, $SREH => 1 } },
+              counts => { $RPOL => 8, $RCLO => 1, $SREH => 1, $MTYPE => 1, $SOLVE => 1 } },
             { label => 'iteratorJoin', re => qr/\biteratorJoin\b/,
-              counts => { $RPOL => 7, $RCLO => 2 } },
+              counts => { $RPOL => 9, $RCLO => 2 } },
             { label => 'chooseGeneratedEvidenceBacking', re => qr/\bchooseGeneratedEvidenceBacking\b/,
               counts => { $RPOL => 4, $RCLO => 2 } },
             # $SREH (Slice 7 flip-prep step b): the per-specialization rehearsal
@@ -267,7 +319,7 @@ my @categories = (
             # binding, which is that specialization's representation interface
             # edge (reunify.md 10.3, 11.1). It deletes with the rehearsal.
             { label => 'relate(', re => qr/\brelate\(/,
-              counts => { $RCLO => 17, $RSHAD => 1, $RMIRR => 1, $FSID => 1, $SREH => 1 } },
+              counts => { $RCLO => 18, $RSHAD => 1, $RMIRR => 1, $FSID => 1, $SREH => 1 } },
             { label => 'relateNominalBacking', re => qr/\brelateNominalBacking\b/,
               counts => { $RCLO => 4 } },
         ],

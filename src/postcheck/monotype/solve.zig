@@ -17,6 +17,7 @@ const Common = @import("../common.zig");
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
 const census = @import("census.zig");
+const policy = @import("../representation_policy.zig");
 const representation_mirror = @import("representation_mirror.zig");
 const spec_rehearsal = @import("spec_rehearsal.zig");
 
@@ -628,6 +629,7 @@ pub const InstGraph = struct {
                 named.def.iterator_depth = item.depth;
                 try self.setContent(node, .{ .named = named });
             }
+            if (self.mirror) |mirror| mirror.producerFinalizedRepresentation(node);
         }
     }
 
@@ -2903,31 +2905,23 @@ pub const InstGraph = struct {
         };
     }
 
+    /// Classify a named pair through the shared representation policy
+    /// (reunify.md section 10.3). The graph holds representations its producer
+    /// has not sealed yet, so it states each operand's minting identity and its
+    /// own answer to the policy's component question; the rule itself lives in
+    /// exactly one place.
     fn iteratorRelation(self: *InstGraph, left: InstNamed, right: InstNamed) Type.IteratorRelation {
-        const base_relation = Type.iteratorRelation(left, right);
-        if (base_relation != .ordinary) return base_relation;
-        if (left.def.iterator_representation != .minted or right.def.iterator_representation != .minted) {
-            return .ordinary;
-        }
-        if (left.kind != right.kind or
-            left.def.module != right.def.module or
-            left.def.type_name != right.def.type_name or
-            left.def.source_decl != right.def.source_decl or
-            !instIteratorOwnerPair(left.builtin_owner, right.builtin_owner))
-        {
-            return .ordinary;
-        }
-        if (left.generated_iterator != null or right.generated_iterator != null) {
-            if (left.generated_iterator == null or right.generated_iterator == null) return .minted_join;
-            if (!optionalInstDigestEql(
-                left.generated_iterator.?.callable_evidence,
-                right.generated_iterator.?.callable_evidence,
-            )) return .minted_join;
-            if (left.def.iterator_kind != right.def.iterator_kind or
-                !self.sameNamedArgs(left.args, right.args)) return .minted_join;
-            return .ordinary;
-        }
-        return Type.iteratorRelation(left, right);
+        // The policy reads component agreement only between two minted
+        // representations, and answering it walks both argument lists, so the
+        // walk runs for that pair shape alone.
+        const components: policy.ComponentAgreement = if (left.def.iterator_representation == .minted and
+            right.def.iterator_representation == .minted and
+            self.sameNamedArgs(left.args, right.args)) .agree else .differ;
+        return policy.iteratorTierRelation(
+            instDescriptor(left),
+            instDescriptor(right),
+            components,
+        );
     }
 
     /// A named type met a structurally different type. Aliases are transparent
@@ -3588,6 +3582,15 @@ pub const InstGraph = struct {
         return try snapshot.sealNode(self.find(node));
     }
 
+    /// The exact immutable Monotype this node was imported from, or null when
+    /// the graph imported none at it. Debug-only measurement reads it to name a
+    /// graph node in the terms directed translation reads: a node an import
+    /// created stands for that immutable type and nothing else (reunify.md
+    /// sections 9, 13 Slice 7). Nothing in lowering selects behavior from it.
+    pub fn importedMonoAtNode(self: *const InstGraph, node: NodeId) ?Type.TypeId {
+        return self.imported_monos.get(node);
+    }
+
     /// Materialize a read-only Monotype-shaped view of a fully resolved graph
     /// node. Open rows and unresolved checked variables have no TypeId view:
     /// callers must continue to use their graph nodes until explicit evidence
@@ -4038,15 +4041,21 @@ pub const GraphTypeFinals = struct {
     }
 };
 
-fn instIteratorOwnerPair(
-    left: ?static_dispatch.BuiltinOwner,
-    right: ?static_dispatch.BuiltinOwner,
-) bool {
-    const owner = left orelse right orelse return false;
-    if (!static_dispatch.isIteratorOwner(owner)) return false;
-    if (left) |left_owner| if (left_owner != owner) return false;
-    if (right) |right_owner| if (right_owner != owner) return false;
-    return true;
+/// The immutable descriptor the shared representation policy reads, copied out
+/// of a graph named node. A node whose representation this graph is still
+/// minting has no recorded `def.generated` digest yet, so its graph-owned
+/// provenance supplies the minting identity the policy classifies by
+/// (reunify.md section 10.3).
+pub fn instDescriptor(named: InstNamed) policy.NamedDescriptor {
+    return .{
+        .kind = named.kind,
+        .def = named.def,
+        .builtin_owner = named.builtin_owner,
+        .minting = if (named.generated_iterator) |provenance|
+            .{ .callable_evidence = provenance.callable_evidence }
+        else
+            null,
+    };
 }
 
 fn optionalInstDigestEql(left: ?names.TypeDigest, right: ?names.TypeDigest) bool {

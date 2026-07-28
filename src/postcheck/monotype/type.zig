@@ -9,6 +9,7 @@ const collections = @import("collections");
 
 const Common = @import("../common.zig");
 const census = @import("census.zig");
+const policy = @import("../representation_policy.zig");
 const names = check.CheckedNames;
 const checked = check.CheckedModule;
 const static_dispatch = check.StaticDispatchRegistry;
@@ -120,58 +121,32 @@ pub const IteratorKind = enum(u8) {
 };
 
 /// Exceptional relation between two named iterator types. Equal identities
-/// and unrelated named types use ordinary named-type unification.
-pub const IteratorRelation = enum(u8) {
-    ordinary,
-    public_minted,
-    forced_dynamic,
-    minted_join,
-};
+/// and unrelated named types use ordinary named-type unification. This is the
+/// shared policy's tier relation under the name Monotype callers use.
+pub const IteratorRelation = policy.IteratorTierRelation;
 
-/// Classifies the representation-tier relation shared by Monotype
-/// instantiation and Lambda Solved unification.
+/// Classifies the representation-tier relation between two finished named
+/// types by asking the shared policy (reunify.md section 10.3). Every operand
+/// here carries its recorded generated identity in `def.generated`, so neither
+/// side states a minting identity and the components question the policy asks
+/// about still-minting representations does not arise; a caller holding
+/// representations its producer has not sealed yet builds descriptors itself
+/// and calls the policy directly.
 pub fn iteratorRelation(left: anytype, right: anytype) IteratorRelation {
-    if (left.kind != right.kind) return .ordinary;
-    if (left.def.module != right.def.module or
-        left.def.type_name != right.def.type_name or
-        left.def.source_decl != right.def.source_decl)
-    {
-        return .ordinary;
-    }
-    if (!iteratorOwnerPair(left.builtin_owner, right.builtin_owner)) return .ordinary;
-
-    const left_representation = left.def.iterator_representation;
-    const right_representation = right.def.iterator_representation;
-    if ((left_representation == .forced_dynamic) != (right_representation == .forced_dynamic)) {
-        return .forced_dynamic;
-    }
-    if ((left_representation == .minted and right_representation == .none) or
-        (left_representation == .none and right_representation == .minted))
-    {
-        return .public_minted;
-    }
-    if (left_representation == .minted and
-        right_representation == .minted and
-        !optionalDigestEql(left.def.generated, right.def.generated))
-    {
-        return .minted_join;
-    }
-    return .ordinary;
+    return policy.iteratorTierRelation(
+        recordedDescriptor(left),
+        recordedDescriptor(right),
+        .differ,
+    );
 }
 
-fn iteratorOwnerPair(
-    left: ?static_dispatch.BuiltinOwner,
-    right: ?static_dispatch.BuiltinOwner,
-) bool {
-    const owner = left orelse right orelse return false;
-    if (!static_dispatch.isIteratorOwner(owner)) return false;
-    if (left) |left_owner| {
-        if (left_owner != owner) return false;
-    }
-    if (right) |right_owner| {
-        if (right_owner != owner) return false;
-    }
-    return true;
+fn recordedDescriptor(named: anytype) policy.NamedDescriptor {
+    return .{
+        .kind = named.kind,
+        .def = named.def,
+        .builtin_owner = named.builtin_owner,
+        .minting = null,
+    };
 }
 
 /// Named checked type instance.

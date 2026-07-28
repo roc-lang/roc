@@ -1287,8 +1287,6 @@ const MonoWalk = struct {
                         .kind = n.kind,
                         .def = n.def,
                         .builtin_owner = n.builtin_owner,
-                        .arg_count = args.items.len,
-                        .backing_use = if (n.backing) |backing| backing.use else null,
                     },
                     .item_logical = if (args.items.len > 0) args.items[0] else skeleton,
                 });

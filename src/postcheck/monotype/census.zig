@@ -22,24 +22,98 @@ pub const enabled = builtin.mode == .Debug and
 const Counter = std.atomic.Value(u64);
 
 /// Every constraint-replay site in Monotype body lowering (reunify.md sections
-/// 9, 13 Slice 7): one member per `graph.unify` call the flip deletes, named by
-/// the function it sits in and the relation it states. The identifiers are
-/// stable, so a corpus table reads per site rather than only in total. The
-/// question each site answers is whether its two sides are ALREADY the same type
-/// under directed translation — a site that is, is a call the flip can simply
-/// delete; a site that is not, is a place the flip must supply the information
-/// the unify carried.
+/// 9, 13 Slice 7). Body lowering states most of its type relations through four
+/// shared relaters — `relateRequestComponent`, `relateFunctionRequestInterface`,
+/// `checkedMonoRequestNode` and its walk `relateCheckedMonoRequestNodeAt` — and
+/// states the rest as a bare `graph.unify`. A relater carries several distinct
+/// relations, so it gets one member per relation rather than one member for the
+/// relater, and each member is named by the relater that carries the relation
+/// plus the relation it states. The identifiers are stable, so a corpus table
+/// reads per site rather than only in total.
+///
+/// The question each site answers is whether its two sides are ALREADY the same
+/// type under directed translation — a site that is, is a relation the flip can
+/// simply delete; a site that is not, is a place the flip must supply the
+/// information the relation carried.
 pub const UnifySite = enum {
-    /// `lowerTemplateWithMonoFor`: the requesting graph adopts the callee's
-    /// sealed function type.
-    template_requester_adopts_solved,
-    /// `unifyRequestWithLocalHit`: the requested type joins the record view that
-    /// matched, and then that record's solved type.
-    request_local_hit_match,
-    request_local_hit_solved,
-    /// `lowerNestedFunctionRequest`: the nested function's checked root joins the
-    /// requester's view of the requested Monotype.
-    nested_root_to_request_view,
+    // --- Relations `relateRequestComponent` carries ---
+
+    /// `unifyFormalWithCallerArgNode`: a callee formal joins the caller's own
+    /// checked argument position.
+    request_component_call_arg_formal_to_actual,
+    /// `instantiateCallNodeFromCallerAtNode`: a callee formal joins the public
+    /// interface of an argument whose evidence is generated-private.
+    request_component_call_arg_formal_to_public_evidence,
+    /// `instantiateCallNodeFromCallerAtNode`: a callee formal joins the exact
+    /// producer evidence the caller's argument expression lowered to.
+    request_component_call_arg_formal_to_evidence,
+    /// `instantiateCallNodeFromCallerAtNode`: the callee's checked return joins
+    /// the caller's checked result position.
+    request_component_call_ret_callee_to_caller,
+    /// `instantiateCallableDispatchPlanCallNodeFromCallerAtNode`: the plan's
+    /// dispatcher position joins the callee formal it dispatches on.
+    request_component_dispatch_receiver_to_formal,
+    /// `instantiateCallableDispatchPlanCallNodeFromCallerAtNode`: a callee
+    /// formal joins the caller's own checked operand position.
+    request_component_dispatch_arg_formal_to_actual,
+    /// `instantiateCallableDispatchPlanCallNodeFromCallerAtNode`: a callee
+    /// formal joins the public interface of a generated-private operand.
+    request_component_dispatch_arg_formal_to_public_evidence,
+    /// `instantiateCallableDispatchPlanCallNodeFromCallerAtNode`: a callee
+    /// formal joins the exact producer evidence its operand lowered to.
+    request_component_dispatch_arg_formal_to_evidence,
+    /// `instantiateCallableDispatchPlanCallNodeFromCallerAtNode`: the callee's
+    /// checked return joins the caller's checked result position.
+    request_component_dispatch_ret_callee_to_caller,
+    /// `relateFormalToOperand`: a numeral plan's callee formal joins the
+    /// caller's checked operand position.
+    request_component_numeral_formal_to_operand,
+    /// `instantiateIteratorPlanCallNodeFromCaller`: an iterator plan's callee
+    /// formal joins the caller's checked operand position.
+    request_component_iterator_formal_to_actual,
+    /// `fieldAccessTypeNode`: the field read joins the Monotype the request
+    /// expects at that position.
+    request_component_field_access_to_expected,
+
+    // --- Relations `relateFunctionRequestInterface` carries ---
+
+    /// `instantiateTargetFromPlanNode`: the dispatch target's checked function
+    /// interface joins the dispatch plan's.
+    function_request_interface_target_to_plan,
+
+    // --- Relations `checkedMonoRequestNode` carries ---
+
+    /// `instantiateCallNodeFromCallerAtNode`: the callee's checked return is
+    /// related to the Monotype the request expects.
+    checked_mono_request_call_ret_to_expected,
+    /// `instantiateTargetCallNodeFromMonoArgs`, per formal and for the return.
+    checked_mono_request_target_formal_to_mono_arg,
+    checked_mono_request_target_ret_to_mono,
+    /// `instantiateTargetCallNodeFromMonoArgAtIndex`: the formal at the
+    /// requested index is related to the Monotype supplied for it.
+    checked_mono_request_target_indexed_formal_to_mono_arg,
+    /// `instantiateIteratorPlanCallNodeFromCaller`: the caller's checked
+    /// argument position is related to the exact producer evidence it lowered
+    /// to, the loop's iterator state is related to its callee formal, and the
+    /// callee's checked return is related to the expected Monotype.
+    checked_mono_request_iterator_arg_to_evidence,
+    checked_mono_request_iterator_formal_to_loop_state,
+    checked_mono_request_iterator_ret_to_expected,
+
+    // --- Relations stated as a bare `graph.unify` ---
+
+    /// `lowerDraftTemplateFromContext`: a recursive root request, a repeated
+    /// template request, and a root's own function node each join the request
+    /// function node the use site built.
+    draft_template_recursive_root_to_request,
+    draft_template_spec_to_request,
+    draft_template_root_to_request,
+    /// `lowerDraftNestedFromContext`: a capture anchor joins the nested
+    /// specialization it anchors, a nested specialization joins the request
+    /// function node, and an owned nested root joins its own body's type.
+    draft_nested_capture_anchor_to_spec,
+    draft_nested_spec_to_request,
+    draft_nested_root_to_body,
     /// `constrainTypeToMono` / `constrainTypeToCell` / `constrainCheckedTypeRelations`.
     constrain_checked_to_mono,
     constrain_checked_to_cell,
@@ -48,66 +122,72 @@ pub const UnifySite = enum {
     /// content built for it. Node construction, not a relation between two
     /// independently derived types.
     inst_node_placeholder_to_content,
-    /// `instNominalBackingNode`: the placeholder standing for a nominal's backing
-    /// joins the instantiated declaration backing. Node construction.
+    /// `instNominalDeclarationBackingNode`: the placeholder standing for a
+    /// nominal's backing joins the instantiated declaration backing. Node
+    /// construction.
     inst_nominal_backing_placeholder_to_content,
-    /// `lowerFunctionBody`: the declared return type joins the body's type.
-    body_return_to_body_type,
-    /// `instantiateCallTypeFromCallerAtType`, per argument and per return.
-    call_arg_generated_evidence_snapshot,
-    call_arg_generated_opaque_evidence,
-    call_arg_formal_to_actual,
-    call_arg_formal_to_evidence,
-    call_arg_formal_to_actual_without_evidence,
-    call_ret_generated_override_callee,
-    call_ret_generated_override_caller,
-    call_ret_callee_to_caller_expected,
-    call_ret_callee_to_expected,
-    call_ret_callee_to_caller,
-    /// `instantiateDispatchPlanCallTypeFromCaller`, per operand and per return.
-    dispatch_call_arg_generated_evidence_snapshot,
-    dispatch_call_arg_generated_opaque_evidence,
-    dispatch_call_arg_formal_to_actual,
-    dispatch_call_arg_formal_to_evidence,
-    dispatch_call_arg_formal_to_actual_without_evidence,
-    dispatch_call_ret_generated_override_callee,
-    dispatch_call_ret_generated_override_caller,
-    dispatch_call_ret_callee_to_caller_expected,
-    dispatch_call_ret_callee_to_expected,
-    dispatch_call_ret_callee_to_caller,
-    /// `instantiateDispatchPlanCallNodeFromCaller`.
-    dispatch_node_ret_callee_to_caller,
-    dispatch_node_ret_callee_to_expected,
-    /// `relateFormalToOperand`.
-    formal_operand_generated_evidence_snapshot,
-    formal_operand_generated_opaque_evidence,
-    formal_operand_to_actual,
-    formal_operand_to_evidence,
-    formal_operand_to_actual_without_evidence,
-    /// `instantiateNumeralPlanCallType`.
+    /// `relateCheckedNodeToProducedValueInner`: a checked request position joins
+    /// the runtime value a body produced for it.
+    checked_to_produced_value,
+    /// `lowerExprInner`: a string literal's checked position joins the `Str`
+    /// primitive.
+    str_literal_expr_to_primitive,
+    /// `restoredHoistedConstAtNode`: a hoisted const's checked type joins the
+    /// request node its use site built.
+    hoisted_const_checked_to_request,
+    /// `lowerPendingCallableEvalBindingValueAtNode`: the entry wrapper's checked
+    /// root joins the nullary wrapper function node, and the template's and the
+    /// compile-time root's checked roots each join the request function node.
+    callable_eval_wrapper_root_to_wrapper_fn,
+    callable_eval_template_root_to_request,
+    callable_eval_comptime_root_to_request,
+    /// `instantiateNumeralPlanCallNode`: the caller's and the callee's checked
+    /// results each join the plan's converted target type.
     numeral_caller_ret_to_target,
     numeral_callee_ret_to_target,
-    /// `instantiateTargetCallTypePreservingSourceArgsAndRet`.
-    target_call_ret_to_mono,
-    /// `instantiateTargetCallNodeFromMonoArgs`.
-    target_node_formal_to_mono_arg,
-    target_node_ret_to_mono,
-    /// `instantiateTargetCallTypeFromMonoArgsPreservingArgs`.
-    target_preserving_mono_arg_to_formal,
-    target_preserving_ret_to_mono,
-    /// `instantiateTargetCallTypeFromMonoArgAtIndexAndRet`.
-    target_indexed_formal_to_mono_arg,
-    target_indexed_ret_to_mono,
-    /// `instantiateTargetCallNodeFromMonoArgAtIndex`.
-    target_indexed_node_formal_to_mono_arg,
-    /// `fieldAccessTypeNode`.
+    /// `localCallArgumentEvidenceNode`: a local's own value node joins the
+    /// Monotype the call expects for that argument.
+    local_argument_evidence_to_expected,
+    /// `restoreConstUseAtNode`: an eval-template const use's requested checked
+    /// type joins the request node.
+    const_use_requested_to_request,
+    /// `lowerConstEvalTemplateUseAtNode`: the entry template's checked root
+    /// joins the nullary wrapper function node, and the evaluated body's checked
+    /// type joins the request node.
+    const_eval_entry_root_to_wrapper_fn,
+    const_eval_body_to_request,
+    /// `relateLookupExprAtNode`: the request node joins the looked-up
+    /// expression's checked position.
+    lookup_expr_expected_to_checked,
+    /// `relateExprAtNode`: the request node joins the type the expression
+    /// lowered to, for the forms with no shape-specific relation.
+    expr_expected_to_lowered,
+    /// `relateEvidenceTargetRootToRequest`: a checked dispatch target's root
+    /// joins its live call request.
+    evidence_target_root_to_request,
+    /// `lowerStructuralEqualityAtNode` / `lowerStructuralHashAtNode`: the
+    /// derivation's two operands are one type, and the hasher operand and the
+    /// result are one type.
+    structural_equality_operands_equal,
+    structural_hash_hasher_to_result,
+    /// `constrainStructuralEqualityOperandNode`: an operand node joins the other
+    /// side's checked position, and then the node that side lowered to.
+    structural_equality_operand_to_checked,
+    structural_equality_operand_to_result,
+    /// `relateRecordRestNodeToSource`: each field of a rest row joins the same
+    /// field read off the source record.
+    record_rest_field_to_source_field,
+    /// `recordRestNodeForPattern`: the rest pattern's checked type joins the row
+    /// of the fields its destructs left over.
+    record_rest_pattern_to_row,
+    /// `includeControlFlowResult`: two branches' generated-private results join.
+    control_flow_private_results_join,
+    /// `lowerIteratorOperandAtNode`: the loop's iterator state joins the callee
+    /// formal the `.next` dispatch instantiated for it.
+    iterator_loop_state_to_formal,
+    /// `fieldAccessTypeNode` through `constrainCheckedInterfaceToFieldCell`: the
+    /// field read joins the checked position the access sits at.
     field_access_to_checked,
-    field_access_to_expected,
-    /// `instantiateIteratorPlanCallTypeFromCaller`.
-    iterator_call_formal_to_actual,
-    iterator_call_formal_to_evidence,
-    iterator_call_formal_to_loop_state,
-    iterator_call_ret_to_expected,
 };
 
 /// What one execution of a constraint-replay site contributed.
@@ -171,16 +251,43 @@ pub const UnifySiteInformation = enum {
     unclassified,
 };
 
-/// Why one execution came out `unmeasurable`.
+/// Why one execution came out `unmeasurable`. Every way a directed answer can
+/// be absent has its own member, so an unmeasurable execution always names
+/// which operand had no answer and exactly why.
 pub const UnifySiteBlocker = enum {
     /// No specialization binding environment was active for the operand's
     /// module, so a checked operand carrying binders has no value to take.
     no_environment,
-    /// The operand's checked type left the directed translator's subset.
+    /// The operand's module is not in this lowering input, so no checked store
+    /// holds the position at all.
+    operand_module_absent,
+    /// The remaining members are the directed translator's own skip classes,
+    /// one per `direct_translate.SkipReason`: the operand's checked type left
+    /// the translatable subset at a recursion the walk could not close, an open
+    /// row, a position whose representation content the checked data cannot
+    /// dictate, a pending or erroneous checked type, an unresolved numeric
+    /// default, a builtin whose declared arity did not match, or a nominal
+    /// whose backing the checked data does not carry.
+    operand_recursive,
+    operand_open_row,
+    operand_engine_input_needed,
+    operand_pending_or_err,
+    operand_numeric_default,
+    operand_malformed_arity,
+    operand_missing_backing,
+    /// The translation reported an error rather than a skip, which stops the
+    /// rehearsal; expected zero.
     operand_untranslatable,
     /// The site hands the graph a node with no checked address and no immutable
     /// type behind it, so nothing names what the directed side would compute.
     operand_undescribed,
+    /// The operand is a record field read, and the receiver's own translation
+    /// is not a record — unwrapping named backings did not reach one. The
+    /// receiver translated; the read off it did not.
+    field_receiver_not_a_record,
+    /// The operand is a record field read whose receiver translated to a
+    /// record that carries no such label.
+    field_label_absent,
 };
 
 /// What one measured operand is. The empty tag union is the stored shape both
@@ -306,6 +413,14 @@ pub const Census = struct {
 
     direct_probe_population: Counter = Counter.init(0),
     direct_stored_match: Counter = Counter.init(0),
+    /// A root whose two stored forms are the same rooted graph reached through
+    /// different entry paths: their unfoldings agree while their stored digests
+    /// encode the recursive back reference at different visiting-stack
+    /// positions (reunify.md section 8.3). This is the probe's copy of the
+    /// rehearsal's `rehearsal_type_equal_under_rerooting` class, so the
+    /// required-zero `direct_stored_mismatch_logical` counts only content
+    /// differences.
+    direct_stored_equal_under_rerooting: Counter = Counter.init(0),
     direct_stored_mismatch: Counter = Counter.init(0),
     direct_stored_mismatch_representation: Counter = Counter.init(0),
     direct_stored_mismatch_logical: Counter = Counter.init(0),
@@ -362,6 +477,12 @@ pub const Census = struct {
     // graph only relates logically-equal nodes at these sites, a rejection is a
     // mirror-side token or slot-shape imprecision, recorded rather than asserted.
     representation_mirror_relate_rejected: Counter = Counter.init(0),
+    // The engine refused a representation the producer finalized at a mirrored
+    // position, because that position's slot models no producer representation
+    // or the incoming tier sits below the one the class already carries. Like a
+    // refused relate, this is mirror-side slot-shape imprecision and is recorded
+    // rather than asserted.
+    representation_mirror_adopt_rejected: Counter = Counter.init(0),
     // The sanctioned nominal-backing relation (two equal-identity nominals whose
     // backings the graph relates) mirrored into the engine as a component
     // equality of the two nominal wrappers. Counts the applied relations.
@@ -858,6 +979,33 @@ pub fn bumpUnifySiteResidual(
     _ = unify_site_residual_states[@intFromEnum(site)][@intFromEnum(state)].fetchAdd(1, .monotonic);
 }
 
+/// Append one formatted fragment of the dump to `out`.
+fn appendCounterLine(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    comptime format: []const u8,
+    args: anytype,
+) std.mem.Allocator.Error!void {
+    const text = try std.fmt.allocPrint(allocator, format, args);
+    defer allocator.free(text);
+    try out.appendSlice(allocator, text);
+}
+
+/// Append one `name=value` column per member of a classification enum, in
+/// declaration order, so the dump names every class the code declares.
+fn appendClassColumns(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    comptime Class: type,
+    comptime prefix: []const u8,
+    counters: []const Counter,
+) std.mem.Allocator.Error!void {
+    inline for (@typeInfo(Class).@"enum".fields) |field| {
+        const value = counters[@intFromEnum(@field(Class, field.name))].load(.monotonic);
+        try appendCounterLine(allocator, out, " " ++ prefix ++ field.name ++ "={d}", .{value});
+    }
+}
+
 /// Render every counter as a `name value` line. Inert outside Debug builds.
 /// The caller owns and frees the returned bytes.
 pub fn dumpText(allocator: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
@@ -872,57 +1020,19 @@ pub fn dumpText(allocator: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
         }
         // One row per constraint-replay site, including sites the corpus never
         // reached: an unexecuted site is a finding of its own, so the table
-        // states every declared site rather than only the ones that ran.
+        // states every declared site rather than only the ones that ran. Each
+        // column is named by the enum member it counts, with the residual
+        // origin and state columns prefixed so no two classifications collide.
         for (unify_site_outcomes, unify_site_blockers, unify_site_information, 0..) |outcomes, blockers, information, index| {
             const site: UnifySite = @enumFromInt(index);
-            const origins = unify_site_residual_origins[index];
-            const states = unify_site_residual_states[index];
-            const line = try std.fmt.allocPrint(
-                allocator,
-                "unify_site name={s} redundant={d} informative={d} representation_decision={d} unmeasurable={d} construction={d}" ++
-                    " no_environment={d} operand_untranslatable={d} operand_undescribed={d}" ++
-                    " representation={d} scheme_binder_unbound={d} unbound_residual={d}" ++
-                    " head_tag={d} row_width={d} named_identity={d} unclassified={d}" ++
-                    " open_on_import={d}" ++
-                    " residual_from_checked={d} residual_from_field={d} residual_from_graph={d}" ++
-                    " residual_not_checked={d} residual_not_followed={d} residual_checked_content={d}" ++
-                    " residual_scheme_binder={d}" ++
-                    " residual_contextual={d} residual_uninhabited={d} residual_module_body={d}" ++
-                    " residual_other_owner={d} residual_undisposed={d}\n",
-                .{
-                    @tagName(site),
-                    outcomes[@intFromEnum(UnifySiteOutcome.redundant)].load(.monotonic),
-                    outcomes[@intFromEnum(UnifySiteOutcome.informative)].load(.monotonic),
-                    outcomes[@intFromEnum(UnifySiteOutcome.representation_decision)].load(.monotonic),
-                    outcomes[@intFromEnum(UnifySiteOutcome.unmeasurable)].load(.monotonic),
-                    outcomes[@intFromEnum(UnifySiteOutcome.construction)].load(.monotonic),
-                    blockers[@intFromEnum(UnifySiteBlocker.no_environment)].load(.monotonic),
-                    blockers[@intFromEnum(UnifySiteBlocker.operand_untranslatable)].load(.monotonic),
-                    blockers[@intFromEnum(UnifySiteBlocker.operand_undescribed)].load(.monotonic),
-                    information[@intFromEnum(UnifySiteInformation.representation)].load(.monotonic),
-                    information[@intFromEnum(UnifySiteInformation.scheme_binder_unbound)].load(.monotonic),
-                    information[@intFromEnum(UnifySiteInformation.unbound_residual)].load(.monotonic),
-                    information[@intFromEnum(UnifySiteInformation.head_tag)].load(.monotonic),
-                    information[@intFromEnum(UnifySiteInformation.row_width)].load(.monotonic),
-                    information[@intFromEnum(UnifySiteInformation.named_identity)].load(.monotonic),
-                    information[@intFromEnum(UnifySiteInformation.unclassified)].load(.monotonic),
-                    unify_site_open_on_import[index].load(.monotonic),
-                    origins[@intFromEnum(UnifySiteOperandOrigin.checked_position)].load(.monotonic),
-                    origins[@intFromEnum(UnifySiteOperandOrigin.field_of_checked)].load(.monotonic),
-                    origins[@intFromEnum(UnifySiteOperandOrigin.graph_sealed)].load(.monotonic),
-                    states[@intFromEnum(UnifySiteResidualState.not_a_checked_position)].load(.monotonic),
-                    states[@intFromEnum(UnifySiteResidualState.position_not_followed)].load(.monotonic),
-                    states[@intFromEnum(UnifySiteResidualState.checked_content)].load(.monotonic),
-                    states[@intFromEnum(UnifySiteResidualState.scheme_binder)].load(.monotonic),
-                    states[@intFromEnum(UnifySiteResidualState.disposed_contextual)].load(.monotonic),
-                    states[@intFromEnum(UnifySiteResidualState.disposed_uninhabited)].load(.monotonic),
-                    states[@intFromEnum(UnifySiteResidualState.disposed_module_body)].load(.monotonic),
-                    states[@intFromEnum(UnifySiteResidualState.disposed_other_owner)].load(.monotonic),
-                    states[@intFromEnum(UnifySiteResidualState.undisposed)].load(.monotonic),
-                },
-            );
-            defer allocator.free(line);
-            try out.appendSlice(allocator, line);
+            try appendCounterLine(allocator, &out, "unify_site name={s}", .{@tagName(site)});
+            try appendClassColumns(allocator, &out, UnifySiteOutcome, "", &outcomes);
+            try appendClassColumns(allocator, &out, UnifySiteBlocker, "", &blockers);
+            try appendClassColumns(allocator, &out, UnifySiteInformation, "", &information);
+            try appendCounterLine(allocator, &out, " open_on_import={d}", .{unify_site_open_on_import[index].load(.monotonic)});
+            try appendClassColumns(allocator, &out, UnifySiteOperandOrigin, "residual_origin_", &unify_site_residual_origins[index]);
+            try appendClassColumns(allocator, &out, UnifySiteResidualState, "residual_state_", &unify_site_residual_states[index]);
+            try out.append(allocator, '\n');
         }
     }
     return out.toOwnedSlice(allocator);

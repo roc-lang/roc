@@ -2416,7 +2416,9 @@ tier explicitly:
   iterator with the same source declaration and item type;
 - a minted iterator wins when related to its ordinary public source type;
 - distinct minted iterator identities join their item and backing information
-  without discarding callable members;
+  without discarding callable members, where two identities are the same only
+  under the same producer digest, or — before the producer seals one — the same
+  minting evidence, kind, and components;
 - equal tiers use ordinary named-type equality.
 
 At a forced-dynamic relation, Lambda Solved always unifies the public item type.
@@ -2449,20 +2451,35 @@ variant sets.
 
 The representation relation is a small, closed set of rules over immutable
 descriptors. Which rule applies to a pair of named heads is decided by the
-shared classifier `Type.iteratorRelation` plus the pair's backing authority;
-both stages that need it read that classification and apply it with their own
+shared policy `iteratorTierRelation` in
+`src/postcheck/representation_policy.zig` plus the pair's backing authority;
+both stages that need it read that one decision and apply it with their own
 storage. Monotype instantiation classifies inside its named-type unification arm
-(`InstGraph.iteratorRelation` in `monotype/solve.zig`, which refines the shared
-classifier with the graph-owned generated-iterator provenance it alone holds);
-Lambda Solved classifies inside its special named-type relations
-(`unifyPublicGeneratedIterator`, `unifyForcedDynamicIterator`,
+(`InstGraph.iteratorRelation` in `monotype/solve.zig`), which builds its own
+descriptors because the graph also holds representations whose producer has not
+sealed them yet; Lambda Solved classifies inside its special named-type
+relations (`unifyPublicGeneratedIterator`, `unifyForcedDynamicIterator`,
 `unifyGeneratedIteratorJoin`, and the backing-authority selection in
-`lambda_solved/solve.zig`). Monotype's representation slot closure engine
+`lambda_solved/solve.zig`), reaching the same policy through
+`Type.iteratorRelation`, the adapter for named types that already carry their
+recorded generated identity. Monotype's representation slot closure engine
 (`representation_closure.zig`) drives the same rules to a fixpoint over its own
-slots through the descriptor-only statement of them in
-`src/postcheck/representation_policy.zig`; it is built and directly tested but
-not yet wired into production lowering. Neither stage shares slot storage, and
-the policy imports neither store: it reads only copied-out descriptor fields.
+slots; it is built and directly tested but not yet wired into production
+lowering. Neither stage shares slot storage, and the policy imports neither
+store: it reads only copied-out descriptor fields.
+
+Two of those descriptor fields exist because generated identity must be an
+explicit input at every point in a representation's life. A finished
+representation states its recorded producer digest. A representation the
+producer is still minting has no digest yet, so it states its **minting
+identity** — the callable evidence it is being minted under — and the caller
+states, as a **component agreement**, whether the two operands' public item and
+producer-minted component types already denote one representation in the
+caller's store. Two representations one producer is still minting are the same
+representation only under the same minting identity, the same producer iterator
+kind, and components the caller proved equal. The policy never reads a store to
+answer that; the graph answers it from its own nodes and the closure engine from
+its own slots.
 
 Each rule declares its algebraic laws, and the closure engine's property tests
 enforce them. "Order-independent partition" means the resulting equivalence
@@ -2493,11 +2510,13 @@ picks a representative by role rather than by order.
   iterator declaration join under the iterator owner, relating both the item
   type and the paired backings; relating the backings closes recursive `rest`
   references before the pair is drained (the issue-10170 shape). Directional by
-  role: the iterator-owner side is the representative, preferring the left
-  operand when both sides are iterator owners. Idempotent and associative; the
-  resulting partition is order-independent even though the representative prefers
-  the left operand. Call sites: the minted-join arm of Monotype instantiation's
-  named-type relation; Lambda Solved's `unifyGeneratedIteratorJoin`.
+  role: the side still stating a minting identity is the representative, because
+  only that side can still be finalized to the dynamic fixed point, and
+  otherwise the iterator-owner side, preferring the left operand when both sides
+  are iterator owners. Idempotent and associative; the resulting partition is
+  order-independent even though the representative prefers the left operand.
+  Call sites: the minted-join arm of Monotype instantiation's named-type
+  relation; Lambda Solved's `unifyGeneratedIteratorJoin`.
 
 - **Generated-evidence backing selection** (`generated_evidence_selection`). Two
   same-identity named heads whose backings carry different producer authority
@@ -2542,6 +2561,13 @@ either strictly reduces the number of roots or consumes an edge without adding
 work, so the relation always reaches a fixpoint. Self-recursive and mutually
 recursive minted backings — including the issue-10170 shape — are direct
 termination fixtures.
+
+Minting the representations themselves is not part of the relation. Monotype
+creates generated iterator chains and selects the forced-dynamic fixed point
+where a chain does not terminate; the closure engine takes each such decision as
+a declared input at the position the producer placed it
+(`adoptProducerRepresentation`), and its declared tier order — public below
+minted below forced-dynamic — refuses any move back down.
 
 The relation is intentionally narrow. Its API cannot create a logical unknown,
 bind a scheme variable, add or remove a field or tag, open or close a row,

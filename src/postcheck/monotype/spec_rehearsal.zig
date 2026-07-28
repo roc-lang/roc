@@ -3300,9 +3300,16 @@ pub const Rehearsal = struct {
             .callee_checked => |address| return self.resolveCheckedOperand(address, true, blocker),
             .field_of => |field| {
                 const receiver = self.resolveCheckedOperand(field.receiver, false, blocker) orelse return null;
-                const emitted = fieldOfEmitted(receiver.store, receiver.ty, field.label) orelse {
-                    blocker.* = .operand_untranslatable;
-                    return null;
+                const emitted = switch (fieldOfEmitted(receiver.store, receiver.ty, field.label)) {
+                    .field => |ty| ty,
+                    .receiver_not_a_record => {
+                        blocker.* = .field_receiver_not_a_record;
+                        return null;
+                    },
+                    .label_absent => {
+                        blocker.* = .field_label_absent;
+                        return null;
+                    },
                 };
                 return .{
                     .store = receiver.store,
@@ -3383,7 +3390,7 @@ pub const Rehearsal = struct {
         blocker: *census.UnifySiteBlocker,
     ) ?ResolvedOperand {
         const cursor = self.lookup.cursor(address.module_bytes) orelse {
-            blocker.* = .operand_untranslatable;
+            blocker.* = .operand_module_absent;
             return null;
         };
         var env: ?*const direct_translate.BindingEnvironment = null;
@@ -3408,7 +3415,13 @@ pub const Rehearsal = struct {
             error.Skip => {
                 blocker.* = switch (reason) {
                     .binder_not_found => .no_environment,
-                    else => .operand_untranslatable,
+                    .recursive_cycle => .operand_recursive,
+                    .open_row => .operand_open_row,
+                    .engine_input_needed => .operand_engine_input_needed,
+                    .pending_or_err => .operand_pending_or_err,
+                    .numeric_default_unresolved => .operand_numeric_default,
+                    .malformed_builtin_arity => .operand_malformed_arity,
+                    .missing_backing => .operand_missing_backing,
                 };
                 return null;
             },
@@ -3918,7 +3931,7 @@ pub const Rehearsal = struct {
                         else
                             (self.standInBacking() orelse return null);
                         return .{ .iterator = .{
-                            .descriptor = descriptorOf(named, GuardedList.borrowLen(args)),
+                            .descriptor = descriptorOf(named),
                             .item = item,
                             .backing = backing,
                         } };
@@ -4442,9 +4455,12 @@ fn representationPolicyCovers(
         .named => |named| named,
         else => return false,
     };
-    const left_descriptor = descriptorOf(left_named, GuardedList.borrowLen(left_store.span(left_named.args)));
-    const right_descriptor = descriptorOf(right_named, GuardedList.borrowLen(right_store.span(right_named.args)));
-    if (policy.iteratorTierRelation(left_descriptor, right_descriptor) != .ordinary) return true;
+    const left_descriptor = descriptorOf(left_named);
+    const right_descriptor = descriptorOf(right_named);
+    // Both operands are sealed emissions carrying their recorded generated
+    // identity, so neither states a minting identity and the policy's component
+    // question does not arise.
+    if (policy.iteratorTierRelation(left_descriptor, right_descriptor, .differ) != .ordinary) return true;
     return policy.evidenceOwnerUsesScoreSelection(left_named.builtin_owner) and
         left_named.builtin_owner == right_named.builtin_owner;
 }
@@ -4452,25 +4468,40 @@ fn representationPolicyCovers(
 /// The type at one record field of an emitted receiver, following named
 /// backings the way a field read reaches the row through them. Null when the
 /// emission carries no record with that label.
-fn fieldOfEmitted(store: *const Type.Store, receiver: Type.TypeId, label: names.RecordFieldNameId) ?Type.TypeId {
+fn fieldOfEmitted(store: *const Type.Store, receiver: Type.TypeId, label: names.RecordFieldNameId) FieldOfEmitted {
     var current = receiver;
     var steps: usize = 0;
     while (steps < max_slot_depth) : (steps += 1) {
         switch (store.get(current)) {
-            .named => |named| current = (named.backing orelse return null).ty,
+            .named => |named| current = (named.backing orelse return .receiver_not_a_record).ty,
             .record => |fields| {
                 const entries = store.fieldSpan(fields);
                 for (0..GuardedList.borrowLen(entries)) |index| {
                     const field = GuardedList.at(entries, index);
-                    if (field.name == label) return field.ty;
+                    if (field.name == label) return .{ .field = field.ty };
                 }
-                return null;
+                return .label_absent;
             },
-            else => return null,
+            else => return .receiver_not_a_record,
         }
     }
-    return null;
+    return .receiver_not_a_record;
 }
+
+/// What reading one label off an emitted receiver produced: the field's type,
+/// or exactly which of the two ways the read had no answer. The split names
+/// which operand a `field_of` site could not translate and why, so an
+/// unmeasurable execution is never left as an unexplained blocker.
+const FieldOfEmitted = union(enum) {
+    field: Type.TypeId,
+    /// The receiver's translation is not a record, and unwrapping named
+    /// backings did not reach one — most often because the receiver's checked
+    /// position reaches a variable no binding names, so it translates to the
+    /// empty tag union.
+    receiver_not_a_record,
+    /// The receiver's translation IS a record, and carries no such label.
+    label_absent,
+};
 
 /// The emitted receiver's argument at `index`, or null when the emission carries
 /// no such position.
@@ -4529,13 +4560,11 @@ fn sitesAgree(
 
 /// The immutable descriptor the shared representation policy reads, copied out
 /// of an emitted named type.
-fn descriptorOf(named: Type.NamedContent, arg_count: usize) policy.NamedDescriptor {
+fn descriptorOf(named: Type.NamedContent) policy.NamedDescriptor {
     return .{
         .kind = named.kind,
         .def = named.def,
         .builtin_owner = named.builtin_owner,
-        .arg_count = arg_count,
-        .backing_use = if (named.backing) |backing| backing.use else null,
     };
 }
 
