@@ -1771,7 +1771,7 @@ main! = |_| { # Yeah Ie
 	crash "Unreachtement"
 	tag_with = Ok(number)
 	ited = "Hello, ${world}"
-	list = 
+	list =
 		
 }
 ~~~

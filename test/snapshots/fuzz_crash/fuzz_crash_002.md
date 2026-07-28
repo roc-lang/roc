@@ -259,7 +259,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-modu : 
+modu :
 ~~~
 # CANONICALIZE
 ~~~clojure
