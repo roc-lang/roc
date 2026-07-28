@@ -34,6 +34,15 @@ const AllocationHeader = extern struct {
     len: usize,
 };
 
+const SourceFrame = extern struct {
+    name_ptr: [*]const u8,
+    name_len: usize,
+    file_ptr: [*]const u8,
+    file_len: usize,
+    line: u32,
+    column: u32,
+};
+
 comptime {
     @export(&runtimeInit, .{ .name = shim_symbols.roc_default_runtime_init });
     @export(&defaultExit, .{ .name = shim_symbols.roc_default_exit });
@@ -41,6 +50,7 @@ comptime {
     @export(&rocDbg, .{ .name = shim_symbols.roc_dbg });
     @export(&rocExpectFailed, .{ .name = shim_symbols.roc_expect_failed });
     @export(&rocCrashed, .{ .name = shim_symbols.roc_crashed });
+    @export(&rocDefaultCrashedWithFrames, .{ .name = shim_symbols.roc_default_crashed_with_frames });
     @export(&rocAlloc, .{ .name = shim_symbols.roc_alloc });
     @export(&rocRealloc, .{ .name = shim_symbols.roc_realloc });
     @export(&rocDealloc, .{ .name = shim_symbols.roc_dealloc });
@@ -96,6 +106,15 @@ fn rocCrashed(bytes: [*]const u8, len: usize) callconv(.c) noreturn {
     writeAll(2, bytes[0..len]);
     writeAll(2, "\n\n");
     c.exit(1);
+}
+
+fn rocDefaultCrashedWithFrames(
+    bytes: [*]const u8,
+    len: usize,
+    _: [*]const SourceFrame,
+    _: usize,
+) callconv(.c) noreturn {
+    rocCrashed(bytes, len);
 }
 
 fn rocAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {

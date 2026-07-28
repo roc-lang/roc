@@ -29,7 +29,9 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///     rather than recorded in the header.
 /// v10: LIR proc specs carry explicit native stack-probe requirements.
 /// v11: LocalSpan lengths are u32 for large proc frame-local spans.
-pub const FORMAT_VERSION: u32 = 11;
+/// v12: statements carry virtual inline-scope ids and the image stores the
+///      corresponding source-procedure/call-site graph.
+pub const FORMAT_VERSION: u32 = 12;
 
 /// Public `ImageError` declaration.
 pub const ImageError = error{
@@ -102,6 +104,8 @@ pub const LirStoreImage = extern struct {
     source_file_ends: ArrayRef,
     cf_stmt_locs: ArrayRef,
     cf_stmt_regions: ArrayRef,
+    cf_stmt_inline_scopes: ArrayRef,
+    inline_scopes: ArrayRef,
     proc_locs: ArrayRef,
     proc_debug_names: ArrayRef,
     local_names: ArrayRef,
@@ -123,6 +127,8 @@ pub const LirStoreImage = extern struct {
             .source_file_ends = try arrayRef(base_ptr, image_size, store.source_file_ends.unsafeRawItemsForView()),
             .cf_stmt_locs = try arrayRef(base_ptr, image_size, store.cf_stmt_locs.unsafeRawItemsForView()),
             .cf_stmt_regions = try arrayRef(base_ptr, image_size, store.cf_stmt_regions.unsafeRawItemsForView()),
+            .cf_stmt_inline_scopes = try arrayRef(base_ptr, image_size, store.cf_stmt_inline_scopes.unsafeRawItemsForView()),
+            .inline_scopes = try arrayRef(base_ptr, image_size, store.inline_scopes.unsafeRawItemsForView()),
             .proc_locs = try arrayRef(base_ptr, image_size, store.proc_locs.unsafeRawItemsForView()),
             .proc_debug_names = try arrayRef(base_ptr, image_size, store.proc_debug_names.unsafeRawItemsForView()),
             .local_names = try arrayRef(base_ptr, image_size, store.local_names.unsafeRawItemsForView()),
@@ -151,6 +157,8 @@ pub const LirStoreImage = extern struct {
             .source_file_ends = try copyArrayRef(allocator, base_ptr, image_capacity, store.source_file_ends.unsafeRawItemsForView()),
             .cf_stmt_locs = try copyArrayRef(allocator, base_ptr, image_capacity, store.cf_stmt_locs.unsafeRawItemsForView()),
             .cf_stmt_regions = try copyArrayRef(allocator, base_ptr, image_capacity, store.cf_stmt_regions.unsafeRawItemsForView()),
+            .cf_stmt_inline_scopes = try copyArrayRef(allocator, base_ptr, image_capacity, store.cf_stmt_inline_scopes.unsafeRawItemsForView()),
+            .inline_scopes = try copyArrayRef(allocator, base_ptr, image_capacity, store.inline_scopes.unsafeRawItemsForView()),
             .proc_locs = try copyArrayRef(allocator, base_ptr, image_capacity, store.proc_locs.unsafeRawItemsForView()),
             .proc_debug_names = try copyArrayRef(allocator, base_ptr, image_capacity, store.proc_debug_names.unsafeRawItemsForView()),
             .local_names = try copyArrayRef(allocator, base_ptr, image_capacity, store.local_names.unsafeRawItemsForView()),
@@ -179,11 +187,14 @@ pub const LirStoreImage = extern struct {
             .source_file_ends = try guardedListFromRef(u32, "LirStore.source_file_ends", base_ptr, image_size, self.source_file_ends),
             .cf_stmt_locs = try guardedListFromRef(base.SourceLoc, "LirStore.cf_stmt_locs", base_ptr, image_size, self.cf_stmt_locs),
             .cf_stmt_regions = try guardedListFromRef(base.Region, "LirStore.cf_stmt_regions", base_ptr, image_size, self.cf_stmt_regions),
+            .cf_stmt_inline_scopes = try guardedListFromRef(LIR.InlineScopeId, "LirStore.cf_stmt_inline_scopes", base_ptr, image_size, self.cf_stmt_inline_scopes),
+            .inline_scopes = try guardedListFromRef(LIR.InlineScope, "LirStore.inline_scopes", base_ptr, image_size, self.inline_scopes),
             .proc_locs = try guardedListFromRef(base.SourceLoc, "LirStore.proc_locs", base_ptr, image_size, self.proc_locs),
             .proc_debug_names = try guardedListFromRef(LirStore.ProcDebugName, "LirStore.proc_debug_names", base_ptr, image_size, self.proc_debug_names),
             .local_names = try guardedListFromRef(u32, "LirStore.local_names", base_ptr, image_size, self.local_names),
             .current_loc = base.SourceLoc.none,
             .current_region = base.Region.zero(),
+            .current_inline_scope = LIR.InlineScopeId.none,
         };
     }
 };
@@ -287,7 +298,7 @@ comptime {
     // this file, then update the expected field count below. A same-build
     // omission (a new store field left out of the image plumbing) is otherwise
     // silent, since `FORMAT_VERSION` only guards cross-version mismatches.
-    std.debug.assert(@typeInfo(LirStore).@"struct".fields.len == 25);
+    std.debug.assert(@typeInfo(LirStore).@"struct".fields.len == 28);
     std.debug.assert(@typeInfo(layout_mod.Store).@"struct".fields.len == 12);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".fields.len == 1);
 }
@@ -573,7 +584,7 @@ test "LIR image declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
 
-/// The 16 `LirStore` array-backed lists serialized as `ArrayRef`s, in the order
+/// The 18 `LirStore` array-backed lists serialized as `ArrayRef`s, in the order
 /// they appear in `LirStoreImage`. `strings` (a sub-image) and the scalar
 /// `next_synthetic_symbol` are serialized too but exercised separately below.
 const serialized_guarded_fields = [_][]const u8{
@@ -590,6 +601,8 @@ const serialized_guarded_fields = [_][]const u8{
     "source_file_ends",
     "cf_stmt_locs",
     "cf_stmt_regions",
+    "cf_stmt_inline_scopes",
+    "inline_scopes",
     "proc_locs",
     "proc_debug_names",
     "local_names",
@@ -715,6 +728,7 @@ test "LIR image copies and round-trips every populated store field" {
     // Ambient lowering state is reset by `view`; it is not image data.
     try std.testing.expectEqual(base.SourceLoc.none, view.store.current_loc);
     try std.testing.expectEqual(base.Region.zero(), view.store.current_region);
+    try std.testing.expectEqual(LIR.InlineScopeId.none, view.store.current_inline_scope);
     // A viewed image is read-only, so string insertion is disabled.
     try std.testing.expectEqual(false, view.store.strings_insertable);
 
