@@ -799,36 +799,65 @@ pub fn Emit(comptime target: RocTarget) type {
         }
 
         pub fn adrp(self: *Self, rd: GeneralReg) Allocator.Error!void {
-            try self.emit32(encodeAdrp(rd, 0));
+            const inst: u32 = 0x90000000 | @as(u32, rd.enc());
+            try self.emit32(inst);
         }
 
-        /// ADRP Xd, #page_delta — see `encodeAdrp`.
-        pub fn adrpPage(self: *Self, rd: GeneralReg, page_delta: i21) Allocator.Error!void {
-            try self.emit32(encodeAdrp(rd, page_delta));
+        /// The 4-instruction PC-relative address sequence used to materialize
+        /// internal code addresses: ADR Xd, #0 — MOVZ Xs, #lo16 — MOVK Xs,
+        /// #hi16, LSL #16 — ADD/SUB Xd, Xd, Xs.
+        ///
+        /// The sequence encodes a pure byte delta from the ADR's own address, so
+        /// it is correct wherever the code lands: linked sections load at
+        /// arbitrary in-page offsets, and page-based sequences (ADRP) would be
+        /// wrong there by the section's load bias. The MOVZ/MOVK pair gives the
+        /// delta 32 bits of range.
+        ///
+        /// These encoders are the single source of truth for the sequence's
+        /// words: `pcRelAddrSequence` emits them, and the address patcher
+        /// rewrites already-emitted sequences with them, so the two can never
+        /// drift.
+        pub fn encodeAdrZero(rd: GeneralReg) u32 {
+            return (0b10000 << 24) | @as(u32, rd.enc());
         }
 
-        /// ADRP Xd, #imm — the 4 KiB page containing the ADRP, plus `page_delta`
-        /// pages. Reaches ±4 GiB, which is why address materialization uses it in
-        /// preference to ADR's ±1 MiB.
-        pub fn encodeAdrp(rd: GeneralReg, page_delta: i21) u32 {
-            const imm: u21 = @bitCast(page_delta);
-            const immlo: u2 = @truncate(imm);
-            const immhi: u19 = @truncate(imm >> 2);
+        pub fn encodeMovz64(rd: GeneralReg, imm16: u16, hw: u2) u32 {
             return (1 << 31) |
-                (@as(u32, immlo) << 29) |
-                (0b10000 << 24) |
-                (@as(u32, immhi) << 5) |
-                @as(u32, rd.enc());
+                (0b10100101 << 23) |
+                (@as(u32, hw) << 21) |
+                (@as(u32, imm16) << 5) |
+                rd.enc();
         }
 
-        /// ADD Xd, Xn, #imm12, matching `addRegRegImm12` but returning the word so
-        /// a patcher can rewrite an already-emitted instruction.
-        pub fn encodeAddImm12(rd: GeneralReg, rn: GeneralReg, imm: u12) u32 {
+        pub fn encodeMovk64(rd: GeneralReg, imm16: u16, hw: u2) u32 {
             return (1 << 31) |
-                (0b0010001 << 24) |
-                (@as(u32, imm) << 10) |
+                (0b11100101 << 23) |
+                (@as(u32, hw) << 21) |
+                (@as(u32, imm16) << 5) |
+                rd.enc();
+        }
+
+        /// ADD/SUB Xd, Xn, Xm (shifted-register form, LSL #0). The sequence's
+        /// registers are always ordinary temporaries, never SP, so the
+        /// shifted-register form is always the right encoding.
+        pub fn encodeAddSubRegRegReg64(rd: GeneralReg, rn: GeneralReg, rm: GeneralReg, subtract: bool) u32 {
+            std.debug.assert(rd != .ZRSP and rn != .ZRSP);
+            const op: u32 = if (subtract) 0b1001011 else 0b0001011;
+            return (1 << 31) |
+                (op << 24) |
+                (@as(u32, rm.enc()) << 16) |
                 (@as(u32, rn.enc()) << 5) |
                 rd.enc();
+        }
+
+        /// Emit the full PC-relative address sequence. `lo16`/`hi16` hold the
+        /// absolute byte delta, `subtract` its sign; all-zero immediates with
+        /// `subtract = false` reserve a sequence for later patching.
+        pub fn pcRelAddrSequence(self: *Self, dst: GeneralReg, scratch: GeneralReg, lo16: u16, hi16: u16, subtract: bool) Allocator.Error!void {
+            try self.emit32(encodeAdrZero(dst));
+            try self.emit32(encodeMovz64(scratch, lo16, 0));
+            try self.emit32(encodeMovk64(scratch, hi16, 1));
+            try self.emit32(encodeAddSubRegRegReg64(dst, dst, scratch, subtract));
         }
 
         /// BLR Xn (branch with link to register - call to address in register)
@@ -2001,23 +2030,28 @@ test "CC.returnI128ByPointer is false for all aarch64 targets" {
     try std.testing.expect(!MacEmit.CC.returnI128ByPointer());
 }
 
-/// What an ADRP + ADD pair actually computes at run time, given where the pair
-/// sits in a page-aligned image. Mirrors the hardware so the test below checks
-/// the resulting address rather than just the bits.
-fn evalAdrpAdd(base: u64, instr_offset: u64, adrp_inst: u32, add_inst: u32) u64 {
-    const immlo: u64 = (adrp_inst >> 29) & 0b11;
-    const immhi: u64 = (adrp_inst >> 5) & 0x7FFFF;
-    const imm21: i21 = @bitCast(@as(u21, @truncate((immhi << 2) | immlo)));
-    const page_base = (base + instr_offset) & ~@as(u64, 0xFFF);
-    const paged = @as(i64, @intCast(page_base)) + (@as(i64, imm21) << 12);
-    const imm12: u64 = (add_inst >> 10) & 0xFFF;
-    return @as(u64, @intCast(paged)) + imm12;
+/// What the PC-relative address sequence actually computes at run time, given
+/// where the sequence sits in memory. Mirrors the hardware so the test below
+/// checks the resulting address rather than just the bits.
+fn evalPcRelSequence(base: u64, instr_offset: u64, words: [4]u32) u64 {
+    // ADR Xd, #imm — anchor. The test emits it with imm 0, so Xd = PC.
+    const adr = words[0];
+    std.debug.assert((adr >> 24) & 0x1F == 0b10000 and adr >> 31 == 0);
+    const anchor = base + instr_offset;
+    // MOVZ Xs, #lo16 then MOVK Xs, #hi16, LSL #16.
+    const lo16: u64 = (words[1] >> 5) & 0xFFFF;
+    const hi16: u64 = (words[2] >> 5) & 0xFFFF;
+    const magnitude = (hi16 << 16) | lo16;
+    // ADD or SUB Xd, Xd, Xs.
+    const subtract = (words[3] >> 30) & 1 == 1;
+    return if (subtract) anchor - magnitude else anchor + magnitude;
 }
 
-test "adrp + add reaches targets past ADR's range" {
-    // A pair of 12-bit immediates could only express 16 MiB, so an image larger
-    // than that silently computed the wrong address. These distances are the
-    // ones that used to be misencoded.
+test "pc-relative address sequence reaches targets past ADR's range" {
+    // A pair of 12-bit immediates could only express 16 MiB, and a page-based
+    // ADRP form is wrong by the load bias whenever the code does not land
+    // page-aligned. These cases cover both failure shapes: distances past
+    // 16 MiB, and bases at arbitrary in-page offsets.
     const cases = [_]struct { instr: u64, target: u64 }{
         .{ .instr = 0, .target = 0 },
         .{ .instr = 0x1000, .target = 0 },
@@ -2030,20 +2064,29 @@ test "adrp + add reaches targets past ADR's range" {
     };
 
     for (cases) |case| {
-        for ([_]u64{ 0x1_0000_0000, 0x4000 }) |base| {
+        // Bases deliberately not page-aligned: linked sections land mid-page.
+        for ([_]u64{ 0x1_0000_0000, 0x4000, 0x1_0000_2830 }) |base| {
             var asm_buf = LinuxEmit.init(std.testing.allocator);
             defer asm_buf.deinit();
 
-            const target_page: i64 = @intCast(case.target >> 12);
-            const instr_page: i64 = @intCast(case.instr >> 12);
-            try asm_buf.adrpPage(.X3, @intCast(target_page - instr_page));
-            try asm_buf.addRegRegImm12(.w64, .X3, .X3, @truncate(case.target));
+            const rel: i64 = @as(i64, @intCast(case.target)) - @as(i64, @intCast(case.instr));
+            const subtract = rel < 0;
+            const abs_rel: u64 = if (subtract) @intCast(-rel) else @intCast(rel);
+            try asm_buf.pcRelAddrSequence(
+                .X3,
+                .X9,
+                @truncate(abs_rel),
+                @truncate(abs_rel >> 16),
+                subtract,
+            );
 
-            const adrp_inst: u32 = @bitCast(asm_buf.buf.items[0..4].*);
-            const add_inst: u32 = @bitCast(asm_buf.buf.items[4..8].*);
+            var words: [4]u32 = undefined;
+            for (0..4) |i| {
+                words[i] = @bitCast(asm_buf.buf.items[i * 4 ..][0..4].*);
+            }
             try std.testing.expectEqual(
                 base + case.target,
-                evalAdrpAdd(base, case.instr, adrp_inst, add_inst),
+                evalPcRelSequence(base, case.instr, words),
             );
         }
     }
