@@ -84,6 +84,8 @@ pub fn apply(env: *ModuleEnv) (Allocator.Error || error{ UnsupportedBuiltinAnnot
     );
     defer graph.deinit();
 
+    var demand_dependencies = try DependencyGraph.collectDependencies(&graph, env.gpa);
+    errdefer demand_dependencies.deinit(env.gpa);
     const eval_order = try DependencyGraph.computeSCCs(&graph, env.gpa);
     if (env.evaluation_order) |old_order| {
         old_order.deinit();
@@ -91,6 +93,8 @@ pub fn apply(env: *ModuleEnv) (Allocator.Error || error{ UnsupportedBuiltinAnnot
     }
     const eval_order_ptr = try env.gpa.create(DependencyGraph.EvaluationOrder);
     eval_order_ptr.* = eval_order;
+    env.setTopLevelDemandDependencies(demand_dependencies);
+    demand_dependencies = .{};
     env.evaluation_order = eval_order_ptr;
 }
 

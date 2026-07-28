@@ -28,6 +28,7 @@ const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
+const TopLevelDemandDependency = can.DependencyGraph.Dependency;
 const Var = types.Var;
 const CompactWriter = collections.CompactWriter;
 const StringLiteral = base.StringLiteral;
@@ -1088,11 +1089,15 @@ pub const RootRequestTable = struct {
         const runtime_requests = try collectRuntimeRootRequests(allocator, all_requests);
         errdefer allocator.free(runtime_requests);
 
+        if (!module.moduleEnvConst().topLevelDemandDependenciesReady()) {
+            checkedArtifactInvariant("checked module had no top-level demand dependencies", .{});
+        }
         const compile_time_requests = try collectCompileTimeRootRequests(
             allocator,
             all_requests,
             module.moduleIndex(),
             artifact_key,
+            module.moduleEnvConst().topLevelDemandDependencies(),
             compile_time_roots,
             procedure_templates,
             resolved_value_refs,
@@ -1158,6 +1163,7 @@ fn collectCompileTimeRootRequests(
     requests: []const RootRequest,
     module_idx: u32,
     artifact_key: CheckedModuleArtifactKey,
+    top_level_demand_dependencies: []const TopLevelDemandDependency,
     compile_time_roots: *const CompileTimeRootTable,
     procedure_templates: *const CheckedProcedureTemplateTable,
     resolved_value_refs: *const ResolvedValueRefTable,
@@ -1183,6 +1189,7 @@ fn collectCompileTimeRootRequests(
         allocator,
         module_idx,
         artifact_key,
+        top_level_demand_dependencies,
         compile_time_roots,
         procedure_templates,
         resolved_value_refs,
@@ -1201,6 +1208,7 @@ const CompileTimeRequestScheduler = struct {
     allocator: Allocator,
     module_idx: u32,
     artifact_key: CheckedModuleArtifactKey,
+    top_level_demand_dependencies: []const TopLevelDemandDependency,
     compile_time_roots: *const CompileTimeRootTable,
     procedure_templates: *const CheckedProcedureTemplateTable,
     resolved_value_refs: *const ResolvedValueRefTable,
@@ -1223,6 +1231,7 @@ const CompileTimeRequestScheduler = struct {
         allocator: Allocator,
         module_idx: u32,
         artifact_key: CheckedModuleArtifactKey,
+        top_level_demand_dependencies: []const TopLevelDemandDependency,
         compile_time_roots: *const CompileTimeRootTable,
         procedure_templates: *const CheckedProcedureTemplateTable,
         resolved_value_refs: *const ResolvedValueRefTable,
@@ -1267,6 +1276,7 @@ const CompileTimeRequestScheduler = struct {
             .allocator = allocator,
             .module_idx = module_idx,
             .artifact_key = artifact_key,
+            .top_level_demand_dependencies = top_level_demand_dependencies,
             .compile_time_roots = compile_time_roots,
             .procedure_templates = procedure_templates,
             .resolved_value_refs = resolved_value_refs,
@@ -1504,6 +1514,7 @@ const CompileTimeRequestScheduler = struct {
         dependency_root: ComptimeRootId,
     ) Allocator.Error!void {
         if (dependency_root == self.current_root_id) return;
+        if (!self.rootDependencyIsStrict(dependency_root)) return;
         const raw = @intFromEnum(dependency_root);
         if (raw >= self.root_to_request_index.len) {
             checkedArtifactInvariant("compile-time root dependency was outside the root table", .{});
@@ -1515,6 +1526,25 @@ const CompileTimeRequestScheduler = struct {
         edge.value_ptr.* = {};
         try self.dependents[dependency_index].append(self.allocator, self.current_request_index);
         self.indegrees[self.current_request_index] += 1;
+    }
+
+    fn rootDependencyIsStrict(
+        self: *const CompileTimeRequestScheduler,
+        dependency_root: ComptimeRootId,
+    ) bool {
+        const dependent = self.compile_time_roots.root(self.current_root_id);
+        const dependency = self.compile_time_roots.root(dependency_root);
+        return switch (dependent.source) {
+            .def => |dependent_def| switch (dependency.source) {
+                .def => |dependency_def| can.DependencyGraph.hasDependency(
+                    self.top_level_demand_dependencies,
+                    dependent_def,
+                    dependency_def,
+                ),
+                else => true,
+            },
+            else => true,
+        };
     }
 
     fn dependencyEdgeKey(

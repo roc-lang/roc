@@ -1050,11 +1050,15 @@ fn processSnapshotContent(
         );
         defer graph.deinit();
 
+        var demand_dependencies = try DependencyGraph.collectDependencies(&graph, can_ir.gpa);
+        errdefer demand_dependencies.deinit(can_ir.gpa);
         const eval_order = try DependencyGraph.computeSCCs(&graph, allocator);
         // IMPORTANT: Use can_ir.gpa here, not allocator, because ModuleEnv.deinit()
         // will free this with self.gpa. They must match to avoid memory leaks.
         const eval_order_ptr = try can_ir.gpa.create(DependencyGraph.EvaluationOrder);
         eval_order_ptr.* = eval_order;
+        can_ir.setTopLevelDemandDependencies(demand_dependencies);
+        demand_dependencies = .{};
         can_ir.evaluation_order = eval_order_ptr;
     }
 

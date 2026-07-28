@@ -17,6 +17,8 @@ const CFSwitchBranch = lir_defs.CFSwitchBranch;
 const CFSwitchBranchSpan = lir_defs.CFSwitchBranchSpan;
 const JoinPoint = lir_defs.JoinPoint;
 const JoinPointSpan = lir_defs.JoinPointSpan;
+const InlineScope = lir_defs.InlineScope;
+const InlineScopeId = lir_defs.InlineScopeId;
 const LirProcSpec = lir_defs.LirProcSpec;
 const LirProcSpecId = lir_defs.LirProcSpecId;
 const Local = lir_defs.Local;
@@ -77,6 +79,10 @@ cf_stmt_locs: GuardedList.List(base.SourceLoc, "LirStore.cf_stmt_locs"),
 /// Checked source region per statement, parallel to `cf_stmts`. Reference-count
 /// statements always record `Region.zero`; they have no source counterpart.
 cf_stmt_regions: GuardedList.List(base.Region, "LirStore.cf_stmt_regions"),
+/// Virtual inline scope per statement, parallel to `cf_stmts`.
+cf_stmt_inline_scopes: GuardedList.List(InlineScopeId, "LirStore.cf_stmt_inline_scopes"),
+/// Interned virtual source-frame graph.
+inline_scopes: GuardedList.List(InlineScope, "LirStore.inline_scopes"),
 /// Source location per proc, parallel to `proc_specs`.
 proc_locs: GuardedList.List(base.SourceLoc, "LirStore.proc_locs"),
 /// Source-level debug names for procs that have source names.
@@ -89,6 +95,8 @@ local_names: GuardedList.List(u32, "LirStore.local_names"),
 current_loc: base.SourceLoc,
 /// Ambient checked source region recorded by `addCFStmt`.
 current_region: base.Region,
+/// Ambient virtual source frame recorded by `addCFStmt`.
+current_inline_scope: InlineScopeId,
 
 /// Initializes empty storage for statement-only LIR.
 pub fn init(allocator: Allocator) Self {
@@ -113,11 +121,14 @@ pub fn init(allocator: Allocator) Self {
         .source_file_ends = .empty,
         .cf_stmt_locs = .empty,
         .cf_stmt_regions = .empty,
+        .cf_stmt_inline_scopes = .empty,
+        .inline_scopes = .empty,
         .proc_locs = .empty,
         .proc_debug_names = .empty,
         .local_names = .empty,
         .current_loc = base.SourceLoc.none,
         .current_region = base.Region.zero(),
+        .current_inline_scope = InlineScopeId.none,
     };
 }
 
@@ -140,6 +151,8 @@ pub fn deinit(self: *Self) void {
     self.source_file_ends.deinit(self.allocator);
     self.cf_stmt_locs.deinit(self.allocator);
     self.cf_stmt_regions.deinit(self.allocator);
+    self.cf_stmt_inline_scopes.deinit(self.allocator);
+    self.inline_scopes.deinit(self.allocator);
     self.proc_locs.deinit(self.allocator);
     self.proc_debug_names.deinit(self.allocator);
     self.local_names.deinit(self.allocator);
@@ -225,6 +238,28 @@ pub fn sourceFileName(self: *const Self, file: u32) []const u8 {
 /// Source location of a statement.
 pub fn stmtLoc(self: *const Self, id: CFStmtId) base.SourceLoc {
     return self.cf_stmt_locs.get(@intFromEnum(id));
+}
+
+/// Virtual source frame associated with a statement.
+pub fn stmtInlineScope(self: *const Self, id: CFStmtId) InlineScopeId {
+    return self.cf_stmt_inline_scopes.get(@intFromEnum(id));
+}
+
+/// Retrieve one virtual source frame.
+pub fn inlineScope(self: *const Self, id: InlineScopeId) InlineScope {
+    return self.inline_scopes.get(@intFromEnum(id));
+}
+
+/// Number of virtual source frames.
+pub fn inlineScopeCount(self: *const Self) usize {
+    return self.inline_scopes.len();
+}
+
+/// Intern one virtual source frame and return its identifier.
+pub fn addInlineScope(self: *Self, scope: InlineScope) Allocator.Error!InlineScopeId {
+    const id: InlineScopeId = @enumFromInt(@as(u32, @intCast(self.inline_scopes.len())));
+    try self.inline_scopes.append(self.allocator, scope);
+    return id;
 }
 
 /// Checked source region of a statement.
@@ -440,8 +475,10 @@ pub fn addCFStmt(self: *Self, stmt: CFStmt) Allocator.Error!CFStmtId {
     };
     const loc = if (has_source) self.current_loc else base.SourceLoc.none;
     const region = if (has_source) self.current_region else base.Region.zero();
+    const inline_scope = if (has_source) self.current_inline_scope else InlineScopeId.none;
     try self.cf_stmt_locs.append(self.allocator, loc);
     try self.cf_stmt_regions.append(self.allocator, region);
+    try self.cf_stmt_inline_scopes.append(self.allocator, inline_scope);
     return @enumFromInt(@as(u32, @intCast(idx)));
 }
 
@@ -694,21 +731,25 @@ pub fn compactCFStmts(self: *Self, reachable: []const bool) void {
     std.debug.assert(reachable.len == self.cf_stmts.len());
     std.debug.assert(self.cf_stmts.len() == self.cf_stmt_locs.len());
     std.debug.assert(self.cf_stmts.len() == self.cf_stmt_regions.len());
+    std.debug.assert(self.cf_stmts.len() == self.cf_stmt_inline_scopes.len());
 
     var write: usize = 0;
     const cf_stmts = self.cf_stmts.unsafeRawItemsMutForStore();
     const cf_stmt_locs = self.cf_stmt_locs.unsafeRawItemsMutForStore();
     const cf_stmt_regions = self.cf_stmt_regions.unsafeRawItemsMutForStore();
-    for (cf_stmts, cf_stmt_locs, cf_stmt_regions, 0..) |stmt, loc, region, index| {
+    const cf_stmt_inline_scopes = self.cf_stmt_inline_scopes.unsafeRawItemsMutForStore();
+    for (cf_stmts, cf_stmt_locs, cf_stmt_regions, cf_stmt_inline_scopes, 0..) |stmt, loc, region, inline_scope, index| {
         if (!reachable[index]) continue;
         cf_stmts[write] = stmt;
         cf_stmt_locs[write] = loc;
         cf_stmt_regions[write] = region;
+        cf_stmt_inline_scopes[write] = inline_scope;
         write += 1;
     }
     self.cf_stmts.shrinkRetainingCapacity(write);
     self.cf_stmt_locs.shrinkRetainingCapacity(write);
     self.cf_stmt_regions.shrinkRetainingCapacity(write);
+    self.cf_stmt_inline_scopes.shrinkRetainingCapacity(write);
 }
 
 /// Reports whether any local in a span has a layout that requires stack probing.
