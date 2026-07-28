@@ -1,7 +1,7 @@
 app [main!] { pf: platform "../fx/platform/main.roc" }
 import pf.Stdout
 
-wrap : U64, a -> Box(({} => a))
+wrap : U64, a -> Box(({} -> a))
 wrap = |_handle, value| Box.box(|{}| value)
 
 main! : () => {}
