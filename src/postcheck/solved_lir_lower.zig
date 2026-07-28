@@ -6953,6 +6953,18 @@ const Lowerer = struct {
         source_span: Type.Span,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
+        if (self.boxBackingLayoutForDirectConstruction(target)) |backing_layout| {
+            const backing_target = try self.addLocalForLayout(backing_layout);
+            const boundary = try self.assignBoxBoundary(target, backing_target, backing_layout, next);
+            return try self.assignCallableBoundary(
+                backing_target,
+                target_span,
+                source,
+                source_span,
+                boundary,
+            );
+        }
+
         const source_variants = self.types.fnVariantSpan(source_span);
         const target_variants = self.types.fnVariantSpan(target_span);
         if (source_variants.len != target_variants.len) {
@@ -7289,6 +7301,18 @@ const Lowerer = struct {
         source_span: Type.Span,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
+        if (self.boxBackingLayoutForDirectConstruction(target)) |backing_layout| {
+            const backing_target = try self.addLocalForLayout(backing_layout);
+            const boundary = try self.assignBoxBoundary(target, backing_target, backing_layout, next);
+            return try self.assignTagUnionBoundary(
+                backing_target,
+                target_span,
+                source,
+                source_span,
+                boundary,
+            );
+        }
+
         const target_tags = self.types.tagSpan(target_span);
         const source_tags = self.types.tagSpan(source_span);
         if (source_tags.len == 0) Common.invariant("tag union boundary saw an empty source tag union");
