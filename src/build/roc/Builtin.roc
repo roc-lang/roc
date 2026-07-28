@@ -7792,14 +7792,22 @@ Builtin :: [].{
 			## expect U16.from_le_bytes([0x34], 0) == Err(OutOfBounds)
 			## ```
 			from_le_bytes : List(U8), U64 -> Try(U16, [OutOfBounds, ..])
-			from_le_bytes = |bytes, index|
-			# Saturating, so an index past the end folds into this same
-			# check instead of needing a separate guard before it.
-				if List.len(bytes).minus_saturated(index) < 2 {
+			from_le_bytes = |bytes, index| {
+				len = List.len(bytes)
+				if index > len {
+					Err(OutOfBounds)
+					# We already checked that (index <= len), so (len - index) can't wrap.
+					# Wrapping rather than saturating is load-bearing for optimization, not
+					# just one instruction cheaper: a saturating subtract lowers to a
+					# conditional select, and that select blocks the range analysis that
+					# otherwise deletes this check outright inside a loop which has already
+					# established a bound on index.
+				} else if len.minus_wrap(index) < 2 {
 					Err(OutOfBounds)
 				} else {
 					Ok(u16_from_le_bytes_unchecked(bytes, index))
 				}
+			}
 
 			## Iterator of integers beginning with this `U16` and ending with the other `U16`.
 			## (Use [U16.until] instead to end with the other `U16` minus one.)
@@ -8578,14 +8586,22 @@ Builtin :: [].{
 			## expect I16.from_le_bytes([0x00], 0) == Err(OutOfBounds)
 			## ```
 			from_le_bytes : List(U8), U64 -> Try(I16, [OutOfBounds, ..])
-			from_le_bytes = |bytes, index|
-			# Saturating, so an index past the end folds into this same
-			# check instead of needing a separate guard before it.
-				if List.len(bytes).minus_saturated(index) < 2 {
+			from_le_bytes = |bytes, index| {
+				len = List.len(bytes)
+				if index > len {
+					Err(OutOfBounds)
+					# We already checked that (index <= len), so (len - index) can't wrap.
+					# Wrapping rather than saturating is load-bearing for optimization, not
+					# just one instruction cheaper: a saturating subtract lowers to a
+					# conditional select, and that select blocks the range analysis that
+					# otherwise deletes this check outright inside a loop which has already
+					# established a bound on index.
+				} else if len.minus_wrap(index) < 2 {
 					Err(OutOfBounds)
 				} else {
 					Ok(i16_from_le_bytes_unchecked(bytes, index))
 				}
+			}
 
 			## Iterator of integers beginning with this `I16` and ending with the other `I16`.
 			## (Use [I16.until] instead to end with the other `I16` minus one.)
@@ -9328,14 +9344,22 @@ Builtin :: [].{
 			## expect U32.from_le_bytes([0x78, 0x56, 0x34], 0) == Err(OutOfBounds)
 			## ```
 			from_le_bytes : List(U8), U64 -> Try(U32, [OutOfBounds, ..])
-			from_le_bytes = |bytes, index|
-			# Saturating, so an index past the end folds into this same
-			# check instead of needing a separate guard before it.
-				if List.len(bytes).minus_saturated(index) < 4 {
+			from_le_bytes = |bytes, index| {
+				len = List.len(bytes)
+				if index > len {
+					Err(OutOfBounds)
+					# We already checked that (index <= len), so (len - index) can't wrap.
+					# Wrapping rather than saturating is load-bearing for optimization, not
+					# just one instruction cheaper: a saturating subtract lowers to a
+					# conditional select, and that select blocks the range analysis that
+					# otherwise deletes this check outright inside a loop which has already
+					# established a bound on index.
+				} else if len.minus_wrap(index) < 4 {
 					Err(OutOfBounds)
 				} else {
 					Ok(u32_from_le_bytes_unchecked(bytes, index))
 				}
+			}
 
 			## Iterator of integers beginning with this `U32` and ending with the other `U32`.
 			## (Use [U32.until] instead to end with the other `U32` minus one.)
@@ -10146,14 +10170,22 @@ Builtin :: [].{
 			## expect I32.from_le_bytes([0x00, 0x00, 0x00], 0) == Err(OutOfBounds)
 			## ```
 			from_le_bytes : List(U8), U64 -> Try(I32, [OutOfBounds, ..])
-			from_le_bytes = |bytes, index|
-			# Saturating, so an index past the end folds into this same
-			# check instead of needing a separate guard before it.
-				if List.len(bytes).minus_saturated(index) < 4 {
+			from_le_bytes = |bytes, index| {
+				len = List.len(bytes)
+				if index > len {
+					Err(OutOfBounds)
+					# We already checked that (index <= len), so (len - index) can't wrap.
+					# Wrapping rather than saturating is load-bearing for optimization, not
+					# just one instruction cheaper: a saturating subtract lowers to a
+					# conditional select, and that select blocks the range analysis that
+					# otherwise deletes this check outright inside a loop which has already
+					# established a bound on index.
+				} else if len.minus_wrap(index) < 4 {
 					Err(OutOfBounds)
 				} else {
 					Ok(i32_from_le_bytes_unchecked(bytes, index))
 				}
+			}
 
 			## Iterator of integers beginning with this `I32` and ending with the other `I32`.
 			## (Use [I32.until] instead to end with the other `I32` minus one.)
@@ -10916,14 +10948,22 @@ Builtin :: [].{
 			## expect U64.from_le_bytes([1, 0, 0, 0, 0, 0, 0], 0) == Err(OutOfBounds)
 			## ```
 			from_le_bytes : List(U8), U64 -> Try(U64, [OutOfBounds, ..])
-			from_le_bytes = |bytes, index|
-			# Saturating, so an index past the end folds into this same
-			# check instead of needing a separate guard before it.
-				if List.len(bytes).minus_saturated(index) < 8 {
+			from_le_bytes = |bytes, index| {
+				len = List.len(bytes)
+				if index > len {
+					Err(OutOfBounds)
+					# We already checked that (index <= len), so (len - index) can't wrap.
+					# Wrapping rather than saturating is load-bearing for optimization, not
+					# just one instruction cheaper: a saturating subtract lowers to a
+					# conditional select, and that select blocks the range analysis that
+					# otherwise deletes this check outright inside a loop which has already
+					# established a bound on index.
+				} else if len.minus_wrap(index) < 8 {
 					Err(OutOfBounds)
 				} else {
 					Ok(u64_from_le_bytes_unchecked(bytes, index))
 				}
+			}
 
 			## Iterator of integers beginning with this `U64` and ending with the other `U64`.
 			## (Use [U64.until] instead to end with the other `U64` minus one.)
@@ -11776,14 +11816,22 @@ Builtin :: [].{
 			## expect I64.from_le_bytes([0, 0, 0, 0, 0, 0, 0], 0) == Err(OutOfBounds)
 			## ```
 			from_le_bytes : List(U8), U64 -> Try(I64, [OutOfBounds, ..])
-			from_le_bytes = |bytes, index|
-			# Saturating, so an index past the end folds into this same
-			# check instead of needing a separate guard before it.
-				if List.len(bytes).minus_saturated(index) < 8 {
+			from_le_bytes = |bytes, index| {
+				len = List.len(bytes)
+				if index > len {
+					Err(OutOfBounds)
+					# We already checked that (index <= len), so (len - index) can't wrap.
+					# Wrapping rather than saturating is load-bearing for optimization, not
+					# just one instruction cheaper: a saturating subtract lowers to a
+					# conditional select, and that select blocks the range analysis that
+					# otherwise deletes this check outright inside a loop which has already
+					# established a bound on index.
+				} else if len.minus_wrap(index) < 8 {
 					Err(OutOfBounds)
 				} else {
 					Ok(i64_from_le_bytes_unchecked(bytes, index))
 				}
+			}
 
 			## Iterator of integers beginning with this `I64` and ending with the other `I64`.
 			## (Use [I64.until] instead to end with the other `I64` minus one.)
@@ -12574,14 +12622,22 @@ Builtin :: [].{
 			## expect U128.from_le_bytes(List.repeat(0.U8, 15), 0) == Err(OutOfBounds)
 			## ```
 			from_le_bytes : List(U8), U64 -> Try(U128, [OutOfBounds, ..])
-			from_le_bytes = |bytes, index|
-			# Saturating, so an index past the end folds into this same
-			# check instead of needing a separate guard before it.
-				if List.len(bytes).minus_saturated(index) < 16 {
+			from_le_bytes = |bytes, index| {
+				len = List.len(bytes)
+				if index > len {
+					Err(OutOfBounds)
+					# We already checked that (index <= len), so (len - index) can't wrap.
+					# Wrapping rather than saturating is load-bearing for optimization, not
+					# just one instruction cheaper: a saturating subtract lowers to a
+					# conditional select, and that select blocks the range analysis that
+					# otherwise deletes this check outright inside a loop which has already
+					# established a bound on index.
+				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(u128_from_le_bytes_unchecked(bytes, index))
 				}
+			}
 
 			## Iterator of integers beginning with this `U128` and ending with the other `U128`.
 			## (Use [U128.until] instead to end with the other `U128` minus one.)
@@ -13479,14 +13535,22 @@ Builtin :: [].{
 			## expect I128.from_le_bytes(List.repeat(0.U8, 15), 0) == Err(OutOfBounds)
 			## ```
 			from_le_bytes : List(U8), U64 -> Try(I128, [OutOfBounds, ..])
-			from_le_bytes = |bytes, index|
-			# Saturating, so an index past the end folds into this same
-			# check instead of needing a separate guard before it.
-				if List.len(bytes).minus_saturated(index) < 16 {
+			from_le_bytes = |bytes, index| {
+				len = List.len(bytes)
+				if index > len {
+					Err(OutOfBounds)
+					# We already checked that (index <= len), so (len - index) can't wrap.
+					# Wrapping rather than saturating is load-bearing for optimization, not
+					# just one instruction cheaper: a saturating subtract lowers to a
+					# conditional select, and that select blocks the range analysis that
+					# otherwise deletes this check outright inside a loop which has already
+					# established a bound on index.
+				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
 					Ok(i128_from_le_bytes_unchecked(bytes, index))
 				}
+			}
 
 			## Iterator of integers beginning with this `I128` and ending with the other `I128`.
 			## (Use [I128.until] instead to end with the other `I128` minus one.)
@@ -17172,7 +17236,12 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-					# We already checked that (index <= len), so (len - index) can't wrap
+					# We already checked that (index <= len), so (len - index) can't wrap.
+					# Wrapping rather than saturating is load-bearing for optimization, not
+					# just one instruction cheaper: a saturating subtract lowers to a
+					# conditional select, and that select blocks the range analysis that
+					# otherwise deletes this check outright inside a loop which has already
+					# established a bound on index.
 				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
@@ -17192,7 +17261,12 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-					# We already checked that (index <= len), so (len - index) can't wrap
+					# We already checked that (index <= len), so (len - index) can't wrap.
+					# Wrapping rather than saturating is load-bearing for optimization, not
+					# just one instruction cheaper: a saturating subtract lowers to a
+					# conditional select, and that select blocks the range analysis that
+					# otherwise deletes this check outright inside a loop which has already
+					# established a bound on index.
 				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
@@ -17217,7 +17291,12 @@ Builtin :: [].{
 					|start|
 						if start > len {
 							Err(NoMore)
-							# We already checked that (start <= len), so (len - start) can't wrap
+							# We already checked that (start <= len), so (len - start) can't wrap.
+							# Wrapping rather than saturating is load-bearing for optimization, not
+							# just one instruction cheaper: a saturating subtract lowers to a
+							# conditional select, and that select blocks the range analysis that
+							# otherwise deletes this check outright inside a loop which has already
+							# established a bound on start.
 						} else if len.minus_wrap(start) >= 16 {
 							Ok((simd_u8x16_load_16_unchecked(bytes, start), start + 16))
 						} else {
@@ -17665,7 +17744,12 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-					# We already checked that (index <= len), so (len - index) can't wrap
+					# We already checked that (index <= len), so (len - index) can't wrap.
+					# Wrapping rather than saturating is load-bearing for optimization, not
+					# just one instruction cheaper: a saturating subtract lowers to a
+					# conditional select, and that select blocks the range analysis that
+					# otherwise deletes this check outright inside a loop which has already
+					# established a bound on index.
 				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
@@ -17685,7 +17769,12 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-					# We already checked that (index <= len), so (len - index) can't wrap
+					# We already checked that (index <= len), so (len - index) can't wrap.
+					# Wrapping rather than saturating is load-bearing for optimization, not
+					# just one instruction cheaper: a saturating subtract lowers to a
+					# conditional select, and that select blocks the range analysis that
+					# otherwise deletes this check outright inside a loop which has already
+					# established a bound on index.
 				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
@@ -18147,7 +18236,12 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-					# We already checked that (index <= len), so (len - index) can't wrap
+					# We already checked that (index <= len), so (len - index) can't wrap.
+					# Wrapping rather than saturating is load-bearing for optimization, not
+					# just one instruction cheaper: a saturating subtract lowers to a
+					# conditional select, and that select blocks the range analysis that
+					# otherwise deletes this check outright inside a loop which has already
+					# established a bound on index.
 				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
@@ -18167,7 +18261,12 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-					# We already checked that (index <= len), so (len - index) can't wrap
+					# We already checked that (index <= len), so (len - index) can't wrap.
+					# Wrapping rather than saturating is load-bearing for optimization, not
+					# just one instruction cheaper: a saturating subtract lowers to a
+					# conditional select, and that select blocks the range analysis that
+					# otherwise deletes this check outright inside a loop which has already
+					# established a bound on index.
 				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
@@ -18675,7 +18774,12 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-					# We already checked that (index <= len), so (len - index) can't wrap
+					# We already checked that (index <= len), so (len - index) can't wrap.
+					# Wrapping rather than saturating is load-bearing for optimization, not
+					# just one instruction cheaper: a saturating subtract lowers to a
+					# conditional select, and that select blocks the range analysis that
+					# otherwise deletes this check outright inside a loop which has already
+					# established a bound on index.
 				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
@@ -18695,7 +18799,12 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-					# We already checked that (index <= len), so (len - index) can't wrap
+					# We already checked that (index <= len), so (len - index) can't wrap.
+					# Wrapping rather than saturating is load-bearing for optimization, not
+					# just one instruction cheaper: a saturating subtract lowers to a
+					# conditional select, and that select blocks the range analysis that
+					# otherwise deletes this check outright inside a loop which has already
+					# established a bound on index.
 				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
@@ -19103,7 +19212,12 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-					# We already checked that (index <= len), so (len - index) can't wrap
+					# We already checked that (index <= len), so (len - index) can't wrap.
+					# Wrapping rather than saturating is load-bearing for optimization, not
+					# just one instruction cheaper: a saturating subtract lowers to a
+					# conditional select, and that select blocks the range analysis that
+					# otherwise deletes this check outright inside a loop which has already
+					# established a bound on index.
 				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
@@ -19123,7 +19237,12 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-					# We already checked that (index <= len), so (len - index) can't wrap
+					# We already checked that (index <= len), so (len - index) can't wrap.
+					# Wrapping rather than saturating is load-bearing for optimization, not
+					# just one instruction cheaper: a saturating subtract lowers to a
+					# conditional select, and that select blocks the range analysis that
+					# otherwise deletes this check outright inside a loop which has already
+					# established a bound on index.
 				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
@@ -19559,7 +19678,12 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-					# We already checked that (index <= len), so (len - index) can't wrap
+					# We already checked that (index <= len), so (len - index) can't wrap.
+					# Wrapping rather than saturating is load-bearing for optimization, not
+					# just one instruction cheaper: a saturating subtract lowers to a
+					# conditional select, and that select blocks the range analysis that
+					# otherwise deletes this check outright inside a loop which has already
+					# established a bound on index.
 				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
@@ -19579,7 +19703,12 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-					# We already checked that (index <= len), so (len - index) can't wrap
+					# We already checked that (index <= len), so (len - index) can't wrap.
+					# Wrapping rather than saturating is load-bearing for optimization, not
+					# just one instruction cheaper: a saturating subtract lowers to a
+					# conditional select, and that select blocks the range analysis that
+					# otherwise deletes this check outright inside a loop which has already
+					# established a bound on index.
 				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
@@ -19915,7 +20044,12 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-					# We already checked that (index <= len), so (len - index) can't wrap
+					# We already checked that (index <= len), so (len - index) can't wrap.
+					# Wrapping rather than saturating is load-bearing for optimization, not
+					# just one instruction cheaper: a saturating subtract lowers to a
+					# conditional select, and that select blocks the range analysis that
+					# otherwise deletes this check outright inside a loop which has already
+					# established a bound on index.
 				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
@@ -19935,7 +20069,12 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-					# We already checked that (index <= len), so (len - index) can't wrap
+					# We already checked that (index <= len), so (len - index) can't wrap.
+					# Wrapping rather than saturating is load-bearing for optimization, not
+					# just one instruction cheaper: a saturating subtract lowers to a
+					# conditional select, and that select blocks the range analysis that
+					# otherwise deletes this check outright inside a loop which has already
+					# established a bound on index.
 				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
@@ -20280,7 +20419,12 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-					# We already checked that (index <= len), so (len - index) can't wrap
+					# We already checked that (index <= len), so (len - index) can't wrap.
+					# Wrapping rather than saturating is load-bearing for optimization, not
+					# just one instruction cheaper: a saturating subtract lowers to a
+					# conditional select, and that select blocks the range analysis that
+					# otherwise deletes this check outright inside a loop which has already
+					# established a bound on index.
 				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
@@ -20300,7 +20444,12 @@ Builtin :: [].{
 				len = List.len(bytes)
 				if index > len {
 					Err(OutOfBounds)
-					# We already checked that (index <= len), so (len - index) can't wrap
+					# We already checked that (index <= len), so (len - index) can't wrap.
+					# Wrapping rather than saturating is load-bearing for optimization, not
+					# just one instruction cheaper: a saturating subtract lowers to a
+					# conditional select, and that select blocks the range analysis that
+					# otherwise deletes this check outright inside a loop which has already
+					# established a bound on index.
 				} else if len.minus_wrap(index) < 16 {
 					Err(OutOfBounds)
 				} else {
