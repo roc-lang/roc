@@ -2678,9 +2678,9 @@ const Inserter = struct {
     //   being rebound. Rebinding kills only that name's own binding — a
     //   rebound borrowed alias must not release its source's unit — so this
     //   one is keyed by the raw local id on purpose.
-    // - `noteEmittedRetain` / `noteEmittedRelease` replay already-emitted RC
-    //   statements into the state during boundary re-walks; emitted RC
-    //   statements name unit locals directly, so raw keying is exact there.
+    // - `noteEmittedRelease` replays already-emitted release statements into
+    //   the state during boundary re-walks; emitted RC statements name unit
+    //   locals directly, so raw keying is exact there.
     //
     // Per-instruction transfer functions (`transferFor*`,
     // `consumeAtTerminal`) — one per ownership-moving instruction kind.
@@ -2755,12 +2755,6 @@ const Inserter = struct {
         if (!owned.contains(target)) return false;
         owned.unset(target);
         return true;
-    }
-
-    /// Replays an already-emitted incref into the state during a boundary
-    /// re-walk (the only context where the walks see RC statements).
-    fn noteEmittedRetain(self: *Inserter, owned: *OwnedSet, value: LIR.LocalId) void {
-        self.placeUnit(owned, value);
     }
 
     /// Replays an already-emitted decref/free into the state during a
@@ -3146,26 +3140,6 @@ const Inserter = struct {
         if (collected) |list| {
             try list.append(self.emission_allocator, local);
         }
-    }
-
-    fn beginDeathScratch(self: *Inserter) *std.ArrayList(LIR.LocalId) {
-        self.death_scratch.clearRetainingCapacity();
-        return self.death_scratch;
-    }
-
-    fn beginTransferPositionScratch(self: *Inserter) *std.ArrayList(u32) {
-        self.transfer_position_scratch.clearRetainingCapacity();
-        return self.transfer_position_scratch;
-    }
-
-    fn takePostReleases(self: *Inserter, deaths: *const std.ArrayList(LIR.LocalId)) ResourceError![]const LIR.LocalId {
-        if (deaths.items.len == 0) return &.{};
-        return try self.emission_allocator.dupe(LIR.LocalId, deaths.items);
-    }
-
-    fn takeTransferPositions(self: *Inserter, positions: *const std.ArrayList(u32)) ResourceError![]const u32 {
-        if (positions.items.len == 0) return &.{};
-        return try self.emission_allocator.dupe(u32, positions.items);
     }
 
     fn canMoveSetLocalValue(
