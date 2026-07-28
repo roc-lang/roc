@@ -4765,8 +4765,9 @@ exactly as all-owned insertion would emit it.
 - `RcSig`: the solved ownership signature of one proc — a mode for every
   refcounted param and return position, plus the lifetime relation between
   borrowed returns and the params they may borrow from.
-- `ArcPlan`: stage-local, per-emission decisions for each statement: concrete
-  moves, retains, releases, call target, and uniqueness bits. It contains no
+- `ArcPlan`: one stage-local slot for a structured path in one ownership
+  context. Dependency-solver visits update the slot with concrete moves,
+  retains, releases, call demand, and uniqueness bits. It contains no
   ownership set, liveness row, or solver context.
 - materialization: consumes an `ArcPlan` and writes RC statements into LIR
   statement chains. Materialization makes no ownership or liveness decisions.
@@ -4943,12 +4944,22 @@ before solving and never weakened:
 ### Interprocedural Solving
 
 The solver performs one exact structural walk of every ownership-neutral proc
-body and records its reachable statements as a per-proc inventory. Pinned-proc
-escapes, call-graph SCCs, binding and signature facts, visibility edges,
-uniqueness facts, reachable returns, and join bodies are all projections of
-that inventory; none independently rediscovers CFG reachability. The inventory
-is stage-local and exact: it records every reachable statement and no
-unreachable statement, with no cap or approximation.
+body and records its reachable statements as a per-proc inventory. A neutral
+body may back several proc specs: caller-context facts are recorded once per
+proc, while definition and occurrence facts are recorded once per structurally
+distinct statement. Pinned-proc escapes, call-graph SCCs, binding and signature
+facts, visibility edges, uniqueness facts, reachable returns, and join bodies
+are typed projections of this lift; none independently rediscovers CFG
+reachability or decodes the same statements again. The inventory is
+stage-local and exact: it records every reachable statement and no unreachable
+statement, with no cap or approximation.
+
+The module solver constructs one dense domain containing exactly locals whose
+committed layouts participate in ARC. Binding tables, dependency edges,
+visibility sets, uniqueness sets, and their worklists use those dense indices;
+scalar and otherwise ARC-irrelevant locals allocate no solver rows. Once the
+fixed point settles, the result is expanded exactly once into LocalId-indexed
+lookup tables for ARC emission.
 
 The proc call graph is derived from the lifted `assign_call` statements. The
 parameter/return solver projects local definitions and static demands,
@@ -4979,6 +4990,13 @@ it. Holder-destroy facts are signature-independent and fixed before this
 worklist starts. Proc bits and local birth bits only turn on, each at most once,
 so unique-return solving never reruns whole-store uniqueness analysis.
 
+Visibility sharing is an undirected equivalence relation over the typed lift,
+so it is solved by union-find and then seeded per component. Pure-alias
+uniqueness uses the exact reverse source-to-alias relation: only dependents of a
+newly changed origin enter its worklist. After return modes settle, the second
+binding phase likewise revisits only changed borrowed-return call results and
+their transitive reverse borrow dependents.
+
 The reachable join-body facts collected during solving are also the sole input
 for emission's jump resolution. Emission must not rediscover join definitions
 by traversing the ownership-neutral graph again.
@@ -4998,11 +5016,20 @@ tail call there only when the values genuinely die earlier.
 
 ### RC Planning and Materialization
 
-After ownership summaries settle, planning consumes solved modes and precise
-lifetimes and produces an explicit `ArcPlan` for each structured path. The
-plan records every concrete move/retain/release decision and any call-variant
-or uniqueness choice. Materialization consumes those decisions and rebuilds
-statement chains with the same insertion machinery used today:
+The ownership-summary dependency solver also owns planning. Every structured
+root, control arm, join body, join remainder, and switch continuation has a
+stable `ArcPlan` slot. The key is the producer-authored structured path plus
+its ownership context, never statement id alone: the same neutral statement
+may be validly reached under several different states. When an entry summary
+shrinks, the solver revisits and replaces exactly that slot; a monotonically
+increasing slot version prevents an older queued visit from overwriting a
+newer decision. Join and switch dependencies patch their registered terminal
+plans when keep/common states change. Once the fixed point converges, direct
+call demands are mapped to final variants and every reachable plan is complete.
+
+Each plan records every concrete move/retain/release decision and call-variant
+or uniqueness choice. Materialization receives neither ownership state nor
+liveness and only follows completed plans to rebuild statement chains:
 
 - borrowed occurrence: no statements.
 - owned occurrence that is not the final occurrence on its path: `incref`
@@ -5040,9 +5067,15 @@ constructed directly from that proc's complete, unique, sorted `frame_locals`
 inventory. The domain contains only locals whose committed layouts contain
 refcounted data, their explicit ownership-unit and borrow-group representatives
 from the solved ownership graph, and the explicit group and
-borrowed-call-result bits required by the equations above. Every representative
-must belong to the same producer-authored proc inventory; a missing local is an
-invariant violation, never something ARC reconstructs from the statement graph.
+borrowed-call-result bits required by the equations above. Every ownership-unit
+and group-leader representative must belong to the same producer-authored proc
+inventory; a missing representative is an invariant violation, never something
+ARC reconstructs from the statement graph. A module-wide borrow group may also
+contain members from other proc specs that share ownership-neutral locals. The
+proc liveness domain counts exactly the members in its own frame, since an
+outside member cannot occur on one of that proc's paths. It derives those
+counts in one linear frame scan from the solved leader relation, so the module
+solution retains no redundant flat group-member table.
 Join ownership sets use the resource prefix of this same per-proc domain.
 Consequently neither ownership nor liveness rows are widened by locals from
 other procedures. Unrelated scalar locals are not ARC resources and never
@@ -5053,43 +5086,59 @@ ownership representatives to ARC's resource-bit width. Widening every row with
 non-resource or other-proc locals would make ARC memory quadratic in an input
 that needs only linear ownership work.
 
-The table carries exactly the same read-before-rebind decisions as the earlier
-on-demand forward scans. Compile-time performance work may change its storage
-or construction, but must not weaken the liveness questions, omit resource
-bits, or approximate the least fixed point.
+The table carries exact read-before-rebind decisions. Compile-time performance
+work may change its storage or construction, but must not weaken the liveness
+questions, omit resource bits, or approximate the least fixed point.
 
 Ownership sets and liveness rows whose explicit domain width fits in one
 machine word are stored inline; wider sets use exact allocated words. This is a
 representation choice made solely from the producer-authored domain width, not
-a heuristic. The liveness graph uses a reusable dense statement-to-node table,
-so successor, predecessor, and worklist edges are direct node indices rather
-than statement hash lookups. Keep-free rows are indexed directly by dense
-ownership-neutral statement id, while the less common loop-keep rows retain
-their exact `(statement, loop identity)` key.
+a heuristic. The ownership-neutral liveness graph is immutable and built once
+per source proc, then shared by every ownership variant emitted from that
+source. It uses a reusable dense statement-to-node table, so successors,
+predecessors, and worklist edges are direct node indices rather than statement
+hash lookups. Its strongly-connected-component condensation is solved in
+reverse dependency order: an acyclic singleton is evaluated once, and
+iteration occurs only inside genuinely cyclic components. Keep-free rows live
+at their compact graph nodes and the active source graph supplies their direct
+dense statement-to-node lookup.
+
+Each join receives a compact loop identity whose direct cache covers the
+forward closure of its explicit body and remainder roots. The join keep-set is
+an additional boundary fact on reachable loop-edge nodes. When that keep-set
+shrinks, ARC computes the exact new boundary row, seeds only loop edges whose
+rows actually changed, and propagates the delta through changed predecessors;
+it neither rebuilds the graph nor discards unaffected rows. Every loop-keyed
+query is therefore a direct `(loop identity, node index)` lookup with no map or
+statement scan.
 
 Join ownership is a must-property. Each reachable jump site contributes a
 state that can only shrink; a join summary maintains their running
 intersection incrementally, and recomputes the body keep-set from that exact
 meet plus the join parameters. A site contribution that shrinks without
 changing the global meet cannot schedule downstream work. Each loop identity
-also records exactly which liveness rows were cached for it and whether any of
-those rows read the loop keep-set. When the keep-set shrinks, only those rows
-are invalidated; ARC never scans the whole cache and never invalidates a row
-whose equation did not depend on the changed input.
+records whether its solved rows consumed any keep bits. A keep change that
+supplied no boundary bits schedules no liveness work.
+
+Join, jump-site, and continuation-switch identities are compact indices
+assigned by the structural lift. Summary tables and plan registrations use
+direct slices over those indices. Planning reuses per-emission death,
+transfer-position, and call-argument scratch buffers; only converged decisions
+are retained in stable `ArcPlan` storage.
 
 All solver-summary, planning, and materialization state for one proc emission
-has the same lifetime and is allocated from one proc-scoped arena. Emitted LIR remains in
-the `LirStore`; arena-backed plans, ownership snapshots, branch results, and
-decision slices are discarded together only after the proc body and metadata
-have been committed. `ArcPlan` is the phase boundary: plan construction may
-query ownership and liveness, while its materializer accepts neither and only
-follows the explicit decisions.
+has the same lifetime and is allocated from one proc-scoped arena. Emitted LIR
+remains in the `LirStore`; arena-backed plans, ownership snapshots, branch
+results, and decision slices are discarded together only after the proc body
+and metadata have been committed. `ArcPlan` is the phase boundary: dependency
+solving may query ownership and liveness while filling a slot; its materializer
+accepts neither and only follows the explicit decisions.
 
 Immediate `incref`/matching-`decref` cancellation is part of retain
 construction: count one cancels the pair and larger counts are reduced by one.
 The completed graph is never rewritten by a later RC-elision traversal. Final
-join metadata is likewise recorded at the exact point each rewritten join is
-emitted, checked for consistent duplicate ids, sorted once, and committed with
+join metadata is likewise recorded when each final join is materialized,
+checked for consistent duplicate ids, sorted once, and committed with
 the proc body; it is not recollected from the finished graph.
 
 The debug borrow certifier deliberately spends more: it re-certifies join

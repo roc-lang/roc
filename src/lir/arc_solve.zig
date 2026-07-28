@@ -90,11 +90,6 @@ pub const Solution = struct {
     /// Owned leader anchoring each local's liveness; the local itself when
     /// the binding is owned or is a borrowed parameter.
     leader: []u32,
-    /// Flat group-member storage indexed through `member_offsets`. Every
-    /// local's group contains at least itself.
-    member_offsets: []u32,
-    member_lens: []u32,
-    members: []u32,
     /// Source local of each pure same-value alias, or `no_local`.
     alias_source: []u32,
     /// Solved ownership signature per proc.
@@ -144,9 +139,6 @@ pub const Solution = struct {
     pub fn deinit(self: *Solution) void {
         self.borrowed.deinit(self.allocator);
         self.allocator.free(self.leader);
-        self.allocator.free(self.member_offsets);
-        self.allocator.free(self.member_lens);
-        self.allocator.free(self.members);
         self.allocator.free(self.alias_source);
         self.allocator.free(self.sigs);
         self.allocator.free(self.join_body_offsets);
@@ -243,15 +235,6 @@ pub const Solution = struct {
             if (steps > self.alias_source.len) solveInvariant("ARC alias-source chain contained a cycle");
         }
         return @enumFromInt(cursor);
-    }
-
-    /// Members of the leader's liveness group, including the leader.
-    pub fn groupMembers(self: *const Solution, leader: LIR.LocalId) []const u32 {
-        const index = @intFromEnum(leader);
-        if (index >= self.member_offsets.len) return &.{};
-        const offset = self.member_offsets[index];
-        const len = self.member_lens[index];
-        return self.members[offset..][0..len];
     }
 
     pub fn sigTable(self: *const Solution) arc_sig.SigTable {
@@ -376,6 +359,16 @@ const DirectCallFact = struct {
     next: LIR.CFStmtId,
 };
 
+/// One structurally distinct direct-call statement. A neutral LIR body can
+/// back more than one proc spec, so caller-sensitive call-graph facts live in
+/// `DirectCallFact` while definition and occurrence facts are counted once
+/// here, exactly like every other shared statement fact.
+const UniqueCallFact = struct {
+    callee: LIR.LirProcSpecId,
+    args: LIR.LocalSpan,
+    target: LIR.LocalId,
+};
+
 const BindingFact = union(enum) {
     fresh: LIR.LocalId,
     multi: LIR.LocalId,
@@ -463,6 +456,7 @@ const Solver = struct {
     /// Reachable direct calls, retained for the return-mode binding update
     /// and unique-return dependency solve.
     direct_calls: std.ArrayList(DirectCallFact),
+    unique_calls: std.ArrayList(UniqueCallFact),
     stack: std.ArrayList(LIR.CFStmtId),
 };
 
@@ -511,6 +505,7 @@ pub fn solve(
         .switch_index_by_stmt = try allocator.alloc(u32, store.cfStmtCount()),
         .pending_jumps = .empty,
         .direct_calls = .empty,
+        .unique_calls = .empty,
         .stack = std.ArrayList(LIR.CFStmtId).empty,
     };
     @memset(solver.proc_stmts, .empty);
@@ -559,6 +554,7 @@ pub fn solve(
         }
         solver.pending_jumps.deinit(allocator);
         solver.direct_calls.deinit(allocator);
+        solver.unique_calls.deinit(allocator);
         solver.stack.deinit(allocator);
         if (!solver_sigs_kept) allocator.free(solver.sigs);
     }
@@ -729,9 +725,6 @@ pub fn solve(
         .allocator = allocator,
         .borrowed = borrowed,
         .leader = leader,
-        .member_offsets = &.{},
-        .member_lens = &.{},
-        .members = &.{},
         .alias_source = alias_source,
         .sigs = solver.sigs,
         .join_body_offsets = join_body_offsets,
@@ -776,36 +769,6 @@ pub fn solve(
         solution.pinned.deinit(allocator);
     }
 
-    // Build flat group-member lists: every local lists at least itself;
-    // borrowed locals are appended to their leader's group.
-    const member_offsets = try allocator.alloc(u32, local_count);
-    errdefer allocator.free(member_offsets);
-    const member_lens = try allocator.alloc(u32, local_count);
-    errdefer allocator.free(member_lens);
-    @memset(member_lens, 0);
-
-    for (0..local_count) |index| {
-        member_lens[solution.leader[index]] += 1;
-    }
-    var offset: u32 = 0;
-    for (0..local_count) |index| {
-        member_offsets[index] = offset;
-        offset += member_lens[index];
-    }
-    const members = try allocator.alloc(u32, local_count);
-    errdefer allocator.free(members);
-    var fill = try allocator.alloc(u32, local_count);
-    defer allocator.free(fill);
-    @memset(fill, 0);
-    for (0..local_count) |index| {
-        const local_leader = solution.leader[index];
-        members[member_offsets[local_leader] + fill[local_leader]] = @intCast(index);
-        fill[local_leader] += 1;
-    }
-
-    solution.member_offsets = member_offsets;
-    solution.member_lens = member_lens;
-    solution.members = members;
     return solution;
 }
 
@@ -1137,15 +1100,22 @@ fn solveUniqueReturnModes(
 fn liftReachableStatements(solver: *Solver) SolveError!void {
     var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(solver.allocator, solver.store.cfStmtCount());
     defer seen.deinit(solver.allocator);
+    var facts_seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(solver.allocator, solver.store.cfStmtCount());
+    defer facts_seen.deinit(solver.allocator);
 
     for (0..solver.store.procSpecCount()) |proc_index| {
         const proc = solver.store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
-        const body = proc.body orelse continue;
         const params = solver.store.getLocalSpan(proc.args);
         for (0..GuardedList.borrowLen(params)) |param_index| {
             const param = GuardedList.at(params, param_index);
-            try solver.binding_facts.append(solver.allocator, .{ .fresh = param });
             try solver.unique_facts.append(solver.allocator, .{ .foreign = param });
+        }
+        // Bodyless procedures still have ABI parameter definitions. They
+        // contribute no reachable statements, but their params are foreign
+        // uniqueness origins just like the independent whole-store model.
+        const body = proc.body orelse continue;
+        for (0..GuardedList.borrowLen(params)) |param_index| {
+            try solver.binding_facts.append(solver.allocator, .{ .fresh = GuardedList.at(params, param_index) });
         }
         const stmts = &solver.proc_stmts[proc_index];
         solver.stack.clearRetainingCapacity();
@@ -1156,10 +1126,60 @@ fn liftReachableStatements(solver: *Solver) SolveError!void {
             seen.set(stmt_index);
             try stmts.append(solver.allocator, current);
             const stmt = solver.store.getCFStmt(current);
-            try liftStmtFacts(solver, @intCast(proc_index), current);
+            try liftProcStmtFacts(solver, @intCast(proc_index), current);
+            if (!facts_seen.isSet(stmt_index)) {
+                facts_seen.set(stmt_index);
+                try liftSharedStmtFacts(solver, current);
+            }
             try appendStructuralSuccessors(solver.allocator, solver.store, &solver.stack, stmt);
         }
         for (stmts.items) |stmt| seen.unset(@intFromEnum(stmt));
+    }
+}
+
+/// Projects facts whose identity includes the proc spec using a neutral body.
+/// The same statement may be visited here for several procs; statement-local
+/// definition and occurrence facts are separately lifted exactly once below.
+fn liftProcStmtFacts(solver: *Solver, proc_index: u32, current: LIR.CFStmtId) SolveError!void {
+    switch (solver.store.getCFStmt(current)) {
+        .assign_call => |assign| try solver.direct_calls.append(solver.allocator, .{
+            .caller = proc_index,
+            .callee = assign.proc,
+            .args = assign.args,
+            .target = assign.target,
+            .next = assign.next,
+        }),
+        .ret => |ret_stmt| try solver.proc_returns[proc_index].append(solver.allocator, @intFromEnum(ret_stmt.value)),
+        .join => |join_stmt| {
+            const joins = &solver.proc_join_bodies[proc_index];
+            const join_index: u32 = @intCast(joins.items.len);
+            const stmt_index = @intFromEnum(current);
+            if (solver.join_index_by_stmt[stmt_index] == no_local) {
+                solver.join_index_by_stmt[stmt_index] = join_index;
+            } else if (solver.join_index_by_stmt[stmt_index] != join_index) {
+                solveInvariant("shared ARC join statement had different structural indices across proc specs");
+            }
+            try joins.append(solver.allocator, .{
+                .id = join_stmt.id,
+                .body = join_stmt.body,
+            });
+        },
+        .jump => |jump_stmt| try solver.pending_jumps.append(solver.allocator, .{
+            .proc = proc_index,
+            .stmt = current,
+            .target = jump_stmt.target,
+        }),
+        .switch_stmt => |switch_stmt| if (switch_stmt.continuation != null) {
+            const stmt_index = @intFromEnum(current);
+            const switch_index = solver.switch_count_by_proc[proc_index];
+            if (solver.switch_index_by_stmt[stmt_index] == no_local) {
+                solver.switch_index_by_stmt[stmt_index] = switch_index;
+            } else if (solver.switch_index_by_stmt[stmt_index] != switch_index) {
+                solveInvariant("shared ARC switch statement had different structural indices across proc specs");
+            }
+            solver.switch_count_by_proc[proc_index] += 1;
+        },
+        else => {},
     }
 }
 
@@ -1179,13 +1199,14 @@ fn resolveJumpIndices(solver: *Solver) void {
         const join_index = target_index orelse solveInvariant("ARC jump targeted a join absent from its lifted procedure");
         const join = &joins.items[join_index];
         const stmt_index = @intFromEnum(pending.stmt);
-        if (solver.jump_target_join_index_by_stmt[stmt_index] != no_local or
-            solver.jump_site_index_by_stmt[stmt_index] != no_local)
+        if (solver.jump_target_join_index_by_stmt[stmt_index] == no_local) {
+            solver.jump_target_join_index_by_stmt[stmt_index] = join_index;
+            solver.jump_site_index_by_stmt[stmt_index] = join.jump_count;
+        } else if (solver.jump_target_join_index_by_stmt[stmt_index] != join_index or
+            solver.jump_site_index_by_stmt[stmt_index] != join.jump_count)
         {
-            solveInvariant("ARC lift assigned one jump statement twice");
+            solveInvariant("shared ARC jump statement had different structural indices across proc specs");
         }
-        solver.jump_target_join_index_by_stmt[stmt_index] = join_index;
-        solver.jump_site_index_by_stmt[stmt_index] = join.jump_count;
         join.jump_count += 1;
     }
 }
@@ -1588,11 +1609,7 @@ fn liftVisibilitySeed(solver: *Solver, local: LIR.LocalId) SolveError!void {
     try solver.visibility_facts.append(solver.allocator, .{ .seed = local });
 }
 
-fn liftStmtFacts(
-    solver: *Solver,
-    proc_index: u32,
-    current: LIR.CFStmtId,
-) SolveError!void {
+fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
     const store = solver.store;
     const allocator = solver.allocator;
     switch (store.getCFStmt(current)) {
@@ -1667,12 +1684,10 @@ fn liftStmtFacts(
         },
         .init_uninitialized => {},
         .assign_call => |assign| {
-            try solver.direct_calls.append(allocator, .{
-                .caller = proc_index,
+            try solver.unique_calls.append(allocator, .{
                 .callee = assign.proc,
                 .args = assign.args,
                 .target = assign.target,
-                .next = assign.next,
             });
             try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
             const args = store.getLocalSpan(assign.args);
@@ -1854,14 +1869,6 @@ fn liftStmtFacts(
         .free => {},
         .switch_stmt => |switch_stmt| {
             try solver.unique_facts.append(allocator, .{ .read = switch_stmt.cond });
-            if (switch_stmt.continuation != null) {
-                const stmt_index = @intFromEnum(current);
-                if (solver.switch_index_by_stmt[stmt_index] != no_local) {
-                    solveInvariant("ARC lift assigned one continuation switch twice");
-                }
-                solver.switch_index_by_stmt[stmt_index] = solver.switch_count_by_proc[proc_index];
-                solver.switch_count_by_proc[proc_index] += 1;
-            }
         },
         .switch_initialized_payload => |switch_stmt| try solver.unique_facts.append(allocator, .{ .read = switch_stmt.cond }),
         .str_match => |str_match| {
@@ -1922,27 +1929,9 @@ fn liftStmtFacts(
                 solver.maybe_uninitialized_condition[param_index] = @intFromEnum(condition);
                 solver.maybe_uninitialized_condition_mask[param_index] = mask;
             }
-            const joins = &solver.proc_join_bodies[proc_index];
-            const join_index: u32 = @intCast(joins.items.len);
-            const stmt_index = @intFromEnum(current);
-            if (solver.join_index_by_stmt[stmt_index] != no_local) {
-                solveInvariant("ARC lift assigned one join statement twice");
-            }
-            solver.join_index_by_stmt[stmt_index] = join_index;
-            try joins.append(allocator, .{
-                .id = join_stmt.id,
-                .body = join_stmt.body,
-            });
         },
-        .ret => |ret_stmt| {
-            try solver.proc_returns[proc_index].append(allocator, @intFromEnum(ret_stmt.value));
-            try solver.unique_facts.append(allocator, .{ .consume = ret_stmt.value });
-        },
-        .jump => |jump_stmt| try solver.pending_jumps.append(allocator, .{
-            .proc = proc_index,
-            .stmt = current,
-            .target = jump_stmt.target,
-        }),
+        .ret => |ret_stmt| try solver.unique_facts.append(allocator, .{ .consume = ret_stmt.value }),
+        .jump => {},
         .crash, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
     }
 }
@@ -2091,7 +2080,7 @@ fn computeVisibilityFromFacts(
     // Direct-call return flow depends only on the lifted call and return
     // facts, but returns may be encountered after their callers during the
     // structural walk, so connect them after the lift is complete.
-    for (solver.direct_calls.items) |call| {
+    for (solver.unique_calls.items) |call| {
         if (solver.store.getProcSpec(call.callee).body == null) continue;
         const target = domain.indexOf(call.target) orelse continue;
         for (solver.proc_returns[@intFromEnum(call.callee)].items) |return_local| {
@@ -2736,12 +2725,13 @@ fn computeUniquenessFromFacts(
 
     // Direct-call facts are static, but their return origins and argument
     // occurrences consume the final signature table.
-    for (solver.direct_calls.items) |call| {
-        const target = domain.indexOf(call.target) orelse continue;
-        Marks.trackDef(&has_def, &multi_def, target);
+    for (solver.unique_calls.items) |call| {
         const sig = solver.sigs[@intFromEnum(call.callee)];
-        if (sig.ret_unique) born.set(target) else foreign.set(target);
-        try origins.noteCall(call.callee, call.target);
+        if (domain.indexOf(call.target)) |target| {
+            Marks.trackDef(&has_def, &multi_def, target);
+            if (sig.ret_unique) born.set(target) else foreign.set(target);
+            try origins.noteCall(call.callee, call.target);
+        }
         const args = solver.store.getLocalSpan(call.args);
         for (0..GuardedList.borrowLen(args)) |position| {
             const arg = domain.indexOf(GuardedList.at(args, position)) orelse continue;
@@ -2755,6 +2745,8 @@ fn computeUniquenessFromFacts(
 
     var foreign_iter = foreign.iterator(.{});
     while (foreign_iter.next()) |index| born.unset(index);
+    var multi_iter = multi_def.iterator(.{});
+    while (multi_iter.next()) |index| born.unset(index);
     for (alias_targets.items) |target| {
         born.unset(target);
         if (multi_def.isSet(target)) destroyed.set(target);
@@ -3212,6 +3204,13 @@ fn computeUniquenessDetailed(
     // occurrence anywhere.
     var foreign_iter = foreign_def.iterator(.{});
     while (foreign_iter.next()) |index| born.unset(index);
+
+    // A flow-insensitive uniqueness bit denotes one concrete allocation
+    // origin. Even when every definition is individually fresh, a local with
+    // several definitions can name different runtime allocations and does
+    // not have one statically trackable birth.
+    var multi_iter = multi_def.iterator(.{});
+    while (multi_iter.next()) |index| born.unset(index);
 
     // An alias target's origin derives from its source, so a birth bit set
     // by another of its definitions must not stand on its own (the alias
