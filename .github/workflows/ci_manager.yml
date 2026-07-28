@@ -191,7 +191,9 @@ jobs:
         include:
           - os: ubuntu-24.04
             shard: ubuntu-full
-            timeout_minutes: 120
+            # This unsharded lane includes both exhaustive evaluator corpora,
+            # so keep enough headroom for the remaining integration tests.
+            timeout_minutes: 180
             minici_args: []
           - os: macos-15
             shard: macos-core
