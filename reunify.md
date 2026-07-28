@@ -147,16 +147,28 @@ This project does not:
 ## 3. Premise ledger: what verification established
 
 Verification passes (2026-07-21/22) checked the current-state claims
-against the code; hypotheses that remain open are marked as Slice 0
-measurements. Implementers should treat this ledger as authoritative.
+against the code; a re-verification pass (2026-07-28) re-checked every one
+of them after `origin/main` merged in, and rewrote the entries main had
+overtaken. Entries carrying **[main]** are ones main resolved
+independently of this branch. Implementers should treat this ledger as
+authoritative.
 
 **Confirmed true:**
 
-- The Monotype re-solver machinery (refill-in-place, deferral-until-stable,
-  snapshot-on-import, conflict-on-over-demand) exists exactly as described
-  (§6.6) and is a coordinated defense against one root cause: types move
-  during lowering because lowering re-solves them. `monotype/solve.zig`'s
-  own comments and a comptime `assertNoNodeId` test already pin the intended
+- **[main, partly resolved]** The Monotype re-solver machinery was a
+  coordinated defense against one root cause: types move during lowering
+  because lowering re-solves them. Two of its four legs are gone. Refill-
+  in-place is deleted: a solved node is read only as an immutable snapshot
+  (`GraphTypeFinals`, `initActiveSnapshot`, `sealNode`, `freezeRelations`
+  in `monotype/solve.zig`), and `structural_test.zig` pins the refill API's
+  absence. Deferral survives under a new name and a new trigger:
+  `DraftTemplateSpec` with `state: DraftSpecState` in
+  `BodyDraftStore.template_specs`, resolved by
+  `Builder.resolveDeferredTemplateSpecs` **after the caller's graph has
+  frozen**, rather than once the requester's types stop moving.
+  Snapshot-on-import and conflict-on-over-demand remain, and the second is
+  now stronger (see the `importMono` entry below). `monotype/solve.zig`'s
+  own comments and a comptime `assertNoNodeId` test still pin the intended
   end state ("Completed Monotype views must expose only `TypeId`s and
   durable AST ids, never these graph-local ids").
 - The Monotype stage reads **no mutable `src/types` solver state** — only
@@ -171,38 +183,62 @@ measurements. Implementers should treat this ledger as authoritative.
 - The Lambda Solved architecture is a faithful port of cor's `lss`
   lambdasolved with one deliberate divergence (§12.3), and its exemption
   from this project is correct (§12.1).
-- A hash-consing interner for Monotype types **already exists** as tested
-  scaffold (`src/postcheck/monotype/type.zig`, `Interner`/`InternerState`,
-  digest probe + collision-bucket exact equality + recursive-group support).
-  Production `Store.add` bypasses it today. Two properties it does **not**
-  yet have, stated here so they are built rather than assumed: its digest
-  and equality paths unwrap **every backed alias**, with no
-  `builtin_owner` exception, while `dispatchHeadContent` alone retains a
-  builtin-owned alias as a dispatch head and checked canonical keys
-  (`canonical_type_keys.zig`) preserve alias identity. Those are three
-  different alias stories today; §8.2 chooses one target and Slice 3 changes
-  storage, digest, equality, dispatch-head use, and verification together.
-  Its recursive-group builder also registers only the selected group root
-  in the interner bucket, so entry-order-independent identity for every
-  cyclic node is a build task (§8.3), not an inherited property.
+- A hash-consing interner for Monotype types exists and now sits **at the
+  production construction boundary**: `Store`'s own `intern*` constructors
+  (`internFunc`, `internRecord`, `internTagUnion`, `internNamed`,
+  `internRecursiveGroupRoot`, `internFilledNode`, …) are the entry points
+  every Monotype construction goes through, and `enableInterning` /
+  `internEnabled` is the switch that turns content dedup on for a store.
+  Dedup is **off** on production stores, so today each call is a plain add;
+  the canonicalization the constructors perform (record-field
+  normalization, storage-transparent alias erasure in `internNamed`) is
+  independent of the switch and is always in force. `excludeFromDedup`
+  keeps a snapshot id that reads a live graph node out of the buckets.
+  Two properties it does **not** yet have, stated here so they are built
+  rather than assumed: its digest and equality paths unwrap **every backed
+  alias**, with no `builtin_owner` exception, while `dispatchHeadContent`
+  alone retains a builtin-owned alias as a dispatch head and checked
+  canonical keys (`canonical_type_keys.zig`) preserve alias identity. Those
+  are three different alias stories today; §8.2 chooses one target and the
+  remaining Slice 3 work changes digest, equality, dispatch-head use, and
+  verification together. Its recursive-group builder also registers only the
+  selected group root in the interner bucket, so entry-order-independent
+  identity for every cyclic node is a build task (§8.3), not an inherited
+  property.
 - The checker already computes the instantiation mapping this design
-  publishes: `src/types/instantiate.zig`'s `Instantiator.var_map` holds the
-  resolved source-variable → fresh-variable map for each instantiation, and
-  a narrower persistence mechanism already exists (`ModuleEnv.
-  SchemeUseRecord`, with slot kinds like `value_use` / `nested_function_use`
-  / `shared_value_use`, whose fresh vars are resolved at publication).
-  Today it records only constrained variables for selected use kinds — the
-  infrastructure is partial, not absent.
+  needs: `src/types/instantiate.zig`'s `Instantiator.var_map` holds the
+  resolved source-variable → fresh-variable map for each instantiation.
+  `ModuleEnv.SchemeUseRecord` (slot kinds `value_use` /
+  `nested_function_use` / `dispatch_target` / `shared_value_use`) still
+  records only the constrained scheme vars, in nondeterministic map order.
+  Alongside it, `ModuleEnv.SchemeUseSiteRecord` now records the
+  **complete actual vector positionally**, keyed by
+  `(use_node, slot_kind, slot_data, scheme_owner_node)` with a
+  `defining_module_hash` for imported schemes; its written form is
+  `CheckedInstantiationSite`, which carries `actuals_start`/`actuals_len`
+  into `CheckedTypeStore.instantiation_site_actuals` (unreached positions
+  marked by `checked_instantiation_actual_unreached`) and
+  `evidence_start`/`evidence_len` into `StaticDispatchPlanTable.evidence_refs`.
+  Nothing lowers from it yet — it is verified data, not authority.
 
 **Failed verification — corrected in this document:**
 
-- **"The scheme representation already exists."** Only structurally.
-  `CheckedTypeScheme.gv_start`/`gv_len` (`src/check/checked_artifact.zig`)
-  default to zero and no production publication site sets them; the only
-  writer of nonzero ranges is a serialization test. `generalizedVars()`
-  returns an empty slice for every real scheme, and nested let-generalized
-  definitions get no scheme entry at all. Publishing binders is real
-  checking-side work (§7.1, Slice 2).
+- **"The scheme representation already exists."** It did not; it does now.
+  When this ledger was first written, `CheckedTypeScheme.gv_start`/`gv_len`
+  (`src/check/checked_artifact.zig`) defaulted to zero, no production site
+  set them, `generalizedVars()` returned an empty slice for every real
+  scheme, and nested let-generalized definitions got no scheme entry at
+  all. Slice 2 closed that gap: `Check.captureSchemeSnapshot` selects the
+  binders at `Rank.generalized` in `identityVarsFromVar` order and records
+  them through `ModuleEnv.recordSchemeSnapshot`, and
+  `publishSchemeSnapshot` writes them into `type_id_pool` from three
+  production sites — required values, top-level defs, and
+  `publishNestedSchemes` for every otherwise-unwritten
+  `SchemeSnapshotRecord.owner_node` (annotation-owned schemes, inner
+  lambdas, block-local bindings). Schemes also gained `snapshot_root` and
+  `CheckedCapturedBinder` (`captured_start`/`captured_len`). Consumers read
+  the binders: `spec_rehearsal.zig`, `reunify_shadow/shadow.zig`, and the
+  `scheme.gv_len == site.actuals_len` boundary check.
 - **"Poisoned `.err` types legitimately reach postcheck."** False.
   `problemAllowsLoweringWithUserErrors` (`src/compile/compile_package.zig`)
   returns `false` for `.type_mismatch` and every type-shaped problem; the
@@ -219,12 +255,19 @@ measurements. Implementers should treat this ledger as authoritative.
   lookup is reserved for compiler-generated edges with no checked
   instantiation record. Preserved verbatim (§9.7).
 - **"Specialization requests are ground and final by construction."**
-  Unproven; today's code contains counter-mechanisms: the requested-vs-
-  solved distinction in `monotype/specialize.zig`, expected-return
-  back-constraints (`instantiateCallTypeFromCallerAtType`), callee-row
-  widening flowing backward into the requester's node, and `importMono`
-  keeping imported tag unions extensible. Each occurrence is measured and
-  classified in Slice 0 before anything is deleted (§6.7).
+  Partly proven now. The counter-mechanisms have thinned: **[main]**
+  `importMono` copies an unlinked Monotype in as **closed** structure
+  (`.ext = newNode(.empty_tag_union)` for tag unions,
+  `.ext = newNode(.empty_record)` for records), so a later attempt to widen
+  it is a unification conflict rather than a silent rewrite of another
+  specialization's final type — callee-row widening can no longer flow
+  backward into the requester's node. What remains is the requested-vs-
+  solved distinction in `monotype/specialize.zig` (`refineRequest`,
+  `appendAliasEntry`) and the expected-return back-constraint. The corpus
+  measurement (§13.3) shows the requested and solved digests differ on 12
+  snapshot-corpus records and that every measured constraint-replay site
+  outside the new binder gap is redundant, so the remaining mechanisms
+  carry no logical information the checked data lacks.
 - **"Only recursive specialization requests need representation
   stabilization."** False as a premise. Calls are discovered mid-body and
   today's builder defers every procedure-template request made inside the
@@ -237,10 +280,35 @@ measurements. Implementers should treat this ledger as authoritative.
   False. Monotype mints iterator representations and applies an explicit
   tier relation (`IteratorRepresentation`: `none`/`minted`/`forced_dynamic`
   with `public_minted`/`forced_dynamic`/`minted_join` outcomes,
-  `monotype/type.zig`, shared with Lambda Solved); generated opaque
-  evidence has score-based backing selection. These are legitimate
-  representation joins and get a named home (§10) instead of deletion or
-  denial.
+  `Type.iteratorRelation` in `monotype/type.zig`, shared with Lambda
+  Solved); generated opaque evidence selects a backing. These are
+  legitimate representation joins and get a named home (§10) instead of
+  deletion or denial. Two things about them changed with main, and §10 must
+  be read against the new shape:
+  - **[main]** Backing selection is no longer by score.
+    `generatedOpaqueEvidenceScore`, `generatedBackingScore` and
+    `isScoreSelectedEvidenceOwner` are deleted; the producer-authored
+    `BackingAuthority` (`generated_private` vs `checked_public`) decides,
+    deterministically, in `unifyGeneratedOpaqueBacking` and
+    `relateGeneratedPrivateEvidence`. Score selection survives **only** in
+    `representation_policy.zig` (`chooseGeneratedEvidenceBacking`,
+    `evidenceOwnerUsesScoreSelection`), which no production stage consults
+    — its readers are the closure engine and the Debug rehearsal, and both
+    real producers pass `.score = 0`.
+  - **[main]** Monotype no longer calls the shared tier function at unify
+    time. `InstGraph.iteratorRelation` wraps `Type.iteratorRelation` and,
+    for two `.minted` operands, refines the answer using in-graph
+    provenance the shared descriptors cannot see:
+    `InstNamed.generated_iterator` presence and `callable_evidence` digest
+    equality, `def.iterator_kind`, and `sameNamedArgs`. Tier inputs are
+    also no longer minted at node creation:
+    `finalizeGeneratedIteratorRepresentations` computes
+    `generatedIteratorDepth` and `iteratorRootRequiresForcedDynamic` after
+    relation production and before any durable Monotype is sealed. The
+    graph is therefore strictly better informed than a descriptor-only
+    policy, which §10 must state rather than assume away — the Debug
+    representation mirror still asserts the two agree, and on the merged
+    tree that assertion fires (§13.3).
 - **"A production matching walk is the right way to compute bindings."**
   Rejected in this consolidation. A matching walk must re-implement type
   equality (alias transparency, head canonicalization, nominal backing
@@ -249,18 +317,28 @@ measurements. Implementers should treat this ledger as authoritative.
   binder assignments in `var_map`; this design publishes them (§7.2) and
   demotes the matcher to a Debug boundary verifier (§7.6).
 - **Interning silently coarsens lambda sets through the cloning boundary.**
-  `lambda_solved`'s `TypeCloner` memo is keyed on Monotype `TypeId` within
-  each clone, so hash-consing structurally equal function types would merge
-  callable slots without any value-flow edge (`{ f : I64 -> I64,
-  g : I64 -> I64 }` sharing one slot). Occurrence-based cloning lands
-  before interning (§12.5, Slice 1).
+  `lambda_solved`'s `TypeCloner` memo was keyed on Monotype `TypeId` within
+  each clone, so hash-consing structurally equal function types would have
+  merged callable slots without any value-flow edge (`{ f : I64 -> I64,
+  g : I64 -> I64 }` sharing one slot). Slice 1 closed this: the cloner
+  keeps an active-path map rather than a completed-graph memo, so a
+  reservation is reused only by a genuine recursive back edge and a later
+  non-recursive occurrence of one monotype id clones fresh with its own
+  callable slot. Callable-free subgraphs may still share a completed clone,
+  behind a `containsCallableOccurrence` proof (§12.5).
 - **The lambda decision inventory was undercounted ~3× in early drafts.**
-  The verified census (§12.4 item 5) includes the alias unwrap, the
-  score-selected evidence backings (`unifyGeneratedOpaqueBacking` and its
-  expression-side twin), and four distinct iterator joins
-  (`unifyForcedDynamicIterator`, `unifyIteratorOwnerStampedPublic`,
-  `unifyGeneratedIteratorJoin`, `unifyPublicGeneratedIterator`) — all
-  verified present in `lambda_solved/solve.zig`.
+  The verified census (§12.4 item 5) includes the alias unwrap
+  (`transparentAliasBacking`), the generated-private evidence relation
+  (`unifyGeneratedOpaqueBacking` and its expression-side twin), and four
+  distinct iterator joins (`unifyForcedDynamicIterator`,
+  `unifyIteratorOwnerStampedPublic`, `unifyGeneratedIteratorJoin`,
+  `unifyPublicGeneratedIterator`) — all verified present in
+  `lambda_solved/solve.zig`. **[main]** Two of the items that drove the
+  original undercount are now deleted rather than classified:
+  `in_iter_backing` and `forced_dynamic_backings`, both of which lived in
+  the erasure and cloning passes. The census list is pinned by line count
+  in `ci/check_reunify_manifest.pl`, so it can no longer drift out of date
+  silently.
 - **The Lambda-Mono differential harness cannot detect mutations inside
   `lambda_solved`.** Both of its sides consume the same solved program, so
   a mutated set corrupts both identically; set-coarsening is usually
@@ -436,16 +514,22 @@ Notes:
   numeral oracles (`literal_defaulting`, `exact_numeral`) for precisely
   this downstream consumer.
 
-### 6.2 Schemes: the container exists; the data must be published
+### 6.2 Schemes: the container and the data both exist now
 
-`CheckedTypeScheme` (`id`, `key`, `root`, `gv_start`, `gv_len`) and its
-`generalizedVars()` accessor exist and round-trip through serialization.
-But per the ledger (§3): production leaves the ranges zero, nested schemes
-have no entries, and today's consumer reads only `.root` and re-derives
-generalization in its own graph — the project's disease in miniature.
-`SchemeUseRecord` shows the checker can persist use-site instantiation data;
-it currently records only dispatch-constrained variables for selected use
-kinds. §7 turns both into complete, verified artifact data.
+`CheckedTypeScheme` (`id`, `key`, `root`, `snapshot_root`, `gv_start`,
+`gv_len`, `captured_start`, `captured_len`) and its `generalizedVars()`
+accessor exist, carry real data, and round-trip through serialization.
+Slice 2 closed the gap this section originally described: binders are
+selected at generalization (`Check.captureSchemeSnapshot`), carried on
+`ModuleEnv.scheme_snapshot_binders`, and written by `publishSchemeSnapshot`
+for required values, top-level defs, and — through `publishNestedSchemes` —
+every nested owner (annotation-owned schemes, inner lambdas, block-local
+bindings). `CheckedInstantiationSite` carries the positional actual vector
+and the evidence range for each use site (§7.2).
+
+What has **not** happened is the consumer change: Monotype still reads
+`.root` and re-derives generalization in its own graph. The data is
+verified and inert; the disease is now confined to the consumer.
 
 ### 6.3 Canonical type keys, and identity layering
 
@@ -489,20 +573,42 @@ this project preserves it verbatim (§9.7).
 
 > "Checked types instantiate into union-find nodes with explicit row
 > extension links; constraints unify nodes order-independently; Monotypes
-> are materialized views of solved nodes, refilled in place when their node
-> gains evidence. Cross-specialization edges import finished Monotypes as
-> snapshots, so a specialization that needs more than its requested type is
-> a unification conflict rather than a silent rewrite of another
-> specialization's final type."
+> use immutable read-only snapshots of fully resolved nodes.
+> Cross-specialization edges import finished Monotypes as snapshots, so a
+> specialization that needs more than its requested type is a unification
+> conflict rather than a silent rewrite of another specialization's final
+> type."
 
-Concretely: a fresh union-find graph (`InstGraph`) per specialization;
-`InstVariable` nodes carrying checked defaulting evidence; dozens of
-unification sites across `solve.zig` and `lower.zig`; mutable Monotype
-views (`addMonoView`/`monoFor`/`fillMono`/`importMono`) refilled as
-evidence arrives and sealed at the end; `unsolved_monos` tracking; template
-requests deferred until the requester's types stop moving
-(`DeferredTemplate`, whose `method_scope: checked.ModuleId` carries the
-registry scope); finished specializations imported as one-way snapshots.
+Concretely, as the merged tree stands:
+
+- A fresh union-find graph (`InstGraph`) per specialization, created in
+  `lowerTemplateWithMono` and destroyed with it; `InstVariable` nodes
+  carrying checked defaulting evidence. **[main]** Each specialization's
+  graph is independent — cross-specialization edges carry finished
+  Monotypes, never shared mutable state.
+- **[main]** Mutable Monotype views are gone. `addMonoView`, `fillMono`,
+  `registerNodeType`, `drainDirty`, `pointInTimeTypeForNode` and
+  `unsolved_monos` are deleted, and `structural_test.zig` pins their
+  absence. A node is read as an immutable snapshot through
+  `GraphTypeFinals` (`initActiveSnapshot`, `sealNode`), gated by
+  `freezeRelations`; `monoFor` survives only as the private snapshot
+  helper behind `activeTypeViewForNode`/`finalTypeViewForNode`.
+- **[main]** `importMono` imports **closed**: an unlinked Monotype copies
+  in with `.ext = newNode(.empty_tag_union)` / `.empty_record`, so callee
+  evidence can no longer widen a requester's imported row.
+- **[main]** `DeferredTemplate` is deleted. The deferral it named survives
+  as `DraftTemplateSpec` (`state: DraftSpecState` of
+  `deferred`/`lowering`/`lowered`/`resolved`) held in
+  `BodyDraftStore.template_specs`, resolved by
+  `Builder.resolveDeferredTemplateSpecs` once the caller's graph has
+  frozen and checked by `verifyDraftTemplateSpecsResolved`. Its
+  `method_scope: checked.ModuleId` still carries the registry scope.
+- The exact surface is pinned in `ci/check_reunify_manifest.pl`:
+  `InstGraph.create` 33 in `solve.zig` + 28 in `lower.zig`, `.unify(` 19 +
+  42, `importMono` 15 + 23, plus the named row/backing entry points
+  (`unifyRoots`, `unifyConcrete`, `unifyThroughBacking`, `unifyTagRows`,
+  `unifyRecordRows`, `unifyRowWithEmpty`, `writeOrQueueTagRest`,
+  `writeOrQueueRecordRest`).
 
 The specialization registry (`monotype/specialize.zig`) models the request
 lifecycle explicitly: records are *reserved* (key registered) strictly
@@ -510,10 +616,12 @@ before lowering, a still-reserved record's request can be *refined* after a
 requester's graph seals a deferred request, and completion records the
 solved type — when the solved digest differs from the requested one, the
 solved shape becomes an alias lookup entry pointing at the same record
-(never a rekey). **The requested/solved distinction is not hypothetical;
-whether the difference ever carries information the frozen checked types
-lack is the migration's most important empirical question, and Slice 0
-measures it rather than assuming the answer.**
+(never a rekey). The requested/solved distinction is not hypothetical: the
+snapshot corpus records 12 `solved_digest_differs_from_request` events.
+Whether that difference carries information the frozen checked types lack
+was the migration's most important empirical question, and §13.3's
+measurement answers it — at every constraint-replay site the census
+reaches, it does not.
 
 ### 6.7 What the graph actually decides
 
@@ -527,11 +635,12 @@ Every class of work the graph performs, mapped to its target home:
    `List U64` is expected — is bound by context today). Published actuals
    cover this by construction, because checking saw the whole relation.
 2. **Symmetric row solving** — `unifyTagRows`/`unifyRecordRows` mint fresh
-   extensions and distribute disjoint remainders in both directions, and
-   `importMono` keeps imported tag unions extensible so callee evidence can
-   widen a requester's row. Target: rows are settled at the checked
-   boundary. Whether today's two-sided flow ever adds information the
-   frozen types lack is the Slice 0 groundness measurement; any
+   extensions and distribute disjoint remainders in both directions.
+   **[main]** The import half of this is closed: `importMono` no longer
+   keeps imported tag unions extensible, so callee evidence cannot widen a
+   requester's row. Target: rows are settled at the checked boundary. The
+   groundness measurement found no constraint-replay execution that carried
+   row information (`row_width` is zero at every measured site); any future
    counterexample is fixed by recording fuller rows at finalization — never
    by keeping a row solver.
 3. **Defaulting application** — `numeric_default_phase` → the shared
@@ -543,26 +652,32 @@ Every class of work the graph performs, mapped to its target home:
    dispositions (§7.4).
 4. **Dispatch-evidence consumption** — already lookup, not inference;
    carries over with its scoping unchanged (§9.7).
-5. **Representation decisions** — postcheck-minted facts joined by explicit
-   policy: the iterator tier relation (shared with LambdaSolved),
-   generated-evidence backing selection, and nominal-wraps-structural root
-   selection (`unifyThroughBacking` keeps the nominal as the shared root).
-   These are neither re-derivation nor substitution; they become the
-   representation algebra (§10). The empty-tag-union-yields-to-concrete
-   behavior is deliberately **not** in this category: an empty tag union
-   acting as an unresolved slot is either checked bottom/residual data
-   (§7.4) or import bookkeeping that deletes with the graph — Slice 0's
-   classification assigns each occurrence, and §10.5 bans it from the
-   algebra. (Lambda Solved's own empty-tag-union tie-break stays where it
-   is, in that solver's census — §12.4.)
-6. **Snapshot/refill/logical-deferral bookkeeping** — consequence-management
-   of re-solving; deletes with the graph. The *semantic* need to wait for a
-   call's representation inputs is real even when the call is not recursive:
-   a representation slot can gain information later in its caller's draft.
-   That residue becomes §11's explicit pre-publication representation
-   dependency scheduling. It carries no logical unknown, never revises a
-   checked substitution, and is not the current `DeferredTemplate`
-   mechanism under another name.
+5. **Representation decisions** — postcheck-minted content joined by
+   explicit policy: the iterator tier relation (`InstGraph.iteratorRelation`
+   over the shared `Type.iteratorRelation`, plus the pre-seal
+   `finalizeGeneratedIteratorRepresentations` pass), generated-evidence
+   backing selection **[main]** by producer `BackingAuthority` rather than
+   by score, and nominal-wraps-structural root selection
+   (`unifyThroughBacking` keeps the nominal as the shared root). These are
+   neither re-derivation nor substitution; they become the representation
+   algebra (§10). The empty-tag-union-yields-to-concrete behavior is
+   deliberately **not** in this category: an empty tag union acting as an
+   unresolved slot is either checked bottom/residual data (§7.4) or import
+   bookkeeping that deletes with the graph; §10.5 bans it from the algebra.
+   **[main]** Lambda Solved's own named empty-tag-union tie-break
+   (`isEmptyTagUnion`) is deleted; the behavior survives only inline in the
+   same-constructor tag-union arm, and `seamResidualShapesAgree` now makes
+   cross-constructor yielding impossible.
+6. **Snapshot and logical-deferral bookkeeping** — consequence-management
+   of re-solving; deletes with the graph. **[main]** The refill half is
+   already gone (§6.6); what is left is snapshotting plus
+   `DraftTemplateSpec` deferral. The real need to wait for a call's
+   representation inputs holds even when the call is not recursive: a
+   representation slot can gain information later in its caller's draft.
+   That residue becomes §11's explicit pre-seal representation dependency
+   scheduling. It carries no logical unknown, never revises a checked
+   substitution, and is not the current draft-spec deferral mechanism under
+   another name.
 
 ### 6.8 Lambda Solved and after
 
@@ -1730,29 +1845,47 @@ Invariants, each the negation of a plausible "simplification":
    specialization identity.
 5. **The structural walk makes real decisions beyond the callable slots.**
    The verified census in `lambda_solved/solve.zig` — load-bearing for
-   §12.6, maintained next to the solver and in `design.md`; a Debug
-   assertion may claim "all other structures are equal" only after this
-   inventory is complete and tested:
-   - the empty-tag-union tie-break that yields to a concrete peer;
-   - backed-alias unwrapping (today the Lambda helper has no
-     `builtin_owner` exception; Slice 0 records whether that retained
-     Monotype form can reach the solver and pins the intended behavior);
-   - score-selected generated-evidence backings
-     (`unifyGeneratedOpaqueBacking` on the pattern side and its
-     expression-side twin; higher `generatedOpaqueEvidenceScore` wins,
-     loser linked in);
+   §12.6, maintained next to the solver and in `design.md`, and pinned by
+   line count in `ci/check_reunify_manifest.pl`'s `lambda-solved-census`
+   category, so a new special relation must be classified in both before it
+   can land. A Debug assertion may claim "all other structures are equal"
+   only after this inventory is complete and tested. The current inventory:
+   - backed-alias unwrapping (`transparentAliasBacking`, 4 sites). It still
+     has no `builtin_owner` exception — every `named.kind == .alias`
+     unwraps — and now counts the retained case it walks through
+     (`lambda_alias_unwrap_builtin_owned`);
+   - the generated-private evidence relation
+     (`unifyGeneratedOpaqueBacking` on the pattern side and
+     `relateGeneratedPrivateEvidence` on the expression side), **[main]**
+     decided by the producer-authored `BackingAuthority` rather than by
+     score, with the loser linked in;
    - four iterator nominal-identity joins (`unifyForcedDynamicIterator`,
      `unifyIteratorOwnerStampedPublic`, `unifyGeneratedIteratorJoin`,
-     `unifyPublicGeneratedIterator`) under the shared iterator relation;
-   - erased-callable dominance and member accumulation;
-   - named backing authority and recursive backing traversal;
-   - and, in the erasure pass rather than `unify`: the iterator-backing
-     exemption (`in_iter_backing`) keeping a minted `Iter`/`Stream` step
-     closure's lambda set, and forced-dynamic backing collection during
-     cloning.
-   Several of these are the LambdaSolved face of the §10 algebra; the
-   Slice 0 classification records, for each, whether its policy home is
-   the shared algebra module or the solver.
+     `unifyPublicGeneratedIterator`) under the shared iterator relation,
+     which Lambda Solved still reads directly as `Type.iteratorRelation`;
+   - erased-callable dominance and member accumulation
+     (`markErasedCallablesReachedByType`, `closeCallableSlot`);
+   - named backing authority and recursive backing traversal
+     (`structuralBackingForNamed`);
+   - `mergeLambdaSets`, `unifyCaptures`, `active_unifications`, and the
+     `forall` invariant trap.
+
+   **[main] Three items this list used to carry are deleted**, not
+   reclassified: the named empty-tag-union tie-break (`isEmptyTagUnion`) —
+   the behavior survives only inline in the same-constructor tag-union arm,
+   and `seamResidualShapesAgree` restricts seam shape disagreement to
+   `erased`↔`lambda_set`; the iterator-backing exemption
+   (`in_iter_backing`); and forced-dynamic backing collection during
+   cloning (`forced_dynamic_backings`). The score-selection census
+   (`generatedBackingScore`, `generatedOpaqueEvidenceScore`,
+   `isScoreSelectedEvidenceOwner`, `unifyIteratorBackings`) is deleted with
+   them.
+
+   Several of the survivors are the LambdaSolved face of the §10 algebra.
+   Note the asymmetry main introduced: Lambda Solved reads the shared
+   descriptor-only tier function, while Monotype reads the graph-refined
+   `InstGraph.iteratorRelation` (§3). The two stages therefore no longer
+   classify from the same inputs, and §10 owns reconciling that.
 
 ### 12.5 The cloning boundary: occurrence identity, before interning
 
@@ -1906,9 +2039,11 @@ current path; the new data is verified, not yet authoritative.
 First establish the hard boundary: mutable evidence lives exclusively in
 graph-local cells; a graph result commits to Monotype only when sealed and
 is immutable thereafter; delete the mutable-view/refill API while
-retaining the logical graph. Then put the existing interner behind the
-production construction boundary, route every construction through it
-(sealed commits, generated types, wrappers, recursive groups), implement
+retaining the logical graph (done — §6.6). Then put the existing interner
+behind the production construction boundary, route every construction
+through it (sealed commits, generated types, wrappers, recursive groups —
+done: `Store`'s `intern*` constructors are that boundary, with dedup off),
+implement
 head canonicalization (§8.4), preserve all five equality relations
 separately (§8.2), implement the declared split between stored alias
 identity, logical alias projection, and dispatch-head ownership across
@@ -1982,9 +2117,10 @@ exists to end, wearing a new name.
 **Slice 7 — Delete logical Monotype solving.**
 With the manifest at zero for logical solving, authority changes hands
 here — once. Delete `InstGraph` logical variables, row nodes, logical
-`unify`, logical graph sealing, `unsolved_monos`, `DeferredTemplate` and its
-logical-key stabilization/refinement, request refinement, and solved-shape
-logical aliases (the refill API died in Slice 3). Retain only §11's new
+`unify`, logical graph sealing, `importMono`, `DraftTemplateSpec` deferral
+and its logical-key stabilization, `refineRequest`, and solved-shape
+logical aliases (the refill API and `unsolved_monos` are already
+gone — §6.6). Retain only §11's new
 pre-publication representation dependency scheduler and provisional
 handles; their API cannot carry logical graph nodes. Delete the shadow
 verifier; make direct substitution plus representation closure the sole
@@ -2003,11 +2139,163 @@ exist — avoid `plan.md` as a tracked filename per CI rules); verify the
 permanent gates carry no migration allowlist. This file is then superseded
 by `design.md`.
 
-Slices 0–5 each deliver standalone value (measured semantics, guarded
-lambda seam, published schemes, isolated mutation, interned store, named
+Slices 0–5 each deliver standalone value (measured meaning, guarded
+lambda seam, recorded schemes, isolated mutation, interned store, named
 and terminating representation policy/closure, shadow-proven ground
 translation) and are individually revertible; the project pays for itself
 even if paused before cutover.
+
+### 13.1 Slice status after the `origin/main` merge (2026-07-28)
+
+`origin/main` merged in 370 commits that independently did part of this
+plan. Status of each slice on the merged tree:
+
+| slice | status |
+|---|---|
+| 0 — declare and measure | **done**; the manifest, the architecture gate, and the census are in the tree and re-measured (§13.3). |
+| 1 — occurrence-based lambda cloning | **done**; the cloner keeps an active-path map behind a `containsCallableOccurrence` proof. |
+| 2 — schemes and use-site substitutions | **done**; binders, nested owners, captured binders, positional actuals, and evidence ranges are all written and verified, and nothing lowers from them. |
+| 3 — isolate graph mutation, promote the interner | **mostly done.** **[main]** deleted the refill API and closed imported rows; the `intern*` constructors are the production construction boundary with dedup switched off. Still open: head canonicalization (§8.4), the alias identity split across digest/equality/dispatch-head/verification (§8.2), entry-order-independent recursive identity (§8.3), and the digest-stability assertions. |
+| 4 — representation policy and closure engine | **built, and now behind the graph.** `representation_policy.zig` and `representation_closure.zig` exist and are directly tested, but **[main]** made Monotype's own classification graph-aware (`InstGraph.iteratorRelation`, `finalizeGeneratedIteratorRepresentations`) and replaced score selection with producer backing authority. The descriptor-only policy no longer reproduces the graph's answers: the Debug mirror's `join.relation == tierFor(rule)` assertion in `representation_closure.stepIterator` fires on three eval cases, and 24 sealed `minted_join` descriptors disagree (§13.3). Slice 4 must be re-landed against the graph-aware inputs before Slice 7 can lean on it. |
+| 5 — direct instantiation as Debug shadow | **done, with new drift.** The shadow runs; its scheme comparison, which was at zero mismatches pre-merge, now reports 3 own-module and 13 imported mismatches. |
+| 6 — shadow expanded to full specialization | **done, with new drift.** The rehearsal reaches 254888 compared positions at 254179 match; 48 logical mismatches remain, all newly introduced (§13.3). |
+| 7 — delete logical solving | **open.** This is the whole remaining project; §13.2 states the shortest path. |
+| 8 — cache, performance, documentation | **open.** |
+
+### 13.2 Shortest remaining path to deleting logical solving
+
+The precondition Slice 7 waits on is that no constraint-replay execution
+carries logical information the checked data lacks. The pre-merge run
+established that over 53 measured sites; the merged tree's constraint
+surface is differently shaped, so that result does not carry over and the
+first job is to restore the measurement, not to redo the argument.
+
+1. **Re-site the constraint census.** `lower.zig` has 42 `.unify(` calls
+   and `solve.zig` 19; only 11 hooks survive, covering 10 sites the corpora
+   reach. Main funnelled most relations through a handful of shared
+   relaters — `relateFunctionRequestInterface`, `relateRequestComponent`,
+   `relateCheckedMonoRequestNodeAt`, `checkedMonoRequestNode`,
+   `functionRequestNode`, `relateOpaqueInterface` — so the census hooks
+   belong at those relaters' call sites rather than at the raw
+   `graph.unify` calls, and `UnifySite` needs re-declaring against them.
+   Until that lands, 43 of 53 declared members are dead names and the
+   redundancy result covers a fraction of the surface.
+2. **Close the one checked-data gap the census still shows.** Every
+   informative execution and every seam divergence on the merged tree is
+   one shape: a rigid binder of a checked scheme that the requesting
+   frame's binding does not name, so directed translation materializes the
+   empty tag union where the graph obtains the value by unifying against
+   the caller. It shows up at `target_node_formal_to_mono_arg` (a
+   compiler-generated dispatch-target edge whose actuals arrive as
+   Monotypes, not as a `CheckedInstantiationSite`) and as
+   `rehearsal_unbound_binder_scheme_unrelated`. §9.6's declared
+   generated-edge rules are where it is fixed.
+3. **Re-land Slice 4 against graph-aware inputs.** Either the closure
+   engine takes the provenance `InstGraph.iteratorRelation` reads, or §10
+   states the graph as the authority and the mirror stops asserting
+   agreement. Today it asserts, and the assertion aborts compilation on
+   three eval cases under `ROC_REUNIFY_SHADOW`.
+4. **Give the direct-translate probe a re-rooting class.** All 585 of its
+   stored-form mismatches are recursive types the two sides root at
+   different entry points — §8.3's known phenomenon, which the rehearsal
+   already classifies as `rehearsal_type_equal_under_rerooting` and the
+   probe does not. This is a measurement gap, not a translation bug, and
+   until it is closed the probe's required-zero counter cannot be read.
+5. **Then flip.** Delete `InstGraph` logical variables and row nodes,
+   `unify`/`unifyRoots`/`unifyConcrete`/`unifyThroughBacking`/
+   `unifyTagRows`/`unifyRecordRows`/`unifyRowWithEmpty`/`writeOrQueue*`,
+   logical graph sealing, `DraftTemplateSpec` deferral, `refineRequest`
+   and the solved-shape logical aliases, and `importMono`.
+
+Steps 1 and 2 are the only ones that can change the answer; 3 and 4 are
+measurement debt that hides it.
+
+### 13.3 Corpus measurement (2026-07-28, merged tree)
+
+Run as `ROC_REUNIFY_SHADOW=1 ROC_REUNIFY_CENSUS=<file>` over the snapshot
+corpus (`zig build run-snapshot-tool`, 3139 lowering runs in one process)
+and the eval corpus (`eval-test-runner`, 1739 measured test processes;
+`TMPDIR` must name a writable directory or 23 `dev_object_*` snapshots
+fail silently). Each census counter is a per-process running total, so the
+corpus total is the sum over processes of each process's last block; the
+block now opens with `census_writer <pid>` so that sum is exact under the
+eval runner's fork pool.
+
+**Constraint replay.** The census reaches 10 of its 53 declared
+`UnifySite` members, because main's restructuring left only 11 hooks
+against 42 `.unify(` calls in `lower.zig` and 19 in `solve.zig`
+(§13.2 step 1). Over what it does reach:
+
+| corpus | redundant | open_on_import | informative | representation_decision | unmeasurable | construction |
+|---|---|---|---|---|---|---|
+| snapshots | 22857 | 0 | 8 | 0 | 4 | 1871546 |
+| eval | 6508 | 0 | 24 | 0 | 96 | 2068936 |
+
+The informative executions are two shapes. All 28 at
+`target_node_formal_to_mono_arg` are `scheme_binder_unbound`: the checked
+formal reaches a **rigid** variable that is a generalized binder carrying
+one static-dispatch constraint, which the site's binding does not name, so
+directed translation emits the empty tag union where the graph takes the
+value from the supplied Monotype argument. The 4 at
+`numeral_caller_ret_to_target` / `numeral_callee_ret_to_target` are
+`head_tag` with `residual_origin=graph_sealed`: the graph's sealed numeral
+target is a named type and the checked return is the bare primitive, so
+the difference is the wrapper the graph's own target carries, not checked
+data the directed side lacks. The 100 unmeasurable executions are all
+`field_access_to_checked` with `operand_untranslatable`.
+
+**The lowering seam.** `seam_direct` 629 reads on snapshots and 757 on
+eval, `seam_direct_absent` 0 on both — every checked position the seam
+reads is one the checked data describes. `seam_direct_diverged` is 0 on
+snapshots and 8 on eval, all from one program and all one shape:
+`direct=fn(List<[]>,[])->List<[]>` against `graph=fn(List<i64>,i64)->List<i64>`
+under `binding=frame`. That is the same unbound-binder residual as the
+informative constraint executions, so §13.2 step 2 closes both.
+
+**The rehearsal.** 115453 specializations attempted and 105615 compared on
+eval (26615 / 14189 on snapshots); the unresolved remainder is entirely
+`skip_root_edge` and `skip_generated_edge` — every other skip class is
+zero on both corpora. 254888 positions compared, 254179 match, 661 equal
+under re-rooting, **48 logical mismatches** and 0 representation
+mismatches. The 48 split as 30 `unbound_residual` (all
+`other_scheme_binder_off_chain` / `binder_scheme_unrelated`, i.e. the
+position's free variable belongs to a scheme with no checked relation to
+the frame at all), 16 `named_identity` where the two nominal heads differ
+only in `kind`, and 2 `row_width` (a 1-field record against a 2-field
+one). Snapshots are at zero logical mismatches.
+
+**The direct-translate probe.** 90151 roots on eval (28230 on snapshots),
+71026 stored-form matches (8771), and **585 mismatches, 351 of them in the
+required-zero `mismatch_logical` bucket**. Snapshots have none. Every one
+of the 108 eval processes that reports a logical mismatch also reports
+`rehearsal_type_equal_under_rerooting > 0` and
+`direct_stored_skip_context_variant > 0`, while only 13 of the other 1631
+report the first and none report the second; single-process runs
+attribute them to recursive-nominal programs specifically. The probe
+compares raw stored digests and has no equal-under-rerooting class, so
+§8.3's recursive re-rooting lands in its required-zero bucket. This is a
+measurement gap, not a translation bug.
+
+**Representation.** 35211 sealed descriptors match on eval and **24
+disagree, all `minted_join`**, across 12 processes; snapshots have none.
+The same divergence hits harder in `representation_closure.stepIterator`,
+whose `join.relation == tierFor(rule)` assertion aborts three eval
+programs under `ROC_REUNIFY_SHADOW` (`inspect: closure capturing for loop
+element with equality`, `inspect: recursive custom iterator take_first
+works in for loop`, `iter alloc: captured range map folds are
+zero-alloc`); all three pass with the shadow off. The Slice 5 shadow's
+scheme comparison, at zero pre-merge, now reports 3 own-module and 13
+imported mismatches.
+
+**What is not comparable to the pre-merge run.** The pre-merge figures
+(943644 redundant across 53 sites; snapshot seam 94383 reads / 240
+divergent; eval seam 3561 divergent; 23769 rehearsal specializations,
+108430 positions, 4718 equal-under-rerooting; 9289 probe matches) were
+taken against a `lower.zig` with 53 measured constraint sites and a
+different graph. The absolute totals moved because the measured surface
+moved, so the honest reading is per-class: zero informative became 28,
+zero unmeasurable became 100, zero rehearsal-logical became 48, and zero
+probe-logical became 351.
 
 ---
 

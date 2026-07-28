@@ -932,6 +932,13 @@ pub fn dumpText(allocator: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
 /// The census owns this write directly through libc — it is Debug-only
 /// measurement plumbing, deliberately outside the compiler's file-system
 /// abstraction, and every failure is silent so lowering is never affected.
+///
+/// Each counter is a running total for the one process that holds it, and a
+/// corpus run fans out across many processes that all append here. The block
+/// therefore opens with the writing process id, so a reader takes each
+/// writer's last block as that writer's total and adds those, instead of
+/// adding a writer's running totals to each other. The whole block is one
+/// write, so the id and the counters it labels cannot be separated.
 pub fn appendDumpToEnvPath(allocator: std.mem.Allocator) void {
     if (comptime !enabled) return;
     const raw_path = std.c.getenv("ROC_REUNIFY_CENSUS") orelse return;
@@ -940,7 +947,9 @@ pub fn appendDumpToEnvPath(allocator: std.mem.Allocator) void {
     const text = dumpText(allocator) catch return;
     defer allocator.free(text);
     if (text.len == 0) return;
-    appendToFile(raw_path, text);
+    const block = std.fmt.allocPrint(allocator, "census_writer {d}\n{s}", .{ std.c.getpid(), text }) catch return;
+    defer allocator.free(block);
+    appendToFile(raw_path, block);
 }
 
 /// Append bytes to the named file through libc with `O_APPEND`, so multiple

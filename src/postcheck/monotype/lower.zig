@@ -8219,10 +8219,7 @@ const Builder = struct {
     /// used during draft finalization, where the active graph remains present
     /// but the supplied TypeIds are durable rather than active snapshots.
     fn closedFunctionType(self: *Builder, arg_tys: []const Type.TypeId, ret_ty: Type.TypeId) Allocator.Error!Type.TypeId {
-        return try self.program.types.add(.{ .func = .{
-            .args = try self.program.types.addSpan(arg_tys),
-            .ret = ret_ty,
-        } });
+        return try self.program.types.internFunc(&self.program.names, arg_tys, ret_ty);
     }
 
     fn oneArgFnType(self: *Builder, arg_ty: Type.TypeId, ret_ty: Type.TypeId) Allocator.Error!Type.TypeId {
@@ -8336,9 +8333,9 @@ const Builder = struct {
         }
         if (requested_err_tags.len == declared_err_tags.len) return null;
 
-        const narrowed_err_ty = try self.program.types.add(.{
+        const narrowed_err_ty = try self.program.types.internFilledNode(&self.program.names, try self.program.types.add(.{
             .tag_union = try self.program.types.addTagVariants(&self.program.names, narrowed_tags),
-        });
+        }));
         const narrowed_try_ty = try self.hostedTryTypeLike(hosted_try, requested.ret, requested_try.ok_ty, narrowed_err_ty);
         const source_args = try GuardedList.dupe(self.allocator, Type.TypeId, requested_args);
         defer self.allocator.free(source_args);
@@ -8601,9 +8598,9 @@ const Builder = struct {
         if (!found_ok or !found_err) {
             Common.invariant("Try backing type did not contain Ok and Err tags");
         }
-        const backing_ty = try self.program.types.add(.{
+        const backing_ty = try self.program.types.internFilledNode(&self.program.names, try self.program.types.add(.{
             .tag_union = try self.program.types.addTagVariants(&self.program.names, tags),
-        });
+        }));
         const template_args = self.program.types.span(template.args);
         if (capability.ok_type_arg_index >= template_args.len or capability.err_type_arg_index >= template_args.len) {
             Common.invariant("hosted Try capability referenced a missing template type argument");
@@ -8612,7 +8609,7 @@ const Builder = struct {
         defer self.allocator.free(args);
         args[capability.ok_type_arg_index] = ok_ty;
         args[capability.err_type_arg_index] = err_ty;
-        return try self.program.types.add(.{ .named = .{
+        return try self.program.types.internFilledNode(&self.program.names, try self.program.types.add(.{ .named = .{
             .named_type = template.named_type,
             .def = template.def,
             .kind = template.kind,
@@ -8624,7 +8621,7 @@ const Builder = struct {
                 .authority = template_backing.authority,
             },
             .declared_order = template.declared_order,
-        } });
+        } }));
     }
 
     fn errorRowIsIncludedIn(self: *Builder, source_err_ty: Type.TypeId, target_err_ty: Type.TypeId) bool {
@@ -30957,7 +30954,7 @@ const BodyContext = struct {
         param: static_dispatch.EvidenceParamRecord,
     ) Allocator.Error!Type.TypeId {
         const primitive = defaultedEvidenceParamPrimitive(param);
-        return try self.builder.program.types.add(.{ .primitive = primitive });
+        return try self.builder.program.types.internPrimitive(&self.builder.program.names, primitive);
     }
 
     fn defaultedEvidenceParamNode(
@@ -33765,7 +33762,7 @@ const BodyContext = struct {
             .named => |named| named,
             else => Common.invariant("compiler helper expected a named template type"),
         };
-        return try self.builder.program.types.add(.{ .named = .{
+        return try self.builder.program.types.internFilledNode(&self.builder.program.names, try self.builder.program.types.add(.{ .named = .{
             .named_type = template.named_type,
             .def = template.def,
             .kind = template.kind,
@@ -33773,7 +33770,7 @@ const BodyContext = struct {
             .args = try self.builder.program.types.addSpan(args),
             .backing = .{ .ty = backing_ty, .use = template.backing.?.use, .authority = authority },
             .declared_order = template.declared_order,
-        } });
+        } }));
     }
 
     const TryJsonInfo = struct {
@@ -33950,7 +33947,10 @@ const BodyContext = struct {
         }
         if (!found_ok or !found_err) Common.invariant("Try backing type did not contain Ok and Err tags");
 
-        const backing_ty = try self.builder.program.types.add(.{ .tag_union = try self.builder.program.types.addTagVariants(&self.builder.program.names, tags) });
+        const backing_ty = try self.builder.program.types.internFilledNode(
+            &self.builder.program.names,
+            try self.builder.program.types.add(.{ .tag_union = try self.builder.program.types.addTagVariants(&self.builder.program.names, tags) }),
+        );
         const args = [_]Type.TypeId{ ok_ty, err_ty };
         return try self.cloneNamedTypeWithArgs(template_try_ty, &args, backing_ty);
     }
