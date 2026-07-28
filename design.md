@@ -3179,35 +3179,70 @@ A deferred procedure-template request has two distinct sources of type
 evidence. Caller value flow owns the request's function arguments and return;
 the requested checked template owns explicit type-constructor arguments that
 may have no value-level occurrence, including phantom nominal arguments. Before
-the requester seals, Monotype traverses matching request and checked structure
-without relating ordinary value positions, and constrains only named type
-arguments and the explicit element arguments of builtin container types.
+the callee body lowers, Monotype traverses matching request and checked
+structure without relating ordinary value positions, and constrains only named
+type arguments and the explicit element arguments of builtin container types.
 Unifying the two complete function roots here is forbidden: two sibling
 requests can legitimately carry different concrete value arguments, and a
-callee checked root must not make those caller-owned cells aliases. The callee
-later creates its own fresh instantiation graph and constrains its complete
-checked root against the sealed request in that graph.
+callee checked root must not make those caller-owned cells aliases.
 
-The deferred request stores only that live caller-owned interface and a draft
-call target. Once the caller graph is frozen, the interface is sealed exactly
-once and the target maps directly to an existing specialization or to a body
-lowered in a fresh specialization-owned graph. The caller never owns a copy of
-the context-free callee body. Generated structural work may retain explicit
-lexical context when that context is one of its inputs, but it follows the same
-procedure-body ownership rule; encoding and decoding do not define a separate
+Monotype solves all live specialization demands in one solve session. Each
+specialization owns a graph partition: only that specialization may allocate
+body nodes, snapshots, generated representations, deferred structural work, or
+draft IR in the partition. A call creates an explicit interface edge between
+the caller-owned request cells and the callee-owned function-root cells. The
+session's relation worklist may propagate constraints across that edge, but no
+callee body is allocated in the caller's partition and no ordinary graph
+operation may cross a partition boundary. Cross-partition edges are therefore
+auditable capabilities, not implicit node sharing or copied type structure.
+
+A missing context-free specialization first receives a session-local
+specialization-demand id. Its body lowers exactly once in its own partition,
+and draft calls name demand ids until finalization. Demand identity before
+solving consists only of explicit producer data: checked procedure identity,
+method-registry scope, dispatch-evidence topology, lexical-dependency identity,
+and the exact interface edge that introduced the demand. It never uses a
+defaulted type snapshot, partial structural digest, or overlap heuristic.
+Repeated calls may join a demand only through explicit recursive-group
+ownership or through the same already-related interface; otherwise they remain
+independent demands until their final closed interfaces prove them identical.
+
+Body lowering and deferred relation production extend the session worklist.
+The session reaches quiescence only when every local relation and every
+cross-partition interface edge has processed the latest versions of its input
+classes and no deferred producer can add another relation or demand. Row and
+unresolved-variable defaults are forbidden before quiescence. Body-only
+evidence such as a returned nested function's error row or a generated-private
+representation therefore propagates through the interface edge to the original
+caller cells before either partition can seal.
+
+The demand dependency graph is finalized by strongly connected component.
+Every recursive checked procedure group supplies explicit ownership for the
+corresponding demand SCC; recursion is never inferred from similar graph
+shapes. Once an SCC and its outgoing dependencies are quiescent, all of its
+partitions freeze together, their interfaces seal, and final specialization
+identities are computed from the closed types. Cache lookup and structural
+deduplication happen only at this point. The finalizer assigns function ids for
+every retained member before committing any member's body, so direct and
+mutual recursion use ordinary resolved call targets without provisional
+Monotype types or placeholder function records. Imported cached
+specializations are immutable terminal demand nodes whose already-sealed
+interfaces participate only as finished snapshots.
+
+Generated structural work may retain explicit lexical context when that
+context is one of its inputs, but it follows the same procedure-body ownership
+and session-edge rules; encoding and decoding do not define a separate
 specialization path.
 
-A fresh procedure specialization reserves its global function identity before
-lowering its body and records that reservation as the active root owner. A call
-from beneath that owner may rejoin the reservation when it names the same
-checked procedure and method scope, carries the same dispatch evidence, and
-matches the active function interface. The checked source root used to reach
-the declaration is not recursive ownership: different checked occurrences may
-reach the same procedure. For a synthesized partial interface, at least one
-argument must overlap the root's initially snapshotted argument classes before
-the edge can be classified as recursive. This is the same explicit ownership
-rule used by draft-local procedures and prevents either an accidental second
-body for the root or a merge of unrelated sibling requests.
+A fresh procedure specialization reserves a session-local demand identity
+before lowering its body; it does not reserve a global function id or create a
+Monotype type snapshot. A call from that body rejoins an in-progress demand
+only when the checked artifact identifies the target as a member of the same
+recursive procedure group and the call's procedure, method scope, and dispatch
+evidence select that member's demand. The checked source root used to reach the
+declaration is not recursive ownership: different checked occurrences may
+reach the same procedure. Argument-class overlap, partial type structure, and
+source-root similarity are never evidence of recursion.
 
 Checking must also validate a mono-specialization default against the complete
 method callable type before placing direct evidence in the checked dispatch
