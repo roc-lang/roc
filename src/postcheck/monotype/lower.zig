@@ -242,11 +242,12 @@ const SpecEvidence = union(enum) {
     target: *const SpecEvidenceTarget,
     structural: static_dispatch.StructuralDerivation,
     /// The edge left the requirement's dispatcher unsolved: no value of that
-    /// type can ever reach the dispatch, which lowers to an explicit
-    /// unreachable crash.
+    /// type can ever reach the dispatch. Monotype represents that non-returning
+    /// path with an ordinary Roc runtime crash instead of a dispatch call.
     unreachable_value,
     /// Checking rejected the edge's requirement (a reported missing method);
-    /// the dispatch lowers to an explicit crash.
+    /// if `roc run` continues and reaches the dispatch, Monotype emits an
+    /// ordinary Roc runtime crash instead of returning a value.
     checked_error,
 };
 
@@ -11014,9 +11015,10 @@ const BodyContext = struct {
     /// (their plans' `constraint(k)` refs index the constant's scheme).
     restore_evidence: EvidenceChain,
     /// Exact dispatch sites whose constraint evidence resolves to a checked
-    /// error or unreachable value in this specialization. CheckedModule
-    /// dependency propagation turns these dispatch crash bits into the
-    /// complete expression and statement divergence columns consumed below.
+    /// error or unreachable value in this specialization. Monotype emits a
+    /// runtime crash instead of returning a value from each such dispatch.
+    /// CheckedModule dependency propagation turns these dispatch crash bits into
+    /// the complete expression and statement divergence columns consumed below.
     specialization_dispatch_crashes: ?[]bool = null,
     owns_specialization_dispatch_crashes: bool = false,
     specialization_dispatch_divergence: ?checked.DispatchDivergence = null,
@@ -15113,8 +15115,8 @@ const BodyContext = struct {
     fn lowerExprType(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!Type.TypeId {
         const expr = self.view.bodies.expr(expr_id);
         return switch (expr.data) {
-            // A checked runtime error is bottom: it never produces a value, so
-            // an unconstrained occurrence uses unit while contextual lowering
+            // A checked runtime error emits a crash and never returns a value,
+            // so an unconstrained occurrence uses unit while contextual lowering
             // supplies the exact expected type through lowerExprAtType.
             .runtime_error => try self.unitType(),
             .call => |call| (try self.callResultMonoType(expr.ty, call, null)) orelse try self.lowerTypeView(expr.ty),
@@ -15175,10 +15177,10 @@ const BodyContext = struct {
         self.builder.program.current_region = region;
         if (self.checkedExprDivergesInLoweredRuntime(expr_id)) {
             // An uncontextual use still has to preserve an explicitly checked
-            // non-returning path. A root error is bottom and can use unit; any
-            // other divergent value keeps its own graph node as the cell — the
-            // value never materializes, and sealing defaults the node if
-            // nothing else constrains it (e.g. a bare `break` statement).
+            // non-returning path. A root runtime error emits a crash and can use
+            // unit; any other divergent value keeps its own graph node as the
+            // cell — the value never materializes, and sealing defaults the node
+            // if nothing else constrains it (e.g. a bare `break` statement).
             if (self.view.types.payload(expr.ty) == .err) {
                 return try self.lowerDivergentExprAtType(expr_id, try self.unitType());
             }
@@ -27268,9 +27270,10 @@ const BodyContext = struct {
         checked_expr: checked.CheckedExprId,
         expected_node: NodeId,
     ) Allocator.Error!void {
-        // Divergent expressions are bottom: they never produce a value to
-        // relate to the request. In particular, checking may replace a failed
-        // callee with `runtime_error` while its dead call type contains `.err`.
+        // Divergent expressions never return a value to relate to the request.
+        // In particular, checking may replace a failed callee with
+        // `runtime_error`, which emits a crash, while its unused call type
+        // contains `.err`.
         if (self.checkedExprDivergesInLoweredRuntime(checked_expr)) return;
         const expr = self.view.bodies.expr(checked_expr);
         switch (expr.data) {
@@ -29135,9 +29138,9 @@ const BodyContext = struct {
         // polymorphic function value never called at a concrete type — e.g.
         // evaluating `run` itself for `run : a -> a where [a.go : a -> a]`.
         // Checking classified such dispatches (`unreachable_dispatch`, or a
-        // `checked_error` for reported missing methods); both lower to an
-        // explicit crash. A genuinely reachable ownerless dispatch was
-        // rejected at check time.
+        // `checked_error` for reported missing methods); both emit an ordinary
+        // Roc runtime crash and never return a dispatch result. A genuinely
+        // reachable ownerless dispatch was rejected at check time.
         const resolved = switch (self.evidenceResolution(plan) orelse
             Common.invariant("CheckedStaticDispatchCallPlan had no MethodTarget or StructuralDerivation")) {
             .target => |lookup| lookup,
@@ -30345,13 +30348,16 @@ const BodyContext = struct {
 
     /// A checked dispatch whose resolution names a callable target or structural
     /// derivation. Callable, dispatcher, and operand type instantiation accepts
-    /// this wrapper instead of a raw plan, so checked-error data cannot reach
-    /// those operations without first passing the evidence gate below.
+    /// this wrapper instead of a raw plan. A rejected non-returning dispatch
+    /// takes `DispatchRuntimePlan.crash`, so Monotype emits an ordinary Roc
+    /// runtime crash without instantiating the rejected callable's type.
     const CallableDispatchPlan = struct {
         plan: static_dispatch.StaticDispatchCallPlan,
         operands: []const static_dispatch.StaticDispatchOperand,
     };
 
+    /// The required gate before any dispatch type instantiation. `crash` means
+    /// the dispatch emits an ordinary Roc runtime crash and returns no value.
     const DispatchRuntimePlan = union(enum) {
         callable: CallableDispatchPlan,
         crash: DispatchCrashReason,
@@ -30388,10 +30394,10 @@ const BodyContext = struct {
         };
     }
 
-    /// Whether checking decided this dispatch has no runtime call: its
+    /// Whether checking decided this is a rejected non-returning dispatch: its
     /// dispatcher is a value no edge can supply (unreachable), or checking
-    /// rejected the requirement (a reported missing method). Both lower to an
-    /// explicit crash.
+    /// rejected the requirement (a reported missing method). Monotype emits an
+    /// ordinary Roc runtime crash instead of a dispatch call for both cases.
     fn dispatchCrashReason(self: *BodyContext, plan: static_dispatch.StaticDispatchCallPlan) ?DispatchCrashReason {
         return switch (plan.resolution) {
             .unreachable_dispatch => .unreachable_value,
@@ -39630,9 +39636,9 @@ const BodyContext = struct {
             .expect => |expr| if (self.builder.inline_expects == .run) expr else return null,
             else => return null,
         };
-        // Explicit checked bottom has a deliberately erroneous source type and
-        // its own divergent lowering; probing its type node here would demand
-        // an instantiation checking intentionally did not produce.
+        // An explicit checked runtime error emits a crash and has a deliberately
+        // erroneous source type. Probing its type node here would demand an
+        // instantiation checking intentionally did not produce.
         if (self.view.bodies.expr(expr_id).data == .runtime_error) return null;
         const node = try self.lowerExprTypeNode(expr_id);
         if (!try self.nodeIsProvenUninhabited(node)) return null;
@@ -39960,11 +39966,11 @@ const BodyContext = struct {
         checked_expr_id: checked.CheckedExprId,
         ty: Type.TypeId,
     ) Allocator.Error!BodyExprData {
-        // A divergent expression never produces a value, so its checked result
+        // A divergent expression never returns a value, so its checked result
         // variable can legitimately remain unconstrained; the continuation's
-        // explicit type stands in for a result that cannot exist. Explicit
-        // checked bottom instead lowers only its observable path at unit,
-        // because its deliberately erroneous source type has no monotype.
+        // explicit type stands in for a result that cannot exist. An explicit
+        // checked runtime error lowers its crash path at unit because its
+        // deliberately erroneous source type has no monotype.
         const effect_ty = if (self.view.bodies.expr(checked_expr_id).data == .runtime_error)
             try self.unitType()
         else
