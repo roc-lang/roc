@@ -34890,25 +34890,32 @@ const BodyContext = struct {
                         "encode_record",
                     ) or added;
                 }
-                if (fields.len != 0) {
+                if (kind == .parser) {
+                    if (fields.len != 0) {
+                        added = try self.prepareRenameRecordFieldCodecCall(
+                            boundary_expr,
+                            kind,
+                            shape_node,
+                            boundary_callable_node,
+                        ) or added;
+                    }
+                    added = try self.prepareSkipRecordFieldCodecCall(
+                        boundary_expr,
+                        shape_node,
+                        boundary_callable_node,
+                    ) or added;
+                    added = try self.prepareParseRecordFieldCodecCall(
+                        boundary_expr,
+                        shape_node,
+                        boundary_callable_node,
+                    ) or added;
+                } else if (fields.len != 0) {
                     added = try self.prepareRenameRecordFieldCodecCall(
                         boundary_expr,
                         kind,
                         shape_node,
                         boundary_callable_node,
                     ) or added;
-                    if (kind == .parser) {
-                        added = try self.prepareSkipRecordFieldCodecCall(
-                            boundary_expr,
-                            shape_node,
-                            boundary_callable_node,
-                        ) or added;
-                        added = try self.prepareParseRecordFieldCodecCall(
-                            boundary_expr,
-                            shape_node,
-                            boundary_callable_node,
-                        ) or added;
-                    }
                 }
                 for (fields) |field|
                     added = try self.prepareCustomCodecCallsAtNode(boundary_expr, kind, field.ty, boundary_callable_node, seen) or added;
