@@ -14150,11 +14150,11 @@ const BodyContext = struct {
         // Resolve every plan in this scope before instantiating any of its type
         // relations. A rejected inner dispatch makes every enclosing expression
         // that evaluates it divergent, so relation replay must consume the
-        // complete specialization-specific divergence column rather than facts
-        // accumulated incrementally in source order.
+        // complete specialization-specific divergence column, not only the
+        // entries discovered earlier in source order.
         var added_crash = false;
-        for (refs, scopes) |plan_id, scope_ref| {
-            if (!dispatchRefBelongsToScope(scope_ref, scope_id)) continue;
+        for (refs, scopes) |plan_id, dispatch_scope| {
+            if (!dispatchRefBelongsToScope(dispatch_scope, scope_id)) continue;
             const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
             switch (self.dispatchRuntimePlan(plan)) {
                 .callable => {},
@@ -14165,8 +14165,8 @@ const BodyContext = struct {
         }
         if (added_crash) try self.refreshSpecializationDispatchDivergence();
 
-        for (refs, scopes, kinds) |plan_id, scope_ref, relation_kind| {
-            if (!dispatchRefBelongsToScope(scope_ref, scope_id)) continue;
+        for (refs, scopes, kinds) |plan_id, dispatch_scope, relation_kind| {
+            if (!dispatchRefBelongsToScope(dispatch_scope, scope_id)) continue;
             const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
             if (self.checkedExprDivergesInLoweredRuntime(plan.expr)) continue;
             if (relation_kind == .conversion) continue;
@@ -14185,15 +14185,15 @@ const BodyContext = struct {
     }
 
     fn dispatchRefBelongsToScope(
-        scope_ref: checked.DispatchScopeRef,
+        dispatch_scope: checked.DispatchScope,
         scope_id: ?checked.DispatchScopeId,
     ) bool {
         return if (scope_id) |wanted_scope|
-            switch (scope_ref) {
+            switch (dispatch_scope) {
                 .root => false,
                 .generalized => |id| id == wanted_scope,
             }
-        else switch (scope_ref) {
+        else switch (dispatch_scope) {
             .root => true,
             .generalized => false,
         };
