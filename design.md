@@ -3224,8 +3224,14 @@ method-registry scope, dispatch-evidence topology, lexical-dependency identity,
 and the exact interface edge that introduced the demand. It never uses a
 defaulted type snapshot, partial structural digest, or overlap heuristic.
 Repeated calls may join a demand only through explicit recursive-group
-ownership or through the same already-related interface; otherwise they remain
-independent demands until their final closed interfaces prove them identical.
+ownership, through the same already-related interface, or after both complete
+live request interfaces contain no unresolved cells and exact structural
+equality proves they are the same session-local demand. That last proof creates
+an explicit interface edge from the new requester to the existing
+specialization partition; it never unifies their roots, stores an active Type
+view, or enters the durable specialization cache before sealing. Requests that
+do not satisfy one of those proofs remain independent demands until their final
+closed interfaces prove them identical.
 
 Body lowering and deferred relation production extend the session worklist.
 The session reaches quiescence only when every local relation and every
@@ -3252,7 +3258,14 @@ interfaces participate only as finished snapshots.
 Generated structural work may retain explicit lexical context when that
 context is one of its inputs, but it follows the same procedure-body ownership
 and session-edge rules; encoding and decoding do not define a separate
-specialization path.
+specialization path. Restoring a stored generated parser or encoder runtime is
+itself a deferred-relation producer: before generating the restored body, it
+walks the checker-selected concrete shape and prepares exactly the format
+methods that body can call. Those live prepared interfaces are consumed
+directly while the solve session is active and as sealed interfaces after
+quiescence. Restoration never requires a format method merely to drive solve
+progress, and it materializes no Type-shaped view until its preparation has
+finished.
 
 A fresh procedure specialization reserves a session-local demand identity
 before lowering its body; it does not reserve a global function id or create a

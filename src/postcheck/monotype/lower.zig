@@ -1487,6 +1487,17 @@ const Builder = struct {
         return self.program.types.specializationDigestCached(&self.program.names, ty, null);
     }
 
+    fn activeTypeFromNode(
+        _: *Builder,
+        graph: *InstGraph,
+        node: NodeId,
+    ) Allocator.Error!Type.TypeId {
+        if (!try graph.typeIsResolved(node)) {
+            Common.invariant("resolved specialization lookup requested a view of an unresolved interface");
+        }
+        return try graph.activeTypeViewForNode(node);
+    }
+
     fn sealedCaptureAbiDigest(
         self: *Builder,
         sealer: *GraphTypeFinals,
@@ -2415,11 +2426,17 @@ const Builder = struct {
         self: *Builder,
         source_ctx: *BodyContext,
         template_ref: names.ProcTemplate,
-        request_fn_node: NodeId,
+        raw_request_fn_node: NodeId,
         partial_evidence: []const SpecEvidence,
         signature_relation: Ast.SignatureRelation,
     ) Allocator.Error!DraftFnSlot {
         self.count("template_requests");
+        // Structural selection across an explicit caller/callee interface can
+        // expose a function descendant owned by the producer partition. The
+        // new demand and every draft cell derived from it belong to the
+        // requesting body, so retain that exact live class through a
+        // partition-owned identity before lookup or demand creation.
+        const request_fn_node = try source_ctx.graph.retainPartitionCell(raw_request_fn_node);
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
         // The request graph already contains the exact call-occurrence
@@ -2570,12 +2587,60 @@ const Builder = struct {
                 }
             }
         }
+        var resolved_request_key: ?names.TypeDigest = null;
+        var selected_resolved = false;
+        if (selection.selected() == null and try source_ctx.graph.typeIsResolved(request_fn_node)) {
+            const request_ty = try self.activeTypeFromNode(source_ctx.graph, request_fn_node);
+            const request_key = self.specializationTypeDigest(request_ty);
+            resolved_request_key = request_key;
+            const resolved_address = DraftTemplateLookupAddress{
+                .family = family,
+                .evidence_digest = evidence_digest.bytes,
+                .request_kind = 0,
+                .request_fn_key = request_key.bytes,
+            };
+            if (source_ctx.draft.template_spec_lookup.get(resolved_address)) |candidates| {
+                for (candidates.items) |raw_spec| {
+                    const spec = &source_ctx.draft.template_specs.items[raw_spec];
+                    if (spec.state != .lowered) continue;
+                    if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
+                    if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
+                    const candidate_graph = spec.demand_graph orelse
+                        Common.invariant("lowered independent specialization had no partition graph");
+                    const candidate_root = spec.body_root_node orelse
+                        Common.invariant("lowered independent specialization had no body interface");
+                    if (!try candidate_graph.typeIsResolved(candidate_root)) continue;
+                    const candidate_ty = try self.activeTypeFromNode(candidate_graph, candidate_root);
+                    if (!try self.program.types.typeEql(
+                        &self.program.names,
+                        candidate_ty,
+                        request_ty,
+                    )) continue;
+                    if (!selection.add(raw_spec, true)) {
+                        Common.invariant("resolved draft request matched more than one exact specialization");
+                    }
+                    selected_resolved = true;
+                }
+            }
+        }
         if (selection.selected()) |raw_spec| {
             const spec = &source_ctx.draft.template_specs.items[raw_spec];
             self.count("template_hits");
-            try source_ctx.graph.unify(spec.request_fn_node, request_fn_node);
-            if (!source_ctx.graph.sameFunctionInterface(spec.request_fn_node, request_fn_node)) {
-                Common.invariant("recursive draft template request did not join its complete function interface");
+            if (selected_resolved) {
+                const candidate_graph = spec.demand_graph orelse
+                    Common.invariant("resolved specialization reuse had no partition graph");
+                const candidate_root = spec.body_root_node orelse
+                    Common.invariant("resolved specialization reuse had no body interface");
+                try source_ctx.graph.registerInterfaceEdge(
+                    request_fn_node,
+                    candidate_graph,
+                    candidate_root,
+                );
+            } else {
+                try source_ctx.graph.unify(spec.request_fn_node, request_fn_node);
+                if (!source_ctx.graph.sameFunctionInterface(spec.request_fn_node, request_fn_node)) {
+                    Common.invariant("recursive draft template request did not join its complete function interface");
+                }
             }
             if (signature_relation == .exact_graph) {
                 source_ctx.draft.fns.items[@intFromEnum(spec.fn_id)].signature_relation = .exact_graph;
@@ -2676,6 +2741,17 @@ const Builder = struct {
             if (!lookup_entry.found_existing) lookup_entry.value_ptr.* = .empty;
             try lookup_entry.value_ptr.append(self.allocator, @intCast(spec_index));
         }
+        if (resolved_request_key) |request_key| {
+            const resolved_address = DraftTemplateLookupAddress{
+                .family = family,
+                .evidence_digest = evidence_digest.bytes,
+                .request_kind = 0,
+                .request_fn_key = request_key.bytes,
+            };
+            const lookup_entry = try source_ctx.draft.template_spec_lookup.getOrPut(resolved_address);
+            if (!lookup_entry.found_existing) lookup_entry.value_ptr.* = .empty;
+            try lookup_entry.value_ptr.append(self.allocator, @intCast(spec_index));
+        }
         if (!local_context_dependent and template.target != .hosted) {
             const demand = try self.lowerIndependentTemplateDemand(
                 source_ctx,
@@ -2706,18 +2782,18 @@ const Builder = struct {
         defer body_ctx.deinit();
         if (lexical) |captured| try body_ctx.restoreCodecLexicalContext(captured);
         const root_node = try body_ctx.instNode(template.checked_fn_root);
-        if (!local_context_dependent and signature_relation == .independent_roots) {
+        if (template.target == .hosted) {
+            try relateHostedFunctionRequestInterface(
+                source_ctx.graph,
+                try self.hostedTryAdapterCapability(view, template.hosted_try_adapter),
+                root_node,
+                request_fn_node,
+            );
+        } else if (!local_context_dependent and signature_relation == .independent_roots) {
             const public_request = source_ctx.graph.requestSourceInterface(request_fn_node) orelse request_fn_node;
             try constrainDeferredTemplateTypeArguments(source_ctx.graph, root_node, public_request);
         } else {
-            if (template.target == .hosted) {
-                try relateHostedFunctionRequestInterface(
-                    source_ctx.graph,
-                    try self.hostedTryAdapterCapability(view, template.hosted_try_adapter),
-                    root_node,
-                    request_fn_node,
-                );
-            } else if (try source_ctx.graph.containsGeneratedPrivate(request_fn_node)) {
+            if (try source_ctx.graph.containsGeneratedPrivate(request_fn_node)) {
                 if (source_ctx.graph.requestSourceInterface(request_fn_node)) |source_fn_node| {
                     try relateFunctionRequestInterface(source_ctx.graph, root_node, source_fn_node);
                 }
@@ -4835,11 +4911,6 @@ const Builder = struct {
         };
         var added_relation = false;
         if (kind == .parser) {
-            added_relation = try ctx.prepareParserInvalidValueCodecCall(
-                boundary.expr,
-                boundary.shape_node,
-                boundary.callable_node,
-            );
             var required_error_seen = std.AutoHashMap(NodeId, void).init(self.allocator);
             defer required_error_seen.deinit();
             if (try ctx.graphParserShapeNeedsRequiredFieldError(boundary.shape_node, &required_error_seen)) {
@@ -4895,11 +4966,6 @@ const Builder = struct {
         const result = try ctx.graphParserResultNodes(callable.ret);
 
         var added_relation = false;
-        added_relation = try ctx.prepareParserInvalidValueCodecCall(
-            boundary.expr,
-            result.value,
-            constructor_node,
-        );
         var required_error_seen = std.AutoHashMap(NodeId, void).init(self.allocator);
         defer required_error_seen.deinit();
         if (try ctx.graphParserShapeNeedsRequiredFieldError(result.value, &required_error_seen)) {
@@ -5643,12 +5709,23 @@ const Builder = struct {
             if (!demand.prepared) {
                 Common.invariant("independent specialization finalized before relation preparation");
             }
-            const def_id = ids.defOrNull(demand.root_def) orelse
-                Common.invariant("fresh independent specialization emitted no definition");
             const fn_template = self.program.fnSource(fn_id);
             const fn_ty = fn_template.mono_fn_ty;
             const digest = self.specializationTypeDigest(fn_ty);
             const evidence = programViewFnEvidence(self.program.view(), fn_template);
+            if (try self.spec_store.findLocal(
+                templateSpecIdentity(
+                    spec.template_ref,
+                    spec.method_scope,
+                    spec.source_fn_key,
+                    fn_template.evidence_digest,
+                    fn_ty,
+                    digest,
+                ),
+                specializationEvidenceView(evidence),
+            )) |_| continue;
+            const def_id = ids.defOrNull(demand.root_def) orelse
+                Common.invariant("fresh independent specialization emitted no definition");
             const spec_id = try self.addTemplateSpecRecord(
                 spec.template_ref,
                 spec.method_scope,
@@ -18218,8 +18295,8 @@ const BodyContext = struct {
                 selected.tag_text;
 
         const parse_lookup = try self.methodLookupForTypeName(encoding_ty, method_name);
-        const parse_mono_ty = try self.frozenCodecCallableForShape(parse_lookup, shape_ty) orelse
-            Common.invariant("parser format callable was not prepared before graph sealing");
+        const parse_mono_ty = try self.preparedCodecCallableForShape(parse_lookup, shape_ty) orelse
+            Common.invariant("parser format callable was not prepared before body generation");
         const parse_fn = self.builder.functionShape(parse_mono_ty, "parser target method was not a function");
         const parse_arg_tys = self.builder.program.types.span(parse_fn.args);
         if (!Ident.textEql(selected.tag_text, "TagUnion")) {
@@ -18333,8 +18410,8 @@ const BodyContext = struct {
         };
 
         const parse_lookup = try self.methodLookupForTypeName(encoding_ty, "parse_record_field");
-        const callable_mono_ty = try self.frozenCodecCallableForShape(parse_lookup, shape_ty) orelse
-            Common.invariant("record parser callable was not prepared before graph sealing");
+        const callable_mono_ty = try self.preparedCodecCallableForShape(parse_lookup, shape_ty) orelse
+            Common.invariant("record parser callable was not prepared before body generation");
         const parse_fn = self.builder.functionShape(callable_mono_ty, "parse_record_field target method was not a function");
         const parse_arg_tys = self.builder.program.types.span(parse_fn.args);
         if (parse_arg_tys.len != 3) Common.invariant("parse_record_field target method had an unexpected arity");
@@ -24813,16 +24890,12 @@ const BodyContext = struct {
         }
         const encoding_node = callable.args[0];
         const encoding_cell = DraftTypeCell.fromGraphNode(encoding_node);
-        const encoding_ty = try fn_ctx.resolvedTypeViewForNode(encoding_node);
+        const shape_node = try fn_ctx.lowerTypeNode(plan.dispatcher_ty);
 
         const runtime_fn = try self.graph.functionNodes(request_fn_node);
         if (runtime_fn.args.len != 1) Common.invariant("stored parser runtime function had an unexpected arity");
         const state_cell = DraftTypeCell.fromGraphNode(runtime_fn.args[0]);
         const ret_cell = DraftTypeCell.fromGraphNode(runtime_fn.ret);
-        const state_ty = try fn_ctx.resolvedTypeViewForNode(runtime_fn.args[0]);
-        const ret_ty = try fn_ctx.resolvedTypeViewForNode(runtime_fn.ret);
-
-        const shape_ty = try fn_ctx.resolvedCheckedTypeView(plan.dispatcher_ty);
         const state_local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), state_cell, null);
         const state_expr = try fn_ctx.addExprWithTypeCell(state_cell, .{ .local = state_local });
 
@@ -24848,6 +24921,29 @@ const BodyContext = struct {
             };
             break :blk try fn_ctx.addExprWithTypeCell(encoding_cell, .{ .local = local });
         } else try fn_ctx.lowerDispatchOperandAtNode(plan_args[0], encoding_node);
+
+        var required_error_seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        defer required_error_seen.deinit();
+        if (try fn_ctx.graphParserShapeNeedsRequiredFieldError(shape_node, &required_error_seen)) {
+            _ = try fn_ctx.ensureGraphParserMissingRequiredFieldError(callable_node);
+        }
+        var codec_seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        defer codec_seen.deinit();
+        _ = try fn_ctx.prepareCustomCodecCallsAtNode(
+            encoding_expr,
+            .parser,
+            shape_node,
+            callable_node,
+            &codec_seen,
+        );
+
+        // Preparing the exact generated body calls may extend live graph
+        // relations. Materialize active Type views only after that producer
+        // work has completed, so no invalidated snapshot enters draft IR.
+        const encoding_ty = try fn_ctx.resolvedTypeViewForNode(encoding_node);
+        const state_ty = try fn_ctx.resolvedTypeViewForNode(runtime_fn.args[0]);
+        const ret_ty = try fn_ctx.resolvedTypeViewForNode(runtime_fn.ret);
+        const shape_ty = try fn_ctx.resolvedTypeViewForNode(shape_node);
 
         const str_ty = try self.builder.primitiveType(.str);
         var precomputed_plan = BodyContext.ParserPrecomputedPlan.init(self.allocator);
@@ -25099,18 +25195,14 @@ const BodyContext = struct {
         }
         const encoding_node = callable.args[0];
         const encoding_cell = DraftTypeCell.fromGraphNode(encoding_node);
-        const encoding_ty = try fn_ctx.resolvedTypeViewForNode(encoding_node);
+        const shape_node = try fn_ctx.lowerTypeNode(plan.dispatcher_ty);
 
         const runtime_fn = try self.graph.functionNodes(request_fn_node);
         if (runtime_fn.args.len != 2) Common.invariant("stored encoder_for runtime function had an unexpected arity");
         const value_cell = DraftTypeCell.fromGraphNode(runtime_fn.args[0]);
         const state_cell = DraftTypeCell.fromGraphNode(runtime_fn.args[1]);
         const ret_cell = DraftTypeCell.fromGraphNode(runtime_fn.ret);
-        const value_ty = try fn_ctx.resolvedTypeViewForNode(runtime_fn.args[0]);
-        const state_ty = try fn_ctx.resolvedTypeViewForNode(runtime_fn.args[1]);
-        const ret_ty = try fn_ctx.resolvedTypeViewForNode(runtime_fn.ret);
 
-        const shape_ty = try fn_ctx.resolvedCheckedTypeView(plan.dispatcher_ty);
         const value_local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), value_cell, null);
         const value_expr = try fn_ctx.addExprWithTypeCell(value_cell, .{ .local = value_local });
         const state_local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), state_cell, null);
@@ -25138,6 +25230,25 @@ const BodyContext = struct {
             };
             break :blk try fn_ctx.addExprWithTypeCell(encoding_cell, .{ .local = local });
         } else try fn_ctx.lowerDispatchOperandAtNode(plan_args[0], encoding_node);
+
+        var codec_seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        defer codec_seen.deinit();
+        _ = try fn_ctx.prepareCustomCodecCallsAtNode(
+            encoding_expr,
+            .encoder,
+            shape_node,
+            callable_node,
+            &codec_seen,
+        );
+
+        // Generated runtime restoration is itself a relation producer. Its
+        // body consumes the exact prepared method interfaces only after those
+        // relations have settled, never active snapshots captured beforehand.
+        const encoding_ty = try fn_ctx.resolvedTypeViewForNode(encoding_node);
+        const value_ty = try fn_ctx.resolvedTypeViewForNode(runtime_fn.args[0]);
+        const state_ty = try fn_ctx.resolvedTypeViewForNode(runtime_fn.args[1]);
+        const ret_ty = try fn_ctx.resolvedTypeViewForNode(runtime_fn.ret);
+        const shape_ty = try fn_ctx.resolvedTypeViewForNode(shape_node);
 
         const str_ty = try self.builder.primitiveType(.str);
         var precomputed_plan = BodyContext.ParserPrecomputedPlan.init(self.allocator);
@@ -25941,7 +26052,7 @@ const BodyContext = struct {
             .lookup_required,
             .lambda,
             .closure,
-            => return try self.lowerExprAtTypeCell(checked_expr, .{ .sealed = ty }),
+            => return try self.lowerExprAtTypeCell(checked_expr, try self.draftTypeCell(ty)),
             else => {},
         }
         return self.lowerExprAtTypeWithDemand(checked_expr, ty, .runtime_value);
@@ -26241,10 +26352,10 @@ const BodyContext = struct {
                 });
                 return lowered_expr;
             },
-            .dispatch_call => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, .{ .sealed = ty }),
-            .interpolation => |interpolation| return try self.lowerDispatchExprAtType(expr.ty, interpolation.plan, .{ .sealed = ty }),
-            .type_dispatch_call => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, .{ .sealed = ty }),
-            .method_eq => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, .{ .sealed = ty }),
+            .dispatch_call => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, try self.draftTypeCell(ty)),
+            .interpolation => |interpolation| return try self.lowerDispatchExprAtType(expr.ty, interpolation.plan, try self.draftTypeCell(ty)),
+            .type_dispatch_call => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, try self.draftTypeCell(ty)),
+            .method_eq => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, try self.draftTypeCell(ty)),
             .lookup_local => |lookup| return try self.lowerLookupExprAtType(expr.ty, lookup.resolved, ty),
             .lookup_external => |resolved| return try self.lowerLookupExprAtType(expr.ty, resolved, ty),
             .lookup_required => |resolved| return try self.lowerLookupExprAtType(expr.ty, resolved, ty),
@@ -29161,6 +29272,34 @@ const BodyContext = struct {
         return null;
     }
 
+    fn preparedCodecCallableForShape(
+        self: *BodyContext,
+        lookup: MethodLookup,
+        shape_ty: Type.TypeId,
+    ) Allocator.Error!?Type.TypeId {
+        if (self.frozen_sealed_emission) {
+            return try self.frozenCodecCallableForShape(lookup, shape_ty);
+        }
+
+        const shape_node = try self.activeNodeFromType(shape_ty);
+        var found: ?Type.TypeId = null;
+        for (self.draft.prepared_codec_calls.items) |prepared| {
+            if (!self.methodLookupEql(prepared.lookup, lookup)) continue;
+            if (!self.graph.sameClass(prepared.shape_node, shape_node)) continue;
+            const callable_ty = try self.resolvedTypeViewForNode(prepared.callable_node);
+            if (found) |previous| {
+                if (!try self.builder.program.types.typeEql(
+                    &self.builder.program.names,
+                    previous,
+                    callable_ty,
+                )) Common.invariant("prepared codec shape had multiple callable interfaces");
+            } else {
+                found = callable_ty;
+            }
+        }
+        return found;
+    }
+
     fn frozenCodecCallableForLookup(
         self: *BodyContext,
         lookup: MethodLookup,
@@ -29177,6 +29316,31 @@ const BodyContext = struct {
                 )) Common.invariant("prepared codec lookup had multiple callable interfaces");
             } else {
                 found = prepared.callable_ty;
+            }
+        }
+        return found;
+    }
+
+    fn preparedCodecCallableForLookup(
+        self: *BodyContext,
+        lookup: MethodLookup,
+    ) Allocator.Error!?Type.TypeId {
+        if (self.frozen_sealed_emission) {
+            return try self.frozenCodecCallableForLookup(lookup);
+        }
+
+        var found: ?Type.TypeId = null;
+        for (self.draft.prepared_codec_calls.items) |prepared| {
+            if (!self.methodLookupEql(prepared.lookup, lookup)) continue;
+            const callable_ty = try self.resolvedTypeViewForNode(prepared.callable_node);
+            if (found) |previous| {
+                if (!try self.builder.program.types.typeEql(
+                    &self.builder.program.names,
+                    previous,
+                    callable_ty,
+                )) Common.invariant("prepared codec lookup had multiple callable interfaces");
+            } else {
+                found = callable_ty;
             }
         }
         return found;
@@ -29984,8 +30148,8 @@ const BodyContext = struct {
         result_ty: Type.TypeId,
     ) Allocator.Error!EncodeContainerMethod {
         const lookup = try self.methodLookupForTypeName(encoding_ty, method_name);
-        const callable_ty = try self.frozenCodecCallableForLookup(lookup) orelse
-            Common.invariant("container encoder callable was not prepared before graph sealing");
+        const callable_ty = try self.preparedCodecCallableForLookup(lookup) orelse
+            Common.invariant("container encoder callable was not prepared before body generation");
         const method_fn = self.builder.functionShape(callable_ty, "container encoder method was not a function");
         const method_args = self.builder.program.types.span(method_fn.args);
         const expected_arity: usize = if (kind == .tag) 4 else 3;
@@ -32667,6 +32831,21 @@ const BodyContext = struct {
         };
     }
 
+    fn graphJsonObjectKeyIsUnitTagUnion(self: *BodyContext, raw_node: NodeId) Allocator.Error!bool {
+        const node = self.graphShapeNode(raw_node);
+        return switch (self.graph.content(node)) {
+            .tag_union => blk: {
+                const tags = (try self.graph.tagRowNodes(node)).tags;
+                if (tags.len == 0) break :blk false;
+                for (tags) |tag| {
+                    if (tag.payloads.len != 0) break :blk false;
+                }
+                break :blk true;
+            },
+            else => false,
+        };
+    }
+
     fn prepareParseScalarCodecCall(
         self: *BodyContext,
         boundary_expr: DraftExprId,
@@ -33348,6 +33527,12 @@ const BodyContext = struct {
                                 boundary_callable_node,
                                 method_name,
                             ) or added;
+                        } else if (try self.graphJsonObjectKeyIsUnitTagUnion(named.args[0])) {
+                            added = try self.prepareParserInvalidValueCodecCall(
+                                boundary_expr,
+                                named.args[0],
+                                boundary_callable_node,
+                            ) or added;
                         }
                     } else if (self.graphJsonEncodeObjectKeyMethodName(named.args[0])) |method_name| {
                         added = try self.prepareEncodeObjectKeyCodecCall(
@@ -33400,6 +33585,11 @@ const BodyContext = struct {
                         shape_node,
                         boundary_callable_node,
                     ) or added;
+                    added = try self.prepareParserInvalidValueCodecCall(
+                        boundary_expr,
+                        shape_node,
+                        boundary_callable_node,
+                    ) or added;
                 } else {
                     added = try self.prepareEncodeContainerCodecCall(
                         boundary_expr,
@@ -33413,6 +33603,10 @@ const BodyContext = struct {
                 }
             },
             .record, .zst, .empty_record => {
+                const fields = switch (self.graph.content(shape_node)) {
+                    .zst, .empty_record => &.{},
+                    else => (try self.graph.recordNodes(structural_node)).fields,
+                };
                 if (kind == .encoder) {
                     added = try self.prepareEncodeContainerCodecCall(
                         boundary_expr,
@@ -33421,12 +33615,14 @@ const BodyContext = struct {
                         "encode_record",
                     ) or added;
                 }
-                added = try self.prepareRenameRecordFieldCodecCall(
-                    boundary_expr,
-                    kind,
-                    shape_node,
-                    boundary_callable_node,
-                ) or added;
+                if (fields.len != 0) {
+                    added = try self.prepareRenameRecordFieldCodecCall(
+                        boundary_expr,
+                        kind,
+                        shape_node,
+                        boundary_callable_node,
+                    ) or added;
+                }
                 if (kind == .parser) {
                     added = try self.prepareSkipRecordFieldCodecCall(
                         boundary_expr,
@@ -33439,10 +33635,6 @@ const BodyContext = struct {
                         boundary_callable_node,
                     ) or added;
                 }
-                const fields = switch (self.graph.content(shape_node)) {
-                    .zst => &.{},
-                    else => (try self.graph.recordNodes(structural_node)).fields,
-                };
                 for (fields) |field|
                     added = try self.prepareCustomCodecCallsAtNode(boundary_expr, kind, field.ty, boundary_callable_node, seen) or added;
             },
@@ -34504,7 +34696,7 @@ const BodyContext = struct {
     }
 
     fn lowerMatchExpr(self: *BodyContext, expr_id: checked.CheckedExprId, match: anytype, result_ty: Type.TypeId) Allocator.Error!DraftExprId {
-        return try self.lowerMatchExprAtTypeCell(expr_id, match, .{ .sealed = result_ty });
+        return try self.lowerMatchExprAtTypeCell(expr_id, match, try self.draftTypeCell(result_ty));
     }
 
     fn lowerMatchExprAtTypeCell(
@@ -36276,7 +36468,7 @@ const BodyContext = struct {
         if_: anytype,
         result_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        return try self.lowerIfExprAtTypeCell(expr_id, if_, .{ .sealed = result_ty });
+        return try self.lowerIfExprAtTypeCell(expr_id, if_, try self.draftTypeCell(result_ty));
     }
 
     fn lowerIfExprAtTypeCell(
