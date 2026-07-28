@@ -64,7 +64,8 @@ pub const Constants = struct {
     /// 38: Platform provides entries include their exact platform-local definition.
     /// 39: ModuleEnv stores exact top-level demand dependencies.
     /// 41: Encoding protocol names containers by Roc shape: list, tuple, record, dict.
-    pub const CACHE_VERSION = 41;
+    /// 42: Checked modules store explicitly rejected static-dispatch obligations.
+    pub const CACHE_VERSION = 42;
 };
 
 /// Configuration for the Roc cache system.

@@ -3897,6 +3897,13 @@ its plan:
   specialization edge can ever supply and no default applies: the dispatch is
   statically unreachable and lowers to an explicit crash.
 
+Checking records `checked_error` by the raw static-dispatch obligation identity
+that owns the rejected edge. Rejection is not encoded by changing the
+constraint callable, its return, the dispatcher, or any operand to an erroneous
+type: those solver variables can be shared with independently valid producers.
+Checked-artifact publication consumes the explicit rejected-obligation record
+and must not infer rejection by inspecting a callable result type.
+
 `checked_error` and `unreachable_dispatch` are rejected, non-returning
 dispatches. Monotype lowers both to an ordinary Roc runtime crash instead of a
 call, so neither can return a dispatch result value. For `checked_error`, this is

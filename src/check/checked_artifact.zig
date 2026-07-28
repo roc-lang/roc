@@ -13652,6 +13652,8 @@ const EvidencePass = struct {
     value_use_by_node: std.AutoHashMap(u32, u32),
     /// dispatch_target record index by the discharged edge's raw fn var.
     target_by_fn_var: std.AutoHashMap(u32, u32),
+    /// Raw constraint function vars checking explicitly rejected.
+    rejected_static_dispatches: std.AutoHashMap(u32, void),
     /// Source node by checked expr (reverse of `exprIdForSource`).
     source_by_checked_expr: std.AutoHashMap(u32, u32),
     /// Generalized local VALUE decls (non-lambda exprs, e.g. an `if` choosing
@@ -13738,6 +13740,7 @@ const EvidencePass = struct {
             .types = module.typeStoreConst(),
             .value_use_by_node = std.AutoHashMap(u32, u32).init(allocator),
             .target_by_fn_var = std.AutoHashMap(u32, u32).init(allocator),
+            .rejected_static_dispatches = std.AutoHashMap(u32, void).init(allocator),
             .source_by_checked_expr = std.AutoHashMap(u32, u32).init(allocator),
             .local_value_scheme_by_var = std.AutoHashMap(u32, u32).init(allocator),
             .value_use_record_by_pattern = std.AutoHashMap(u32, u32).init(allocator),
@@ -13761,6 +13764,7 @@ const EvidencePass = struct {
         self.deferred_use_sites.deinit(self.allocator);
         self.value_use_by_node.deinit();
         self.target_by_fn_var.deinit();
+        self.rejected_static_dispatches.deinit();
         self.source_by_checked_expr.deinit();
         self.local_value_scheme_by_var.deinit();
         self.value_use_record_by_pattern.deinit();
@@ -13995,6 +13999,12 @@ const EvidencePass = struct {
 
     fn buildIndexes(self: *EvidencePass) Allocator.Error!void {
         const module_env = self.module.moduleEnvConst();
+        for (module_env.rejectedStaticDispatches()) |rejected| {
+            const entry = try self.rejected_static_dispatches.getOrPut(rejected.constraint_fn_var);
+            if (entry.found_existing) {
+                checkedArtifactInvariant("duplicate rejected static-dispatch obligation", .{});
+            }
+        }
         for (module_env.scheme_uses.items.items, 0..) |record, i| {
             switch (@as(ModuleEnv.SchemeUseRecord.Slot, @enumFromInt(record.slot_kind))) {
                 .value_use, .shared_value_use => {
@@ -14293,15 +14303,7 @@ const EvidencePass = struct {
         commit_unpinned: bool,
     ) Allocator.Error!?static_dispatch.StaticDispatchResolution {
         if (constraint_fn_var) |fn_var| {
-            const fn_content = self.types.resolveVar(fn_var).desc.content;
-            const checked_error = switch (fn_content) {
-                .err => true,
-                else => if (fn_content.unwrapFunc()) |func|
-                    self.types.resolveVar(func.ret).desc.content == .err
-                else
-                    false,
-            };
-            if (checked_error) return .checked_error;
+            if (self.rejected_static_dispatches.contains(@intFromEnum(fn_var))) return .checked_error;
         }
 
         const resolved = self.types.resolveVar(dispatcher_var);
@@ -14326,7 +14328,7 @@ const EvidencePass = struct {
         }
 
         switch (resolved.desc.content) {
-            .err => return .checked_error,
+            .err => checkedArtifactInvariant("erroneous dispatch receiver reached publication without an explicit rejection", .{}),
             .flex => |flex| return self.resolveVarObligation(resolved.var_, flex.constraints, method, structural_kind, constraint_fn_var, chain, commit_unpinned),
             .rigid => |rigid| return self.resolveVarObligation(resolved.var_, rigid.constraints, method, structural_kind, constraint_fn_var, chain, commit_unpinned),
             .alias, .structure => {
@@ -14346,9 +14348,7 @@ const EvidencePass = struct {
                 }
                 // No owner head: a genuinely structural shape.
                 if (structural_kind) |kind| return .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) };
-                // Checking already reported the missing method; the site is
-                // erroneous.
-                return .checked_error;
+                checkedArtifactInvariant("ownerless non-structural dispatch reached publication without an explicit rejection", .{});
             },
         }
     }
