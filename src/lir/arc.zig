@@ -71,7 +71,6 @@ const ProcArcDomain = struct {
         store: *const LirStore,
         solution: *const arc_solve.Solution,
         local_contains_refcounted: []const bool,
-        borrowed_call_result: []const bool,
         global_local_index: []u32,
         frame_span: LIR.LocalSpan,
     ) ResourceError!ProcArcDomain {
@@ -161,9 +160,7 @@ const ProcArcDomain = struct {
 
         var value_use_count: usize = 0;
         for (frame_locals, 0..) |local, frame_index| {
-            const local_index = @intFromEnum(local);
-            if (local_index >= borrowed_call_result.len) arcInvariant("ARC borrowed-result table did not cover frame local");
-            if (!borrowed_call_result[local_index]) continue;
+            if (!solution.isBorrowedCallResult(local)) continue;
             value_use_bit_index[frame_index] = @intCast(value_use_count);
             value_use_locals_buffer[value_use_count] = local;
             value_use_count += 1;
@@ -254,23 +251,6 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     defer solution.deinit();
     inserter.solution = &solution;
 
-    // Borrowed call results need a separate value-use liveness bit because
-    // emitted RC statements are raw reads, not uses of the borrowed result.
-    // Record this module-wide fact once; each proc domain below selects only
-    // the results named by that proc's explicit frame-local inventory.
-    var borrowed_call_result = try store.allocator.alloc(bool, store.localCount());
-    defer store.allocator.free(borrowed_call_result);
-    @memset(borrowed_call_result, false);
-    for (0..store.cfStmtCount()) |stmt_index| {
-        const target = switch (store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))))) {
-            .assign_call => |assign| assign.target,
-            .assign_call_erased => |assign| assign.target,
-            else => continue,
-        };
-        if (!solution.isBorrowed(target)) continue;
-        borrowed_call_result[@intFromEnum(target)] = true;
-    }
-
     // Domains are active one proc at a time. This reusable exact map makes
     // global LocalId -> proc-dense index lookup O(1) without allocating and
     // clearing a module-wide table for every proc.
@@ -311,11 +291,8 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         .queue = .empty,
         .enabled = options.specialize,
         .original_bodies = original_bodies,
-        .unique_seed_masks = try store.allocator.alloc(?u64, base_proc_count),
     };
-    @memset(variants.unique_seed_masks, null);
     defer {
-        store.allocator.free(variants.unique_seed_masks);
         variants.map.deinit();
         variants.sigs.deinit(store.allocator);
         variants.queue.deinit(store.allocator);
@@ -350,7 +327,6 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             store,
             &solution,
             local_contains_refcounted,
-            borrowed_call_result,
             proc_local_index,
             source_spec.frame_locals,
         );
@@ -478,9 +454,6 @@ const VariantTable = struct {
     enabled: bool,
     /// Ownership-neutral bodies of the base procs, for variant re-emission.
     original_bodies: []const ?LIR.CFStmtId,
-    /// Lazily-computed parameter positions whose unique seed can eliminate a
-    /// runtime uniqueness check in the original body.
-    unique_seed_masks: []?u64,
 };
 
 /// Explicit loop-liveness input. The identity is allocated with the join
@@ -3325,146 +3298,12 @@ const Inserter = struct {
     }
 
     fn procParamCanUseUniqueSeed(
-        self: *Inserter,
+        self: *const Inserter,
         proc_id: LIR.LirProcSpecId,
         position: usize,
-    ) ResourceError!bool {
+    ) bool {
         if (position >= 64) return false;
-        const proc_index = @intFromEnum(proc_id);
-        if (proc_index >= self.variants.unique_seed_masks.len) return false;
-        if (self.variants.unique_seed_masks[proc_index]) |mask| {
-            return (mask & argMaskBit(position)) != 0;
-        }
-
-        const mask = try self.computeProcUniqueSeedMask(proc_id);
-        self.variants.unique_seed_masks[proc_index] = mask;
-        return (mask & argMaskBit(position)) != 0;
-    }
-
-    fn computeProcUniqueSeedMask(self: *Inserter, proc_id: LIR.LirProcSpecId) ResourceError!u64 {
-        const proc = self.store.getProcSpec(proc_id);
-        const params = self.store.getLocalSpan(proc.args);
-        if (params.len == 0) return 0;
-
-        var mask: u64 = 0;
-        const visited = try self.emission_allocator.alloc(bool, self.store.cfStmtCount());
-        defer self.emission_allocator.free(visited);
-        @memset(visited, false);
-
-        var stack = std.ArrayList(LIR.CFStmtId).empty;
-        defer stack.deinit(self.emission_allocator);
-
-        if (self.variants.original_bodies[@intFromEnum(proc_id)]) |body| {
-            try stack.append(self.emission_allocator, body);
-        }
-        const join_points = self.store.getJoinPointSpan(proc.join_points);
-        for (0..GuardedList.borrowLen(join_points)) |join_index| {
-            const join_point = GuardedList.at(join_points, join_index);
-            try stack.append(self.emission_allocator, join_point.body);
-        }
-
-        while (stack.pop()) |stmt_id| {
-            const stmt_index = @intFromEnum(stmt_id);
-            if (stmt_index >= visited.len) arcInvariant("ARC unique-seed scan saw stmt outside store");
-            if (visited[stmt_index]) continue;
-            visited[stmt_index] = true;
-
-            const stmt = self.store.getCFStmt(stmt_id);
-            switch (stmt) {
-                .assign_low_level => |assign| {
-                    mask |= self.uniqueSeedMaskForLowLevel(params, assign.args, assign.rc_effect);
-                    try stack.append(self.emission_allocator, assign.next);
-                },
-                .switch_stmt => |switch_stmt| {
-                    const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
-                    for (0..GuardedList.borrowLen(branches)) |branch_index| {
-                        const branch = GuardedList.at(branches, branch_index);
-                        try stack.append(self.emission_allocator, branch.body);
-                    }
-                    try stack.append(self.emission_allocator, switch_stmt.default_branch);
-                    if (switch_stmt.continuation) |continuation| {
-                        try stack.append(self.emission_allocator, continuation);
-                    }
-                },
-                .switch_initialized_payload => |switch_stmt| {
-                    try stack.append(self.emission_allocator, switch_stmt.initialized_branch);
-                    try stack.append(self.emission_allocator, switch_stmt.uninitialized_branch);
-                },
-                .str_match => |str_match| {
-                    try stack.append(self.emission_allocator, str_match.on_match);
-                    try stack.append(self.emission_allocator, str_match.on_miss);
-                },
-                .str_match_set => |str_match_set| {
-                    const arms = self.store.getStrMatchArms(str_match_set.arms);
-                    for (0..GuardedList.borrowLen(arms)) |arm_index| {
-                        const arm = GuardedList.at(arms, arm_index);
-                        try stack.append(self.emission_allocator, arm.on_match);
-                    }
-                    try stack.append(self.emission_allocator, str_match_set.on_miss);
-                },
-                .join => |join_stmt| {
-                    try stack.append(self.emission_allocator, join_stmt.body);
-                    try stack.append(self.emission_allocator, join_stmt.remainder);
-                },
-                inline .init_uninitialized,
-                .assign_ref,
-                .assign_literal,
-                .assign_call,
-                .assign_call_erased,
-                .assign_packed_erased_fn,
-                .assign_list,
-                .assign_struct,
-                .assign_tag,
-                .store_struct,
-                .store_tag,
-                .set_local,
-                .debug,
-                .expect,
-                .comptime_branch_taken,
-                .incref,
-                .decref,
-                .decref_if_initialized,
-                .free,
-                => |linear| try stack.append(self.emission_allocator, linear.next),
-                .ret,
-                .jump,
-                .crash,
-                .expect_err,
-                .runtime_error,
-                .comptime_exhaustiveness_failed,
-                .loop_continue,
-                .loop_break,
-                => {},
-            }
-        }
-
-        return mask;
-    }
-
-    fn uniqueSeedMaskForLowLevel(
-        self: *const Inserter,
-        params: anytype,
-        args: LIR.LocalSpan,
-        rc_effect: LIR.LowLevel.RcEffect,
-    ) u64 {
-        const check_mask = rc_effect.may_runtime_uniqueness_check_args & rc_effect.consume_args;
-        if (check_mask == 0) return 0;
-
-        var mask: u64 = 0;
-        const locals = self.store.getLocalSpan(args);
-        for (0..GuardedList.borrowLen(locals)) |arg_position| {
-            const arg = GuardedList.at(locals, arg_position);
-            if (arg_position >= 64) break;
-            if ((check_mask & argMaskBit(arg_position)) == 0) continue;
-            for (0..@min(params.len, 64)) |param_position| {
-                const param = GuardedList.at(params, param_position);
-                if (arg == param) {
-                    mask |= argMaskBit(param_position);
-                    break;
-                }
-            }
-        }
-        return mask;
+        return (self.solution.uniqueSeedMaskOf(proc_id) & argMaskBit(position)) != 0;
     }
 
     fn callArgOwnership(
@@ -3499,7 +3338,7 @@ const Inserter = struct {
                 if (!can_transfer) continue;
                 const bit = @as(u64, 1) << @as(u6, @intCast(position));
                 const return_borrows_param = callee_sig.ret_mode == .borrowed and (callee_sig.ret_lenders & bit) != 0;
-                const seed_can_reach_check = if (callee) |direct| try self.procParamCanUseUniqueSeed(direct, position) else false;
+                const seed_can_reach_check = if (callee) |direct| self.procParamCanUseUniqueSeed(direct, position) else false;
                 const seeds_unique_param = unique_demand and seed_can_reach_check and self.isLocalUniqueHere(local) and
                     !self.groupSharesOtherOperand(locals, position, local);
                 if (!return_borrows_param and !seeds_unique_param) continue;
@@ -3526,7 +3365,7 @@ const Inserter = struct {
                 // checked ops it reaches in the body go check-free.
                 const seed_can_reach_check = if (position < 64) blk: {
                     const direct = callee orelse break :blk false;
-                    break :blk try self.procParamCanUseUniqueSeed(direct, position);
+                    break :blk self.procParamCanUseUniqueSeed(direct, position);
                 } else false;
                 if (unique_demand and seed_can_reach_check and self.isLocalUniqueHere(local) and
                     !self.groupSharesOtherOperand(locals, position, local))
@@ -5690,7 +5529,6 @@ test "ARC proc domain excludes scalar and other-proc locals" {
     const local_contains_refcounted = [_]bool{ true, false, true };
     var solution = try arc_solve.solve(testing.allocator, &f.store, &local_contains_refcounted, &.{});
     defer solution.deinit();
-    const borrowed_call_result = [_]bool{ false, false, false };
     var global_local_index = [_]u32{ no_proc_local_index, no_proc_local_index, no_proc_local_index };
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -5701,7 +5539,6 @@ test "ARC proc domain excludes scalar and other-proc locals" {
             &f.store,
             &solution,
             &local_contains_refcounted,
-            &borrowed_call_result,
             &global_local_index,
             f.store.getProcSpec(resource_proc).frame_locals,
         );
@@ -5725,7 +5562,6 @@ test "ARC proc domain excludes scalar and other-proc locals" {
         &f.store,
         &solution,
         &local_contains_refcounted,
-        &borrowed_call_result,
         &global_local_index,
         f.store.getProcSpec(other_proc).frame_locals,
     );
@@ -5777,7 +5613,6 @@ test "ARC proc domain filters module-wide borrow groups to its frame" {
     solution.alias_source[@intFromEnum(external_member)] = @intFromEnum(leader);
     try testing.expectEqual(leader, solution.leaderOf(external_member));
 
-    const borrowed_call_result = [_]bool{ false, false, false };
     var global_local_index = [_]u32{ no_proc_local_index, no_proc_local_index, no_proc_local_index };
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -5786,7 +5621,6 @@ test "ARC proc domain filters module-wide borrow groups to its frame" {
         &f.store,
         &solution,
         &local_contains_refcounted,
-        &borrowed_call_result,
         &global_local_index,
         f.store.getProcSpec(local_proc).frame_locals,
     );

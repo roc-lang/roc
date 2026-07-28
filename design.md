@@ -4954,6 +4954,14 @@ reachability or decodes the same statements again. The inventory is
 stage-local and exact: it records every reachable statement and no unreachable
 statement, with no cap or approximation.
 
+Caller-context projections also record direct-call tailness and, for each
+proc, the parameter positions that can reach consuming low-level runtime
+uniqueness checks. Variant planning consumes those solved masks directly; it
+does not rescan a proc body or allocate a module-sized visited table. The final
+binding expansion also publishes the exact borrowed call-result set used by
+per-proc liveness domains, so ARC insertion performs no second module-wide
+statement scan to reconstruct call-result kinds.
+
 The module solver constructs one dense domain containing exactly locals whose
 committed layouts participate in ARC. Binding tables, dependency edges,
 visibility sets, uniqueness sets, and their worklists use those dense indices;

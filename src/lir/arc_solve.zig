@@ -87,6 +87,9 @@ pub const Solution = struct {
     /// parameters, which anchor their own groups and live for the whole
     /// call).
     borrowed: std.bit_set.DynamicBitSetUnmanaged,
+    /// Bit set => this borrowed local is a direct-call result and therefore
+    /// needs its own value-use liveness bit in emission.
+    borrowed_call_result: std.bit_set.DynamicBitSetUnmanaged,
     /// Owned leader anchoring each local's liveness; the local itself when
     /// the binding is owned or is a borrowed parameter.
     leader: []u32,
@@ -94,6 +97,9 @@ pub const Solution = struct {
     alias_source: []u32,
     /// Solved ownership signature per proc.
     sigs: []arc_sig.RcSig,
+    /// Parameter positions whose values can reach a consuming low-level
+    /// runtime uniqueness check in this proc's ownership-neutral body.
+    unique_seed_masks: []u64,
     /// Flat join-body facts per source proc, indexed through the adjacent
     /// offsets and lengths.
     join_body_offsets: []u32,
@@ -138,9 +144,11 @@ pub const Solution = struct {
 
     pub fn deinit(self: *Solution) void {
         self.borrowed.deinit(self.allocator);
+        self.borrowed_call_result.deinit(self.allocator);
         self.allocator.free(self.leader);
         self.allocator.free(self.alias_source);
         self.allocator.free(self.sigs);
+        self.allocator.free(self.unique_seed_masks);
         self.allocator.free(self.join_body_offsets);
         self.allocator.free(self.join_body_lens);
         self.allocator.free(self.join_bodies);
@@ -178,6 +186,12 @@ pub const Solution = struct {
         const index = @intFromEnum(local);
         if (index >= self.leader.len) return false;
         return self.borrowed.isSet(index);
+    }
+
+    pub fn isBorrowedCallResult(self: *const Solution, local: LIR.LocalId) bool {
+        const index = @intFromEnum(local);
+        if (index >= self.leader.len) return false;
+        return self.borrowed_call_result.isSet(index);
     }
 
     /// True when RC statements touching this local's value must use atomic
@@ -243,6 +257,12 @@ pub const Solution = struct {
 
     pub fn sigOf(self: *const Solution, proc: LIR.LirProcSpecId) arc_sig.RcSig {
         return self.sigTable().get(proc);
+    }
+
+    pub fn uniqueSeedMaskOf(self: *const Solution, proc: LIR.LirProcSpecId) u64 {
+        const index = @intFromEnum(proc);
+        if (index >= self.unique_seed_masks.len) solveInvariant("ARC uniqueness-seed lookup exceeded the solved proc table");
+        return self.unique_seed_masks[index];
     }
 
     pub fn joinBodiesOf(self: *const Solution, proc: LIR.LirProcSpecId) []const JoinBody {
@@ -356,7 +376,7 @@ const DirectCallFact = struct {
     callee: LIR.LirProcSpecId,
     args: LIR.LocalSpan,
     target: LIR.LocalId,
-    next: LIR.CFStmtId,
+    tail: bool,
 };
 
 /// One structurally distinct direct-call statement. A neutral LIR body can
@@ -408,6 +428,7 @@ const Solver = struct {
     rc_local: []const bool,
     domain: *const ArcLocalDomain,
     sigs: []arc_sig.RcSig,
+    unique_seed_masks: []u64,
     pinned: std.bit_set.DynamicBitSetUnmanaged,
     /// Call-graph SCC id per proc, for the tail-call rule.
     scc: []u32,
@@ -479,6 +500,7 @@ pub fn solve(
         .rc_local = rc_local,
         .domain = &domain,
         .sigs = try allocator.alloc(arc_sig.RcSig, proc_count),
+        .unique_seed_masks = try allocator.alloc(u64, proc_count),
         .pinned = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, proc_count),
         .scc = try allocator.alloc(u32, proc_count),
         .defs = try allocator.alloc(DefKind, arc_local_count),
@@ -520,8 +542,9 @@ pub fn solve(
     var solver_join_indices_kept = false;
     defer {
         if (solver_sigs_kept) {
-            // Ownership of sigs moved into the Solution.
+            // Ownership of proc-indexed solution tables moved into Solution.
             solver.sigs = &.{};
+            solver.unique_seed_masks = &.{};
         }
         if (!solver_sigs_kept) solver.pinned.deinit(allocator);
         allocator.free(solver.scc);
@@ -557,10 +580,12 @@ pub fn solve(
         solver.unique_calls.deinit(allocator);
         solver.stack.deinit(allocator);
         if (!solver_sigs_kept) allocator.free(solver.sigs);
+        if (!solver_sigs_kept) allocator.free(solver.unique_seed_masks);
     }
 
     @memset(solver.param_position, no_local);
     @memset(solver.param_proc, no_local);
+    @memset(solver.unique_seed_masks, 0);
     @memset(solver.maybe_uninitialized_condition, no_local);
     @memset(solver.maybe_uninitialized_condition_mask, 0);
 
@@ -692,6 +717,8 @@ pub fn solve(
     // consumers. Non-ARC locals are identity leaders with no ownership bits.
     var borrowed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
     errdefer borrowed.deinit(allocator);
+    var borrowed_call_result = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+    errdefer borrowed_call_result.deinit(allocator);
     const leader = try allocator.alloc(u32, local_count);
     errdefer allocator.free(leader);
     const alias_source = try allocator.alloc(u32, local_count);
@@ -720,13 +747,19 @@ pub fn solve(
             maybe_uninitialized_condition_mask[local_index] = solver.maybe_uninitialized_condition_mask[arc_index];
         }
     }
+    for (solver.unique_calls.items) |call| {
+        const target = domain.indexOf(call.target) orelse continue;
+        if (binding.borrowed.isSet(target)) borrowed_call_result.set(@intFromEnum(call.target));
+    }
 
     var solution = Solution{
         .allocator = allocator,
         .borrowed = borrowed,
+        .borrowed_call_result = borrowed_call_result,
         .leader = leader,
         .alias_source = alias_source,
         .sigs = solver.sigs,
+        .unique_seed_masks = solver.unique_seed_masks,
         .join_body_offsets = join_body_offsets,
         .join_body_lens = join_body_lens,
         .join_bodies = join_bodies,
@@ -748,9 +781,11 @@ pub fn solve(
     solver_join_indices_kept = true;
     errdefer {
         solution.borrowed.deinit(allocator);
+        solution.borrowed_call_result.deinit(allocator);
         allocator.free(solution.leader);
         allocator.free(solution.alias_source);
         allocator.free(solution.sigs);
+        allocator.free(solution.unique_seed_masks);
         allocator.free(solution.join_body_offsets);
         allocator.free(solution.join_body_lens);
         allocator.free(solution.join_bodies);
@@ -1126,7 +1161,7 @@ fn liftReachableStatements(solver: *Solver) SolveError!void {
             seen.set(stmt_index);
             try stmts.append(solver.allocator, current);
             const stmt = solver.store.getCFStmt(current);
-            try liftProcStmtFacts(solver, @intCast(proc_index), current);
+            try liftProcStmtFacts(solver, @intCast(proc_index), proc.args, current);
             if (!facts_seen.isSet(stmt_index)) {
                 facts_seen.set(stmt_index);
                 try liftSharedStmtFacts(solver, current);
@@ -1140,15 +1175,31 @@ fn liftReachableStatements(solver: *Solver) SolveError!void {
 /// Projects facts whose identity includes the proc spec using a neutral body.
 /// The same statement may be visited here for several procs; statement-local
 /// definition and occurrence facts are separately lifted exactly once below.
-fn liftProcStmtFacts(solver: *Solver, proc_index: u32, current: LIR.CFStmtId) SolveError!void {
+fn liftProcStmtFacts(
+    solver: *Solver,
+    proc_index: u32,
+    proc_params: LIR.LocalSpan,
+    current: LIR.CFStmtId,
+) SolveError!void {
     switch (solver.store.getCFStmt(current)) {
         .assign_call => |assign| try solver.direct_calls.append(solver.allocator, .{
             .caller = proc_index,
             .callee = assign.proc,
             .args = assign.args,
             .target = assign.target,
-            .next = assign.next,
+            .tail = switch (solver.store.getCFStmt(assign.next)) {
+                .ret => |ret_stmt| ret_stmt.value == assign.target,
+                else => false,
+            },
         }),
+        .assign_low_level => |assign| {
+            solver.unique_seed_masks[proc_index] |= lowLevelUniqueSeedMask(
+                solver.store,
+                proc_params,
+                assign.args,
+                assign.rc_effect,
+            );
+        },
         .ret => |ret_stmt| try solver.proc_returns[proc_index].append(solver.allocator, @intFromEnum(ret_stmt.value)),
         .join => |join_stmt| {
             const joins = &solver.proc_join_bodies[proc_index];
@@ -1181,6 +1232,31 @@ fn liftProcStmtFacts(solver: *Solver, proc_index: u32, current: LIR.CFStmtId) So
         },
         else => {},
     }
+}
+
+fn lowLevelUniqueSeedMask(
+    store: *const LirStore,
+    params_span: LIR.LocalSpan,
+    args_span: LIR.LocalSpan,
+    rc_effect: LIR.LowLevel.RcEffect,
+) u64 {
+    const check_mask = rc_effect.may_runtime_uniqueness_check_args & rc_effect.consume_args;
+    if (check_mask == 0) return 0;
+
+    const params = store.getLocalSpan(params_span);
+    const args = store.getLocalSpan(args_span);
+    var mask: u64 = 0;
+    for (0..GuardedList.borrowLen(args)) |arg_position| {
+        if (arg_position >= 64) break;
+        if ((check_mask & (@as(u64, 1) << @as(u6, @intCast(arg_position)))) == 0) continue;
+        const arg = GuardedList.at(args, arg_position);
+        for (0..@min(GuardedList.borrowLen(params), 64)) |param_position| {
+            if (arg != GuardedList.at(params, param_position)) continue;
+            mask |= @as(u64, 1) << @as(u6, @intCast(param_position));
+            break;
+        }
+    }
+    return mask;
 }
 
 /// Resolves every lifted jump to the compact join index and per-join
@@ -1318,7 +1394,7 @@ fn collectAll(solver: *Solver) SolveError!void {
         const callee_sig = solver.sigs[@intFromEnum(call.callee)];
         const args = solver.store.getLocalSpan(call.args);
         const same_scc = solver.scc[@intFromEnum(call.callee)] == solver.scc[call.caller];
-        const tail_call = same_scc and isTailCall(solver.store, call.target, call.next);
+        const tail_call = same_scc and call.tail;
         for (0..GuardedList.borrowLen(args)) |position| {
             const arg = GuardedList.at(args, position);
             const argument = solver.domain.indexOf(arg) orelse continue;
@@ -1934,15 +2010,6 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
         .jump => {},
         .crash, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
     }
-}
-
-/// A call is in tail position when the very next statement returns the call
-/// result.
-fn isTailCall(store: *const LirStore, target: LIR.LocalId, next: LIR.CFStmtId) bool {
-    return switch (store.getCFStmt(next)) {
-        .ret => |ret_stmt| ret_stmt.value == target,
-        else => false,
-    };
 }
 
 /// Returns the single refcounted argument a borrowed-return call result may
