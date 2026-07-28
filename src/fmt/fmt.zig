@@ -349,6 +349,7 @@ const Formatter = struct {
     // This starts true since beginning of file is considered a newline.
     has_newline: bool = true,
     has_multiline_string: bool = false,
+    pending_spaces: usize = 0,
 
     /// Creates a new Formatter for the given parse IR.
     fn init(ast: AST, writer: *std.Io.Writer) Allocator.Error!Formatter {
@@ -368,6 +369,7 @@ const Formatter = struct {
 
     /// Deinits all data owned by the formatter object.
     fn flush(fmt: *Formatter) error{WriteFailed}!void {
+        fmt.pending_spaces = 0;
         try fmt.writer.flush();
     }
 
@@ -3312,23 +3314,102 @@ const Formatter = struct {
     }
 
     fn push(fmt: *Formatter, c: u8) error{WriteFailed}!void {
-        if (c != '\t') {
-            fmt.has_newline = c == '\n';
-        }
         fmt.has_multiline_string = false;
-        try fmt.writer.writeByte(c);
+        switch (c) {
+            ' ' => {
+                fmt.pending_spaces += 1;
+                fmt.has_newline = false;
+            },
+            '\n' => {
+                fmt.pending_spaces = 0;
+                fmt.has_newline = true;
+                try fmt.writer.writeByte(c);
+            },
+            '\t' => {
+                try fmt.flushPendingSpaces();
+                try fmt.writer.writeByte(c);
+            },
+            else => {
+                try fmt.flushPendingSpaces();
+                fmt.has_newline = false;
+                try fmt.writer.writeByte(c);
+            },
+        }
     }
 
     fn pushAll(fmt: *Formatter, str: []const u8) error{WriteFailed}!void {
         if (str.len == 0) {
             return;
         }
+
+        fmt.has_multiline_string = false;
+        var run_start: usize = 0;
+        var i: usize = 0;
+        while (i < str.len) {
+            switch (str[i]) {
+                ' ' => {
+                    if (run_start < i) {
+                        try fmt.writeStructuralRun(str[run_start..i]);
+                    }
+
+                    const spaces_start = i;
+                    while (i < str.len and str[i] == ' ') : (i += 1) {}
+                    fmt.pending_spaces += i - spaces_start;
+                    fmt.has_newline = false;
+                    run_start = i;
+                },
+                '\n' => {
+                    if (run_start < i) {
+                        try fmt.writeStructuralRun(str[run_start..i]);
+                    }
+
+                    fmt.pending_spaces = 0;
+                    fmt.has_newline = true;
+                    try fmt.writer.writeByte('\n');
+                    i += 1;
+                    run_start = i;
+                },
+                else => i += 1,
+            }
+        }
+
+        if (run_start < str.len) {
+            try fmt.writeStructuralRun(str[run_start..]);
+        }
+    }
+
+    fn writeStructuralRun(fmt: *Formatter, str: []const u8) error{WriteFailed}!void {
+        try fmt.flushPendingSpaces();
+
+        const all_tabs = for (str) |c| {
+            if (c != '\t') break false;
+        } else true;
+        if (!all_tabs) {
+            fmt.has_newline = false;
+        }
+
+        try fmt.writer.writeAll(str);
+    }
+
+    fn flushPendingSpaces(fmt: *Formatter) error{WriteFailed}!void {
+        if (fmt.pending_spaces == 0) return;
+
+        try fmt.writer.splatByteAll(' ', fmt.pending_spaces);
+        fmt.pending_spaces = 0;
+    }
+
+    fn pushVerbatim(fmt: *Formatter, str: []const u8) error{WriteFailed}!void {
+        if (str.len == 0) return;
+
+        try fmt.flushPendingSpaces();
+
         const all_tabs = for (str) |c| {
             if (c != '\t') break false;
         } else true;
         if (!all_tabs) {
             fmt.has_newline = str[str.len - 1] == '\n';
         }
+
         fmt.has_multiline_string = false;
         try fmt.writer.writeAll(str);
     }
@@ -3354,7 +3435,7 @@ const Formatter = struct {
         }
 
         const text = fmt.ast.env.source[start..region.end.offset];
-        try fmt.pushAll(text);
+        try fmt.pushVerbatim(text);
     }
 
     fn exprIsNumericAccessReceiver(fmt: *Formatter, expr_idx: AST.Expr.Idx) bool {
@@ -3749,6 +3830,28 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) FormatPar
         std.debug.print("Formatted:\n==========\n{s}\n==========\n\n", .{result.written()});
     }
     return try result.toOwnedSlice();
+}
+
+test "issue 10431: wrapped declaration has no trailing whitespace" {
+    // Repro for https://github.com/roc-lang/roc/issues/10431
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\x =
+        \\    1
+    , false);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings("x =\n\t1\n", result);
+}
+
+test "string token text preserves significant trailing spaces" {
+    const regular = try moduleFmtsStable(std.testing.allocator, "regular=\"value \"", false);
+    defer std.testing.allocator.free(regular);
+    try std.testing.expectEqualStrings("regular = \"value \"\n", regular);
+
+    const multiline = try moduleFmtsStable(std.testing.allocator, "multiline = \\\\first  \n" ++
+        "\\\\second", false);
+    defer std.testing.allocator.free(multiline);
+    try std.testing.expectEqualStrings("multiline = \\\\first  \n\t\\\\second\n", multiline);
 }
 
 // Issue #8851: Formatter idempotence tests for arrow call with field access
