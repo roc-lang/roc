@@ -96,44 +96,43 @@ selected by LIR ARC insertion. Consumers may lazily cache code or interpreter
 execution plans for that helper, but they must not select a different helper
 from local layout data. Reference-counting policy belongs to LIR ARC insertion.
 
-Recursive walks over post-check types and values must be bounded. A structure
-reachable after checking can be self-referential — a recursive nominal's
-backing, or the fixpoint value of a recursively-constructed chain (an iterator
-wrapped around itself a runtime number of times) — so "this walk terminates"
-is an assumption, not a property, unless the walk either traverses a provably
-acyclic structure or carries an explicit budget. When a budget is exhausted,
-the walk must fail toward the conservative answer for its question — decline
-the optimization, keep the value materialized, or select an explicitly defined
-dynamic representation — never toward a hang, an unbounded specialization set,
-or a wrong result. The
-budget must be chosen so exhaustion errs in the safe direction for that
-specific question: a substitution check answers "cannot substitute" (a missed
-optimization), and a minted-chain depth walk reports the cap (the chain takes
-the explicit `forced_dynamic` representation). Two standing instances: Monotype bounds
-minted iterator chain depth at the single construction choke point
-(`generatedIteratorNode` plus graph finalization), which is what guarantees specialization terminates
-for recursively-constructed chains regardless of call structure; and
-constructor specialization bounds its substitution-candidate value walk
-(`valueCanSubstitute`), because a loop-carried value can reference itself and
-a cyclic value is correctly non-substitutable anyway.
+Recursive walks over post-check types and values must have an explicit
+termination argument. A structure reachable after checking can be
+self-referential — a recursive nominal's backing, or the fixpoint value of a
+recursively-constructed chain (an iterator wrapped around itself a runtime
+number of times) — so "this walk terminates" is an assumption, not a property,
+unless the walk traverses a proven acyclic structure, detects graph cycles, or
+carries explicit proof fuel. Proof fuel is not rewrite evidence. Every
+fuelled query returns a typed result that distinguishes `proven`, `disproven`,
+and `unknown_budget_exhausted`, and only `proven` may authorize a rewrite.
+Exhaustion therefore retains the ordinary exact IR; it is never cached as
+`disproven` and never selects a guessed runtime
+representation.
 
-Cycles in a constructor-specialization `Value` tree form through two pointer
-edges — a nominal value's backing and a static-data candidate's runtime
-value — and a callable value's captures can carry either edge inside them, so
-every walk that follows the pointer edges or descends through callable
-captures carries an explicit bound. The size, substitution, unsafe-leaf, and reusability measures
-spend a shared per-node work budget and report the conservative answer when it
-runs out; the constructor-size measure saturates its sums so an exhausted child
-propagates the cap rather than overflowing, which makes "measured size equals
-the cap" a reliable exhaustion signal. A value flagged by that signal is never
-materialized: the inliners rebind it through a plain clone of its source
-expression, and a match over such a scrutinee emits a residual runtime match
-over a plain clone of the source scrutinee, both finite by construction. The
+Representation finiteness is different from proof-query termination. Monotype
+bounds minted iterator identities at the single graph-owned construction choke
+point (`generatedIteratorNode` plus graph finalization); crossing that declared
+type-universe boundary produces the explicit `forced_dynamic` representation.
+SpecConstr's shape, substitution, structural-work, and constructor-size
+queries instead use typed proof exhaustion solely to decline an optional
+rewrite. Code-growth admission is likewise separate from rewrite-legality proof: a
+growth limit may retain the ordinary shared control-flow form after a rewrite
+has been proven legal, but it cannot change a proof result or choose a runtime
+encoding.
+
+Cycles in a constructor-specialization `Value` graph form through a nominal
+value's backing, a static-data candidate's runtime value, or a callable capture
+that reaches either edge. The size, substitution, shape, and reusability
+queries spend one shared proof-fuel value per query and preserve exhaustion in
+their result types. Constructor-size arithmetic also detects overflow instead
+of turning it into an apparent exact size. When an inline argument's finite
+size cannot be proven, the inliner binds a plain clone of its source expression;
+when static matching exhausts its proof fuel, it retains the runtime match. The
 value matchers (`bindPatToValue`, `bindPatToMatchValue`, `bindPatToFlowValue`),
 the field, item, and tag readers (`fieldFromValue`, `itemFromValue`,
 `tagFromValue`, `recordFromValue`, `tupleFromValue`), and `materialize` each
 count the pointer edges they follow against a shared strip cap; the matchers
-decline toward a residual runtime match on exhaustion, while those readers and
+retain a runtime match on exhaustion, while those readers and
 `materialize` — which only ever run on values already proven acyclic by the
 rules above — treat reaching the cap as a compiler bug. The shape-driven walks (`valueFromShapeArgs`,
 `appendExprsFromValue`, `supplyLoopSlotLeaves`, `shapeMatchesValue`, `shapeEql`)
@@ -1632,6 +1631,34 @@ reports the checked caller site. Finalization must not recover a checked region
 from module display names, source filenames, line/column offsets, or broadest
 matching checked nodes.
 
+Runtime and debugger provenance is independent of machine procedure
+boundaries. Post-check IR interns inline-scope nodes containing the source
+procedure identity, the exact caller site, and the enclosing inline scope;
+every source-bearing expression and statement carries one scope id beside its
+location. Cloning preserves the scope. Inlining extends it with the call site.
+Specialization keeps the original source procedure identity. LIR and serialized
+LirImage retain the same scope graph. The LIR interpreter captures the failed
+statement's innermost scope id so a diagnostic consumer can expand its exact
+parent chain. LLVM emits the graph as standard nested `DISubprogram` and
+`DILocation.inlinedAt` metadata. Other debuggers and runtime symbolizers must
+consume this graph (or a lossless backend encoding of it); they must not infer
+source frames from the surviving machine procedures.
+
+The synthetic default platform's crash entrypoint receives such a lossless
+encoding directly from LLVM codegen: the current LIR statement's inline-scope
+chain is flattened innermost-first into constant source-frame records, with the
+statement location for the innermost frame and each exact call site for its
+parent. The default platform prints those materialized source frames before
+walking the machine stack. It never scans procedure bodies for crashability or
+reconstructs an inlined source frame from a machine symbol.
+
+Inlining permission never depends on scanning a body for `crash`, `expect`, a
+particular low-level operation, or a transitively reachable failure. Such scans
+are necessarily incomplete for indirect calls and future failure forms. A
+machine stack frame and a source frame are separate concepts: optimized code may
+remove the machine call while its virtual inline frame remains represented for
+debugger and crash-report consumers.
+
 Hoistability is computed while checking expressions, as part of the existing
 recursive checking work that already determines types, resolved references, and
 effect data. Checking may return temporary hoistability data from `checkExpr`
@@ -2438,24 +2465,84 @@ a known iterator constructor, SpecConstr can:
 Iterator classification in this pass consumes the explicit iterator
 representation field (or the checked public `Builtin.Iter` identity). It does
 not identify generated iterator types solely from a nullable generated digest.
-Adapter-specific rewrites consume `iterator_kind`; for example, branch-append
-peeling recognizes `.append` from the result nominal instead of inspecting a
-generated step function and guessing its source operation from syntax.
+The checked public identity is an interned module-and-declaration identity, not
+a comparison against type-name text. Adapter-specific rewrites consume the
+exact checker-authored `IteratorProcedureId` on the call. The procedure id
+identifies the operation; that operation's declared lowering contract supplies
+its producer/non-producer role and operand roles, while the solved result type
+supplies its explicit representation. A result type's `iterator_kind` describes
+the representation but does not by itself prove that an arbitrary expression
+constructed it.
+
+Monotype Lifted remains source-shaped when SpecConstr begins: calls and other
+strict computations can still occur inside constructor operands and branch
+arms. Evaluation order is therefore owned by the clone result, not recovered
+from expression ids or assumed from constructor shape. Every cloned symbolic
+`Value` is paired with one ordered `BindingChain` containing the strict work
+that produced its opaque leaves. The structural owner places that chain at the
+source evaluation position before allowing the value skeleton to flow.
+
+SpecConstr collects call patterns from exact direct-call and callable
+identities, then performs one value-aware normalization clone of every original
+body. This complete traversal replaces the former routing scans that guessed
+which bodies contained shape demand, recursive workers, or iterator loops.
+Known loop state is handled by the loop clone's explicit fixed-point shapes;
+adapter-specific transforms match exact stamped calls. The pass does not scan
+whole bodies to classify branch-chosen loops, count construction-call depth,
+recognize iterator types by text, or set a guessed body category that changes
+how a later clone interprets opaque calls.
+
+Monotype can assign distinct local ids to uses of one checked pattern binder at
+one monomorphic type. SpecConstr therefore keeps lexical binder aliases separate
+from known-value evidence. Every active binding records its exact local and an
+alias keyed by checked binder id plus monomorphic type digest; whole-body
+normalization seeds the alias index from the function's arguments and captures.
+A separate value index exposes only known structure and loop-carried state to
+specialization decisions. Consequently an opaque binder use still resolves to
+its active cloned local, but that lexical resolution cannot authorize inlining
+or constructor specialization.
+
+Analysis exhaustion is explicit. A bounded query returns `proven`,
+`disproven`, or `unknown_budget_exhausted`; only `proven` authorizes a rewrite.
+Hard generated-code limits may decline proven work, but they never change a
+rewrite-legality result. Exact function uses, source-return presence, and
+tail-self-call summaries are collected together as `ProgramProcedureUsage`;
+worker localization collects a fresh snapshot after each graph mutation instead
+of performing independent per-candidate body scans. A source-relative early
+`return` still prevents procedure-to-join localization until lifted returns
+carry explicit continuation targets.
+
+Each normalization or discovery clone owns a short-lived scratch arena. Only
+accepted call patterns are copied into pass-wide storage, so discarded symbolic
+value graphs do not accumulate across functions. Generic analysis follows
+existing constructor evidence; a structural consumer requests a producer's
+result shape through the separate demand path, which propagates through the
+callee's exact used-argument plan.
+
+Inlining a call additionally requires exact closed Monotype identity between
+the call-site result and the callee body's result. Independently specialized
+graphs may prove a public/generated or minted/forced-dynamic relation without
+giving the two results the same runtime representation; that relation is not
+permission to substitute the callee's private value into the caller. Such a
+call remains explicit for Lambda Solved to consume at the representation
+boundary. Rewritten callable workers are likewise keyed by the source template,
+the exact callable-use ABI, and the exact capture ABI, so one worker is never
+shared across distinct specialization graphs merely because its lexical source
+and captures happen to match.
+
+The useful lesson from GHC's SpecConstr is this separation of concerns. GHC's
+`Value`/`CallPat` data and `ScEnv` substitution/value environments carry
+constructor evidence; simplifier floats own strict work; and specialization
+count/size controls bound compiler and generated-code growth without becoming
+evidence. Roc follows that ownership model, but does not copy GHC's occurrence
+guesses or syntax-driven constructor recognition; Roc has checked procedure
+identities, solved representations, explicit keyed captures, and typed
+exhaustion results available directly.
 
 SpecConstr is not responsible for making bounded iterator representation
 allocation-free. Per-chain minting removes the recursive layout edge in every
 mode. SpecConstr improves optimized loop and call shape so later lowering and
 LLVM see scalar state and direct operations.
-
-Value-aware call-pattern discovery may inline ordinary calls only while its
-per-function generic-inline work budget remains. The budget is 16 call
-attempts. Exhaustion declines further generic inlining and keeps the residual
-call, which can miss an optimization but cannot change source behavior.
-Inlining performed for an explicit structural demand uses the separate
-shape-demand path; recursive call cycles remain bounded by the active inline
-stack. Each discovery walk owns a short-lived arena, and only accepted call
-patterns are copied into pass-wide storage, so discarded analysis graphs do
-not accumulate across functions.
 
 SpecConstr preserves shared control explicitly. When a rewrite would move one
 continuation under multiple `match` or `if` arms, it introduces typed lifted
@@ -2491,24 +2578,58 @@ the general call-pattern machinery, so an enclosing fold can contain the same
 self-contained scalar loop as a source loop without changing iterator runtime
 representation.
 
-SpecConstr's symbolic values carry only pure structure; effects live in
-bindings. A pending binding created for an effectful computation may move to
-its region boundary only when its recorded emission window proves the hoist
-crosses no other effect: windows chain from the region entry, effect-free
-bindings commute and need no window, and an effectful binding with no window
-pins its value in place. Emission windows belong to values, not call paths —
-they are keyed by the expression node, which substitution preserves, so a
-producer cloned once as an argument still proves its window when it becomes a
-binding at a later use site. Two properties are load-bearing for this policy.
-First, the effect-mark counter must observe every observable-effect emission,
-expression and statement position alike — a window that silently spanned an
-uncounted emission could hoist a binding across it. Second, any construct that
-can conditionally skip the code after it without advancing the effect marks (a
-`try` sequence's early return) must clone its continuation inside its own
-region: the region boundary is what keeps a producer created after the
-divergence from becoming a hoist candidate beside it. A rewrite that cloned a
-try continuation in its enclosing region would silently reopen effect
-reordering, and the window chain check cannot detect that itself.
+SpecConstr separates symbolic structure from strict work. A cloned value is a
+pair of an owned `BindingChain` and a symbolic `Value`. The chain contains the
+strict computations which produce the value's opaque leaves, in source
+evaluation order. Before a value may be reused through substitution, every
+non-work-free leaf is named in that chain and replaced by the resulting local;
+budget exhaustion names the entire remaining sub-value as one strict binding.
+Cloning a constructor concatenates its children's chains in field or item order.
+Cloning a sequential construct consumes the producer's chain before cloning its
+continuation and places that chain structurally before the continuation. Cloning
+a branch places each arm's chain inside that arm. Introducing a join keeps
+bindings before the case outside the join, keeps arm bindings around the
+corresponding arm jump, and keeps continuation bindings in the join body. No
+binding chain is stored in ambient cloner state, and a nested clone cannot
+observe, capture, flush, or move a chain owned by its caller.
+
+This follows the useful ownership discipline of GHC's simplifier floats: an
+expression transformation produces an ordered binding collection together with
+its expression, collections concatenate in evaluation order, and the owning
+structural boundary wraps them around the result. Roc also preserves GHC's
+important distinction between purity and speculatability: knowing that an
+expression has no language-level effect does not prove that evaluating it early
+or not at all preserves strict source evaluation behavior.
+
+This strict chain is the ordering proof. SpecConstr does not count effectful
+expressions, record emission windows, recover ordering from expression ids, or
+scan cloned bodies to decide whether a binding may cross another binding.
+Code motion is a separate decision. Language-level purity is necessary but not
+sufficient: a pure call can diverge, and a compiler-authored pure procedure can
+contain ordered implementation mutation. SpecConstr therefore does not ask an
+opaque computation for permission to move. It names the computation once in
+the chain owned by its original position, substitutes only the resulting local,
+and discards only structurally work-free value construction around those named
+leaves. This keeps iterator structure visible without discarding or commuting a
+call, loop, low-level operation, or control transfer. Any future optimization
+which does move opaque work needs an explicit earlier-stage total-and-
+speculatable proof; it must never manufacture one by scanning a procedure body.
+
+The append-tail peel is narrower than general value-aware cloning. It applies
+only when an exact `Iter.append` chain shares one base and a structural proof
+shows that the branch condition or scrutinee, guards, and appended items contain
+no call, low-level operation, loop, control transfer, collection allocation, or
+diagnostic operation. In that work-free case replaying the constructor plan
+after the shared base loop cannot move strict work. If any such work exists, the
+peel is declined and the ordinary value-aware clone retains the source branch
+and its `BindingChain` in source order. In particular, SpecConstr never removes
+a source branch and later reuses an effectful condition, scrutinee, or item.
+
+In Debug builds, placing a `BindingChain` verifies its forward/back links and
+the type of every binding, and the Monotype Lifted body verifier checks local
+scope plus join scope and arity. These checks make a lost binding, an arm-owned
+binding escaping through a malformed join, or a chain linked out of source
+order a compiler bug.
 
 A loop-carried variable's reassigned copies share its source binder but not
 its local id, so once a loop clone rebinds the carried slot, binder identity
@@ -5308,6 +5429,14 @@ and old-payload release are all explicit in LIR or in the low-level operation's
 documented RC effect; no backend may infer them from `Box` names or pointer
 shapes.
 
+The pre-ARC box-reuse proof recognizes both a direct producer call and a
+producer that earlier specialization has inlined into one straight-line LIR
+region. It follows only explicit `next` edges from `box_unbox` to the terminal
+`box_box`/`ret`, requires identical committed box and payload layouts, and uses
+proc-wide operand counts to prove that the consumed input box and returned box
+have no consumers outside the rewrite. Control-flow regions or additional box
+consumers are rejected rather than classified from source shape or names.
+
 `reuse_erased_callable` is the erased-callable counterpart. Erased callables are
 not ordinary `Box(T)` payloads; their allocation stores a callable entry, an
 optional drop callback, and inline capture bytes. Reuse is allowed only when:
@@ -6284,6 +6413,10 @@ Minimum boundary checks:
 - Monotype Lifted IR contains no reachable closure expressions, local function
   definitions in expression position, definition references in expression
   position, or direct calls whose callee is still a Monotype function template.
+- SpecConstr binding chains are well-linked, source-ordered, type-correct, and
+  placed by their owning expression, statement, branch, or jump site.
+- Rewritten Monotype Lifted bodies have only lexically scoped local references
+  and jumps whose target is in scope and whose argument count matches its join.
 - Lambda Solved IR has every function type in `args/callable/ret` form.
 - Lambda Solved IR has no unresolved callable slot before direct LIR lowering.
 - Lambda Mono decisions contain no function type and no value-call node.
