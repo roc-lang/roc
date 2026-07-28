@@ -15655,6 +15655,10 @@ pub const CheckedProcedureTemplate = struct {
     resolved_value_refs: ResolvedValueRefTableRef,
     top_level_value_uses: TopLevelUseSummaryRef,
     nested_proc_sites: NestedProcSiteTableRef,
+    /// Source dependency SCC that explicitly owns recursion for this
+    /// procedure. The id is the module evaluation-order index; null means the
+    /// procedure is not a member of a recursive group.
+    recursive_group: ?u32 = null,
     target: ProcTarget,
     hosted_try_adapter: ?HostedTryAdapterCapability = null,
     /// The scheme's dispatch obligations in canonical order (a range into
@@ -15754,6 +15758,12 @@ pub const CheckedProcedureTemplateTable = struct {
         errdefer by_def.deinit(allocator);
 
         const module_name = try names.internModuleIdent(module.identStoreConst(), module.qualifiedModuleIdent());
+        var evaluation_order = try can.DependencyGraph.computeCheckOrder(
+            module.moduleEnvConst(),
+            module.moduleEnvConst().all_defs,
+            allocator,
+        );
+        defer evaluation_order.deinit();
 
         for (global_value_defs) |def_idx| {
             const def = module.def(def_idx);
@@ -15777,6 +15787,12 @@ pub const CheckedProcedureTemplateTable = struct {
                 .proc_base = proc_base,
                 .template = template_id,
             };
+            const recursive_group: ?u32 = recursive_group: for (evaluation_order.sccs, 0..) |scc, group_index| {
+                if (!scc.is_recursive) continue;
+                for (scc.defs) |member| {
+                    if (member == def_idx) break :recursive_group @as(u32, @intCast(group_index));
+                }
+            } else null;
             try by_def.append(allocator, .{
                 .def = def_idx,
                 .template = template_ref,
@@ -15838,6 +15854,7 @@ pub const CheckedProcedureTemplateTable = struct {
                 .resolved_value_refs = .{},
                 .top_level_value_uses = .{},
                 .nested_proc_sites = .{},
+                .recursive_group = recursive_group,
                 .target = if (intrinsic != null)
                     .intrinsic
                 else if (isHostedProcedureExpr(def.expr.data))
@@ -29919,8 +29936,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x1D, 0x8B, 0x84, 0x21, 0xD7, 0x6A, 0x8B, 0x1E, 0x4F, 0x61, 0xD1, 0xDA, 0x81, 0xE6, 0x64, 0x49,
-        0xCE, 0x7D, 0x95, 0x2B, 0x51, 0x94, 0x54, 0xE4, 0x3D, 0x8C, 0xDF, 0x9A, 0x08, 0xB6, 0x17, 0xAA,
+        0xAB, 0xB6, 0x5E, 0x09, 0xB5, 0x12, 0xD6, 0x16, 0xF6, 0xE1, 0xEC, 0x2B, 0xA3, 0x7E, 0x47, 0xE1,
+        0x6F, 0x39, 0x22, 0xF8, 0x9C, 0x57, 0xD5, 0x5A, 0x20, 0xCF, 0xA6, 0x2F, 0x02, 0x9F, 0x8C, 0xFD,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
