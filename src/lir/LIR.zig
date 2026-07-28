@@ -64,6 +64,22 @@ pub const CFStmtId = enum(u32) {
     _,
 };
 
+/// Identifier of one virtual source frame introduced by inlining.
+pub const InlineScopeId = enum(u32) {
+    _,
+
+    pub const none: InlineScopeId = @enumFromInt(std.math.maxInt(u32));
+};
+
+/// A virtual source frame retained independently of physical procedures.
+pub const InlineScope = extern struct {
+    source_symbol: Symbol,
+    source_name: StringLiteral.Idx,
+    source_loc: base.SourceLoc,
+    call_site: base.SourceLoc,
+    parent: InlineScopeId,
+};
+
 /// Identifier of a compile-time-observed control-flow site.
 pub const ComptimeSiteId = enum(u32) {
     _,

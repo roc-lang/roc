@@ -22898,9 +22898,12 @@ fn validateDerivedParseRecord(
     region: Region,
     visited: *std.AutoHashMap(Var, void),
 ) Allocator.Error!DerivedParseValidation {
-    switch (try self.validateRenameFieldMethod(encoding_var, constraint, env, region)) {
-        .ok => {},
-        .unsupported, .reported_error => |result| return result,
+    const has_fields = self.types.getRecordFieldsSlice(fields_range).len > 0;
+    if (has_fields) {
+        switch (try self.validateRenameFieldMethod(encoding_var, constraint, env, region)) {
+            .ok => {},
+            .unsupported, .reported_error => |result| return result,
+        }
     }
     switch (try self.validateParseFormatMethod(encoding_var, state_var, record_var, .record_start, err_var, constraint, env, region)) {
         .ok => {},

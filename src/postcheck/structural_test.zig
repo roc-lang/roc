@@ -176,6 +176,19 @@ test "Lambda Solved keeps lifted syntax and stores callable sets in types" {
     try std.testing.expect(!@hasField(LambdaSolvedType.Content, "erased_fn"));
 }
 
+test "SpecConstr owns strict binding chains and retains opaque discarded work" {
+    const source = @embedFile("monotype_lifted/spec_constr.zig");
+    try expectContains(source, "const ClonedValue = struct");
+    try expectContains(source, "bindings: BindingChain");
+    try expectContains(source, "const discarded = try self.cloneExprValueInto(stmt_expr, &block_bindings)");
+    try expectContains(source, "_ = try self.makeReusableForMatch(discarded, &block_bindings)");
+    try expectNotContains(source, "fn_effect_free");
+    try expectNotContains(source, "effect_marks");
+    try expectNotContains(source, "PendingLet");
+    try expectNotContains(source, "localUseBeforeEffect");
+    try expectNotContains(source, "unsafeLeafCount");
+}
+
 test "Lambda Mono has concrete callable values and no function type" {
     try std.testing.expect(@hasField(LambdaMono.ExprData, "direct_call"));
     try std.testing.expect(@hasField(LambdaMono.ExprData, "indirect_erased_call"));
@@ -1051,7 +1064,7 @@ test "Monotype lambda argument patterns retain graph provenance" {
     try expectContains(lambda_args, "self.lowerShapeFreePatternAtCell(pattern_id, arg_cell)");
     try expectContains(lambda_args, "self.lowerPatternAtNode(pattern_id, arg_node)");
     try expectContains(lambda_args, ".ty = arg_cell");
-    try expectContains(lambda_args, "} }, ret_cell);");
+    try expectContains(lambda_args, "} }, body_ret_cell);");
     try expectNotContains(lambda_args, "activeTypeFromNode(arg_node)");
     try expectNotContains(lambda_args, "activeTypeFromNode(ret_node)");
     try expectNotContains(lambda_args, "lowerPatternAtType(pattern_id");
@@ -1064,7 +1077,7 @@ test "Monotype returns consume the active specialization return cell" {
         "fn lowerReturn(",
         "fn lowerComptimeRootExprAtCell(",
     );
-    try expectContains(lower_source, "self.current_return_target = .{ .lambda = lambda_id, .cell = ret_cell }");
+    try expectContains(lower_source, "self.current_return_target = .{ .lambda = lambda_id, .cell = body_ret_cell }");
     try expectContains(lower_return, "ret.lambda != target.lambda");
     try expectContains(lower_return, "self.lowerExprAtTypeCell(ret.expr, target.cell)");
     try expectNotContains(lower_source, "returnTargetTypeCell");
@@ -1127,6 +1140,11 @@ test "Monotype evidence chains retain checker-recorded lexical scope topology" {
 
 test "Monotype generated-private call requests retain separate request nodes" {
     const lower_source = @embedFile("monotype/lower.zig");
+    const full_request = sourceSliceBetween(
+        lower_source,
+        "fn instantiateTargetCallNodeFromMonoArgs",
+        "fn instantiateTargetCallNodeFromMonoArgAtIndex",
+    );
     const partial_arg = sourceSliceBetween(
         lower_source,
         "fn instantiateTargetCallNodeFromMonoArgAtIndex",
@@ -1138,6 +1156,8 @@ test "Monotype generated-private call requests retain separate request nodes" {
         "fn iteratorOperandNode",
     );
 
+    try expectContains(full_request, "checkedMonoRequestNode");
+    try expectContains(full_request, "functionRequestNode(self.graph, fn_node, request_args, request_ret)");
     try expectContains(partial_arg, "checkedMonoRequestNode");
     try expectContains(partial_arg, "self.graphFunctionNode(request_args, function_nodes.ret)");
     try expectContains(iterator, "checkedMonoRequestNode");

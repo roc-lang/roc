@@ -1316,6 +1316,11 @@ pub const InstGraph = struct {
         return self.nodes.items[@intFromEnum(self.find(id))];
     }
 
+    /// Current root for the node's union-find class.
+    pub fn rootNode(self: *InstGraph, id: NodeId) NodeId {
+        return self.find(id);
+    }
+
     /// Whether two live cells already belong to the same union-find class.
     pub fn sameClass(self: *InstGraph, left: NodeId, right: NodeId) bool {
         return self.find(left) == self.find(right);
@@ -1652,18 +1657,30 @@ pub const InstGraph = struct {
 
         const public_content = self.nodes.items[@intFromEnum(public_node)];
         const private_content = self.nodes.items[@intFromEnum(private_node)];
+        if (isGeneratedPrivateRootContent(public_content) and isGeneratedPrivateRootContent(private_content)) {
+            try self.unify(public_node, private_node);
+            return;
+        }
         const private_contains_generated = try self.containsGeneratedPrivate(private_node);
         switch (private_content) {
             .named => |private_named| if (private_named.backing) |backing| {
                 if (backing.authority == .generated_private) {
-                    if (public_content == .unresolved and private_named.generated_iterator != null) {
-                        try self.materializeGeneratedIteratorPublicInterface(public_node, public_content.unresolved, private_named);
-                        try self.relateGeneratedOpaquePair(
-                            self.nodes.items[@intFromEnum(self.find(public_node))],
-                            private_named,
-                            pending,
-                        );
-                        return;
+                    switch (public_content) {
+                        .unresolved => |public_var| {
+                            if (private_named.generated_iterator != null) {
+                                try self.materializeGeneratedIteratorPublicInterface(public_node, public_var, private_named);
+                                try self.relateGeneratedOpaquePair(
+                                    self.nodes.items[@intFromEnum(self.find(public_node))],
+                                    private_named,
+                                    pending,
+                                );
+                                return;
+                            }
+                            if (try self.resolvePublicVariableToImportedGeneratedIterator(public_node, public_var, private_node, private_named)) {
+                                return;
+                            }
+                        },
+                        else => {},
                     }
                     try self.relateGeneratedOpaquePair(public_content, private_named, pending);
                     return;
@@ -2007,6 +2024,31 @@ pub const InstGraph = struct {
         } else if (private_named.backing != null) {
             Common.invariant("opaque interface relation received different named backing presence");
         }
+    }
+
+    fn resolvePublicVariableToImportedGeneratedIterator(
+        self: *InstGraph,
+        public_node: NodeId,
+        public_var: InstVariable,
+        private_node: NodeId,
+        private_named: InstNamed,
+    ) Allocator.Error!bool {
+        if (private_named.generated_iterator != null) return false;
+        if (private_named.def.generated == null) return false;
+        switch (private_named.def.iterator_representation) {
+            .minted, .forced_dynamic => {},
+            .none => return false,
+        }
+        const owner = private_named.builtin_owner orelse return false;
+        if (!static_dispatch.isIteratorOwner(owner)) return false;
+        if (private_named.args.len == 0) {
+            Common.invariant("imported generated iterator relation received no item argument");
+        }
+        if (public_var.numeric_default_phase != null or public_var.row_default != null) {
+            Common.invariant("imported generated iterator relation received a defaultable public variable");
+        }
+        try self.union_(private_node, public_node);
+        return true;
     }
 
     fn materializeGeneratedIteratorPublicInterface(
@@ -2421,6 +2463,38 @@ pub const InstGraph = struct {
             .func => |public_fn| switch (request_content) {
                 .func => |request_fn| if (public_fn.args.len != request_fn.args.len) {
                     Common.invariant("request container join received functions of different arity");
+                },
+                else => Common.invariant("request container join received different type structure"),
+            },
+            .record => switch (request_content) {
+                .record => {
+                    const public_row = try self.flattenRecordRow(public_root);
+                    const request_row = try self.flattenRecordRow(request_root);
+                    if (public_row.fields.len != request_row.fields.len) {
+                        Common.invariant("request container join received records with different field counts");
+                    }
+                    for (public_row.fields, request_row.fields) |public_field, request_field| {
+                        if (!Ident.textEql(self.fieldLabelText(public_field.name), self.fieldLabelText(request_field.name))) {
+                            Common.invariant("request container join received records with different fields");
+                        }
+                    }
+                },
+                else => Common.invariant("request container join received different type structure"),
+            },
+            .tag_union => switch (request_content) {
+                .tag_union => {
+                    const public_row = try self.flattenTagRow(public_root);
+                    const request_row = try self.flattenTagRow(request_root);
+                    if (public_row.tags.len != request_row.tags.len) {
+                        Common.invariant("request container join received tag unions with different tag counts");
+                    }
+                    for (public_row.tags, request_row.tags) |public_tag, request_tag| {
+                        if (!Ident.textEql(self.tagLabelText(public_tag.name), self.tagLabelText(request_tag.name)) or
+                            public_tag.payloads.len != request_tag.payloads.len)
+                        {
+                            Common.invariant("request container join received tag unions with different tags");
+                        }
+                    }
                 },
                 else => Common.invariant("request container join received different type structure"),
             },
@@ -3593,6 +3667,16 @@ pub const InstGraph = struct {
             if (try self.typeContainsActiveSnapshot(child, seen)) return true;
         }
         return false;
+    }
+
+    fn isGeneratedPrivateRootContent(node_content: InstNode) bool {
+        return switch (node_content) {
+            .named => |named| if (named.backing) |backing|
+                backing.authority == .generated_private
+            else
+                false,
+            else => false,
+        };
     }
 
     fn isActiveSnapshotType(self: *InstGraph, ty: Type.TypeId) bool {
@@ -4967,6 +5051,125 @@ test "opaque iterator relation materializes unresolved public interface from pro
     try std.testing.expectEqual(Type.IteratorRepresentation.none, retained_public.def.iterator_representation);
     try std.testing.expectEqual(@as(usize, 1), retained_public.args.len);
     try std.testing.expect(graph.sameClass(retained_public.args[0], private_item));
+}
+
+test "opaque iterator relation resolves unresolved public variable to imported generated iterator" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0x71} ** 32));
+    const type_name = try name_store.internTypeName("Iter");
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(12) };
+    const public = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const item = try graph.newNode(.{ .primitive = .u64 });
+    const private = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = .{
+            .module = module_identity,
+            .type_name = type_name,
+            .generated = .{ .bytes = [_]u8{0x72} ** 32 },
+            .iterator_representation = .minted,
+            .iterator_kind = .list,
+            .iterator_depth = 1,
+        },
+        .kind = .@"opaque",
+        .builtin_owner = .iter,
+        .args = try graph.arena().dupe(NodeId, &.{item}),
+        .backing = .{
+            .node = try graph.newNode(.empty_record),
+            .use = .runtime_layout_only,
+            .authority = .generated_private,
+        },
+    } });
+
+    try graph.relateOpaqueInterface(public, private);
+
+    const retained = graph.content(public).named;
+    try std.testing.expect(graph.sameClass(public, private));
+    try std.testing.expectEqual(Type.BackingAuthority.generated_private, retained.backing.?.authority);
+    try std.testing.expectEqual(Type.IteratorRepresentation.minted, retained.def.iterator_representation);
+    try std.testing.expectEqual(@as(usize, 1), retained.args.len);
+    try std.testing.expect(graph.sameClass(retained.args[0], item));
+}
+
+test "opaque interface relation delegates nested private iterator requests to unification" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0x73} ** 32));
+    const type_name = try name_store.internTypeName("Iter");
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(13) };
+    const item = try graph.newNode(.{ .primitive = .u64 });
+    const left_component = try graph.newNode(.empty_record);
+    const right_component = try graph.newNode(.empty_record);
+    const left_iter = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = .{
+            .module = module_identity,
+            .type_name = type_name,
+            .generated = .{ .bytes = [_]u8{0x74} ** 32 },
+            .iterator_representation = .minted,
+            .iterator_kind = .concat,
+            .iterator_depth = 2,
+        },
+        .kind = .@"opaque",
+        .builtin_owner = .iter,
+        .args = try graph.arena().dupe(NodeId, &.{ item, left_component }),
+        .backing = .{
+            .node = try graph.newNode(.empty_record),
+            .use = .runtime_layout_only,
+            .authority = .generated_private,
+        },
+    } });
+    const right_iter = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = .{
+            .module = module_identity,
+            .type_name = type_name,
+            .generated = .{ .bytes = [_]u8{0x75} ** 32 },
+            .iterator_representation = .minted,
+            .iterator_kind = .concat,
+            .iterator_depth = 2,
+        },
+        .kind = .@"opaque",
+        .builtin_owner = .iter,
+        .args = try graph.arena().dupe(NodeId, &.{ item, right_component }),
+        .backing = .{
+            .node = try graph.newNode(.empty_record),
+            .use = .runtime_layout_only,
+            .authority = .generated_private,
+        },
+    } });
+    const public_fn = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{left_iter}),
+        .ret = try graph.newNode(.empty_record),
+    } });
+    const private_fn = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{right_iter}),
+        .ret = try graph.newNode(.empty_record),
+    } });
+
+    try graph.relateOpaqueInterface(public_fn, private_fn);
+
+    try std.testing.expect(graph.sameClass(left_iter, right_iter));
+    try std.testing.expectEqual(Type.BackingAuthority.generated_private, graph.content(left_iter).named.backing.?.authority);
+    try std.testing.expectEqual(Type.IteratorRepresentation.minted, graph.content(left_iter).named.def.iterator_representation);
 }
 
 test "opaque relation materializes unresolved public named shell from request" {
