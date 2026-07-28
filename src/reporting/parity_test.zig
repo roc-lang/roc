@@ -450,7 +450,7 @@ test "byte-identity pins per render target" {
     try testing.expectEqualStrings(
         "Expected " ++ blue ++ "Str" ++ rst ++ " but got " ++ red ++ "U64" ++ rst ++ ".\n" ++
             "    " ++ cyan ++ "main" ++ rst ++ "\n" ++
-            " " ++ sec ++ " ┌" ++ ("─" ** 65) ++ " pin.roc:1:5\n" ++ rst ++
+            " " ++ sec ++ " ┌" ++ ("─" ** 65) ++ " " ++ rst ++ "pin.roc" ++ sec ++ ":1:5\n" ++ rst ++
             " " ++ sec ++ " │\n" ++ rst ++
             sec ++ "1 │ " ++ rst ++ red ++ "x = magic 42" ++ rst ++ "\n" ++
             sec ++ "  │ " ++ rst ++ "    " ++ red ++ "^^^^^" ++ rst ++ "\n",
