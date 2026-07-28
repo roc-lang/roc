@@ -237,6 +237,44 @@ const RelationState = enum {
     frozen,
 };
 
+/// Session-global identity of one specialization-owned graph partition.
+pub const PartitionId = enum(u32) { _ };
+
+/// Shared relation storage for one connected specialization-demand component.
+/// Nodes are session-global so an explicit interface edge can relate caller
+/// and callee cells directly, while `InstGraph` remains the allocation
+/// capability for one owning partition.
+const SolveSession = struct {
+    relation_state: RelationState,
+    arena_impl: std.heap.ArenaAllocator,
+    nodes: std.ArrayList(InstNode),
+    node_partitions: std.ArrayList(PartitionId),
+    versions: std.ArrayList(u32),
+    class_member_next: std.ArrayList(?NodeId),
+    class_member_head: std.ArrayList(NodeId),
+    class_member_tail: std.ArrayList(NodeId),
+    processed_relations: std.AutoHashMap(RelationStamp, void),
+    node_snapshots: std.AutoHashMap(NodeId, std.ArrayList(Type.TypeId)),
+    current_snapshots: std.AutoHashMap(NodeId, Type.TypeId),
+    linked_type_nodes: std.AutoHashMap(Type.TypeId, NodeId),
+    imported_monos: std.AutoHashMap(NodeId, Type.TypeId),
+    row_exts: std.AutoHashMap(NodeId, NodeId),
+    row_parents: std.AutoHashMap(NodeId, std.ArrayList(NodeId)),
+    nominal_backings: std.HashMap(NominalBackingDeclaration, std.ArrayList(NominalBackingInstance), NominalBackingCacheContext, 80),
+    request_source_interfaces: std.AutoHashMap(NodeId, NodeId),
+    forced_dynamic_iterator_roots: std.ArrayList(NodeId),
+    recursive_argument_slots: std.ArrayList(NodeId),
+    interface_edges: std.ArrayList(InterfaceEdge),
+    next_partition: u32,
+};
+
+pub const InterfaceEdge = struct {
+    caller_partition: PartitionId,
+    caller_root: NodeId,
+    callee_partition: PartitionId,
+    callee_root: NodeId,
+};
+
 const GeneratedIteratorDepthRule = union(enum) {
     fixed: u8,
     children: struct {
@@ -262,76 +300,79 @@ const GeneratedIteratorDepthFrame = struct {
 /// unification conflict, not a silent divergence.
 pub const InstGraph = struct {
     allocator: Allocator,
-    relation_state: RelationState,
+    partition: PartitionId,
+    session: *SolveSession,
+    owns_session: bool,
+    relation_state: *RelationState,
     types: *Type.Store,
     name_store: *const names.NameStore,
-    arena_impl: std.heap.ArenaAllocator,
-    nodes: std.ArrayList(InstNode),
-    versions: std.ArrayList(u32),
+    arena_impl: *std.heap.ArenaAllocator,
+    nodes: *std.ArrayList(InstNode),
+    node_partitions: *std.ArrayList(PartitionId),
+    versions: *std.ArrayList(u32),
     /// Intrusive chain of permanent node ids in each live union class. Draft
     /// request lookup indexes an open function under one permanent interface
     /// node and probes the current class members, so later unions never stale
     /// the key. Roots own the head/tail; every node owns one next link.
-    class_member_next: std.ArrayList(?NodeId),
-    class_member_head: std.ArrayList(NodeId),
-    class_member_tail: std.ArrayList(NodeId),
-    processed_relations: std.AutoHashMap(RelationStamp, void),
+    class_member_next: *std.ArrayList(?NodeId),
+    class_member_head: *std.ArrayList(NodeId),
+    class_member_tail: *std.ArrayList(NodeId),
+    processed_relations: *std.AutoHashMap(RelationStamp, void),
     /// Immutable Type-shaped snapshots per node root. Old snapshots retain a
     /// direct association with their live graph node, but their content is
     /// never rewritten.
-    node_snapshots: std.AutoHashMap(NodeId, std.ArrayList(Type.TypeId)),
+    node_snapshots: *std.AutoHashMap(NodeId, std.ArrayList(Type.TypeId)),
     /// Latest immutable snapshot for a root. Any relation mutation clears this
     /// cache; a subsequent inspection materializes a fresh snapshot.
-    current_snapshots: std.AutoHashMap(NodeId, Type.TypeId),
+    current_snapshots: *std.AutoHashMap(NodeId, Type.TypeId),
     /// Reverse active-snapshot links, also the import memo: a Monotype already
     /// connected to this graph reuses its node instead of being copied.
-    linked_type_nodes: std.AutoHashMap(Type.TypeId, NodeId),
+    linked_type_nodes: *std.AutoHashMap(Type.TypeId, NodeId),
     /// Exact immutable Monotype snapshot imported at each permanent node.
     /// Unlike `node_snapshots`, these are producer-owned representation
     /// witnesses. Keeping the direct node association lets consumers of an
     /// imported request use the exact finished TypeId rather than reconstructing
     /// an equivalent public shape.
-    imported_monos: std.AutoHashMap(NodeId, Type.TypeId),
+    imported_monos: *std.AutoHashMap(NodeId, Type.TypeId),
     /// Current extension root for each row root. This is the authority for
     /// maintaining `row_parents`; stale extension edges are removed when row
     /// content changes.
-    row_exts: std.AutoHashMap(NodeId, NodeId),
+    row_exts: *std.AutoHashMap(NodeId, NodeId),
     /// Row nodes by the extension node they currently chain through.
-    row_parents: std.AutoHashMap(NodeId, std.ArrayList(NodeId)),
+    row_parents: *std.AutoHashMap(NodeId, std.ArrayList(NodeId)),
     /// Declaration-backed nominal backings already instantiated in this graph,
     /// bucketed by source declaration. Entries compare argument union-find
     /// classes, so a backing instance keeps one identity after evidence merges
     /// or redirects its original argument nodes.
-    nominal_backings: std.HashMap(NominalBackingDeclaration, std.ArrayList(NominalBackingInstance), NominalBackingCacheContext, 80),
+    nominal_backings: *std.HashMap(NominalBackingDeclaration, std.ArrayList(NominalBackingInstance), NominalBackingCacheContext, 80),
     /// Exact source function node from which each generated-private request
     /// function was constructed. A generic source interface may itself carry
     /// upstream generated-private arguments; retaining that producer node is
     /// what lets the callee instantiate those relations without reconstruction.
-    request_source_interfaces: std.AutoHashMap(NodeId, NodeId),
+    request_source_interfaces: *std.AutoHashMap(NodeId, NodeId),
     /// Minted iterator roots whose relation graph proved that retaining the
     /// minted tier would create a recursive component identity. The raw node
     /// remains valid across later unions; finalization resolves it to the live
     /// class and constructs the single forced-dynamic fixed point.
-    forced_dynamic_iterator_roots: std.ArrayList(NodeId),
+    forced_dynamic_iterator_roots: *std.ArrayList(NodeId),
     /// Permanent value-slot nodes that differ from the corresponding source
     /// slot on an explicit recursive edge. Function recursion and loop
     /// feedback both append here; a later minted join touching one of these
     /// slots proves that recursion grows the representation rather than merely
     /// recurring over a fixed iterator.
-    recursive_argument_slots: std.ArrayList(NodeId),
+    recursive_argument_slots: *std.ArrayList(NodeId),
     pub fn create(
         allocator: Allocator,
         types: *Type.Store,
         name_store: *const names.NameStore,
     ) Allocator.Error!*InstGraph {
-        const graph = try allocator.create(InstGraph);
-        graph.* = .{
-            .allocator = allocator,
+        const session = try allocator.create(SolveSession);
+        errdefer allocator.destroy(session);
+        session.* = .{
             .relation_state = .producing,
-            .types = types,
-            .name_store = name_store,
             .arena_impl = std.heap.ArenaAllocator.init(allocator),
             .nodes = .empty,
+            .node_partitions = .empty,
             .versions = .empty,
             .class_member_next = .empty,
             .class_member_head = .empty,
@@ -347,12 +388,73 @@ pub const InstGraph = struct {
             .request_source_interfaces = std.AutoHashMap(NodeId, NodeId).init(allocator),
             .forced_dynamic_iterator_roots = .empty,
             .recursive_argument_slots = .empty,
+            .interface_edges = .empty,
+            .next_partition = 1,
         };
+        const graph = try allocator.create(InstGraph);
+        graph.* = initPartition(allocator, types, name_store, session, @enumFromInt(0), true);
+        return graph;
+    }
+
+    fn initPartition(
+        allocator: Allocator,
+        types: *Type.Store,
+        name_store: *const names.NameStore,
+        session: *SolveSession,
+        partition: PartitionId,
+        owns_session: bool,
+    ) InstGraph {
+        return .{
+            .allocator = allocator,
+            .partition = partition,
+            .session = session,
+            .owns_session = owns_session,
+            .relation_state = &session.relation_state,
+            .types = types,
+            .name_store = name_store,
+            .arena_impl = &session.arena_impl,
+            .nodes = &session.nodes,
+            .node_partitions = &session.node_partitions,
+            .versions = &session.versions,
+            .class_member_next = &session.class_member_next,
+            .class_member_head = &session.class_member_head,
+            .class_member_tail = &session.class_member_tail,
+            .processed_relations = &session.processed_relations,
+            .node_snapshots = &session.node_snapshots,
+            .current_snapshots = &session.current_snapshots,
+            .linked_type_nodes = &session.linked_type_nodes,
+            .imported_monos = &session.imported_monos,
+            .row_exts = &session.row_exts,
+            .row_parents = &session.row_parents,
+            .nominal_backings = &session.nominal_backings,
+            .request_source_interfaces = &session.request_source_interfaces,
+            .forced_dynamic_iterator_roots = &session.forced_dynamic_iterator_roots,
+            .recursive_argument_slots = &session.recursive_argument_slots,
+        };
+    }
+
+    pub fn createPartition(self: *InstGraph) Allocator.Error!*InstGraph {
+        self.requireRelationProduction();
+        const raw = self.session.next_partition;
+        self.session.next_partition += 1;
+        const graph = try self.allocator.create(InstGraph);
+        graph.* = initPartition(
+            self.allocator,
+            self.types,
+            self.name_store,
+            self.session,
+            @enumFromInt(raw),
+            false,
+        );
         return graph;
     }
 
     pub fn destroy(self: *InstGraph) void {
         const allocator = self.allocator;
+        if (!self.owns_session) {
+            allocator.destroy(self);
+            return;
+        }
         var views = self.node_snapshots.valueIterator();
         while (views.next()) |list| {
             list.deinit(allocator);
@@ -371,6 +473,7 @@ pub const InstGraph = struct {
         self.request_source_interfaces.deinit();
         self.forced_dynamic_iterator_roots.deinit(allocator);
         self.recursive_argument_slots.deinit(allocator);
+        self.session.interface_edges.deinit(allocator);
         self.row_parents.deinit();
         self.row_exts.deinit();
         self.imported_monos.deinit();
@@ -380,13 +483,45 @@ pub const InstGraph = struct {
         self.class_member_head.deinit(allocator);
         self.class_member_next.deinit(allocator);
         self.versions.deinit(allocator);
+        self.node_partitions.deinit(allocator);
         self.nodes.deinit(allocator);
         self.arena_impl.deinit();
+        allocator.destroy(self.session);
         allocator.destroy(self);
     }
 
     pub fn arena(self: *InstGraph) Allocator {
         return self.arena_impl.allocator();
+    }
+
+    /// Register the sole capability by which relation production may cross
+    /// specialization partitions. The caller and callee retain distinct body
+    /// ownership even though their exact function-interface cells participate
+    /// in one session-global union-find.
+    pub fn registerInterfaceEdge(
+        self: *InstGraph,
+        caller_root: NodeId,
+        callee: *InstGraph,
+        callee_root: NodeId,
+    ) Allocator.Error!void {
+        self.requireRelationProduction();
+        if (self.session != callee.session) {
+            Common.invariant("specialization interface edge crossed solve sessions");
+        }
+        if (self.partition == callee.partition) {
+            Common.invariant("specialization interface edge stayed within one graph partition");
+        }
+        if (self.node_partitions.items[@intFromEnum(caller_root)] != self.partition or
+            self.node_partitions.items[@intFromEnum(callee_root)] != callee.partition)
+        {
+            Common.invariant("specialization interface edge did not name partition-owned roots");
+        }
+        try self.session.interface_edges.append(self.allocator, .{
+            .caller_partition = self.partition,
+            .caller_root = caller_root,
+            .callee_partition = callee.partition,
+            .callee_root = callee_root,
+        });
     }
 
     pub fn registerRequestSourceInterface(
@@ -455,7 +590,11 @@ pub const InstGraph = struct {
     }
 
     fn acceptsRelationMutation(self: *const InstGraph) bool {
-        return self.relation_state == .producing;
+        return self.relation_state.* == .producing;
+    }
+
+    pub fn relationsAreFrozen(self: *const InstGraph) bool {
+        return !self.acceptsRelationMutation();
     }
 
     fn requireRelationProduction(self: *const InstGraph) void {
@@ -474,7 +613,7 @@ pub const InstGraph = struct {
     /// production. Final type sealing remains available after this transition.
     pub fn freezeRelations(self: *InstGraph) Allocator.Error!void {
         self.requireRelationProduction();
-        self.relation_state = .frozen;
+        self.relation_state.* = .frozen;
     }
 
     pub const ArgumentClassSnapshot = struct {
@@ -1171,6 +1310,7 @@ pub const InstGraph = struct {
         self.requireRelationProduction();
         const id: NodeId = @enumFromInt(@as(u32, @intCast(self.nodes.items.len)));
         try self.nodes.append(self.allocator, node_content);
+        try self.node_partitions.append(self.allocator, self.partition);
         try self.versions.append(self.allocator, 0);
         try self.class_member_next.append(self.allocator, null);
         try self.class_member_head.append(self.allocator, id);
@@ -3945,6 +4085,48 @@ pub fn assertNoDuplicateTags(name_store: *const names.NameStore, tags: []const T
     }
 }
 
+test "specialization partitions share relations only through explicit interface edges" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const caller = try InstGraph.create(gpa, &type_store, &name_store);
+    defer caller.destroy();
+    const callee = try caller.createPartition();
+    defer callee.destroy();
+
+    const caller_ret = try caller.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
+    const caller_fn = try caller.newNode(.{ .func = .{
+        .args = try caller.arena().alloc(NodeId, 0),
+        .ret = caller_ret,
+    } });
+
+    const callee_ext = try callee.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) });
+    const tag_name = try name_store.internTagLabel("BodyOnly");
+    const tags = try callee.arena().alloc(InstTag, 1);
+    tags[0] = .{
+        .name = tag_name,
+        .checked_name = tag_name,
+        .payloads = try callee.arena().alloc(NodeId, 0),
+    };
+    const callee_ret = try callee.newNode(.{ .tag_union = .{ .tags = tags, .ext = callee_ext } });
+    const callee_fn = try callee.newNode(.{ .func = .{
+        .args = try callee.arena().alloc(NodeId, 0),
+        .ret = callee_ret,
+    } });
+
+    try caller.registerInterfaceEdge(caller_fn, callee, callee_fn);
+    try caller.unify(caller_fn, callee_fn);
+
+    try std.testing.expectEqual(@as(usize, 1), caller.session.interface_edges.items.len);
+    try std.testing.expect(caller.sameClass(caller_ret, callee_ret));
+    try std.testing.expectEqual(caller.partition, caller.node_partitions.items[@intFromEnum(caller_fn)]);
+    try std.testing.expectEqual(callee.partition, caller.node_partitions.items[@intFromEnum(callee_fn)]);
+}
+
 fn instNodeEql(left: InstNode, right: InstNode) bool {
     return switch (left) {
         .redirect => |left_next| switch (right) {
@@ -4637,7 +4819,7 @@ test "relation mutation invalidates active snapshots before freezing" {
 
     try graph.freezeRelations();
 
-    try std.testing.expectEqual(RelationState.frozen, graph.relation_state);
+    try std.testing.expectEqual(RelationState.frozen, graph.relation_state.*);
     try std.testing.expect(!graph.acceptsRelationMutation());
 }
 
