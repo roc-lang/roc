@@ -583,6 +583,13 @@ pub const Program = struct {
         self.names.deinit();
     }
 
+    /// Seal the type store once the lifted stage is done introducing types.
+    /// Monotype seals its own store when its lowering ends; this stage takes
+    /// ownership of that store, reopens it, and seals it again here.
+    pub fn freeze(self: *Program) void {
+        self.types.freeze();
+    }
+
     pub fn view(self: *const Program) ProgramView {
         return .{
             .names = &self.names,

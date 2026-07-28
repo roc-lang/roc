@@ -24,6 +24,11 @@ pub fn run(
     owned.names = @import("check").CheckedNames.NameStore.init(allocator);
     var types = owned.types;
     owned.types = @import("../monotype/type.zig").Store.init(allocator);
+    // Monotype sealed this store when its lowering finished. The lifted stage
+    // now owns it and still introduces types of its own -- SpecConstr narrows
+    // loop-carried tuples, which mints the narrowed tuple type -- so the seal
+    // is re-applied once the lifted stage is done rather than carried in.
+    types.reopen();
     var imported_fns = owned.imported_fns.takeArrayList();
     var const_fn_evidence = owned.const_fn_evidence.takeArrayList();
     var const_fn_evidence_frames = owned.const_fn_evidence_frames.takeArrayList();
