@@ -5089,34 +5089,12 @@ const Builder = struct {
             .encoder_for => .encoder,
             .value, .equality, .hash, .map, .map_effectful => Common.invariant("non-codec result mode reached deferred codec preparation"),
         };
-        var added_relation = false;
-        if (kind == .parser) {
-            var required_error_seen = std.AutoHashMap(NodeId, void).init(self.allocator);
-            defer required_error_seen.deinit();
-            if (try ctx.graphParserShapeNeedsRequiredFieldError(boundary.shape_node, &required_error_seen)) {
-                added_relation = try ctx.ensureGraphParserMissingRequiredFieldError(boundary.callable_node);
-            }
-            const runtime = try graph.functionNodes((try graph.functionNodes(boundary.callable_node)).ret);
-            const outer_result = try ctx.graphParserResultNodes(runtime.ret);
-            var invalid_value_seen = std.AutoHashMap(NodeId, void).init(self.allocator);
-            defer invalid_value_seen.deinit();
-            if (try ctx.graphParserShapeNeedsInvalidValue(boundary.shape_node, outer_result.err, &invalid_value_seen)) {
-                added_relation = try ctx.prepareParserInvalidValueCodecCall(
-                    boundary.expr,
-                    boundary.shape_node,
-                    boundary.callable_node,
-                ) or added_relation;
-            }
-        }
-        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
-        defer seen.deinit();
-        return try ctx.prepareCustomCodecCallsAtNode(
+        return try ctx.prepareStructuralCodecCallsAtNode(
             boundary.expr,
             kind,
             boundary.shape_node,
             boundary.callable_node,
-            &seen,
-        ) or added_relation;
+        );
     }
 
     /// Relation production for a deferred parse intrinsic. Only
@@ -11879,6 +11857,13 @@ const BodyContext = struct {
         return id;
     }
 
+    fn fillExprReservation(self: *BodyContext, reservation: DraftExprId, value: DraftExprId) void {
+        self.draft.exprs.items[@intFromEnum(reservation)] =
+            self.draft.exprs.items[@intFromEnum(value)];
+        self.draft.expr_impossibility_proofs.items[@intFromEnum(reservation)] =
+            self.draft.expr_impossibility_proofs.items[@intFromEnum(value)];
+    }
+
     /// Add a structural constructor expression (tag, record, or tuple),
     /// typing it at the nominal construction backing and wrapping it in one
     /// explicit `.nominal` node per nominal layer of `ty`. This keeps
@@ -12562,6 +12547,12 @@ const BodyContext = struct {
         return child;
     }
 
+    fn inheritFrozenEmissionContext(self: *BodyContext, parent: *const BodyContext) void {
+        self.frozen_sealed_emission = parent.frozen_sealed_emission;
+        self.frozen_type_finals = parent.frozen_type_finals;
+        self.frozen_codec_calls = parent.frozen_codec_calls;
+    }
+
     const CallableBodyDemandScope = struct {
         ctx: *BodyContext,
         previous_frames: []const RuntimeDemandGuardFrame,
@@ -12628,9 +12619,7 @@ const BodyContext = struct {
         child.generated_encoder_source_fn_ty = self.generated_encoder_source_fn_ty;
         child.generated_encoder_source_expr = self.generated_encoder_source_expr;
         child.generated_encoder_lambda_index = self.generated_encoder_lambda_index;
-        child.frozen_sealed_emission = self.frozen_sealed_emission;
-        child.frozen_type_finals = self.frozen_type_finals;
-        child.frozen_codec_calls = self.frozen_codec_calls;
+        child.inheritFrozenEmissionContext(self);
         child.source_region_override = self.source_region_override;
         child.current_entry_root = self.current_entry_root;
         child.active_const_binding = self.active_const_binding;
@@ -14654,6 +14643,9 @@ const BodyContext = struct {
         if (try self.producedPublicNamedBackingCompletion(request_root, produced_root, visiting)) |relation| {
             return relation;
         }
+        if (try self.requestPublicNamedBackingCompletion(request_root, produced_root, visiting)) |relation| {
+            return relation;
+        }
 
         return switch (self.graph.content(request_root)) {
             .primitive => |request_primitive| switch (self.graph.content(produced_root)) {
@@ -14715,21 +14707,36 @@ const BodyContext = struct {
         produced_node: NodeId,
         visiting: *std.AutoHashMap(RequestCompletionPair, void),
     ) Allocator.Error!?RequestCompletion {
-        const produced_named = switch (self.graph.content(produced_node)) {
-            .named => |named| named,
-            else => return null,
-        };
-        switch (produced_named.kind) {
-            .nominal, .@"opaque" => {},
-            .alias => return null,
-        }
-        const backing = produced_named.backing orelse return null;
-        if (backing.authority != .checked_public or backing.use != .inspectable) return null;
+        const backing = self.checkedPublicInspectableBacking(produced_node) orelse return null;
 
         return switch (try self.requestCompletionRelation(request_node, backing.node, visiting)) {
             .unchanged, .completed => .completed,
             .mismatch => .mismatch,
         };
+    }
+
+    fn requestPublicNamedBackingCompletion(
+        self: *BodyContext,
+        request_node: NodeId,
+        produced_node: NodeId,
+        visiting: *std.AutoHashMap(RequestCompletionPair, void),
+    ) Allocator.Error!?RequestCompletion {
+        const backing = self.checkedPublicInspectableBacking(request_node) orelse return null;
+
+        return switch (try self.requestCompletionRelation(backing.node, produced_node, visiting)) {
+            .unchanged, .completed => .completed,
+            .mismatch => .mismatch,
+        };
+    }
+
+    fn checkedPublicInspectableBacking(self: *BodyContext, node: NodeId) ?InstBacking {
+        const named = switch (self.graph.content(node)) {
+            .named => |named| named,
+            else => return null,
+        };
+        const backing = named.backing orelse return null;
+        if (backing.authority != .checked_public or backing.use != .inspectable) return null;
+        return backing;
     }
 
     fn requestCompletionSliceRelation(
@@ -25414,6 +25421,7 @@ const BodyContext = struct {
                     self.draft,
                 );
                 fn_ctx.evidence = retained_evidence;
+                fn_ctx.inheritFrozenEmissionContext(self);
                 defer fn_ctx.deinit();
                 try fn_ctx.inheritActiveConstBinding(self);
                 try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
@@ -25466,6 +25474,7 @@ const BodyContext = struct {
             self.draft,
         );
         fn_ctx.evidence = retained_evidence;
+        fn_ctx.inheritFrozenEmissionContext(self);
         defer fn_ctx.deinit();
         try fn_ctx.inheritActiveConstBinding(self);
         try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
@@ -25655,6 +25664,7 @@ const BodyContext = struct {
                 const fn_view = self.builder.moduleForConstFnDef(fn_value.fn_def);
                 var fn_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, fn_view, self.method_scope, ownerTemplateForConstFnDef(fn_value.fn_def), self.graph, self.draft);
                 fn_ctx.evidence = retained_evidence;
+                fn_ctx.inheritFrozenEmissionContext(self);
                 defer fn_ctx.deinit();
                 try fn_ctx.inheritActiveConstBinding(self);
                 try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
@@ -25699,6 +25709,7 @@ const BodyContext = struct {
         const fn_view = self.builder.moduleForConstFnDef(fn_value.fn_def);
         var fn_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, fn_view, self.method_scope, ownerTemplateForConstFnDef(fn_value.fn_def), self.graph, self.draft);
         fn_ctx.evidence = retained_evidence;
+        fn_ctx.inheritFrozenEmissionContext(self);
         defer fn_ctx.deinit();
         try fn_ctx.inheritActiveConstBinding(self);
         try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
@@ -25837,6 +25848,7 @@ const BodyContext = struct {
 
         var fn_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, fn_view, self.method_scope, runtime.owner, self.graph, self.draft);
         defer fn_ctx.deinit();
+        fn_ctx.inheritFrozenEmissionContext(self);
         try fn_ctx.inheritActiveConstBinding(self);
         fn_ctx.current_fn_key = restoredConstFnContextKey(store_view.key, fn_id, fn_value.source_fn_key);
 
@@ -25857,7 +25869,29 @@ const BodyContext = struct {
         defer self.allocator.free(runtime_arg_tys);
         if (runtime_arg_tys.len != 1) Common.invariant("stored parser runtime function had an unexpected arity");
 
-        const shape_ty = try fn_ctx.resolvedCheckedTypeView(plan.dispatcher_ty);
+        const shape_node = try fn_ctx.instNode(plan.dispatcher_ty);
+        const shape_ty = try fn_ctx.resolvedTypeViewForNode(shape_node);
+        const runtime_node = (try self.graph.functionNodes(callable_node)).ret;
+        const runtime_boundary = try fn_ctx.addExprWithTypeCell(
+            DraftTypeCell.fromGraphNode(runtime_node),
+            .pending_deferred,
+        );
+        const previous_codec_calls = fn_ctx.frozen_codec_calls;
+        var runtime_codec_calls: ?[]FrozenPreparedCodecCall = null;
+        if (!fn_ctx.frozen_sealed_emission) {
+            _ = try fn_ctx.prepareStructuralCodecCallsAtNode(
+                runtime_boundary,
+                .parser,
+                shape_node,
+                callable_node,
+            );
+            runtime_codec_calls = try fn_ctx.resolvedPreparedCodecCallsForBoundary(runtime_boundary);
+            fn_ctx.frozen_codec_calls = runtime_codec_calls.?;
+        }
+        defer {
+            fn_ctx.frozen_codec_calls = previous_codec_calls;
+            if (runtime_codec_calls) |calls| self.allocator.free(calls);
+        }
         const state_local = try fn_ctx.addLocal(self.builder.symbols.fresh(), runtime_arg_tys[0]);
         const state_expr = try fn_ctx.localExpr(state_local, runtime_arg_tys[0]);
 
@@ -25926,7 +25960,8 @@ const BodyContext = struct {
         if (encoding_let) |let_| {
             parser_expr = try fn_ctx.wrapLet(let_.local, arg_tys[0], let_.value, parser_expr, ty);
         }
-        return parser_expr;
+        fn_ctx.fillExprReservation(runtime_boundary, parser_expr);
+        return runtime_boundary;
     }
 
     fn restoreConstParserRuntimeFnAtNode(
@@ -25945,6 +25980,7 @@ const BodyContext = struct {
 
         var fn_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, fn_view, self.method_scope, runtime.owner, self.graph, self.draft);
         defer fn_ctx.deinit();
+        fn_ctx.inheritFrozenEmissionContext(self);
         try fn_ctx.inheritActiveConstBinding(self);
         fn_ctx.current_fn_key = restoredConstFnContextKey(store_view.key, fn_id, fn_value.source_fn_key);
 
@@ -25984,7 +26020,28 @@ const BodyContext = struct {
         const state_ty = try fn_ctx.resolvedTypeViewForNode(runtime_fn.args[0]);
         const ret_ty = try fn_ctx.resolvedTypeViewForNode(runtime_fn.ret);
 
-        const shape_ty = try fn_ctx.resolvedCheckedTypeView(plan.dispatcher_ty);
+        const shape_node = try fn_ctx.instNode(plan.dispatcher_ty);
+        const shape_ty = try fn_ctx.resolvedTypeViewForNode(shape_node);
+        const runtime_boundary = try fn_ctx.addExprWithTypeCell(
+            DraftTypeCell.fromGraphNode(request_fn_node),
+            .pending_deferred,
+        );
+        const previous_codec_calls = fn_ctx.frozen_codec_calls;
+        var runtime_codec_calls: ?[]FrozenPreparedCodecCall = null;
+        if (!fn_ctx.frozen_sealed_emission) {
+            _ = try fn_ctx.prepareStructuralCodecCallsAtNode(
+                runtime_boundary,
+                .parser,
+                shape_node,
+                callable_node,
+            );
+            runtime_codec_calls = try fn_ctx.resolvedPreparedCodecCallsForBoundary(runtime_boundary);
+            fn_ctx.frozen_codec_calls = runtime_codec_calls.?;
+        }
+        defer {
+            fn_ctx.frozen_codec_calls = previous_codec_calls;
+            if (runtime_codec_calls) |calls| self.allocator.free(calls);
+        }
         const state_local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), state_cell, null);
         const state_expr = try fn_ctx.addExprWithTypeCell(state_cell, .{ .local = state_local });
 
@@ -26082,12 +26139,14 @@ const BodyContext = struct {
                 DraftTypeCell.fromGraphNode(request_fn_node),
             );
         }
-        return try self.builder.wrapConstSourceCaptureLetsAtTypeCell(
+        parser_expr = try self.builder.wrapConstSourceCaptureLetsAtTypeCell(
             &fn_ctx,
             source_captures.items,
             parser_expr,
             DraftTypeCell.fromGraphNode(request_fn_node),
         );
+        fn_ctx.fillExprReservation(runtime_boundary, parser_expr);
+        return runtime_boundary;
     }
 
     fn restoreConstEncoderForRuntimeFn(
@@ -26106,6 +26165,7 @@ const BodyContext = struct {
 
         var fn_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, fn_view, self.method_scope, runtime.owner, self.graph, self.draft);
         defer fn_ctx.deinit();
+        fn_ctx.inheritFrozenEmissionContext(self);
         try fn_ctx.inheritActiveConstBinding(self);
         fn_ctx.current_fn_key = restoredConstFnContextKey(store_view.key, fn_id, fn_value.source_fn_key);
 
@@ -26126,7 +26186,29 @@ const BodyContext = struct {
         defer self.allocator.free(runtime_arg_tys);
         if (runtime_arg_tys.len != 2) Common.invariant("stored encoder_for runtime function had an unexpected arity");
 
-        const shape_ty = try fn_ctx.resolvedCheckedTypeView(plan.dispatcher_ty);
+        const shape_node = try fn_ctx.instNode(plan.dispatcher_ty);
+        const shape_ty = try fn_ctx.resolvedTypeViewForNode(shape_node);
+        const runtime_node = (try self.graph.functionNodes(callable_node)).ret;
+        const runtime_boundary = try fn_ctx.addExprWithTypeCell(
+            DraftTypeCell.fromGraphNode(runtime_node),
+            .pending_deferred,
+        );
+        const previous_codec_calls = fn_ctx.frozen_codec_calls;
+        var runtime_codec_calls: ?[]FrozenPreparedCodecCall = null;
+        if (!fn_ctx.frozen_sealed_emission) {
+            _ = try fn_ctx.prepareStructuralCodecCallsAtNode(
+                runtime_boundary,
+                .encoder,
+                shape_node,
+                callable_node,
+            );
+            runtime_codec_calls = try fn_ctx.resolvedPreparedCodecCallsForBoundary(runtime_boundary);
+            fn_ctx.frozen_codec_calls = runtime_codec_calls.?;
+        }
+        defer {
+            fn_ctx.frozen_codec_calls = previous_codec_calls;
+            if (runtime_codec_calls) |calls| self.allocator.free(calls);
+        }
         const value_local = try fn_ctx.addLocal(self.builder.symbols.fresh(), runtime_arg_tys[0]);
         const value_expr = try fn_ctx.localExpr(value_local, runtime_arg_tys[0]);
         const state_local = try fn_ctx.addLocal(self.builder.symbols.fresh(), runtime_arg_tys[1]);
@@ -26212,7 +26294,8 @@ const BodyContext = struct {
         if (encoding_let) |let_| {
             encoder_expr = try fn_ctx.wrapLet(let_.local, arg_tys[0], let_.value, encoder_expr, ty);
         }
-        return encoder_expr;
+        fn_ctx.fillExprReservation(runtime_boundary, encoder_expr);
+        return runtime_boundary;
     }
 
     fn restoreConstEncoderForRuntimeFnAtNode(
@@ -26231,6 +26314,7 @@ const BodyContext = struct {
 
         var fn_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, fn_view, self.method_scope, runtime.owner, self.graph, self.draft);
         defer fn_ctx.deinit();
+        fn_ctx.inheritFrozenEmissionContext(self);
         try fn_ctx.inheritActiveConstBinding(self);
         fn_ctx.current_fn_key = restoredConstFnContextKey(store_view.key, fn_id, fn_value.source_fn_key);
 
@@ -26272,7 +26356,28 @@ const BodyContext = struct {
         const state_ty = try fn_ctx.resolvedTypeViewForNode(runtime_fn.args[1]);
         const ret_ty = try fn_ctx.resolvedTypeViewForNode(runtime_fn.ret);
 
-        const shape_ty = try fn_ctx.resolvedCheckedTypeView(plan.dispatcher_ty);
+        const shape_node = try fn_ctx.instNode(plan.dispatcher_ty);
+        const shape_ty = try fn_ctx.resolvedTypeViewForNode(shape_node);
+        const runtime_boundary = try fn_ctx.addExprWithTypeCell(
+            DraftTypeCell.fromGraphNode(request_fn_node),
+            .pending_deferred,
+        );
+        const previous_codec_calls = fn_ctx.frozen_codec_calls;
+        var runtime_codec_calls: ?[]FrozenPreparedCodecCall = null;
+        if (!fn_ctx.frozen_sealed_emission) {
+            _ = try fn_ctx.prepareStructuralCodecCallsAtNode(
+                runtime_boundary,
+                .encoder,
+                shape_node,
+                callable_node,
+            );
+            runtime_codec_calls = try fn_ctx.resolvedPreparedCodecCallsForBoundary(runtime_boundary);
+            fn_ctx.frozen_codec_calls = runtime_codec_calls.?;
+        }
+        defer {
+            fn_ctx.frozen_codec_calls = previous_codec_calls;
+            if (runtime_codec_calls) |calls| self.allocator.free(calls);
+        }
         const value_local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), value_cell, null);
         const value_expr = try fn_ctx.addExprWithTypeCell(value_cell, .{ .local = value_local });
         const state_local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), state_cell, null);
@@ -26395,12 +26500,14 @@ const BodyContext = struct {
                 DraftTypeCell.fromGraphNode(request_fn_node),
             );
         }
-        return try self.builder.wrapConstSourceCaptureLetsAtTypeCell(
+        encoder_expr = try self.builder.wrapConstSourceCaptureLetsAtTypeCell(
             &fn_ctx,
             source_captures.items,
             encoder_expr,
             DraftTypeCell.fromGraphNode(request_fn_node),
         );
+        fn_ctx.fillExprReservation(runtime_boundary, encoder_expr);
+        return runtime_boundary;
     }
 
     fn lowerConstructorChildAtCell(
@@ -33225,6 +33332,62 @@ const BodyContext = struct {
             if (self.graph.sameClass(prepared.shape_node, shape_node)) return true;
         }
         return false;
+    }
+
+    fn prepareStructuralCodecCallsAtNode(
+        self: *BodyContext,
+        boundary_expr: DraftExprId,
+        kind: CodecKind,
+        shape_node: NodeId,
+        boundary_callable_node: NodeId,
+    ) Allocator.Error!bool {
+        var added_relation = false;
+        if (kind == .parser) {
+            var required_error_seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+            defer required_error_seen.deinit();
+            if (try self.graphParserShapeNeedsRequiredFieldError(shape_node, &required_error_seen)) {
+                added_relation = try self.ensureGraphParserMissingRequiredFieldError(boundary_callable_node);
+            }
+            const runtime = try self.graph.functionNodes((try self.graph.functionNodes(boundary_callable_node)).ret);
+            const outer_result = try self.graphParserResultNodes(runtime.ret);
+            var invalid_value_seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+            defer invalid_value_seen.deinit();
+            if (try self.graphParserShapeNeedsInvalidValue(shape_node, outer_result.err, &invalid_value_seen)) {
+                added_relation = try self.prepareParserInvalidValueCodecCall(
+                    boundary_expr,
+                    shape_node,
+                    boundary_callable_node,
+                ) or added_relation;
+            }
+        }
+        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        defer seen.deinit();
+        return try self.prepareCustomCodecCallsAtNode(
+            boundary_expr,
+            kind,
+            shape_node,
+            boundary_callable_node,
+            &seen,
+        ) or added_relation;
+    }
+
+    fn resolvedPreparedCodecCallsForBoundary(
+        self: *BodyContext,
+        boundary_expr: DraftExprId,
+    ) Allocator.Error![]FrozenPreparedCodecCall {
+        var out = std.ArrayList(FrozenPreparedCodecCall).empty;
+        errdefer out.deinit(self.allocator);
+        for (self.draft.prepared_codec_calls.items) |prepared| {
+            if (prepared.boundary_expr != boundary_expr) continue;
+            try out.append(self.allocator, .{
+                .kind = prepared.kind,
+                .shape_ty = try self.currentPhaseTypeForNode(prepared.shape_node),
+                .lookup = prepared.lookup,
+                .callable_ty = try self.currentPhaseTypeForNode(prepared.callable_node),
+                .callee = prepared.callee,
+            });
+        }
+        return try out.toOwnedSlice(self.allocator);
     }
 
     fn prepareCustomCodecCall(
