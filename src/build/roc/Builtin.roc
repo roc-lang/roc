@@ -736,13 +736,12 @@ Builtin :: [].{
 
 			append_json_string_bytes : List(U8), Str -> List(U8)
 			append_json_string_bytes = |out, value| {
-				bytes = Str.to_utf8(value)
-				len = List.len(bytes)
+				len = Str.count_utf8_bytes(value)
 				var $out = u8_list_reserve(out, len)
 				var $index = 0
 
 				while $index < len {
-					$out = u8_append($out, list_get_unsafe(bytes, $index))
+					$out = u8_append($out, str_get_utf8_byte_unsafe(value, $index))
 					$index = $index + 1
 				}
 
@@ -751,15 +750,14 @@ Builtin :: [].{
 
 			append_json_quoted_string : List(U8), Str -> List(U8)
 			append_json_quoted_string = |out, value| {
-				bytes = Str.to_utf8(value)
-				len = List.len(bytes)
+				len = Str.count_utf8_bytes(value)
 				var $out = u8_list_reserve(out, len + 2)
 				var $index = 0
 
 				$out = u8_append($out, 34)
 
 				while $index < len {
-					byte = list_get_unsafe(bytes, $index)
+					byte = str_get_utf8_byte_unsafe(value, $index)
 					$out = Json.append_json_string_byte($out, byte)
 					$index = $index + 1
 				}
