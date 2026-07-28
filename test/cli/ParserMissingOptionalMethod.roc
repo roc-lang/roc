@@ -7,6 +7,9 @@ Format := [Default].{
 	parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError, ..])
 	parse_str = |_, _| Err(FormatError)
 
+	parse_record_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [FormatError, ..])
+	parse_record_start = |_, state| Ok(Uncounted(state))
+
 	parse_record_field : Format,
 	Encoding.FieldName.FieldNames(_shape),
 	State -> Try(
@@ -14,12 +17,15 @@ Format := [Default].{
 			Field({ field : Encoding.FieldName(_shape), rest : State }),
 			TryField({ name : Str, rest : State }),
 			TryFieldCaseless({ name : Str, rest : State }),
-			Continue({ rest : State }),
-			Done({ rest : State }),
+			Continue(State),
+			Done(State),
 		],
 		[FormatError, ..],
 	)
-	parse_record_field = |_, _, state| Ok(Done({ rest: state }))
+	parse_record_field = |_, _, state| Ok(Done(state))
+
+	parse_record_after_field : Format, State -> Try([Continue(State), Done(State)], [FormatError, ..])
+	parse_record_after_field = |_, state| Ok(Continue(state))
 
 	skip_record_field : Format, State -> Try(State, [FormatError, ..])
 	skip_record_field = |_, state| Ok(state)
