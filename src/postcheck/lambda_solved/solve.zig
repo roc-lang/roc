@@ -1331,6 +1331,18 @@ const Solver = struct {
             self.program.types.set(b, .{ .link = self.program.types.rootCompressed(backing) });
             return;
         }
+        if (try self.typeIsProvenUninhabited(a)) {
+            self.program.types.set(a, .{ .link = b });
+            return;
+        }
+        if (try self.typeIsProvenUninhabited(b)) {
+            self.program.types.set(b, .{ .link = a });
+            return;
+        }
+        if (try self.unifyInspectableNamedBacking(a, b, left, right)) return;
+        if (try self.unifyInspectableNamedBacking(b, a, right, left)) return;
+        if (try self.unifyPublicNamedBacking(a, b, right)) return;
+        if (try self.unifyPublicNamedBacking(b, a, left)) return;
 
         switch (left) {
             .primitive => |left_primitive| switch (right) {
@@ -1420,7 +1432,16 @@ const Solver = struct {
             },
             .tag_union => |left_tags| switch (right) {
                 .tag_union => |right_tags| {
-                    try self.unifyTags(left_tags, right_tags);
+                    if (left_tags.count() == 0) {
+                        self.program.types.set(a, .{ .link = b });
+                        return;
+                    }
+                    if (right_tags.count() == 0) {
+                        self.program.types.set(b, .{ .link = a });
+                        return;
+                    }
+                    const merged = try self.unifyTags(left_tags, right_tags);
+                    self.program.types.set(a, .{ .tag_union = merged });
                     self.program.types.set(b, .{ .link = a });
                 },
                 else => Common.invariant("tag-union type failed Lambda Solved unification"),
@@ -1437,7 +1458,6 @@ const Solver = struct {
                         if (try self.unifyPublicGeneratedIterator(a, b, left_named, right_named)) return;
                         Common.invariant("named type identity failed Lambda Solved unification");
                     }
-                    try self.unifySpans(left_named.args, right_named.args, "named type arguments failed Lambda Solved unification");
                     if (left_named.backing) |left_backing| {
                         const right_backing = right_named.backing orelse Common.invariant("named type backing differed during Lambda Solved unification");
                         if (left_backing.use != right_backing.use) Common.invariant("named type backing use differed during Lambda Solved unification");
@@ -1456,6 +1476,7 @@ const Solver = struct {
                     } else if (right_named.backing != null) {
                         Common.invariant("named type backing differed during Lambda Solved unification");
                     } else {
+                        try self.unifySpans(left_named.args, right_named.args, "named type arguments failed Lambda Solved unification");
                         self.program.types.set(b, .{ .link = a });
                     }
                 },
@@ -1463,6 +1484,116 @@ const Solver = struct {
             },
             .link, .unbound, .forall => unreachable,
         }
+    }
+
+    fn unifyPublicNamedBacking(
+        self: *Solver,
+        backing_ty: Type.TypeVarId,
+        named_ty: Type.TypeVarId,
+        named_content: Type.Content,
+    ) Allocator.Error!bool {
+        const named = switch (named_content) {
+            .named => |named| named,
+            else => return false,
+        };
+        switch (named.kind) {
+            .nominal, .@"opaque" => {},
+            .alias => return false,
+        }
+        const backing = named.backing orelse return false;
+        if (backing.authority != .checked_public or backing.use != .inspectable) return false;
+        if (!try self.typeIsProvenUninhabited(backing_ty)) return false;
+        const backing_root = self.program.types.rootCompressed(backing_ty);
+        const named_root = self.program.types.rootCompressed(named_ty);
+        if (backing_root != named_root) {
+            self.program.types.set(backing_root, .{ .link = named_root });
+        }
+        return true;
+    }
+
+    fn unifyInspectableNamedBacking(
+        self: *Solver,
+        structural_ty: Type.TypeVarId,
+        named_ty: Type.TypeVarId,
+        structural_content: Type.Content,
+        named_content: Type.Content,
+    ) Allocator.Error!bool {
+        switch (structural_content) {
+            .named, .link, .unbound, .forall => return false,
+            else => {},
+        }
+        const named = switch (named_content) {
+            .named => |named| named,
+            else => return false,
+        };
+        if (named.kind == .alias) return false;
+        const backing = named.backing orelse return false;
+        if (backing.use != .inspectable) return false;
+
+        const moved_structural = try self.program.types.add(structural_content);
+        try self.unify(moved_structural, backing.ty);
+        const structural_root = self.program.types.rootCompressed(structural_ty);
+        const named_root = self.program.types.rootCompressed(named_ty);
+        if (structural_root != named_root) {
+            self.program.types.set(structural_root, .{ .link = named_root });
+        }
+        return true;
+    }
+
+    fn typeIsProvenUninhabited(self: *Solver, ty: Type.TypeVarId) Allocator.Error!bool {
+        var visiting = std.AutoHashMap(Type.TypeVarId, void).init(self.allocator);
+        defer visiting.deinit();
+        return self.typeIsProvenUninhabitedInner(ty, &visiting);
+    }
+
+    fn typeIsProvenUninhabitedInner(
+        self: *Solver,
+        ty: Type.TypeVarId,
+        visiting: *std.AutoHashMap(Type.TypeVarId, void),
+    ) Allocator.Error!bool {
+        const root = self.program.types.rootCompressed(ty);
+        const entry = try visiting.getOrPut(root);
+        if (entry.found_existing) return false;
+        defer _ = visiting.remove(root);
+
+        return switch (self.program.types.get(root)) {
+            .named => |named| if (named.backing) |backing|
+                if (backing.use == .inspectable)
+                    self.typeIsProvenUninhabitedInner(backing.ty, visiting)
+                else
+                    false
+            else
+                false,
+            .tag_union => |tags| blk: {
+                if (tags.count() == 0) break :blk true;
+                for (0..tags.count()) |tag_index| {
+                    const tag = self.program.types.tagItem(tags, tag_index);
+                    var tag_inhabited = true;
+                    for (0..tag.payloads.count()) |payload_index| {
+                        if (try self.typeIsProvenUninhabitedInner(self.program.types.spanItem(tag.payloads, payload_index), visiting)) {
+                            tag_inhabited = false;
+                            break;
+                        }
+                    }
+                    if (tag_inhabited) break :blk false;
+                }
+                break :blk true;
+            },
+            .tuple => |items| blk: {
+                for (0..items.count()) |index| {
+                    if (try self.typeIsProvenUninhabitedInner(self.program.types.spanItem(items, index), visiting)) break :blk true;
+                }
+                break :blk false;
+            },
+            .record => |fields| blk: {
+                for (0..fields.count()) |index| {
+                    if (try self.typeIsProvenUninhabitedInner(self.program.types.fieldItem(fields, index).ty, visiting)) break :blk true;
+                }
+                break :blk false;
+            },
+            .box => |payload| self.typeIsProvenUninhabitedInner(payload, visiting),
+            .list, .func, .primitive, .lambda_set, .erased, .zst, .link, .unbound, .forall => false,
+        };
     }
 
     /// Transfer Lambda Solved callable evidence from a checked-public value
@@ -1801,14 +1932,35 @@ const Solver = struct {
         }
     }
 
-    fn unifyTags(self: *Solver, lhs: Type.Span, rhs: Type.Span) Allocator.Error!void {
-        if (lhs.count() != rhs.count()) Common.invariant("tag count failed Lambda Solved unification");
-        for (0..lhs.count()) |i| {
-            const left_tag = self.program.types.tagItem(lhs, i);
-            const right_tag = self.program.types.tagItem(rhs, i);
-            if (left_tag.name != right_tag.name) Common.invariant("tag order failed Lambda Solved unification");
-            try self.unifySpans(left_tag.payloads, right_tag.payloads, "tag payload count failed Lambda Solved unification");
+    fn unifyTags(self: *Solver, lhs: Type.Span, rhs: Type.Span) Allocator.Error!Type.Span {
+        var merged = std.ArrayList(Type.Tag).empty;
+        defer merged.deinit(self.allocator);
+        var shared_count: usize = 0;
+
+        for (0..lhs.count()) |left_index| {
+            const left_tag = self.program.types.tagItem(lhs, left_index);
+            try merged.append(self.allocator, left_tag);
+            for (0..rhs.count()) |right_index| {
+                const right_tag = self.program.types.tagItem(rhs, right_index);
+                if (left_tag.name != right_tag.name) continue;
+                try self.unifySpans(left_tag.payloads, right_tag.payloads, "tag payload count failed Lambda Solved unification");
+                shared_count += 1;
+                break;
+            }
         }
+
+        if (shared_count == 0) Common.invariant("disjoint tag unions failed Lambda Solved unification");
+
+        for (0..rhs.count()) |right_index| {
+            const right_tag = self.program.types.tagItem(rhs, right_index);
+            for (0..lhs.count()) |left_index| {
+                if (self.program.types.tagItem(lhs, left_index).name == right_tag.name) break;
+            } else {
+                try merged.append(self.allocator, right_tag);
+            }
+        }
+
+        return try self.program.types.addTags(merged.items);
     }
 
     fn mergeLambdaSets(self: *Solver, lhs: Type.Span, rhs: Type.Span) Allocator.Error!Type.Span {
