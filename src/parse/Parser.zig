@@ -212,14 +212,17 @@ fn looksLikeTagOrNominalDestructure(self: *Parser) bool {
         lookahead += 1;
     }
 
-    // After the (optional) qualifier chain, accept either the applied-tag form
-    // `Tag(args) =` (qualifiers then `(`) or the nominal-value destructure
-    // `Type.(pattern) =` (qualifiers then `.(`). Both then share the same scan
-    // to the matching `)` followed by `=`.
+    // After the (optional) qualifier chain, accept the applied-tag form
+    // `Tag(args) =`, the general nominal-value destructure `Type.(pattern) =`,
+    // or the nominal-record shorthand `Type.{ fields } =`.
+    var expected_close = Token.Tag.CloseRound;
     if (self.peekN(lookahead) == .NoSpaceOpenRound) {
         lookahead += 1;
     } else if (self.peekN(lookahead) == .Dot and self.peekN(lookahead + 1) == .NoSpaceOpenRound) {
         lookahead += 2;
+    } else if (self.peekN(lookahead) == .Dot and self.peekN(lookahead + 1) == .OpenCurly) {
+        lookahead += 2;
+        expected_close = .CloseCurly;
     } else {
         return false;
     }
@@ -240,7 +243,7 @@ fn looksLikeTagOrNominalDestructure(self: *Parser) bool {
         lookahead += 1;
     }
 
-    if (closing_tok != .CloseRound) {
+    if (closing_tok != expected_close) {
         return false;
     }
 
@@ -497,6 +500,16 @@ fn recordStatementDecl(
     }
 
     const decl_idx = try self.decl_index.addDecl(record);
+    switch (statement) {
+        .import => |import_stmt| {
+            if (!import_stmt.nested_import) {
+                if (record.name_ident) |alias_ident| {
+                    try self.decl_index.addImportAliasDecl(scope_idx, alias_ident, decl_idx);
+                }
+            }
+        },
+        else => {},
+    }
     if (record.kind == .value_anno or record.kind == .var_anno) {
         if (self.currentPendingAnno()) |pending| pending.* = decl_idx;
         return;
@@ -1251,11 +1264,21 @@ fn parseAppHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
                 return try self.pushMalformed(AST.Header.Idx, .multiple_platforms, start);
             }
             self.advance();
-            if (self.peek() != .StringStart) {
+            const value = if (self.peek() == .StringStart)
+                try self.parseStringExprTokens()
+            else if (self.peek() == .LowerIdent and std.mem.eql(u8, self.tokenText(self.pos), "glue")) blk: {
+                const ident_tok = self.pos;
+                self.advance();
+                const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
+                break :blk try self.store.addExpr(.{ .ident = .{
+                    .token = ident_tok,
+                    .qualifiers = empty_qualifiers,
+                    .region = .{ .start = ident_tok, .end = self.pos },
+                } });
+            } else {
                 self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
                 return try self.pushMalformed(AST.Header.Idx, .expected_platform_string, start);
-            }
-            const value = try self.parseStringExprTokens();
+            };
             const field = try self.store.addRecordField(.{
                 .name = name_tok,
                 .value = value,
@@ -2053,6 +2076,8 @@ const PatternTagArgsState = struct {
     /// True when parsing `Type.(pattern)` nominal-value destructuring args,
     /// false for ordinary `Tag(args)` application args.
     backing_value: bool = false,
+    /// True for the single-record-pattern shorthand `Type.{ fields }`.
+    record_shorthand: bool = false,
 };
 
 const PatternListState = struct {
@@ -5788,6 +5813,28 @@ fn runExprStatementKernel(
                         };
                         continue :expr_kernel .pattern_tag_args_next;
                     }
+                    if (self.peek() == .Dot and self.peekN(1) == .OpenCurly) {
+                        // `Type.{ fields }` is record-specific shorthand for the
+                        // general nominal destructure `Type.({ fields })`.
+                        self.advance(); // `.`
+                        const record_start = self.pos;
+                        self.advance(); // `{`
+                        pattern_tag_args_state = .{
+                            .start = start,
+                            .final_token = qual_result.final_token,
+                            .qualifiers = qual_result.qualifiers,
+                            .scratch_top = self.store.scratchPatternTop(),
+                            .backing_value = true,
+                            .record_shorthand = true,
+                        };
+                        try open_syntax.pushPattern(open_allocator, .pattern_tag_args, PatternTagArgsState, pattern_tag_args_state);
+                        pattern_record_state = .{
+                            .start = record_start,
+                            .scratch_top = self.store.scratchPatternRecordFieldTop(),
+                            .alternatives = pattern_alternatives,
+                        };
+                        continue :expr_kernel .pattern_record_next;
+                    }
                     last_pattern = try self.store.addPattern(.{ .tag = .{
                         .region = .{ .start = start, .end = self.pos },
                         .args = .{ .span = .{ .start = 0, .len = 0 } },
@@ -6032,6 +6079,19 @@ fn runExprStatementKernel(
                         pattern_tag_args_state = open_syntax.popPatternPayload(.pattern_tag_args, PatternTagArgsState);
                         last_pattern = null;
                         try self.store.addScratchPattern(completed);
+                        if (pattern_tag_args_state.record_shorthand) {
+                            const args = try self.store.patternSpanFrom(pattern_tag_args_state.scratch_top);
+                            last_pattern = try self.store.addPattern(.{ .tag = .{
+                                .region = .{ .start = pattern_tag_args_state.start, .end = self.pos },
+                                .args = args,
+                                .tag_tok = pattern_tag_args_state.final_token,
+                                .qualifiers = pattern_tag_args_state.qualifiers,
+                                .has_args = true,
+                                .backing_value = true,
+                                .record_shorthand = true,
+                            } });
+                            continue :expr_kernel .pattern_complete;
+                        }
                         if (self.peek() == .Comma or self.peek() == .CloseRound) {
                             if (self.peek() == .Comma) {
                                 self.advance();

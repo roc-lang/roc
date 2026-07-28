@@ -89,6 +89,8 @@ static OptimizationLevel toLLVMOptimizationLevel(ZigLLVMIROptimizationLevel leve
             return OptimizationLevel::Oz;
         case ZigLLVMIROptimizationLevel_O3:
             return OptimizationLevel::O3;
+        case ZigLLVMIROptimizationLevel_O0:
+            return OptimizationLevel::O0;
     }
 
     llvm_unreachable("invalid LLVM IR optimization level");

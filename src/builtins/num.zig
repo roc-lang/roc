@@ -8,6 +8,9 @@
 const std = @import("std");
 const i128h = @import("compiler_rt_128.zig");
 const parse_float = @import("vendor_parse_float");
+const float_bits = @import("float_bits.zig");
+const float_math_f32 = @import("float_math/f32.zig");
+const float_math_f64 = @import("float_math/f64.zig");
 
 const WithOverflow = @import("utils.zig").WithOverflow;
 const Ordering = @import("utils.zig").Ordering;
@@ -261,11 +264,9 @@ pub fn exportNumToFloatCast(comptime T: type, comptime F: type, comptime name: [
     const f = struct {
         fn func(x: T) callconv(.c) F {
             if (T == i128) {
-                const result = i128h.i128_to_f64(x);
-                return if (F == f32) @floatCast(result) else result;
+                return if (F == f32) i128h.i128_to_f32(x) else i128h.i128_to_f64(x);
             } else if (T == u128) {
-                const result = i128h.u128_to_f64(x);
-                return if (F == f32) @floatCast(result) else result;
+                return if (F == f32) i128h.u128_to_f32(x) else i128h.u128_to_f64(x);
             } else {
                 return @floatFromInt(x);
             }
@@ -311,7 +312,9 @@ pub fn exportPow(
                     }
                 },
                 else => {
-                    return std.math.pow(T, base, exp);
+                    if (T == f32) return float_math_f32.pow(base, exp);
+                    if (T == f64) return float_math_f64.pow(base, exp);
+                    @compileError("floating-point power supports only F32 and F64");
                 },
             }
         }
@@ -420,61 +423,73 @@ pub fn exportIsFinite(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// Compute arcsine using zig std.math.
+/// Compute arcsine using Roc's width-specific float implementation.
 pub fn exportAsin(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: T) callconv(.c) T {
-            return std.math.asin(input);
+            if (T == f32) return float_math_f32.asin(input);
+            if (T == f64) return float_math_f64.asin(input);
+            @compileError("arcsine supports only F32 and F64");
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// Compute arccosine using zig std.math.
+/// Compute arccosine using Roc's width-specific float implementation.
 pub fn exportAcos(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: T) callconv(.c) T {
-            return std.math.acos(input);
+            if (T == f32) return float_math_f32.acos(input);
+            if (T == f64) return float_math_f64.acos(input);
+            @compileError("arccosine supports only F32 and F64");
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// Compute arctangent using zig std.math.
+/// Compute arctangent using Roc's width-specific float implementation.
 pub fn exportAtan(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: T) callconv(.c) T {
-            return std.math.atan(input);
+            if (T == f32) return float_math_f32.atan(input);
+            if (T == f64) return float_math_f64.atan(input);
+            @compileError("arctangent supports only F32 and F64");
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// Compute sine using zig std.math.
+/// Compute sine using Roc's width-specific float implementation.
 pub fn exportSin(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: T) callconv(.c) T {
-            return math.sin(input);
+            if (T == f32) return float_math_f32.sin(input);
+            if (T == f64) return float_math_f64.sin(input);
+            @compileError("sine supports only F32 and F64");
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// Compute cosine using zig std.math.
+/// Compute cosine using Roc's width-specific float implementation.
 pub fn exportCos(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: T) callconv(.c) T {
-            return math.cos(input);
+            if (T == f32) return float_math_f32.cos(input);
+            if (T == f64) return float_math_f64.cos(input);
+            @compileError("cosine supports only F32 and F64");
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// Compute tangent using zig std.math.
+/// Compute tangent using Roc's width-specific float implementation.
 pub fn exportTan(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: T) callconv(.c) T {
-            return math.tan(input);
+            if (T == f32) return float_math_f32.tan(input);
+            if (T == f64) return float_math_f64.tan(input);
+            @compileError("tangent supports only F32 and F64");
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
@@ -1132,12 +1147,12 @@ pub fn f64FromParts(parts: F64Parts) callconv(.c) f64 {
 
 /// Returns the bit pattern of an f32 as u32.
 pub fn f32ToBits(self: f32) callconv(.c) u32 {
-    return @as(u32, @bitCast(self));
+    return float_bits.normalizeF32NanBits(@bitCast(self));
 }
 
 /// Returns the bit pattern of an f64 as u64.
 pub fn f64ToBits(self: f64) callconv(.c) u64 {
-    return @as(u64, @bitCast(self));
+    return float_bits.normalizeF64NanBits(@bitCast(self));
 }
 
 /// Returns the bit pattern of an i128 as u128.
@@ -1611,6 +1626,23 @@ test "f64ToBits and f64FromBits roundtrip" {
         const bits = f64ToBits(val);
         const reconstructed = f64FromBits(bits);
         try std.testing.expectEqual(val, reconstructed);
+    }
+}
+
+test "float to bits normalizes every NaN representation" {
+    const f32_nan_bits = [_]u32{ 0x7f80_0001, 0x7fc1_2345, 0xff80_0001, 0xffc1_2345 };
+    for (f32_nan_bits) |bits| {
+        try std.testing.expectEqual(float_bits.normalized_f32_nan_bits, f32ToBits(f32FromBits(bits)));
+    }
+
+    const f64_nan_bits = [_]u64{
+        0x7ff0_0000_0000_0001,
+        0x7ff9_2345_6789_abcd,
+        0xfff0_0000_0000_0001,
+        0xfff9_2345_6789_abcd,
+    };
+    for (f64_nan_bits) |bits| {
+        try std.testing.expectEqual(float_bits.normalized_f64_nan_bits, f64ToBits(f64FromBits(bits)));
     }
 }
 

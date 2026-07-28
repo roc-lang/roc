@@ -149,11 +149,17 @@ fn unsupportedLlvmDataLayout(target: std.Target) noreturn {
 
 /// Lowers statement-only LIR procedures to LLVM bitcode.
 pub const MonoLlvmCodeGen = struct {
+    pub const EntrypointAbi = enum {
+        test_runner,
+        plugin,
+    };
+
     pub const Entrypoint = struct {
         symbol_name: []const u8,
         proc: LirProcSpecId,
         arg_layouts: []const layout.Idx,
         ret_layout: layout.Idx,
+        abi: EntrypointAbi = .test_runner,
     };
 
     allocator: Allocator,
@@ -171,6 +177,9 @@ pub const MonoLlvmCodeGen = struct {
     /// Layout store for resolving composite type layouts (records, tuples).
     /// Set by the evaluator before calling generateCode.
     layout_store: ?*const layout.Store = null,
+    /// Optional compiler-plugin stamp bytes exported by generated shared libs.
+    plugin_stamp_bytes: ?[]const u8 = null,
+    plugin_stamp_alignment: u32 = 1,
 
     builder: ?*LlvmBuilder = null,
     wip: ?*LlvmBuilder.WipFunction = null,
@@ -180,6 +189,9 @@ pub const MonoLlvmCodeGen = struct {
     args_ptr_arg: ?LlvmBuilder.Value = null,
     capture_ptr_arg: ?LlvmBuilder.Value = null,
     current_ret_layout: layout.Idx = .zst,
+    /// Source statement whose machine instructions are currently being emitted.
+    /// Default-platform crash lowering consumes its explicit inline-scope chain.
+    current_source_stmt: ?CFStmtId = null,
 
     proc_registry: std.AutoHashMap(u32, LlvmBuilder.Function.Index),
     builtin_functions: std.StringHashMap(LlvmBuilder.Function.Index),
@@ -223,6 +235,11 @@ pub const MonoLlvmCodeGen = struct {
     debug_globals_fwd_ref: LlvmBuilder.Metadata.Optional = .none,
     current_subprogram: LlvmBuilder.Metadata.Optional = .none,
     current_debug_file: u32 = SourceLoc.no_file,
+    /// Virtual source procedures and call-site chains for LIR inline scopes.
+    /// These are cleared at each physical procedure because the outermost
+    /// call-site scope is that procedure's concrete `DISubprogram`.
+    debug_inline_subprograms: std.AutoHashMap(u32, LlvmBuilder.Metadata),
+    debug_inline_callsites: std.AutoHashMap(u32, LlvmBuilder.Metadata),
     /// Debug type metadata per layout index, memoized per module build.
     debug_types: std.AutoHashMap(u32, LlvmBuilder.Metadata),
 
@@ -286,7 +303,13 @@ pub const MonoLlvmCodeGen = struct {
         inner_bad_utf8_tag: u32,
     };
 
-    const StrFindFirstLayoutInfo = struct {
+    const StrSplitFirstLayoutInfo = struct {
+        after_offset: u32,
+        before_offset: u32,
+        found_offset: u32,
+    };
+
+    const StrSplitLastLayoutInfo = struct {
         after_offset: u32,
         before_offset: u32,
         found_offset: u32,
@@ -334,6 +357,8 @@ pub const MonoLlvmCodeGen = struct {
             .stmt_entry_blocks = std.AutoHashMap(u32, LlvmBuilder.Function.Block.Index).init(allocator),
             .loop_continue_blocks = .empty,
             .loop_break_blocks = .empty,
+            .debug_inline_subprograms = std.AutoHashMap(u32, LlvmBuilder.Metadata).init(allocator),
+            .debug_inline_callsites = std.AutoHashMap(u32, LlvmBuilder.Metadata).init(allocator),
             .debug_types = std.AutoHashMap(u32, LlvmBuilder.Metadata).init(allocator),
         };
     }
@@ -361,6 +386,8 @@ pub const MonoLlvmCodeGen = struct {
     /// Releases backend-owned scratch maps.
     pub fn deinit(self: *MonoLlvmCodeGen) void {
         self.debug_types.deinit();
+        self.debug_inline_callsites.deinit();
+        self.debug_inline_subprograms.deinit();
         self.proc_registry.deinit();
         self.builtin_functions.deinit();
         self.clearStaticBytes();
@@ -395,6 +422,9 @@ pub const MonoLlvmCodeGen = struct {
         self.debug_globals_fwd_ref = .none;
         self.current_subprogram = .none;
         self.current_debug_file = SourceLoc.no_file;
+        self.current_source_stmt = null;
+        self.debug_inline_subprograms.clearRetainingCapacity();
+        self.debug_inline_callsites.clearRetainingCapacity();
         self.debug_types.clearRetainingCapacity();
     }
 
@@ -652,8 +682,11 @@ pub const MonoLlvmCodeGen = struct {
                 entrypoint.proc,
                 entrypoint.arg_layouts,
                 entrypoint.ret_layout,
+                entrypoint.abi,
             );
         }
+
+        try self.emitPluginStampFunction();
 
         if (self.enable_default_platform_runtime) {
             try self.emitDefaultPlatformBacktraceTable();
@@ -1004,6 +1037,29 @@ pub const MonoLlvmCodeGen = struct {
                             builder.metadataString("Dec") catch return error.OutOfMemory,
                             128,
                         ) catch return error.OutOfMemory,
+                    },
+                    .vector => {
+                        const vector = scalar.getVector();
+                        const lane_ty = if (vector.isSigned())
+                            builder.debugSignedType(
+                                builder.metadataString(@tagName(vector.lanePrecision())) catch return error.OutOfMemory,
+                                vector.laneBits(),
+                            ) catch return error.OutOfMemory
+                        else
+                            builder.debugUnsignedType(
+                                builder.metadataString(@tagName(vector.lanePrecision())) catch return error.OutOfMemory,
+                                vector.laneBits(),
+                            ) catch return error.OutOfMemory;
+                        return builder.debugVectorType(
+                            builder.metadataString(@tagName(vector)) catch return error.OutOfMemory,
+                            null,
+                            self.debug_compile_unit.unwrap(),
+                            0,
+                            lane_ty,
+                            128,
+                            128,
+                            null,
+                        ) catch return error.OutOfMemory;
                     },
                     .opaque_ptr => return builder.debugPointerType(
                         builder.metadataString("OpaquePtr") catch return error.OutOfMemory,
@@ -1391,6 +1447,8 @@ pub const MonoLlvmCodeGen = struct {
         self.stmt_entry_blocks.clearRetainingCapacity();
         self.loop_continue_blocks.clearRetainingCapacity();
         self.loop_break_blocks.clearRetainingCapacity();
+        self.debug_inline_subprograms.clearRetainingCapacity();
+        self.debug_inline_callsites.clearRetainingCapacity();
 
         const outer_subprogram = self.current_subprogram;
         const outer_debug_file = self.current_debug_file;
@@ -1532,7 +1590,7 @@ pub const MonoLlvmCodeGen = struct {
         defer attrs_wip.deinit(builder);
 
         var ret_ty: LlvmBuilder.Type = .void;
-        var ret_pieces: []const layout.abi.RegPiece = &.{};
+        var ret_registers: ?layout.abi.RegisterPlacement = null;
         var ret_is_indirect = false;
         switch (lowered.ret) {
             .none => {},
@@ -1542,15 +1600,9 @@ pub const MonoLlvmCodeGen = struct {
                 try param_types.append(self.allocator, ptr_ty);
                 ret_is_indirect = true;
             },
-            .registers => |pieces| {
-                ret_pieces = pieces;
-                if (pieces.len == 1) {
-                    ret_ty = try self.cAbiPieceLlvmType(builder, pieces[0]);
-                } else {
-                    const field_types = try arena.alloc(LlvmBuilder.Type, pieces.len);
-                    for (pieces, field_types) |piece, *t| t.* = try self.cAbiPieceLlvmType(builder, piece);
-                    ret_ty = builder.structType(.normal, field_types) catch return error.OutOfMemory;
-                }
+            .registers => |registers| {
+                ret_registers = registers;
+                ret_ty = try self.cAbiRegisterCarrierType(builder, registers);
             },
         }
 
@@ -1564,11 +1616,7 @@ pub const MonoLlvmCodeGen = struct {
                     }
                     try param_types.append(self.allocator, ptr_ty);
                 },
-                .registers => |pieces| {
-                    for (pieces) |piece| {
-                        try param_types.append(self.allocator, try self.cAbiPieceLlvmType(builder, piece));
-                    }
-                },
+                .registers => |registers| try self.appendCAbiRegisterParamTypes(builder, &attrs_wip, &param_types, registers),
             }
         }
 
@@ -1628,16 +1676,13 @@ pub const MonoLlvmCodeGen = struct {
                         try self.copyBytes(try self.offsetPtr(args_buf, offset), src, size, self.alignmentForLayout(arg_layout));
                     }
                 },
-                .registers => |pieces| {
-                    const arg_align = self.alignmentForLayout(arg_layout);
-                    for (pieces) |piece| {
-                        const val = wip.arg(param_cursor);
-                        param_cursor += 1;
-                        const dst = try self.offsetPtr(args_buf, offset + piece.offset);
-                        const store_val = try self.coerceScalar(val, try pieceLlvmType(builder, piece), self.cAbiPieceIsSigned(arg_layout));
-                        _ = wip.store(.normal, store_val, dst, arg_align) catch return error.OutOfMemory;
-                    }
-                },
+                .registers => |registers| try self.storeCAbiRegisterParam(
+                    builder,
+                    registers,
+                    &param_cursor,
+                    try self.offsetPtr(args_buf, offset),
+                    arg_layout,
+                ),
             }
         }
 
@@ -1658,28 +1703,10 @@ pub const MonoLlvmCodeGen = struct {
             _ = try self.callFunctionIndex(proc_fn.?, &.{ ret_slot, args_buf }, false);
         }
 
-        if (ret_pieces.len == 0) {
-            _ = wip.retVoid() catch return error.OutOfMemory;
+        if (ret_registers) |registers| {
+            _ = wip.ret(try self.loadCAbiRegisterResult(builder, registers, ret_slot, ret_layout)) catch return error.OutOfMemory;
         } else {
-            const ret_align = self.alignmentForLayout(ret_layout);
-            if (ret_pieces.len == 1) {
-                const src = try self.offsetPtr(ret_slot, ret_pieces[0].offset);
-                const piece_ty = try pieceLlvmType(builder, ret_pieces[0]);
-                const val = wip.load(.normal, piece_ty, src, ret_align, "") catch return error.OutOfMemory;
-                const ret_val = try self.coerceScalar(val, ret_ty, self.cAbiPieceIsSigned(ret_layout));
-                _ = wip.ret(ret_val) catch return error.OutOfMemory;
-            } else {
-                var agg = builder.poisonValue(ret_ty) catch return error.OutOfMemory;
-                for (ret_pieces, 0..) |piece, i| {
-                    const piece_ty = try pieceLlvmType(builder, piece);
-                    const src = try self.offsetPtr(ret_slot, piece.offset);
-                    const val = wip.load(.normal, piece_ty, src, ret_align, "") catch return error.OutOfMemory;
-                    const field_ty = try self.cAbiPieceLlvmType(builder, piece);
-                    const field = try self.coerceScalar(val, field_ty, self.cAbiPieceIsSigned(ret_layout));
-                    agg = wip.insertValue(agg, field, &.{@intCast(i)}, "") catch return error.OutOfMemory;
-                }
-                _ = wip.ret(agg) catch return error.OutOfMemory;
-            }
+            _ = wip.retVoid() catch return error.OutOfMemory;
         }
 
         try self.finishCurrentWipFunction();
@@ -1691,6 +1718,7 @@ pub const MonoLlvmCodeGen = struct {
         entry_proc: LirProcSpecId,
         arg_layouts: []const layout.Idx,
         ret_layout: layout.Idx,
+        abi: EntrypointAbi,
     ) Error!void {
         if (self.enable_default_platform_hosted_calls and
             self.host_call_mode == .extern_symbols and
@@ -1705,7 +1733,10 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
         const proc_fn = self.proc_registry.get(@intFromEnum(entry_proc)) orelse return error.CompilationFailed;
         const ptr_ty = builder.ptrType(.default) catch return error.OutOfMemory;
-        const wrapper_ty = builder.fnType(.void, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty }, .normal) catch return error.OutOfMemory;
+        const wrapper_ty = switch (abi) {
+            .test_runner => builder.fnType(.void, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty }, .normal) catch return error.OutOfMemory,
+            .plugin => builder.fnType(.void, &.{ ptr_ty, ptr_ty, ptr_ty }, .normal) catch return error.OutOfMemory,
+        };
         const wrapper_name = try self.exportedFunctionName(builder, symbol_name);
         const wrapper = builder.addFunction(wrapper_ty, wrapper_name, .default) catch return error.OutOfMemory;
         wrapper.setLinkage(.external, builder);
@@ -1732,9 +1763,18 @@ pub const MonoLlvmCodeGen = struct {
         wip.cursor = .{ .block = entry };
 
         const roc_ops = wip.arg(0);
-        const test_context = wip.arg(1);
-        const ret_ptr = wip.arg(2);
-        const args_ptr = wip.arg(3);
+        const test_context = switch (abi) {
+            .test_runner => wip.arg(1),
+            .plugin => builder.nullValue(ptr_ty) catch return error.OutOfMemory,
+        };
+        const ret_ptr = wip.arg(switch (abi) {
+            .test_runner => 2,
+            .plugin => 1,
+        });
+        const args_ptr = wip.arg(switch (abi) {
+            .test_runner => 3,
+            .plugin => 2,
+        });
         self.roc_ops_arg = roc_ops;
         self.test_context_arg = test_context;
 
@@ -1742,6 +1782,44 @@ pub const MonoLlvmCodeGen = struct {
         try self.copyEntrypointArgsToInternalBuffer(args_ptr, args_buf, arg_layouts);
         _ = try self.callFunctionIndex(proc_fn, &.{ roc_ops, test_context, ret_ptr, args_buf }, false);
         _ = wip.retVoid() catch return error.OutOfMemory;
+        try self.finishCurrentWipFunction();
+    }
+
+    fn emitPluginStampFunction(self: *MonoLlvmCodeGen) Error!void {
+        const stamp_bytes = self.plugin_stamp_bytes orelse return;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const ptr_ty = builder.ptrType(.default) catch return error.OutOfMemory;
+        const stamp_ty = builder.arrayType(stamp_bytes.len, .i8) catch return error.OutOfMemory;
+
+        const stamp_var = builder.addVariable(
+            builder.strtabString("roc_plugin_stamp_v1_bytes") catch return error.OutOfMemory,
+            stamp_ty,
+            .default,
+        ) catch return error.OutOfMemory;
+        stamp_var.ptrConst(builder).global.setLinkage(.internal, builder);
+        stamp_var.setMutability(.constant, builder);
+        stamp_var.setAlignment(LlvmBuilder.Alignment.fromByteUnits(self.plugin_stamp_alignment), builder);
+        stamp_var.setInitializer(
+            builder.stringConst(builder.string(stamp_bytes) catch return error.OutOfMemory) catch return error.OutOfMemory,
+            builder,
+        ) catch return error.OutOfMemory;
+
+        const stamp_fn_ty = builder.fnType(ptr_ty, &.{}, .normal) catch return error.OutOfMemory;
+        const stamp_fn_name = try self.exportedFunctionName(builder, "roc_plugin_stamp_v1");
+        const stamp_fn = builder.addFunction(stamp_fn_ty, stamp_fn_name, .default) catch return error.OutOfMemory;
+        stamp_fn.setLinkage(.external, builder);
+        self.configureExportCallConv(stamp_fn, builder);
+
+        const outer_wip = self.wip;
+        defer self.wip = outer_wip;
+
+        var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = stamp_fn, .strip = builder.strip }) catch return error.OutOfMemory;
+        defer wip.deinit();
+        self.wip = &wip;
+
+        const entry = wip.block(0, "entry") catch return error.OutOfMemory;
+        wip.cursor = .{ .block = entry };
+        _ = wip.ret(stamp_var.toValue(builder)) catch return error.OutOfMemory;
         try self.finishCurrentWipFunction();
     }
 
@@ -2259,30 +2337,87 @@ pub const MonoLlvmCodeGen = struct {
     /// Processes a single statement node, queueing successors and nested-body
     /// continuations onto `work` rather than recursing.
     /// Sets the WIP function's ambient debug location from a statement's LIR
-    /// source location. Statements with no location (or from a different file
-    /// than the subprogram, which plain subprogram scopes cannot express) get
-    /// line 0: the LLVM verifier requires a location on inlinable calls inside
-    /// functions that have debug info, and line 0 marks them compiler-generated.
-    fn setStmtDebugLocation(self: *MonoLlvmCodeGen, stmt_id: CFStmtId) void {
+    /// source location. Inlined statements use their virtual source procedure
+    /// and exact nested call-site chain; compiler-generated statements use line
+    /// zero in the physical procedure.
+    fn setStmtDebugLocation(self: *MonoLlvmCodeGen, stmt_id: CFStmtId) Error!void {
         const wip = self.wip orelse return;
         if (wip.strip) return;
         if (self.current_subprogram.unwrap() == null) return;
         const loc = self.store.stmtLoc(stmt_id);
-        if (loc.hasLocation() and loc.file == self.current_debug_file) {
-            wip.debug_location = .{ .location = .{
-                .line = loc.line,
-                .column = loc.column,
-                .scope = self.current_subprogram,
-                .inlined_at = .none,
-            } };
-        } else {
-            wip.debug_location = .{ .location = .{
-                .line = 0,
-                .column = 0,
-                .scope = self.current_subprogram,
-                .inlined_at = .none,
-            } };
-        }
+        const inline_scope = self.store.stmtInlineScope(stmt_id);
+        const scope = if (inline_scope == lir.LIR.InlineScopeId.none)
+            self.current_subprogram
+        else
+            (try self.debugInlineSubprogram(inline_scope)).toOptional();
+        const inlined_at = if (inline_scope == lir.LIR.InlineScopeId.none)
+            LlvmBuilder.Metadata.Optional.none
+        else
+            (try self.debugInlineCallsite(inline_scope)).toOptional();
+        const has_compatible_location = loc.hasLocation() and
+            (inline_scope != lir.LIR.InlineScopeId.none or loc.file == self.current_debug_file);
+        wip.debug_location = .{ .location = .{
+            .line = if (has_compatible_location) loc.line else 0,
+            .column = if (has_compatible_location) loc.column else 0,
+            .scope = scope,
+            .inlined_at = inlined_at,
+        } };
+    }
+
+    fn debugInlineSubprogram(self: *MonoLlvmCodeGen, id: lir.LIR.InlineScopeId) Error!LlvmBuilder.Metadata {
+        const key = @intFromEnum(id);
+        if (self.debug_inline_subprograms.get(key)) |existing| return existing;
+
+        const builder = self.builder orelse return error.CompilationFailed;
+        const scope = self.store.inlineScope(id);
+        const linkage_name = builder.metadataStringFmt("roc__proc_{x}", .{scope.source_symbol.raw()}) catch return error.OutOfMemory;
+        const name = if (scope.source_name.isNone())
+            linkage_name
+        else
+            builder.metadataString(self.store.getString(scope.source_name)) catch return error.OutOfMemory;
+        const subprogram = builder.debugSubprogram(
+            try self.debugFileFor(builder, scope.source_loc.file),
+            name,
+            linkage_name,
+            scope.source_loc.line,
+            scope.source_loc.line,
+            builder.debugSubroutineType(null) catch return error.OutOfMemory,
+            .{
+                .di_flags = .{},
+                .sp_flags = .{
+                    .Definition = true,
+                    .LocalToUnit = true,
+                    .Optimized = true,
+                },
+            },
+            self.debug_compile_unit.unwrap().?,
+        ) catch return error.OutOfMemory;
+        try self.debug_inline_subprograms.put(key, subprogram);
+        return subprogram;
+    }
+
+    fn debugInlineCallsite(self: *MonoLlvmCodeGen, id: lir.LIR.InlineScopeId) Error!LlvmBuilder.Metadata {
+        const key = @intFromEnum(id);
+        if (self.debug_inline_callsites.get(key)) |existing| return existing;
+
+        const builder = self.builder orelse return error.CompilationFailed;
+        const scope = self.store.inlineScope(id);
+        const parent_scope = if (scope.parent == lir.LIR.InlineScopeId.none)
+            self.current_subprogram.unwrap().?
+        else
+            try self.debugInlineSubprogram(scope.parent);
+        const parent_callsite = if (scope.parent == lir.LIR.InlineScopeId.none)
+            null
+        else
+            try self.debugInlineCallsite(scope.parent);
+        const callsite = builder.debugLocation(
+            if (scope.call_site.hasLocation()) scope.call_site.line else 0,
+            if (scope.call_site.hasLocation()) scope.call_site.column else 0,
+            parent_scope,
+            parent_callsite,
+        ) catch return error.OutOfMemory;
+        try self.debug_inline_callsites.put(key, callsite);
+        return callsite;
     }
 
     fn compileStmtNode(
@@ -2293,8 +2428,11 @@ pub const MonoLlvmCodeGen = struct {
     ) Error!void {
         if (self.currentBlockHasTerminator()) return;
         if (try self.enterSharedStmtBlock(stmt_id)) return;
+        const outer_source_stmt = self.current_source_stmt;
+        defer self.current_source_stmt = outer_source_stmt;
+        self.current_source_stmt = stmt_id;
         const stmt = self.store.getCFStmt(stmt_id);
-        self.setStmtDebugLocation(stmt_id);
+        try self.setStmtDebugLocation(stmt_id);
         switch (stmt) {
             .assign_ref => |assign| {
                 try self.emitAssignRef(assign.target, assign.op);
@@ -2802,6 +2940,7 @@ pub const MonoLlvmCodeGen = struct {
             try self.materializeLocalSpanIfDeferred(arg_locals);
         }
         switch (op) {
+            .num_plus_wrap, .num_minus_wrap, .num_times_wrap => unreachable,
             .bool_not => {
                 const value = try self.loadBool(self.slot(GuardedList.at(arg_locals, 0)).ptr);
                 const not_value = (self.wip orelse return error.CompilationFailed).not(value, "") catch return error.OutOfMemory;
@@ -2832,20 +2971,80 @@ pub const MonoLlvmCodeGen = struct {
             .num_bitwise_xor,
             => try self.emitNumericBinary(target, op, arg_locals),
             .num_bitwise_not => try self.emitNumericBitwiseNot(target, GuardedList.at(arg_locals, 0)),
+            .num_count_one_bits,
+            .num_count_leading_zero_bits,
+            .num_count_trailing_zero_bits,
+            => try self.emitNumericBitCount(target, op, GuardedList.at(arg_locals, 0)),
+            .simd_load_16_unchecked => try self.emitSimdLoad(target, arg_locals),
+            .simd_store_16_unchecked => try self.emitSimdStore(target, arg_locals, unique_args),
+            .simd_append_16 => try self.emitSimdAppend(target, arg_locals, unique_args),
+            .simd_splat,
+            .simd_get_lane_unchecked,
+            .simd_with_lane_unchecked,
+            .simd_to_u128_bits,
+            .simd_from_u128_bits,
+            .simd_add_wrap,
+            .simd_sub_wrap,
+            .simd_add_sat,
+            .simd_sub_sat,
+            .simd_neg_wrap,
+            .simd_abs_wrap,
+            .simd_min,
+            .simd_max,
+            .simd_abs_diff,
+            .simd_avg_rounded,
+            .simd_mul_wrap,
+            .simd_mul_high,
+            .simd_mul_q15_sat,
+            .simd_mul_wide_lo,
+            .simd_mul_wide_hi,
+            .simd_dot_pairs,
+            .simd_dot_pairs_sat,
+            .simd_sad,
+            .simd_and,
+            .simd_or,
+            .simd_xor,
+            .simd_not,
+            .simd_bit_select,
+            .simd_eq_lanes,
+            .simd_gt_lanes,
+            .simd_gte_lanes,
+            .simd_bitmask,
+            .simd_shl_wrap,
+            .simd_shr_wrap,
+            .simd_shr_zf_wrap,
+            .simd_shr_rounded,
+            .simd_interleave_lo,
+            .simd_interleave_hi,
+            .simd_even_lanes,
+            .simd_odd_lanes,
+            .simd_reverse_lanes,
+            .simd_table_lookup,
+            .simd_concat_shift_bytes,
+            .simd_widen_lo,
+            .simd_widen_hi,
+            .simd_pairwise_add_widen,
+            .simd_narrow_wrap,
+            .simd_narrow_sat,
+            .simd_sum_lanes,
+            .simd_sum_lanes_wrap,
+            .simd_clmul_lo,
+            .simd_clmul_hi,
+            => try self.emitSimdLowLevel(target, op, arg_locals),
             .num_negate, .num_negate_checked => try self.emitNumericNegate(target, op, GuardedList.at(arg_locals, 0)),
             .num_abs, .num_abs_checked => try self.emitNumericAbs(target, op, GuardedList.at(arg_locals, 0)),
             .num_abs_diff => try self.emitNumericAbsDiff(target, arg_locals),
             .num_pow => if (self.localLayout(target) == .dec)
                 try self.emitDecPow(target, arg_locals)
             else
-                try self.emitNumericFloatBinaryIntrinsic(target, arg_locals, .pow),
+                try self.emitNumericFloatPow(target, arg_locals),
             .num_sqrt => try self.emitNumericSqrt(target, GuardedList.at(arg_locals, 0)),
-            .num_sin => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), builtinSymbol(LowLevelBuiltins.unaryMathFloat(.num_sin)), builtinSymbol(LowLevelBuiltins.unaryMathDec(.num_sin))),
-            .num_cos => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), builtinSymbol(LowLevelBuiltins.unaryMathFloat(.num_cos)), builtinSymbol(LowLevelBuiltins.unaryMathDec(.num_cos))),
-            .num_tan => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), builtinSymbol(LowLevelBuiltins.unaryMathFloat(.num_tan)), builtinSymbol(LowLevelBuiltins.unaryMathDec(.num_tan))),
-            .num_asin => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), builtinSymbol(LowLevelBuiltins.unaryMathFloat(.num_asin)), builtinSymbol(LowLevelBuiltins.unaryMathDec(.num_asin))),
-            .num_acos => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), builtinSymbol(LowLevelBuiltins.unaryMathFloat(.num_acos)), builtinSymbol(LowLevelBuiltins.unaryMathDec(.num_acos))),
-            .num_atan => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), builtinSymbol(LowLevelBuiltins.unaryMathFloat(.num_atan)), builtinSymbol(LowLevelBuiltins.unaryMathDec(.num_atan))),
+            .num_sin => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), .num_sin),
+            .num_cos => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), .num_cos),
+            .num_tan => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), .num_tan),
+            .num_asin => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), .num_asin),
+            .num_acos => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), .num_acos),
+            .num_atan => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), .num_atan),
             .num_floor => try self.emitNumericFloatUnaryIntrinsic(target, GuardedList.at(arg_locals, 0), .floor),
             .num_ceiling => try self.emitNumericFloatUnaryIntrinsic(target, GuardedList.at(arg_locals, 0), .ceil),
             .list_len => try self.storeIntToLayout(self.slot(target).ptr, try self.loadUsize(try self.offsetPtr(self.slot(GuardedList.at(arg_locals, 0)).ptr, self.rocListLenOffset())), self.localLayout(target)),
@@ -2875,7 +3074,10 @@ pub const MonoLlvmCodeGen = struct {
             .str_ends_with => try self.emitStrEndsWith(target, arg_locals),
             .str_caseless_ascii_equals => try self.emitStrCaselessAsciiEquals(target, arg_locals),
             .str_count_utf8_bytes => try self.emitStrCountUtf8Bytes(target, GuardedList.at(arg_locals, 0)),
-            .str_find_first => try self.emitStrFindFirst(target, arg_locals),
+            .str_get_utf8_byte_unsafe => try self.emitStrGetUtf8ByteUnsafe(target, arg_locals),
+            .str_substring_unsafe => try self.emitStrSubstringUnsafe(target, arg_locals),
+            .str_split_first => try self.emitStrSplitFirst(target, arg_locals),
+            .str_split_last => try self.emitStrSplitLast(target, arg_locals),
             .str_drop_prefix_caseless_ascii => try self.emitStrDropPrefixCaselessAscii(target, arg_locals),
             .str_concat => try self.emitStrRetBuiltin(target, builtinSymbol(LowLevelBuiltins.strOp(.str_concat)), arg_locals, unique_args),
             .str_trim => try self.emitStrUnaryRetBuiltin(target, builtinSymbol(LowLevelBuiltins.strOp(.str_trim)), GuardedList.at(arg_locals, 0), unique_args),
@@ -3198,11 +3400,24 @@ pub const MonoLlvmCodeGen = struct {
         rhs = try self.coerceScalar(rhs, result_ty, self.localLayout(GuardedList.at(args, 1)).isSigned());
         const result = if (isFloatLayout(target_layout)) blk: {
             if (checked_op != null) return error.UnsupportedLowLevel;
+
+            if (plain_op == .num_div_trunc_by) {
+                const quotient = wip.bin(.fdiv, lhs, rhs, "") catch return error.OutOfMemory;
+                break :blk wip.callIntrinsic(
+                    .normal,
+                    .none,
+                    .trunc,
+                    &.{result_ty},
+                    &.{quotient},
+                    "",
+                ) catch return error.OutOfMemory;
+            }
+
             const tag: LlvmBuilder.Function.Instruction.Tag = switch (plain_op) {
                 .num_plus => .fadd,
                 .num_minus => .fsub,
                 .num_times => .fmul,
-                .num_div_by, .num_div_trunc_by => .fdiv,
+                .num_div_by => .fdiv,
                 .num_rem_by, .num_mod_by => .frem,
                 else => return error.UnsupportedLowLevel,
             };
@@ -3350,27 +3565,22 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const result_ty = self.scalarType(target_layout);
-        const shift_bits = builder.intValue(.i8, self.intBits(target_layout)) catch return error.OutOfMemory;
+        const width = self.intBits(target_layout);
         const rhs_u8 = try self.coerceScalar(rhs, .i8, false);
-        const too_large = wip.icmp(.uge, rhs_u8, shift_bits, "") catch return error.OutOfMemory;
         const amount = try self.coerceScalar(rhs_u8, result_ty, false);
-        if (op == .num_shift_right_by and target_layout.isSigned()) {
-            // Arithmetic right shift keeps filling with sign bits, so any
-            // amount >= the bit width behaves like shifting by bits - 1.
-            const max_amount = builder.intValue(result_ty, self.intBits(target_layout) - 1) catch return error.OutOfMemory;
-            const safe_amount = wip.select(.normal, too_large, max_amount, amount, "") catch return error.OutOfMemory;
-            return wip.bin(.ashr, lhs, safe_amount, "") catch return error.OutOfMemory;
-        }
-        const zero_amount = builder.zeroInitValue(result_ty) catch return error.OutOfMemory;
-        const safe_amount = wip.select(.normal, too_large, zero_amount, amount, "") catch return error.OutOfMemory;
+        // The shift count is taken modulo the bit width. The widths are all
+        // powers of two, so that is a bitwise AND with (width - 1). Masking also
+        // keeps LLVM's shl/lshr/ashr out of poison territory (their result is
+        // poison when the count is >= the bit width).
+        const mask = builder.intValue(result_ty, width - 1) catch return error.OutOfMemory;
+        const masked_amount = wip.bin(.@"and", amount, mask, "") catch return error.OutOfMemory;
         const tag: LlvmBuilder.Function.Instruction.Tag = switch (op) {
             .num_shift_left_by => .shl,
-            .num_shift_right_by, .num_shift_right_zf_by => .lshr,
+            .num_shift_right_by => if (target_layout.isSigned()) .ashr else .lshr,
+            .num_shift_right_zf_by => .lshr,
             else => unreachable,
         };
-        const shifted = wip.bin(tag, lhs, safe_amount, "") catch return error.OutOfMemory;
-        const zero_result = builder.zeroInitValue(result_ty) catch return error.OutOfMemory;
-        return wip.select(.normal, too_large, zero_result, shifted, "") catch return error.OutOfMemory;
+        return wip.bin(tag, lhs, masked_amount, "") catch return error.OutOfMemory;
     }
 
     fn emitDecBinary(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: anytype) Error!void {
@@ -3499,6 +3709,694 @@ pub const MonoLlvmCodeGen = struct {
         try self.storeScalar(self.slot(target).ptr, target_layout, result);
     }
 
+    /// Lower a bit-counting op (`count_one_bits`/`count_leading_zero_bits`/
+    /// `count_trailing_zero_bits`) to the corresponding LLVM intrinsic on the
+    /// operand's integer type (i8..i128; LLVM legalizes i128 itself). The
+    /// ctlz/cttz `is_zero_poison` flag is FALSE so a zero operand yields the
+    /// bit width, matching the spec. The intrinsic result has the operand's
+    /// width; `storeScalar` truncates it to the declared U8 return.
+    fn emitNumericBitCount(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, arg: LocalId) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const target_layout = self.localLayout(target);
+        const value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
+        const value_ty = value.typeOfWip(wip);
+        const zero_is_not_poison = builder.intValue(.i1, 0) catch return error.OutOfMemory;
+        const result = switch (op) {
+            .num_count_one_bits => wip.callIntrinsic(
+                .normal,
+                .none,
+                .ctpop,
+                &.{value_ty},
+                &.{value},
+                "",
+            ) catch return error.OutOfMemory,
+            .num_count_leading_zero_bits => wip.callIntrinsic(
+                .normal,
+                .none,
+                .ctlz,
+                &.{value_ty},
+                &.{ value, zero_is_not_poison },
+                "",
+            ) catch return error.OutOfMemory,
+            .num_count_trailing_zero_bits => wip.callIntrinsic(
+                .normal,
+                .none,
+                .cttz,
+                &.{value_ty},
+                &.{ value, zero_is_not_poison },
+                "",
+            ) catch return error.OutOfMemory,
+            else => unreachable,
+        };
+        try self.storeScalar(self.slot(target).ptr, target_layout, result);
+    }
+
+    fn simdVectorForLayout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) ?layout.Vector {
+        const value_layout = self.layoutValue(layout_idx);
+        if (value_layout.tag != .scalar or value_layout.getScalar().tag != .vector) return null;
+        return value_layout.getScalar().getVector();
+    }
+
+    fn simdType(self: *MonoLlvmCodeGen, vector: layout.Vector) Error!LlvmBuilder.Type {
+        return vectorLlvmType(self.builder orelse return error.CompilationFailed, vector);
+    }
+
+    fn loadSimdLocal(self: *MonoLlvmCodeGen, local: LocalId) Error!LlvmBuilder.Value {
+        const vector = self.simdVectorForLayout(self.localLayout(local)) orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        return wip.load(.normal, try self.simdType(vector), self.slot(local).ptr, self.alignmentForLayout(self.localLayout(local)), "") catch return error.OutOfMemory;
+    }
+
+    fn storeSimdLocal(self: *MonoLlvmCodeGen, local: LocalId, value: LlvmBuilder.Value) Error!void {
+        const vector = self.simdVectorForLayout(self.localLayout(local)) orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const vector_ty = try self.simdType(vector);
+        const stored = if (value.typeOfWip(wip) == vector_ty)
+            value
+        else
+            wip.cast(.bitcast, value, vector_ty, "") catch return error.OutOfMemory;
+        _ = wip.store(.normal, stored, self.slot(local).ptr, self.alignmentForLayout(self.localLayout(local))) catch return error.OutOfMemory;
+    }
+
+    fn simdShuffleMask(self: *MonoLlvmCodeGen, indices: []const u32) Error!LlvmBuilder.Value {
+        const builder = self.builder orelse return error.CompilationFailed;
+        var constants: [16]LlvmBuilder.Constant = undefined;
+        if (indices.len > constants.len) return error.CompilationFailed;
+        for (indices, 0..) |index, i| constants[i] = builder.intConst(.i32, index) catch return error.OutOfMemory;
+        const ty = builder.vectorType(.normal, @intCast(indices.len), .i32) catch return error.OutOfMemory;
+        return builder.vectorValue(ty, constants[0..indices.len]) catch return error.OutOfMemory;
+    }
+
+    fn emitSimdLoad(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const vector = self.simdVectorForLayout(self.localLayout(target)) orelse return error.CompilationFailed;
+        const bytes = try self.loadPointer(self.slot(GuardedList.at(args, 0)).ptr);
+        const index = try self.loadIntegerLocalAsUsize(GuardedList.at(args, 1));
+        const source = wip.gep(.inbounds, .i8, bytes, &.{index}, "") catch return error.OutOfMemory;
+        const value = wip.load(.normal, try self.simdType(vector), source, LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
+        try self.storeSimdLocal(target, value);
+    }
+
+    fn emitSimdStore(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const vector = try self.loadSimdLocal(GuardedList.at(args, 0));
+        const bits = wip.cast(.bitcast, vector, .i128, "") catch return error.OutOfMemory;
+        const parts = try self.splitI128Value(bits);
+        const list = try self.rocListArgFields(self.slot(GuardedList.at(args, 1)).ptr);
+        const index = try self.coerceScalar(
+            try self.loadScalar(self.slot(GuardedList.at(args, 2)).ptr, self.localLayout(GuardedList.at(args, 2))),
+            .i64,
+            false,
+        );
+        const mode = if ((unique_args & (@as(u64, 1) << 1)) != 0) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
+        try self.callBuiltinVoid(
+            builtinSymbol(.simd_store_16),
+            &.{ try self.ptrType(), .i64, .i64, try self.ptrType(), self.ptrSizedIntType(), self.ptrSizedIntType(), .i64, .i8, try self.ptrType() },
+            &.{ self.slot(target).ptr, parts.low, parts.high, list[0], list[1], list[2], index, builder.intValue(.i8, @intFromEnum(mode)) catch return error.OutOfMemory, self.rocOps() },
+        );
+    }
+
+    fn emitSimdAppend(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const vector = try self.loadSimdLocal(GuardedList.at(args, 0));
+        const bits = wip.cast(.bitcast, vector, .i128, "") catch return error.OutOfMemory;
+        const parts = try self.splitI128Value(bits);
+        const list = try self.rocListArgFields(self.slot(GuardedList.at(args, 1)).ptr);
+        const mode = if ((unique_args & (@as(u64, 1) << 1)) != 0) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
+        try self.callBuiltinVoid(
+            builtinSymbol(.simd_append_16),
+            &.{ try self.ptrType(), .i64, .i64, try self.ptrType(), self.ptrSizedIntType(), self.ptrSizedIntType(), .i8, try self.ptrType() },
+            &.{ self.slot(target).ptr, parts.low, parts.high, list[0], list[1], list[2], builder.intValue(.i8, @intFromEnum(mode)) catch return error.OutOfMemory, self.rocOps() },
+        );
+    }
+
+    fn simdRawType(self: *MonoLlvmCodeGen, lane_bits: u16, lane_count: u16) Error!LlvmBuilder.Type {
+        const builder = self.builder orelse return error.CompilationFailed;
+        return builder.vectorType(.normal, lane_count, builder.intType(lane_bits) catch return error.OutOfMemory) catch return error.OutOfMemory;
+    }
+
+    fn simdRawSplat(self: *MonoLlvmCodeGen, lane_bits: u16, lane_count: u16, value: i128) Error!LlvmBuilder.Value {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const lane_ty = builder.intType(lane_bits) catch return error.OutOfMemory;
+        return builder.splatValue(try self.simdRawType(lane_bits, lane_count), builder.intConst(lane_ty, value) catch return error.OutOfMemory) catch return error.OutOfMemory;
+    }
+
+    fn simdExtendVector(self: *MonoLlvmCodeGen, value: LlvmBuilder.Value, lane_bits: u16, lane_count: u16, signed: bool) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        return wip.cast(if (signed) .sext else .zext, value, try self.simdRawType(lane_bits, lane_count), "") catch return error.OutOfMemory;
+    }
+
+    fn simdClampVector(
+        self: *MonoLlvmCodeGen,
+        value: LlvmBuilder.Value,
+        lane_bits: u16,
+        lane_count: u16,
+        lower: i128,
+        upper: i128,
+        signed_compare: bool,
+    ) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const low = try self.simdRawSplat(lane_bits, lane_count, lower);
+        const high = try self.simdRawSplat(lane_bits, lane_count, upper);
+        const below = wip.icmp(if (signed_compare) .slt else .ult, value, low, "") catch return error.OutOfMemory;
+        const above = wip.icmp(if (signed_compare) .sgt else .ugt, value, high, "") catch return error.OutOfMemory;
+        const at_least_low = wip.select(.normal, below, low, value, "") catch return error.OutOfMemory;
+        return wip.select(.normal, above, high, at_least_low, "") catch return error.OutOfMemory;
+    }
+
+    fn emitSimdLowLevel(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: anytype) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const target_layout = self.localLayout(target);
+        const destination_vector = self.simdVectorForLayout(target_layout);
+        var source_vector: ?layout.Vector = null;
+        for (0..args.len) |i| {
+            source_vector = self.simdVectorForLayout(self.localLayout(GuardedList.at(args, i))) orelse continue;
+            break;
+        }
+        const vector = source_vector orelse destination_vector orelse return error.CompilationFailed;
+        const vector_ty = try self.simdType(vector);
+        const lane_ty = builder.intType(vector.laneBits()) catch return error.OutOfMemory;
+
+        switch (op) {
+            .simd_splat => {
+                const arg = GuardedList.at(args, 0);
+                const scalar = try self.coerceScalar(try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg)), lane_ty, self.localLayout(arg).isSigned());
+                try self.storeSimdLocal(target, wip.splatVector(try self.simdType(destination_vector.?), scalar, "") catch return error.OutOfMemory);
+            },
+            .simd_get_lane_unchecked => {
+                const value = try self.loadSimdLocal(GuardedList.at(args, 0));
+                const index_arg = GuardedList.at(args, 1);
+                const index = try self.coerceScalar(try self.loadScalar(self.slot(index_arg).ptr, self.localLayout(index_arg)), .i32, false);
+                const lane = wip.extractElement(value, index, "") catch return error.OutOfMemory;
+                try self.storeScalar(self.slot(target).ptr, target_layout, lane);
+            },
+            .simd_with_lane_unchecked => {
+                const value = try self.loadSimdLocal(GuardedList.at(args, 0));
+                const index_arg = GuardedList.at(args, 1);
+                const lane_arg = GuardedList.at(args, 2);
+                const index = try self.coerceScalar(try self.loadScalar(self.slot(index_arg).ptr, self.localLayout(index_arg)), .i32, false);
+                const lane = try self.coerceScalar(try self.loadScalar(self.slot(lane_arg).ptr, self.localLayout(lane_arg)), lane_ty, self.localLayout(lane_arg).isSigned());
+                try self.storeSimdLocal(target, wip.insertElement(value, lane, index, "") catch return error.OutOfMemory);
+            },
+            .simd_to_u128_bits => {
+                const value = try self.loadSimdLocal(GuardedList.at(args, 0));
+                try self.storeScalar(self.slot(target).ptr, target_layout, wip.cast(.bitcast, value, .i128, "") catch return error.OutOfMemory);
+            },
+            .simd_from_u128_bits => {
+                const arg = GuardedList.at(args, 0);
+                const bits = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
+                try self.storeSimdLocal(target, wip.cast(.bitcast, bits, try self.simdType(destination_vector.?), "") catch return error.OutOfMemory);
+            },
+            .simd_add_wrap, .simd_sub_wrap, .simd_mul_wrap, .simd_and, .simd_or, .simd_xor => {
+                const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
+                const rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
+                const tag: LlvmBuilder.Function.Instruction.Tag = switch (op) {
+                    .simd_add_wrap => .add,
+                    .simd_sub_wrap => .sub,
+                    .simd_mul_wrap => .mul,
+                    .simd_and => .@"and",
+                    .simd_or => .@"or",
+                    .simd_xor => .xor,
+                    else => unreachable,
+                };
+                try self.storeSimdLocal(target, wip.bin(tag, lhs, rhs, "") catch return error.OutOfMemory);
+            },
+            .simd_add_sat, .simd_sub_sat => {
+                const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
+                const rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
+                const intrinsic: LlvmBuilder.Intrinsic = if (op == .simd_add_sat)
+                    (if (vector.isSigned()) .@"sadd.sat" else .@"uadd.sat")
+                else if (vector.isSigned())
+                    .@"ssub.sat"
+                else
+                    .@"usub.sat";
+                const result = wip.callIntrinsic(.normal, .none, intrinsic, &.{vector_ty}, &.{ lhs, rhs }, "") catch return error.OutOfMemory;
+                try self.storeSimdLocal(target, result);
+            },
+            .simd_neg_wrap => {
+                try self.storeSimdLocal(target, wip.neg(try self.loadSimdLocal(GuardedList.at(args, 0)), "") catch return error.OutOfMemory);
+            },
+            .simd_not => {
+                try self.storeSimdLocal(target, wip.not(try self.loadSimdLocal(GuardedList.at(args, 0)), "") catch return error.OutOfMemory);
+            },
+            .simd_abs_wrap => {
+                const value = try self.loadSimdLocal(GuardedList.at(args, 0));
+                const zero = builder.zeroInitValue(vector_ty) catch return error.OutOfMemory;
+                const negative = wip.icmp(.slt, value, zero, "") catch return error.OutOfMemory;
+                const negated = wip.neg(value, "") catch return error.OutOfMemory;
+                try self.storeSimdLocal(target, wip.select(.normal, negative, negated, value, "") catch return error.OutOfMemory);
+            },
+            .simd_min, .simd_max => {
+                const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
+                const rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
+                const condition: LlvmBuilder.IntegerCondition = if (op == .simd_min)
+                    (if (vector.isSigned()) .slt else .ult)
+                else if (vector.isSigned())
+                    .sgt
+                else
+                    .ugt;
+                const choose_lhs = wip.icmp(condition, lhs, rhs, "") catch return error.OutOfMemory;
+                try self.storeSimdLocal(target, wip.select(.normal, choose_lhs, lhs, rhs, "") catch return error.OutOfMemory);
+            },
+            .simd_abs_diff => {
+                const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
+                const rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
+                const lhs_ge = wip.icmp(.uge, lhs, rhs, "") catch return error.OutOfMemory;
+                const forward = wip.bin(.sub, lhs, rhs, "") catch return error.OutOfMemory;
+                const reverse = wip.bin(.sub, rhs, lhs, "") catch return error.OutOfMemory;
+                try self.storeSimdLocal(target, wip.select(.normal, lhs_ge, forward, reverse, "") catch return error.OutOfMemory);
+            },
+            .simd_avg_rounded => {
+                if (self.target.cpu.arch == .x86_64) {
+                    const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
+                    const rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
+                    const name = if (vector.laneBits() == 8) "llvm.x86.sse2.pavg.b" else "llvm.x86.sse2.pavg.w";
+                    try self.storeSimdLocal(target, try self.callBuiltin(name, vector_ty, &.{ vector_ty, vector_ty }, &.{ lhs, rhs }));
+                    return;
+                }
+                const wide_bits: u16 = vector.laneBits() * 2;
+                const lhs = try self.simdExtendVector(try self.loadSimdLocal(GuardedList.at(args, 0)), wide_bits, vector.laneCount(), false);
+                const rhs = try self.simdExtendVector(try self.loadSimdLocal(GuardedList.at(args, 1)), wide_bits, vector.laneCount(), false);
+                const sum = wip.bin(.add, lhs, rhs, "") catch return error.OutOfMemory;
+                const biased = wip.bin(.add, sum, try self.simdRawSplat(wide_bits, vector.laneCount(), 1), "") catch return error.OutOfMemory;
+                const average = wip.bin(.lshr, biased, try self.simdRawSplat(wide_bits, vector.laneCount(), 1), "") catch return error.OutOfMemory;
+                try self.storeSimdLocal(target, wip.cast(.trunc, average, vector_ty, "") catch return error.OutOfMemory);
+            },
+            .simd_bit_select => {
+                const mask = try self.loadSimdLocal(GuardedList.at(args, 0));
+                const when_set = try self.loadSimdLocal(GuardedList.at(args, 1));
+                const when_clear = try self.loadSimdLocal(GuardedList.at(args, 2));
+                const set_bits = wip.bin(.@"and", mask, when_set, "") catch return error.OutOfMemory;
+                const clear_bits = wip.bin(.@"and", wip.not(mask, "") catch return error.OutOfMemory, when_clear, "") catch return error.OutOfMemory;
+                try self.storeSimdLocal(target, wip.bin(.@"or", set_bits, clear_bits, "") catch return error.OutOfMemory);
+            },
+            .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes => {
+                const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
+                const rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
+                const condition: LlvmBuilder.IntegerCondition = switch (op) {
+                    .simd_eq_lanes => .eq,
+                    .simd_gt_lanes => if (vector.isSigned()) .sgt else .ugt,
+                    .simd_gte_lanes => if (vector.isSigned()) .sge else .uge,
+                    else => unreachable,
+                };
+                const compared = wip.icmp(condition, lhs, rhs, "") catch return error.OutOfMemory;
+                try self.storeSimdLocal(target, wip.cast(.sext, compared, vector_ty, "") catch return error.OutOfMemory);
+            },
+            else => try self.emitSimdComplex(target, op, args, vector, destination_vector),
+        }
+    }
+
+    fn simdShuffleHalf(self: *MonoLlvmCodeGen, value: LlvmBuilder.Value, vector: layout.Vector, high: bool) Error!LlvmBuilder.Value {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        var indices: [8]u32 = undefined;
+        const count: usize = vector.laneCount() / 2;
+        const start: u32 = if (high) @intCast(count) else 0;
+        for (0..count) |i| indices[i] = start + @as(u32, @intCast(i));
+        return wip.shuffleVector(value, builder.poisonValue(try self.simdType(vector)) catch return error.OutOfMemory, try self.simdShuffleMask(indices[0..count]), "") catch return error.OutOfMemory;
+    }
+
+    fn simdPairShuffle(self: *MonoLlvmCodeGen, value: LlvmBuilder.Value, lane_count: u16, odd: bool) Error!LlvmBuilder.Value {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        var indices: [8]u32 = undefined;
+        const count: usize = lane_count / 2;
+        for (0..count) |i| indices[i] = @intCast(2 * i + @intFromBool(odd));
+        return wip.shuffleVector(value, builder.poisonValue(value.typeOfWip(wip)) catch return error.OutOfMemory, try self.simdShuffleMask(indices[0..count]), "") catch return error.OutOfMemory;
+    }
+
+    fn emitSimdComplex(
+        self: *MonoLlvmCodeGen,
+        target: LocalId,
+        op: lir.LowLevel,
+        args: anytype,
+        vector: layout.Vector,
+        destination_vector: ?layout.Vector,
+    ) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const vector_ty = try self.simdType(vector);
+
+        switch (op) {
+            .simd_mul_high => {
+                const wide_bits: u16 = vector.laneBits() * 2;
+                const lhs = try self.simdExtendVector(try self.loadSimdLocal(GuardedList.at(args, 0)), wide_bits, vector.laneCount(), vector.isSigned());
+                const rhs = try self.simdExtendVector(try self.loadSimdLocal(GuardedList.at(args, 1)), wide_bits, vector.laneCount(), vector.isSigned());
+                const product = wip.bin(.mul, lhs, rhs, "") catch return error.OutOfMemory;
+                const shifted = wip.bin(if (vector.isSigned()) .ashr else .lshr, product, try self.simdRawSplat(wide_bits, vector.laneCount(), vector.laneBits()), "") catch return error.OutOfMemory;
+                try self.storeSimdLocal(target, wip.cast(.trunc, shifted, vector_ty, "") catch return error.OutOfMemory);
+            },
+            .simd_mul_q15_sat => {
+                if (self.target.cpu.arch == .x86_64) {
+                    const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
+                    const rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
+                    const multiplied = try self.callBuiltin("llvm.x86.ssse3.pmul.hr.sw.128", vector_ty, &.{ vector_ty, vector_ty }, &.{ lhs, rhs });
+                    const minimum = try self.simdRawSplat(16, 8, 0x8000);
+                    const lhs_min = wip.icmp(.eq, lhs, minimum, "") catch return error.OutOfMemory;
+                    const rhs_min = wip.icmp(.eq, rhs, minimum, "") catch return error.OutOfMemory;
+                    const both_min = wip.bin(.@"and", lhs_min, rhs_min, "") catch return error.OutOfMemory;
+                    const maximum = try self.simdRawSplat(16, 8, 32767);
+                    try self.storeSimdLocal(target, wip.select(.normal, both_min, maximum, multiplied, "") catch return error.OutOfMemory);
+                    return;
+                }
+                if (self.target.cpu.arch == .aarch64 or self.target.cpu.arch == .aarch64_be) {
+                    const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
+                    const rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
+                    try self.storeSimdLocal(target, try self.callBuiltin("llvm.aarch64.neon.sqrdmulh.v8i16", vector_ty, &.{ vector_ty, vector_ty }, &.{ lhs, rhs }));
+                    return;
+                }
+                const lane_count = vector.laneCount();
+                // Use i64 intermediates so the pinned -32768 * -32768 case
+                // reaches +32768 before the final i16 saturation instead of
+                // overflowing while doubling an i32 product.
+                const lhs = try self.simdExtendVector(try self.loadSimdLocal(GuardedList.at(args, 0)), 64, lane_count, true);
+                const rhs = try self.simdExtendVector(try self.loadSimdLocal(GuardedList.at(args, 1)), 64, lane_count, true);
+                const product = wip.bin(.mul, lhs, rhs, "") catch return error.OutOfMemory;
+                const doubled = wip.bin(.shl, product, try self.simdRawSplat(64, lane_count, 1), "") catch return error.OutOfMemory;
+                const rounded = wip.bin(.add, doubled, try self.simdRawSplat(64, lane_count, 32768), "") catch return error.OutOfMemory;
+                const scaled = wip.bin(.ashr, rounded, try self.simdRawSplat(64, lane_count, 16), "") catch return error.OutOfMemory;
+                const clamped = try self.simdClampVector(scaled, 64, lane_count, -32768, 32767, true);
+                try self.storeSimdLocal(target, wip.cast(.trunc, clamped, vector_ty, "") catch return error.OutOfMemory);
+            },
+            .simd_mul_wide_lo, .simd_mul_wide_hi => {
+                const destination = destination_vector orelse return error.CompilationFailed;
+                const high = op == .simd_mul_wide_hi;
+                const lhs_half = try self.simdShuffleHalf(try self.loadSimdLocal(GuardedList.at(args, 0)), vector, high);
+                const rhs_half = try self.simdShuffleHalf(try self.loadSimdLocal(GuardedList.at(args, 1)), vector, high);
+                const lhs = try self.simdExtendVector(lhs_half, destination.laneBits(), destination.laneCount(), vector.isSigned());
+                const rhs = try self.simdExtendVector(rhs_half, destination.laneBits(), destination.laneCount(), vector.isSigned());
+                try self.storeSimdLocal(target, wip.bin(.mul, lhs, rhs, "") catch return error.OutOfMemory);
+            },
+            .simd_dot_pairs => {
+                if (self.target.cpu.arch == .x86_64) {
+                    const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
+                    const rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
+                    try self.storeSimdLocal(target, try self.callBuiltin("llvm.x86.sse2.pmadd.wd", try self.simdRawType(32, 4), &.{ vector_ty, vector_ty }, &.{ lhs, rhs }));
+                    return;
+                }
+                const lhs = try self.simdExtendVector(try self.loadSimdLocal(GuardedList.at(args, 0)), 32, 8, true);
+                const rhs = try self.simdExtendVector(try self.loadSimdLocal(GuardedList.at(args, 1)), 32, 8, true);
+                const products = wip.bin(.mul, lhs, rhs, "") catch return error.OutOfMemory;
+                const even = try self.simdPairShuffle(products, 8, false);
+                const odd = try self.simdPairShuffle(products, 8, true);
+                try self.storeSimdLocal(target, wip.bin(.add, even, odd, "") catch return error.OutOfMemory);
+            },
+            .simd_dot_pairs_sat => {
+                if (self.target.cpu.arch == .x86_64) {
+                    const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
+                    const rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
+                    try self.storeSimdLocal(target, try self.callBuiltin("llvm.x86.ssse3.pmadd.ub.sw.128", try self.simdRawType(16, 8), &.{ vector_ty, vector_ty }, &.{ lhs, rhs }));
+                    return;
+                }
+                // A u8*i8 product fits in i16, but the sum of two products
+                // does not. Accumulate in i32 lanes and saturate before
+                // narrowing, matching PMADDUBSW rather than wrapping early.
+                const lhs = try self.simdExtendVector(try self.loadSimdLocal(GuardedList.at(args, 0)), 32, 16, false);
+                const rhs = try self.simdExtendVector(try self.loadSimdLocal(GuardedList.at(args, 1)), 32, 16, true);
+                const products = wip.bin(.mul, lhs, rhs, "") catch return error.OutOfMemory;
+                const even = try self.simdPairShuffle(products, 16, false);
+                const odd = try self.simdPairShuffle(products, 16, true);
+                const sums = wip.bin(.add, even, odd, "") catch return error.OutOfMemory;
+                const clamped = try self.simdClampVector(sums, 32, 8, -32768, 32767, true);
+                try self.storeSimdLocal(target, wip.cast(.trunc, clamped, try self.simdRawType(16, 8), "") catch return error.OutOfMemory);
+            },
+            .simd_sad => {
+                if (self.target.cpu.arch == .x86_64) {
+                    const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
+                    const rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
+                    try self.storeSimdLocal(target, try self.callBuiltin("llvm.x86.sse2.psad.bw", try self.simdRawType(64, 2), &.{ vector_ty, vector_ty }, &.{ lhs, rhs }));
+                    return;
+                }
+                try self.emitSimdSad(target, args);
+            },
+            .simd_bitmask => try self.emitSimdBitmask(target, args, vector),
+            .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap => {
+                const value = try self.loadSimdLocal(GuardedList.at(args, 0));
+                const count_arg = GuardedList.at(args, 1);
+                const raw_count = try self.coerceScalar(try self.loadScalar(self.slot(count_arg).ptr, self.localLayout(count_arg)), builder.intType(vector.laneBits()) catch return error.OutOfMemory, false);
+                const masked_count = wip.bin(.@"and", raw_count, builder.intValue(raw_count.typeOfWip(wip), vector.laneBits() - 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+                const counts = wip.splatVector(vector_ty, masked_count, "") catch return error.OutOfMemory;
+                const tag: LlvmBuilder.Function.Instruction.Tag = switch (op) {
+                    .simd_shl_wrap => .shl,
+                    .simd_shr_wrap => if (vector.isSigned()) .ashr else .lshr,
+                    .simd_shr_zf_wrap => .lshr,
+                    else => unreachable,
+                };
+                try self.storeSimdLocal(target, wip.bin(tag, value, counts, "") catch return error.OutOfMemory);
+            },
+            .simd_shr_rounded => try self.emitSimdRoundedShift(target, args, vector),
+            .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes => {
+                const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
+                const rhs = if (op == .simd_reverse_lanes)
+                    builder.poisonValue(vector_ty) catch return error.OutOfMemory
+                else
+                    try self.loadSimdLocal(GuardedList.at(args, 1));
+                var indices: [16]u32 = undefined;
+                const count: usize = vector.laneCount();
+                switch (op) {
+                    .simd_interleave_lo, .simd_interleave_hi => {
+                        const start: usize = if (op == .simd_interleave_hi) count / 2 else 0;
+                        for (0..count / 2) |i| {
+                            indices[2 * i] = @intCast(start + i);
+                            indices[2 * i + 1] = @intCast(count + start + i);
+                        }
+                    },
+                    .simd_even_lanes, .simd_odd_lanes => {
+                        const parity: usize = @intFromBool(op == .simd_odd_lanes);
+                        for (0..count / 2) |i| {
+                            indices[i] = @intCast(2 * i + parity);
+                            indices[count / 2 + i] = @intCast(count + 2 * i + parity);
+                        }
+                    },
+                    .simd_reverse_lanes => for (0..count) |i| {
+                        indices[i] = @intCast(count - 1 - i);
+                    },
+                    else => unreachable,
+                }
+                try self.storeSimdLocal(target, wip.shuffleVector(lhs, rhs, try self.simdShuffleMask(indices[0..count]), "") catch return error.OutOfMemory);
+            },
+            .simd_table_lookup => try self.emitSimdTableLookup(target, args),
+            .simd_concat_shift_bytes => try self.emitSimdConcatShift(target, args),
+            .simd_widen_lo, .simd_widen_hi => {
+                const destination = destination_vector orelse return error.CompilationFailed;
+                const half = try self.simdShuffleHalf(try self.loadSimdLocal(GuardedList.at(args, 0)), vector, op == .simd_widen_hi);
+                try self.storeSimdLocal(target, try self.simdExtendVector(half, destination.laneBits(), destination.laneCount(), vector.isSigned()));
+            },
+            .simd_pairwise_add_widen => {
+                const destination = destination_vector orelse return error.CompilationFailed;
+                const value = try self.loadSimdLocal(GuardedList.at(args, 0));
+                const even = try self.simdPairShuffle(value, vector.laneCount(), false);
+                const odd = try self.simdPairShuffle(value, vector.laneCount(), true);
+                const wide_even = try self.simdExtendVector(even, destination.laneBits(), destination.laneCount(), vector.isSigned());
+                const wide_odd = try self.simdExtendVector(odd, destination.laneBits(), destination.laneCount(), vector.isSigned());
+                try self.storeSimdLocal(target, wip.bin(.add, wide_even, wide_odd, "") catch return error.OutOfMemory);
+            },
+            .simd_narrow_wrap, .simd_narrow_sat => try self.emitSimdNarrow(target, args, vector, destination_vector orelse return error.CompilationFailed, op == .simd_narrow_sat),
+            .simd_sum_lanes, .simd_sum_lanes_wrap => try self.emitSimdSum(target, args, vector),
+            .simd_clmul_lo, .simd_clmul_hi => try self.emitSimdClmul(target, args, op == .simd_clmul_hi),
+            else => return error.UnsupportedLowLevel,
+        }
+    }
+
+    fn emitSimdSad(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
+        const rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
+        const result_ty = try self.simdRawType(64, 2);
+        var result = builder.zeroInitValue(result_ty) catch return error.OutOfMemory;
+        for (0..2) |half| {
+            var sum = builder.intValue(.i64, 0) catch return error.OutOfMemory;
+            for (0..8) |lane_in_half| {
+                const lane = half * 8 + lane_in_half;
+                const index = builder.intValue(.i32, lane) catch return error.OutOfMemory;
+                const a8 = wip.extractElement(lhs, index, "") catch return error.OutOfMemory;
+                const b8 = wip.extractElement(rhs, index, "") catch return error.OutOfMemory;
+                const a = try self.coerceScalar(a8, .i64, false);
+                const b = try self.coerceScalar(b8, .i64, false);
+                const a_ge_b = wip.icmp(.uge, a, b, "") catch return error.OutOfMemory;
+                const forward = wip.bin(.sub, a, b, "") catch return error.OutOfMemory;
+                const reverse = wip.bin(.sub, b, a, "") catch return error.OutOfMemory;
+                sum = wip.bin(.add, sum, wip.select(.normal, a_ge_b, forward, reverse, "") catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+            }
+            result = wip.insertElement(result, sum, builder.intValue(.i32, half) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        }
+        try self.storeSimdLocal(target, result);
+    }
+
+    fn emitSimdBitmask(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, vector: layout.Vector) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const value = try self.loadSimdLocal(GuardedList.at(args, 0));
+        const result_ty = self.scalarType(self.localLayout(target));
+        var result = builder.intValue(result_ty, 0) catch return error.OutOfMemory;
+        for (0..vector.laneCount()) |i| {
+            const lane = wip.extractElement(value, builder.intValue(.i32, i) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+            const sign = wip.bin(.lshr, lane, builder.intValue(lane.typeOfWip(wip), vector.laneBits() - 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+            const bit = try self.coerceScalar(sign, result_ty, false);
+            const positioned = if (i == 0)
+                bit
+            else
+                wip.bin(.shl, bit, builder.intValue(result_ty, i) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+            result = wip.bin(.@"or", result, positioned, "") catch return error.OutOfMemory;
+        }
+        try self.storeScalar(self.slot(target).ptr, self.localLayout(target), result);
+    }
+
+    fn emitSimdRoundedShift(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, vector: layout.Vector) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const value = try self.loadSimdLocal(GuardedList.at(args, 0));
+        const count_arg = GuardedList.at(args, 1);
+        const count = try self.coerceScalar(try self.loadScalar(self.slot(count_arg).ptr, self.localLayout(count_arg)), .i32, false);
+        const zero32 = builder.intValue(.i32, 0) catch return error.OutOfMemory;
+        const is_zero = wip.icmp(.eq, count, zero32, "") catch return error.OutOfMemory;
+        const out_of_range = wip.icmp(.uge, count, builder.intValue(.i32, vector.laneBits()) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const safe_count = wip.select(.normal, is_zero, builder.intValue(.i32, 1) catch return error.OutOfMemory, count, "") catch return error.OutOfMemory;
+        const wide_bits: u16 = vector.laneBits() * 2;
+        const wide_ty = try self.simdRawType(wide_bits, vector.laneCount());
+        const wide_value = try self.simdExtendVector(value, wide_bits, vector.laneCount(), true);
+        const wide_count_scalar = try self.coerceScalar(safe_count, builder.intType(wide_bits) catch return error.OutOfMemory, false);
+        const wide_counts = wip.splatVector(wide_ty, wide_count_scalar, "") catch return error.OutOfMemory;
+        const bias_count = wip.bin(.sub, wide_count_scalar, builder.intValue(wide_count_scalar.typeOfWip(wip), 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const bias_scalar = wip.bin(.shl, builder.intValue(wide_count_scalar.typeOfWip(wip), 1) catch return error.OutOfMemory, bias_count, "") catch return error.OutOfMemory;
+        const bias = wip.splatVector(wide_ty, bias_scalar, "") catch return error.OutOfMemory;
+        const rounded = wip.bin(.ashr, wip.bin(.add, wide_value, bias, "") catch return error.OutOfMemory, wide_counts, "") catch return error.OutOfMemory;
+        const narrowed = wip.cast(.trunc, rounded, try self.simdType(vector), "") catch return error.OutOfMemory;
+        const zero_vector = builder.zeroInitValue(try self.simdType(vector)) catch return error.OutOfMemory;
+        const after_range = wip.select(.normal, out_of_range, zero_vector, narrowed, "") catch return error.OutOfMemory;
+        try self.storeSimdLocal(target, wip.select(.normal, is_zero, value, after_range, "") catch return error.OutOfMemory);
+    }
+
+    fn emitSimdTableLookup(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const table = try self.loadSimdLocal(GuardedList.at(args, 0));
+        const indices = try self.loadSimdLocal(GuardedList.at(args, 1));
+        const vector_ty = try self.simdRawType(8, 16);
+        if (self.target.cpu.arch == .x86_64) {
+            const invalid = wip.icmp(.uge, indices, try self.simdRawSplat(8, 16, 16), "") catch return error.OutOfMemory;
+            const hardware_indices = wip.select(.normal, invalid, try self.simdRawSplat(8, 16, 0x80), indices, "") catch return error.OutOfMemory;
+            try self.storeSimdLocal(target, try self.callBuiltin("llvm.x86.ssse3.pshuf.b.128", vector_ty, &.{ vector_ty, vector_ty }, &.{ table, hardware_indices }));
+            return;
+        }
+        if (self.target.cpu.arch == .aarch64 or self.target.cpu.arch == .aarch64_be) {
+            try self.storeSimdLocal(target, try self.callBuiltin("llvm.aarch64.neon.tbl1.v16i8", vector_ty, &.{ vector_ty, vector_ty }, &.{ table, indices }));
+            return;
+        }
+        var result = builder.zeroInitValue(vector_ty) catch return error.OutOfMemory;
+        for (0..16) |i| {
+            const lane_index = builder.intValue(.i32, i) catch return error.OutOfMemory;
+            const requested8 = wip.extractElement(indices, lane_index, "") catch return error.OutOfMemory;
+            const requested = try self.coerceScalar(requested8, .i32, false);
+            const in_range = wip.icmp(.ult, requested, builder.intValue(.i32, 16) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+            const safe_index = wip.select(.normal, in_range, requested, builder.intValue(.i32, 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+            const selected = wip.extractElement(table, safe_index, "") catch return error.OutOfMemory;
+            const lane = wip.select(.normal, in_range, selected, builder.intValue(.i8, 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+            result = wip.insertElement(result, lane, lane_index, "") catch return error.OutOfMemory;
+        }
+        try self.storeSimdLocal(target, result);
+    }
+
+    fn emitSimdConcatShift(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const lhs_vector = try self.loadSimdLocal(GuardedList.at(args, 0));
+        const rhs_vector = try self.loadSimdLocal(GuardedList.at(args, 1));
+        const count_arg = GuardedList.at(args, 2);
+        const count = try self.coerceScalar(try self.loadScalar(self.slot(count_arg).ptr, self.localLayout(count_arg)), .i128, false);
+        const zero = builder.intValue(.i128, 0) catch return error.OutOfMemory;
+        const sixteen = builder.intValue(.i128, 16) catch return error.OutOfMemory;
+        const is_zero = wip.icmp(.eq, count, zero, "") catch return error.OutOfMemory;
+        const is_sixteen = wip.icmp(.eq, count, sixteen, "") catch return error.OutOfMemory;
+        const safe_nonzero = wip.select(.normal, is_zero, builder.intValue(.i128, 1) catch return error.OutOfMemory, count, "") catch return error.OutOfMemory;
+        const safe_count = wip.select(.normal, is_sixteen, builder.intValue(.i128, 15) catch return error.OutOfMemory, safe_nonzero, "") catch return error.OutOfMemory;
+        const bit_count = wip.bin(.mul, safe_count, builder.intValue(.i128, 8) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const inverse = wip.bin(.sub, builder.intValue(.i128, 128) catch return error.OutOfMemory, bit_count, "") catch return error.OutOfMemory;
+        const lhs = wip.cast(.bitcast, lhs_vector, .i128, "") catch return error.OutOfMemory;
+        const rhs = wip.cast(.bitcast, rhs_vector, .i128, "") catch return error.OutOfMemory;
+        const shifted = wip.bin(.@"or", wip.bin(.lshr, lhs, bit_count, "") catch return error.OutOfMemory, wip.bin(.shl, rhs, inverse, "") catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const after_sixteen = wip.select(.normal, is_sixteen, rhs, shifted, "") catch return error.OutOfMemory;
+        const result = wip.select(.normal, is_zero, lhs, after_sixteen, "") catch return error.OutOfMemory;
+        try self.storeSimdLocal(target, wip.cast(.bitcast, result, lhs_vector.typeOfWip(wip), "") catch return error.OutOfMemory);
+    }
+
+    fn emitSimdNarrow(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, source: layout.Vector, destination: layout.Vector, saturated: bool) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        var lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
+        var rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
+        if (saturated) {
+            const upper: i128 = if (destination.isSigned())
+                (@as(i128, 1) << @intCast(destination.laneBits() - 1)) - 1
+            else
+                (@as(i128, 1) << @intCast(destination.laneBits())) - 1;
+            const lower: i128 = if (destination.isSigned()) -(@as(i128, 1) << @intCast(destination.laneBits() - 1)) else 0;
+            const signed_compare = destination.isSigned() or source.isSigned();
+            lhs = try self.simdClampVector(lhs, source.laneBits(), source.laneCount(), lower, upper, signed_compare);
+            rhs = try self.simdClampVector(rhs, source.laneBits(), source.laneCount(), lower, upper, signed_compare);
+        }
+        const narrow_half_ty = try self.simdRawType(destination.laneBits(), source.laneCount());
+        const lhs_narrow = wip.cast(.trunc, lhs, narrow_half_ty, "") catch return error.OutOfMemory;
+        const rhs_narrow = wip.cast(.trunc, rhs, narrow_half_ty, "") catch return error.OutOfMemory;
+        var indices: [16]u32 = undefined;
+        for (0..destination.laneCount()) |i| indices[i] = @intCast(i);
+        const result = wip.shuffleVector(lhs_narrow, rhs_narrow, try self.simdShuffleMask(indices[0..destination.laneCount()]), "") catch return error.OutOfMemory;
+        try self.storeSimdLocal(target, result);
+    }
+
+    fn emitSimdSum(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, vector: layout.Vector) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const target_layout = self.localLayout(target);
+        const result_bits: u16 = @intCast(self.intBits(target_layout));
+        const value = try self.loadSimdLocal(GuardedList.at(args, 0));
+        const extended = if (result_bits == vector.laneBits())
+            value
+        else
+            try self.simdExtendVector(value, result_bits, vector.laneCount(), vector.isSigned());
+        const result = wip.callIntrinsic(.normal, .none, .@"vector.reduce.add", &.{extended.typeOfWip(wip)}, &.{extended}, "") catch return error.OutOfMemory;
+        try self.storeScalar(self.slot(target).ptr, target_layout, result);
+    }
+
+    fn emitSimdClmul(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, high: bool) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const lhs_vector = try self.loadSimdLocal(GuardedList.at(args, 0));
+        const rhs_vector = try self.loadSimdLocal(GuardedList.at(args, 1));
+        const index = builder.intValue(.i32, @intFromBool(high)) catch return error.OutOfMemory;
+        const lhs64 = wip.extractElement(lhs_vector, index, "") catch return error.OutOfMemory;
+        const rhs64 = wip.extractElement(rhs_vector, index, "") catch return error.OutOfMemory;
+        if (self.target.cpu.arch == .x86_64) {
+            const vector_ty = try self.simdRawType(64, 2);
+            const immediate: u8 = if (high) 0x11 else 0x00;
+            try self.storeSimdLocal(target, try self.callBuiltin(
+                "llvm.x86.pclmulqdq",
+                vector_ty,
+                &.{ vector_ty, vector_ty, .i8 },
+                &.{ lhs_vector, rhs_vector, builder.intValue(.i8, immediate) catch return error.OutOfMemory },
+            ));
+            return;
+        }
+        if (self.target.cpu.arch == .aarch64 or self.target.cpu.arch == .aarch64_be) {
+            const byte_vector_ty = try self.simdRawType(8, 16);
+            const product = try self.callBuiltin("llvm.aarch64.neon.pmull64", byte_vector_ty, &.{ .i64, .i64 }, &.{ lhs64, rhs64 });
+            try self.storeSimdLocal(target, product);
+            return;
+        }
+        const lhs = try self.coerceScalar(lhs64, .i128, false);
+        var result = builder.intValue(.i128, 0) catch return error.OutOfMemory;
+        for (0..64) |i| {
+            const bit = wip.bin(.@"and", wip.bin(.lshr, rhs64, builder.intValue(.i64, i) catch return error.OutOfMemory, "") catch return error.OutOfMemory, builder.intValue(.i64, 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+            const bit128 = try self.coerceScalar(bit, .i128, false);
+            const mask = wip.neg(bit128, "") catch return error.OutOfMemory;
+            const shifted = if (i == 0) lhs else wip.bin(.shl, lhs, builder.intValue(.i128, i) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+            result = wip.bin(.xor, result, wip.bin(.@"and", shifted, mask, "") catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        }
+        try self.storeSimdLocal(target, wip.cast(.bitcast, result, lhs_vector.typeOfWip(wip), "") catch return error.OutOfMemory);
+    }
     fn emitNumericAbs(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, arg: LocalId) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
@@ -3581,6 +4479,18 @@ pub const MonoLlvmCodeGen = struct {
                 try self.emitFloatToIntTryUnsafeConversion(target, GuardedList.at(args, 0));
                 return;
             },
+            .f64_to_f32_try_unsafe => {
+                try self.emitF64ToF32TryUnsafeConversion(target, GuardedList.at(args, 0));
+                return;
+            },
+            .dec_to_f32_try_unsafe => {
+                try self.emitDecToF32TryUnsafeConversion(target, GuardedList.at(args, 0));
+                return;
+            },
+            .dec_to_f32_wrap, .dec_to_f64 => {
+                try self.emitDecToFloatConversion(target, GuardedList.at(args, 0), op == .dec_to_f32_wrap);
+                return;
+            },
             .dec_to_i8_try_unsafe,
             .dec_to_i16_try_unsafe,
             .dec_to_i32_try_unsafe,
@@ -3625,6 +4535,19 @@ pub const MonoLlvmCodeGen = struct {
             return;
         }
         try self.emitCrashBytes(name);
+    }
+
+    fn emitDecToFloatConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, is_f32: bool) Error!void {
+        const dec_value = try self.loadScalar(self.slot(arg).ptr, .dec);
+        const parts = try self.splitI128Value(dec_value);
+        const float_ty: LlvmBuilder.Type = if (is_f32) .float else .double;
+        const result = try self.callBuiltin(
+            LowLevelBuiltins.decToFloat(is_f32).symbolName(),
+            float_ty,
+            &.{ .i64, .i64 },
+            &.{ parts.low, parts.high },
+        );
+        try self.storeScalar(self.slot(target).ptr, self.localLayout(target), result);
     }
 
     const FloatDecIntTryUnsafeInfo = struct {
@@ -3677,40 +4600,28 @@ pub const MonoLlvmCodeGen = struct {
     const FloatToIntTruncInfo = struct {
         src_is_f32: bool,
         target_bits: u8,
-        target_signed: bool,
     };
 
     fn floatToIntTruncInfo(op: lir.LowLevel) ?FloatToIntTruncInfo {
         return switch (op) {
-            .f32_to_i8_trunc => .{ .src_is_f32 = true, .target_bits = 8, .target_signed = true },
-            .f32_to_i16_trunc => .{ .src_is_f32 = true, .target_bits = 16, .target_signed = true },
-            .f32_to_i32_trunc => .{ .src_is_f32 = true, .target_bits = 32, .target_signed = true },
-            .f32_to_i64_trunc => .{ .src_is_f32 = true, .target_bits = 64, .target_signed = true },
-            .f32_to_i128_trunc => .{ .src_is_f32 = true, .target_bits = 128, .target_signed = true },
-            .f32_to_u8_trunc => .{ .src_is_f32 = true, .target_bits = 8, .target_signed = false },
-            .f32_to_u16_trunc => .{ .src_is_f32 = true, .target_bits = 16, .target_signed = false },
-            .f32_to_u32_trunc => .{ .src_is_f32 = true, .target_bits = 32, .target_signed = false },
-            .f32_to_u64_trunc => .{ .src_is_f32 = true, .target_bits = 64, .target_signed = false },
-            .f32_to_u128_trunc => .{ .src_is_f32 = true, .target_bits = 128, .target_signed = false },
-            .f64_to_i8_trunc => .{ .src_is_f32 = false, .target_bits = 8, .target_signed = true },
-            .f64_to_i16_trunc => .{ .src_is_f32 = false, .target_bits = 16, .target_signed = true },
-            .f64_to_i32_trunc => .{ .src_is_f32 = false, .target_bits = 32, .target_signed = true },
-            .f64_to_i64_trunc => .{ .src_is_f32 = false, .target_bits = 64, .target_signed = true },
-            .f64_to_i128_trunc => .{ .src_is_f32 = false, .target_bits = 128, .target_signed = true },
-            .f64_to_u8_trunc => .{ .src_is_f32 = false, .target_bits = 8, .target_signed = false },
-            .f64_to_u16_trunc => .{ .src_is_f32 = false, .target_bits = 16, .target_signed = false },
-            .f64_to_u32_trunc => .{ .src_is_f32 = false, .target_bits = 32, .target_signed = false },
-            .f64_to_u64_trunc => .{ .src_is_f32 = false, .target_bits = 64, .target_signed = false },
-            .f64_to_u128_trunc => .{ .src_is_f32 = false, .target_bits = 128, .target_signed = false },
+            .f32_to_i8_trunc, .f32_to_u8_trunc => .{ .src_is_f32 = true, .target_bits = 8 },
+            .f32_to_i16_trunc, .f32_to_u16_trunc => .{ .src_is_f32 = true, .target_bits = 16 },
+            .f32_to_i32_trunc, .f32_to_u32_trunc => .{ .src_is_f32 = true, .target_bits = 32 },
+            .f32_to_i64_trunc, .f32_to_u64_trunc => .{ .src_is_f32 = true, .target_bits = 64 },
+            .f32_to_i128_trunc, .f32_to_u128_trunc => .{ .src_is_f32 = true, .target_bits = 128 },
+            .f64_to_i8_trunc, .f64_to_u8_trunc => .{ .src_is_f32 = false, .target_bits = 8 },
+            .f64_to_i16_trunc, .f64_to_u16_trunc => .{ .src_is_f32 = false, .target_bits = 16 },
+            .f64_to_i32_trunc, .f64_to_u32_trunc => .{ .src_is_f32 = false, .target_bits = 32 },
+            .f64_to_i64_trunc, .f64_to_u64_trunc => .{ .src_is_f32 = false, .target_bits = 64 },
+            .f64_to_i128_trunc, .f64_to_u128_trunc => .{ .src_is_f32 = false, .target_bits = 128 },
             else => null,
         };
     }
 
     /// Wrapping float→int conversion: the builtin wrapper implements Roc's
-    /// wrap semantics (NaN and the infinities produce 0, widths of at most
-    /// 64 bits wrap modulo 2^bits, and 128-bit targets produce 0 when the
-    /// truncated value is out of range), writing the result bytes directly
-    /// into the target slot.
+    /// wrap semantics (NaN and the infinities produce 0; finite values
+    /// truncate toward zero and wrap modulo 2^bits), writing the result bytes
+    /// directly into the target slot.
     fn emitFloatToIntTruncConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, info: FloatToIntTruncInfo) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
@@ -3718,12 +4629,11 @@ pub const MonoLlvmCodeGen = struct {
         const float_ty: LlvmBuilder.Type = if (info.src_is_f32) .float else .double;
         try self.callBuiltinVoid(
             name,
-            &.{ try self.ptrType(), float_ty, .i32, .i32, .i32 },
+            &.{ try self.ptrType(), float_ty, .i32, .i32 },
             &.{
                 self.slot(target).ptr,
                 value,
                 builder.intValue(.i32, info.target_bits) catch return error.OutOfMemory,
-                builder.intValue(.i32, @intFromBool(info.target_signed)) catch return error.OutOfMemory,
                 builder.intValue(.i32, @as(u32, info.target_bits) / 8) catch return error.OutOfMemory,
             },
         );
@@ -3747,11 +4657,12 @@ pub const MonoLlvmCodeGen = struct {
 
         switch (info.src_kind) {
             .f32, .f64 => {
-                var value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
-                value = try self.coerceScalar(value, .double, false);
+                const is_f32 = info.src_kind == .f32;
+                const float_ty: LlvmBuilder.Type = if (is_f32) .float else .double;
+                const value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
                 try self.callBuiltinVoid(
-                    builtinSymbol(.f64_to_int_try_unsafe),
-                    &.{ try self.ptrType(), .double, .i32, .i32, .i32, .i32, .i32 },
+                    if (is_f32) builtinSymbol(.f32_to_int_try_unsafe) else builtinSymbol(.f64_to_int_try_unsafe),
+                    &.{ try self.ptrType(), float_ty, .i32, .i32, .i32, .i32, .i32 },
                     &.{
                         allocated.ptr,
                         value,
@@ -3911,12 +4822,13 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
         const info = try self.tryUnsafeRecordInfo(self.localLayout(target));
         const arg_layout = self.localLayout(arg);
-        const raw_value = try self.loadScalar(self.slot(arg).ptr, arg_layout);
-        const value = try self.coerceScalar(raw_value, .double, false);
+        const value = try self.loadScalar(self.slot(arg).ptr, arg_layout);
+        const is_f32 = arg_layout == .f32;
+        const float_ty: LlvmBuilder.Type = if (is_f32) .float else .double;
 
         try self.callBuiltinVoid(
-            builtinSymbol(.f64_to_int_try_unsafe),
-            &.{ try self.ptrType(), .double, .i32, .i32, .i32, .i32, .i32 },
+            if (is_f32) builtinSymbol(.f32_to_int_try_unsafe) else builtinSymbol(.f64_to_int_try_unsafe),
+            &.{ try self.ptrType(), float_ty, .i32, .i32, .i32, .i32, .i32 },
             &.{
                 self.slot(target).ptr,
                 value,
@@ -3925,6 +4837,52 @@ pub const MonoLlvmCodeGen = struct {
                 builder.intValue(.i32, info.value_size) catch return error.OutOfMemory,
                 builder.intValue(.i32, info.success_offset) catch return error.OutOfMemory,
                 builder.intValue(.i32, info.value_offset) catch return error.OutOfMemory,
+            },
+        );
+    }
+
+    fn emitF64ToF32TryUnsafeConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const allocated = try self.allocAggregateTarget(target);
+        const ret_layout_val = self.layoutValue(allocated.layout_idx);
+        if (ret_layout_val.tag != .struct_) return error.CompilationFailed;
+        const struct_idx = ret_layout_val.getStruct().idx;
+        const success_offset = self.layouts().getStructFieldOffsetByOriginalIndex(struct_idx, 0);
+        const value_offset = self.layouts().getStructFieldOffsetByOriginalIndex(struct_idx, 1);
+        const value = try self.loadScalar(self.slot(arg).ptr, .f64);
+
+        try self.callBuiltinVoid(
+            builtinSymbol(.f64_to_f32_try_unsafe),
+            &.{ try self.ptrType(), .double, .i32, .i32 },
+            &.{
+                allocated.ptr,
+                value,
+                builder.intValue(.i32, success_offset) catch return error.OutOfMemory,
+                builder.intValue(.i32, value_offset) catch return error.OutOfMemory,
+            },
+        );
+    }
+
+    fn emitDecToF32TryUnsafeConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const allocated = try self.allocAggregateTarget(target);
+        const ret_layout_val = self.layoutValue(allocated.layout_idx);
+        if (ret_layout_val.tag != .struct_) return error.CompilationFailed;
+        const struct_idx = ret_layout_val.getStruct().idx;
+        const success_offset = self.layouts().getStructFieldOffsetByOriginalIndex(struct_idx, 0);
+        const value_offset = self.layouts().getStructFieldOffsetByOriginalIndex(struct_idx, 1);
+        const value = try self.loadScalar(self.slot(arg).ptr, .dec);
+        const parts = try self.splitI128Value(value);
+
+        try self.callBuiltinVoid(
+            builtinSymbol(.dec_to_f32_try_unsafe),
+            &.{ try self.ptrType(), .i64, .i64, .i32, .i32 },
+            &.{
+                allocated.ptr,
+                parts.low,
+                parts.high,
+                builder.intValue(.i32, success_offset) catch return error.OutOfMemory,
+                builder.intValue(.i32, value_offset) catch return error.OutOfMemory,
             },
         );
     }
@@ -5062,7 +6020,9 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitCrashBytes(self: *MonoLlvmCodeGen, msg: []const u8) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
-        try self.emitStaticRocOpsMessageCall(.crashed, msg);
+        if (!try self.emitDefaultPlatformCrashWithFrames(msg)) {
+            try self.emitStaticRocOpsMessageCall(.crashed, msg);
+        }
         // Linux AArch64 eval tests handle crashes by returning to the Zig host.
         // Longjmping through LLVM-generated frames is not reliable on that target.
         if (self.target.cpu.arch == .aarch64 and self.target.os.tag == .linux) {
@@ -5070,6 +6030,80 @@ pub const MonoLlvmCodeGen = struct {
         } else {
             _ = wip.@"unreachable"() catch return error.OutOfMemory;
         }
+    }
+
+    /// Call the synthetic default platform's diagnostic-only crash entrypoint
+    /// with the exact virtual source-frame chain attached to the current LIR
+    /// statement. This is a lossless backend encoding of LIR inline scopes, not
+    /// a reconstruction from machine procedures or symbol names.
+    fn emitDefaultPlatformCrashWithFrames(self: *MonoLlvmCodeGen, msg: []const u8) Error!bool {
+        if (!self.enable_default_platform_diagnostics) return false;
+        const stmt_id = self.current_source_stmt orelse return false;
+        var scope_id = self.store.stmtInlineScope(stmt_id);
+        if (scope_id == lir.LIR.InlineScopeId.none) return false;
+
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const ptr_ty = try self.ptrType();
+        const usize_ty = self.ptrSizedIntType();
+        const frame_ty = builder.structType(.normal, &.{ ptr_ty, usize_ty, ptr_ty, usize_ty, .i32, .i32 }) catch return error.OutOfMemory;
+
+        var frames = std.ArrayList(LlvmBuilder.Constant).empty;
+        defer frames.deinit(self.allocator);
+        var frame_loc = self.store.stmtLoc(stmt_id);
+        while (scope_id != lir.LIR.InlineScopeId.none) {
+            const scope = self.store.inlineScope(scope_id);
+            try frames.append(self.allocator, try self.defaultPlatformSourceFrameConst(frame_ty, scope, frame_loc));
+            frame_loc = scope.call_site;
+            scope_id = scope.parent;
+        }
+
+        const frames_ty = builder.arrayType(frames.items.len, frame_ty) catch return error.OutOfMemory;
+        const frames_name = builder.strtabStringFmt(".roc.crash_frames.{d}", .{self.string_counter}) catch return error.OutOfMemory;
+        self.string_counter += 1;
+        const frames_var = builder.addVariable(frames_name, frames_ty, .default) catch return error.OutOfMemory;
+        frames_var.ptrConst(builder).global.setLinkage(.internal, builder);
+        frames_var.setMutability(.constant, builder);
+        frames_var.setInitializer(builder.arrayConst(frames_ty, frames.items) catch return error.OutOfMemory, builder) catch return error.OutOfMemory;
+
+        const fn_ty = builder.fnType(.void, &.{ ptr_ty, usize_ty, ptr_ty, usize_ty }, .normal) catch return error.OutOfMemory;
+        const callback = try self.declareExternSymbol(shim_symbols.roc_default_crashed_with_frames, fn_ty);
+        _ = wip.call(.normal, .ccc, .none, fn_ty, callback.toValue(builder), &.{
+            try self.staticBytes(msg),
+            builder.intValue(usize_ty, msg.len) catch return error.OutOfMemory,
+            frames_var.toValue(builder),
+            builder.intValue(usize_ty, frames.items.len) catch return error.OutOfMemory,
+        }, "") catch return error.OutOfMemory;
+        return true;
+    }
+
+    fn defaultPlatformSourceFrameConst(
+        self: *MonoLlvmCodeGen,
+        frame_ty: LlvmBuilder.Type,
+        scope: lir.LIR.InlineScope,
+        loc: SourceLoc,
+    ) Error!LlvmBuilder.Constant {
+        const builder = self.builder orelse return error.CompilationFailed;
+        var allocated_name: ?[]u8 = null;
+        defer if (allocated_name) |name| self.allocator.free(name);
+        const name = if (scope.source_name.isNone()) blk: {
+            const generated = try std.fmt.allocPrint(self.allocator, "roc__proc_{x}", .{scope.source_symbol.raw()});
+            allocated_name = generated;
+            break :blk generated;
+        } else self.store.getString(scope.source_name);
+        const file = if (loc.file == SourceLoc.no_file or loc.file >= self.store.sourceFileCount())
+            ""
+        else
+            self.store.sourceFileName(loc.file);
+
+        return builder.structConst(frame_ty, &.{
+            (try self.staticBytes(name)).toConst().?,
+            builder.intConst(self.ptrSizedIntType(), name.len) catch return error.OutOfMemory,
+            (try self.staticBytes(file)).toConst().?,
+            builder.intConst(self.ptrSizedIntType(), file.len) catch return error.OutOfMemory,
+            builder.intConst(.i32, if (loc.hasLocation()) loc.line else 0) catch return error.OutOfMemory,
+            builder.intConst(.i32, if (loc.hasLocation()) loc.column else 0) catch return error.OutOfMemory,
+        }) catch return error.OutOfMemory;
     }
 
     fn emitRuntimeError(self: *MonoLlvmCodeGen) Error!void {
@@ -5940,16 +6974,58 @@ pub const MonoLlvmCodeGen = struct {
         try self.storeIntToLayout(self.slot(target).ptr, result, self.localLayout(target));
     }
 
-    fn emitStrFindFirst(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+    fn emitStrGetUtf8ByteUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+        var call_args = try self.rocStrArgs1(GuardedList.at(args, 0));
+        defer call_args.deinit(self.allocator);
+        const index = try self.coerceScalar(
+            try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))),
+            .i64,
+            false,
+        );
+        try call_args.append(self.allocator, .i64, index);
+        const result = try self.callBuiltin(
+            builtinSymbol(LowLevelBuiltins.strOp(.str_get_utf8_byte_unsafe)),
+            .i8,
+            call_args.types.items,
+            call_args.values.items,
+        );
+        try self.storeScalar(self.slot(target).ptr, self.localLayout(target), result);
+    }
+
+    fn emitStrSubstringUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+        var call_args = try self.rocStrArgs1(GuardedList.at(args, 0));
+        defer call_args.deinit(self.allocator);
+        try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
+        const start = try self.coerceScalar(
+            try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))),
+            .i64,
+            false,
+        );
+        const length = try self.coerceScalar(
+            try self.loadScalar(self.slot(GuardedList.at(args, 2)).ptr, self.localLayout(GuardedList.at(args, 2))),
+            .i64,
+            false,
+        );
+        try call_args.append(self.allocator, .i64, start);
+        try call_args.append(self.allocator, .i64, length);
+        try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
+        try self.callBuiltinVoid(
+            builtinSymbol(LowLevelBuiltins.strOp(.str_substring_unsafe)),
+            call_args.types.items,
+            call_args.values.items,
+        );
+    }
+
+    fn emitStrSplitFirst(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
         const target_slot = self.slot(target);
-        const info = try self.resolveStrFindFirstLayout(target_slot.layout_idx);
+        const info = try self.resolveStrSplitFirstLayout(target_slot.layout_idx);
         if (target_slot.size > 0) try self.zeroBytes(target_slot.ptr, target_slot.size);
 
         const layout_ptr = try self.allocEntryBlockSlot(
             .i8,
-            @sizeOf(builtins.dev_wrappers.StrFindFirstLayout),
-            LlvmBuilder.Alignment.fromByteUnits(@alignOf(builtins.dev_wrappers.StrFindFirstLayout)),
-            "str_find_first_layout",
+            @sizeOf(builtins.dev_wrappers.StrSplitFirstLayout),
+            LlvmBuilder.Alignment.fromByteUnits(@alignOf(builtins.dev_wrappers.StrSplitFirstLayout)),
+            "str_split_first_layout",
         );
 
         try self.storeRawInt(layout_ptr, 0, .i32, info.after_offset, 4);
@@ -5961,7 +7037,31 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.prepend(self.allocator, try self.ptrType(), target_slot.ptr);
         try call_args.append(self.allocator, try self.ptrType(), layout_ptr);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(.str_find_first)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(.str_split_first)), call_args.types.items, call_args.values.items);
+    }
+
+    fn emitStrSplitLast(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+        const target_slot = self.slot(target);
+        const info = try self.resolveStrSplitLastLayout(target_slot.layout_idx);
+        if (target_slot.size > 0) try self.zeroBytes(target_slot.ptr, target_slot.size);
+
+        const layout_ptr = try self.allocEntryBlockSlot(
+            .i8,
+            @sizeOf(builtins.dev_wrappers.StrSplitLastLayout),
+            LlvmBuilder.Alignment.fromByteUnits(@alignOf(builtins.dev_wrappers.StrSplitLastLayout)),
+            "str_split_last_layout",
+        );
+
+        try self.storeRawInt(layout_ptr, 0, .i32, info.after_offset, 4);
+        try self.storeRawInt(layout_ptr, 4, .i32, info.before_offset, 4);
+        try self.storeRawInt(layout_ptr, 8, .i32, info.found_offset, 4);
+
+        var call_args = try self.rocStrArgs2(GuardedList.at(args, 0), GuardedList.at(args, 1), false);
+        defer call_args.deinit(self.allocator);
+        try call_args.prepend(self.allocator, try self.ptrType(), target_slot.ptr);
+        try call_args.append(self.allocator, try self.ptrType(), layout_ptr);
+        try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
+        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(.str_split_last)), call_args.types.items, call_args.values.items);
     }
 
     fn emitStrDropPrefixCaselessAscii(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
@@ -6146,6 +7246,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn emitFloatBitCast(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, arg: LocalId) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
         const target_ty: LlvmBuilder.Type = switch (op) {
@@ -6155,8 +7256,54 @@ pub const MonoLlvmCodeGen = struct {
             .f64_from_bits => .double,
             else => unreachable,
         };
-        const casted = wip.cast(.bitcast, value, target_ty, "") catch return error.OutOfMemory;
-        try self.storeScalar(self.slot(target).ptr, self.localLayout(target), casted);
+        const raw_bits = wip.cast(.bitcast, value, target_ty, "") catch return error.OutOfMemory;
+        const normalized = switch (op) {
+            .f32_to_bits => blk: {
+                const magnitude = wip.bin(
+                    .@"and",
+                    raw_bits,
+                    builder.intValue(.i32, 0x7fff_ffff) catch return error.OutOfMemory,
+                    "",
+                ) catch return error.OutOfMemory;
+                const is_nan = wip.icmp(
+                    .ugt,
+                    magnitude,
+                    builder.intValue(.i32, 0x7f80_0000) catch return error.OutOfMemory,
+                    "",
+                ) catch return error.OutOfMemory;
+                break :blk wip.select(
+                    .normal,
+                    is_nan,
+                    builder.intValue(.i32, builtins.float_bits.normalized_f32_nan_bits) catch return error.OutOfMemory,
+                    raw_bits,
+                    "",
+                ) catch return error.OutOfMemory;
+            },
+            .f64_to_bits => blk: {
+                const magnitude = wip.bin(
+                    .@"and",
+                    raw_bits,
+                    builder.intValue(.i64, 0x7fff_ffff_ffff_ffff) catch return error.OutOfMemory,
+                    "",
+                ) catch return error.OutOfMemory;
+                const is_nan = wip.icmp(
+                    .ugt,
+                    magnitude,
+                    builder.intValue(.i64, 0x7ff0_0000_0000_0000) catch return error.OutOfMemory,
+                    "",
+                ) catch return error.OutOfMemory;
+                break :blk wip.select(
+                    .normal,
+                    is_nan,
+                    builder.intValue(.i64, builtins.float_bits.normalized_f64_nan_bits) catch return error.OutOfMemory,
+                    raw_bits,
+                    "",
+                ) catch return error.OutOfMemory;
+            },
+            .f32_from_bits, .f64_from_bits => raw_bits,
+            else => unreachable,
+        };
+        try self.storeScalar(self.slot(target).ptr, self.localLayout(target), normalized);
     }
 
     fn emitNumericSqrt(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
@@ -6169,15 +7316,20 @@ pub const MonoLlvmCodeGen = struct {
         try self.emitNumericFloatUnaryIntrinsic(target, arg, .sqrt);
     }
 
-    fn emitNumericUnaryMath(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, float_name: []const u8, dec_name: []const u8) Error!void {
+    fn emitNumericUnaryMath(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, op: lir.LowLevel) Error!void {
         if (self.localLayout(target) == .dec) {
             const value = try self.loadScalar(self.slot(arg).ptr, .dec);
-            const result = try self.callDecUnaryBuiltin(dec_name, value);
+            const result = try self.callDecUnaryBuiltin(LowLevelBuiltins.unaryMathDec(op).symbolName(), value);
             try self.storeScalar(self.slot(target).ptr, .dec, result);
             return;
         }
 
-        try self.emitNumericFloatUnaryBuiltin(target, arg, float_name);
+        const target_layout = self.localLayout(target);
+        try self.emitNumericFloatUnaryBuiltin(
+            target,
+            arg,
+            LowLevelBuiltins.unaryMathFloat(op, target_layout == .f32).symbolName(),
+        );
     }
 
     fn emitNumericFloatUnaryIntrinsic(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, intrinsic: LlvmBuilder.Intrinsic) Error!void {
@@ -6197,40 +7349,37 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn emitNumericFloatUnaryBuiltin(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, name: []const u8) Error!void {
-        const builder = self.builder orelse return error.CompilationFailed;
         const target_layout = self.localLayout(target);
-        const value = try self.coerceScalar(try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg)), .double, false);
-        const width: u8 = switch (target_layout) {
-            .f32 => 4,
-            .f64 => 8,
+        const target_ty: LlvmBuilder.Type = switch (target_layout) {
+            .f32 => .float,
+            .f64 => .double,
             else => return error.UnsupportedLowLevel,
         };
+        const value = try self.coerceScalar(try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg)), target_ty, false);
         const result = try self.callBuiltin(
             name,
-            .double,
-            &.{ .double, .i8 },
-            &.{
-                value,
-                builder.intValue(.i8, width) catch return error.OutOfMemory,
-            },
+            target_ty,
+            &.{target_ty},
+            &.{value},
         );
         try self.storeScalar(self.slot(target).ptr, target_layout, result);
     }
 
-    fn emitNumericFloatBinaryIntrinsic(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, intrinsic: LlvmBuilder.Intrinsic) Error!void {
-        const wip = self.wip orelse return error.CompilationFailed;
+    fn emitNumericFloatPow(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
         const target_layout = self.localLayout(target);
-        const target_ty = self.scalarType(target_layout);
+        const target_ty: LlvmBuilder.Type = switch (target_layout) {
+            .f32 => .float,
+            .f64 => .double,
+            else => return error.UnsupportedLowLevel,
+        };
         const lhs = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, self.localLayout(GuardedList.at(args, 0))), target_ty, false);
         const rhs = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), target_ty, false);
-        const result = wip.callIntrinsic(
-            .normal,
-            .none,
-            intrinsic,
-            &.{target_ty},
+        const result = try self.callBuiltin(
+            LowLevelBuiltins.floatPow(target_layout == .f32).symbolName(),
+            target_ty,
+            &.{ target_ty, target_ty },
             &.{ lhs, rhs },
-            "",
-        ) catch return error.OutOfMemory;
+        );
         try self.storeScalar(self.slot(target).ptr, target_layout, result);
     }
 
@@ -7761,6 +8910,13 @@ pub const MonoLlvmCodeGen = struct {
         return self.llvmAlignment(self.sizeAlignOf(layout_idx).alignment);
     }
 
+    fn alignmentForLayoutOffset(self: *MonoLlvmCodeGen, layout_idx: layout.Idx, offset: u32) LlvmBuilder.Alignment {
+        const base_alignment = @max(self.sizeAlignOf(layout_idx).alignment.toByteUnits(), 1);
+        if (offset == 0) return LlvmBuilder.Alignment.fromByteUnits(base_alignment);
+        const offset_alignment = @as(u32, 1) << @intCast(@ctz(offset));
+        return LlvmBuilder.Alignment.fromByteUnits(@min(base_alignment, offset_alignment));
+    }
+
     fn offsetPtr(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, offset: u32) Error!LlvmBuilder.Value {
         if (offset == 0) return ptr;
         const builder = self.builder orelse return error.CompilationFailed;
@@ -7857,12 +9013,46 @@ pub const MonoLlvmCodeGen = struct {
 
     fn storeIntLiteral(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, layout_idx: layout.Idx, value: i64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
-        try self.storeScalar(ptr, layout_idx, builder.intValue(self.scalarType(layout_idx), value) catch return error.OutOfMemory);
+        if (self.simdVectorForLayout(layout_idx)) |vector| {
+            const wip = self.wip orelse return error.CompilationFailed;
+            const bits = builder.intValue(.i128, @as(u128, @as(u64, @bitCast(value)))) catch return error.OutOfMemory;
+            const vector_value = wip.cast(.bitcast, bits, try self.simdType(vector), "") catch return error.OutOfMemory;
+            _ = wip.store(.normal, vector_value, ptr, self.alignmentForLayout(layout_idx)) catch return error.OutOfMemory;
+            return;
+        }
+        const ty = self.scalarType(layout_idx);
+        const bits: u64 = @bitCast(value);
+        const literal = switch (self.intBits(layout_idx)) {
+            8 => builder.intValue(ty, @as(u8, @truncate(bits))) catch return error.OutOfMemory,
+            16 => builder.intValue(ty, @as(u16, @truncate(bits))) catch return error.OutOfMemory,
+            32 => builder.intValue(ty, @as(u32, @truncate(bits))) catch return error.OutOfMemory,
+            64 => builder.intValue(ty, bits) catch return error.OutOfMemory,
+            128 => builder.intValue(ty, @as(u128, bits)) catch return error.OutOfMemory,
+            else => return error.CompilationFailed,
+        };
+        try self.storeScalar(ptr, layout_idx, literal);
     }
 
     fn storeI128Literal(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, layout_idx: layout.Idx, value: i128) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
-        try self.storeScalar(ptr, layout_idx, builder.intValue(self.scalarType(layout_idx), value) catch return error.OutOfMemory);
+        if (self.simdVectorForLayout(layout_idx)) |vector| {
+            const wip = self.wip orelse return error.CompilationFailed;
+            const bits = builder.intValue(.i128, @as(u128, @bitCast(value))) catch return error.OutOfMemory;
+            const vector_value = wip.cast(.bitcast, bits, try self.simdType(vector), "") catch return error.OutOfMemory;
+            _ = wip.store(.normal, vector_value, ptr, self.alignmentForLayout(layout_idx)) catch return error.OutOfMemory;
+            return;
+        }
+        const ty = self.scalarType(layout_idx);
+        const bits: u128 = @bitCast(value);
+        const literal = switch (self.intBits(layout_idx)) {
+            8 => builder.intValue(ty, @as(u8, @truncate(bits))) catch return error.OutOfMemory,
+            16 => builder.intValue(ty, @as(u16, @truncate(bits))) catch return error.OutOfMemory,
+            32 => builder.intValue(ty, @as(u32, @truncate(bits))) catch return error.OutOfMemory,
+            64 => builder.intValue(ty, @as(u64, @truncate(bits))) catch return error.OutOfMemory,
+            128 => builder.intValue(ty, bits) catch return error.OutOfMemory,
+            else => return error.CompilationFailed,
+        };
+        try self.storeScalar(ptr, layout_idx, literal);
     }
 
     fn storeFloatLiteral(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, layout_idx: layout.Idx, value: anytype) Error!void {
@@ -8035,7 +9225,27 @@ pub const MonoLlvmCodeGen = struct {
         };
     }
 
-    fn resolveStrFindFirstLayout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) Error!StrFindFirstLayoutInfo {
+    fn resolveStrSplitFirstLayout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) Error!StrSplitFirstLayoutInfo {
+        const ret_layout_val = self.layoutValue(layout_idx);
+        if (ret_layout_val.tag != .struct_) return error.CompilationFailed;
+
+        const record_idx = ret_layout_val.getStruct().idx;
+        const record_data = self.layouts().getStructData(record_idx);
+        const fields = self.layouts().struct_fields.sliceRange(record_data.getFields());
+        if (fields.len != 3) return error.CompilationFailed;
+
+        if (self.layouts().getStructFieldLayoutByOriginalIndex(record_idx, 0) != .str) return error.CompilationFailed;
+        if (self.layouts().getStructFieldLayoutByOriginalIndex(record_idx, 1) != .str) return error.CompilationFailed;
+        if (self.layouts().getStructFieldLayoutByOriginalIndex(record_idx, 2) != .bool) return error.CompilationFailed;
+
+        return .{
+            .after_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 0),
+            .before_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 1),
+            .found_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 2),
+        };
+    }
+
+    fn resolveStrSplitLastLayout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) Error!StrSplitLastLayoutInfo {
         const ret_layout_val = self.layoutValue(layout_idx);
         if (ret_layout_val.tag != .struct_) return error.CompilationFailed;
 
@@ -8162,6 +9372,11 @@ pub const MonoLlvmCodeGen = struct {
         const layout_val = self.layoutValue(runtime_layout_idx);
         const size = self.layoutByteSize(runtime_layout_idx);
         if (layout_val.tag == .zst or size == 0) return 0;
+        // Internal Roc procedure arguments use fixed-size slots in a shared
+        // byte buffer. A vector occupies its full 16-byte value; rounding it
+        // down to the ordinary scalar slot size makes the following argument
+        // overlap the vector's upper half.
+        if (layout_val.tag == .scalar and layout_val.getScalar().tag == .vector) return 16;
         if (layout_val.tag == .list or layout_val.tag == .list_of_zst) return 24;
         if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
             if (size > 8) return @intCast(std.mem.alignForward(u32, size, 8));
@@ -8271,7 +9486,7 @@ pub const MonoLlvmCodeGen = struct {
     /// The C-ABI target this build is compiling for.
     fn abiTarget(self: *const MonoLlvmCodeGen) layout.abi.Target {
         return switch (self.target.cpu.arch) {
-            .aarch64, .aarch64_be => .aarch64,
+            .aarch64, .aarch64_be => layout.abi.aarch64Target(self.target.os.tag),
             .x86_64 => if (self.target.os.tag == .windows) .x86_64_windows else .x86_64_sysv,
             .wasm32 => .wasm32,
             .wasm64 => .wasm64,
@@ -8289,7 +9504,13 @@ pub const MonoLlvmCodeGen = struct {
                 8 => .double,
                 else => .fp128,
             },
+            .vector => vectorLlvmType(builder, piece.vector_kind orelse return error.CompilationFailed),
         };
+    }
+
+    fn vectorLlvmType(builder: *LlvmBuilder, vector: layout.Vector) Error!LlvmBuilder.Type {
+        const lane_ty = builder.intType(vector.laneBits()) catch return error.OutOfMemory;
+        return builder.vectorType(.normal, vector.laneCount(), lane_ty) catch return error.OutOfMemory;
     }
 
     /// The LLVM C-ABI carrier type for a register piece. LLVM IR has sub-i32
@@ -8319,11 +9540,267 @@ pub const MonoLlvmCodeGen = struct {
             .scalar => switch (lay.getScalar().tag) {
                 .int => direct_idx.isSigned(),
                 .frac => direct_idx == .dec,
-                .opaque_ptr, .str => false,
+                .vector, .opaque_ptr, .str => false,
             },
             .tag_union, .box, .box_of_zst, .ptr => false,
             else => direct_idx.isSigned(),
         };
+    }
+
+    /// Convert between a value's natural LLVM register-piece type and the
+    /// carrier type required by the C ABI. Homogeneous AArch64 vector
+    /// aggregates use the first member's vector shape for every element of
+    /// their LLVM array carrier, even when the source aggregate mixes lane
+    /// shapes. Those conversions preserve all 128 bits; they are bitcasts, not
+    /// lane-wise integer extensions or truncations.
+    fn coerceCAbiPiece(
+        self: *MonoLlvmCodeGen,
+        value: LlvmBuilder.Value,
+        target_ty: LlvmBuilder.Type,
+        piece: layout.abi.RegPiece,
+        signed: bool,
+    ) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        if (value.typeOfWip(wip) == target_ty) return value;
+        if (piece.class == .vector) {
+            return wip.cast(.bitcast, value, target_ty, "") catch return error.OutOfMemory;
+        }
+        return self.coerceScalar(value, target_ty, signed);
+    }
+
+    /// The one LLVM value type that preserves an ABI register placement's
+    /// required grouping. Piecewise arguments are handled separately because
+    /// each piece is its own parameter; aggregate returns use `structure` even
+    /// when they contain only one register piece.
+    fn cAbiRegisterCarrierType(
+        self: *MonoLlvmCodeGen,
+        builder: *LlvmBuilder,
+        registers: layout.abi.RegisterPlacement,
+    ) Error!LlvmBuilder.Type {
+        return switch (registers.carrier) {
+            .piecewise => {
+                if (registers.pieces.len == 1) {
+                    return self.cAbiPieceLlvmType(builder, registers.pieces[0]);
+                }
+                const field_types = try self.allocator.alloc(LlvmBuilder.Type, registers.pieces.len);
+                defer self.allocator.free(field_types);
+                for (registers.pieces, field_types) |piece, *field_ty| {
+                    field_ty.* = try self.cAbiPieceLlvmType(builder, piece);
+                }
+                return builder.structType(.normal, field_types) catch return error.OutOfMemory;
+            },
+            .structure => {
+                const field_types = try self.allocator.alloc(LlvmBuilder.Type, registers.pieces.len);
+                defer self.allocator.free(field_types);
+                for (registers.pieces, field_types) |piece, *field_ty| {
+                    field_ty.* = try self.cAbiPieceLlvmType(builder, piece);
+                }
+                return builder.structType(.normal, field_types) catch return error.OutOfMemory;
+            },
+            .integer => {
+                var byte_size: u16 = 0;
+                for (registers.pieces) |piece| byte_size = @max(byte_size, piece.offset + piece.size);
+                return builder.intType(@as(u24, byte_size) * 8) catch return error.OutOfMemory;
+            },
+            .array => {
+                std.debug.assert(registers.pieces.len > 0);
+                const elem_ty = try self.cAbiPieceLlvmType(builder, registers.pieces[0]);
+                return builder.arrayType(registers.pieces.len, elem_ty) catch return error.OutOfMemory;
+            },
+        };
+    }
+
+    fn appendCAbiRegisterParamTypes(
+        self: *MonoLlvmCodeGen,
+        builder: *LlvmBuilder,
+        attrs: *LlvmBuilder.FunctionAttributes.Wip,
+        param_types: *std.ArrayList(LlvmBuilder.Type),
+        registers: layout.abi.RegisterPlacement,
+    ) Error!void {
+        switch (registers.carrier) {
+            .piecewise => for (registers.pieces) |piece| {
+                try param_types.append(self.allocator, try self.cAbiPieceLlvmType(builder, piece));
+            },
+            .structure, .integer, .array => {
+                if (registers.carrier == .array) {
+                    if (registers.carrier.array) |alignment| {
+                        try attrs.addParamAttr(param_types.items.len, .{
+                            .alignstack = .wrap(LlvmBuilder.Alignment.fromByteUnits(alignment)),
+                        }, builder);
+                    }
+                }
+                try param_types.append(self.allocator, try self.cAbiRegisterCarrierType(builder, registers));
+            },
+        }
+    }
+
+    fn storeCAbiRegisterParam(
+        self: *MonoLlvmCodeGen,
+        builder: *LlvmBuilder,
+        registers: layout.abi.RegisterPlacement,
+        param_cursor: *u32,
+        dst: LlvmBuilder.Value,
+        arg_layout: layout.Idx,
+    ) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        switch (registers.carrier) {
+            .piecewise => for (registers.pieces) |piece| {
+                const val = wip.arg(param_cursor.*);
+                param_cursor.* += 1;
+                const piece_dst = try self.offsetPtr(dst, piece.offset);
+                const store_val = try self.coerceCAbiPiece(val, try pieceLlvmType(builder, piece), piece, self.cAbiPieceIsSigned(arg_layout));
+                _ = wip.store(.normal, store_val, piece_dst, self.alignmentForLayoutOffset(arg_layout, piece.offset)) catch return error.OutOfMemory;
+            },
+            .integer => {
+                const val = wip.arg(param_cursor.*);
+                param_cursor.* += 1;
+                const piece_dst = try self.offsetPtr(dst, registers.pieces[0].offset);
+                _ = wip.store(.normal, val, piece_dst, self.alignmentForLayoutOffset(arg_layout, registers.pieces[0].offset)) catch return error.OutOfMemory;
+            },
+            .structure, .array => {
+                const aggregate = wip.arg(param_cursor.*);
+                param_cursor.* += 1;
+                for (registers.pieces, 0..) |piece, i| {
+                    const field = wip.extractValue(aggregate, &.{@intCast(i)}, "") catch return error.OutOfMemory;
+                    const piece_dst = try self.offsetPtr(dst, piece.offset);
+                    const store_val = try self.coerceCAbiPiece(field, try pieceLlvmType(builder, piece), piece, self.cAbiPieceIsSigned(arg_layout));
+                    _ = wip.store(.normal, store_val, piece_dst, self.alignmentForLayoutOffset(arg_layout, piece.offset)) catch return error.OutOfMemory;
+                }
+            },
+        }
+    }
+
+    fn appendCAbiRegisterCallArg(
+        self: *MonoLlvmCodeGen,
+        builder: *LlvmBuilder,
+        attrs: *LlvmBuilder.FunctionAttributes.Wip,
+        param_types: *std.ArrayList(LlvmBuilder.Type),
+        call_args: *std.ArrayList(LlvmBuilder.Value),
+        registers: layout.abi.RegisterPlacement,
+        arg_ptr: LlvmBuilder.Value,
+        arg_layout: layout.Idx,
+    ) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        switch (registers.carrier) {
+            .piecewise => for (registers.pieces) |piece| {
+                const piece_ty = try pieceLlvmType(builder, piece);
+                const src = try self.offsetPtr(arg_ptr, piece.offset);
+                const val = wip.load(.normal, piece_ty, src, self.alignmentForLayoutOffset(arg_layout, piece.offset), "") catch return error.OutOfMemory;
+                const carrier_ty = try self.cAbiPieceLlvmType(builder, piece);
+                try param_types.append(self.allocator, carrier_ty);
+                try call_args.append(self.allocator, try self.coerceCAbiPiece(val, carrier_ty, piece, self.cAbiPieceIsSigned(arg_layout)));
+            },
+            .integer => {
+                const carrier_ty = try self.cAbiRegisterCarrierType(builder, registers);
+                const src = try self.offsetPtr(arg_ptr, registers.pieces[0].offset);
+                const val = wip.load(.normal, carrier_ty, src, self.alignmentForLayoutOffset(arg_layout, registers.pieces[0].offset), "") catch return error.OutOfMemory;
+                try param_types.append(self.allocator, carrier_ty);
+                try call_args.append(self.allocator, val);
+            },
+            .structure => {
+                const carrier_ty = try self.cAbiRegisterCarrierType(builder, registers);
+                var aggregate = builder.poisonValue(carrier_ty) catch return error.OutOfMemory;
+                for (registers.pieces, 0..) |piece, i| {
+                    const piece_ty = try pieceLlvmType(builder, piece);
+                    const src = try self.offsetPtr(arg_ptr, piece.offset);
+                    const val = wip.load(.normal, piece_ty, src, self.alignmentForLayoutOffset(arg_layout, piece.offset), "") catch return error.OutOfMemory;
+                    const field_ty = try self.cAbiPieceLlvmType(builder, piece);
+                    const field = try self.coerceCAbiPiece(val, field_ty, piece, self.cAbiPieceIsSigned(arg_layout));
+                    aggregate = wip.insertValue(aggregate, field, &.{@intCast(i)}, "") catch return error.OutOfMemory;
+                }
+                try param_types.append(self.allocator, carrier_ty);
+                try call_args.append(self.allocator, aggregate);
+            },
+            .array => {
+                if (registers.carrier.array) |alignment| {
+                    try attrs.addParamAttr(param_types.items.len, .{
+                        .alignstack = .wrap(LlvmBuilder.Alignment.fromByteUnits(alignment)),
+                    }, builder);
+                }
+                const carrier_ty = try self.cAbiRegisterCarrierType(builder, registers);
+                var aggregate = builder.poisonValue(carrier_ty) catch return error.OutOfMemory;
+                const array_elem_ty = try self.cAbiPieceLlvmType(builder, registers.pieces[0]);
+                for (registers.pieces, 0..) |piece, i| {
+                    const piece_ty = try pieceLlvmType(builder, piece);
+                    const src = try self.offsetPtr(arg_ptr, piece.offset);
+                    const val = wip.load(.normal, piece_ty, src, self.alignmentForLayoutOffset(arg_layout, piece.offset), "") catch return error.OutOfMemory;
+                    const field = try self.coerceCAbiPiece(val, array_elem_ty, piece, self.cAbiPieceIsSigned(arg_layout));
+                    aggregate = wip.insertValue(aggregate, field, &.{@intCast(i)}, "") catch return error.OutOfMemory;
+                }
+                try param_types.append(self.allocator, carrier_ty);
+                try call_args.append(self.allocator, aggregate);
+            },
+        }
+    }
+
+    fn storeCAbiRegisterResult(
+        self: *MonoLlvmCodeGen,
+        builder: *LlvmBuilder,
+        registers: layout.abi.RegisterPlacement,
+        result: LlvmBuilder.Value,
+        ret_ptr: LlvmBuilder.Value,
+        ret_layout: layout.Idx,
+    ) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        switch (registers.carrier) {
+            .integer => {
+                const dst = try self.offsetPtr(ret_ptr, registers.pieces[0].offset);
+                _ = wip.store(.normal, result, dst, self.alignmentForLayoutOffset(ret_layout, registers.pieces[0].offset)) catch return error.OutOfMemory;
+            },
+            .piecewise, .structure, .array => {
+                if (registers.carrier == .piecewise and registers.pieces.len == 1) {
+                    const piece = registers.pieces[0];
+                    const dst = try self.offsetPtr(ret_ptr, piece.offset);
+                    const store_val = try self.coerceCAbiPiece(result, try pieceLlvmType(builder, piece), piece, self.cAbiPieceIsSigned(ret_layout));
+                    _ = wip.store(.normal, store_val, dst, self.alignmentForLayoutOffset(ret_layout, piece.offset)) catch return error.OutOfMemory;
+                    return;
+                }
+                for (registers.pieces, 0..) |piece, i| {
+                    const field = wip.extractValue(result, &.{@intCast(i)}, "") catch return error.OutOfMemory;
+                    const dst = try self.offsetPtr(ret_ptr, piece.offset);
+                    const store_val = try self.coerceCAbiPiece(field, try pieceLlvmType(builder, piece), piece, self.cAbiPieceIsSigned(ret_layout));
+                    _ = wip.store(.normal, store_val, dst, self.alignmentForLayoutOffset(ret_layout, piece.offset)) catch return error.OutOfMemory;
+                }
+            },
+        }
+    }
+
+    fn loadCAbiRegisterResult(
+        self: *MonoLlvmCodeGen,
+        builder: *LlvmBuilder,
+        registers: layout.abi.RegisterPlacement,
+        ret_ptr: LlvmBuilder.Value,
+        ret_layout: layout.Idx,
+    ) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const carrier_ty = try self.cAbiRegisterCarrierType(builder, registers);
+        switch (registers.carrier) {
+            .integer => {
+                const src = try self.offsetPtr(ret_ptr, registers.pieces[0].offset);
+                return wip.load(.normal, carrier_ty, src, self.alignmentForLayoutOffset(ret_layout, registers.pieces[0].offset), "") catch return error.OutOfMemory;
+            },
+            .piecewise, .structure, .array => {
+                if (registers.carrier == .piecewise and registers.pieces.len == 1) {
+                    const piece = registers.pieces[0];
+                    const src = try self.offsetPtr(ret_ptr, piece.offset);
+                    const val = wip.load(.normal, try pieceLlvmType(builder, piece), src, self.alignmentForLayoutOffset(ret_layout, piece.offset), "") catch return error.OutOfMemory;
+                    return self.coerceCAbiPiece(val, carrier_ty, piece, self.cAbiPieceIsSigned(ret_layout));
+                }
+                var aggregate = builder.poisonValue(carrier_ty) catch return error.OutOfMemory;
+                const array_elem_ty: ?LlvmBuilder.Type = if (registers.carrier == .array)
+                    try self.cAbiPieceLlvmType(builder, registers.pieces[0])
+                else
+                    null;
+                for (registers.pieces, 0..) |piece, i| {
+                    const src = try self.offsetPtr(ret_ptr, piece.offset);
+                    const val = wip.load(.normal, try pieceLlvmType(builder, piece), src, self.alignmentForLayoutOffset(ret_layout, piece.offset), "") catch return error.OutOfMemory;
+                    const field_ty = array_elem_ty orelse try self.cAbiPieceLlvmType(builder, piece);
+                    const field = try self.coerceCAbiPiece(val, field_ty, piece, self.cAbiPieceIsSigned(ret_layout));
+                    aggregate = wip.insertValue(aggregate, field, &.{@intCast(i)}, "") catch return error.OutOfMemory;
+                }
+                return aggregate;
+            },
+        }
     }
 
     /// A type with the exact size and alignment of `layout_idx`, for a `byval`/`sret`
@@ -8515,7 +9992,7 @@ pub const MonoLlvmCodeGen = struct {
 
         // Return value: registers (coerced struct/scalar) or sret pointer.
         var ret_ty: LlvmBuilder.Type = .void;
-        var ret_pieces: []const layout.abi.RegPiece = &.{};
+        var ret_registers: ?layout.abi.RegisterPlacement = null;
         switch (lowered.ret) {
             .none => {},
             .indirect => {
@@ -8524,15 +10001,9 @@ pub const MonoLlvmCodeGen = struct {
                 try param_types.append(self.allocator, ptr_ty);
                 try call_args.append(self.allocator, ret_ptr);
             },
-            .registers => |pieces| {
-                ret_pieces = pieces;
-                if (pieces.len == 1) {
-                    ret_ty = try self.cAbiPieceLlvmType(builder, pieces[0]);
-                } else {
-                    const field_types = try arena.alloc(LlvmBuilder.Type, pieces.len);
-                    for (pieces, field_types) |piece, *t| t.* = try self.cAbiPieceLlvmType(builder, piece);
-                    ret_ty = builder.structType(.normal, field_types) catch return error.OutOfMemory;
-                }
+            .registers => |registers| {
+                ret_registers = registers;
+                ret_ty = try self.cAbiRegisterCarrierType(builder, registers);
             },
         }
 
@@ -8541,9 +10012,9 @@ pub const MonoLlvmCodeGen = struct {
             try call_args.append(self.allocator, self.rocOps());
         }
 
-        // Arguments: register pieces are flattened into separate values, each loaded exactly
-        // from its byte offset (avoiding struct-padding over-reads); memory args pass a byval
-        // pointer.
+        // Arguments use the classifier's explicit scalar/array/piecewise
+        // carrier. Each memory piece is loaded from its exact byte range;
+        // memory-class arguments pass their ABI pointer/byval form.
         for (lowered.args, arg_ptrs, arg_layouts) |placement, arg_ptr, arg_layout| {
             switch (placement) {
                 .none => {},
@@ -8555,17 +10026,15 @@ pub const MonoLlvmCodeGen = struct {
                     try param_types.append(self.allocator, ptr_ty);
                     try call_args.append(self.allocator, arg_ptr);
                 },
-                .registers => |pieces| {
-                    const arg_align = self.alignmentForLayout(arg_layout);
-                    for (pieces) |piece| {
-                        const piece_ty = try pieceLlvmType(builder, piece);
-                        const src = try self.offsetPtr(arg_ptr, piece.offset);
-                        const val = wip.load(.normal, piece_ty, src, arg_align, "") catch return error.OutOfMemory;
-                        const carrier_ty = try self.cAbiPieceLlvmType(builder, piece);
-                        try param_types.append(self.allocator, carrier_ty);
-                        try call_args.append(self.allocator, try self.coerceScalar(val, carrier_ty, self.cAbiPieceIsSigned(arg_layout)));
-                    }
-                },
+                .registers => |registers| try self.appendCAbiRegisterCallArg(
+                    builder,
+                    &attrs_wip,
+                    &param_types,
+                    &call_args,
+                    registers,
+                    arg_ptr,
+                    arg_layout,
+                ),
             }
         }
 
@@ -8586,20 +10055,8 @@ pub const MonoLlvmCodeGen = struct {
         const result = wip.call(.normal, .ccc, attrs, fn_ty, callee, call_args.items, "") catch return error.OutOfMemory;
 
         // Register return: store each piece back into the result slot at its byte offset.
-        if (ret_pieces.len > 0) {
-            const ret_align = self.alignmentForLayout(ret_layout);
-            if (ret_pieces.len == 1) {
-                const dst = try self.offsetPtr(ret_ptr, ret_pieces[0].offset);
-                const store_val = try self.coerceScalar(result, try pieceLlvmType(builder, ret_pieces[0]), self.cAbiPieceIsSigned(ret_layout));
-                _ = wip.store(.normal, store_val, dst, ret_align) catch return error.OutOfMemory;
-            } else {
-                for (ret_pieces, 0..) |piece, i| {
-                    const field = wip.extractValue(result, &.{@intCast(i)}, "") catch return error.OutOfMemory;
-                    const dst = try self.offsetPtr(ret_ptr, piece.offset);
-                    const store_val = try self.coerceScalar(field, try pieceLlvmType(builder, piece), self.cAbiPieceIsSigned(ret_layout));
-                    _ = wip.store(.normal, store_val, dst, ret_align) catch return error.OutOfMemory;
-                }
-            }
+        if (ret_registers) |registers| {
+            try self.storeCAbiRegisterResult(builder, registers, result, ret_ptr, ret_layout);
         }
     }
 

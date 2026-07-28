@@ -927,6 +927,10 @@ const Certifier = struct {
     lender_arena: std.heap.ArenaAllocator,
     records: std.AutoHashMap(LIR.JoinPointId, JoinRecord),
     memo: std.AutoHashMap(MemoEntry, void),
+    /// Statements with more than one structural predecessor. Only these
+    /// statements can be revisited by distinct control-flow walks, so only
+    /// these need quotient-state memoization.
+    memo_points: std.bit_set.DynamicBitSetUnmanaged = .{},
     summary_scratch: std.ArrayList(LocalSummary) = .empty,
     repr_scratch: std.AutoHashMap(ValueId, u32),
     /// Dense position per reference-counted store local used by the proc
@@ -963,6 +967,7 @@ const Certifier = struct {
         self.clearRecords();
         self.records.deinit();
         self.memo.deinit();
+        self.memo_points.deinit(self.allocator);
         self.summary_scratch.deinit(self.allocator);
         self.repr_scratch.deinit();
         self.local_dense.deinit(self.allocator);
@@ -996,6 +1001,7 @@ const Certifier = struct {
             @intFromEnum(self.current_stmt),
         } ++ args;
         self.diag.context_stmt = self.current_stmt;
+        self.diag.context_proc = self.current_proc;
         self.diag.set("proc={d} stmt={d}: " ++ fmt, full_args);
         return error.Certification;
     }
@@ -1780,6 +1786,124 @@ const Certifier = struct {
         }
     }
 
+    /// Marks the control-flow convergence points that can be reached more
+    /// than once. Straight-line statements have exactly one structural
+    /// predecessor and cannot participate in a fixpoint or shared-tail
+    /// deduplication, so summarizing the whole proc state at each one would
+    /// turn large generated initializers into quadratic work.
+    fn collectMemoPoints(self: *Certifier, body: LIR.CFStmtId) Allocator.Error!void {
+        const stmt_count = self.store.cfStmtCount();
+        try self.memo_points.resize(self.allocator, stmt_count, false);
+        self.memo_points.unsetAll();
+
+        const predecessor_counts = try self.allocator.alloc(u8, stmt_count);
+        defer self.allocator.free(predecessor_counts);
+        @memset(predecessor_counts, 0);
+
+        var visited = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(self.allocator, stmt_count);
+        defer visited.deinit(self.allocator);
+        var stack = std.ArrayList(LIR.CFStmtId).empty;
+        defer stack.deinit(self.allocator);
+
+        const Walk = struct {
+            fn add(
+                counts: []u8,
+                work: *std.ArrayList(LIR.CFStmtId),
+                allocator: Allocator,
+                successor: LIR.CFStmtId,
+            ) Allocator.Error!void {
+                const index = @intFromEnum(successor);
+                if (counts[index] < 2) counts[index] += 1;
+                try work.append(allocator, successor);
+            }
+        };
+
+        // The procedure entry is a structural predecessor. A back edge to
+        // the entry therefore makes it a memo point like any other cycle.
+        predecessor_counts[@intFromEnum(body)] = 1;
+        try stack.append(self.allocator, body);
+
+        while (stack.pop()) |current| {
+            const current_index = @intFromEnum(current);
+            if (visited.isSet(current_index)) continue;
+            visited.set(current_index);
+
+            switch (self.store.getCFStmt(current)) {
+                inline .assign_ref,
+                .assign_literal,
+                .init_uninitialized,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .comptime_branch_taken,
+                => |stmt| try Walk.add(predecessor_counts, &stack, self.allocator, stmt.next),
+                .switch_stmt => |switch_stmt| {
+                    const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
+                    for (0..GuardedList.borrowLen(branches)) |branch_index| {
+                        const branch = GuardedList.at(branches, branch_index);
+                        try Walk.add(predecessor_counts, &stack, self.allocator, branch.body);
+                    }
+                    try Walk.add(predecessor_counts, &stack, self.allocator, switch_stmt.default_branch);
+                    if (switch_stmt.continuation) |continuation| {
+                        try Walk.add(predecessor_counts, &stack, self.allocator, continuation);
+                    }
+                },
+                .switch_initialized_payload => |switch_stmt| {
+                    try Walk.add(predecessor_counts, &stack, self.allocator, switch_stmt.initialized_branch);
+                    try Walk.add(predecessor_counts, &stack, self.allocator, switch_stmt.uninitialized_branch);
+                },
+                .str_match => |str_match| {
+                    try Walk.add(predecessor_counts, &stack, self.allocator, str_match.on_match);
+                    try Walk.add(predecessor_counts, &stack, self.allocator, str_match.on_miss);
+                },
+                .str_match_set => |str_match_set| {
+                    const arms = self.store.getStrMatchArms(str_match_set.arms);
+                    for (0..GuardedList.borrowLen(arms)) |arm_index| {
+                        const arm = GuardedList.at(arms, arm_index);
+                        try Walk.add(predecessor_counts, &stack, self.allocator, arm.on_match);
+                    }
+                    try Walk.add(predecessor_counts, &stack, self.allocator, str_match_set.on_miss);
+                },
+                .join => |join_stmt| {
+                    // A join body is a separately scheduled control-flow
+                    // root; jumps contribute its remaining predecessors.
+                    try Walk.add(predecessor_counts, &stack, self.allocator, join_stmt.body);
+                    try Walk.add(predecessor_counts, &stack, self.allocator, join_stmt.remainder);
+                },
+                .jump => |jump_stmt| {
+                    if (self.join_bodies.get(jump_stmt.target)) |target_body| {
+                        try Walk.add(predecessor_counts, &stack, self.allocator, target_body);
+                    }
+                },
+                .expect_err,
+                .ret,
+                .crash,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .loop_continue,
+                .loop_break,
+                => {},
+            }
+        }
+
+        for (predecessor_counts, 0..) |count, index| {
+            if (count > 1) self.memo_points.set(index);
+        }
+    }
+
     fn noteExposedReadLocal(
         self: *const Certifier,
         relevant: *std.bit_set.DynamicBitSetUnmanaged,
@@ -2349,6 +2473,7 @@ const Certifier = struct {
         self.join_bodies.clearRetainingCapacity();
         self.clearReadsBeforeRebindCache();
         try self.collectProcLocals(proc, body);
+        try self.collectMemoPoints(body);
         try self.relevant_scratch.resize(self.allocator, self.proc_locals.items.len, false);
 
         var state = try State.init(self.allocator, self.local_dense.items, self.proc_locals.items.len);
@@ -2418,10 +2543,12 @@ const Certifier = struct {
         while (true) {
             self.current_stmt = cursor;
 
-            const summary = try self.summarize(&state);
-            const memo_entry = MemoEntry{ .stmt = @intFromEnum(cursor), .digest = summaryDigest(cursor, summary) };
-            const seen = try self.memo.getOrPut(memo_entry);
-            if (seen.found_existing) return;
+            if (self.memo_points.isSet(@intFromEnum(cursor))) {
+                const summary = try self.summarize(&state);
+                const memo_entry = MemoEntry{ .stmt = @intFromEnum(cursor), .digest = summaryDigest(cursor, summary) };
+                const seen = try self.memo.getOrPut(memo_entry);
+                if (seen.found_existing) return;
+            }
 
             const stmt = self.store.getCFStmt(cursor);
             switch (stmt) {

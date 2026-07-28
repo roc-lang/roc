@@ -17,14 +17,14 @@ const builtins = @import("builtins");
 pub const BuiltinFn = builtins.builtin_registry.BuiltinFn;
 
 /// Float variant of a unary transcendental math op.
-pub fn unaryMathFloat(op: LowLevel) BuiltinFn {
+pub fn unaryMathFloat(op: LowLevel, is_f32: bool) BuiltinFn {
     return switch (op) {
-        .num_sin => .float_sin,
-        .num_cos => .float_cos,
-        .num_tan => .float_tan,
-        .num_asin => .float_asin,
-        .num_acos => .float_acos,
-        .num_atan => .float_atan,
+        .num_sin => if (is_f32) .float_sin_f32 else .float_sin,
+        .num_cos => if (is_f32) .float_cos_f32 else .float_cos,
+        .num_tan => if (is_f32) .float_tan_f32 else .float_tan,
+        .num_asin => if (is_f32) .float_asin_f32 else .float_asin,
+        .num_acos => if (is_f32) .float_acos_f32 else .float_acos,
+        .num_atan => if (is_f32) .float_atan_f32 else .float_atan,
         else => unreachable,
     };
 }
@@ -44,10 +44,10 @@ pub fn unaryMathDec(op: LowLevel) BuiltinFn {
 }
 
 /// Float rounding ops, for backends that call rather than inline them.
-pub fn floatRounding(op: LowLevel) BuiltinFn {
+pub fn floatRounding(op: LowLevel, is_f32: bool) BuiltinFn {
     return switch (op) {
-        .num_floor => .float_floor,
-        .num_ceiling => .float_ceiling,
+        .num_floor => if (is_f32) .float_floor_f32 else .float_floor,
+        .num_ceiling => if (is_f32) .float_ceiling_f32 else .float_ceiling,
         else => unreachable,
     };
 }
@@ -66,8 +66,17 @@ pub fn decBinaryArith(op: LowLevel) BuiltinFn {
 }
 
 /// Float `num_pow`, for backends that call rather than inline it.
-pub fn floatPow() BuiltinFn {
-    return .float_pow;
+pub fn floatPow(is_f32: bool) BuiltinFn {
+    return if (is_f32) .float_pow_f32 else .float_pow;
+}
+
+/// Float binary operations which lower through shared wrappers.
+pub fn floatBinaryArith(op: LowLevel, is_f32: bool) BuiltinFn {
+    return switch (op) {
+        .num_div_trunc_by => if (is_f32) .float_div_trunc_f32 else .float_div_trunc,
+        .num_rem_by, .num_mod_by => if (is_f32) .float_rem_f32 else .float_rem,
+        else => unreachable,
+    };
 }
 
 /// 128-bit truncating division / remainder.
@@ -87,6 +96,20 @@ pub fn i128Mod(is_unsigned: bool) BuiltinFn {
 /// 128-bit multiply with overflow detection.
 pub fn checkedMul128(is_unsigned: bool) BuiltinFn {
     return if (is_unsigned) .num_mul_with_overflow_u128 else .num_mul_with_overflow_i128;
+}
+
+/// Exact 128-bit integer-to-float conversion. The f32 wrappers round directly
+/// from the integer; they must not first round the integer to f64.
+pub fn int128ToFloat(is_signed: bool, is_f32: bool) BuiltinFn {
+    return if (is_signed)
+        (if (is_f32) .i128_to_f32 else .i128_to_f64)
+    else
+        (if (is_f32) .u128_to_f32 else .u128_to_f64);
+}
+
+/// Decimal-to-float conversion selected by destination width.
+pub fn decToFloat(is_f32: bool) BuiltinFn {
+    return if (is_f32) .dec_to_f32 else .dec_to_f64;
 }
 
 /// Scalar integer modulo by width and signedness, for backends that call
@@ -153,8 +176,11 @@ pub fn strOp(op: LowLevel) BuiltinFn {
         .str_drop_prefix => .str_drop_prefix,
         .str_drop_prefix_caseless_ascii => .str_drop_prefix_caseless_ascii,
         .str_drop_suffix => .str_drop_suffix,
-        .str_find_first => .str_find_first,
+        .str_split_first => .str_split_first,
+        .str_split_last => .str_split_last,
         .str_count_utf8_bytes => .str_count_utf8_bytes,
+        .str_get_utf8_byte_unsafe => .str_get_utf8_byte_unsafe,
+        .str_substring_unsafe => .str_substring_unsafe,
         .str_with_capacity => .str_with_capacity,
         .str_reserve => .str_reserve,
         .str_release_excess_capacity => .str_release_excess_capacity,
@@ -206,9 +232,17 @@ pub fn listEq(elem: ListEqElem) BuiltinFn {
     };
 }
 
-/// Hasher primitives. Scalar writes funnel into the width-normalized
-/// wrappers (everything up to 64 bits hashes through `hasher_write_u64`;
-/// f64 and Dec share `hasher_write_f64_bits`).
+/// Hasher primitives. Scalar writes funnel into the width-normalized wrappers:
+/// everything up to 64 bits hashes through `hasher_write_u64`, and `Dec` --
+/// which is a 128-bit fixed-point value, not a float -- hashes through
+/// `hasher_write_u128` alongside u128/i128.
+///
+/// `Dec` used to be mapped onto `hasher_write_f64_bits` here. That wrapper takes
+/// (seed, bits), while the 128-bit wrapper takes (seed, domain, low, high), so
+/// the one caller that passes a runtime `op` rather than a comptime literal --
+/// the LLVM backend -- emitted a four-argument call to a two-parameter function.
+/// The Dec's actual value was never read, and Dict lookups on Dec-keyed records
+/// and tuples returned KeyNotFound on x86_64-windows.
 pub fn hasherOp(op: LowLevel) BuiltinFn {
     return switch (op) {
         .dict_pseudo_seed => .dict_pseudo_seed,
@@ -223,9 +257,9 @@ pub fn hasherOp(op: LowLevel) BuiltinFn {
         .hasher_write_i32,
         .hasher_write_i64,
         => .hasher_write_u64,
-        .hasher_write_u128, .hasher_write_i128 => .hasher_write_u128,
+        .hasher_write_u128, .hasher_write_i128, .hasher_write_dec => .hasher_write_u128,
         .hasher_write_f32 => .hasher_write_f32_bits,
-        .hasher_write_f64, .hasher_write_dec => .hasher_write_f64_bits,
+        .hasher_write_f64 => .hasher_write_f64_bits,
         .hasher_write_bytes => .hasher_write_bytes,
         .hasher_write_str => .hasher_write_str,
         else => unreachable,

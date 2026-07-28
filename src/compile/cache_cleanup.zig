@@ -207,6 +207,17 @@ fn cleanupPersistentCache(std_io: Io, cache_base: []const u8, now_ns: i128, mayb
     var base_dir = Dir.cwd().openDir(std_io, cache_base, .{ .iterate = true }) catch return;
     defer base_dir.close(std_io);
 
+    const PersistentSubdir = struct {
+        name: []const u8,
+        nested_directory_depth: u8,
+    };
+    const subdirs = [_]PersistentSubdir{
+        .{ .name = "mod", .nested_directory_depth = 1 },
+        .{ .name = "exe", .nested_directory_depth = 1 },
+        .{ .name = "test", .nested_directory_depth = 1 },
+        .{ .name = "glue-dylib", .nested_directory_depth = 2 },
+    };
+
     var version_it = base_dir.iterate();
     while (true) {
         const version_entry = (version_it.next(std_io) catch break) orelse break;
@@ -215,10 +226,10 @@ fn cleanupPersistentCache(std_io: Io, cache_base: []const u8, now_ns: i128, mayb
         var version_dir = base_dir.openDir(std_io, version_entry.name, .{ .iterate = true }) catch continue;
         defer version_dir.close(std_io);
 
-        for ([_][]const u8{ "mod", "exe", "test" }) |subdir_name| {
-            var subdir = version_dir.openDir(std_io, subdir_name, .{ .iterate = true }) catch continue;
+        for (subdirs) |subdir_info| {
+            var subdir = version_dir.openDir(std_io, subdir_info.name, .{ .iterate = true }) catch continue;
             defer subdir.close(std_io);
-            cleanupCacheSubdir(std_io, subdir, now_ns, maybe_stats);
+            cleanupCacheSubdir(std_io, subdir, now_ns, maybe_stats, subdir_info.nested_directory_depth);
         }
     }
 
@@ -226,26 +237,20 @@ fn cleanupPersistentCache(std_io: Io, cache_base: []const u8, now_ns: i128, mayb
     // directories are harmless and deleting them can cause race conditions.
 }
 
-/// Clean up files in a cache subdirectory (mod/, exe/, or test/) older than 30
-/// days. Accepts files directly in `subdir` as well as files one level deep in
-/// bucket directories (e.g. "a0", "b1"); deeper nesting is ignored.
-fn cleanupCacheSubdir(std_io: Io, subdir: Dir, now_ns: i128, maybe_stats: ?*CleanupStats) void {
+/// Clean up files in a cache subdirectory older than 30 days. The caller passes
+/// the exact nested directory depth for the cache family: one bucket level for
+/// mod/exe/test and target/opt levels for glue dylibs.
+fn cleanupCacheSubdir(std_io: Io, subdir: Dir, now_ns: i128, maybe_stats: ?*CleanupStats, nested_directory_depth: u8) void {
     var it = subdir.iterate();
     while (true) {
         const entry = (it.next(std_io) catch break) orelse break;
 
         if (entry.kind == .file) {
             deleteCacheFileIfOld(std_io, subdir, entry.name, now_ns, maybe_stats);
-        } else if (entry.kind == .directory) {
-            var bucket = subdir.openDir(std_io, entry.name, .{ .iterate = true }) catch continue;
-            defer bucket.close(std_io);
-
-            var bucket_it = bucket.iterate();
-            while (true) {
-                const file = (bucket_it.next(std_io) catch break) orelse break;
-                if (file.kind != .file) continue;
-                deleteCacheFileIfOld(std_io, bucket, file.name, now_ns, maybe_stats);
-            }
+        } else if (entry.kind == .directory and nested_directory_depth > 0) {
+            var child = subdir.openDir(std_io, entry.name, .{ .iterate = true }) catch continue;
+            defer child.close(std_io);
+            cleanupCacheSubdir(std_io, child, now_ns, maybe_stats, nested_directory_depth - 1);
         }
     }
 
@@ -436,7 +441,7 @@ test "cleanupCacheSubdir deletes old files and keeps new files" {
     {
         var subdir = Dir.cwd().openDir(std.testing.io, subdir_path, .{ .iterate = true }) catch unreachable;
         defer subdir.close(std.testing.io);
-        cleanupCacheSubdir(std.testing.io, subdir, now_ns, &stats);
+        cleanupCacheSubdir(std.testing.io, subdir, now_ns, &stats, 1);
     }
 
     // Both files should still exist since they're brand new
@@ -455,7 +460,7 @@ test "cleanupCacheSubdir deletes old files and keeps new files" {
     {
         var subdir = Dir.cwd().openDir(std.testing.io, subdir_path, .{ .iterate = true }) catch unreachable;
         defer subdir.close(std.testing.io);
-        cleanupCacheSubdir(std.testing.io, subdir, far_future_ns, &stats2);
+        cleanupCacheSubdir(std.testing.io, subdir, far_future_ns, &stats2, 1);
     }
 
     // Both files should be deleted now
@@ -463,6 +468,53 @@ test "cleanupCacheSubdir deletes old files and keeps new files" {
 
     // Verify files are gone
     tmp_dir.dir.access(std.testing.io, "cache_subdir/bucket1/old_file.rcache", .{}) catch |err| {
+        try std.testing.expectEqual(error.FileNotFound, err);
+    };
+}
+
+test "cleanupPersistentCache deletes old glue dylib files at target opt depth" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const cache_base = std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp_dir.sub_path, "roc-cache" }) catch unreachable;
+    defer allocator.free(cache_base);
+
+    const glue_dir = std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "glue-dylib", "x64mac", "dev" }) catch unreachable;
+    defer allocator.free(glue_dir);
+
+    const mod_dir = std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "mod", "aa" }) catch unreachable;
+    defer allocator.free(mod_dir);
+
+    Dir.cwd().createDirPath(std.testing.io, glue_dir) catch unreachable;
+    Dir.cwd().createDirPath(std.testing.io, mod_dir) catch unreachable;
+
+    const glue_file = std.fs.path.join(allocator, &.{ glue_dir, "old.dylib" }) catch unreachable;
+    defer allocator.free(glue_file);
+    const glue_tmp = std.fs.path.join(allocator, &.{ glue_dir, "old.dylib.1.0.tmp" }) catch unreachable;
+    defer allocator.free(glue_tmp);
+    const mod_file = std.fs.path.join(allocator, &.{ mod_dir, "old.rcache" }) catch unreachable;
+    defer allocator.free(mod_file);
+
+    (Dir.cwd().createFile(std.testing.io, glue_file, .{}) catch unreachable).close(std.testing.io);
+    (Dir.cwd().createFile(std.testing.io, glue_tmp, .{}) catch unreachable).close(std.testing.io);
+    (Dir.cwd().createFile(std.testing.io, mod_file, .{}) catch unreachable).close(std.testing.io);
+
+    const now_ns = nowNs(std.testing.io);
+    const far_future_ns: i128 = now_ns + Config.PERSISTENT_MAX_AGE_NS + std.time.ns_per_s;
+    var stats = CleanupStats{};
+    cleanupPersistentCache(std.testing.io, cache_base, far_future_ns, &stats);
+
+    try std.testing.expectEqual(@as(u32, 3), stats.cache_files_deleted);
+
+    Dir.cwd().access(std.testing.io, glue_file, .{}) catch |err| {
+        try std.testing.expectEqual(error.FileNotFound, err);
+    };
+    Dir.cwd().access(std.testing.io, glue_tmp, .{}) catch |err| {
+        try std.testing.expectEqual(error.FileNotFound, err);
+    };
+    Dir.cwd().access(std.testing.io, mod_file, .{}) catch |err| {
         try std.testing.expectEqual(error.FileNotFound, err);
     };
 }

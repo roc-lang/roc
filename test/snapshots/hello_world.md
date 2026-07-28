@@ -67,13 +67,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "main!"))
-		(e-lambda
-			(args
-				(p-underscore))
-			(e-call
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-string
-					(e-literal (string "Hello, world!"))))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(s-import (mod "pf.Stdout")
 		(exposes)))
 ~~~

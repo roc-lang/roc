@@ -665,4 +665,141 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "{}" },
     },
+    .{
+        // https://github.com/roc-lang/roc/issues/10067
+        // A stored const keeps the exact generated iterator witness. Using the
+        // binding must consume that witness without merging it into the public
+        // Iter interface.
+        .name = "issue 10067: stored iterator witness survives lookup",
+        .source_kind = .module,
+        .source =
+        \\xs = [1.I64].iter()
+        \\
+        \\main : List(I64)
+        \\main = xs.collect()
+        ,
+        .expected = .{ .inspect_str = "[1]" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10067
+        .name = "issue 10067: stored iterator witness survives record field access",
+        .source_kind = .module,
+        .source =
+        \\holder : { it : Iter(I64) }
+        \\holder = { it: [1.I64].iter() }
+        \\
+        \\main : List(I64)
+        \\main = holder.it.collect()
+        ,
+        .expected = .{ .inspect_str = "[1]" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10067
+        .name = "issue 10067: stored iterator witness survives tuple item access",
+        .source_kind = .module,
+        .source =
+        \\pair : (Iter(I64), I64)
+        \\pair = ([1.I64].iter(), 0.I64)
+        \\
+        \\main : List(I64)
+        \\main = pair.0.collect()
+        ,
+        .expected = .{ .inspect_str = "[1]" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10301
+        .name = "issue 10301: for over an effect-produced runtime list folds correctly",
+        .source_kind = .module,
+        .source =
+        \\produce : U64 -> List(U64)
+        \\produce = |n| {
+        \\    dbg "produce"
+        \\    [n, 2, 3]
+        \\}
+        \\
+        \\main : U64
+        \\main = {
+        \\    var $sum = 0
+        \\    for byte in produce(1) {
+        \\        $sum = $sum * 31 + byte
+        \\    }
+        \\    $sum
+        \\}
+        ,
+        .expected = .{ .inspect_str = "1026" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10317
+        .name = "issue 10317: loop-carried reassignment under a branch keeps zero args",
+        .source_kind = .module,
+        .source =
+        \\main : I64
+        \\main = {
+        \\    var $x = 0
+        \\    var $y = 0
+        \\    for flag in [Bool.False] {
+        \\        $y = if flag {
+        \\            $x = 1
+        \\            0
+        \\        } else {
+        \\            0
+        \\        }
+        \\    }
+        \\    $x + $y
+        \\}
+        ,
+        .expected = .{ .inspect_str = "0" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10300
+        .name = "issue 10300: integer wrapping arithmetic is expressible",
+        .source = "(U8.plus_wrap(U8.highest, 1), U8.minus_wrap(0, 1), U8.times_wrap(128, 2))",
+        .expected = .{ .inspect_str = "(0, 255, 0)" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10321
+        .name = "issue 10321: generalized from_quote literal supports custom and builtin specializations",
+        .source_kind = .module,
+        .source =
+        \\Bar := [Text(Str), Empty].{
+        \\    from_quote : Str -> Try(Bar, [BadQuotedBytes(Str)])
+        \\    from_quote = |str| Ok(Text(str))
+        \\}
+        \\
+        \\bar_identity : Bar -> Bar
+        \\bar_identity = |bar| bar
+        \\
+        \\str_identity : Str -> Str
+        \\str_identity = |str| str
+        \\
+        \\go = |f| f("hello")
+        \\
+        \\main = (go(bar_identity), go(str_identity))
+        ,
+        .expected = .{ .inspect_str = "(Text(\"hello\"), \"hello\")" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10321
+        .name = "issue 10321: from_quote survives a function stored in a record",
+        .source_kind = .module,
+        .source =
+        \\Bar := [Text(Str), Empty].{
+        \\    from_quote : Str -> Try(Bar, [BadQuotedBytes(Str)])
+        \\    from_quote = |str| Ok(Text(str))
+        \\}
+        \\
+        \\identity : Bar -> Bar
+        \\identity = |bar| bar
+        \\
+        \\hooks = { mk: identity }
+        \\
+        \\use_hooks = |h| {
+        \\    mk = h.mk
+        \\    mk("hello")
+        \\}
+        \\
+        \\main = use_hooks(hooks)
+        ,
+        .expected = .{ .inspect_str = "Text(\"hello\")" },
+    },
 };

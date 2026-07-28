@@ -1735,7 +1735,7 @@ pub const Rehearsal = struct {
         const trace = frame.trace orelse return;
         var it = trace.provenance.iterator();
         while (it.next()) |entry| {
-            const root = @intFromEnum(graph.rootOf(@enumFromInt(entry.key_ptr.*)));
+            const root = @intFromEnum(graph.rootNode(@enumFromInt(entry.key_ptr.*)));
             const sealed = trace.sealed.get(root) orelse continue;
             const gop = positions.getOrPut(self.allocator, entry.value_ptr.*) catch return self.fail();
             if (!gop.found_existing) gop.value_ptr.* = Occurrences.empty();

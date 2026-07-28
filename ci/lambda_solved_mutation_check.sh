@@ -8,8 +8,8 @@
 # src/postcheck/lambda_solved/solve.zig's test section (reunify.md section
 # 12.6). Each patch in ci/lambda_solved_mutations/ seeds one representative
 # solver bug (union member dropped, capture-type unify skipped, callable slot
-# sealed to a singleton instead of empty, the iterator-backing erasure
-# exemption ignored, occurrence cloning reverted to a completed-graph memo).
+# sealed to a singleton instead of empty, occurrence cloning reverted to a
+# completed-graph memo).
 # For each mutation this script rebuilds and runs the postcheck module tests and
 # requires them to FAIL — a mutant that survives means the direct tests are not
 # actually protecting that invariant.

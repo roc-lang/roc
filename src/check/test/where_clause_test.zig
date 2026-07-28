@@ -224,6 +224,34 @@ test "where clause - multiple constraints on same variable" {
     try test_env_b.assertDefType("main", "(Str, U64)");
 }
 
+test "where clause - duplicate identical method constraints share one obligation" {
+    const source =
+        \\f : a -> {} where [a.foo : a, {} -> {}, a.foo : a, {} -> {}]
+        \\f = |x| {
+        \\    _ = x.foo({})
+        \\    {}
+        \\}
+    ;
+    var test_env = try TestEnv.init("DuplicateWhereConstraint", source);
+    defer test_env.deinit();
+
+    try test_env.assertDefType(
+        "f",
+        "a -> {} where [a.foo : a, {} -> {}]",
+    );
+}
+
+test "where clause - duplicate incompatible method constraints report a mismatch" {
+    const source =
+        \\f : a -> {} where [a.foo : a, {} -> {}, a.foo : a, Str -> {}]
+        \\f = |_| {}
+    ;
+    var test_env = try TestEnv.init("ConflictingDuplicateWhereConstraint", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("Type Mismatch");
+}
+
 // Cross-module where clause tests
 
 test "where clause - cross-module constraint satisfaction" {

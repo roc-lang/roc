@@ -74,9 +74,9 @@ match shape {
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "times") (constraint-fn-var 211)
+					(e-dispatch-call (method "times") (constraint-fn-var 230)
 						(receiver
-							(e-dispatch-call (method "times") (constraint-fn-var 209)
+							(e-dispatch-call (method "times") (constraint-fn-var 228)
 								(receiver
 									(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14")))
 								(args
@@ -90,7 +90,7 @@ match shape {
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "times") (constraint-fn-var 214)
+					(e-dispatch-call (method "times") (constraint-fn-var 233)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "width"))))
@@ -102,9 +102,9 @@ match shape {
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "times") (constraint-fn-var 226)
+					(e-dispatch-call (method "times") (constraint-fn-var 245)
 						(receiver
-							(e-dispatch-call (method "times") (constraint-fn-var 224)
+							(e-dispatch-call (method "times") (constraint-fn-var 243)
 								(receiver
 									(e-dec-small (numerator "5") (denominator-power-of-ten "1") (value "0.5")))
 								(args

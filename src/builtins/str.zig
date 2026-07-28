@@ -902,6 +902,8 @@ test "floatToStrBytes emits stable shortest representations" {
     try expectFloatToStr(f32, std.math.inf(f32), "inf");
     try expectFloatToStr(f32, -std.math.inf(f32), "-inf");
     try expectFloatToStr(f32, std.math.nan(f32), "nan");
+    try expectFloatToStr(f32, @bitCast(@as(u32, 0xff80_0001)), "nan");
+    try expectFloatToStr(f32, @bitCast(@as(u32, 0xffc1_2345)), "nan");
 
     try expectFloatToStr(f64, @as(f64, 0.0), "0");
     try expectFloatToStr(f64, @as(f64, -0.0), "-0");
@@ -912,6 +914,8 @@ test "floatToStrBytes emits stable shortest representations" {
     try expectFloatToStr(f64, std.math.inf(f64), "inf");
     try expectFloatToStr(f64, -std.math.inf(f64), "-inf");
     try expectFloatToStr(f64, std.math.nan(f64), "nan");
+    try expectFloatToStr(f64, @bitCast(@as(u64, 0xfff0_0000_0000_0001)), "nan");
+    try expectFloatToStr(f64, @bitCast(@as(u64, 0xfff9_2345_6789_abcd)), "nan");
 }
 
 /// Format a Roc float into a RocStr using the same implementation used by
@@ -1028,8 +1032,8 @@ pub fn substringUnsafeC(
     return substringUnsafe(string, start, length, roc_ops);
 }
 
-/// Result layout for `Str.find_first`.
-pub const FindFirstResult = struct {
+/// Result layout for `Str.split_first`.
+pub const SplitFirstResult = struct {
     before: RocStr,
     found: bool,
     after: RocStr,
@@ -1058,7 +1062,7 @@ fn smallStringFromPtr(bytes: [*]const u8, length: usize) RocStr {
 }
 
 /// Find the first delimiter occurrence and return seamless slices around it.
-pub fn findFirst(source: RocStr, delimiter: RocStr, roc_ops: *RocOps) FindFirstResult {
+pub fn splitFirst(source: RocStr, delimiter: RocStr, roc_ops: *RocOps) SplitFirstResult {
     const source_bytes = source.asSlice();
     const delimiter_bytes = delimiter.asSlice();
 
@@ -1071,6 +1075,41 @@ pub fn findFirst(source: RocStr, delimiter: RocStr, roc_ops: *RocOps) FindFirstR
     }
 
     const index = std.mem.find(u8, source_bytes, delimiter_bytes) orelse {
+        return .{
+            .before = RocStr.empty(),
+            .found = false,
+            .after = RocStr.empty(),
+        };
+    };
+
+    return .{
+        .before = retainedSlice(source, 0, index, roc_ops),
+        .found = true,
+        .after = retainedSlice(source, index + delimiter_bytes.len, source_bytes.len - index - delimiter_bytes.len, roc_ops),
+    };
+}
+
+/// Result layout for `Str.split_last`.
+pub const SplitLastResult = struct {
+    before: RocStr,
+    found: bool,
+    after: RocStr,
+};
+
+/// Find the last delimiter occurrence and return seamless slices around it.
+pub fn splitLast(source: RocStr, delimiter: RocStr, roc_ops: *RocOps) SplitLastResult {
+    const source_bytes = source.asSlice();
+    const delimiter_bytes = delimiter.asSlice();
+
+    if (delimiter_bytes.len == 0) {
+        return .{
+            .before = retainedSlice(source, 0, source_bytes.len, roc_ops),
+            .found = true,
+            .after = RocStr.empty(),
+        };
+    }
+
+    const index = std.mem.findLast(u8, source_bytes, delimiter_bytes) orelse {
         return .{
             .before = RocStr.empty(),
             .found = false,
@@ -2148,7 +2187,10 @@ pub fn strWithAsciiUppercased(
 
 /// TODO: Document strCaselessAsciiEquals.
 pub fn strCaselessAsciiEquals(self: RocStr, other: RocStr) callconv(.c) bool {
-    if (self.bytes == other.bytes and self.length == other.length) {
+    if (self.bytes == other.bytes and
+        self.capacity_or_alloc_ptr == other.capacity_or_alloc_ptr and
+        self.length == other.length)
+    {
         return true;
     }
 
@@ -2850,6 +2892,44 @@ test "RocStr.eq: utf8 content uses exact byte equality" {
 
     try std.testing.expect(roc_str1.eql(roc_str2));
     try std.testing.expect(!roc_str1.eql(roc_str3));
+}
+
+test "unchecked UTF-8 byte access reads SSO and heap strings" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const small = RocStr.fromSlice("A\x00\xc3\xa9", test_env.getOps());
+    const large = RocStr.fromSlice("012345678901234567890123456789\xf0\x9f\x8e\x89", test_env.getOps());
+    defer small.decref(test_env.getOps());
+    defer large.decref(test_env.getOps());
+
+    try std.testing.expect(small.isSmallStr());
+    try std.testing.expect(!large.isSmallStr());
+    try std.testing.expectEqual(@as(u8, 0), getUnsafeC(small, 1));
+    try std.testing.expectEqual(@as(u8, 0xc3), getUnsafeC(small, 2));
+    try std.testing.expectEqual(@as(u8, 0xf0), getUnsafeC(large, 30));
+    try std.testing.expectEqual(@as(u8, 0x89), getUnsafeC(large, 33));
+}
+
+test "unchecked substrings cover SSO and retained heap slices" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const small = RocStr.fromSlice("abcdef", test_env.getOps());
+    const small_middle = substringUnsafeC(small, 2, 3, test_env.getOps());
+    try std.testing.expect(small_middle.eqlSlice("cde"));
+    try std.testing.expect(small.eqlSlice("abcdef"));
+
+    const source = RocStr.fromSlice("012345678901234567890123456789", test_env.getOps());
+    source.incref(1, test_env.getOps());
+    const middle = substringUnsafeC(source, 5, 20, test_env.getOps());
+    try std.testing.expect(middle.isSeamlessSlice());
+    source.decref(test_env.getOps());
+    try std.testing.expect(middle.eqlSlice("56789012345678901234"));
+
+    const empty = substringUnsafeC(middle, middle.len(), 0, test_env.getOps());
+    try std.testing.expect(empty.isEmpty());
+    middle.decref(test_env.getOps());
 }
 
 test "RocStr.eq: boundary between small and heap strings" {

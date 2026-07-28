@@ -109,7 +109,7 @@ main = "${y}"
 				(p-assign (ident "thing"))
 				(p-assign (ident "f")))
 			(e-block
-				(e-call (constraint-fn-var 218)
+				(e-call (constraint-fn-var 237)
 					(e-lookup-local
 						(p-assign (ident "f")))
 					(e-lookup-local
@@ -124,7 +124,7 @@ main = "${y}"
 				(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))
 	(d-let
 		(p-assign (ident "y"))
-		(e-call (constraint-fn-var 239)
+		(e-call (constraint-fn-var 258)
 			(e-lookup-local
 				(p-assign (ident "call")))
 			(e-num (value "5"))
@@ -132,7 +132,7 @@ main = "${y}"
 				(args
 					(p-assign (ident "i")))
 				(e-block
-					(e-dispatch-call (method "plus") (constraint-fn-var 237)
+					(e-dispatch-call (method "plus") (constraint-fn-var 256)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "i"))))
@@ -145,13 +145,7 @@ main = "${y}"
 				(p-assign (ident "#interp_0"))
 				(e-lookup-local
 					(p-assign (ident "y"))))
-			(e-interpolation (constraint-fn-var 256) (dispatcher-var 35)
-				(first
-					(e-literal (string "")))
-				(parts
-					(e-lookup-local
-						(p-assign (ident "#interp_0")))
-					(e-literal (string "")))))))
+			(e-runtime-error (tag "erroneous_value_expr")))))
 ~~~
 # TYPES
 ~~~clojure

@@ -14,6 +14,7 @@
 //! This file keeps fx-specific tests that are not covered by that matrix.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const util = @import("util.zig");
 const fx_test_specs = @import("fx_test_specs.zig");
@@ -738,25 +739,11 @@ test "fx platform string interpolation type mismatch (interpreter)" {
     const run_result = try util.runRocCommand(std.testing.io, allocator, &.{
         "--opt=interpreter",
         "test/fx/num_method_call.roc",
-        "--allow-errors",
     });
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
-    // `--allow-errors` may exit successfully after reporting diagnostics, but
-    // it must not publish checked artifacts or run LIR for an erroneous graph.
-    switch (run_result.term) {
-        .exited => |code| {
-            try testing.expectEqual(@as(u8, 0), code);
-        },
-        else => {
-            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
-            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-            return error.RunFailed;
-        },
-    }
-
+    try util.checkFailure(run_result);
     try testing.expectEqualStrings("", run_result.stdout);
 
     // Verify the error output contains proper diagnostic info
@@ -764,7 +751,8 @@ test "fx platform string interpolation type mismatch (interpreter)" {
     try testing.expect(std.mem.find(u8, run_result.stderr, "TYPE MISMATCH") != null);
     try testing.expect(std.mem.find(u8, run_result.stderr, "U8") != null);
     try testing.expect(std.mem.find(u8, run_result.stderr, "Str") != null);
-    try testing.expect(std.mem.find(u8, run_result.stderr, "Found 1 error") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "1 error") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "Roc crashed:") != null);
 }
 
 test "fx platform string interpolation type mismatch (dev backend)" {
@@ -775,25 +763,11 @@ test "fx platform string interpolation type mismatch (dev backend)" {
     const run_result = try util.runRocCommand(std.testing.io, allocator, &.{
         "--opt=dev",
         "test/fx/num_method_call.roc",
-        "--allow-errors",
     });
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
-    // `--allow-errors` may exit successfully after reporting diagnostics, but
-    // it must not publish checked artifacts or run LIR for an erroneous graph.
-    switch (run_result.term) {
-        .exited => |code| {
-            try testing.expectEqual(@as(u8, 0), code);
-        },
-        else => {
-            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
-            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-            return error.RunFailed;
-        },
-    }
-
+    try util.checkFailure(run_result);
     try testing.expectEqualStrings("", run_result.stdout);
 
     // Verify the error output contains proper diagnostic info
@@ -801,7 +775,8 @@ test "fx platform string interpolation type mismatch (dev backend)" {
     try testing.expect(std.mem.find(u8, run_result.stderr, "TYPE MISMATCH") != null);
     try testing.expect(std.mem.find(u8, run_result.stderr, "U8") != null);
     try testing.expect(std.mem.find(u8, run_result.stderr, "Str") != null);
-    try testing.expect(std.mem.find(u8, run_result.stderr, "Found 1 error") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "1 error") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "Roc crashed:") != null);
 }
 
 test "fx platform run from different cwd" {
@@ -814,8 +789,8 @@ test "fx platform run from different cwd" {
     // Get absolute path to roc binary since we'll change cwd
     const roc_abs_path = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, util.roc_binary_path, allocator);
     defer allocator.free(roc_abs_path);
-    var env_map = try util.buildIsolatedTestEnvMap(std.testing.io, allocator, null);
-    defer env_map.deinit();
+    var env = try util.buildIsolatedTestEnvMap(std.testing.io, allocator, null);
+    defer env.deinit(std.testing.io, allocator);
 
     // Run roc from the test/fx directory with a relative path to app.roc
     const run_result = try util.runChildWithTimeout(std.testing.io, allocator, &[_][]const u8{
@@ -823,7 +798,7 @@ test "fx platform run from different cwd" {
         "app.roc",
     }, .{
         .cwd = "test/fx",
-        .env_map = &env_map,
+        .env_map = &env.env_map,
         .max_output_bytes = 10 * 1024 * 1024,
     });
     defer allocator.free(run_result.stdout);
@@ -1065,23 +1040,21 @@ test "fx platform issue8433" {
     }
 }
 
-test "run aborts on type errors by default" {
-    // Tests that the default roc command aborts when there are type errors (without --allow-errors)
+test "run executes until it reaches a checked error by default" {
     const allocator = testing.allocator;
 
     const run_result = try util.runRoc(std.testing.io, allocator, &.{}, "test/fx/run_allow_errors.roc");
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
-    // Should fail with type errors
     try util.checkFailure(run_result);
-
-    // Should show the errors
     try testing.expect(std.mem.find(u8, run_result.stderr, "NAME NOT IN SCOPE") != null);
+    try testing.expect(std.mem.find(u8, run_result.stdout, "Hello, World!") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "Roc crashed:") != null);
 }
 
 test "run aborts on parse errors by default" {
-    // Tests that the default roc command aborts when there are parse errors (without --allow-errors)
+    // Parsing recovery has not produced executable checked input for this file.
     const allocator = testing.allocator;
 
     const run_result = try util.runRoc(std.testing.io, allocator, &.{}, "test/fx/parse_error.roc");
@@ -1095,8 +1068,7 @@ test "run aborts on parse errors by default" {
     try testing.expect(std.mem.find(u8, run_result.stderr, "UNEXPECTED STATEMENT") != null);
 }
 
-test "run with --allow-errors attempts execution despite type errors" {
-    // Tests that `roc --allow-errors` attempts to execute even with type errors.
+test "run executes until it reaches a checked error in an explicit backend" {
     // TODO: remove Windows workaround once the shared LIR image path
     // handles crash-on-type-error consistently on Windows.
     const opt_flag: []const u8 = if (@import("builtin").os.tag == .windows) "--opt=interpreter" else "--opt=dev";
@@ -1105,7 +1077,6 @@ test "run with --allow-errors attempts execution despite type errors" {
     const run_result = try util.runRocCommand(std.testing.io, allocator, &.{
         opt_flag,
         "test/fx/run_allow_errors.roc",
-        "--allow-errors",
     });
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
@@ -1113,13 +1084,13 @@ test "run with --allow-errors attempts execution despite type errors" {
     // Should still show the errors
     try testing.expect(std.mem.find(u8, run_result.stderr, "NAME NOT IN SCOPE") != null);
 
-    // The program will attempt to run and likely crash, which is expected behavior
-    // We just verify it didn't abort during type checking
+    try testing.expect(std.mem.find(u8, run_result.stdout, "Hello, World!") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "Roc crashed:") != null);
 }
 
-test "run with --allow-errors handles type mismatch in function args" {
+test "run handles a checked type mismatch in function args" {
     // Regression test for https://github.com/roc-lang/roc/issues/9263
-    // The dev backend crashed (SIGABRT) when --allow-errors was used on code
+    // The dev backend crashed (SIGABRT) on code
     // where a type mismatch in a function argument caused the return type to
     // become an error type variable nested inside a function type.
     const allocator = testing.allocator;
@@ -1127,7 +1098,6 @@ test "run with --allow-errors handles type mismatch in function args" {
     const run_result = try util.runRocCommand(std.testing.io, allocator, &.{
         "--opt=dev",
         "test/fx/allow_errors_type_mismatch.roc",
-        "--allow-errors",
     });
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
@@ -1302,9 +1272,15 @@ test "fx platform hosted function passed as argument to higher-order function" {
 
 test "fx platform runtime stack overflow" {
     // Keep coverage for both paths:
-    // 1. The normal interpreter path on the real runtime sample.
+    // 1. The normal interpreter path on the real runtime sample. The
+    //    interpreter's call-depth guard exists only in Debug builds of the
+    //    compiler (release builds never constrain evaluation depth; see
+    //    design.md), so the guard's crash output can be asserted only when
+    //    this suite and the roc binary it spawns are built in Debug mode.
     // 2. The compiled dev-backend host path via the FX host self-test hook.
-    try expectInterpreterRuntimeStackOverflow();
+    if (comptime builtin.mode == .Debug) {
+        try expectInterpreterRuntimeStackOverflow();
+    }
     try expectDevRuntimeStackOverflow();
 }
 
@@ -1473,13 +1449,13 @@ test "fx platform fold_rev static dispatch regression" {
 }
 
 test "fx platform invalid nested where-clause static dispatch fails in check" {
-    // Regression test for #9657: the original repro's top-level decode_i64 and
-    // encode_i64 declarations are not I64.decode/I64.encode methods, so check
-    // must reject the where-clause contract before post-check lowering.
+    // Regression test for #9657: I64's builtin decode/encode methods do not
+    // have the signatures required by this where-clause, so check must reject
+    // the contract before post-check lowering.
     const allocator = testing.allocator;
 
-    var env_map = try util.buildIsolatedTestEnvMap(std.testing.io, allocator, null);
-    defer env_map.deinit();
+    var env = try util.buildIsolatedTestEnvMap(std.testing.io, allocator, null);
+    defer env.deinit(std.testing.io, allocator);
 
     const check_result = try util.runChildWithTimeout(std.testing.io, allocator, &[_][]const u8{
         util.roc_binary_path,
@@ -1487,7 +1463,7 @@ test "fx platform invalid nested where-clause static dispatch fails in check" {
         "--no-cache",
         "test/fx/nested_static_dispatch_where_repro.roc",
     }, .{
-        .env_map = &env_map,
+        .env_map = &env.env_map,
         .max_output_bytes = 10 * 1024 * 1024,
     });
     defer allocator.free(check_result.stdout);
@@ -1498,7 +1474,7 @@ test "fx platform invalid nested where-clause static dispatch fails in check" {
         .stderr = check_result.stderr,
         .term = check_result.term,
     });
-    try testing.expect(std.mem.find(u8, check_result.stderr, "MISSING METHOD") != null);
+    try testing.expect(std.mem.find(u8, check_result.stderr, "TYPE MISMATCH") != null);
     try testing.expect(std.mem.find(u8, check_result.stderr, "postcheck invariant violated") == null);
 }
 
@@ -1519,8 +1495,8 @@ test "fx platform valid nested where-clause static dispatch builds" {
     const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_path});
     defer allocator.free(output_arg);
 
-    var env_map = try util.buildIsolatedTestEnvMap(std.testing.io, allocator, null);
-    defer env_map.deinit();
+    var env = try util.buildIsolatedTestEnvMap(std.testing.io, allocator, null);
+    defer env.deinit(std.testing.io, allocator);
 
     const build_result = try util.runChildWithTimeout(std.testing.io, allocator, &[_][]const u8{
         util.roc_binary_path,
@@ -1531,7 +1507,7 @@ test "fx platform valid nested where-clause static dispatch builds" {
         output_arg,
         "test/fx/nested_static_dispatch_where_valid.roc",
     }, .{
-        .env_map = &env_map,
+        .env_map = &env.env_map,
         .max_output_bytes = 10 * 1024 * 1024,
     });
     defer allocator.free(build_result.stdout);
@@ -1548,8 +1524,8 @@ test "fx platform valid nested where-clause static dispatch builds" {
 test "fx platform divergent if with all crash branches does not hit postcheck invariant" {
     const allocator = testing.allocator;
 
-    var env_map = try util.buildIsolatedTestEnvMap(std.testing.io, allocator, null);
-    defer env_map.deinit();
+    var env = try util.buildIsolatedTestEnvMap(std.testing.io, allocator, null);
+    defer env.deinit(std.testing.io, allocator);
 
     const build_result = try util.runChildWithTimeout(std.testing.io, allocator, &[_][]const u8{
         util.roc_binary_path,
@@ -1557,7 +1533,7 @@ test "fx platform divergent if with all crash branches does not hit postcheck in
         "--no-cache",
         "test/fx/divergent_if_all_branches_crash_repro.roc",
     }, .{
-        .env_map = &env_map,
+        .env_map = &env.env_map,
         .max_output_bytes = 10 * 1024 * 1024,
     });
     defer allocator.free(build_result.stdout);
@@ -1705,7 +1681,7 @@ test "fx platform issue8943 error message memory corruption" {
     }
 
     // We expect at least 2 occurrences from source regions plus one more at
-    // the end in "Found X error(s)..."
+    // the summary at the end.
     if (filename_count < 3) {
         std.debug.print("Error output appears corrupted - filename 'issue8943.roc' found only {d} times (expected at least 3):\n", .{filename_count});
         std.debug.print("STDERR: {s}\n", .{run_result.stderr});

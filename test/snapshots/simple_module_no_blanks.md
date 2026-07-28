@@ -57,10 +57,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "hello!"))
-		(e-call
-			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-string
-				(e-literal (string "Hello")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "world"))
 		(e-string

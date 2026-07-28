@@ -72,14 +72,30 @@ pub fn isValidShorthand(name: []const u8) bool {
     return true;
 }
 
+/// What kind of artifact an install entry carries: an app built to an
+/// executable that `roc run` executes, or a glue spec built to a plugin
+/// dylib that `roc glue` loads.
+pub const InstallKind = enum {
+    executable,
+    glue,
+};
+
 /// Metadata recorded for every install entry. The URL is the source's
 /// compiler identity; the shorthand and paths are storage details.
 pub const Manifest = struct {
     format_version: u32,
+    kind: []const u8,
     url: []const u8,
     hash: []const u8,
     compiler_version: []const u8,
 };
+
+/// Parse a manifest's kind string. Null means the manifest is corrupt.
+pub fn manifestKind(manifest: Manifest) ?InstallKind {
+    if (std.mem.eql(u8, manifest.kind, "executable")) return .executable;
+    if (std.mem.eql(u8, manifest.kind, "glue")) return .glue;
+    return null;
+}
 
 /// Resolve the install root directory: `ROC_INSTALL_DIR` if set, otherwise a
 /// platform-appropriate persistent user data directory (deliberately not a
@@ -145,6 +161,16 @@ pub const EntryPaths = struct {
     bin_dir: []const u8,
     /// `<entry>/bin/<shorthand>[.exe]`
     exe_path: []const u8,
+    /// `<entry>/bin/<shorthand>.<dylib|so|dll>`
+    glue_dylib_path: []const u8,
+
+    /// The artifact path an entry of the given kind must contain.
+    pub fn artifactPath(self: *const EntryPaths, kind: InstallKind) []const u8 {
+        return switch (kind) {
+            .executable => self.exe_path,
+            .glue => self.glue_dylib_path,
+        };
+    }
 };
 
 /// Compute the paths for a shorthand's entry under a version directory.
@@ -160,6 +186,12 @@ pub fn entryPathsIn(allocator: Allocator, entry_dir: []const u8, shorthand: []co
         try std.fmt.allocPrint(allocator, "{s}.exe", .{shorthand})
     else
         shorthand;
+    const dylib_ext = switch (builtin.target.os.tag) {
+        .windows => ".dll",
+        .macos => ".dylib",
+        else => ".so",
+    };
+    const dylib_filename = try std.fmt.allocPrint(allocator, "{s}{s}", .{ shorthand, dylib_ext });
     return .{
         .entry_dir = entry_dir,
         .manifest_path = try std.fs.path.join(allocator, &.{ entry_dir, manifest_filename }),
@@ -167,6 +199,7 @@ pub fn entryPathsIn(allocator: Allocator, entry_dir: []const u8, shorthand: []co
         .main_roc_path = try std.fs.path.join(allocator, &.{ entry_dir, source_dir_name, "main.roc" }),
         .bin_dir = try std.fs.path.join(allocator, &.{ entry_dir, bin_dir_name }),
         .exe_path = try std.fs.path.join(allocator, &.{ entry_dir, bin_dir_name, exe_filename }),
+        .glue_dylib_path = try std.fs.path.join(allocator, &.{ entry_dir, bin_dir_name, dylib_filename }),
     };
 }
 
@@ -199,7 +232,7 @@ pub fn parseManifest(allocator: Allocator, bytes: []const u8) Allocator.Error!?P
         error.OutOfMemory => return error.OutOfMemory,
         else => return null,
     };
-    if (parsed.value.format_version != manifest_format_version) {
+    if (parsed.value.format_version != manifest_format_version or manifestKind(parsed.value) == null) {
         var owned = parsed;
         owned.deinit();
         return null;
@@ -263,6 +296,7 @@ test "manifest json round trip" {
     const gpa = std.testing.allocator;
     const json = try manifestToJson(gpa, .{
         .format_version = manifest_format_version,
+        .kind = "executable",
         .url = "https://example.com/tokei/1.2.3/abc.tar.zst",
         .hash = "abc",
         .compiler_version = "test-version",
@@ -273,12 +307,14 @@ test "manifest json round trip" {
     defer parsed.deinit();
     try std.testing.expectEqualStrings("https://example.com/tokei/1.2.3/abc.tar.zst", parsed.manifest().url);
     try std.testing.expectEqualStrings("abc", parsed.manifest().hash);
+    try std.testing.expectEqual(InstallKind.executable, manifestKind(parsed.manifest()).?);
 }
 
 test "manifest rejects wrong format version" {
     const gpa = std.testing.allocator;
     const json = try manifestToJson(gpa, .{
         .format_version = manifest_format_version + 1,
+        .kind = "executable",
         .url = "https://example.com/x/1.0.0/abc.tar.zst",
         .hash = "abc",
         .compiler_version = "test-version",

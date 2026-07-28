@@ -230,6 +230,33 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
         }
 
+        /// POPCNT dst, src (population count) — `F3 0F B8 /r`. dst is ModRM.reg.
+        pub fn popcntRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
+            try self.buf.append(self.allocator, 0xF3); // mandatory prefix
+            try self.emitRex(width, dst, src);
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0xB8);
+            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+        }
+
+        /// LZCNT dst, src (count leading zeros) — `F3 0F BD /r`. dst is ModRM.reg.
+        pub fn lzcntRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
+            try self.buf.append(self.allocator, 0xF3); // mandatory prefix
+            try self.emitRex(width, dst, src);
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0xBD);
+            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+        }
+
+        /// TZCNT dst, src (count trailing zeros) — `F3 0F BC /r`. dst is ModRM.reg.
+        pub fn tzcntRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
+            try self.buf.append(self.allocator, 0xF3); // mandatory prefix
+            try self.emitRex(width, dst, src);
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0xBC);
+            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+        }
+
         /// MUL r64 - unsigned widening multiply: RDX:RAX = RAX * src
         /// Result: low 64 bits in RAX, high 64 bits in RDX
         pub fn mulReg(self: *Self, width: RegisterWidth, src: GeneralReg) Allocator.Error!void {

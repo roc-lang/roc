@@ -241,9 +241,6 @@ pub const Census = struct {
     two_sided_record_row_merge: Counter = Counter.init(0),
     one_sided_tag_row_merge: Counter = Counter.init(0),
     one_sided_record_row_merge: Counter = Counter.init(0),
-    import_tag_ext_kept_open: Counter = Counter.init(0),
-    import_record_ext_kept_open: Counter = Counter.init(0),
-    import_ext_widened: Counter = Counter.init(0),
     plain_variable_to_empty_tag_union: Counter = Counter.init(0),
     empty_tag_union_yield: Counter = Counter.init(0),
     nominal_backing_root_join: Counter = Counter.init(0),
@@ -262,7 +259,6 @@ pub const Census = struct {
     solved_digest_differs_from_request: Counter = Counter.init(0),
     builtin_owned_alias_created: Counter = Counter.init(0),
     lambda_alias_unwrap_builtin_owned: Counter = Counter.init(0),
-    lambda_generated_backing_equal_score: Counter = Counter.init(0),
     // reunify.md 7.1, Slice 2: how a procedure binding's source scheme root was
     // resolved. `by_id` is the dense scheme id carried on the binding; `by_content_digest`
     // is the content-key lookup used only when the binding stored no id.

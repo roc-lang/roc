@@ -28,13 +28,6 @@ static void memory_copy(void *dst_void, const void *src_void, size_t len) {
     }
 }
 
-static void memory_zero(void *dst_void, size_t len) {
-    uint8_t *dst = (uint8_t *)dst_void;
-    for (size_t i = 0; i < len; i += 1) {
-        dst[i] = 0;
-    }
-}
-
 static uintptr_t align_forward(uintptr_t value, size_t alignment) {
     return (value + alignment - 1u) & ~(uintptr_t)(alignment - 1u);
 }
@@ -128,9 +121,9 @@ enum {
 #define DEFINE_OK_HOSTED(name, ret_type, tag_offset) \
     ret_type name(RocStr arg0) {                     \
         (void)arg0;                                  \
-        ret_type result;                             \
-        memory_zero(&result, sizeof(result));        \
-        result.bytes[(tag_offset)] = TAG_OK;         \
+        (void)(tag_offset);                          \
+        ret_type result = {0};                       \
+        result.tag = ret_type##Tag_Ok;               \
         return result;                               \
     }
 

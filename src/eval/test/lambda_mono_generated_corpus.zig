@@ -641,4 +641,399 @@ pub const cases = [_]Case{
         \\}
         ,
     },
+
+    // Iterator-consumer sweep: {for, fold} x {static, effect-produced} x
+    // {scalar, record, branch-reassigned carry} x {bare, adapter chain}. This
+    // harness lowers with inline mode `.none`, so SpecConstr never runs here
+    // and these cases guard the direct solved-to-LIR lowering of iterator
+    // loops, carries, and effect ordering — not the fusion rewrites. Fusion
+    // correctness for the same shapes is guarded by lir_inline's
+    // .none-vs-.wrappers differential and structural tests.
+    .{
+        .name = "spec_constr: for static list scalar carry",
+        .source =
+        \\{
+        \\    var $sum = 0.I64
+        \\    for x in [1.I64, 2, 3] {
+        \\        $sum = $sum * 31 + x
+        \\    }
+        \\    $sum
+        \\}
+        ,
+    },
+    .{
+        .name = "spec_constr: for produced list scalar carry",
+        .source =
+        \\{
+        \\    produce = |n| {
+        \\        dbg "produce"
+        \\        [n, 2.I64, 3]
+        \\    }
+        \\    var $sum = 0.I64
+        \\    for x in produce(1.I64) {
+        \\        $sum = $sum * 31 + x
+        \\    }
+        \\    $sum
+        \\}
+        ,
+    },
+    .{
+        .name = "spec_constr: fold static list scalar",
+        .source =
+        \\Iter.fold([1.I64, 2, 3].iter(), 0, |acc, x| acc * 31 + x)
+        ,
+    },
+    .{
+        .name = "spec_constr: fold produced list scalar",
+        .source =
+        \\{
+        \\    produce = |n| {
+        \\        dbg "produce"
+        \\        [n, 2.I64, 3]
+        \\    }
+        \\    Iter.fold(produce(1.I64).iter(), 0, |acc, x| acc * 31 + x)
+        \\}
+        ,
+    },
+    .{
+        .name = "spec_constr: for produced list element order traced",
+        .source =
+        \\{
+        \\    produce = |n| {
+        \\        dbg "produce"
+        \\        [n, 2.I64, 3]
+        \\    }
+        \\    var $sum = 0.I64
+        \\    for x in produce(1.I64) {
+        \\        dbg x
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        ,
+    },
+    .{
+        .name = "spec_constr: fold produced list element order traced",
+        .source =
+        \\{
+        \\    produce = |n| {
+        \\        dbg "produce"
+        \\        [n, 2.I64, 3]
+        \\    }
+        \\    Iter.fold(produce(1.I64).iter(), 0, |acc, x| {
+        \\        dbg x
+        \\        acc * 31 + x
+        \\    })
+        \\}
+        ,
+    },
+    .{
+        .name = "spec_constr: for static map chain",
+        .source =
+        \\{
+        \\    var $sum = 0.I64
+        \\    for x in [1.I64, 2, 3].iter().map(|v| v * 2) {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        ,
+    },
+    .{
+        .name = "spec_constr: for produced map chain",
+        .source =
+        \\{
+        \\    produce = |n| {
+        \\        dbg "produce"
+        \\        [n, 2.I64, 3]
+        \\    }
+        \\    var $sum = 0.I64
+        \\    for x in produce(1.I64).iter().map(|v| v * 2) {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        ,
+    },
+    .{
+        .name = "spec_constr: fold produced map chain",
+        .source =
+        \\{
+        \\    produce = |n| {
+        \\        dbg "produce"
+        \\        [n, 2.I64, 3]
+        \\    }
+        \\    Iter.fold(produce(1.I64).iter().map(|v| v + 10), 0, |acc, x| acc * 100 + x)
+        \\}
+        ,
+    },
+    .{
+        .name = "spec_constr: for produced keep_if chain",
+        .source =
+        \\{
+        \\    produce = |n| {
+        \\        dbg "produce"
+        \\        [n, 2.I64, 3, 4]
+        \\    }
+        \\    var $sum = 0.I64
+        \\    for x in produce(1.I64).iter().keep_if(|v| v > 2) {
+        \\        dbg x
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        ,
+    },
+    .{
+        .name = "spec_constr: for produced record carry",
+        .source =
+        \\{
+        \\    produce = |n| {
+        \\        dbg "produce"
+        \\        [n, 2.I64, 3]
+        \\    }
+        \\    var $state = { sum: 0.I64, count: 0.I64 }
+        \\    for x in produce(1.I64) {
+        \\        $state = { sum: $state.sum + x, count: $state.count + 1 }
+        \\    }
+        \\    $state.sum * 10 + $state.count
+        \\}
+        ,
+    },
+    .{
+        .name = "spec_constr: fold static record carry",
+        .source =
+        \\{
+        \\    out = Iter.fold([1.I64, 2, 3].iter(), { sum: 0.I64, count: 0.I64 }, |acc, x| {
+        \\        { sum: acc.sum + x, count: acc.count + 1 }
+        \\    })
+        \\    out.sum * 10 + out.count
+        \\}
+        ,
+    },
+    .{
+        .name = "spec_constr: fold produced record carry",
+        .source =
+        \\{
+        \\    produce = |n| {
+        \\        dbg "produce"
+        \\        [n, 2.I64, 3]
+        \\    }
+        \\    out = Iter.fold(produce(1.I64).iter(), { sum: 0.I64, count: 0.I64 }, |acc, x| {
+        \\        { sum: acc.sum + x, count: acc.count + 1 }
+        \\    })
+        \\    out.sum * 10 + out.count
+        \\}
+        ,
+    },
+    .{
+        .name = "spec_constr: for static branch-reassigned carry",
+        .source =
+        \\{
+        \\    var $x = 0.I64
+        \\    var $y = 0.I64
+        \\    for flag in [Bool.False, Bool.True] {
+        \\        $y = if flag {
+        \\            $x = $x + 1
+        \\            $x
+        \\        } else {
+        \\            0
+        \\        }
+        \\    }
+        \\    $x * 10 + $y
+        \\}
+        ,
+    },
+    .{
+        .name = "spec_constr: for produced branch-reassigned carry",
+        .source =
+        \\{
+        \\    produce = |n| {
+        \\        dbg "produce"
+        \\        [n, 0.I64, 5, 0]
+        \\    }
+        \\    var $x = 0.I64
+        \\    var $y = 0.I64
+        \\    for v in produce(3.I64) {
+        \\        $y = if v > 0 {
+        \\            $x = $x + v
+        \\            $x
+        \\        } else {
+        \\            0
+        \\        }
+        \\    }
+        \\    $x * 10 + $y
+        \\}
+        ,
+    },
+    .{
+        .name = "spec_constr: two produced loops sequential order",
+        .source =
+        \\{
+        \\    produce = |label, n| {
+        \\        dbg label
+        \\        [n, 2.I64, 3]
+        \\    }
+        \\    var $a = 0.I64
+        \\    for x in produce("first", 1.I64) {
+        \\        $a = $a + x
+        \\    }
+        \\    var $b = 0.I64
+        \\    for y in produce("second", 10.I64) {
+        \\        $b = $b * 2 + y
+        \\    }
+        \\    $a * 1000 + $b
+        \\}
+        ,
+    },
+    .{
+        .name = "spec_constr: produced list consumed by two loops",
+        .source =
+        \\{
+        \\    produce = |n| {
+        \\        dbg "produce"
+        \\        [n, 2.I64, 3]
+        \\    }
+        \\    xs = produce(1.I64)
+        \\    var $a = 0.I64
+        \\    for x in xs {
+        \\        $a = $a + x
+        \\    }
+        \\    var $b = 0.I64
+        \\    for y in xs {
+        \\        $b = $b * 31 + y
+        \\    }
+        \\    $a * 10000 + $b
+        \\}
+        ,
+    },
+    .{
+        .name = "spec_constr: conditional produced loop taken",
+        .source =
+        \\{
+        \\    produce = |n| {
+        \\        dbg "produce"
+        \\        [n, 2.I64, 3]
+        \\    }
+        \\    pick = |flag| {
+        \\        xs = if flag {
+        \\            produce(1.I64)
+        \\        } else {
+        \\            []
+        \\        }
+        \\        var $sum = 0.I64
+        \\        for x in xs {
+        \\            $sum = $sum + x
+        \\        }
+        \\        $sum
+        \\    }
+        \\    pick(Bool.True) * 100 + pick(Bool.False)
+        \\}
+        ,
+    },
+    .{
+        .name = "spec_constr: nested for over produced lists",
+        .source =
+        \\{
+        \\    produce = |label, n| {
+        \\        dbg label
+        \\        [n, n + 1.I64]
+        \\    }
+        \\    var $sum = 0.I64
+        \\    for x in produce("outer", 1.I64) {
+        \\        for y in produce("inner", 10.I64) {
+        \\            $sum = $sum * 10 + x + y
+        \\        }
+        \\    }
+        \\    $sum
+        \\}
+        ,
+    },
+    .{
+        .name = "spec_constr: fold then for over one produced let",
+        .source =
+        \\{
+        \\    produce = |n| {
+        \\        dbg "produce"
+        \\        [n, 2.I64, 3]
+        \\    }
+        \\    xs = produce(1.I64)
+        \\    folded = Iter.fold(xs.iter(), 0, |acc, x| acc + x)
+        \\    var $sum = folded
+        \\    for x in xs {
+        \\        $sum = $sum * 31 + x
+        \\    }
+        \\    $sum
+        \\}
+        ,
+    },
+    .{
+        .name = "spec_constr: interleaved dbg between producer and loop",
+        .source =
+        \\{
+        \\    produce = |n| {
+        \\        dbg "produce"
+        \\        [n, 2.I64, 3]
+        \\    }
+        \\    xs = produce(1.I64)
+        \\    dbg "between"
+        \\    var $sum = 0.I64
+        \\    for x in xs {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        ,
+    },
+    .{
+        .name = "spec_constr: for over produced then appended list",
+        .source =
+        \\{
+        \\    produce = |n| {
+        \\        dbg "produce"
+        \\        [n, 2.I64]
+        \\    }
+        \\    xs = List.append(produce(1.I64), 9.I64)
+        \\    var $sum = 0.I64
+        \\    for x in xs {
+        \\        dbg x
+        \\        $sum = $sum * 31 + x
+        \\    }
+        \\    $sum
+        \\}
+        ,
+    },
+    .{
+        .name = "spec_constr: empty produced list",
+        .source =
+        \\{
+        \\    produce = |n| {
+        \\        dbg n
+        \\        []
+        \\    }
+        \\    var $sum = 100.I64
+        \\    for x in produce(7.I64) {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        ,
+    },
+    .{
+        .name = "spec_constr: single element produced list",
+        .source =
+        \\{
+        \\    produce = |n| {
+        \\        dbg n
+        \\        [n]
+        \\    }
+        \\    var $sum = 0.I64
+        \\    for x in produce(7.I64) {
+        \\        dbg x
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        ,
+    },
 };

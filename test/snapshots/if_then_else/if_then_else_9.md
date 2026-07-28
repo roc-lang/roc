@@ -107,14 +107,14 @@ NO CHANGE
 		(if-branch
 			(e-runtime-error (tag "ident_not_in_scope"))
 			(e-block
-				(e-num (value "1"))))
+				(e-runtime-error (tag "erroneous_value_expr"))))
 		(if-branch
-			(e-num (value "10"))
+			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-block
 				(e-tag (name "A")))))
 	(if-else
 		(e-block
-			(e-num (value "3")))))
+			(e-runtime-error (tag "erroneous_value_expr")))))
 ~~~
 # TYPES
 ~~~clojure

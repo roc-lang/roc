@@ -269,6 +269,7 @@ pub const Tag = enum {
     diag_type_var_starting_with_dollar,
     diag_underscore_in_type_declaration,
     diagnostic_exposed_but_not_implemented,
+    diag_provided_value_is_required,
     diag_redundant_exposed,
     diag_if_expr_without_else,
     diag_break_outside_loop,

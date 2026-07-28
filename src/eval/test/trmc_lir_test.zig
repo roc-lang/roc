@@ -80,7 +80,7 @@ fn freshJoinPointId(next: *u32) LIR.JoinPointId {
 }
 
 fn runProcU64(allocator: Allocator, store: *const LirStore, layouts: *const layout.Store, proc: LIR.LirProcSpecId, runtime_env: *RuntimeHostEnv) TrmcLirTestError!u64 {
-    var interp = try eval.Interpreter.init(allocator, store, layouts, runtime_env.get_ops());
+    var interp = try eval.Interpreter.init(allocator, store, layouts, runtime_env.get_ops(), .preserve);
     defer interp.deinit();
     const result = try interp.eval(.{ .proc_id = proc, .arg_layouts = &.{} });
     return result.value.read(u64);
@@ -557,7 +557,7 @@ fn runProcU64Args(
     runtime_env: *RuntimeHostEnv,
     args: []const u64,
 ) TrmcLirTestError!u64 {
-    var interp = try eval.Interpreter.init(allocator, store, layouts, runtime_env.get_ops());
+    var interp = try eval.Interpreter.init(allocator, store, layouts, runtime_env.get_ops(), .preserve);
     defer interp.deinit();
     const arg_layouts = [_]layout.Idx{.u64} ** 4;
     var packed_args: [4]u64 = undefined;
@@ -591,7 +591,7 @@ test "trmc transforms the canonical repeat shape and builds correct structure" {
 
     try lir.Arc.insert(&store, &layouts, .{});
 
-    var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops());
+    var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops(), .preserve);
     defer interp.deinit();
     for ([_]u64{ 0, 1, 3 }) |n| {
         var arg = n;
@@ -607,9 +607,9 @@ test "trmc transforms the canonical repeat shape and builds correct structure" {
 test "trmc'd repeat escapes the interpreter call-depth cap" {
     const allocator = std.testing.allocator;
 
-    // Control: without the transform, depth 2000 exceeds the interpreter's
-    // 1024-frame cap and crashes.
-    {
+    // The interpreter's artificial call-depth cap is a Debug-only diagnostic.
+    // In Debug, verify the untransformed control case exceeds that cap.
+    if (comptime @import("builtin").mode == .Debug) {
         var store = LirStore.init(allocator);
         defer store.deinit();
         var layouts = try layout.Store.init(allocator, base.target.TargetUsize.native);
@@ -623,7 +623,7 @@ test "trmc'd repeat escapes the interpreter call-depth cap" {
         const repeat = try buildRepeatProc(allocator, &b, &store, peano);
         try lir.Arc.insert(&store, &layouts, .{});
 
-        var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops());
+        var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops(), .preserve);
         defer interp.deinit();
         var arg: u64 = 2000;
         try std.testing.expectError(error.Crash, interp.eval(.{
@@ -649,7 +649,7 @@ test "trmc'd repeat escapes the interpreter call-depth cap" {
         try lir.Trmc.run(&store, &layouts);
         try lir.Arc.insert(&store, &layouts, .{});
 
-        var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops());
+        var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops(), .preserve);
         defer interp.deinit();
         var arg: u64 = 2000;
         const result = try interp.eval(.{
@@ -993,7 +993,7 @@ test "mixed construct and plain-tail branches both become jumps" {
 
     // Depth 2000 makes 2000 recursive calls (1000 S nodes): both rewritten
     // branches must loop for this to survive the 1024-frame cap.
-    var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops());
+    var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops(), .preserve);
     defer interp.deinit();
     var arg: u64 = 2000;
     const result = try interp.eval(.{
@@ -1026,23 +1026,23 @@ test "golden: repeat IR before and after the trmc transform" {
     const before = try dumpProcText(allocator, &store, &layouts, repeat);
     defer allocator.free(before);
     try std.testing.expectEqualStrings(
-        \\proc p0 args=[l0:u64] ret=tag_union#17
+        \\proc p0 args=[l0:u64] ret=tag_union#25
         \\  join j0 params=[l1]
         \\    remainder:
         \\      l2:u64 = literal 0
         \\      l3:bool = low_level num_is_eq(l0, l2)
         \\      switch l3 default_cold=false
         \\        case 1:
-        \\          l1:tag_union#17 = tag v0 d0
+        \\          l1:tag_union#25 = tag v0 d0
         \\          jump j0
         \\        default:
         \\          l4:u64 = literal 1
         \\          l5:u64 = low_level num_minus(l0, l4)
-        \\          l6:tag_union#17 = call p0(l5)
-        \\          l7:box#18 = low_level box_box(l6)
-        \\          l8:struct_#19 = struct(l7)
-        \\          l9:tag_union#17 = tag v1 d1 (l8)
-        \\          l1:tag_union#17 = ref.local l9
+        \\          l6:tag_union#25 = call p0(l5)
+        \\          l7:box#26 = low_level box_box(l6)
+        \\          l8:struct_#27 = struct(l7)
+        \\          l9:tag_union#25 = tag v1 d1 (l8)
+        \\          l1:tag_union#25 = ref.local l9
         \\          jump j0
         \\    body:
         \\      ret l1
@@ -1054,10 +1054,10 @@ test "golden: repeat IR before and after the trmc transform" {
     const after = try dumpProcText(allocator, &store, &layouts, repeat);
     defer allocator.free(after);
     try std.testing.expectEqualStrings(
-        \\proc p0 args=[l17:u64] ret=tag_union#17 transform=trmc
+        \\proc p0 args=[l17:u64] ret=tag_union#25 transform=trmc
         \\  join j1 params=[l0, l10, l11]
         \\    remainder:
-        \\      l12:ptr#21 = low_level ptr_alloca()
+        \\      l12:ptr#29 = low_level ptr_alloca()
         \\      set l0 := l17 (initialize_join_param)
         \\      set l10 := l12 (initialize_join_param)
         \\      set l11 := l12 (initialize_join_param)
@@ -1069,22 +1069,22 @@ test "golden: repeat IR before and after the trmc transform" {
         \\          l3:bool = low_level num_is_eq(l0, l2)
         \\          switch l3 default_cold=false
         \\            case 1:
-        \\              l1:tag_union#17 = tag v0 d0
+        \\              l1:tag_union#25 = tag v0 d0
         \\              jump j0
         \\            default:
         \\              l4:u64 = literal 1
         \\              l5:u64 = low_level num_minus(l0, l4)
-        \\              l7:box#18 = low_level box_alloc_zeroed()
-        \\              l15:ptr#21 = low_level ptr_cast(l7)
-        \\              l8:struct_#19 = struct(l7)
-        \\              l9:tag_union#17 = tag v1 d1 (l8)
+        \\              l7:box#26 = low_level box_alloc_zeroed()
+        \\              l15:ptr#29 = low_level ptr_cast(l7)
+        \\              l8:struct_#27 = struct(l7)
+        \\              l9:tag_union#25 = tag v1 d1 (l8)
         \\              l16:zst = low_level ptr_store(l10, l9)
         \\              set l0 := l5 (initialize_join_param)
         \\              set l10 := l15 (initialize_join_param)
         \\              jump j1
         \\        body:
         \\          l14:zst = low_level ptr_store(l10, l1)
-        \\          l13:tag_union#17 = low_level ptr_load(l11)
+        \\          l13:tag_union#25 = low_level ptr_load(l11)
         \\          ret l13
         \\
     , after);

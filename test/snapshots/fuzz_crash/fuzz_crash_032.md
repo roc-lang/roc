@@ -332,39 +332,7 @@ olor = |color| {
 		(e-lambda
 			(args
 				(p-assign (ident "color")))
-			(e-block
-				(s-expr
-					(e-runtime-error (tag "undeclared_type")))
-				(e-match
-					(match
-						(cond
-							(e-lookup-local
-								(p-assign (ident "color"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-runtime-error (tag "type_alias_but_needed_nominal"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-tag (name "LocalStatus"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-runtime-error (tag "pattern_not_canonicalized"))))
-								(value
-									(e-tag (name "Complete"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-runtime-error (tag "undeclared_type"))))
-								(value
-									(e-runtime-error (tag "type_alias_but_needed_nominal")))))))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-underscore)

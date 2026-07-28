@@ -66,14 +66,25 @@ const debug_dir = "test/echo";
 /// Path to the compiled roc binary used for reproducing failures.
 const roc_binary = "./zig-out/bin/roc";
 
-test "numeric try API has no legacy suffix" {
+test "numeric arithmetic API uses method-aligned names" {
     const allocator = base.defaultGpa();
     const ctx = CoreCtx.default(allocator, allocator, std.testing.io);
     const builtin_source = try ctx.readFile(builtin_roc_path, allocator);
     defer allocator.free(builtin_source);
 
-    const legacy_suffix = "_" ++ "checked";
-    try testing.expectEqual(null, std.mem.find(u8, builtin_source, legacy_suffix));
+    const legacy_names = [_][]const u8{
+        "_" ++ "checked",
+        "add" ++ "_try",
+        "sub" ++ "_try",
+        "mul" ++ "_try",
+        "add" ++ "_wrap",
+        "sub" ++ "_wrap",
+        "mul" ++ "_wrap",
+    };
+
+    for (legacy_names) |legacy_name| {
+        try testing.expectEqual(null, std.mem.find(u8, builtin_source, legacy_name));
+    }
 }
 
 const BlockKind = enum {

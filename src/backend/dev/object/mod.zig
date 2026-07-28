@@ -14,10 +14,25 @@ pub const elf = @import("elf.zig");
 pub const macho = @import("macho.zig");
 pub const coff = @import("coff.zig");
 
-/// One 8-byte address field in a DWARF debug section that must be relocated
-/// to the text section's start address plus `addend`.
+/// A section referenced by a field in a DWARF debug section.
+pub const DebugRelocTarget = enum {
+    text,
+    debug_line,
+    debug_abbrev,
+};
+
+/// The encoded width of a relocated field in a DWARF debug section.
+pub const DebugRelocWidth = enum {
+    four,
+    eight,
+};
+
+/// One field in a DWARF debug section that the object linker must relocate
+/// to `target section start + addend`.
 pub const DebugReloc = struct {
     section_offset: u32,
+    target: DebugRelocTarget,
+    width: DebugRelocWidth,
     addend: u64,
 };
 

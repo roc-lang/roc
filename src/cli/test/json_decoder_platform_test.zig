@@ -108,12 +108,21 @@ test "JSON parsing platform derives structural parser without runtime allocation
         try std.fs.path.join(allocator, &.{ tmp_path, camel_direct_exe_name });
     defer allocator.free(camel_direct_output_path);
 
-    var env_map = try util.buildIsolatedTestEnvMap(io, allocator, null);
-    defer env_map.deinit();
+    var env = try util.buildIsolatedTestEnvMap(io, allocator, null);
+    defer env.deinit(io, allocator);
 
     if (prebuilt_path == null) {
-        try buildRocApp(allocator, &env_map, target_name, output_path, "test/json-decoder/app.roc");
+        try buildRocApp(allocator, &env.env_map, target_name, output_path, "test/json-decoder/app.roc");
     }
+
+    try runJsonDecoderAndCheckOutput(allocator, output_path, "42", "42\n");
+    try runJsonDecoderAndCheckOutput(allocator, output_path, " \t42\r\n", "42\n");
+    try runJsonDecoderAndCheckOutput(
+        allocator,
+        output_path,
+        "                                                                42                                                                ",
+        "42\n",
+    );
 
     for (0..8) |case_index| {
         const mask: u8 = @intCast(case_index);
@@ -160,7 +169,7 @@ test "JSON parsing platform derives structural parser without runtime allocation
     try runJsonDecoderAndCheckInvalidUtf8(allocator, output_path);
 
     if (camel_prebuilt_path == null) {
-        try buildRocApp(allocator, &env_map, target_name, camel_output_path, "test/json-decoder/camel_app.roc");
+        try buildRocApp(allocator, &env.env_map, target_name, camel_output_path, "test/json-decoder/camel_app.roc");
     }
     try expectBinaryOmits(allocator, camel_output_path, &.{ "cache_control", "first_value", "inner_value", "nested_record", "second_value", "user_id" });
     try runJsonDecoderAndCheckOutput(
@@ -171,7 +180,7 @@ test "JSON parsing platform derives structural parser without runtime allocation
     );
 
     if (camel_direct_prebuilt_path == null) {
-        try buildRocApp(allocator, &env_map, target_name, camel_direct_output_path, "test/json-decoder/camel_direct_app.roc");
+        try buildRocApp(allocator, &env.env_map, target_name, camel_direct_output_path, "test/json-decoder/camel_direct_app.roc");
     }
     try runJsonDecoderAndCheckOutput(
         allocator,

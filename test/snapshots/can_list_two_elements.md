@@ -44,8 +44,7 @@ NO CHANGE
 (e-list
 	(elems
 		(e-num (value "1"))
-		(e-string
-			(e-literal (string "hello")))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

@@ -796,3 +796,17 @@ test "check - repro - B092 - ambiguous List.sum on empty list is rejected" {
 
     try std.testing.expect(test_env.checker.problems.problems.items.len > 0);
 }
+
+test "check - repro - issue 10184 - tag syntax for value-backed nominal reports an error" {
+    // Repro for https://github.com/roc-lang/roc/issues/10184: using tag
+    // construction syntax for a value-backed nominal must produce a diagnostic.
+    const src =
+        \\T := I64
+        \\value = T.I64(42)
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Invalid Nominal Tag");
+}

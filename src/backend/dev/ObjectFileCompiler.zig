@@ -202,6 +202,7 @@ fn compileWithCodeGen(
         lir_store,
         layout_store,
         static_strings.entries,
+        .preserve,
     ) catch return CompilationError.OutOfMemory;
     defer codegen.deinit();
 

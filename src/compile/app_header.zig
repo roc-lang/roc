@@ -16,6 +16,7 @@ const std = @import("std");
 const base = @import("base");
 const parse = @import("parse");
 const can = @import("can");
+const compiler_platforms = @import("compiler_platforms.zig");
 
 const Allocator = std.mem.Allocator;
 const Io = @import("ctx").CoreCtx;
@@ -31,10 +32,22 @@ pub const PackageEntry = struct {
     spec: []const u8,
 };
 
+/// The platform an `app` header references: none, a path/URL spec as
+/// written in source, or a compiler-owned platform ident such as `glue`.
+pub const PlatformRef = union(enum) {
+    none,
+    path_or_url: []const u8,
+    compiler_owned: compiler_platforms.CompilerOwnedPlatform,
+};
+
 /// Information extracted from an `app` header. All slices are arena-owned
 /// by the `arena` allocator passed to `parseAppHeader`.
 pub const AppHeaderInfo = struct {
+    /// Authoritative platform reference from the app header.
+    platform_ref: PlatformRef,
     /// Raw platform spec (the string literal after `platform`). Empty if absent.
+    /// For compiler-owned platform references, this remains empty; callers
+    /// should use `platform_ref`.
     platform_spec: []const u8,
     /// Platform qualifier (the key in `{ pf: platform "..." }`). Null if absent.
     platform_qualifier: ?[]const u8,
@@ -86,10 +99,16 @@ pub fn parseAppHeader(
 
     const platform_field = ast.store.getRecordField(app.platform_idx);
 
-    const platform_spec: []const u8 = blk: {
-        const value_expr = platform_field.value orelse break :blk "";
-        const s = stringFromExpr(ast, value_expr) catch break :blk "";
-        break :blk try arena.dupe(u8, s);
+    const platform_ref: PlatformRef = blk: {
+        const value_expr = platform_field.value orelse break :blk .none;
+        break :blk platformRefFromExpr(ast, value_expr, arena) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.ExpectedPlatformRef => .none,
+        };
+    };
+    const platform_spec: []const u8 = switch (platform_ref) {
+        .path_or_url => |spec| spec,
+        .compiler_owned, .none => "",
     };
 
     const platform_qualifier: ?[]const u8 = blk: {
@@ -132,9 +151,31 @@ pub fn parseAppHeader(
     }
 
     return .{
+        .platform_ref = platform_ref,
         .platform_spec = platform_spec,
         .platform_qualifier = platform_qualifier,
         .non_platform_packages = try entries.toOwnedSlice(),
+    };
+}
+
+fn platformRefFromExpr(
+    ast: *parse.AST,
+    expr_idx: parse.AST.Expr.Idx,
+    arena: Allocator,
+) (Allocator.Error || error{ExpectedPlatformRef})!PlatformRef {
+    const e = ast.store.getExpr(expr_idx);
+    return switch (e) {
+        .string => {
+            const s = stringFromExpr(ast, expr_idx) catch return error.ExpectedPlatformRef;
+            return .{ .path_or_url = try arena.dupe(u8, s) };
+        },
+        .ident => |ident| {
+            if (ident.qualifiers.span.len != 0) return error.ExpectedPlatformRef;
+            const text = ast.resolve(ident.token);
+            const platform = compiler_platforms.fromHeaderIdent(text) orelse return error.ExpectedPlatformRef;
+            return .{ .compiler_owned = platform };
+        },
+        else => error.ExpectedPlatformRef,
     };
 }
 

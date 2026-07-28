@@ -121,7 +121,7 @@ pub const RepresentationMirror = struct {
     /// The engine slot modelling a node's representation, if one exists. For
     /// tests and the seal comparison.
     pub fn slotOf(self: *RepresentationMirror, node: NodeId) ?closure.RepresentationSlotId {
-        return self.node_slots.get(self.graph.rootOf(node));
+        return self.node_slots.get(self.graph.rootNode(node));
     }
 
     pub fn destroy(self: *RepresentationMirror) void {
@@ -136,23 +136,24 @@ pub const RepresentationMirror = struct {
 
     // --- Decision-site hooks (reunify.md section 10.3) ---
 
-    /// Mirror an iterator tier join the graph classified (`applyIteratorJoin`).
-    /// Builds an iterator slot for each operand and relates them under the rule
-    /// matching the policy's tier decision.
+    /// Mirror an iterator tier join the graph classified. Builds an iterator slot
+    /// for each operand and relates them under the rule matching the graph's tier
+    /// decision. The graph's `iteratorRelation` is the authority for which tier
+    /// relation applies; the engine only models the relation it is handed.
     pub fn mirrorIteratorJoin(
         self: *RepresentationMirror,
         left: NodeId,
         right: NodeId,
-        join: policy.IteratorJoin,
+        relation: Type.IteratorRelation,
     ) void {
         if (self.disabled) return;
-        const rule: closure.RepresentationRule = switch (join.relation) {
+        const rule: closure.RepresentationRule = switch (relation) {
             .public_minted => .iterator_public_minted,
             .forced_dynamic => .iterator_forced_dynamic,
             .minted_join => .iterator_minted_join,
             .ordinary => return,
         };
-        const site: SiteRule = switch (join.relation) {
+        const site: SiteRule = switch (relation) {
             .public_minted => .iterator_public_minted,
             .forced_dynamic => .iterator_forced_dynamic,
             .minted_join => .iterator_minted_join,
@@ -188,8 +189,8 @@ pub const RepresentationMirror = struct {
     ) void {
         const left_slot = self.slotForNode(left, 0) orelse return self.fail();
         const right_slot = self.slotForNode(right, 0) orelse return self.fail();
-        self.site_rules.put(self.allocator, self.graph.rootOf(left), site) catch return self.fail();
-        self.site_rules.put(self.allocator, self.graph.rootOf(right), site) catch return self.fail();
+        self.site_rules.put(self.allocator, self.graph.rootNode(left), site) catch return self.fail();
+        self.site_rules.put(self.allocator, self.graph.rootNode(right), site) catch return self.fail();
         self.engine.relate(left_slot, right_slot, rule) catch |err| switch (err) {
             error.LogicallyUnequal => census.bump("representation_mirror_relate_rejected"),
             else => self.fail(),
@@ -269,7 +270,7 @@ pub const RepresentationMirror = struct {
         while (it.next()) |entry| {
             const node = entry.key_ptr.*;
             const site = entry.value_ptr.*;
-            const slot = self.node_slots.get(self.graph.rootOf(node)) orelse continue;
+            const slot = self.node_slots.get(self.graph.rootNode(node)) orelse continue;
             const representative = self.engine.find(slot);
             const gop = compared.getOrPut(self.allocator, representative) catch return self.fail();
             if (gop.found_existing) continue;
@@ -297,7 +298,7 @@ pub const RepresentationMirror = struct {
     }
 
     fn compareIterator(self: *RepresentationMirror, node: NodeId, site: SiteRule) void {
-        const root = self.graph.rootOf(node);
+        const root = self.graph.rootNode(node);
         const slot = self.node_slots.get(root) orelse return;
         const engine_shape = self.engine.shapeOf(slot);
         const engine_descriptor = switch (engine_shape) {
@@ -349,7 +350,7 @@ pub const RepresentationMirror = struct {
     /// by its union-find root. Returns null on allocation failure so the caller
     /// disables the mirror. A backing cycle returns a fresh opaque leaf.
     fn slotForNode(self: *RepresentationMirror, node: NodeId, depth: u32) ?closure.RepresentationSlotId {
-        const root = self.graph.rootOf(node);
+        const root = self.graph.rootNode(node);
         if (self.node_slots.get(root)) |existing| return existing;
         if (depth >= max_slot_depth or self.in_progress.contains(root)) {
             return self.freshLeaf(root);
@@ -531,21 +532,18 @@ const testing = std.testing;
 const MirrorFixture = struct {
     type_store: Type.Store,
     name_store: names.NameStore,
-    unsolved_monos: std.AutoHashMap(Type.TypeId, void),
     graph: *InstGraph,
 
     fn init(allocator: Allocator) Allocator.Error!MirrorFixture {
         var fixture: MirrorFixture = .{
             .type_store = Type.Store.init(allocator),
             .name_store = names.NameStore.init(allocator),
-            .unsolved_monos = std.AutoHashMap(Type.TypeId, void).init(allocator),
             .graph = undefined,
         };
         fixture.graph = try InstGraph.create(
             allocator,
             &fixture.type_store,
             &fixture.name_store,
-            &fixture.unsolved_monos,
         );
         return fixture;
     }
@@ -556,7 +554,6 @@ const MirrorFixture = struct {
 
     fn deinit(self: *MirrorFixture) void {
         self.graph.destroy();
-        self.unsolved_monos.deinit();
         self.name_store.deinit();
         self.type_store.deinit();
     }
@@ -659,7 +656,7 @@ test "sealed engine descriptor agrees with the graph node on a hand-built join" 
 
     // The seal comparison reads the graph node's final content (the minted
     // winner) and the engine's representative descriptor; they must agree.
-    const root = fixture.graph.rootOf(iters.public_iter);
+    const root = fixture.graph.rootNode(iters.public_iter);
     const graph_named = switch (fixture.graph.content(root)) {
         .named => |named| named,
         else => return error.TestUnexpectedResult,

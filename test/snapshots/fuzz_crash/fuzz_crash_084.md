@@ -65,12 +65,7 @@ t = |
 (can-ir
 	(d-let
 		(p-assign (ident "t"))
-		(e-lambda
-			(args
-				(p-tuple
-					(patterns
-						(p-runtime-error (tag "not_implemented")))))
-			(e-num (value "0")))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

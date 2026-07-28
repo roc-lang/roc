@@ -180,6 +180,14 @@ pub const CommonIdents = extern struct {
     f32_type: Ident.Idx,
     f64_type: Ident.Idx,
     dec_type: Ident.Idx,
+    u8x16_type: Ident.Idx,
+    i8x16_type: Ident.Idx,
+    u16x8_type: Ident.Idx,
+    i16x8_type: Ident.Idx,
+    u32x4_type: Ident.Idx,
+    i32x4_type: Ident.Idx,
+    u64x2_type: Ident.Idx,
+    i64x2_type: Ident.Idx,
     bool_type: Ident.Idx,
 
     // Field/tag names used during type checking and evaluation
@@ -300,6 +308,14 @@ pub const CommonIdents = extern struct {
             .f32_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.F32")),
             .f64_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.F64")),
             .dec_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Dec")),
+            .u8x16_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U8x16")),
+            .i8x16_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I8x16")),
+            .u16x8_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U16x8")),
+            .i16x8_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I16x8")),
+            .u32x4_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U32x4")),
+            .i32x4_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I32x4")),
+            .u64x2_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U64x2")),
+            .i64x2_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I64x2")),
             .bool_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Bool")),
             .before_dot = try common.insertIdent(gpa, Ident.for_text("before_dot")),
             .after_dot = try common.insertIdent(gpa, Ident.for_text("after_dot")),
@@ -421,6 +437,14 @@ pub const CommonIdents = extern struct {
             .f32_type = common.findIdent("Builtin.Num.F32") orelse unreachable,
             .f64_type = common.findIdent("Builtin.Num.F64") orelse unreachable,
             .dec_type = common.findIdent("Builtin.Num.Dec") orelse unreachable,
+            .u8x16_type = common.findIdent("Builtin.Num.U8x16") orelse unreachable,
+            .i8x16_type = common.findIdent("Builtin.Num.I8x16") orelse unreachable,
+            .u16x8_type = common.findIdent("Builtin.Num.U16x8") orelse unreachable,
+            .i16x8_type = common.findIdent("Builtin.Num.I16x8") orelse unreachable,
+            .u32x4_type = common.findIdent("Builtin.Num.U32x4") orelse unreachable,
+            .i32x4_type = common.findIdent("Builtin.Num.I32x4") orelse unreachable,
+            .u64x2_type = common.findIdent("Builtin.Num.U64x2") orelse unreachable,
+            .i64x2_type = common.findIdent("Builtin.Num.I64x2") orelse unreachable,
             .bool_type = common.findIdent("Builtin.Bool") orelse unreachable,
             .before_dot = common.findIdent("before_dot") orelse unreachable,
             .after_dot = common.findIdent("after_dot") orelse unreachable,
@@ -549,17 +573,27 @@ pub const MethodBinding = extern struct {
 /// associated methods to be published through the module exposure table.
 pub const MethodDefs = SortedArrayBuilder(MethodKey, MethodBinding);
 
-/// Checked dispatch metadata for one source `for` loop.
-///
-/// Checking writes this when it creates the loop's required `iter` and `next`
-/// static-dispatch constraints. Checked artifact publication consumes it to
-/// publish an explicit iterator-for plan for mono lowering.
+/// Exact checker-owned shape of an iterator step result.
+pub const IteratorStepTopology = extern struct {
+    done_tag_ident: u32,
+    one_tag_ident: u32,
+    skip_tag_ident: u32,
+    item_field_ident: u32,
+    rest_field_ident: u32,
+    one_payload_var: u32,
+    skip_payload_var: u32,
+};
+
+/// Checked dispatch and topology metadata for one source `for` loop.
+/// Later stages consume these exact identities instead of inferring the
+/// iterator protocol from names or row shapes.
 pub const ForLoopDispatchPlan = extern struct {
     node_idx: u32,
     pattern_idx: u32,
     iterable_idx: u32,
     iter_fn_var: u32,
     next_fn_var: u32,
+    step_topology: IteratorStepTopology,
 
     pub const SafeList = collections.SafeList(@This());
 };
@@ -892,6 +926,12 @@ store: NodeStore,
 /// Set after canonicalization completes. Must not be accessed before then.
 evaluation_order: ?*DependencyGraph.EvaluationOrder,
 
+/// Exact strict-demand edges between top-level definitions. Canonicalization
+/// produces this data and serialization preserves it for checked-artifact
+/// publication; unlike `evaluation_order`, it is not a transient traversal aid.
+top_level_demand_dependencies: DependencyGraph.Dependency.SafeList,
+top_level_demand_dependencies_ready: bool,
+
 /// True only after `check.TypedCIR.prepareRuntimeEnv` has prepared this env for
 /// checked-artifact consumption. Serialized user modules intentionally do not
 /// preserve this flag; the baked builtin module does, because its static env is
@@ -960,6 +1000,9 @@ pub const ProvidesEntry = struct {
     ident: Ident.Idx,
     /// The FFI symbol string (e.g., "main")
     ffi_symbol: StringLiteral.Idx,
+    /// The platform-local definition selected by this declaration, or null
+    /// when canonicalization diagnosed an invalid target.
+    local_def: ?CIR.Def.Idx,
 
     pub const SafeList = collections.SafeList(@This());
 };
@@ -1036,6 +1079,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.imports.relocate(offset);
     self.file_dependencies.relocate(offset);
     self.store.relocate(offset);
+    self.top_level_demand_dependencies.relocate(offset);
     self.method_idents.relocate(offset);
     self.method_defs.relocate(offset);
     self.for_loop_dispatch_plans.relocate(offset);
@@ -1067,6 +1111,8 @@ pub fn initCIRFields(self: *Self, module_name: []const u8) Allocator.Error!void 
     self.diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
     // Note: self.store already exists from ModuleEnv.init(), so we don't create a new one
     self.evaluation_order = null; // Will be set after canonicalization completes
+    self.top_level_demand_dependencies = .{};
+    self.top_level_demand_dependencies_ready = false;
     self.runtime_prepared = false;
 }
 
@@ -1115,6 +1161,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
         .store = try NodeStore.initCapacity(gpa, node_capacity),
         .evaluation_order = null, // Will be set after canonicalization completes
+        .top_level_demand_dependencies = .{},
+        .top_level_demand_dependencies_ready = false,
         .runtime_prepared = false,
         .idents = idents,
         .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
@@ -1159,6 +1207,7 @@ pub fn deinit(self: *Self) void {
     self.scheme_snapshot_binders.deinit(self.gpa);
     self.scheme_use_sites.deinit(self.gpa);
     self.scheme_use_site_actuals.deinit(self.gpa);
+    self.top_level_demand_dependencies.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
 
@@ -1166,6 +1215,41 @@ pub fn deinit(self: *Self) void {
         eval_order.deinit();
         self.gpa.destroy(eval_order);
     }
+}
+
+/// Replace the module's exact strict-demand relation with freshly produced
+/// canonical dependency data. Ownership of `dependencies` transfers here.
+pub fn setTopLevelDemandDependencies(
+    self: *Self,
+    dependencies: DependencyGraph.Dependency.SafeList,
+) void {
+    self.top_level_demand_dependencies.deinit(self.gpa);
+    self.top_level_demand_dependencies = dependencies;
+    self.top_level_demand_dependencies_ready = true;
+}
+
+/// Return the exact strict-demand relation produced by canonicalization.
+pub fn topLevelDemandDependencies(self: *const Self) []const DependencyGraph.Dependency {
+    std.debug.assert(self.top_level_demand_dependencies_ready);
+    return self.top_level_demand_dependencies.items.items;
+}
+
+/// Whether canonicalization has produced the exact strict-demand relation.
+pub fn topLevelDemandDependenciesReady(self: *const Self) bool {
+    return self.top_level_demand_dependencies_ready;
+}
+
+/// Whether one exact strict-demand edge was produced by canonicalization.
+pub fn hasTopLevelDemandDependency(
+    self: *const Self,
+    dependent: CIR.Def.Idx,
+    dependency: CIR.Def.Idx,
+) bool {
+    return DependencyGraph.hasDependency(
+        self.topLevelDemandDependencies(),
+        dependent,
+        dependency,
+    );
 }
 
 /// Deinitialize a cached module environment.
@@ -1620,6 +1704,42 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("You can fix this by either defining ");
             try report.document.addUnqualifiedSymbol(owned_ident);
             try report.document.addReflowingText(" in this module, or by removing it from the list of exposed values.");
+
+            break :blk report;
+        },
+        .provided_value_is_required => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const ident_name = self.getIdent(data.ident);
+            const is_effectful = std.mem.endsWith(u8, ident_name, "!");
+            const stem = if (is_effectful) ident_name[0 .. ident_name.len - 1] else ident_name;
+            const example = try std.fmt.allocPrint(
+                allocator,
+                "{s}_for_host{s} = {s}",
+                .{ stem, if (is_effectful) "!" else "", ident_name },
+            );
+            defer allocator.free(example);
+
+            var report = try Report.init(allocator, "Required Value in Provides", "", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.headline.addUnqualifiedSymbol(owned_ident);
+            try report.headline.addReflowingText(" is supplied by the app through the platform's ");
+            try report.headline.addInlineCode("requires");
+            try report.headline.addReflowingText(" section, so ");
+            try report.headline.addInlineCode("provides");
+            try report.headline.addReflowingText(" cannot expose it to the host directly.");
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.addSourceContext(region_info, owned_filename, self.getSourceAll(), self.getLineStartsAll());
+
+            try report.document.addReflowingText("Define a platform-local entrypoint which forwards to ");
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(", then reference that entrypoint from ");
+            try report.document.addInlineCode("provides");
+            try report.document.addReflowingText(". For example:");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_example = try report.addOwnedString(example);
+            try report.document.addInlineCode(owned_example);
 
             break :blk report;
         },
@@ -3394,8 +3514,10 @@ pub const Serialized = extern struct {
     diagnostics: CIR.Diagnostic.Span,
     store: NodeStore.Serialized,
     evaluation_order_reserved: u64, // Reserved space for evaluation_order field (required for in-place deserialization cast)
+    top_level_demand_dependencies: DependencyGraph.Dependency.SafeList.Serialized,
+    top_level_demand_dependencies_ready: bool,
     runtime_prepared: bool,
-    runtime_prepared_padding: [7]u8,
+    runtime_prepared_padding: [6]u8,
     // Well-known identifier indices (serialized directly, no lookup needed during deserialization)
     idents: CommonIdents,
     import_mapping_reserved: [6]u64, // Reserved space for import_mapping (AutoHashMap is ~40 bytes), initialized at runtime
@@ -3478,6 +3600,12 @@ pub const Serialized = extern struct {
         // Serialize NodeStore
         try self.store.serialize(&env.store, allocator, writer);
 
+        try self.top_level_demand_dependencies.serialize(
+            &env.top_level_demand_dependencies,
+            allocator,
+            writer,
+        );
+
         // Set gpa, module_name, evaluation_order_reserved to zeros;
         // these are runtime-only and will be set during deserialization.
         // Preserve display_module_name_idx since the ident store is also serialized and indices remain valid.
@@ -3490,8 +3618,9 @@ pub const Serialized = extern struct {
         self.self_module_identity_reserved = @intFromEnum(env.self_module_identity);
         self.self_module_identity_padding = 0;
         self.evaluation_order_reserved = 0;
+        self.top_level_demand_dependencies_ready = env.top_level_demand_dependencies_ready;
         self.runtime_prepared = env.module_role == .builtin and env.runtime_prepared;
-        self.runtime_prepared_padding = .{ 0, 0, 0, 0, 0, 0, 0 };
+        self.runtime_prepared_padding = .{ 0, 0, 0, 0, 0, 0 };
         // Serialize well-known identifier indices directly (no lookup needed during deserialization)
         self.idents = env.idents;
         // import_mapping is runtime-only and initialized fresh during deserialization
@@ -3562,6 +3691,8 @@ pub const Serialized = extern struct {
             .diagnostics = self.diagnostics,
             .store = self.store.deserializeInto(base_addr, gpa),
             .evaluation_order = null, // Not serialized, will be recomputed if needed
+            .top_level_demand_dependencies = self.top_level_demand_dependencies.deserializeInto(base_addr),
+            .top_level_demand_dependencies_ready = self.top_level_demand_dependencies_ready,
             .runtime_prepared = self.runtime_prepared,
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
@@ -3625,6 +3756,8 @@ pub const Serialized = extern struct {
             .diagnostics = self.diagnostics,
             .store = self.store.deserializeInto(base_addr, gpa),
             .evaluation_order = null,
+            .top_level_demand_dependencies = self.top_level_demand_dependencies.deserializeInto(base_addr),
+            .top_level_demand_dependencies_ready = self.top_level_demand_dependencies_ready,
             .runtime_prepared = self.runtime_prepared,
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
@@ -3690,6 +3823,8 @@ pub const Serialized = extern struct {
             // Use deserializeWithCopy for NodeStore so regions can be extended
             .store = try self.store.deserializeWithCopy(base_addr, gpa),
             .evaluation_order = null,
+            .top_level_demand_dependencies = self.top_level_demand_dependencies.deserializeInto(base_addr),
+            .top_level_demand_dependencies_ready = self.top_level_demand_dependencies_ready,
             .runtime_prepared = self.runtime_prepared,
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
@@ -3729,6 +3864,7 @@ pub fn recordForLoopDispatchPlan(
     iterable_idx: Node.Idx,
     iter_fn_var: TypeVar,
     next_fn_var: TypeVar,
+    step_topology: IteratorStepTopology,
 ) std.mem.Allocator.Error!void {
     const raw_node: u32 = @intFromEnum(node_idx);
     const raw_pattern: u32 = @intFromEnum(pattern_idx);
@@ -3741,6 +3877,7 @@ pub fn recordForLoopDispatchPlan(
             .iterable_idx = raw_iterable,
             .iter_fn_var = @intFromEnum(iter_fn_var),
             .next_fn_var = @intFromEnum(next_fn_var),
+            .step_topology = step_topology,
         };
         return;
     }
@@ -3750,6 +3887,7 @@ pub fn recordForLoopDispatchPlan(
         .iterable_idx = raw_iterable,
         .iter_fn_var = @intFromEnum(iter_fn_var),
         .next_fn_var = @intFromEnum(next_fn_var),
+        .step_topology = step_topology,
     });
 }
 

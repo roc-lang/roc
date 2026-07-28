@@ -327,6 +327,7 @@ fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) 
         &lowered.view.store,
         &lowered.view.layouts,
         runtime_env.get_ops(),
+        .preserve,
     );
     defer interp.deinit();
 
@@ -363,6 +364,7 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendE
             &lowered.view.store,
             &lowered.view.layouts,
             static_strings.entries,
+            .preserve,
         );
         defer codegen.deinit();
         try codegen.compileAllProcSpecs(lowered.view.store.getProcSpecs());
@@ -542,11 +544,18 @@ fn runSingleTest(io: std.Io, allocator: std.mem.Allocator, tc: TestCase) TestOut
     return .{ .status = .pass, .backends = backends };
 }
 
-fn serializeOutcome(fd: posix.fd_t, outcome: TestOutcome, duration_ns: u64) void {
+/// Build the wire bytes for a TestOutcome into `out`. Shared by the raw
+/// pipe serializer and the u32-length-prefixed streamed variant.
+fn appendOutcomeBytes(
+    out: *std.ArrayListUnmanaged(u8),
+    gpa: std.mem.Allocator,
+    outcome: TestOutcome,
+    duration_ns: u64,
+) std.mem.Allocator.Error!void {
     var run_bufs: [NUM_BACKENDS]?[]u8 = .{ null, null };
     defer {
         for (run_bufs) |maybe_buf| {
-            if (maybe_buf) |buf| base.defaultGpa().free(buf);
+            if (maybe_buf) |buf| gpa.free(buf);
         }
     }
 
@@ -566,12 +575,13 @@ fn serializeOutcome(fd: posix.fd_t, outcome: TestOutcome, duration_ns: u64) void
         header.backend_message_lens[i] = if (backend_detail.message) |msg| @intCast(msg.len) else 0;
         if (backend_detail.run) |run| {
             var buf: std.ArrayListUnmanaged(u8) = .empty;
-            appendEncodedRun(base.defaultGpa(), &buf, run) catch {
+            appendEncodedRun(gpa, &buf, run) catch {
+                buf.deinit(gpa);
                 header.backend_run_lens[i] = 0;
                 continue;
             };
-            const owned = buf.toOwnedSlice(base.defaultGpa()) catch {
-                buf.deinit(base.defaultGpa());
+            const owned = buf.toOwnedSlice(gpa) catch {
+                buf.deinit(gpa);
                 header.backend_run_lens[i] = 0;
                 continue;
             };
@@ -582,14 +592,21 @@ fn serializeOutcome(fd: posix.fd_t, outcome: TestOutcome, duration_ns: u64) void
         }
     }
 
-    harness.writeAll(fd, std.mem.asBytes(&header));
-    if (outcome.message) |msg| harness.writeAll(fd, msg);
+    try out.appendSlice(gpa, std.mem.asBytes(&header));
+    if (outcome.message) |msg| try out.appendSlice(gpa, msg);
     for (outcome.backends) |backend_detail| {
-        if (backend_detail.message) |msg| harness.writeAll(fd, msg);
+        if (backend_detail.message) |msg| try out.appendSlice(gpa, msg);
     }
     for (run_bufs) |maybe_buf| {
-        if (maybe_buf) |buf| harness.writeAll(fd, buf);
+        if (maybe_buf) |buf| try out.appendSlice(gpa, buf);
     }
+}
+
+fn serializeOutcome(fd: posix.fd_t, outcome: TestOutcome, duration_ns: u64) void {
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    defer out.deinit(base.defaultGpa());
+    appendOutcomeBytes(&out, base.defaultGpa(), outcome, duration_ns) catch return;
+    harness.writeAll(fd, out.items);
 }
 
 fn deserializeOutcome(buf: []const u8, gpa: std.mem.Allocator) ?TestResult {
@@ -648,6 +665,23 @@ fn serializeResultForPool(fd: posix.fd_t, result: TestResult) void {
     serializeOutcome(fd, outcome, result.duration_ns);
 }
 
+/// Streamed variant for persistent worker mode: the same wire bytes behind a
+/// u32 frame-length prefix. This runner passes a null worker argv template,
+/// so the pool never spawns streaming workers today; wired for the shared
+/// PoolConfig contract.
+fn serializeResultStreamedForPool(fd: posix.fd_t, result: TestResult) void {
+    const outcome: TestOutcome = .{
+        .status = result.status,
+        .message = result.message,
+        .backends = result.backends,
+    };
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    defer out.deinit(base.defaultGpa());
+    appendOutcomeBytes(&out, base.defaultGpa(), outcome, result.duration_ns) catch return;
+    harness.writeFrameHeader(fd, out.items.len);
+    harness.writeAll(fd, out.items);
+}
+
 fn dupeOptional(gpa: std.mem.Allocator, value: ?[]const u8) ?[]const u8 {
     return if (value) |slice| gpa.dupe(u8, slice) catch null else null;
 }
@@ -694,6 +728,7 @@ const timeout_result: TestResult = .{
 const Pool = harness.ProcessPool(TestCase, TestResult, .{
     .runTest = &runTestForPool,
     .serialize = &serializeResultForPool,
+    .serializeStreamed = &serializeResultStreamedForPool,
     .deserialize = &deserializeOutcome,
     .default_result = default_result,
     .timeout_result = timeout_result,

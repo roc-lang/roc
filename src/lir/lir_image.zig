@@ -1,10 +1,10 @@
 //! Shared-memory ARC-inserted LIR image for interpreter-shim execution.
 //!
 //! The parent process owns checking and post-check compilation. It completes
-//! checked modules, lowers directly to LIR, inserts ARC, and then writes a small
-//! offset table into the existing shared-memory allocator. The child process maps
-//! the same shared-memory object and views the LIR/layout arrays in place; it
-//! never reconstructs compiler data.
+//! checked modules, lowers directly to LIR, inserts ARC, and then places the
+//! exact finalized LIR/layout arrays plus an offset table in shared memory. The
+//! child process maps the same object and views those arrays in place; it never
+//! reconstructs compiler data.
 
 const std = @import("std");
 const base = @import("base");
@@ -29,13 +29,18 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///     rather than recorded in the header.
 /// v10: LIR proc specs carry explicit native stack-probe requirements.
 /// v11: LocalSpan lengths are u32 for large proc frame-local spans.
-pub const FORMAT_VERSION: u32 = 11;
+/// v12: statements carry virtual inline-scope ids and the image stores the
+///      corresponding source-procedure/call-site graph.
+pub const FORMAT_VERSION: u32 = 12;
 
 /// Public `ImageError` declaration.
 pub const ImageError = error{
     InvalidLirImage,
     UnsupportedLirImageVersion,
 };
+
+/// Errors produced while copying finalized LIR into an image buffer.
+pub const CopyError = std.mem.Allocator.Error || ImageError;
 
 /// Direct interpreter entrypoint written by the parent.
 pub const PlatformEntrypoint = extern struct {
@@ -99,6 +104,8 @@ pub const LirStoreImage = extern struct {
     source_file_ends: ArrayRef,
     cf_stmt_locs: ArrayRef,
     cf_stmt_regions: ArrayRef,
+    cf_stmt_inline_scopes: ArrayRef,
+    inline_scopes: ArrayRef,
     proc_locs: ArrayRef,
     proc_debug_names: ArrayRef,
     local_names: ArrayRef,
@@ -120,9 +127,41 @@ pub const LirStoreImage = extern struct {
             .source_file_ends = try arrayRef(base_ptr, image_size, store.source_file_ends.unsafeRawItemsForView()),
             .cf_stmt_locs = try arrayRef(base_ptr, image_size, store.cf_stmt_locs.unsafeRawItemsForView()),
             .cf_stmt_regions = try arrayRef(base_ptr, image_size, store.cf_stmt_regions.unsafeRawItemsForView()),
+            .cf_stmt_inline_scopes = try arrayRef(base_ptr, image_size, store.cf_stmt_inline_scopes.unsafeRawItemsForView()),
+            .inline_scopes = try arrayRef(base_ptr, image_size, store.inline_scopes.unsafeRawItemsForView()),
             .proc_locs = try arrayRef(base_ptr, image_size, store.proc_locs.unsafeRawItemsForView()),
             .proc_debug_names = try arrayRef(base_ptr, image_size, store.proc_debug_names.unsafeRawItemsForView()),
             .local_names = try arrayRef(base_ptr, image_size, store.local_names.unsafeRawItemsForView()),
+        };
+    }
+
+    fn copyFromStore(
+        allocator: std.mem.Allocator,
+        base_ptr: [*]align(1) const u8,
+        image_capacity: usize,
+        store: *const LirStore,
+    ) CopyError!LirStoreImage {
+        return .{
+            .cf_stmts = try copyArrayRef(allocator, base_ptr, image_capacity, store.cf_stmts.unsafeRawItemsForView()),
+            .cf_switch_branches = try copyArrayRef(allocator, base_ptr, image_capacity, store.cf_switch_branches.unsafeRawItemsForView()),
+            .str_match_steps = try copyArrayRef(allocator, base_ptr, image_capacity, store.str_match_steps.unsafeRawItemsForView()),
+            .str_match_arms = try copyArrayRef(allocator, base_ptr, image_capacity, store.str_match_arms.unsafeRawItemsForView()),
+            .join_points = try copyArrayRef(allocator, base_ptr, image_capacity, store.join_points.unsafeRawItemsForView()),
+            .locals = try copyArrayRef(allocator, base_ptr, image_capacity, store.locals.unsafeRawItemsForView()),
+            .local_ids = try copyArrayRef(allocator, base_ptr, image_capacity, store.local_ids.unsafeRawItemsForView()),
+            .u64s = try copyArrayRef(allocator, base_ptr, image_capacity, store.u64s.unsafeRawItemsForView()),
+            .proc_specs = try copyArrayRef(allocator, base_ptr, image_capacity, store.proc_specs.unsafeRawItemsForView()),
+            .strings = try StringLiteralStoreImage.copyFromStore(allocator, base_ptr, image_capacity, &store.strings),
+            .next_synthetic_symbol = store.next_synthetic_symbol,
+            .source_file_bytes = try copyArrayRef(allocator, base_ptr, image_capacity, store.source_file_bytes.unsafeRawItemsForView()),
+            .source_file_ends = try copyArrayRef(allocator, base_ptr, image_capacity, store.source_file_ends.unsafeRawItemsForView()),
+            .cf_stmt_locs = try copyArrayRef(allocator, base_ptr, image_capacity, store.cf_stmt_locs.unsafeRawItemsForView()),
+            .cf_stmt_regions = try copyArrayRef(allocator, base_ptr, image_capacity, store.cf_stmt_regions.unsafeRawItemsForView()),
+            .cf_stmt_inline_scopes = try copyArrayRef(allocator, base_ptr, image_capacity, store.cf_stmt_inline_scopes.unsafeRawItemsForView()),
+            .inline_scopes = try copyArrayRef(allocator, base_ptr, image_capacity, store.inline_scopes.unsafeRawItemsForView()),
+            .proc_locs = try copyArrayRef(allocator, base_ptr, image_capacity, store.proc_locs.unsafeRawItemsForView()),
+            .proc_debug_names = try copyArrayRef(allocator, base_ptr, image_capacity, store.proc_debug_names.unsafeRawItemsForView()),
+            .local_names = try copyArrayRef(allocator, base_ptr, image_capacity, store.local_names.unsafeRawItemsForView()),
         };
     }
 
@@ -148,11 +187,14 @@ pub const LirStoreImage = extern struct {
             .source_file_ends = try guardedListFromRef(u32, "LirStore.source_file_ends", base_ptr, image_size, self.source_file_ends),
             .cf_stmt_locs = try guardedListFromRef(base.SourceLoc, "LirStore.cf_stmt_locs", base_ptr, image_size, self.cf_stmt_locs),
             .cf_stmt_regions = try guardedListFromRef(base.Region, "LirStore.cf_stmt_regions", base_ptr, image_size, self.cf_stmt_regions),
+            .cf_stmt_inline_scopes = try guardedListFromRef(LIR.InlineScopeId, "LirStore.cf_stmt_inline_scopes", base_ptr, image_size, self.cf_stmt_inline_scopes),
+            .inline_scopes = try guardedListFromRef(LIR.InlineScope, "LirStore.inline_scopes", base_ptr, image_size, self.inline_scopes),
             .proc_locs = try guardedListFromRef(base.SourceLoc, "LirStore.proc_locs", base_ptr, image_size, self.proc_locs),
             .proc_debug_names = try guardedListFromRef(LirStore.ProcDebugName, "LirStore.proc_debug_names", base_ptr, image_size, self.proc_debug_names),
             .local_names = try guardedListFromRef(u32, "LirStore.local_names", base_ptr, image_size, self.local_names),
             .current_loc = base.SourceLoc.none,
             .current_region = base.Region.zero(),
+            .current_inline_scope = LIR.InlineScopeId.none,
         };
     }
 };
@@ -164,6 +206,17 @@ pub const StringLiteralStoreImage = extern struct {
     fn fromStore(base_ptr: [*]align(1) const u8, image_size: usize, store: *const base.StringLiteral.Store) ImageError!StringLiteralStoreImage {
         return .{
             .buffer = try arrayRef(base_ptr, image_size, store.buffer.items.items),
+        };
+    }
+
+    fn copyFromStore(
+        allocator: std.mem.Allocator,
+        base_ptr: [*]align(1) const u8,
+        image_capacity: usize,
+        store: *const base.StringLiteral.Store,
+    ) CopyError!StringLiteralStoreImage {
+        return .{
+            .buffer = try copyArrayRef(allocator, base_ptr, image_capacity, store.buffer.items.items),
         };
     }
 
@@ -193,6 +246,23 @@ pub const LayoutStoreImage = extern struct {
             .struct_data = try arrayRef(base_ptr, image_size, store.struct_data.items.items),
             .tag_union_variants = try multiArrayRef(layout_mod.TagUnionVariant, base_ptr, image_size, store.tag_union_variants),
             .tag_union_data = try arrayRef(base_ptr, image_size, store.tag_union_data.items.items),
+        };
+    }
+
+    fn copyFromStore(
+        allocator: std.mem.Allocator,
+        base_ptr: [*]align(1) const u8,
+        image_capacity: usize,
+        store: *const layout_mod.Store,
+    ) CopyError!LayoutStoreImage {
+        return .{
+            .layouts = try copyArrayRef(allocator, base_ptr, image_capacity, store.layouts.items.items),
+            .resolved_list_layouts = try copyArrayRef(allocator, base_ptr, image_capacity, store.resolved_list_layouts.items),
+            .tuple_elems = try copyArrayRef(allocator, base_ptr, image_capacity, store.tuple_elems.items.items),
+            .struct_fields = try copyMultiArrayRef(layout_mod.StructField, allocator, base_ptr, image_capacity, store.struct_fields),
+            .struct_data = try copyArrayRef(allocator, base_ptr, image_capacity, store.struct_data.items.items),
+            .tag_union_variants = try copyMultiArrayRef(layout_mod.TagUnionVariant, allocator, base_ptr, image_capacity, store.tag_union_variants),
+            .tag_union_data = try copyArrayRef(allocator, base_ptr, image_capacity, store.tag_union_data.items.items),
         };
     }
 
@@ -228,7 +298,7 @@ comptime {
     // this file, then update the expected field count below. A same-build
     // omission (a new store field left out of the image plumbing) is otherwise
     // silent, since `FORMAT_VERSION` only guards cross-version mismatches.
-    std.debug.assert(@typeInfo(LirStore).@"struct".fields.len == 25);
+    std.debug.assert(@typeInfo(LirStore).@"struct".fields.len == 28);
     std.debug.assert(@typeInfo(layout_mod.Store).@"struct".fields.len == 12);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".fields.len == 1);
 }
@@ -260,20 +330,48 @@ pub fn fillHeaderInBuffer(
     };
 }
 
-/// Fill the reserved LIR image header in the existing shared-memory mapping.
-///
-/// `lowered` must already have been allocated with the shared-memory allocator
-/// associated with `base_ptr`; this function only installs offset metadata.
-///
-/// Thin wrapper over `fillHeaderInBuffer` — kept for naming clarity at IPC sites.
-pub fn fillHeaderInSharedMemory(
-    header: *Header,
+/// Exact copied LIR data awaiting its final image size and header.
+pub const CopiedProgram = struct {
+    image_capacity: usize,
+    root_procs: ArrayRef,
+    platform_entrypoints: ArrayRef,
+    store: LirStoreImage,
+    layouts: LayoutStoreImage,
+
+    pub fn fillHeader(self: CopiedProgram, header: *Header, image_size: usize) ImageError!void {
+        if (image_size > self.image_capacity) return error.InvalidLirImage;
+        header.* = .{
+            .magic = MAGIC,
+            .format_version = FORMAT_VERSION,
+            .image_size = image_size,
+            .root_procs = self.root_procs,
+            .platform_entrypoints = self.platform_entrypoints,
+            .store = self.store,
+            .layouts = self.layouts,
+        };
+    }
+};
+
+/// Copy a finalized ARC-ready LIR program into an independently allocated
+/// image buffer. Compiler scratch and intermediate IR stay in their ordinary
+/// reclaimable allocator; the image owns only the arrays its mapped consumer
+/// reads. `image_capacity` validates every copied pointer; the returned data
+/// writes a header only after the caller supplies the allocator's final used
+/// size.
+pub fn copyProgramIntoBuffer(
+    allocator: std.mem.Allocator,
     base_ptr: [*]align(1) const u8,
-    image_size: usize,
+    image_capacity: usize,
     lowered: *const Program.Result,
     platform_entrypoints: []const PlatformEntrypoint,
-) ImageError!void {
-    return fillHeaderInBuffer(header, base_ptr, image_size, lowered, platform_entrypoints);
+) CopyError!CopiedProgram {
+    return .{
+        .image_capacity = image_capacity,
+        .root_procs = try copyArrayRef(allocator, base_ptr, image_capacity, lowered.root_procs.items),
+        .platform_entrypoints = try copyArrayRef(allocator, base_ptr, image_capacity, platform_entrypoints),
+        .store = try LirStoreImage.copyFromStore(allocator, base_ptr, image_capacity, &lowered.store),
+        .layouts = try LayoutStoreImage.copyFromStore(allocator, base_ptr, image_capacity, &lowered.layouts),
+    };
 }
 
 /// View an ARC-inserted LIR program in place from a mapped buffer.
@@ -341,6 +439,18 @@ fn arrayRef(base_ptr: [*]align(1) const u8, image_size: usize, slice: anytype) I
     };
 }
 
+fn copyArrayRef(
+    allocator: std.mem.Allocator,
+    base_ptr: [*]align(1) const u8,
+    image_capacity: usize,
+    source: anytype,
+) CopyError!ArrayRef {
+    if (source.len == 0) return ArrayRef.empty();
+    const T = std.meta.Child(@TypeOf(source));
+    const copied = try allocator.dupe(T, source);
+    return try arrayRef(base_ptr, image_capacity, copied);
+}
+
 fn multiArrayRef(
     comptime T: type,
     base_ptr: [*]align(1) const u8,
@@ -362,6 +472,18 @@ fn multiArrayRef(
         .len = @intCast(list.items.len),
         .capacity = @intCast(list.items.capacity),
     };
+}
+
+fn copyMultiArrayRef(
+    comptime T: type,
+    allocator: std.mem.Allocator,
+    base_ptr: [*]align(1) const u8,
+    image_capacity: usize,
+    source: collections.SafeMultiList(T),
+) CopyError!ArrayRef {
+    if (source.items.len == 0) return ArrayRef.empty();
+    const copied = try source.clone(allocator);
+    return try multiArrayRef(T, base_ptr, image_capacity, copied);
 }
 
 fn sliceFromRef(comptime T: type, base_ptr: [*]align(1) u8, image_size: usize, ref: ArrayRef) ImageError![]T {
@@ -462,7 +584,7 @@ test "LIR image declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
 
-/// The 16 `LirStore` array-backed lists serialized as `ArrayRef`s, in the order
+/// The 18 `LirStore` array-backed lists serialized as `ArrayRef`s, in the order
 /// they appear in `LirStoreImage`. `strings` (a sub-image) and the scalar
 /// `next_synthetic_symbol` are serialized too but exercised separately below.
 const serialized_guarded_fields = [_][]const u8{
@@ -479,17 +601,24 @@ const serialized_guarded_fields = [_][]const u8{
     "source_file_ends",
     "cf_stmt_locs",
     "cf_stmt_regions",
+    "cf_stmt_inline_scopes",
+    "inline_scopes",
     "proc_locs",
     "proc_debug_names",
     "local_names",
 };
 
-test "LIR image round-trips every populated store field" {
+test "LIR image copies and round-trips every populated store field" {
     const gpa = std.testing.allocator;
 
-    // One contiguous buffer owns every array the image references. The image
-    // records offsets relative to `buffer.ptr`, so all backing storage below is
-    // allocated from this fixed buffer rather than from `gpa` directly.
+    // Build the compiler result outside the image buffer so this test proves
+    // copying transfers every mapped field instead of retaining source
+    // pointers.
+    var source_arena = std.heap.ArenaAllocator.init(gpa);
+    defer source_arena.deinit();
+    const source_allocator = source_arena.allocator();
+
+    // The copied image has independent contiguous storage.
     const buffer = try gpa.alignedAlloc(u8, .@"16", 1 << 20);
     defer gpa.free(buffer);
     var fba_state = std.heap.FixedBufferAllocator.init(buffer);
@@ -533,55 +662,46 @@ test "LIR image round-trips every populated store field" {
         }
     };
 
-    // A LirStore with every serialized list populated distinctively. `init`
-    // seeds the non-serialized scalar/ambient fields; the arrays it creates are
-    // empty and immediately overwritten with fixed-buffer-backed storage, so the
-    // store is never deinitialized (its arrays are not owned by `gpa`).
-    var store = LirStore.init(gpa);
+    // A LirStore with every serialized list populated distinctively.
+    var store = LirStore.init(source_allocator);
     inline for (serialized_guarded_fields, 0..) |fname, i| {
-        @field(store, fname) = try h.guarded(@FieldType(LirStore, fname), fba, 2 + i, @intCast(0x20 + i));
+        @field(store, fname) = try h.guarded(@FieldType(LirStore, fname), source_allocator, 2 + i, @intCast(0x20 + i));
     }
     store.next_synthetic_symbol = 0x0123_4567_89ab_cdef;
-    store.strings = .{ .buffer = .{ .items = .{ .items = try h.distinct(u8, fba, 24, 0x90), .capacity = 24 } } };
+    store.strings = .{ .buffer = .{ .items = .{ .items = try h.distinct(u8, source_allocator, 24, 0x90), .capacity = 24 } } };
 
     // A layout Store with every serialized list populated distinctively. Only
     // the seven array-backed fields are serialized; the interning caches are not
     // read by `fromStore`, so they are left undefined here.
     var layouts = layout_mod.Store{
         .allocator = gpa,
-        .layouts = try h.safeList(layout_mod.Layout, fba, 3, 0x40),
-        .resolved_list_layouts = .{ .items = try h.distinct(?layout_mod.Idx, fba, 4, 0x50), .capacity = 4 },
-        .tuple_elems = try h.safeList(layout_mod.Idx, fba, 5, 0x60),
-        .struct_fields = try h.multiList(layout_mod.StructField, fba, 6, 0x70),
-        .struct_data = try h.safeList(layout_mod.StructData, fba, 7, 0x80),
-        .tag_union_variants = try h.multiList(layout_mod.TagUnionVariant, fba, 8, 0x88),
-        .tag_union_data = try h.safeList(layout_mod.TagUnionData, fba, 9, 0xa0),
+        .layouts = try h.safeList(layout_mod.Layout, source_allocator, 3, 0x40),
+        .resolved_list_layouts = .{ .items = try h.distinct(?layout_mod.Idx, source_allocator, 4, 0x50), .capacity = 4 },
+        .tuple_elems = try h.safeList(layout_mod.Idx, source_allocator, 5, 0x60),
+        .struct_fields = try h.multiList(layout_mod.StructField, source_allocator, 6, 0x70),
+        .struct_data = try h.safeList(layout_mod.StructData, source_allocator, 7, 0x80),
+        .tag_union_variants = try h.multiList(layout_mod.TagUnionVariant, source_allocator, 8, 0x88),
+        .tag_union_data = try h.safeList(layout_mod.TagUnionData, source_allocator, 9, 0xa0),
         .interned_layouts = undefined,
         .scratch_intern_key = undefined,
         .interned_recursive_graphs = undefined,
         .target_usize = target_usize,
     };
 
-    const root_procs = try h.distinct(LIR.LirProcSpecId, fba, 3, 0xb0);
-    const entrypoints = try h.distinct(PlatformEntrypoint, fba, 2, 0xc0);
+    const root_procs = try h.distinct(LIR.LirProcSpecId, source_allocator, 3, 0xb0);
+    const entrypoints = try h.distinct(PlatformEntrypoint, source_allocator, 2, 0xc0);
 
     const base_ptr = buffer.ptr;
-    const image_size = fba_state.end_index;
-
-    // Serialize: fill the header exactly as `fillHeaderInBuffer` does, so this
-    // drives the real `fromStore`/`arrayRef` plumbing under test.
-    const header: Header = .{
-        .magic = MAGIC,
-        .format_version = FORMAT_VERSION,
-        .image_size = image_size,
-        .root_procs = try arrayRef(base_ptr, image_size, root_procs),
-        .platform_entrypoints = try arrayRef(base_ptr, image_size, entrypoints),
-        .store = try LirStoreImage.fromStore(base_ptr, image_size, &store),
-        .layouts = try LayoutStoreImage.fromStore(base_ptr, image_size, &layouts),
-    };
+    const header = try fba.create(Header);
+    var lowered: Program.Result = undefined;
+    lowered.store = store;
+    lowered.layouts = layouts;
+    lowered.root_procs = .{ .items = root_procs, .capacity = root_procs.len };
+    const copied = try copyProgramIntoBuffer(fba, base_ptr, buffer.len, &lowered, entrypoints);
+    try copied.fillHeader(header, fba_state.end_index);
 
     // View back over the same buffer.
-    var view = try viewMappedImageWithAllocator(&header, base_ptr, buffer.len, target_usize, gpa);
+    var view = try viewMappedImageWithAllocator(header, base_ptr, buffer.len, target_usize, gpa);
     defer view.layouts.interned_layouts.deinit();
     defer view.layouts.scratch_intern_key.deinit(gpa);
 
@@ -608,6 +728,7 @@ test "LIR image round-trips every populated store field" {
     // Ambient lowering state is reset by `view`; it is not image data.
     try std.testing.expectEqual(base.SourceLoc.none, view.store.current_loc);
     try std.testing.expectEqual(base.Region.zero(), view.store.current_region);
+    try std.testing.expectEqual(LIR.InlineScopeId.none, view.store.current_inline_scope);
     // A viewed image is read-only, so string insertion is disabled.
     try std.testing.expectEqual(false, view.store.strings_insertable);
 

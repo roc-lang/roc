@@ -121,20 +121,7 @@ main! = |_| {
 (can-ir
 	(d-let
 		(p-assign (ident "main!"))
-		(e-lambda
-			(args
-				(p-underscore))
-			(e-block
-				(s-let
-					(p-assign (ident "result"))
-					(e-call
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-string
-							(e-literal (string "Hello from external mod!")))))
-				(e-call
-					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-lookup-local
-						(p-assign (ident "result")))))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(s-import (mod "pf.Stdout")
 		(exposes))
 	(s-import (mod "json.Json")

@@ -33,7 +33,7 @@ pub const BuildError = Allocator.Error || std.Thread.SpawnError || error{ Expect
 /// Errors that can occur while initializing build inputs.
 pub const InitError = Allocator.Error || BuiltinModules.InitError;
 /// Errors that can occur while compiling discovered modules.
-pub const CompileDiscoveredError = BuildError || compile_package.PublishError || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound, HasUserErrors };
+pub const CompileDiscoveredError = BuildError || compile_package.PublishError || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound };
 /// Errors that can occur while building a root module.
 pub const BuildRootError = BuildError || CompileDiscoveredError;
 /// Errors that can occur while building an app module.
@@ -50,6 +50,7 @@ const ImportResolver = compile_package.ImportResolver;
 const ScheduleHook = compile_package.ScheduleHook;
 const CacheManager = @import("cache_manager.zig").CacheManager;
 const package_source = @import("package_source.zig");
+const compiler_platforms = @import("compiler_platforms.zig");
 const package_resolution = @import("package_resolution.zig");
 const package_identity = @import("package_identity.zig");
 const watch_inputs = @import("watch_inputs.zig");
@@ -136,13 +137,9 @@ const PathUtils = struct {
 pub const PostCheckPublicationMode = enum {
     /// No post-check work (diagnostics only).
     none,
-    /// Publish the relation-bearing platform root once at finalization (for
-    /// `roc check` and `roc build`).
+    /// Publish the relation-bearing platform root once at finalization,
+    /// including when checked source contains explicit runtime-error nodes.
     executable_artifacts,
-    /// Executable artifact publication that tolerates user errors when every
-    /// erroring module still permits lowering (checked runtime-error nodes
-    /// the interpreter can execute). Used by the `roc run` interpreter path.
-    executable_artifacts_allow_user_errors,
 };
 
 // BuildEnv: workspace-level orchestrator for multi-package builds with local-only shorthands.
@@ -205,12 +202,9 @@ pub const BuildEnv = struct {
     /// work, for diagnostic-only embeddings that never link an executable.
     post_check_publication_mode: PostCheckPublicationMode = .executable_artifacts,
 
-    /// Whether executable artifacts were published for this build AND every
-    /// accumulated error (if any) still permits lowering. Consumers that
-    /// lower to LIR must gate on this rather than re-deriving it from error
-    /// state: report ownership moves out of the coordinator when compilation
-    /// finishes, so coordinator error queries go stale. Recomputed after
-    /// finalization because finalization itself may append reports.
+    /// Whether executable artifacts were published for this build. User
+    /// diagnostics do not change this: checked recovery nodes remain valid
+    /// lowering input and crash only if execution reaches them.
     executable_artifacts_finalized: bool = false,
 
     /// Compiler role to assign to the root module of this build.
@@ -253,6 +247,9 @@ pub const BuildEnv = struct {
     /// before `build` to override the default location (used by tests);
     /// otherwise populated from the environment on first resolution.
     package_cache_dir: ?[]const u8 = null,
+
+    /// Optional root for materialized compiler-owned platform sources.
+    compiler_owned_source_dir: ?[]const u8 = null,
 
     // Builtin modules (Bool, Try, Str) shared across all packages (heap-allocated to prevent moves)
     builtin_modules: *BuiltinModules,
@@ -355,6 +352,7 @@ pub const BuildEnv = struct {
         }
 
         if (self.package_cache_dir) |dir| self.gpa.free(@constCast(dir));
+        if (self.compiler_owned_source_dir) |dir| self.gpa.free(@constCast(dir));
 
         if (self.root_url) |*url| url.deinit(self.gpa);
         if (self.main_url) |*url| url.deinit(self.gpa);
@@ -535,6 +533,13 @@ pub const BuildEnv = struct {
 
     pub fn setRootSourceDirOverride(self: *BuildEnv, source_dir: []const u8) void {
         self.root_source_dir_override = source_dir;
+    }
+
+    pub fn setCompilerOwnedSourceDir(self: *BuildEnv, source_dir: []const u8) Allocator.Error!void {
+        if (self.compiler_owned_source_dir) |old| {
+            self.gpa.free(@constCast(old));
+        }
+        self.compiler_owned_source_dir = try self.gpa.dupe(u8, source_dir);
     }
 
     pub fn setSyntheticRootSourceMapping(
@@ -1036,35 +1041,19 @@ pub const BuildEnv = struct {
             self.emitAccumulatedReportsForError();
             return err;
         };
-        const allow_user_errors =
-            self.post_check_publication_mode == .executable_artifacts_allow_user_errors;
         var finalized_executable = false;
-        if (!coord.hasUserErrors()) {
-            switch (self.post_check_publication_mode) {
-                .none => {},
-                .executable_artifacts, .executable_artifacts_allow_user_errors => {
-                    coord.finalizeExecutableArtifacts() catch |err| {
-                        self.emitAccumulatedReportsForError();
-                        return err;
-                    };
-                    finalized_executable = true;
-                },
-            }
-        } else if (allow_user_errors and coord.userErrorsAllowExecutableLowering()) {
-            coord.finalizeExecutableArtifactsAllowUserErrors() catch |err| {
-                self.emitAccumulatedReportsForError();
-                return err;
-            };
-            finalized_executable = true;
+        switch (self.post_check_publication_mode) {
+            .none => {},
+            .executable_artifacts => {
+                coord.finalizeExecutableArtifacts() catch |err| {
+                    self.emitAccumulatedReportsForError();
+                    return err;
+                };
+                finalized_executable = true;
+            },
         }
 
-        // Finalization may append new reports (unresolved dispatch,
-        // non-lowerable defs, relation mismatches). Decide whether executable
-        // lowering may proceed now, before result transfer drains the
-        // Coordinator's per-module reports.
-        self.executable_artifacts_finalized = finalized_executable and
-            (!coord.hasUserErrors() or
-                (allow_user_errors and coord.userErrorsAllowExecutableLowering()));
+        self.executable_artifacts_finalized = finalized_executable;
 
         if (comptime trace_build) {
             std.debug.print("[BUILD] Coordinator loop complete, transferring results...\n", .{});
@@ -1941,6 +1930,7 @@ pub const BuildEnv = struct {
             .fs = self.filesystem,
             .gpa = self.gpa,
             .cache_packages_dir = self.package_cache_dir,
+            .compiler_owned_source_dir = self.compiler_owned_source_dir,
         };
         var resolver = package_resolution.Resolver.init(self.gpa, ctx_fetcher.fetcher(), self.resolution_config);
         defer resolver.deinit();
@@ -2833,6 +2823,10 @@ pub const BuildEnv = struct {
     /// cache-directory check also excludes path dependencies that live
     /// inside an extracted bundle.
     pub fn isBundleableModule(self: *BuildEnv, pkg_name: []const u8, module_path: []const u8) bool {
+        // Compiler-owned platforms are embedded in every compiler; their
+        // materialized sources live outside the bundle root and must never
+        // be bundled.
+        if (compiler_platforms.fromIdentity(pkg_name) != null) return false;
         if (self.packages.getPtr(pkg_name)) |pkg| {
             if (pkg.url != null) return false;
         }
@@ -3087,7 +3081,7 @@ pub const BuildEnv = struct {
     pub fn getExecutableRootSemanticData(self: *BuildEnv) ?SemanticModuleData {
         if (self.getPlatformSemanticData()) |platform| {
             if (platform.checked_artifact) |artifact| {
-                if (artifact.platform_required_bindings.bindings.len > 0 or
+                if (artifact.checking_context_identity.platform_app_relation != null or
                     artifact.root_requests.requests.len > 0 or
                     artifact.provided_exports.exports.len > 0)
                 {
@@ -3223,12 +3217,17 @@ pub const BuildEnv = struct {
 
     /// Drain reports and render them to a writer. Returns error/warning counts.
     /// Replaces the repeated drain → iterate → render boilerplate pattern.
-    pub fn renderDiagnostics(self: *BuildEnv, writer: anytype) Allocator.Error!RenderDiagnosticsResult {
+    pub fn renderDiagnostics(
+        self: *BuildEnv,
+        writer: anytype,
+        config: reporting.ReportingConfig,
+    ) Allocator.Error!RenderDiagnosticsResult {
         const drained = try self.drainReports();
         defer self.freeDrainedReports(drained);
 
         var total_error_count: usize = 0;
         var total_warning_count: usize = 0;
+        const palette = reporting.ColorUtils.getPaletteForConfig(config);
 
         for (drained) |mod| {
             for (mod.reports) |*report| {
@@ -3237,8 +3236,6 @@ pub const BuildEnv = struct {
                     .runtime_error, .fatal => total_error_count += 1,
                     .warning => total_warning_count += 1,
                 }
-                const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-                const config = reporting.ReportingConfig.initColorTerminal();
                 reporting.renderReportToTerminal(report, writer, palette, config) catch {};
             }
         }
@@ -3252,7 +3249,12 @@ pub const BuildEnv = struct {
     /// Render one warning for each `dbg` that remains in an optimized build.
     /// Optimized builds intentionally keep `dbg` so users can debug performance
     /// problems, but release artifacts should make those call sites visible.
-    pub fn renderOptimizedDbgWarnings(self: *BuildEnv, writer: anytype, opt_name: []const u8) Allocator.Error!usize {
+    pub fn renderOptimizedDbgWarnings(
+        self: *BuildEnv,
+        writer: anytype,
+        opt_name: []const u8,
+        config: reporting.ReportingConfig,
+    ) Allocator.Error!usize {
         const modules = try self.getCompiledModules(self.gpa);
         defer self.gpa.free(modules);
 
@@ -3263,7 +3265,7 @@ pub const BuildEnv = struct {
 
             try collectDbgRegionsInModule(self.gpa, mod.semantic.env, &regions);
             for (regions.items) |region| {
-                try self.renderOptimizedDbgWarning(writer, mod.semantic.env, mod.path, opt_name, region);
+                try self.renderOptimizedDbgWarning(writer, mod.semantic.env, mod.path, opt_name, region, config);
                 total += 1;
             }
         }
@@ -3277,6 +3279,7 @@ pub const BuildEnv = struct {
         path: []const u8,
         opt_name: []const u8,
         region: base.Region,
+        config: reporting.ReportingConfig,
     ) Allocator.Error!void {
         var report = try Report.init(self.gpa, "`dbg` in Optimized Build", "", .warning);
         defer report.deinit();
@@ -3299,8 +3302,7 @@ pub const BuildEnv = struct {
         try report.document.addInlineCode("dbg");
         try report.document.addReflowingText(" is intended for debugging.");
 
-        const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-        const config = reporting.ReportingConfig.initColorTerminal();
+        const palette = reporting.ColorUtils.getPaletteForConfig(config);
         reporting.renderReportToTerminal(&report, writer, palette, config) catch {};
     }
 

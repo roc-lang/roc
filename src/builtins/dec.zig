@@ -49,6 +49,86 @@ fn printI128Decimal(buf: []u8, val: i128) usize {
     return pos;
 }
 
+/// Round the exact rational `scaled / 10^18` directly to IEEE binary32.
+/// This deliberately never converts through binary64, which would introduce a
+/// double-rounding boundary for Dec-to-F32 conversion.
+fn scaledI128ToF32(scaled: i128) f32 {
+    if (scaled == 0) return 0.0;
+
+    const negative = scaled < 0;
+    const raw: u128 = @bitCast(scaled);
+    const magnitude = if (negative) 0 -% raw else raw;
+    const scale: u128 = @intCast(RocDec.one_point_zero_i128);
+
+    const magnitude_bit: i32 = 127 - @as(i32, @intCast(@clz(magnitude)));
+    const scale_bit: i32 = 127 - @as(i32, @intCast(@clz(scale)));
+    var exponent = magnitude_bit - scale_bit;
+
+    // Correct the bit-length estimate to floor(log2(magnitude / scale)).
+    if (exponent >= 0) {
+        if (i128h.shr(magnitude, @intCast(exponent)) < scale) exponent -= 1;
+    } else {
+        if (i128h.shl(magnitude, @intCast(-exponent)) < scale) exponent -= 1;
+    }
+
+    const significand_shift = 23 - exponent;
+    const numerator: u128 = if (significand_shift >= 0)
+        i128h.shl(magnitude, @intCast(significand_shift))
+    else
+        magnitude;
+    const denominator: u128 = if (significand_shift >= 0)
+        scale
+    else
+        i128h.shl(scale, @intCast(-significand_shift));
+
+    var significand: u32 = @intCast(i128h.divTrunc_u128(numerator, denominator));
+    const remainder = i128h.rem_u128(numerator, denominator);
+    const twice_remainder = i128h.shl(remainder, 1);
+    if (twice_remainder > denominator or (twice_remainder == denominator and (significand & 1) != 0)) {
+        significand += 1;
+    }
+
+    if (significand == (@as(u32, 1) << 24)) {
+        significand >>= 1;
+        exponent += 1;
+    }
+
+    const sign_bit: u32 = @intFromBool(negative);
+    const biased_exponent: u32 = @intCast(exponent + 127);
+    const fraction = significand & ((@as(u32, 1) << 23) - 1);
+    return @bitCast((sign_bit << 31) | (biased_exponent << 23) | fraction);
+}
+
+/// Convert an IEEE binary32 value directly to the exact Dec scale, truncating
+/// toward zero without any binary64 arithmetic.
+fn f32ToScaledI128(value: f32) ?i128 {
+    const raw: u32 = @bitCast(value);
+    const negative = (raw >> 31) != 0;
+    const raw_exponent = (raw >> 23) & 0xff;
+    if (raw_exponent == 0xff) return null;
+    if (raw_exponent == 0) return 0;
+
+    const fraction = raw & 0x007f_ffff;
+    const significand: u128 = (@as(u128, 1) << 23) | fraction;
+    const scaled_significand = i128h.mul_u128_lo(significand, @intCast(RocDec.one_point_zero_i128));
+    const shift = @as(i32, @intCast(raw_exponent)) - 127 - 23;
+    const magnitude: u128 = if (shift >= 0) blk: {
+        if (shift >= 128) return null;
+        const amount: u7 = @intCast(shift);
+        if (scaled_significand > i128h.shr(std.math.maxInt(u128), amount)) return null;
+        break :blk i128h.shl(scaled_significand, amount);
+    } else blk: {
+        const amount: u32 = @intCast(-shift);
+        break :blk if (amount >= 128) 0 else i128h.shr(scaled_significand, @intCast(amount));
+    };
+
+    const negative_limit = i128h.shl(@as(u128, 1), 127);
+    const positive_limit: u128 = @bitCast(@as(i128, std.math.maxInt(i128)));
+    if ((!negative and magnitude > positive_limit) or (negative and magnitude > negative_limit)) return null;
+    if (!negative) return @intCast(magnitude);
+    return @bitCast(0 -% magnitude);
+}
+
 /// Roc's fixed-point decimal runtime representation.
 ///
 /// `num` stores the decimal value scaled by 10^18, so `1.0` is represented as
@@ -111,6 +191,10 @@ pub const RocDec = extern struct {
 
         const ret: RocDec = .{ .num = i128h.f64_to_i128(result) };
         return ret;
+    }
+
+    pub fn fromF32(num: f32) ?RocDec {
+        return .{ .num = f32ToScaledI128(num) orelse return null };
     }
 
     pub fn toF64(dec: RocDec) f64 {
@@ -1394,8 +1478,7 @@ pub fn fromF32C(
     arg_f32: f32,
     roc_ops: *RocOps,
 ) callconv(.c) i128 {
-    const arg_f64 = arg_f32;
-    if (@call(.always_inline, RocDec.fromF64, .{arg_f64})) |dec| {
+    if (@call(.always_inline, RocDec.fromF32, .{arg_f32})) |dec| {
         return dec.num;
     } else {
         roc_ops.crash("Decimal conversion from f32!");
@@ -1410,22 +1493,12 @@ pub fn toF64(arg: RocDec) callconv(.c) f64 {
 
 /// Convert Dec to F32 (lossy conversion)
 pub fn toF32(arg: RocDec) callconv(.c) f32 {
-    return @floatCast(arg.toF64());
+    return scaledI128ToF32(arg.num);
 }
 
 /// Convert Dec to F32 with range check - returns null if out of range
 pub fn toF32Try(arg: RocDec) ?f32 {
-    const f64_val = arg.toF64();
-    // Check if the value is within F32 range
-    if (f64_val > math.floatMax(f32) or f64_val < -math.floatMax(f32)) {
-        return null;
-    }
-    // Also check for infinity (which would indicate overflow)
-    const f32_val: f32 = @floatCast(f64_val);
-    if (math.isInf(f32_val) and !math.isInf(f64_val)) {
-        return null;
-    }
-    return f32_val;
+    return toF32(arg);
 }
 
 /// Convert Dec to integer by truncating the fractional part (wrapping on overflow)
@@ -1753,6 +1826,25 @@ test "fromF64" {
 test "fromF64 overflow" {
     const dec = RocDec.fromF64(1e308);
     try std.testing.expectEqual(dec, null);
+}
+
+test "F32 and Dec convert directly without binary64 intermediates" {
+    try std.testing.expectEqual(
+        RocDec{ .num = 100000001490116119 },
+        RocDec.fromF32(@bitCast(@as(u32, 0x3dcc_cccd))).?,
+    );
+    try std.testing.expectEqual(@as(?RocDec, null), RocDec.fromF32(std.math.inf(f32)));
+
+    // This exact Dec value lies on the side of an F32 rounding boundary that
+    // a Dec -> F64 -> F32 double rounding gets wrong by one F32 ULP.
+    try std.testing.expectEqual(
+        @as(u32, 0x341c_4fc9),
+        @as(u32, @bitCast(toF32(.{ .num = 145576585453 }))),
+    );
+    try std.testing.expectEqual(
+        @as(u32, 0xb41c_4fc9),
+        @as(u32, @bitCast(toF32(.{ .num = -145576585453 }))),
+    );
 }
 
 test "fromStr: empty" {

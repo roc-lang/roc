@@ -61,7 +61,7 @@ a = (
 		(p-assign (ident "a"))
 		(e-field-access (field "e")
 			(receiver
-				(e-num (value "0"))))))
+				(e-runtime-error (tag "erroneous_value_expr"))))))
 ~~~
 # TYPES
 ~~~clojure

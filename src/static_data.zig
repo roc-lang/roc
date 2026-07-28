@@ -230,7 +230,21 @@ const StaticInitializerMachine = struct {
         if (result.bytes.len != source.bytes.len) {
             const target_layout = self.layoutValue(layout_idx);
             if (target_layout.tag == .box_of_zst) return result;
-            staticDataInvariant("static initializer explicit reinterpret changed target byte size");
+            if (@import("builtin").mode == .Debug) {
+                const source_layout = self.layoutValue(source.layout_idx);
+                std.debug.panic(
+                    "static data invariant violated: static initializer explicit reinterpret changed target byte size from layout {d} ({s}, {d} bytes) to layout {d} ({s}, {d} bytes)",
+                    .{
+                        @intFromEnum(source.layout_idx),
+                        @tagName(source_layout.tag),
+                        source.bytes.len,
+                        @intFromEnum(layout_idx),
+                        @tagName(target_layout.tag),
+                        result.bytes.len,
+                    },
+                );
+            }
+            unreachable;
         }
         @memcpy(result.bytes, source.bytes);
         try result.relocations.appendSlice(self.allocator(), source.relocations.items);
@@ -834,6 +848,11 @@ const StaticInitializerMachine = struct {
 pub const BuildOptions = struct {
     /// Include host-visible provided constants as well as internal LIR values.
     include_provided_exports: bool = false,
+    /// Include every explicitly requested constant initializer under a stable,
+    /// host-invisible symbol. This exposes the exact target bytes to compiler
+    /// tests and other consumers that requested a constant directly rather
+    /// than through a platform-provided export.
+    include_requested_exports: bool = false,
 };
 
 /// Build readonly data symbols for internal LIR values and optional provided constants.
@@ -891,6 +910,7 @@ const StaticDataBuilder = struct {
     frozen_allocations: std.AutoHashMap(SymbolicAllocationId, PointerTarget),
     local_symbol_ordinal: u32,
     include_provided_exports: bool,
+    include_requested_exports: bool,
 
     fn init(
         allocator: Allocator,
@@ -911,6 +931,7 @@ const StaticDataBuilder = struct {
             .frozen_allocations = std.AutoHashMap(SymbolicAllocationId, PointerTarget).init(allocator),
             .local_symbol_ordinal = 0,
             .include_provided_exports = options.include_provided_exports,
+            .include_requested_exports = options.include_requested_exports,
         };
     }
 
@@ -923,9 +944,35 @@ const StaticDataBuilder = struct {
         errdefer self.deinitNodes();
 
         if (self.include_provided_exports) try self.buildProvidedExports();
+        if (self.include_requested_exports) try self.buildRequestedExports();
         try self.buildInternalStaticValues();
 
         return try self.nodes.toOwnedSlice(self.allocator);
+    }
+
+    fn buildRequestedExports(self: *StaticDataBuilder) MaterializationError!void {
+        for (self.lowered.lir_result.requested_layouts.items, 0..) |request, index| {
+            const initializer = request.initializer orelse continue;
+            if (request.const_locator == null) continue;
+
+            const symbol_name = try std.fmt.allocPrint(self.allocator, "roc__requested_const_value_{d}", .{index});
+            errdefer self.allocator.free(symbol_name);
+            const value = try self.initializer_machine.evaluateProc(initializer);
+            if (value.layout_idx != request.layout_idx) {
+                staticDataInvariant("requested static initializer return layout differed from requested layout");
+            }
+            const materialized = try self.freezeValue(value);
+            errdefer self.deinitMaterialized(materialized);
+
+            try self.nodes.append(self.allocator, .{
+                .symbol_name = symbol_name,
+                .bytes = materialized.bytes,
+                .alignment = materialized.alignment,
+                .is_global = true,
+                .is_exported = false,
+                .relocations = materialized.relocations,
+            });
+        }
     }
 
     fn buildProvidedExports(self: *StaticDataBuilder) MaterializationError!void {

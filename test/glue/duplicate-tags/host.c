@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 static size_t alloc_count = 0;
 static size_t dealloc_count = 0;
@@ -87,9 +86,9 @@ enum {
 #define DEFINE_OK_HOSTED(name, ret_type, tag_offset) \
     ret_type name(RocStr arg0) {                     \
         (void)arg0;                                  \
-        ret_type result;                             \
-        memset(&result, 0, sizeof(result));          \
-        result.bytes[(tag_offset)] = TAG_OK;         \
+        (void)(tag_offset);                          \
+        ret_type result = {0};                       \
+        result.tag = ret_type##Tag_Ok;               \
         return result;                               \
     }
 

@@ -39,6 +39,13 @@ const MethodRegistryTestCheckedBodies = struct {
     ) ?checked_ids.CheckedExprId {
         unreachable;
     }
+
+    pub fn statementIdForSource(
+        _: *const @This(),
+        _: can.CIR.Statement.Idx,
+    ) ?checked_ids.CheckedStatementId {
+        unreachable;
+    }
 };
 
 // primitives - nums //
@@ -4877,6 +4884,29 @@ test "check type - nominal destructure pattern in lambda arg binds the backing v
     try checkTypesModule(source, .{ .pass = .last_def }, "Distance -> U64");
 }
 
+test "check type - nominal record destructure syntax works in every pattern position" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Point := { x : U64, y : U64 }
+        \\
+        \\sum_arg : Point -> U64
+        \\sum_arg = |Point.{ x, y }| x + y
+        \\
+        \\sum_let : Point -> U64
+        \\sum_let = |point| {
+        \\    Point.{ x, y } = point
+        \\    x + y
+        \\}
+        \\
+        \\sum_match : Point -> U64
+        \\sum_match = |point| match point {
+        \\    Point.{ x, y } => x + y
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Point -> U64");
+}
+
 // LITERAL COERCION + STRUCTURAL LIFTING INTO NOMINALS (executable spec)
 //
 // Two DIFFERENT operations, deliberately kept separate:
@@ -4903,6 +4933,43 @@ test "consolidated - record literal lifts into record-backed nominal (control)" 
         \\p = { x: 1 }
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "Point");
+}
+
+test "nominal constructor rejects an already nominal record backing" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Wrap :: { a : U8, b : U8 }.{
+        \\    inc_a : Wrap -> Wrap
+        \\    inc_a = |wrap| Wrap.{ ..wrap, a: wrap.a + 1 }
+        \\}
+    ;
+    try checkTypesModule(source, .fail_first, "Invalid Nominal Record");
+}
+
+test "nominal constructor backing allows a nested nominal value" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Inner :: { value : U8 }
+        \\Outer :: { inner : Inner }
+        \\
+        \\inner = Inner.{ value: 1 }
+        \\outer = Outer.{ inner }
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Outer");
+}
+
+test "record update still lifts to its nominal extension" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Wrap :: { a : U8, b : U8 }
+        \\
+        \\inc_a : Wrap -> Wrap
+        \\inc_a = |wrap| { ..wrap, a: wrap.a + 1 }
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Wrap -> Wrap");
 }
 
 test "consolidated - record literal does not lift through a newtype chain" {
@@ -5032,6 +5099,29 @@ test "check type - early return - pass" {
         \\}
     ;
     try checkTypesExpr(source, .pass, "Bool -> List(_a)");
+}
+
+test "check type - unreachable final expression does not constrain early return" {
+    const source =
+        \\f = |x| {
+        \\    return x
+        \\    x + 1
+        \\}
+        \\result = f(1.I64)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "result" } }, "I64");
+}
+
+test "check type - unreachable statements do not constrain early return" {
+    const source =
+        \\f = |x| {
+        \\    return x
+        \\    y = x + 1
+        \\    y
+        \\}
+        \\result = f(1.I64)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "result" } }, "I64");
 }
 
 test "check type - final infinite loop can satisfy annotated return type" {
@@ -7204,7 +7294,7 @@ test "check type - def order independence - passive literal def after its constr
 // DIFFERENT integer-only methods share a component (`a`'s `bitwise_and` mentions
 // `b`). The group policy must (1) pick one candidate for the whole group — Dec
 // is refuted by the method-lookup miss, so the first surviving integer, I64,
-// wins — and (2) exempt passives from the forced assignment: `shift_left_by : T,
+// wins — and (2) exempt passives from the forced assignment: `shl_wrap : T,
 // U8 -> T` pins the shift-amount literal `3` to U8 via the method signature;
 // force-assigning it the group candidate (I64) would fail every candidate and
 // head-default the drivers to Dec, erroring. Both def orders must accept with
@@ -7212,7 +7302,7 @@ test "check type - def order independence - passive literal def after its constr
 test "check type - def order independence - heterogeneous multi-driver group (linking def first)" {
     const source =
         \\a = (1).bitwise_and(b)
-        \\b = (2).shift_left_by(3)
+        \\b = (2).shl_wrap(3)
     ;
     try checkTypesModuleDefs(source, &.{
         .{ .def = "a", .expected = "I64" },
@@ -7222,7 +7312,7 @@ test "check type - def order independence - heterogeneous multi-driver group (li
 
 test "check type - def order independence - heterogeneous multi-driver group (linking def last)" {
     const source =
-        \\b = (2).shift_left_by(3)
+        \\b = (2).shl_wrap(3)
         \\a = (1).bitwise_and(b)
     ;
     try checkTypesModuleDefs(source, &.{
@@ -7263,19 +7353,19 @@ test "check type - def order independence - mixed quote+numeral multi-driver gro
 
 // BOUNDARY GROUP DEFAULTING: the same interference-component machinery must run
 // at a def's generalization boundary, not just at module finalize.
-// `(5).plus((2).shift_left_by(3))` puts two DRIVER literals in one component
+// `(5).plus((2).shl_wrap(3))` puts two DRIVER literals in one component
 // (`5`'s `plus` signature reaches the inner dispatch's return — `2`'s constraint
 // signature's return). At top level this resolves via `finalizeLiteralDefaults`'
-// group policy (Dec refuted by the `shift_left_by` lookup miss; first surviving
+// group policy (Dec refuted by the `shl_wrap` lookup miss; first surviving
 // integer, I64, wins). Wrapped in a function, the literals are NOT
 // signature-reachable, so the BOUNDARY must default them — using the same group
 // policy. Before the boundary shared this machinery, it committed literals
 // one-by-one in var-pool order: `5`'s Dec probe speculatively pinned the inner
 // dispatch's return before `2`'s integer-only constraint was consulted, so the
-// def erred (MISSING METHOD `shift_left_by` on Dec) while the identical
+// def erred (MISSING METHOD `shl_wrap` on Dec) while the identical
 // top-level expression type-checked. Exactly one LITERAL DEFAULTED warning:
 // `5`'s `plus` signature reaches the def's return type (the leak), while `2`'s
-// `shift_left_by` signature touches nothing signature-reachable (def-local
+// `shl_wrap` signature touches nothing signature-reachable (def-local
 // default, silent) and `3` is a passive pinned to U8 by the fired signature
 // (never warned).
 //
@@ -7285,7 +7375,7 @@ test "check type - def order independence - mixed quote+numeral multi-driver gro
 // literal group never spans local statements.)
 test "check type - boundary defaulting - heterogeneous multi-driver group inside a function" {
     const source =
-        \\g = |_x| (5).plus((2).shift_left_by(3))
+        \\g = |_x| (5).plus((2).shl_wrap(3))
     ;
     try checkTypesModule(source, .{ .pass_with_warnings = .{
         .def = .last_def,
@@ -7298,7 +7388,7 @@ test "check type - boundary defaulting - heterogeneous multi-driver group inside
 // outcome (modulo the boundary's leak warning).
 test "check type - finalize defaulting - heterogeneous multi-driver group at top level" {
     const source =
-        \\top = (5).plus((2).shift_left_by(3))
+        \\top = (5).plus((2).shl_wrap(3))
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "I64");
 }

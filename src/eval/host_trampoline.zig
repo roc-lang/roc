@@ -36,8 +36,9 @@ const Call = extern struct {
     sret: ?*anyopaque,
     /// Captured integer result registers after the call (x0,x1 / rax,rdx).
     res_gp: *[2]u64,
-    /// Captured SSE result registers after the call (v0,v1 / xmm0,xmm1).
-    res_sse: *[2]u128,
+    /// Captured SIMD/FP result registers after the call. AArch64 homogeneous
+    /// aggregates can use v0..v3; x86-64 writes the first two entries.
+    res_sse: *[max_result_sse]u128,
 };
 
 const supported = switch (builtin.cpu.arch) {
@@ -50,6 +51,7 @@ pub const available = supported;
 
 const max_gp = 8;
 const max_sse = 8;
+const max_result_sse = 4;
 /// Stack argument area: bounded; hosted functions with more than this much stack-passed
 /// argument data are rejected rather than silently truncated.
 const max_stack_bytes = 256;
@@ -74,7 +76,7 @@ pub fn call(
     if (!supported) return Error.UnsupportedArch;
 
     const target_abi: layout.abi.Target = switch (builtin.cpu.arch) {
-        .aarch64, .aarch64_be => .aarch64,
+        .aarch64, .aarch64_be => layout.abi.aarch64Target(builtin.os.tag),
         .x86_64 => if (builtin.os.tag == .windows) .x86_64_windows else .x86_64_sysv,
         else => return Error.UnsupportedArch,
     };
@@ -82,13 +84,11 @@ pub fn call(
     // Hosted functions take their natural C ABI under the symbol ABI: the host
     // reaches its own runtime operations directly, so no leading *RocOps.
     const lowered = layout.abi.lower(arena, store, target_abi, arg_layouts, ret_layout, false) catch return Error.TooManyRegisters;
+    const physical = layout.abi.assignPhysicalArgs(arena, store, target_abi, lowered, arg_layouts) catch return Error.TooManyRegisters;
 
     var gp: [max_gp]u64 = @splat(0);
     var sse: [max_sse]u128 = @splat(0);
-    var stack: [max_stack_bytes]u8 align(16) = undefined;
-    var gp_n: usize = 0;
-    var sse_n: usize = 0;
-    var stack_n: usize = 0;
+    var stack: [max_stack_bytes]u8 align(16) = @splat(0);
     var sret: ?*anyopaque = null;
 
     // Return placement: a memory-class return passes the result buffer as the sret pointer.
@@ -101,40 +101,33 @@ pub fn call(
     // AArch64 uses x8, which the assembly stub loads from the `sret` field.
     if (sret) |ret_ptr| {
         if (target_abi == .x86_64_sysv or target_abi == .x86_64_windows) {
-            if (gp_n >= max_gp) return Error.TooManyRegisters;
-            gp[gp_n] = @intFromPtr(ret_ptr);
-            gp_n += 1;
+            gp[0] = @intFromPtr(ret_ptr);
         }
     }
 
-    for (lowered.args, arg_offsets, arg_layouts) |placement, arg_offset, arg_layout| {
+    if (physical.stack_size > max_stack_bytes) return Error.TooManyStackBytes;
+    for (physical.args, arg_offsets) |placement, arg_offset| {
         const value = args_buf + arg_offset;
         switch (placement) {
             .none => {},
-            .indirect => {
-                if (target_abi == .x86_64_sysv) {
-                    const size = store.layoutSize(store.getLayout(arg_layout));
-                    try appendStackBytes(&stack, &stack_n, value, size);
-                } else {
-                    // AAPCS64 and Win64 pass memory-class arguments by pointer.
-                    if (gp_n >= max_gp) return Error.TooManyRegisters;
-                    gp[gp_n] = @intFromPtr(value);
-                    gp_n += 1;
-                }
+            .indirect => |location| switch (location) {
+                .register => |index| gp[index] = @intFromPtr(value),
+                .stack => |offset| {
+                    const ptr_value = @intFromPtr(value);
+                    @memcpy(stack[offset .. offset + 8], std.mem.asBytes(&ptr_value));
+                },
+            },
+            .stack_value => |stack_value| {
+                const end = @as(usize, stack_value.offset) + stack_value.size;
+                if (end > max_stack_bytes) return Error.TooManyStackBytes;
+                @memcpy(stack[stack_value.offset..end], value[0..stack_value.size]);
             },
             .registers => |pieces| {
-                for (pieces) |piece| {
+                for (pieces) |assigned| {
+                    const piece = assigned.piece;
                     switch (piece.class) {
-                        .integer => {
-                            if (gp_n >= max_gp) return Error.TooManyRegisters;
-                            gp[gp_n] = readUnaligned(u64, value + piece.offset, piece.size);
-                            gp_n += 1;
-                        },
-                        .float => {
-                            if (sse_n >= max_sse) return Error.TooManyRegisters;
-                            sse[sse_n] = readUnaligned(u128, value + piece.offset, piece.size);
-                            sse_n += 1;
-                        },
+                        .integer => gp[assigned.register_index] = readUnaligned(u64, value + piece.offset, piece.size),
+                        .float, .vector => sse[assigned.register_index] = readUnaligned(u128, value + piece.offset, piece.size),
                     }
                 }
             },
@@ -142,13 +135,13 @@ pub fn call(
     }
 
     var res_gp: [2]u64 = @splat(0);
-    var res_sse: [2]u128 = @splat(0);
+    var res_sse: [max_result_sse]u128 = @splat(0);
     var ctl = Call{
         .target = target,
         .gp = &gp,
         .sse = &sse,
-        .stack = if (stack_n == 0) null else &stack,
-        .stack_size = std.mem.alignForward(usize, stack_n, 16),
+        .stack = if (physical.stack_size == 0) null else &stack,
+        .stack_size = std.mem.alignForward(usize, physical.stack_size, 16),
         .sret = sret,
         .res_gp = &res_gp,
         .res_sse = &res_sse,
@@ -158,16 +151,16 @@ pub fn call(
     // Gather a register-class return back into the result buffer.
     switch (lowered.ret) {
         .none, .indirect => {},
-        .registers => |pieces| {
+        .registers => |registers| {
             var gpi: usize = 0;
             var ssei: usize = 0;
-            for (pieces) |piece| {
+            for (registers.pieces) |piece| {
                 switch (piece.class) {
                     .integer => {
                         writeUnaligned(ret_buf + piece.offset, std.mem.asBytes(&res_gp[gpi])[0..piece.size]);
                         gpi += 1;
                     },
-                    .float => {
+                    .float, .vector => {
                         writeUnaligned(ret_buf + piece.offset, std.mem.asBytes(&res_sse[ssei])[0..piece.size]);
                         ssei += 1;
                     },
@@ -187,16 +180,6 @@ fn writeUnaligned(dst: [*]u8, bytes: []const u8) void {
     @memcpy(dst[0..bytes.len], bytes);
 }
 
-fn appendStackBytes(stack: *[max_stack_bytes]u8, stack_n: *usize, value: [*]const u8, size: usize) Error!void {
-    const aligned_size = std.mem.alignForward(usize, size, 8);
-    if (stack_n.* + aligned_size > max_stack_bytes) return Error.TooManyStackBytes;
-    @memcpy(stack[stack_n.* .. stack_n.* + size], value[0..size]);
-    if (aligned_size > size) {
-        @memset(stack[stack_n.* + size .. stack_n.* + aligned_size], 0);
-    }
-    stack_n.* += aligned_size;
-}
-
 fn invoke(ctl: *const Call) void {
     switch (builtin.cpu.arch) {
         .aarch64, .aarch64_be, .x86_64 => rocCallTrampoline(ctl),
@@ -214,4 +197,10 @@ test "host_trampoline available on supported arches" {
     if (builtin.cpu.arch == .aarch64 or builtin.cpu.arch == .x86_64) {
         try std.testing.expect(available);
     }
+}
+
+test "host trampoline result image holds every homogeneous aggregate register" {
+    try std.testing.expectEqual(@as(usize, 4), max_result_sse);
+    const result_image = @typeInfo(@FieldType(Call, "res_sse")).pointer.child;
+    try std.testing.expectEqual(@as(usize, max_result_sse * @sizeOf(u128)), @sizeOf(result_image));
 }

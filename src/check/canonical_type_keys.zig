@@ -182,6 +182,20 @@ const Builder = struct {
         const resolved = self.store.resolveVar(var_);
         const root = resolved.var_;
 
+        // The checker explicitly records when it closes an otherwise
+        // unresolved identity to `[]`. Encode the surviving union-find root so
+        // every reference to that identity shares one checked type digest.
+        if (resolved.desc.empty_tag_union_is_default) {
+            try self.writeIdentityVariable(
+                root,
+                resolved.desc.rank,
+                "defaulted_empty_tag_union",
+                null,
+                types.StaticDispatchConstraint.SafeList.Range.empty(),
+            );
+            return;
+        }
+
         switch (resolved.desc.content) {
             .flex => |flex| {
                 if (self.require_concrete) {

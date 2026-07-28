@@ -5,9 +5,29 @@ inputs:
     description: 'Number of times to retry on failure'
     required: false
     default: '3'
+  # Keep this list narrow and anchored. It is matched case-sensitively against
+  # the *whole* combined output of a failed command, and these steps wrap real
+  # test commands -- not just dependency fetches -- so anything that can appear
+  # incidentally in test output will silently re-run the entire suite.
+  #
+  # A bare `503` used to be in this list and did exactly that: the eval timing
+  # line "... stops within bounds (19503.1ms)" matched, re-running a 25-minute
+  # suite. `bad HTTP response code` already covers the real Zig message
+  # ("error: bad HTTP response code: '503 ...'"), so the bare code is gone.
+  #
+  # `EndOfStream` and `WriteFailed` are bare Zig error names with the same
+  # hazard -- `WriteFailed` is even in the CLI tests' own error set
+  # (src/cli/test/util.zig). They are kept because they are the observed
+  # signature of a truncated dependency fetch, but if a real failure is ever
+  # seen retrying because of them, anchor them to an `error:` prefix.
   error_string_contains:
-    description: 'Retry only if error output contains this string'
-    required: true
+    description: >-
+      Regex matched case-sensitively against the failed command's combined
+      output; the command is retried only on a match. Defaults to the
+      transient-network signature set. Override only for a command with a
+      genuinely different flake signature.
+    required: false
+    default: 'HttpConnectionClosing|build\.zig\.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|bad HTTP response code'
   command:
     description: 'The command to run'
     required: true
@@ -103,8 +123,9 @@ runs:
             exit $exitCode
           }
 
-          # Check if error matches retry condition
-          if ($output -match "${{ inputs.error_string_contains }}") {
+          # Check if error matches retry condition. `-cmatch` (not `-match`) so
+          # this lane is case-sensitive like the bash lane's `grep -Eq`.
+          if ($output -cmatch "${{ inputs.error_string_contains }}") {
             Write-Host "Command failed with exit code $exitCode and error output contains '${{ inputs.error_string_contains }}'"
             Write-Host "Retrying..."
             $attempt++

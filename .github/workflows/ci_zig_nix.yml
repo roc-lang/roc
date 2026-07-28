@@ -57,7 +57,6 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: 'nix develop ./src/ -c bash ci/zig_nix_ci.sh ${{ matrix.nix_ci_mode }} ${{ matrix.target_flag }}'
-          error_string_contains: "build.zig.zon|HttpConnectionClosing|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|bad HTTP response code"
           retry_count: 3
 
       - name: Check Zig dependency package cache contents
@@ -86,5 +85,4 @@ jobs:
             set -euo pipefail
             nix build ./src#roc
             result/bin/roc check CONTRIBUTING/profiling/bench_repeated_check.roc
-          error_string_contains: "build.zig.zon|HttpConnectionClosing|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|bad HTTP response code"
           retry_count: 3

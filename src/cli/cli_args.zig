@@ -41,6 +41,12 @@ pub const CliArgs = union(enum) {
     }
 };
 
+/// Parsed command plus CLI-wide output settings.
+pub const ParsedArgs = struct {
+    command: CliArgs,
+    no_color: bool,
+};
+
 /// Errors that can occur due to bad input while parsing the arguments
 pub const ArgProblem = union(enum) {
     missing_flag_value: struct {
@@ -135,7 +141,6 @@ pub const RunArgs = struct {
     target: ?[]const u8 = null, // the target to compile for (e.g., x64musl, x64glibc)
     app_args: []const []const u8 = &[_][]const u8{}, // any arguments to be passed to roc application being run
     no_cache: bool = false, // bypass the executable cache
-    allow_errors: bool = false, // allow execution even if there are type errors
     watch: bool = false, // hot reload when source inputs change; implied for dev runs
     explicit_watch: bool = false, // --watch was passed (as opposed to implied by a dev run)
     explicit_opt: bool = false, // --opt was passed (as opposed to defaulted)
@@ -177,7 +182,6 @@ pub const BuildArgs = struct {
     target: ?[]const u8 = null, // the target to compile for (e.g., x64musl, x64glibc)
     output: ?[]const u8 = null, // the path where the output binary should be created
     debug: bool = false, // include debug information in the output binary
-    allow_errors: bool = false, // allow building even if there are type errors
     verbose: bool = false, // enable verbose output including cache statistics
     timings: bool = false, // always show the per-phase timing breakdown
     no_cache: bool = false, // disable compilation caching
@@ -274,7 +278,6 @@ pub const ExperimentalLspArgs = struct {
 /// Arguments for `roc repl`
 pub const ReplArgs = struct {
     opt: OptLevel = default_dev_opt,
-    no_color: bool = false,
 };
 
 /// Arguments for `roc glue`
@@ -288,6 +291,38 @@ pub const GlueArgs = struct {
 
 /// Parse a list of arguments.
 pub fn parse(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) ParseError!CliArgs {
+    return (try parseWithGlobalOptions(alloc, std_io, args)).command;
+}
+
+/// Parse CLI-wide options before dispatching to a command parser.
+///
+/// `--no-color` is consumed before command parsing so every command shares one
+/// explicit output setting. Arguments after `--` belong to the executed Roc
+/// application and remain untouched.
+pub fn parseWithGlobalOptions(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) ParseError!ParsedArgs {
+    var command_args = try alloc.alloc([]const u8, args.len);
+    defer alloc.free(command_args);
+
+    var no_color = false;
+    var after_separator = false;
+    var command_arg_count: usize = 0;
+    for (args) |arg| {
+        if (mem.eql(u8, arg, "--")) after_separator = true;
+        if (!after_separator and mem.eql(u8, arg, "--no-color")) {
+            no_color = true;
+            continue;
+        }
+        command_args[command_arg_count] = arg;
+        command_arg_count += 1;
+    }
+
+    return .{
+        .command = try parseCommand(alloc, std_io, command_args[0..command_arg_count]),
+        .no_color = no_color,
+    };
+}
+
+fn parseCommand(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) ParseError!CliArgs {
     if (args.len == 0) return try parseRun(alloc, args, .default);
 
     // `roc run` accepts everything the default run accepts, plus installed
@@ -322,7 +357,7 @@ const main_help =
     \\
     \\Commands:
     \\  run              Run a .roc file, a bundle URL, or an installed shorthand
-    \\  install          Install a Roc app from a bundle URL under a shorthand name
+    \\  install          Install a Roc app or glue spec from a bundle URL under a shorthand name
     \\  build            Build a binary from the given .roc file, but don't run it
     \\  bundle           Bundle .roc files into a compressed archive
     \\  unbundle         Extract files from compressed .tar.zst archives
@@ -346,7 +381,7 @@ const main_help =
     \\      --opt=<opt>                    Execution mode: dev (default, fast compilation), interpreter, size (LLVM) or speed (LLVM)
     \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
     \\      --no-cache                     Disable compilation and executable caches (useful for compiler and platform developers)
-    \\      --allow-errors                 Allow execution even if there are type errors (warnings are always allowed)
+    \\      --no-color                     Do not use ANSI escape codes in CLI output
     \\  -j, --jobs=<N>                     Max worker threads for parallel compilation (default: auto-detect CPU count)
     \\
 ;
@@ -368,14 +403,16 @@ const run_help =
 ;
 
 const install_help =
-    \\Install a Roc app from a bundle URL under a shorthand name
+    \\Install a Roc app or glue spec from a bundle URL under a shorthand name
     \\
     \\Usage: roc install [OPTIONS] <SHORTHAND> <URL>
     \\
     \\Downloads the bundle, verifies its content hash, and builds it with
-    \\--opt=speed so that `roc run <SHORTHAND>` executes an optimized binary
-    \\with no compile step. Installations persist outside the cache and are
-    \\scoped to the compiler version that installed them.
+    \\--opt=speed. An app becomes an optimized binary that `roc run
+    \\<SHORTHAND>` executes with no compile step; a glue spec becomes an
+    \\optimized plugin dylib that `roc glue <SHORTHAND> ...` loads directly.
+    \\Installations persist outside the cache and are scoped to the compiler
+    \\version that installed them.
     \\
     \\Arguments:
     \\  <SHORTHAND>  A name of your choice: a lowercase letter followed by
@@ -483,7 +520,6 @@ fn parseBuild(args: []const []const u8) CliArgs {
     var target: ?[]const u8 = null;
     var output: ?[]const u8 = null;
     var debug: bool = false;
-    var allow_errors: bool = false;
     var verbose: bool = false;
     var timings: bool = false;
     var no_cache: bool = false;
@@ -508,7 +544,6 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\      --opt=<opt>                    Build mode: speed (default LLVM optimized), size (LLVM optimized for binary size), dev (native dev backend), or interpreter (embedded interpreter backend)
             \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
             \\      --debug                        Include debug information in the output binary
-            \\      --allow-errors                 Allow building even if there are type errors (warnings are always allowed)
             \\      --verbose                      Enable verbose output including cache statistics
             \\      --timings                      Show how long each compilation phase took (shown automatically when a build is slow)
             \\      --no-cache                     Disable compilation caching
@@ -548,8 +583,6 @@ fn parseBuild(args: []const []const u8) CliArgs {
             }
         } else if (mem.eql(u8, arg, "--debug")) {
             debug = true;
-        } else if (mem.eql(u8, arg, "--allow-errors")) {
-            allow_errors = true;
         } else if (mem.startsWith(u8, arg, "--wasm-memory")) {
             if (getFlagValue(arg)) |value| {
                 wasm_memory = std.fmt.parseInt(usize, value, 10) catch {
@@ -605,7 +638,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .debug = debug, .allow_errors = allow_errors, .verbose = verbose, .timings = timings, .no_cache = no_cache, .watch = watch, .watch_inputs_file = watch_inputs_file, .max_threads = max_threads, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .resolve_limits = resolve_limits } };
+    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .debug = debug, .verbose = verbose, .timings = timings, .no_cache = no_cache, .watch = watch, .watch_inputs_file = watch_inputs_file, .max_threads = max_threads, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .resolve_limits = resolve_limits } };
 }
 
 fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
@@ -870,7 +903,6 @@ fn parseTest(args: []const []const u8) CliArgs {
 
 fn parseRepl(args: []const []const u8) CliArgs {
     var opt: OptLevel = default_dev_opt;
-    var no_color: bool = false;
 
     for (args) |arg| {
         if (isHelpFlag(arg)) {
@@ -881,12 +913,9 @@ fn parseRepl(args: []const []const u8) CliArgs {
             \\
             \\Options:
             \\      --opt=<opt>  Execution mode: dev (default, fast compilation), interpreter, size (LLVM) or speed (LLVM)
-            \\      --no-color   Do not use ANSI color codes in REPL diagnostics
             \\  -h, --help       Print help
             \\
             };
-        } else if (mem.eql(u8, arg, "--no-color")) {
-            no_color = true;
         } else if (mem.startsWith(u8, arg, "--opt")) {
             if (getFlagValue(arg)) |value| {
                 if (OptLevel.from_str(value)) |level| {
@@ -901,7 +930,7 @@ fn parseRepl(args: []const []const u8) CliArgs {
             return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "repl", .arg = arg } } };
         }
     }
-    return CliArgs{ .repl = .{ .opt = opt, .no_color = no_color } };
+    return CliArgs{ .repl = .{ .opt = opt } };
 }
 
 fn parseGlue(args: []const []const u8) CliArgs {
@@ -924,7 +953,7 @@ fn parseGlue(args: []const []const u8) CliArgs {
             \\  [ROC_FILE]   The platform .roc file to analyze [default: main.roc]
             \\
             \\Options:
-            \\  --opt=<level>  Run the glue spec with dev or interpreter [default: dev]
+            \\  --opt=<level>  Compile and run the glue spec with dev, size, or speed [default: dev]
             \\  --no-cache     Disable compilation caching
             \\  -h, --help     Print help
             \\
@@ -935,11 +964,11 @@ fn parseGlue(args: []const []const u8) CliArgs {
             if (getFlagValue(arg)) |value| {
                 if (OptLevel.from_str(value)) |level| {
                     switch (level) {
-                        .dev, .interpreter => opt = level,
-                        .speed, .size => return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "dev,interpreter" } } },
+                        .dev, .size, .speed => opt = level,
+                        .interpreter => return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "dev,size,speed" } } },
                     }
                 } else {
-                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "dev,interpreter" } } };
+                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "dev,size,speed" } } };
                 }
             } else {
                 return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--opt" } } };
@@ -972,7 +1001,7 @@ fn parseGlue(args: []const []const u8) CliArgs {
         \\  [ROC_FILE]   The platform .roc file to analyze [default: main.roc]
         \\
         \\Options:
-        \\  --opt=<level>  Run the glue spec with dev or interpreter [default: dev]
+        \\  --opt=<level>  Compile and run the glue spec with dev, size, or speed [default: dev]
         \\  -h, --help     Print help
         \\
         };
@@ -993,7 +1022,7 @@ fn parseGlue(args: []const []const u8) CliArgs {
         \\  [ROC_FILE]   The platform .roc file to analyze [default: main.roc]
         \\
         \\Options:
-        \\  --opt=<level>  Run the glue spec with dev or interpreter [default: dev]
+        \\  --opt=<level>  Compile and run the glue spec with dev, size, or speed [default: dev]
         \\  -h, --help     Print help
         \\
         };
@@ -1270,7 +1299,6 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8, mode: RunParseMode) 
     var explicit_opt = false;
     var target: ?[]const u8 = null;
     var no_cache: bool = false;
-    var allow_errors: bool = false;
     var watch: bool = false;
     var timings: bool = false;
     var max_threads: ?usize = null;
@@ -1329,8 +1357,6 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8, mode: RunParseMode) 
             }
         } else if (mem.eql(u8, arg, "--no-cache")) {
             no_cache = true;
-        } else if (mem.eql(u8, arg, "--allow-errors")) {
-            allow_errors = true;
         } else if (mem.eql(u8, arg, "--watch")) {
             watch = true;
         } else if (mem.eql(u8, arg, "--timings")) {
@@ -1373,7 +1399,7 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8, mode: RunParseMode) 
         }
     }
 
-    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .app_args = try app_args.toOwnedSlice(), .no_cache = no_cache, .allow_errors = allow_errors, .watch = watch or (opt == .dev), .explicit_watch = watch, .explicit_opt = explicit_opt, .timings = timings, .max_threads = max_threads, .resolve_limits = resolve_limits, .via_run_subcommand = mode == .run_subcommand } };
+    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .app_args = try app_args.toOwnedSlice(), .no_cache = no_cache, .watch = watch or (opt == .dev), .explicit_watch = watch, .explicit_opt = explicit_opt, .timings = timings, .max_threads = max_threads, .resolve_limits = resolve_limits, .via_run_subcommand = mode == .run_subcommand } };
 }
 
 fn parseInstall(args: []const []const u8) CliArgs {
@@ -1962,11 +1988,21 @@ test "roc repl" {
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = try parse(gpa, testing.io, &[_][]const u8{ "repl", "--no-color" });
-        defer result.deinit(gpa);
-        try testing.expectEqual(.repl, std.meta.activeTag(result));
-        try testing.expect(result.repl.no_color);
+        const parsed = try parseWithGlobalOptions(gpa, testing.io, &[_][]const u8{ "repl", "--no-color" });
+        defer parsed.command.deinit(gpa);
+        try testing.expectEqual(.repl, std.meta.activeTag(parsed.command));
+        try testing.expect(parsed.no_color);
     }
+}
+
+test "global no-color is not forwarded to the app" {
+    const gpa = testing.allocator;
+
+    const parsed = try parseWithGlobalOptions(gpa, testing.io, &[_][]const u8{ "--no-color", "app.roc", "--", "--no-color" });
+    defer parsed.command.deinit(gpa);
+
+    try testing.expect(parsed.no_color);
+    try testing.expectEqualSlices([]const u8, &.{"--no-color"}, parsed.command.run.app_args);
 }
 
 test "roc glue" {
@@ -1985,18 +2021,18 @@ test "roc glue" {
         try testing.expectEqualStrings("platform/main.roc", result.glue.platform_path);
     }
     {
-        const result = try parse(gpa, testing.io, &[_][]const u8{ "glue", "--opt=interpreter", "Glue.roc", "glue-out" });
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "glue", "--opt=size", "Glue.roc", "glue-out" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("Glue.roc", result.glue.glue_spec);
         try testing.expectEqualStrings("glue-out", result.glue.output_dir);
-        try testing.expectEqual(OptLevel.interpreter, result.glue.opt);
+        try testing.expectEqual(OptLevel.size, result.glue.opt);
     }
     {
-        const result = try parse(gpa, testing.io, &[_][]const u8{ "glue", "--opt=size", "Glue.roc", "glue-out" });
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "glue", "--opt=interpreter", "Glue.roc", "glue-out" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("--opt", result.problem.invalid_flag_value.flag);
-        try testing.expectEqualStrings("size", result.problem.invalid_flag_value.value);
-        try testing.expectEqualStrings("dev,interpreter", result.problem.invalid_flag_value.valid_options);
+        try testing.expectEqualStrings("interpreter", result.problem.invalid_flag_value.value);
+        try testing.expectEqualStrings("dev,size,speed", result.problem.invalid_flag_value.valid_options);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "glue", "-h" });

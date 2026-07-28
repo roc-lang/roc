@@ -417,15 +417,13 @@ EndOfFile,
 	(s-expect
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
-		(e-string
-			(e-literal (string "test assertion"))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
-		(e-string
-			(e-literal (string "mod load"))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr

@@ -1458,6 +1458,7 @@ test "production FinalSpecId matches the shadow sealing computation" {
             .callable = .{ .proc_template = .{ .module = .{ .bytes = [_]u8{0x11} ** 32 }, .proc_base = 2, .template = 7 } },
             .method_scope = .{ .bytes = [_]u8{0x22} ** 32 },
             .source_fn_ty_digest = .{},
+            .evidence_digest = .{},
             .request_fn_ty_digest = .{},
             .request_fn_ty = request_fn_ty,
         },

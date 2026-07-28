@@ -140,31 +140,7 @@ a = || {}
 (can-ir
 	(d-let
 		(p-assign (ident "s"))
-		(e-block
-			(e-match
-				(match
-					(cond
-						(e-num (value "0")))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-list
-										(patterns))))
-							(value
-								(e-empty_list)))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-list
-										(patterns))))
-							(value
-								(e-block
-									(s-expr
-										(e-block
-											(e-runtime-error (tag "empty_tuple"))))
-									(e-tuple-access (index "70000")
-										(e-empty_record))))))))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "a"))
 		(e-lambda

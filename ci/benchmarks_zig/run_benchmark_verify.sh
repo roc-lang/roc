@@ -41,8 +41,8 @@ fi
 is_intentional_error_fixture() {
     local filename="$1"
 
-    # These files intentionally exercise diagnostics, --allow-errors, or
-    # runtime crash reporting. They are test fixtures, not successful execution
+    # These files intentionally exercise diagnostics or runtime crash reporting.
+    # They are test fixtures, not successful execution
     # benchmarks. Do not add compiler crash/regression repros here; those should
     # fail if the PR binary cannot run them.
     case "$filename" in

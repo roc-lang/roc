@@ -26,15 +26,25 @@ const CompactWriter = collections.CompactWriter;
 /// would silently dangle after relocation, so we reject it at compile time
 /// (such a type needs the transform-B side-list treatment instead).
 pub fn assertRelocatablePod(comptime T: type) void {
+    comptime {
+        // CheckedModuleArtifact.Serialized is intentionally a large recursive
+        // union. Validate its complete shape rather than depending on Zig's
+        // default comptime branch quota.
+        @setEvalBranchQuota(1_000_000);
+        assertRelocatablePodInner(T);
+    }
+}
+
+fn assertRelocatablePodInner(comptime T: type) void {
     switch (@typeInfo(T)) {
         .int, .float, .bool, .void, .@"enum", .error_set, .vector => {},
-        .optional => |o| assertRelocatablePod(o.child),
-        .array => |a| assertRelocatablePod(a.child),
+        .optional => |o| assertRelocatablePodInner(o.child),
+        .array => |a| assertRelocatablePodInner(a.child),
         .@"struct" => |s| {
-            for (s.fields) |f| assertRelocatablePod(f.type);
+            for (s.fields) |f| assertRelocatablePodInner(f.type);
         },
         .@"union" => |u| {
-            for (u.fields) |f| assertRelocatablePod(f.type);
+            for (u.fields) |f| assertRelocatablePodInner(f.type);
         },
         .pointer => @compileError("SerializedSlice element type '" ++ @typeName(T) ++
             "' contains a pointer/slice; it is not relocation-invariant. Use a side-list (transform B) instead."),

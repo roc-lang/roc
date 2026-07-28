@@ -205,6 +205,7 @@ const WrapperAnalyzer = struct {
         const expr = self.solved.lifted.getExpr(expr_id);
         return switch (expr.data) {
             .local => |local| localIsArg(local, args),
+            .@"unreachable",
             .unit,
             .int_lit,
             .frac_f32_lit,
@@ -309,6 +310,7 @@ const WrapperAnalyzer = struct {
     fn visitBodyCallees(self: *WrapperAnalyzer, expr_id: Lifted.ExprId) std.mem.Allocator.Error!void {
         const expr = self.solved.lifted.getExpr(expr_id);
         switch (expr.data) {
+            .@"unreachable",
             .local,
             .unit,
             .int_lit,

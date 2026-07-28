@@ -21,6 +21,10 @@ pub const Diagnostic = union(enum) {
         ident: Ident.Idx,
         region: Region,
     },
+    provided_value_is_required: struct {
+        ident: Ident.Idx,
+        region: Region,
+    },
     redundant_exposed: struct {
         ident: Ident.Idx,
         region: Region,
@@ -389,6 +393,7 @@ pub const Diagnostic = union(enum) {
         return switch (self) {
             .not_implemented => |d| d.region,
             .exposed_but_not_implemented => |d| d.region,
+            .provided_value_is_required => |d| d.region,
             .redundant_exposed => |d| d.region,
             .invalid_num_literal => |d| d.region,
             .ident_already_in_scope => |d| d.region,

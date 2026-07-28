@@ -500,23 +500,7 @@ y =
 (can-ir
 	(d-let
 		(p-assign (ident "x"))
-		(e-tuple
-			(elems
-				(e-num (value "97"))
-				(e-num (value "233"))
-				(e-num (value "128640"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-num (value "128640"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-num (value "92"))
-				(e-num (value "39"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "y"))
 		(e-runtime-error (tag "expr_not_canonicalized"))))

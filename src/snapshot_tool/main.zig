@@ -1054,11 +1054,15 @@ fn processSnapshotContent(
         );
         defer graph.deinit();
 
+        var demand_dependencies = try DependencyGraph.collectDependencies(&graph, can_ir.gpa);
+        errdefer demand_dependencies.deinit(can_ir.gpa);
         const eval_order = try DependencyGraph.computeSCCs(&graph, allocator);
         // IMPORTANT: Use can_ir.gpa here, not allocator, because ModuleEnv.deinit()
         // will free this with self.gpa. They must match to avoid memory leaks.
         const eval_order_ptr = try can_ir.gpa.create(DependencyGraph.EvaluationOrder);
         eval_order_ptr.* = eval_order;
+        can_ir.setTopLevelDemandDependencies(demand_dependencies);
+        demand_dependencies = .{};
         can_ir.evaluation_order = eval_order_ptr;
     }
 
@@ -4525,10 +4529,9 @@ fn compileSnapshotReplInspectedModule(
     source: []const u8,
     config: *const Config,
 ) SnapshotError!eval_mod.test_helpers.CompiledProgram {
-    if (config.builtin_modules_ref) |bm| {
-        return eval_mod.test_helpers.compileInspectedProgramWithBuiltin(
+    var resources = if (config.builtin_modules_ref) |bm|
+        try eval_mod.test_helpers.parseAndCanonicalizeInspectedProgramWithBuiltin(
             allocator,
-            app_io,
             .module,
             source,
             &.{},
@@ -4538,9 +4541,50 @@ fn compileSnapshotReplInspectedModule(
                 .artifact = &bm.checked_artifact,
             },
             null,
-        );
+        )
+    else
+        try eval_mod.test_helpers.parseAndCanonicalizeInspectedProgram(allocator, .module, source, &.{});
+
+    // Snapshot REPL entries render checker diagnostics instead of evaluating
+    // their explicit crash values. The checked module is already complete at
+    // this point; this is a presentation decision, not a checking outcome.
+    if (snapshotReplResourcesHaveErrors(&resources)) {
+        resources.deinit(allocator);
+        return error.TypeCheckError;
     }
-    return eval_mod.test_helpers.compileInspectedProgram(allocator, app_io, .module, source, &.{});
+
+    return eval_mod.test_helpers.lowerInspectedProgram(allocator, app_io, resources);
+}
+
+fn snapshotReplProblemIsError(problem: check.problem.Problem) bool {
+    return switch (problem) {
+        .effectful_function_name,
+        .redundant_pattern,
+        .unmatchable_pattern,
+        .comptime_unused_branch,
+        .comptime_condition,
+        .literal_defaulted,
+        => false,
+        else => true,
+    };
+}
+
+fn snapshotReplCheckedModuleHasErrors(module: *const eval_mod.test_helpers.CheckedModule) bool {
+    for (module.checker.problems.problems.items) |problem| {
+        if (snapshotReplProblemIsError(problem)) return true;
+    }
+    return module.module_env.types.containsErrContent();
+}
+
+fn snapshotReplResourcesHaveErrors(resources: *const eval_mod.test_helpers.ParsedResources) bool {
+    for (resources.checker.problems.problems.items) |problem| {
+        if (snapshotReplProblemIsError(problem)) return true;
+    }
+    if (resources.module_env.types.containsErrContent()) return true;
+    for (resources.extra_modules) |*module| {
+        if (snapshotReplCheckedModuleHasErrors(module)) return true;
+    }
+    return false;
 }
 
 fn compileSnapshotReplInspectedExpr(allocator: Allocator, source: []const u8) SnapshotError!eval_mod.test_helpers.CompiledProgram {

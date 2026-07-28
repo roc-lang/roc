@@ -690,10 +690,7 @@ combineTrys = |jsonTry, httpStatus|
 		(e-lambda
 			(args
 				(p-assign (ident "input")))
-			(e-call
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-lookup-local
-					(p-assign (ident "input")))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
@@ -705,39 +702,7 @@ combineTrys = |jsonTry, httpStatus|
 		(e-lambda
 			(args
 				(p-assign (ident "req")))
-			(e-block
-				(s-let
-					(p-assign (ident "result"))
-					(e-call
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-field-access (field "body")
-							(receiver
-								(e-lookup-local
-									(p-assign (ident "req")))))))
-				(e-match
-					(match
-						(cond
-							(e-lookup-local
-								(p-assign (ident "result"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-call
-										(e-runtime-error (tag "ident_not_in_scope"))
-										(e-lookup-local
-											(p-assign (ident "value"))))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-call
-										(e-runtime-error (tag "ident_not_in_scope"))
-										(e-lookup-local
-											(p-assign (ident "error")))))))))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
@@ -748,22 +713,7 @@ combineTrys = |jsonTry, httpStatus|
 			(args
 				(p-assign (ident "config"))
 				(p-assign (ident "values")))
-			(e-call
-				(e-runtime-error (tag "nested_value_not_found"))
-				(e-lookup-local
-					(p-assign (ident "values")))
-				(e-closure
-					(captures
-						(capture (ident "config")))
-					(e-lambda
-						(args
-							(p-assign (ident "v")))
-						(e-call
-							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-lookup-local
-								(p-assign (ident "config")))
-							(e-lookup-local
-								(p-assign (ident "v"))))))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
@@ -778,10 +728,7 @@ combineTrys = |jsonTry, httpStatus|
 		(e-lambda
 			(args
 				(p-assign (ident "config")))
-			(e-call
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-lookup-local
-					(p-assign (ident "config")))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
@@ -796,27 +743,20 @@ combineTrys = |jsonTry, httpStatus|
 					(cond
 						(e-field-access (field "status")
 							(receiver
-								(e-lookup-local
-									(p-assign (ident "response"))))))
+								(e-runtime-error (tag "erroneous_value_use")))))
 					(branches
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-call
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-lookup-local
-										(p-assign (ident "status"))))))
+								(e-runtime-error (tag "erroneous_value_expr"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-call
-									(e-runtime-error (tag "qualified_ident_does_not_exist"))
-									(e-lookup-local
-										(p-assign (ident "error"))))))))))
+								(e-runtime-error (tag "erroneous_value_expr"))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
@@ -827,38 +767,7 @@ combineTrys = |jsonTry, httpStatus|
 			(args
 				(p-assign (ident "jsonTry"))
 				(p-assign (ident "httpStatus")))
-			(e-match
-				(match
-					(cond
-						(e-lookup-local
-							(p-assign (ident "jsonTry"))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-tag (name "Ok")
-									(args
-										(e-record
-											(fields
-												(field (name "body")
-													(e-call
-														(e-runtime-error (tag "ident_not_in_scope"))
-														(e-lookup-local
-															(p-assign (ident "value")))))
-												(field (name "status")
-													(e-lookup-local
-														(p-assign (ident "httpStatus"))))))))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-tag (name "Err")
-									(args
-										(e-lookup-local
-											(p-assign (ident "error")))))))))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "Try") (builtin)

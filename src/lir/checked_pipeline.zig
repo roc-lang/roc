@@ -28,6 +28,8 @@ const checked = check.CheckedModule;
 
 /// Resource failure while lowering checked modules to LIR.
 pub const LowerResourceError = Allocator.Error;
+/// An explicit checked constant requested for target static-data materialization.
+pub const StaticDataRequest = postcheck.Common.StaticDataRequest;
 
 /// Root checked module plus the checked imports visible to post-check lowering.
 pub const CheckedModuleSet = struct {
@@ -39,6 +41,8 @@ pub const CheckedModuleSet = struct {
 pub const RootRequestSet = struct {
     requests: []const checked.RootRequest = &.{},
     layout_requests: []const checked.CheckedTypeId = &.{},
+    /// Explicit checked constants to restore as readonly target data.
+    static_data_requests: []const postcheck.Common.StaticDataRequest = &.{},
     /// Request layouts and materialization roots for host-visible provided data.
     include_provided_data_exports: bool = false,
     /// Restore eligible stored constants as internal readonly static values.
@@ -218,11 +222,13 @@ pub fn lowerCheckedModulesToLir(
     const layout_requests = try collectLayoutRequests(allocator, modules.root.module, roots.layout_requests, roots.include_provided_data_exports);
     defer allocator.free(layout_requests);
     const static_data_requests = switch (target.checked_module_state) {
-        .complete => if (roots.include_provided_data_exports)
-            try collectStaticDataRequests(allocator, modules.root.module)
-        else
-            try allocator.alloc(postcheck.Common.StaticDataRequest, 0),
-        .checking_finalization => try allocator.alloc(postcheck.Common.StaticDataRequest, 0),
+        .complete => try collectStaticDataRequests(
+            allocator,
+            modules.root.module,
+            roots.static_data_requests,
+            roots.include_provided_data_exports,
+        ),
+        .checking_finalization => try allocator.dupe(postcheck.Common.StaticDataRequest, roots.static_data_requests),
     };
     defer allocator.free(static_data_requests);
 
@@ -244,9 +250,13 @@ pub fn lowerCheckedModulesToLir(
     var mono_owned = true;
     errdefer if (mono_owned) mono.deinit();
 
-    var lifted = try postcheck.MonotypeLifted.Lift.run(allocator, mono);
+    // Each post-check transform consumes its input even when it returns an
+    // error. Transfer ownership before entering the transform so its cleanup
+    // and this function's cleanup can never both deinitialize the same IR.
+    const mono_input = mono;
     mono_owned = false;
     mono = undefined;
+    var lifted = try postcheck.MonotypeLifted.Lift.run(allocator, mono_input);
     var lifted_owned = true;
     errdefer if (lifted_owned) lifted.deinit();
 
@@ -255,16 +265,20 @@ pub fn lowerCheckedModulesToLir(
     }
     try postcheck.MonotypeLifted.Lift.recomputeCaptures(allocator, &lifted);
 
-    var solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted);
+    const lifted_input = lifted;
     lifted_owned = false;
     lifted = undefined;
+    var solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted_input);
     var solved_owned = true;
     errdefer if (solved_owned) solved.deinit();
 
     var inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, &solved);
     defer inline_plan.deinit();
 
-    var lowered = try postcheck.SolvedLirLower.run(allocator, target.target_usize, solved, .{
+    const solved_input = solved;
+    solved_owned = false;
+    solved = undefined;
+    var lowered = try postcheck.SolvedLirLower.run(allocator, target.target_usize, solved_input, .{
         .inline_plan = inline_plan.view(),
         .inline_expects = target.inline_expects,
         .list_in_place_map = target.list_in_place_map,
@@ -277,8 +291,6 @@ pub fn lowerCheckedModulesToLir(
         .test_plan_metadata = roots.test_plan_metadata,
         .debug_materialized_out = target.debug_materialized_out,
     });
-    solved_owned = false;
-    solved = undefined;
     errdefer lowered.deinit();
 
     // TRMC/TCE must rewrite recursive procs before ARC insertion: it deletes
@@ -406,9 +418,15 @@ pub fn selectPlatformEntrypointRoots(
 fn collectStaticDataRequests(
     allocator: Allocator,
     root: *const checked.Module,
+    explicit: []const postcheck.Common.StaticDataRequest,
+    include_provided: bool,
 ) Allocator.Error![]postcheck.Common.StaticDataRequest {
     var requests = std.ArrayList(postcheck.Common.StaticDataRequest).empty;
     errdefer requests.deinit(allocator);
+
+    try requests.appendSlice(allocator, explicit);
+
+    if (!include_provided) return try requests.toOwnedSlice(allocator);
 
     for (root.provided_exports.exports) |provided| {
         switch (provided) {

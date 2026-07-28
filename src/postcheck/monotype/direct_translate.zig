@@ -1179,11 +1179,16 @@ const Walk = struct {
                 // would be wrong output (reunify.md section 10.3). The crypto
                 // digest/hasher nominals are excluded: they carry a fixed
                 // declaration backing and are translated like any other nominal.
+                // An iterator nominal is the same shape of case: its tier and
+                // minted backing are chosen by the representation engine, not
+                // recorded in checked module data.
                 .parse_tag_union_spec,
                 .fields,
                 .field,
+                .iterator,
                 => .engine_input_needed,
                 .bool_tag_union,
+                .try_nominal,
                 .dict,
                 .set,
                 .crypto_sha256_digest,

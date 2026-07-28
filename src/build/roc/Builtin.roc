@@ -37,7 +37,8 @@ Builtin :: [].{
 		}
 
 		JsonState :: [Input(Str)]
-		JsonEncodeState :: { output : List(U8), container_commas : List(Bool) }
+		JsonEncodeState :: { output : List(U8) }
+		JsonContainerEncodeState :: { output : List(U8), needs_comma : Bool }
 
 		Json :: {}.{
 			parse_str : JsonEncoding, JsonState -> Try({ value : Str, rest : JsonState }, [InvalidJson(Str)])
@@ -146,16 +147,16 @@ Builtin :: [].{
 			encode_null = |_, state| JsonEncoding.encode_null(state)
 
 			## write_payloads supplies each tag payload in source order.
-			encode_tag : JsonEncoding, JsonEncodeState, Str, U64, (JsonEncodeState, (JsonEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)
+			encode_tag : JsonEncoding, JsonEncodeState, Str, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
 			encode_tag = |_, state, tag, count, write_payloads| JsonEncoding.encode_tag(state, tag, count, write_payloads)
 
-			encode_record : JsonEncoding, JsonEncodeState, U64, (JsonEncodeState, (JsonEncodeState, Str, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)
+			encode_record : JsonEncoding, JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, Str, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
 			encode_record = |_, state, count, write_fields| JsonEncoding.encode_record(state, count, write_fields)
 
-			encode_tuple : JsonEncoding, JsonEncodeState, U64, (JsonEncodeState, (JsonEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)
+			encode_tuple : JsonEncoding, JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
 			encode_tuple = |_, state, count, write_elements| JsonEncoding.encode_tuple(state, count, write_elements)
 
-			encode_list : JsonEncoding, JsonEncodeState, U64, (JsonEncodeState, (JsonEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)
+			encode_list : JsonEncoding, JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
 			encode_list = |_, state, count, write_elements| JsonEncoding.encode_list(state, count, write_elements)
 
 			to_str : a -> Str
@@ -165,7 +166,7 @@ Builtin :: [].{
 			to_str = |value| {
 				Shape : a
 				encode_shape = Shape.encoder_for(JsonEncoding.Default)
-				Ok(encoded) = encode_shape(value, JsonEncodeState.{ output: u8_list_with_capacity(64), container_commas: [] })
+				Ok(encoded) = encode_shape(value, JsonEncodeState.{ output: u8_list_with_capacity(64) })
 
 				Str.from_utf8_lossy(encoded.output)
 			}
@@ -181,7 +182,7 @@ Builtin :: [].{
 			to_str_try = |value| {
 				Shape : a
 				encode_shape = Shape.encoder_for(JsonEncoding.Default)
-				encoded = encode_shape(value, JsonEncodeState.{ output: u8_list_with_capacity(64), container_commas: [] })?
+				encoded = encode_shape(value, JsonEncodeState.{ output: u8_list_with_capacity(64) })?
 
 				Ok(Str.from_utf8_lossy(encoded.output))
 			}
@@ -374,10 +375,10 @@ Builtin :: [].{
 
 			split_json_number_exponent : Str -> Try({ mantissa : Str, exponent : Str }, [NotFound])
 			split_json_number_exponent = |value|
-				match Str.find_first(value, "e") {
+				match Str.split_first(value, "e") {
 					Ok(split) => Ok({ mantissa: split.before, exponent: split.after })
 					Err(NotFound) =>
-						match Str.find_first(value, "E") {
+						match Str.split_first(value, "E") {
 							Ok(split) => Ok({ mantissa: split.before, exponent: split.after })
 							Err(NotFound) => Err(NotFound)
 						}
@@ -403,7 +404,7 @@ Builtin :: [].{
 					mantissa
 				}
 
-				parts = match Str.find_first(unsigned_mantissa, ".") {
+				parts = match Str.split_first(unsigned_mantissa, ".") {
 					Ok(split) => { int_part: split.before, frac_part: split.after }
 					Err(NotFound) => { int_part: unsigned_mantissa, frac_part: "" }
 				}
@@ -420,7 +421,7 @@ Builtin :: [].{
 					if trimmed.point > 21 or trimmed.point < -18 {
 						Err(BadNumStr)
 					} else {
-						normalized = Json.normalize_json_dec_digits(negative, trimmed.digits, trimmed.digits_len, trimmed.point)?
+						normalized = Json.normalize_json_dec_digits(negative, trimmed.digits, trimmed.point)?
 						dec_from_str(normalized)
 					}
 				}
@@ -428,9 +429,7 @@ Builtin :: [].{
 
 			json_dec_digits_are_zero : Str -> Bool
 			json_dec_digits_are_zero = |digits| {
-				bytes = Str.to_utf8(digits)
-
-				for byte in bytes {
+				for byte in Str.iter_utf8(digits) {
 					if byte != 48 {
 						return False
 					}
@@ -439,25 +438,24 @@ Builtin :: [].{
 				True
 			}
 
-			trim_json_dec_leading_zeros : Str, I64 -> { digits : Str, digits_len : U64, point : I64 }
+			trim_json_dec_leading_zeros : Str, I64 -> { digits : Str, point : I64 }
 			trim_json_dec_leading_zeros = |digits, point| {
-				bytes = Str.to_utf8(digits)
-				len = List.len(bytes)
+				len = Str.count_utf8_bytes(digits)
 				var $index = 0
 
-				while $index < len and list_get_unsafe(bytes, $index) == 48 {
+				while $index < len and str_get_utf8_byte_unsafe(digits, $index) == 48 {
 					$index = $index + 1
 				}
 
 				{
-					digits: Str.from_utf8_lossy(List.drop_first(bytes, $index)),
-					digits_len: len - $index,
+					# the dropped prefix is ASCII zeros, so the cut is a UTF-8 boundary
+					digits: str_drop_first_bytes_unsafe(digits, $index),
 					point: point - $index.to_i64_wrap(),
 				}
 			}
 
-			normalize_json_dec_digits : Bool, Str, U64, I64 -> Try(Str, [BadNumStr])
-			normalize_json_dec_digits = |negative, digits, digits_len, point| {
+			normalize_json_dec_digits : Bool, Str, I64 -> Try(Str, [BadNumStr])
+			normalize_json_dec_digits = |negative, digits, point| {
 				sign = if negative "-" else ""
 
 				if point <= 0 {
@@ -471,14 +469,15 @@ Builtin :: [].{
 					)
 				} else {
 					point_u64 = point.to_u64_wrap()
+					digits_len = Str.count_utf8_bytes(digits)
 
 					if point_u64 >= digits_len {
 						zero_count = point_u64 - digits_len
 						Ok(Str.concat(sign, Str.concat(digits, Str.repeat("0", zero_count))))
 					} else {
-						bytes = Str.to_utf8(digits)
-						before = Str.from_utf8_lossy(List.take_first(bytes, point_u64))
-						after = Str.from_utf8_lossy(List.drop_first(bytes, point_u64))
+						# digits holds only ASCII digits, so any cut is a UTF-8 boundary
+						before = str_substring_unsafe(digits, 0, point_u64)
+						after = str_drop_first_bytes_unsafe(digits, point_u64)
 
 						Ok(Str.concat(sign, Str.concat(before, Str.concat(".", after))))
 					}
@@ -523,91 +522,43 @@ Builtin :: [].{
 				Ok(
 					JsonEncodeState.{
 						output: Json.append_json_string_bytes(state.output, value),
-						container_commas: state.container_commas,
 					},
 				)
 
-			container_needs_comma : JsonEncodeState -> Bool
-			container_needs_comma = |state|
-				match List.last(state.container_commas) {
-					Ok(needs_comma) => needs_comma
-					Err(ListWasEmpty) => {
-						crash "json encoder container stack underflow"
-					}
-				}
-
-			mark_container_has_item : List(Bool) -> List(Bool)
-			mark_container_has_item = |container_commas|
-				List.drop_last(container_commas, 1).append(True)
-
-			write_record_start : JsonEncodeState -> Try(JsonEncodeState, _never_fails)
-			write_record_start = |state|
-				Ok(
-					JsonEncodeState.{
-						output: u8_append(state.output, 123),
-						container_commas: state.container_commas.append(False),
-					},
-				)
-
-			write_record_field : JsonEncodeState, Str, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)
+			write_record_field : JsonContainerEncodeState, Str, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)
 			write_record_field = |state, field, write_value| {
-				with_comma = if Json.container_needs_comma(state) {
+				with_comma = if state.needs_comma {
 					u8_append(state.output, 44)
 				} else {
 					state.output
 				}
 				output = u8_append(Json.append_json_quoted_string(with_comma, field), 58)
 
-				write_value(
-					JsonEncodeState.{
-						output,
-						container_commas: Json.mark_container_has_item(state.container_commas),
+				encoded = write_value(JsonEncodeState.{ output })?
+				Ok(
+					JsonContainerEncodeState.{
+						output: encoded.output,
+						needs_comma: True,
 					},
 				)
 			}
 
-			write_record_end : JsonEncodeState -> Try(JsonEncodeState, _never_fails)
-			write_record_end = |state|
-				Ok(
-					JsonEncodeState.{
-						output: u8_append(state.output, 125),
-						container_commas: List.drop_last(state.container_commas, 1),
-					},
-				)
-
-			write_sequence_start : JsonEncodeState -> Try(JsonEncodeState, _never_fails)
-			write_sequence_start = |state|
-				Ok(
-					JsonEncodeState.{
-						output: u8_append(state.output, 91),
-						container_commas: state.container_commas.append(False),
-					},
-				)
-
-			write_sequence_element : JsonEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)
+			write_sequence_element : JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)
 			write_sequence_element = |state, write_value| {
-				output = if Json.container_needs_comma(state) {
+				output = if state.needs_comma {
 					u8_append(state.output, 44)
 				} else {
 					state.output
 				}
 
-				write_value(
-					JsonEncodeState.{
-						output,
-						container_commas: Json.mark_container_has_item(state.container_commas),
+				encoded = write_value(JsonEncodeState.{ output })?
+				Ok(
+					JsonContainerEncodeState.{
+						output: encoded.output,
+						needs_comma: True,
 					},
 				)
 			}
-
-			write_sequence_end : JsonEncodeState -> Try(JsonEncodeState, _never_fails)
-			write_sequence_end = |state|
-				Ok(
-					JsonEncodeState.{
-						output: u8_append(state.output, 93),
-						container_commas: List.drop_last(state.container_commas, 1),
-					},
-				)
 
 			append_json_string_bytes : List(U8), Str -> List(U8)
 			append_json_string_bytes = |out, value| {
@@ -775,7 +726,7 @@ Builtin :: [].{
 
 			snake_to_camel : Str -> Str
 			snake_to_camel = |text|
-				match Str.find_first(text, "_") {
+				match Str.split_first(text, "_") {
 					Ok({ before, after }) =>
 						before.concat(Json.upper_first_ascii(Json.snake_to_camel(after)))
 
@@ -1119,8 +1070,7 @@ Builtin :: [].{
 
 			is_json_number : Str -> Bool
 			is_json_number = |value| {
-				bytes = Str.to_utf8(value)
-				len = List.len(bytes)
+				len = Str.count_utf8_bytes(value)
 
 				if len == 0 {
 					return False
@@ -1128,7 +1078,7 @@ Builtin :: [].{
 
 				var $index = 0
 
-				first = list_get_unsafe(bytes, $index)
+				first = str_get_utf8_byte_unsafe(value, $index)
 
 				if first == 45 {
 					$index = $index + 1
@@ -1138,7 +1088,7 @@ Builtin :: [].{
 					}
 				}
 
-				int_first = list_get_unsafe(bytes, $index)
+				int_first = str_get_utf8_byte_unsafe(value, $index)
 
 				if int_first == 48 {
 					$index = $index + 1
@@ -1146,7 +1096,7 @@ Builtin :: [].{
 					$index = $index + 1
 
 					while $index < len {
-						byte = list_get_unsafe(bytes, $index)
+						byte = str_get_utf8_byte_unsafe(value, $index)
 
 						if Json.is_json_digit(byte) {
 							$index = $index + 1
@@ -1159,7 +1109,7 @@ Builtin :: [].{
 				}
 
 				if $index < len {
-					byte = list_get_unsafe(bytes, $index)
+					byte = str_get_utf8_byte_unsafe(value, $index)
 
 					if byte == 46 {
 						$index = $index + 1
@@ -1168,14 +1118,14 @@ Builtin :: [].{
 							return False
 						}
 
-						first_fraction_byte = list_get_unsafe(bytes, $index)
+						first_fraction_byte = str_get_utf8_byte_unsafe(value, $index)
 
 						if !Json.is_json_digit(first_fraction_byte) {
 							return False
 						}
 
 						while $index < len {
-							fraction_byte = list_get_unsafe(bytes, $index)
+							fraction_byte = str_get_utf8_byte_unsafe(value, $index)
 
 							if Json.is_json_digit(fraction_byte) {
 								$index = $index + 1
@@ -1187,7 +1137,7 @@ Builtin :: [].{
 				}
 
 				if $index < len {
-					byte = list_get_unsafe(bytes, $index)
+					byte = str_get_utf8_byte_unsafe(value, $index)
 
 					if Json.is_json_exponent_marker(byte) {
 						$index = $index + 1
@@ -1196,7 +1146,7 @@ Builtin :: [].{
 							return False
 						}
 
-						exponent_first_byte = list_get_unsafe(bytes, $index)
+						exponent_first_byte = str_get_utf8_byte_unsafe(value, $index)
 
 						if Json.is_json_sign(exponent_first_byte) {
 							$index = $index + 1
@@ -1206,14 +1156,14 @@ Builtin :: [].{
 							}
 						}
 
-						first_exponent_digit = list_get_unsafe(bytes, $index)
+						first_exponent_digit = str_get_utf8_byte_unsafe(value, $index)
 
 						if !Json.is_json_digit(first_exponent_digit) {
 							return False
 						}
 
 						while $index < len {
-							exponent_byte = list_get_unsafe(bytes, $index)
+							exponent_byte = str_get_utf8_byte_unsafe(value, $index)
 
 							if Json.is_json_digit(exponent_byte) {
 								$index = $index + 1
@@ -1232,14 +1182,13 @@ Builtin :: [].{
 
 			is_json_unsigned_int_literal : Str -> Bool
 			is_json_unsigned_int_literal = |value| {
-				bytes = Str.to_utf8(value)
-				len = List.len(bytes)
+				len = Str.count_utf8_bytes(value)
 
 				if len == 0 {
 					return False
 				}
 
-				first = list_get_unsafe(bytes, 0)
+				first = str_get_utf8_byte_unsafe(value, 0)
 
 				if first == 48 {
 					return len == 1
@@ -1252,7 +1201,7 @@ Builtin :: [].{
 				var $index = 1
 
 				while $index < len {
-					byte = list_get_unsafe(bytes, $index)
+					byte = str_get_utf8_byte_unsafe(value, $index)
 
 					if Json.is_json_digit(byte) {
 						$index = $index + 1
@@ -1325,35 +1274,37 @@ Builtin :: [].{
 			## keeps that delimiter. Both results are zero-copy slices.
 			split_json_scalar_tail : Str -> Try({ value : Str, after : Str }, [InvalidJson(Str), ..])
 			split_json_scalar_tail = |raw| {
-				bytes = Str.to_utf8(raw)
+				len = Str.count_utf8_bytes(raw)
+				var $index = 0
+				var $found = False
 
-				match List.find_first_index(bytes, is_json_scalar_delimiter) {
-					Ok(0) => {
-						# missing scalar value
-						Err(Json.invalid_json)
+				while $index < len {
+					if is_json_scalar_delimiter(str_get_utf8_byte_unsafe(raw, $index)) {
+						$found = True
+						break
+					} else {
+						$index = $index + 1
 					}
-					Ok(index) => {
-						value = match Str.from_utf8(List.take_first(bytes, index)) {
+				}
+
+				if $found {
+					if $index == 0 {
+						Err(Json.invalid_json)
+					} else {
+						value = match Str.drop_last_bytes(raw, len - $index) {
 							Ok(v) => v
-							# unreachable: the split point is an ASCII delimiter, so the prefix is always valid UTF-8
-							Err(_) => {
-								crash "Json scalar splitter invariant violated: split at a delimiter was not valid UTF-8"
+							Err(BadUtf8) => {
+								crash "Json scalar splitter invariant violated: ASCII delimiter was not a UTF-8 boundary"
 							}
 						}
-
-						# `value` is a content-matched prefix of `raw`, so dropping it yields the
-						# tail beginning with the delimiter — a zero-copy slice operation.
-						Ok({ value, after: Str.drop_prefix(raw, value) })
+						# the cut is at an ASCII delimiter, so it is a UTF-8 boundary
+						after = str_drop_first_bytes_unsafe(raw, $index)
+						Ok({ value, after })
 					}
-					Err(NotFound) => {
-						if Str.is_empty(raw) {
-							# missing scalar value (end of input)
-							Err(Json.invalid_json)
-						} else {
-							# the scalar runs to the end of the input
-							Ok({ value: raw, after: "" })
-						}
-					}
+				} else if $index == 0 {
+					Err(Json.invalid_json)
+				} else {
+					Ok({ value: raw, after: "" })
 				}
 			}
 		}
@@ -1541,7 +1492,7 @@ Builtin :: [].{
 					Input(value) => Json.parse_tag_union_from_json(value, encoding, spec)
 				}
 
-			encode_tag : JsonEncodeState, Str, U64, (JsonEncodeState, (JsonEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)
+			encode_tag : JsonEncodeState, Str, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
 			encode_tag = |state, tag, count, write_payloads|
 				if count == 0 {
 					JsonEncoding.encode_str(tag, state)
@@ -1555,7 +1506,14 @@ Builtin :: [].{
 								tag,
 								|payload_state|
 									if count == 1 {
-										write_payloads(payload_state, |item_state, write_value| write_value(item_state))
+										finished = write_payloads(
+											JsonContainerEncodeState.{ output: payload_state.output, needs_comma: False },
+											|item_state, write_value| {
+												encoded = write_value(JsonEncodeState.{ output: item_state.output })?
+												Ok(JsonContainerEncodeState.{ output: encoded.output, needs_comma: True })
+											},
+										)?
+										Ok(JsonEncodeState.{ output: finished.output })
 									} else {
 										JsonEncoding.encode_tuple(payload_state, count, write_payloads)
 									},
@@ -1563,21 +1521,21 @@ Builtin :: [].{
 					)
 				}
 
-			encode_record : JsonEncodeState, U64, (JsonEncodeState, (JsonEncodeState, Str, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)
+			encode_record : JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, Str, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
 			encode_record = |state, _, write_fields| {
-				started = Json.write_record_start(state)?
+				started = JsonContainerEncodeState.{ output: u8_append(state.output, 123), needs_comma: False }
 				finished = write_fields(started, Json.write_record_field)?
-				Json.write_record_end(finished)
+				Ok(JsonEncodeState.{ output: u8_append(finished.output, 125) })
 			}
 
-			encode_tuple : JsonEncodeState, U64, (JsonEncodeState, (JsonEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)
+			encode_tuple : JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
 			encode_tuple = |state, _, write_elements| {
-				started = Json.write_sequence_start(state)?
+				started = JsonContainerEncodeState.{ output: u8_append(state.output, 91), needs_comma: False }
 				finished = write_elements(started, Json.write_sequence_element)?
-				Json.write_sequence_end(finished)
+				Ok(JsonEncodeState.{ output: u8_append(finished.output, 93) })
 			}
 
-			encode_list : JsonEncodeState, U64, (JsonEncodeState, (JsonEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)
+			encode_list : JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
 			encode_list = |state, count, write_elements| JsonEncoding.encode_tuple(state, count, write_elements)
 
 			encode_str : Str, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
@@ -1585,7 +1543,6 @@ Builtin :: [].{
 				Ok(
 					JsonEncodeState.{
 						output: Json.append_json_quoted_string(state.output, value),
-						container_commas: state.container_commas,
 					},
 				)
 
@@ -1594,7 +1551,6 @@ Builtin :: [].{
 				Ok(
 					JsonEncodeState.{
 						output: Json.append_json_string_bytes(state.output, if value "true" else "false"),
-						container_commas: state.container_commas,
 					},
 				)
 
@@ -1621,7 +1577,6 @@ Builtin :: [].{
 				Ok(
 					JsonEncodeState.{
 						output: Json.append_json_string_bytes(state.output, json_u64_to_str(value)),
-						container_commas: state.container_commas,
 					},
 				)
 
@@ -1672,7 +1627,6 @@ Builtin :: [].{
 				Ok(
 					JsonEncodeState.{
 						output: Json.append_json_string_bytes(state.output, "null"),
-						container_commas: state.container_commas,
 					},
 				)
 
@@ -1892,7 +1846,7 @@ Builtin :: [].{
 				if Str.is_empty(headers) {
 					Ok(Done({ rest: HttpHeaderState.{ raw: "" } }))
 				} else {
-					line_parts = match Str.find_first(headers, "\r\n") {
+					line_parts = match Str.split_first(headers, "\r\n") {
 						Ok(parts) => parts
 						Err(NotFound) => { before: headers, after: "" }
 					}
@@ -1900,7 +1854,7 @@ Builtin :: [].{
 					if Str.is_empty(line_parts.before) {
 						Ok(Done({ rest: HttpHeaderState.{ raw: line_parts.after } }))
 					} else {
-						match Str.find_first(headers, ":") {
+						match Str.split_first(headers, ":") {
 							Ok({ before: name, after: value_start }) => {
 								name_len = Str.count_utf8_bytes(name)
 								line_len = Str.count_utf8_bytes(line_parts.before)
@@ -1932,14 +1886,14 @@ Builtin :: [].{
 
 			take_header_value : Str -> Try({ value : Str, after : Str }, [BadHeader, ..])
 			take_header_value = |raw|
-				match Str.find_first(raw, "\r\n") {
+				match Str.split_first(raw, "\r\n") {
 					Ok({ before, after }) => Ok({ value: Str.trim(before), after })
 					Err(NotFound) => Ok({ value: Str.trim(raw), after: "" })
 				}
 
 			underscores_to_dashes : Str -> Str
 			underscores_to_dashes = |text|
-				match Str.find_first(text, "_") {
+				match Str.split_first(text, "_") {
 					Ok({ before, after }) =>
 						Str.concat(Str.concat(before, "-"), HttpHeader.underscores_to_dashes(after))
 
@@ -2157,17 +2111,18 @@ Builtin :: [].{
 		## ```
 		drop_suffix : Str, Str -> Str
 
-		## Finds the first occurrence of a delimiter in a string.
+		## Splits the string on the first occurrence of a delimiter, returning the
+		## parts before and after it.
 		##
 		## The returned strings are slices of the original string.
 		##
 		## ```roc
-		## expect "foo: bar".find_first(":") == Ok({ before: "foo", after: " bar" })
-		## expect "foo".find_first(":") == Err(NotFound)
+		## expect "foo: bar".split_first(":") == Ok({ before: "foo", after: " bar" })
+		## expect "foo".split_first(":") == Err(NotFound)
 		## ```
-		find_first : Str, Str -> Try({ before : Str, after : Str }, [NotFound])
-		find_first = |source, delimiter| {
-			split = str_find_first_raw(source, delimiter)
+		split_first : Str, Str -> Try({ before : Str, after : Str }, [NotFound])
+		split_first = |source, delimiter| {
+			split = str_split_first_raw(source, delimiter)
 
 			if split.found {
 				Ok({ before: split.before, after: split.after })
@@ -2176,11 +2131,133 @@ Builtin :: [].{
 			}
 		}
 
+		## Splits the string on the last occurrence of a delimiter, returning the
+		## parts before and after it.
+		##
+		## The returned strings are slices of the original string.
+		##
+		## ```roc
+		## expect "a.b.c".split_last(".") == Ok({ before: "a.b", after: "c" })
+		## expect "foo".split_last(":") == Err(NotFound)
+		## ```
+		split_last : Str, Str -> Try({ before : Str, after : Str }, [NotFound])
+		split_last = |source, delimiter| {
+			split = str_split_last_raw(source, delimiter)
+
+			if split.found {
+				Ok({ before: split.before, after: split.after })
+			} else {
+				Err(NotFound)
+			}
+		}
+
+		## Replaces every occurrence of `delimiter` in a string with `replacement`.
+		## Returns the string unchanged when `delimiter` is empty or not found.
+		## ```roc
+		## expect "a,b,c".replace_each(",", " and ") == "a and b and c"
+		## expect "abc".replace_each("x", "y") == "abc"
+		## ```
+		replace_each : Str, Str, Str -> Str
+		replace_each = |source, delimiter, replacement|
+			Str.join_with(Str.split_on(source, delimiter), replacement)
+
+		## Replaces the first occurrence of `delimiter` in a string with `replacement`.
+		## Returns the string unchanged when `delimiter` is empty or not found.
+		## ```roc
+		## expect "a,b,a".replace_first(",", " and ") == "a and b,a"
+		## expect "abc".replace_first("x", "y") == "abc"
+		## ```
+		replace_first : Str, Str, Str -> Str
+		replace_first = |source, delimiter, replacement|
+			if Str.is_empty(delimiter) {
+				source
+			} else {
+				match Str.split_first(source, delimiter) {
+					Ok({ before, after }) => before.concat(replacement).concat(after)
+					Err(NotFound) => source
+				}
+			}
+
+		## Replaces the last occurrence of `delimiter` in a string with `replacement`.
+		## Returns the string unchanged when `delimiter` is empty or not found.
+		## ```roc
+		## expect "a,b,a".replace_last(",", " and ") == "a,b and a"
+		## expect "abc".replace_last("x", "y") == "abc"
+		## ```
+		replace_last : Str, Str, Str -> Str
+		replace_last = |source, delimiter, replacement|
+			if Str.is_empty(delimiter) {
+				source
+			} else {
+				match Str.split_last(source, delimiter) {
+					Ok({ before, after }) => before.concat(replacement).concat(after)
+					Err(NotFound) => source
+				}
+			}
+
 		## Gives the number of bytes in a [Str] value.
 		## ```roc
 		## expect "Hello World".count_utf8_bytes() == 11
 		## ```
 		count_utf8_bytes : Str -> U64
+
+		## Iterate over this string's UTF-8 code units in byte order. The iterator's
+		## known length is the string's byte length. Iteration does not allocate.
+		iter_utf8 : Str -> Iter(U8)
+		iter_utf8 = |str| {
+			make = |index| {
+				len = Str.count_utf8_bytes(str)
+
+				iter_from_step(
+					Known(len - index),
+					||
+						if index == len {
+							Done
+						} else {
+							One({ item: str_get_utf8_byte_unsafe(str, index), rest: make(index + 1) })
+						},
+				)
+			}
+
+			make(0)
+		}
+
+		## Drop a byte count from the start of a string. Counts at or beyond the
+		## byte length return `Ok("")`; an in-range cut inside a UTF-8 code point
+		## returns `Err(BadUtf8)`. Valid slices do not allocate.
+		drop_first_bytes : Str, U64 -> Try(Str, [BadUtf8, ..])
+		drop_first_bytes = |str, count| {
+			if count < Str.count_utf8_bytes(str) {
+				byte = str_get_utf8_byte_unsafe(str, count)
+				if byte >= 128 and byte < 192 {
+					return Err(BadUtf8)
+				}
+			}
+			Ok(str_drop_first_bytes_unsafe(str, count))
+		}
+
+		## Drop a byte count from the end of a string. Counts at or beyond the byte
+		## length return `Ok("")`; an in-range cut inside a UTF-8 code point returns
+		## `Err(BadUtf8)`. Valid slices do not allocate.
+		drop_last_bytes : Str, U64 -> Try(Str, [BadUtf8, ..])
+		drop_last_bytes = |str, count| {
+			if count == 0 {
+				Ok(str)
+			} else {
+				len = Str.count_utf8_bytes(str)
+				if count >= len {
+					Ok("")
+				} else {
+					end = len - count
+					byte = str_get_utf8_byte_unsafe(str, end)
+					if byte >= 128 and byte < 192 {
+						Err(BadUtf8)
+					} else {
+						Ok(str_substring_unsafe(str, 0, end))
+					}
+				}
+			}
+		}
 
 		## Returns a string of the specified capacity without any content.
 		##
@@ -2429,10 +2506,12 @@ Builtin :: [].{
 		## Feed an [I128] into the hasher.
 		write_i128 : Hasher, I128 -> Hasher
 
-		## Feed an [F32] into the hasher.
+		## Feed an [F32] into the hasher. Positive and negative zero hash
+		## identically, and every `NaN` representation hashes identically.
 		write_f32 : Hasher, F32 -> Hasher
 
-		## Feed an [F64] into the hasher.
+		## Feed an [F64] into the hasher. Positive and negative zero hash
+		## identically, and every `NaN` representation hashes identically.
 		write_f64 : Hasher, F64 -> Hasher
 
 		## Feed a [Dec] into the hasher.
@@ -2689,7 +2768,7 @@ Builtin :: [].{
 		exclusive_range : num, num, [Known(U64), Unknown] -> Iter(num)
 			where [
 				num.is_lt : num, num -> Bool,
-				num.add_try : num, num -> Try(num, [Overflow]),
+				num.plus_try : num, num -> Try(num, [Overflow]),
 				num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
 			]
 		exclusive_range = |start, end, len_if_known|
@@ -2699,7 +2778,7 @@ Builtin :: [].{
 					if start < end {
 						One({
 							item: start,
-							rest: match start.add_try(1) {
+							rest: match start.plus_try(1) {
 								Ok(next) => if next < end {
 									Iter.exclusive_range(
 										next,
@@ -2728,7 +2807,7 @@ Builtin :: [].{
 		inclusive_range : num, num, [Known(U64), Unknown] -> Iter(num)
 			where [
 				num.is_lte : num, num -> Bool,
-				num.add_try : num, num -> Try(num, [Overflow]),
+				num.plus_try : num, num -> Try(num, [Overflow]),
 				num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
 			]
 		inclusive_range = |start, end, len_if_known|
@@ -2738,7 +2817,7 @@ Builtin :: [].{
 					if start <= end {
 						One({
 							item: start,
-							rest: match start.add_try(1) {
+							rest: match start.plus_try(1) {
 								Ok(next) => if next <= end {
 									Iter.inclusive_range(
 										next,
@@ -3482,6 +3561,16 @@ Builtin :: [].{
 		append_if_ok : List(a), Try(a, err) -> List(a)
 		append_if_ok = |list, maybe_item| list_append_if_ok(list, maybe_item)
 
+		## Add the `Ok` payload to the beginning of a list, or leave the list unchanged
+		## if the value is `Err`.
+		## ```roc
+		## expect List.prepend_if_ok([2, 3], Ok(1)) == [1, 2, 3]
+		##
+		## expect List.prepend_if_ok([2, 3], Err(NotFound)) == [2, 3]
+		## ```
+		prepend_if_ok : List(a), Try(a, err) -> List(a)
+		prepend_if_ok = |list, maybe_item| list_prepend_if_ok(list, maybe_item)
+
 		## Add a single element to the beginning of a list.
 		## ```roc
 		## expect [2, 3, 4].prepend(1) == [1, 2, 3, 4]
@@ -3526,6 +3615,26 @@ Builtin :: [].{
 		## ```
 		subscript : List(item), U64 -> Try(item, [OutOfBounds, ..])
 		subscript = |list, index| List.get(list, index)
+
+		## Returns the element at the given index, wrapping back to the start when the
+		## index is past the end (the index is taken modulo the length).
+		##
+		## You may know a similar function named `getWrap`, or indexing that wraps a
+		## negative or out-of-range index, in other languages.
+		##
+		## Returns `Err(ListWasEmpty)` if the list is empty.
+		## ```roc
+		## expect ["a", "b", "c"].get_wrap(4) == Ok("b")
+		## ```
+		get_wrap : List(item), U64 -> Try(item, [ListWasEmpty, ..])
+		get_wrap = |list, index| {
+			len = List.len(list)
+			if len == 0 {
+				Try.Err(ListWasEmpty)
+			} else {
+				Try.Ok(list_get_unsafe(list, index % len))
+			}
+		}
 
 		## Replaces the element at the given index with a new value.
 		## ```roc
@@ -3581,6 +3690,36 @@ Builtin :: [].{
 				Ok(list_swap_unsafe(list, index_1, index_2))
 			} else {
 				Err(OutOfBounds)
+			}
+		}
+
+		## Inserts an element at the given index, shifting later elements toward the end.
+		## An index equal to the length appends the element; a greater index is out of bounds.
+		## ```roc
+		## expect [1.I64, 2, 3].insert(1, 9) == Ok([1, 9, 2, 3])
+		##
+		## expect [1.I64, 2, 3].insert(5, 9) == Err(OutOfBounds)
+		## ```
+		insert : List(a), U64, a -> Try(List(a), [OutOfBounds, ..])
+		insert = |list, index, item| {
+			len = List.len(list)
+			if index > len {
+				Err(OutOfBounds)
+			} else {
+				# The two loops append exactly `index` then `len - index` elements plus
+				# the inserted one, so every unchecked append stays within `len + 1`.
+				var $result = List.with_capacity(len + 1)
+				var $i = 0
+				while $i < index {
+					$result = list_append_unsafe($result, list_get_unsafe(list, $i))
+					$i = $i + 1
+				}
+				$result = list_append_unsafe($result, item)
+				while $i < len {
+					$result = list_append_unsafe($result, list_get_unsafe(list, $i))
+					$i = $i + 1
+				}
+				Ok($result)
 			}
 		}
 
@@ -3662,6 +3801,54 @@ Builtin :: [].{
 				match (a_list.get($index), b_list.get($index)) {
 					(Ok(a), Ok(b)) => {
 						$result = $result.append(transform(a, b))
+					}
+					_ => {
+						break
+					}
+				}
+				$index = $index + 1
+			}
+			$result
+		}
+
+		## Apply a ternary function to triples of elements from three lists, returning a list of results.
+		## The result's length is the length of the shortest input list.
+		## ```
+		## expect [1, 2, 3].map3([10, 20, 30], [100, 200, 300], |a, b, c| a + b + c) == [111, 222, 333]
+		## expect [1, 2, 3, 4, 5].map3([10, 20], [100, 200, 300], |a, b, c| a + b + c) == [111, 222]
+		## ```
+		map3 : List(a), List(b), List(c), (a, b, c -> d) -> List(d)
+		map3 = |a_list, b_list, c_list, transform| {
+			var $result = []
+			var $index = 0
+			while ($index < a_list.len() and $index < b_list.len() and $index < c_list.len()) {
+				match (a_list.get($index), b_list.get($index), c_list.get($index)) {
+					(Ok(a), Ok(b), Ok(c)) => {
+						$result = $result.append(transform(a, b, c))
+					}
+					_ => {
+						break
+					}
+				}
+				$index = $index + 1
+			}
+			$result
+		}
+
+		## Apply a quaternary function to groups of elements from four lists, returning a list of results.
+		## The result's length is the length of the shortest input list.
+		## ```
+		## expect [1, 2, 3].map4([10, 20, 30], [100, 200, 300], [1000, 2000, 3000], |a, b, c, d| a + b + c + d) == [1111, 2222, 3333]
+		## expect [1, 2, 3, 4, 5].map4([10, 20], [100, 200, 300], [1000, 2000, 3000, 4000], |a, b, c, d| a + b + c + d) == [1111, 2222]
+		## ```
+		map4 : List(a), List(b), List(c), List(d), (a, b, c, d -> e) -> List(e)
+		map4 = |a_list, b_list, c_list, d_list, transform| {
+			var $result = []
+			var $index = 0
+			while ($index < a_list.len() and $index < b_list.len() and $index < c_list.len() and $index < d_list.len()) {
+				match (a_list.get($index), b_list.get($index), c_list.get($index), d_list.get($index)) {
+					(Ok(a), Ok(b), Ok(c), Ok(d)) => {
+						$result = $result.append(transform(a, b, c, d))
 					}
 					_ => {
 						break
@@ -3782,6 +3969,97 @@ Builtin :: [].{
 						acc
 					},
 			)
+
+		## Like [List.map], but the transform can fail. Runs a `Try`-returning
+		## function on each element and collects the `Ok` values. Stops at the first
+		## `Err` and returns it, so the result is either all the transformed values
+		## or the first failure.
+		## ```roc
+		## expect [1.I64, 2, 3].map_try(|n| if n < 3 { Ok(n) } else { Err(TooBig) }) == Err(TooBig)
+		## ```
+		map_try : List(a), (a -> Try(b, err)) -> Try(List(b), err)
+		map_try = |list, transform| {
+			var $out = List.with_capacity(list.len())
+			for elem in list {
+				$out = list_append_unsafe($out, transform(elem)?)
+			}
+			Ok($out)
+		}
+
+		## Like [List.map_try], but the transform is effectful. It runs on each
+		## element until one returns `Err`, then stops.
+		## ```roc
+		## rows.map_try!(|row| SQL.insert!("INSERT INTO t VALUES (?)", [row]))
+		## ```
+		map_try! : List(a), (a => Try(b, err)) => Try(List(b), err)
+		map_try! = |list, transform!| {
+			var $out = List.with_capacity(list.len())
+			for elem in list {
+				$out = list_append_unsafe($out, transform!(elem)?)
+			}
+			Ok($out)
+		}
+
+		## Like [List.keep_if], but the predicate can fail. Runs a `Try`-returning
+		## predicate on each element, keeping the ones it maps to `Ok(Bool.True)`.
+		## Stops at the first `Err` and returns it.
+		## ```roc
+		## expect [1.I64, 2, 3].keep_if_try(|n| Ok(n > 1)) == Ok([2, 3])
+		## ```
+		keep_if_try : List(a), (a -> Try(Bool, err)) -> Try(List(a), err)
+		keep_if_try = |list, predicate| {
+			var $out = []
+			for elem in list {
+				if predicate(elem)? {
+					$out = List.concat($out, [elem])
+				}
+			}
+			Ok($out)
+		}
+
+		## Like [List.keep_if_try], but the predicate is effectful. It runs on each
+		## element until one returns `Err`, then stops.
+		## ```roc
+		## users.keep_if_try!(|user| SQL.query_bool!("SELECT is_active FROM users WHERE id = ?", [user.id]))
+		## ```
+		keep_if_try! : List(a), (a => Try(Bool, err)) => Try(List(a), err)
+		keep_if_try! = |list, predicate!| {
+			var $out = []
+			for elem in list {
+				if predicate!(elem)? {
+					$out = List.concat($out, [elem])
+				}
+			}
+			Ok($out)
+		}
+
+		## Like [List.fold], but the step function can fail. Threads `state` through
+		## the list, and if a step returns `Err`, stops and returns it.
+		## ```roc
+		## expect [1.I64, 2, 3].fold_try(0, |sum, n| if n < 3 { Ok(sum + n) } else { Err(Stop) }) == Err(Stop)
+		## ```
+		fold_try : List(item), state, (state, item -> Try(state, err)) -> Try(state, err)
+		fold_try = |list, initial, step| {
+			var $state = initial
+			for elem in list {
+				$state = step($state, elem)?
+			}
+			Ok($state)
+		}
+
+		## Like [List.fold_try], but the step function is effectful. It runs on each
+		## element until one returns `Err`, then stops.
+		## ```roc
+		## events.fold_try!(State.init, |state, event| Store.apply!(state, event))
+		## ```
+		fold_try! : List(item), state, (state, item => Try(state, err)) => Try(state, err)
+		fold_try! = |list, initial, step!| {
+			var $state = initial
+			for elem in list {
+				$state = step!($state, elem)?
+			}
+			Ok($state)
+		}
 
 		## Build a value using each element in the list.
 		##
@@ -4015,6 +4293,24 @@ Builtin :: [].{
 		## ```
 		drop_at : List(a), U64 -> List(a)
 
+		## Removes the element at the given index by moving the last element into its
+		## place, so the order of the remaining elements is not preserved. This is O(1),
+		## unlike `drop_at`, which shifts every later element down.
+		##
+		## Returns the list unchanged if the index is out of bounds.
+		## ```roc
+		## expect [1.I64, 2, 3, 4].drop_swap(1) == [1, 4, 3]
+		## ```
+		drop_swap : List(a), U64 -> List(a)
+		drop_swap = |list, index| {
+			len = List.len(list)
+			if index < len {
+				List.drop_last(list_swap_unsafe(list, index, len - 1), 1)
+			} else {
+				list
+			}
+		}
+
 		## Return a sublist of the list starting at `start` and containing up to `len`
 		## elements. Out-of-bounds ranges are clamped, producing a shorter or empty list.
 		## ```roc
@@ -4036,6 +4332,15 @@ Builtin :: [].{
 		take_first : List(a), U64 -> List(a)
 		take_first = |list, n| {
 			List.sublist(list, { len: n, start: 0 })
+		}
+
+		## Removes every element while preserving the current capacity.
+		## ```roc
+		## expect [1.I64, 2, 3].clear() == []
+		## ```
+		clear : List(a) -> List(a)
+		clear = |list| {
+			List.take_first(list, 0)
 		}
 
 		## Returns the given number of elements from the end of the list.
@@ -4331,7 +4636,7 @@ Builtin :: [].{
 		encoder_for : encoding -> (List(item), state -> Try(state, err))
 			where [
 				item.encoder_for : encoding -> (item, state -> Try(state, err)),
-				encoding.encode_list : state, U64, (state, (state, (state -> Try(state, err)) -> Try(state, err)) -> Try(state, err)) -> Try(state, err),
+				encoding.encode_list : state, U64, (container_state, (container_state, (state -> Try(state, err)) -> Try(container_state, err)) -> Try(container_state, err)) -> Try(state, err),
 			]
 		encoder_for = |encoding| {
 			Encoding : encoding
@@ -5727,10 +6032,16 @@ Builtin :: [].{
 			## ```
 			plus : U8, U8 -> U8
 
-			## Add two [U8] values, returning `Err(Overflow)` instead of wrapping
+			## Add two [U8] values, wrapping on overflow.
+			## ```roc
+			## expect U8.plus_wrap(U8.highest, 1) == 0
+			## ```
+			plus_wrap : U8, U8 -> U8
+
+			## Add two [U8] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in a [U8].
-			add_try : U8, U8 -> Try(U8, [Overflow, ..])
-			add_try = |a, b| unsigned_add_try(U8.highest, a, b)
+			plus_try : U8, U8 -> Try(U8, [Overflow, ..])
+			plus_try = |a, b| unsigned_plus_try(U8.highest, a, b)
 
 			## Iterator over [U8] values from `start` up to but not including `end`.
 			## Returns an empty iterator if `start >= end`. This is what `start..<end`
@@ -5777,10 +6088,16 @@ Builtin :: [].{
 			## ```
 			minus : U8, U8 -> U8
 
+			## Subtract the second [U8] from the first, wrapping on overflow.
+			## ```roc
+			## expect U8.minus_wrap(0, 1) == U8.highest
+			## ```
+			minus_wrap : U8, U8 -> U8
+
 			## Subtract the second [U8] from the first, returning `Err(Overflow)`
-			## instead of wrapping if the result does not fit in a [U8].
-			sub_try : U8, U8 -> Try(U8, [Overflow, ..])
-			sub_try = |a, b| unsigned_sub_try(a, b)
+			## instead of crashing or wrapping if the result does not fit in a [U8].
+			minus_try : U8, U8 -> Try(U8, [Overflow, ..])
+			minus_try = |a, b| unsigned_minus_try(a, b)
 
 			## Subtract the second [U8] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -5797,10 +6114,16 @@ Builtin :: [].{
 			## ```
 			times : U8, U8 -> U8
 
+			## Multiply two [U8] values, wrapping on overflow.
+			## ```roc
+			## expect U8.times_wrap(U8.highest, 2) == U8.highest - 1
+			## ```
+			times_wrap : U8, U8 -> U8
+
 			## Multiply two [U8] values, returning `Err(Overflow)` instead of
-			## wrapping if the result does not fit in a [U8].
-			mul_try : U8, U8 -> Try(U8, [Overflow, ..])
-			mul_try = |a, b| unsigned_mul_try(U8.highest, 0, a, b)
+			## crashing or wrapping if the result does not fit in a [U8].
+			times_try : U8, U8 -> Try(U8, [Overflow, ..])
+			times_try = |a, b| unsigned_times_try(U8.highest, 0, a, b)
 
 			## Multiply two [U8] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -5918,34 +6241,43 @@ Builtin :: [].{
 			## Bits shifted past the most significant bit are discarded, and zeros
 			## are shifted in on the right. Each left shift by one is equivalent to
 			## multiplying by 2 (modulo 256).
+			## The count is taken modulo 8, so shifting by 8 leaves the value unchanged and shifting by 9 shifts by 1.
 			## ```roc
-			## expect U8.shift_left_by(1, 3) == 8
+			## expect U8.shl_wrap(1, 3) == 8
 			##
-			## expect U8.shift_left_by(0b0000_0101, 2) == 0b0001_0100
+			## expect U8.shl_wrap(0b0000_0101, 2) == 0b0001_0100
+			##
+			## expect U8.shl_wrap(1, 8) == 1
 			## ```
-			shift_left_by : U8, U8 -> U8
+			shl_wrap : U8, U8 -> U8
 
 			## Shift the bits of a [U8] to the right by the given number of positions.
 			## Bits shifted past the least significant bit are discarded, and zeros
 			## are shifted in on the left. Each right shift by one is equivalent to
 			## integer division by 2. For unsigned integers this behaves the same as
-			## [U8.shift_right_zf_by].
+			## [U8.shr_zf_wrap].
+			## The count is taken modulo 8, so shifting by 8 leaves the value unchanged and shifting by 9 shifts by 1.
 			## ```roc
-			## expect U8.shift_right_by(32, 2) == 8
+			## expect U8.shr_wrap(32, 2) == 8
 			##
-			## expect U8.shift_right_by(0b1010_0000, 3) == 0b0001_0100
+			## expect U8.shr_wrap(0b1010_0000, 3) == 0b0001_0100
+			##
+			## expect U8.shr_wrap(32, 8) == 32
 			## ```
-			shift_right_by : U8, U8 -> U8
+			shr_wrap : U8, U8 -> U8
 
 			## Shift the bits of a [U8] to the right by the given number of positions,
 			## filling the vacated high bits with zeros ("zero-fill"). For unsigned
-			## integers this behaves the same as [U8.shift_right_by].
+			## integers this behaves the same as [U8.shr_wrap].
+			## The count is taken modulo 8, so shifting by 8 leaves the value unchanged and shifting by 9 shifts by 1.
 			## ```roc
-			## expect U8.shift_right_zf_by(32, 2) == 8
+			## expect U8.shr_zf_wrap(32, 2) == 8
 			##
-			## expect U8.shift_right_zf_by(0b1010_0000, 3) == 0b0001_0100
+			## expect U8.shr_zf_wrap(0b1010_0000, 3) == 0b0001_0100
+			##
+			## expect U8.shr_zf_wrap(32, 8) == 32
 			## ```
-			shift_right_zf_by : U8, U8 -> U8
+			shr_zf_wrap : U8, U8 -> U8
 
 			## Returns the bitwise AND of two [U8] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
@@ -5982,7 +6314,6 @@ Builtin :: [].{
 			## expect U8.count_leading_zero_bits(0) == 8
 			## ```
 			count_leading_zero_bits : U8 -> U8
-			count_leading_zero_bits = |value| unsigned_count_leading_zero_bits(8, 0, 2, value)
 
 			## Count the zero bits after the last one bit, starting at the least significant bit.
 			## ```roc
@@ -5991,7 +6322,6 @@ Builtin :: [].{
 			## expect U8.count_trailing_zero_bits(0) == 8
 			## ```
 			count_trailing_zero_bits : U8 -> U8
-			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(8, 0, 2, value)
 
 			## Count the one bits in the value.
 			## ```roc
@@ -6000,7 +6330,6 @@ Builtin :: [].{
 			## expect U8.count_one_bits(0) == 0
 			## ```
 			count_one_bits : U8 -> U8
-			count_one_bits = |value| unsigned_count_one_bits(0, 2, value)
 
 			## Build a [U8] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -6050,7 +6379,7 @@ Builtin :: [].{
 						if start <= end {
 							One({
 								item: start,
-								rest: match U8.add_try(start, 1) {
+								rest: match U8.plus_try(start, 1) {
 									Ok(next) => if next <= end {
 										U8.to(next, end)
 									} else {
@@ -6086,7 +6415,7 @@ Builtin :: [].{
 						if start < end {
 							One({
 								item: start,
-								rest: match U8.add_try(start, 1) {
+								rest: match U8.plus_try(start, 1) {
 									Ok(next) => if next < end {
 										U8.until(next, end)
 									} else {
@@ -6393,10 +6722,16 @@ Builtin :: [].{
 			## ```
 			plus : I8, I8 -> I8
 
-			## Add two [I8] values, returning `Err(Overflow)` instead of wrapping
+			## Add two [I8] values, wrapping on overflow.
+			## ```roc
+			## expect I8.plus_wrap(I8.highest, 1) == I8.lowest
+			## ```
+			plus_wrap : I8, I8 -> I8
+
+			## Add two [I8] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in an [I8].
-			add_try : I8, I8 -> Try(I8, [Overflow, ..])
-			add_try = |a, b| signed_add_try(I8.lowest, I8.highest, 0, a, b)
+			plus_try : I8, I8 -> Try(I8, [Overflow, ..])
+			plus_try = |a, b| signed_plus_try(I8.lowest, I8.highest, 0, a, b)
 
 			## Iterator over [I8] values from `start` up to but not including `end`.
 			## Returns an empty iterator if `start >= end`. This is what `start..<end`
@@ -6447,10 +6782,16 @@ Builtin :: [].{
 			## ```
 			minus : I8, I8 -> I8
 
+			## Subtract the second [I8] from the first, wrapping on overflow.
+			## ```roc
+			## expect I8.minus_wrap(I8.lowest, 1) == I8.highest
+			## ```
+			minus_wrap : I8, I8 -> I8
+
 			## Subtract the second [I8] from the first, returning `Err(Overflow)`
-			## instead of wrapping if the result does not fit in an [I8].
-			sub_try : I8, I8 -> Try(I8, [Overflow, ..])
-			sub_try = |a, b| signed_sub_try(I8.lowest, I8.highest, 0, a, b)
+			## instead of crashing or wrapping if the result does not fit in an [I8].
+			minus_try : I8, I8 -> Try(I8, [Overflow, ..])
+			minus_try = |a, b| signed_minus_try(I8.lowest, I8.highest, 0, a, b)
 
 			## Subtract the second [I8] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -6469,10 +6810,16 @@ Builtin :: [].{
 			## ```
 			times : I8, I8 -> I8
 
+			## Multiply two [I8] values, wrapping on overflow.
+			## ```roc
+			## expect I8.times_wrap(I8.lowest, -1) == I8.lowest
+			## ```
+			times_wrap : I8, I8 -> I8
+
 			## Multiply two [I8] values, returning `Err(Overflow)` instead of
-			## wrapping if the result does not fit in an [I8].
-			mul_try : I8, I8 -> Try(I8, [Overflow, ..])
-			mul_try = |a, b| signed_mul_try(I8.lowest, I8.highest, 0, -1, a, b)
+			## crashing or wrapping if the result does not fit in an [I8].
+			times_try : I8, I8 -> Try(I8, [Overflow, ..])
+			times_try = |a, b| signed_times_try(I8.lowest, I8.highest, 0, -1, a, b)
 
 			## Multiply two [I8] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -6629,33 +6976,42 @@ Builtin :: [].{
 			## Shift the bits of an [I8] to the left by the given number of
 			## positions. Bits shifted past the most significant bit are discarded,
 			## and zeros are shifted in on the right.
+			## The count is taken modulo 8, so shifting by 8 leaves the value unchanged and shifting by 9 shifts by 1.
 			## ```roc
-			## expect I8.shift_left_by(1, 3) == 8
+			## expect I8.shl_wrap(1, 3) == 8
 			##
-			## expect I8.shift_left_by(0b0000_0101, 2) == 0b0001_0100
+			## expect I8.shl_wrap(0b0000_0101, 2) == 0b0001_0100
+			##
+			## expect I8.shl_wrap(1, 8) == 1
 			## ```
-			shift_left_by : I8, U8 -> I8
+			shl_wrap : I8, U8 -> I8
 
 			## Shift the bits of an [I8] to the right by the given number of
 			## positions, preserving the sign ("arithmetic shift"). The sign bit
 			## is shifted in on the left, so negative values remain negative. Each
 			## right shift by one is equivalent to integer division by 2 (rounding
 			## toward negative infinity).
+			## The count is taken modulo 8, so shifting by 8 leaves the value unchanged and shifting by 9 shifts by 1.
 			## ```roc
-			## expect I8.shift_right_by(32, 2) == 8
+			## expect I8.shr_wrap(32, 2) == 8
 			##
-			## expect I8.shift_right_by(-32, 2) == -8
+			## expect I8.shr_wrap(-32, 2) == -8
+			##
+			## expect I8.shr_wrap(32, 8) == 32
 			## ```
-			shift_right_by : I8, U8 -> I8
+			shr_wrap : I8, U8 -> I8
 
 			## Shift the bits of an [I8] to the right by the given number of
 			## positions.
+			## The count is taken modulo 8, so shifting by 8 leaves the value unchanged and shifting by 9 shifts by 1.
 			## ```roc
-			## expect I8.shift_right_zf_by(32, 2) == 8
+			## expect I8.shr_zf_wrap(32, 2) == 8
 			##
-			## expect I8.shift_right_zf_by(0b0101_0000, 3) == 0b0000_1010
+			## expect I8.shr_zf_wrap(0b0101_0000, 3) == 0b0000_1010
+			##
+			## expect I8.shr_zf_wrap(32, 8) == 32
 			## ```
-			shift_right_zf_by : I8, U8 -> I8
+			shr_zf_wrap : I8, U8 -> I8
 
 			## Returns the bitwise AND of two [I8] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
@@ -6693,7 +7049,6 @@ Builtin :: [].{
 			## expect I8.count_leading_zero_bits(0) == 8
 			## ```
 			count_leading_zero_bits : I8 -> U8
-			count_leading_zero_bits = |value| signed_count_leading_zero_bits(8, 0, 2, value)
 
 			## Count the zero bits after the last one bit, starting at the least significant bit.
 			## ```roc
@@ -6702,7 +7057,6 @@ Builtin :: [].{
 			## expect I8.count_trailing_zero_bits(0) == 8
 			## ```
 			count_trailing_zero_bits : I8 -> U8
-			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(8, 0, 2, value)
 
 			## Count the one bits in the value.
 			## ```roc
@@ -6711,7 +7065,6 @@ Builtin :: [].{
 			## expect I8.count_one_bits(0) == 0
 			## ```
 			count_one_bits : I8 -> U8
-			count_one_bits = |value| signed_count_one_bits(8, 0, 2, value)
 
 			## Iterator of integers beginning with this `I8` and ending with the other `I8`.
 			## (Use [I8.until] instead to end with the other `I8` minus one.)
@@ -6735,7 +7088,7 @@ Builtin :: [].{
 						if start <= end {
 							One({
 								item: start,
-								rest: match I8.add_try(start, 1) {
+								rest: match I8.plus_try(start, 1) {
 									Ok(next) => if next <= end {
 										I8.to(next, end)
 									} else {
@@ -6771,7 +7124,7 @@ Builtin :: [].{
 						if start < end {
 							One({
 								item: start,
-								rest: match I8.add_try(start, 1) {
+								rest: match I8.plus_try(start, 1) {
 									Ok(next) => if next < end {
 										I8.until(next, end)
 									} else {
@@ -7131,10 +7484,16 @@ Builtin :: [].{
 			## ```
 			plus : U16, U16 -> U16
 
-			## Add two [U16] values, returning `Err(Overflow)` instead of wrapping
+			## Add two [U16] values, wrapping on overflow.
+			## ```roc
+			## expect U16.plus_wrap(U16.highest, 1) == 0
+			## ```
+			plus_wrap : U16, U16 -> U16
+
+			## Add two [U16] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in a [U16].
-			add_try : U16, U16 -> Try(U16, [Overflow, ..])
-			add_try = |a, b| unsigned_add_try(U16.highest, a, b)
+			plus_try : U16, U16 -> Try(U16, [Overflow, ..])
+			plus_try = |a, b| unsigned_plus_try(U16.highest, a, b)
 
 			## Iterator over [U16] values from `start` up to but not including `end`.
 			## Returns an empty iterator if `start >= end`. This is what `start..<end`
@@ -7181,10 +7540,16 @@ Builtin :: [].{
 			## ```
 			minus : U16, U16 -> U16
 
+			## Subtract the second [U16] from the first, wrapping on overflow.
+			## ```roc
+			## expect U16.minus_wrap(0, 1) == U16.highest
+			## ```
+			minus_wrap : U16, U16 -> U16
+
 			## Subtract the second [U16] from the first, returning `Err(Overflow)`
-			## instead of wrapping if the result does not fit in a [U16].
-			sub_try : U16, U16 -> Try(U16, [Overflow, ..])
-			sub_try = |a, b| unsigned_sub_try(a, b)
+			## instead of crashing or wrapping if the result does not fit in a [U16].
+			minus_try : U16, U16 -> Try(U16, [Overflow, ..])
+			minus_try = |a, b| unsigned_minus_try(a, b)
 
 			## Subtract the second [U16] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -7201,10 +7566,16 @@ Builtin :: [].{
 			## ```
 			times : U16, U16 -> U16
 
+			## Multiply two [U16] values, wrapping on overflow.
+			## ```roc
+			## expect U16.times_wrap(U16.highest, 2) == U16.highest - 1
+			## ```
+			times_wrap : U16, U16 -> U16
+
 			## Multiply two [U16] values, returning `Err(Overflow)` instead of
-			## wrapping if the result does not fit in a [U16].
-			mul_try : U16, U16 -> Try(U16, [Overflow, ..])
-			mul_try = |a, b| unsigned_mul_try(U16.highest, 0, a, b)
+			## crashing or wrapping if the result does not fit in a [U16].
+			times_try : U16, U16 -> Try(U16, [Overflow, ..])
+			times_try = |a, b| unsigned_times_try(U16.highest, 0, a, b)
 
 			## Multiply two [U16] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -7322,34 +7693,43 @@ Builtin :: [].{
 			## Bits shifted past the most significant bit are discarded, and zeros
 			## are shifted in on the right. Each left shift by one is equivalent to
 			## multiplying by 2 (modulo 65536).
+			## The count is taken modulo 16, so shifting by 16 leaves the value unchanged and shifting by 17 shifts by 1.
 			## ```roc
-			## expect U16.shift_left_by(1, 3) == 8
+			## expect U16.shl_wrap(1, 3) == 8
 			##
-			## expect U16.shift_left_by(0b0000_0101, 2) == 0b0001_0100
+			## expect U16.shl_wrap(0b0000_0101, 2) == 0b0001_0100
+			##
+			## expect U16.shl_wrap(1, 16) == 1
 			## ```
-			shift_left_by : U16, U8 -> U16
+			shl_wrap : U16, U8 -> U16
 
 			## Shift the bits of a [U16] to the right by the given number of positions.
 			## Bits shifted past the least significant bit are discarded, and zeros
 			## are shifted in on the left. Each right shift by one is equivalent to
 			## integer division by 2. For unsigned integers this behaves the same as
-			## [U16.shift_right_zf_by].
+			## [U16.shr_zf_wrap].
+			## The count is taken modulo 16, so shifting by 16 leaves the value unchanged and shifting by 17 shifts by 1.
 			## ```roc
-			## expect U16.shift_right_by(32, 2) == 8
+			## expect U16.shr_wrap(32, 2) == 8
 			##
-			## expect U16.shift_right_by(0b1010_0000, 3) == 0b0001_0100
+			## expect U16.shr_wrap(0b1010_0000, 3) == 0b0001_0100
+			##
+			## expect U16.shr_wrap(32, 16) == 32
 			## ```
-			shift_right_by : U16, U8 -> U16
+			shr_wrap : U16, U8 -> U16
 
 			## Shift the bits of a [U16] to the right by the given number of positions,
 			## filling the vacated high bits with zeros ("zero-fill"). For unsigned
-			## integers this behaves the same as [U16.shift_right_by].
+			## integers this behaves the same as [U16.shr_wrap].
+			## The count is taken modulo 16, so shifting by 16 leaves the value unchanged and shifting by 17 shifts by 1.
 			## ```roc
-			## expect U16.shift_right_zf_by(32, 2) == 8
+			## expect U16.shr_zf_wrap(32, 2) == 8
 			##
-			## expect U16.shift_right_zf_by(0b1010_0000, 3) == 0b0001_0100
+			## expect U16.shr_zf_wrap(0b1010_0000, 3) == 0b0001_0100
+			##
+			## expect U16.shr_zf_wrap(32, 16) == 32
 			## ```
-			shift_right_zf_by : U16, U8 -> U16
+			shr_zf_wrap : U16, U8 -> U16
 
 			## Returns the bitwise AND of two [U16] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
@@ -7386,7 +7766,6 @@ Builtin :: [].{
 			## expect U16.count_leading_zero_bits(0) == 16
 			## ```
 			count_leading_zero_bits : U16 -> U8
-			count_leading_zero_bits = |value| unsigned_count_leading_zero_bits(16, 0, 2, value)
 
 			## Count the zero bits after the last one bit, starting at the least significant bit.
 			## ```roc
@@ -7395,7 +7774,6 @@ Builtin :: [].{
 			## expect U16.count_trailing_zero_bits(0) == 16
 			## ```
 			count_trailing_zero_bits : U16 -> U8
-			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(16, 0, 2, value)
 
 			## Count the one bits in the value.
 			## ```roc
@@ -7404,7 +7782,6 @@ Builtin :: [].{
 			## expect U16.count_one_bits(0) == 0
 			## ```
 			count_one_bits : U16 -> U8
-			count_one_bits = |value| unsigned_count_one_bits(0, 2, value)
 
 			## Iterator of integers beginning with this `U16` and ending with the other `U16`.
 			## (Use [U16.until] instead to end with the other `U16` minus one.)
@@ -7428,7 +7805,7 @@ Builtin :: [].{
 						if start <= end {
 							One({
 								item: start,
-								rest: match U16.add_try(start, 1) {
+								rest: match U16.plus_try(start, 1) {
 									Ok(next) => if next <= end {
 										U16.to(next, end)
 									} else {
@@ -7464,7 +7841,7 @@ Builtin :: [].{
 						if start < end {
 							One({
 								item: start,
-								rest: match U16.add_try(start, 1) {
+								rest: match U16.plus_try(start, 1) {
 									Ok(next) => if next < end {
 										U16.until(next, end)
 									} else {
@@ -7830,10 +8207,16 @@ Builtin :: [].{
 			## ```
 			plus : I16, I16 -> I16
 
-			## Add two [I16] values, returning `Err(Overflow)` instead of wrapping
+			## Add two [I16] values, wrapping on overflow.
+			## ```roc
+			## expect I16.plus_wrap(I16.highest, 1) == I16.lowest
+			## ```
+			plus_wrap : I16, I16 -> I16
+
+			## Add two [I16] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in an [I16].
-			add_try : I16, I16 -> Try(I16, [Overflow, ..])
-			add_try = |a, b| signed_add_try(I16.lowest, I16.highest, 0, a, b)
+			plus_try : I16, I16 -> Try(I16, [Overflow, ..])
+			plus_try = |a, b| signed_plus_try(I16.lowest, I16.highest, 0, a, b)
 
 			## Iterator over [I16] values from `start` up to but not including `end`.
 			## Returns an empty iterator if `start >= end`. This is what `start..<end`
@@ -7884,10 +8267,16 @@ Builtin :: [].{
 			## ```
 			minus : I16, I16 -> I16
 
+			## Subtract the second [I16] from the first, wrapping on overflow.
+			## ```roc
+			## expect I16.minus_wrap(I16.lowest, 1) == I16.highest
+			## ```
+			minus_wrap : I16, I16 -> I16
+
 			## Subtract the second [I16] from the first, returning `Err(Overflow)`
-			## instead of wrapping if the result does not fit in an [I16].
-			sub_try : I16, I16 -> Try(I16, [Overflow, ..])
-			sub_try = |a, b| signed_sub_try(I16.lowest, I16.highest, 0, a, b)
+			## instead of crashing or wrapping if the result does not fit in an [I16].
+			minus_try : I16, I16 -> Try(I16, [Overflow, ..])
+			minus_try = |a, b| signed_minus_try(I16.lowest, I16.highest, 0, a, b)
 
 			## Subtract the second [I16] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -7906,10 +8295,16 @@ Builtin :: [].{
 			## ```
 			times : I16, I16 -> I16
 
+			## Multiply two [I16] values, wrapping on overflow.
+			## ```roc
+			## expect I16.times_wrap(I16.lowest, -1) == I16.lowest
+			## ```
+			times_wrap : I16, I16 -> I16
+
 			## Multiply two [I16] values, returning `Err(Overflow)` instead of
-			## wrapping if the result does not fit in an [I16].
-			mul_try : I16, I16 -> Try(I16, [Overflow, ..])
-			mul_try = |a, b| signed_mul_try(I16.lowest, I16.highest, 0, -1, a, b)
+			## crashing or wrapping if the result does not fit in an [I16].
+			times_try : I16, I16 -> Try(I16, [Overflow, ..])
+			times_try = |a, b| signed_times_try(I16.lowest, I16.highest, 0, -1, a, b)
 
 			## Multiply two [I16] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -8066,33 +8461,42 @@ Builtin :: [].{
 			## Shift the bits of an [I16] to the left by the given number of
 			## positions. Bits shifted past the most significant bit are discarded,
 			## and zeros are shifted in on the right.
+			## The count is taken modulo 16, so shifting by 16 leaves the value unchanged and shifting by 17 shifts by 1.
 			## ```roc
-			## expect I16.shift_left_by(1, 3) == 8
+			## expect I16.shl_wrap(1, 3) == 8
 			##
-			## expect I16.shift_left_by(0b0000_0101, 2) == 0b0001_0100
+			## expect I16.shl_wrap(0b0000_0101, 2) == 0b0001_0100
+			##
+			## expect I16.shl_wrap(1, 16) == 1
 			## ```
-			shift_left_by : I16, U8 -> I16
+			shl_wrap : I16, U8 -> I16
 
 			## Shift the bits of an [I16] to the right by the given number of
 			## positions, preserving the sign ("arithmetic shift"). The sign bit
 			## is shifted in on the left, so negative values remain negative. Each
 			## right shift by one is equivalent to integer division by 2 (rounding
 			## toward negative infinity).
+			## The count is taken modulo 16, so shifting by 16 leaves the value unchanged and shifting by 17 shifts by 1.
 			## ```roc
-			## expect I16.shift_right_by(32, 2) == 8
+			## expect I16.shr_wrap(32, 2) == 8
 			##
-			## expect I16.shift_right_by(-32, 2) == -8
+			## expect I16.shr_wrap(-32, 2) == -8
+			##
+			## expect I16.shr_wrap(32, 16) == 32
 			## ```
-			shift_right_by : I16, U8 -> I16
+			shr_wrap : I16, U8 -> I16
 
 			## Shift the bits of an [I16] to the right by the given number of
 			## positions.
+			## The count is taken modulo 16, so shifting by 16 leaves the value unchanged and shifting by 17 shifts by 1.
 			## ```roc
-			## expect I16.shift_right_zf_by(32, 2) == 8
+			## expect I16.shr_zf_wrap(32, 2) == 8
 			##
-			## expect I16.shift_right_zf_by(0b0101_0000, 3) == 0b0000_1010
+			## expect I16.shr_zf_wrap(0b0101_0000, 3) == 0b0000_1010
+			##
+			## expect I16.shr_zf_wrap(32, 16) == 32
 			## ```
-			shift_right_zf_by : I16, U8 -> I16
+			shr_zf_wrap : I16, U8 -> I16
 
 			## Returns the bitwise AND of two [I16] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
@@ -8130,7 +8534,6 @@ Builtin :: [].{
 			## expect I16.count_leading_zero_bits(0) == 16
 			## ```
 			count_leading_zero_bits : I16 -> U8
-			count_leading_zero_bits = |value| signed_count_leading_zero_bits(16, 0, 2, value)
 
 			## Count the zero bits after the last one bit, starting at the least significant bit.
 			## ```roc
@@ -8139,7 +8542,6 @@ Builtin :: [].{
 			## expect I16.count_trailing_zero_bits(0) == 16
 			## ```
 			count_trailing_zero_bits : I16 -> U8
-			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(16, 0, 2, value)
 
 			## Count the one bits in the value.
 			## ```roc
@@ -8148,7 +8550,6 @@ Builtin :: [].{
 			## expect I16.count_one_bits(0) == 0
 			## ```
 			count_one_bits : I16 -> U8
-			count_one_bits = |value| signed_count_one_bits(16, 0, 2, value)
 
 			## Iterator of integers beginning with this `I16` and ending with the other `I16`.
 			## (Use [I16.until] instead to end with the other `I16` minus one.)
@@ -8172,7 +8573,7 @@ Builtin :: [].{
 						if start <= end {
 							One({
 								item: start,
-								rest: match I16.add_try(start, 1) {
+								rest: match I16.plus_try(start, 1) {
 									Ok(next) => if next <= end {
 										I16.to(next, end)
 									} else {
@@ -8208,7 +8609,7 @@ Builtin :: [].{
 						if start < end {
 							One({
 								item: start,
-								rest: match I16.add_try(start, 1) {
+								rest: match I16.plus_try(start, 1) {
 									Ok(next) => if next < end {
 										I16.until(next, end)
 									} else {
@@ -8583,10 +8984,16 @@ Builtin :: [].{
 			## ```
 			plus : U32, U32 -> U32
 
-			## Add two [U32] values, returning `Err(Overflow)` instead of wrapping
+			## Add two [U32] values, wrapping on overflow.
+			## ```roc
+			## expect U32.plus_wrap(U32.highest, 1) == 0
+			## ```
+			plus_wrap : U32, U32 -> U32
+
+			## Add two [U32] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in a [U32].
-			add_try : U32, U32 -> Try(U32, [Overflow, ..])
-			add_try = |a, b| unsigned_add_try(U32.highest, a, b)
+			plus_try : U32, U32 -> Try(U32, [Overflow, ..])
+			plus_try = |a, b| unsigned_plus_try(U32.highest, a, b)
 
 			## Iterator over [U32] values from `start` up to but not including `end`.
 			## Returns an empty iterator if `start >= end`. This is what `start..<end`
@@ -8633,10 +9040,16 @@ Builtin :: [].{
 			## ```
 			minus : U32, U32 -> U32
 
+			## Subtract the second [U32] from the first, wrapping on overflow.
+			## ```roc
+			## expect U32.minus_wrap(0, 1) == U32.highest
+			## ```
+			minus_wrap : U32, U32 -> U32
+
 			## Subtract the second [U32] from the first, returning `Err(Overflow)`
-			## instead of wrapping if the result does not fit in a [U32].
-			sub_try : U32, U32 -> Try(U32, [Overflow, ..])
-			sub_try = |a, b| unsigned_sub_try(a, b)
+			## instead of crashing or wrapping if the result does not fit in a [U32].
+			minus_try : U32, U32 -> Try(U32, [Overflow, ..])
+			minus_try = |a, b| unsigned_minus_try(a, b)
 
 			## Subtract the second [U32] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -8653,10 +9066,16 @@ Builtin :: [].{
 			## ```
 			times : U32, U32 -> U32
 
+			## Multiply two [U32] values, wrapping on overflow.
+			## ```roc
+			## expect U32.times_wrap(U32.highest, 2) == U32.highest - 1
+			## ```
+			times_wrap : U32, U32 -> U32
+
 			## Multiply two [U32] values, returning `Err(Overflow)` instead of
-			## wrapping if the result does not fit in a [U32].
-			mul_try : U32, U32 -> Try(U32, [Overflow, ..])
-			mul_try = |a, b| unsigned_mul_try(U32.highest, 0, a, b)
+			## crashing or wrapping if the result does not fit in a [U32].
+			times_try : U32, U32 -> Try(U32, [Overflow, ..])
+			times_try = |a, b| unsigned_times_try(U32.highest, 0, a, b)
 
 			## Multiply two [U32] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -8774,34 +9193,43 @@ Builtin :: [].{
 			## Bits shifted past the most significant bit are discarded, and zeros
 			## are shifted in on the right. Each left shift by one is equivalent to
 			## multiplying by 2 (modulo 4294967296).
+			## The count is taken modulo 32, so shifting by 32 leaves the value unchanged and shifting by 33 shifts by 1.
 			## ```roc
-			## expect U32.shift_left_by(1, 3) == 8
+			## expect U32.shl_wrap(1, 3) == 8
 			##
-			## expect U32.shift_left_by(0b0000_0101, 2) == 0b0001_0100
+			## expect U32.shl_wrap(0b0000_0101, 2) == 0b0001_0100
+			##
+			## expect U32.shl_wrap(1, 32) == 1
 			## ```
-			shift_left_by : U32, U8 -> U32
+			shl_wrap : U32, U8 -> U32
 
 			## Shift the bits of a [U32] to the right by the given number of positions.
 			## Bits shifted past the least significant bit are discarded, and zeros
 			## are shifted in on the left. Each right shift by one is equivalent to
 			## integer division by 2. For unsigned integers this behaves the same as
-			## [U32.shift_right_zf_by].
+			## [U32.shr_zf_wrap].
+			## The count is taken modulo 32, so shifting by 32 leaves the value unchanged and shifting by 33 shifts by 1.
 			## ```roc
-			## expect U32.shift_right_by(32, 2) == 8
+			## expect U32.shr_wrap(32, 2) == 8
 			##
-			## expect U32.shift_right_by(0b1010_0000, 3) == 0b0001_0100
+			## expect U32.shr_wrap(0b1010_0000, 3) == 0b0001_0100
+			##
+			## expect U32.shr_wrap(32, 32) == 32
 			## ```
-			shift_right_by : U32, U8 -> U32
+			shr_wrap : U32, U8 -> U32
 
 			## Shift the bits of a [U32] to the right by the given number of positions,
 			## filling the vacated high bits with zeros ("zero-fill"). For unsigned
-			## integers this behaves the same as [U32.shift_right_by].
+			## integers this behaves the same as [U32.shr_wrap].
+			## The count is taken modulo 32, so shifting by 32 leaves the value unchanged and shifting by 33 shifts by 1.
 			## ```roc
-			## expect U32.shift_right_zf_by(32, 2) == 8
+			## expect U32.shr_zf_wrap(32, 2) == 8
 			##
-			## expect U32.shift_right_zf_by(0b1010_0000, 3) == 0b0001_0100
+			## expect U32.shr_zf_wrap(0b1010_0000, 3) == 0b0001_0100
+			##
+			## expect U32.shr_zf_wrap(32, 32) == 32
 			## ```
-			shift_right_zf_by : U32, U8 -> U32
+			shr_zf_wrap : U32, U8 -> U32
 
 			## Returns the bitwise AND of two [U32] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
@@ -8838,7 +9266,6 @@ Builtin :: [].{
 			## expect U32.count_leading_zero_bits(0) == 32
 			## ```
 			count_leading_zero_bits : U32 -> U8
-			count_leading_zero_bits = |value| unsigned_count_leading_zero_bits(32, 0, 2, value)
 
 			## Count the zero bits after the last one bit, starting at the least significant bit.
 			## ```roc
@@ -8847,7 +9274,6 @@ Builtin :: [].{
 			## expect U32.count_trailing_zero_bits(0) == 32
 			## ```
 			count_trailing_zero_bits : U32 -> U8
-			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(32, 0, 2, value)
 
 			## Count the one bits in the value.
 			## ```roc
@@ -8856,7 +9282,6 @@ Builtin :: [].{
 			## expect U32.count_one_bits(0) == 0
 			## ```
 			count_one_bits : U32 -> U8
-			count_one_bits = |value| unsigned_count_one_bits(0, 2, value)
 
 			## Iterator of integers beginning with this `U32` and ending with the other `U32`.
 			## (Use [U32.until] instead to end with the other `U32` minus one.)
@@ -8880,7 +9305,7 @@ Builtin :: [].{
 						if start <= end {
 							One({
 								item: start,
-								rest: match U32.add_try(start, 1) {
+								rest: match U32.plus_try(start, 1) {
 									Ok(next) => if next <= end {
 										U32.to(next, end)
 									} else {
@@ -8916,7 +9341,7 @@ Builtin :: [].{
 						if start < end {
 							One({
 								item: start,
-								rest: match U32.add_try(start, 1) {
+								rest: match U32.plus_try(start, 1) {
 									Ok(next) => if next < end {
 										U32.until(next, end)
 									} else {
@@ -9314,10 +9739,16 @@ Builtin :: [].{
 			## ```
 			plus : I32, I32 -> I32
 
-			## Add two [I32] values, returning `Err(Overflow)` instead of wrapping
+			## Add two [I32] values, wrapping on overflow.
+			## ```roc
+			## expect I32.plus_wrap(I32.highest, 1) == I32.lowest
+			## ```
+			plus_wrap : I32, I32 -> I32
+
+			## Add two [I32] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in an [I32].
-			add_try : I32, I32 -> Try(I32, [Overflow, ..])
-			add_try = |a, b| signed_add_try(I32.lowest, I32.highest, 0, a, b)
+			plus_try : I32, I32 -> Try(I32, [Overflow, ..])
+			plus_try = |a, b| signed_plus_try(I32.lowest, I32.highest, 0, a, b)
 
 			## Iterator over [I32] values from `start` up to but not including `end`.
 			## Returns an empty iterator if `start >= end`. This is what `start..<end`
@@ -9368,10 +9799,16 @@ Builtin :: [].{
 			## ```
 			minus : I32, I32 -> I32
 
+			## Subtract the second [I32] from the first, wrapping on overflow.
+			## ```roc
+			## expect I32.minus_wrap(I32.lowest, 1) == I32.highest
+			## ```
+			minus_wrap : I32, I32 -> I32
+
 			## Subtract the second [I32] from the first, returning `Err(Overflow)`
-			## instead of wrapping if the result does not fit in an [I32].
-			sub_try : I32, I32 -> Try(I32, [Overflow, ..])
-			sub_try = |a, b| signed_sub_try(I32.lowest, I32.highest, 0, a, b)
+			## instead of crashing or wrapping if the result does not fit in an [I32].
+			minus_try : I32, I32 -> Try(I32, [Overflow, ..])
+			minus_try = |a, b| signed_minus_try(I32.lowest, I32.highest, 0, a, b)
 
 			## Subtract the second [I32] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -9390,10 +9827,16 @@ Builtin :: [].{
 			## ```
 			times : I32, I32 -> I32
 
+			## Multiply two [I32] values, wrapping on overflow.
+			## ```roc
+			## expect I32.times_wrap(I32.lowest, -1) == I32.lowest
+			## ```
+			times_wrap : I32, I32 -> I32
+
 			## Multiply two [I32] values, returning `Err(Overflow)` instead of
-			## wrapping if the result does not fit in an [I32].
-			mul_try : I32, I32 -> Try(I32, [Overflow, ..])
-			mul_try = |a, b| signed_mul_try(I32.lowest, I32.highest, 0, -1, a, b)
+			## crashing or wrapping if the result does not fit in an [I32].
+			times_try : I32, I32 -> Try(I32, [Overflow, ..])
+			times_try = |a, b| signed_times_try(I32.lowest, I32.highest, 0, -1, a, b)
 
 			## Multiply two [I32] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -9550,33 +9993,42 @@ Builtin :: [].{
 			## Shift the bits of an [I32] to the left by the given number of
 			## positions. Bits shifted past the most significant bit are discarded,
 			## and zeros are shifted in on the right.
+			## The count is taken modulo 32, so shifting by 32 leaves the value unchanged and shifting by 33 shifts by 1.
 			## ```roc
-			## expect I32.shift_left_by(1, 3) == 8
+			## expect I32.shl_wrap(1, 3) == 8
 			##
-			## expect I32.shift_left_by(0b0000_0101, 2) == 0b0001_0100
+			## expect I32.shl_wrap(0b0000_0101, 2) == 0b0001_0100
+			##
+			## expect I32.shl_wrap(1, 32) == 1
 			## ```
-			shift_left_by : I32, U8 -> I32
+			shl_wrap : I32, U8 -> I32
 
 			## Shift the bits of an [I32] to the right by the given number of
 			## positions, preserving the sign ("arithmetic shift"). The sign bit
 			## is shifted in on the left, so negative values remain negative. Each
 			## right shift by one is equivalent to integer division by 2 (rounding
 			## toward negative infinity).
+			## The count is taken modulo 32, so shifting by 32 leaves the value unchanged and shifting by 33 shifts by 1.
 			## ```roc
-			## expect I32.shift_right_by(32, 2) == 8
+			## expect I32.shr_wrap(32, 2) == 8
 			##
-			## expect I32.shift_right_by(-32, 2) == -8
+			## expect I32.shr_wrap(-32, 2) == -8
+			##
+			## expect I32.shr_wrap(32, 32) == 32
 			## ```
-			shift_right_by : I32, U8 -> I32
+			shr_wrap : I32, U8 -> I32
 
 			## Shift the bits of an [I32] to the right by the given number of
 			## positions.
+			## The count is taken modulo 32, so shifting by 32 leaves the value unchanged and shifting by 33 shifts by 1.
 			## ```roc
-			## expect I32.shift_right_zf_by(32, 2) == 8
+			## expect I32.shr_zf_wrap(32, 2) == 8
 			##
-			## expect I32.shift_right_zf_by(0b0101_0000, 3) == 0b0000_1010
+			## expect I32.shr_zf_wrap(0b0101_0000, 3) == 0b0000_1010
+			##
+			## expect I32.shr_zf_wrap(32, 32) == 32
 			## ```
-			shift_right_zf_by : I32, U8 -> I32
+			shr_zf_wrap : I32, U8 -> I32
 
 			## Returns the bitwise AND of two [I32] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
@@ -9614,7 +10066,6 @@ Builtin :: [].{
 			## expect I32.count_leading_zero_bits(0) == 32
 			## ```
 			count_leading_zero_bits : I32 -> U8
-			count_leading_zero_bits = |value| signed_count_leading_zero_bits(32, 0, 2, value)
 
 			## Count the zero bits after the last one bit, starting at the least significant bit.
 			## ```roc
@@ -9623,7 +10074,6 @@ Builtin :: [].{
 			## expect I32.count_trailing_zero_bits(0) == 32
 			## ```
 			count_trailing_zero_bits : I32 -> U8
-			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(32, 0, 2, value)
 
 			## Count the one bits in the value.
 			## ```roc
@@ -9632,7 +10082,6 @@ Builtin :: [].{
 			## expect I32.count_one_bits(0) == 0
 			## ```
 			count_one_bits : I32 -> U8
-			count_one_bits = |value| signed_count_one_bits(32, 0, 2, value)
 
 			## Iterator of integers beginning with this `I32` and ending with the other `I32`.
 			## (Use [I32.until] instead to end with the other `I32` minus one.)
@@ -9656,7 +10105,7 @@ Builtin :: [].{
 						if start <= end {
 							One({
 								item: start,
-								rest: match I32.add_try(start, 1) {
+								rest: match I32.plus_try(start, 1) {
 									Ok(next) => if next <= end {
 										I32.to(next, end)
 									} else {
@@ -9692,7 +10141,7 @@ Builtin :: [].{
 						if start < end {
 							One({
 								item: start,
-								rest: match I32.add_try(start, 1) {
+								rest: match I32.plus_try(start, 1) {
 									Ok(next) => if next < end {
 										I32.until(next, end)
 									} else {
@@ -10084,10 +10533,16 @@ Builtin :: [].{
 			## ```
 			plus : U64, U64 -> U64
 
-			## Add two [U64] values, returning `Err(Overflow)` instead of wrapping
+			## Add two [U64] values, wrapping on overflow.
+			## ```roc
+			## expect U64.plus_wrap(U64.highest, 1) == 0
+			## ```
+			plus_wrap : U64, U64 -> U64
+
+			## Add two [U64] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in a [U64].
-			add_try : U64, U64 -> Try(U64, [Overflow, ..])
-			add_try = |a, b| unsigned_add_try(U64.highest, a, b)
+			plus_try : U64, U64 -> Try(U64, [Overflow, ..])
+			plus_try = |a, b| unsigned_plus_try(U64.highest, a, b)
 
 			## Iterator over [U64] values from `start` up to but not including `end`.
 			## Returns an empty iterator if `start >= end`. This is what `start..<end`
@@ -10108,7 +10563,7 @@ Builtin :: [].{
 			range_inclusive : U64, U64 -> Iter(U64)
 			range_inclusive = |start, end| {
 				len_if_known = if start <= end
-					match start.abs_diff(end).add_try(1) {
+					match start.abs_diff(end).plus_try(1) {
 						Ok(len) => Known(len)
 						Err(Overflow) => Unknown
 					}
@@ -10137,10 +10592,16 @@ Builtin :: [].{
 			## ```
 			minus : U64, U64 -> U64
 
+			## Subtract the second [U64] from the first, wrapping on overflow.
+			## ```roc
+			## expect U64.minus_wrap(0, 1) == U64.highest
+			## ```
+			minus_wrap : U64, U64 -> U64
+
 			## Subtract the second [U64] from the first, returning `Err(Overflow)`
-			## instead of wrapping if the result does not fit in a [U64].
-			sub_try : U64, U64 -> Try(U64, [Overflow, ..])
-			sub_try = |a, b| unsigned_sub_try(a, b)
+			## instead of crashing or wrapping if the result does not fit in a [U64].
+			minus_try : U64, U64 -> Try(U64, [Overflow, ..])
+			minus_try = |a, b| unsigned_minus_try(a, b)
 
 			## Subtract the second [U64] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -10157,10 +10618,16 @@ Builtin :: [].{
 			## ```
 			times : U64, U64 -> U64
 
+			## Multiply two [U64] values, wrapping on overflow.
+			## ```roc
+			## expect U64.times_wrap(U64.highest, 2) == U64.highest - 1
+			## ```
+			times_wrap : U64, U64 -> U64
+
 			## Multiply two [U64] values, returning `Err(Overflow)` instead of
-			## wrapping if the result does not fit in a [U64].
-			mul_try : U64, U64 -> Try(U64, [Overflow, ..])
-			mul_try = |a, b| unsigned_mul_try(U64.highest, 0, a, b)
+			## crashing or wrapping if the result does not fit in a [U64].
+			times_try : U64, U64 -> Try(U64, [Overflow, ..])
+			times_try = |a, b| unsigned_times_try(U64.highest, 0, a, b)
 
 			## Multiply two [U64] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -10278,34 +10745,43 @@ Builtin :: [].{
 			## Bits shifted past the most significant bit are discarded, and zeros
 			## are shifted in on the right. Each left shift by one is equivalent to
 			## multiplying by 2 (modulo 2^64).
+			## The count is taken modulo 64, so shifting by 64 leaves the value unchanged and shifting by 65 shifts by 1.
 			## ```roc
-			## expect U64.shift_left_by(1, 3) == 8
+			## expect U64.shl_wrap(1, 3) == 8
 			##
-			## expect U64.shift_left_by(0b0000_0101, 2) == 0b0001_0100
+			## expect U64.shl_wrap(0b0000_0101, 2) == 0b0001_0100
+			##
+			## expect U64.shl_wrap(1, 64) == 1
 			## ```
-			shift_left_by : U64, U8 -> U64
+			shl_wrap : U64, U8 -> U64
 
 			## Shift the bits of a [U64] to the right by the given number of positions.
 			## Bits shifted past the least significant bit are discarded, and zeros
 			## are shifted in on the left. Each right shift by one is equivalent to
 			## integer division by 2. For unsigned integers this behaves the same as
-			## [U64.shift_right_zf_by].
+			## [U64.shr_zf_wrap].
+			## The count is taken modulo 64, so shifting by 64 leaves the value unchanged and shifting by 65 shifts by 1.
 			## ```roc
-			## expect U64.shift_right_by(32, 2) == 8
+			## expect U64.shr_wrap(32, 2) == 8
 			##
-			## expect U64.shift_right_by(0b1010_0000, 3) == 0b0001_0100
+			## expect U64.shr_wrap(0b1010_0000, 3) == 0b0001_0100
+			##
+			## expect U64.shr_wrap(32, 64) == 32
 			## ```
-			shift_right_by : U64, U8 -> U64
+			shr_wrap : U64, U8 -> U64
 
 			## Shift the bits of a [U64] to the right by the given number of positions,
 			## filling the vacated high bits with zeros ("zero-fill"). For unsigned
-			## integers this behaves the same as [U64.shift_right_by].
+			## integers this behaves the same as [U64.shr_wrap].
+			## The count is taken modulo 64, so shifting by 64 leaves the value unchanged and shifting by 65 shifts by 1.
 			## ```roc
-			## expect U64.shift_right_zf_by(32, 2) == 8
+			## expect U64.shr_zf_wrap(32, 2) == 8
 			##
-			## expect U64.shift_right_zf_by(0b1010_0000, 3) == 0b0001_0100
+			## expect U64.shr_zf_wrap(0b1010_0000, 3) == 0b0001_0100
+			##
+			## expect U64.shr_zf_wrap(32, 64) == 32
 			## ```
-			shift_right_zf_by : U64, U8 -> U64
+			shr_zf_wrap : U64, U8 -> U64
 
 			## Returns the bitwise AND of two [U64] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
@@ -10342,7 +10818,6 @@ Builtin :: [].{
 			## expect U64.count_leading_zero_bits(0) == 64
 			## ```
 			count_leading_zero_bits : U64 -> U8
-			count_leading_zero_bits = |value| unsigned_count_leading_zero_bits(64, 0, 2, value)
 
 			## Count the zero bits after the last one bit, starting at the least significant bit.
 			## ```roc
@@ -10351,7 +10826,6 @@ Builtin :: [].{
 			## expect U64.count_trailing_zero_bits(0) == 64
 			## ```
 			count_trailing_zero_bits : U64 -> U8
-			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(64, 0, 2, value)
 
 			## Count the one bits in the value.
 			## ```roc
@@ -10360,7 +10834,6 @@ Builtin :: [].{
 			## expect U64.count_one_bits(0) == 0
 			## ```
 			count_one_bits : U64 -> U8
-			count_one_bits = |value| unsigned_count_one_bits(0, 2, value)
 
 			## Iterator of integers beginning with this `U64` and ending with the other `U64`.
 			## (Use [U64.until] instead to end with the other `U64` minus one.)
@@ -10378,7 +10851,7 @@ Builtin :: [].{
 					if start > end {
 						Known(0)
 					} else {
-						match U64.add_try(end - start, 1) {
+						match U64.plus_try(end - start, 1) {
 							Ok(len) => Known(len)
 							Err(Overflow) => Unknown
 						}
@@ -10387,7 +10860,7 @@ Builtin :: [].{
 						if start <= end {
 							One({
 								item: start,
-								rest: match U64.add_try(start, 1) {
+								rest: match U64.plus_try(start, 1) {
 									Ok(next) => if next <= end {
 										U64.to(next, end)
 									} else {
@@ -10423,7 +10896,7 @@ Builtin :: [].{
 						if start < end {
 							One({
 								item: start,
-								rest: match U64.add_try(start, 1) {
+								rest: match U64.plus_try(start, 1) {
 									Ok(next) => if next < end {
 										U64.until(next, end)
 									} else {
@@ -10857,10 +11330,16 @@ Builtin :: [].{
 			## ```
 			plus : I64, I64 -> I64
 
-			## Add two [I64] values, returning `Err(Overflow)` instead of wrapping
+			## Add two [I64] values, wrapping on overflow.
+			## ```roc
+			## expect I64.plus_wrap(I64.highest, 1) == I64.lowest
+			## ```
+			plus_wrap : I64, I64 -> I64
+
+			## Add two [I64] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in an [I64].
-			add_try : I64, I64 -> Try(I64, [Overflow, ..])
-			add_try = |a, b| signed_add_try(I64.lowest, I64.highest, 0, a, b)
+			plus_try : I64, I64 -> Try(I64, [Overflow, ..])
+			plus_try = |a, b| signed_plus_try(I64.lowest, I64.highest, 0, a, b)
 
 			## Iterator over [I64] values from `start` up to but not including `end`.
 			## Returns an empty iterator if `start >= end`. This is what `start..<end`
@@ -10881,7 +11360,7 @@ Builtin :: [].{
 			range_inclusive : I64, I64 -> Iter(I64)
 			range_inclusive = |start, end| {
 				len_if_known = if start <= end
-					match start.abs_diff(end).add_try(1) {
+					match start.abs_diff(end).plus_try(1) {
 						Ok(len) => Known(len)
 						Err(Overflow) => Unknown
 					}
@@ -10914,10 +11393,16 @@ Builtin :: [].{
 			## ```
 			minus : I64, I64 -> I64
 
+			## Subtract the second [I64] from the first, wrapping on overflow.
+			## ```roc
+			## expect I64.minus_wrap(I64.lowest, 1) == I64.highest
+			## ```
+			minus_wrap : I64, I64 -> I64
+
 			## Subtract the second [I64] from the first, returning `Err(Overflow)`
-			## instead of wrapping if the result does not fit in an [I64].
-			sub_try : I64, I64 -> Try(I64, [Overflow, ..])
-			sub_try = |a, b| signed_sub_try(I64.lowest, I64.highest, 0, a, b)
+			## instead of crashing or wrapping if the result does not fit in an [I64].
+			minus_try : I64, I64 -> Try(I64, [Overflow, ..])
+			minus_try = |a, b| signed_minus_try(I64.lowest, I64.highest, 0, a, b)
 
 			## Subtract the second [I64] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -10936,10 +11421,16 @@ Builtin :: [].{
 			## ```
 			times : I64, I64 -> I64
 
+			## Multiply two [I64] values, wrapping on overflow.
+			## ```roc
+			## expect I64.times_wrap(I64.lowest, -1) == I64.lowest
+			## ```
+			times_wrap : I64, I64 -> I64
+
 			## Multiply two [I64] values, returning `Err(Overflow)` instead of
-			## wrapping if the result does not fit in an [I64].
-			mul_try : I64, I64 -> Try(I64, [Overflow, ..])
-			mul_try = |a, b| signed_mul_try(I64.lowest, I64.highest, 0, -1, a, b)
+			## crashing or wrapping if the result does not fit in an [I64].
+			times_try : I64, I64 -> Try(I64, [Overflow, ..])
+			times_try = |a, b| signed_times_try(I64.lowest, I64.highest, 0, -1, a, b)
 
 			## Multiply two [I64] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -11096,33 +11587,42 @@ Builtin :: [].{
 			## Shift the bits of an [I64] to the left by the given number of
 			## positions. Bits shifted past the most significant bit are discarded,
 			## and zeros are shifted in on the right.
+			## The count is taken modulo 64, so shifting by 64 leaves the value unchanged and shifting by 65 shifts by 1.
 			## ```roc
-			## expect I64.shift_left_by(1, 3) == 8
+			## expect I64.shl_wrap(1, 3) == 8
 			##
-			## expect I64.shift_left_by(0b0000_0101, 2) == 0b0001_0100
+			## expect I64.shl_wrap(0b0000_0101, 2) == 0b0001_0100
+			##
+			## expect I64.shl_wrap(1, 64) == 1
 			## ```
-			shift_left_by : I64, U8 -> I64
+			shl_wrap : I64, U8 -> I64
 
 			## Shift the bits of an [I64] to the right by the given number of
 			## positions, preserving the sign ("arithmetic shift"). The sign bit
 			## is shifted in on the left, so negative values remain negative. Each
 			## right shift by one is equivalent to integer division by 2 (rounding
 			## toward negative infinity).
+			## The count is taken modulo 64, so shifting by 64 leaves the value unchanged and shifting by 65 shifts by 1.
 			## ```roc
-			## expect I64.shift_right_by(32, 2) == 8
+			## expect I64.shr_wrap(32, 2) == 8
 			##
-			## expect I64.shift_right_by(-32, 2) == -8
+			## expect I64.shr_wrap(-32, 2) == -8
+			##
+			## expect I64.shr_wrap(32, 64) == 32
 			## ```
-			shift_right_by : I64, U8 -> I64
+			shr_wrap : I64, U8 -> I64
 
 			## Shift the bits of an [I64] to the right by the given number of
 			## positions.
+			## The count is taken modulo 64, so shifting by 64 leaves the value unchanged and shifting by 65 shifts by 1.
 			## ```roc
-			## expect I64.shift_right_zf_by(32, 2) == 8
+			## expect I64.shr_zf_wrap(32, 2) == 8
 			##
-			## expect I64.shift_right_zf_by(0b0101_0000, 3) == 0b0000_1010
+			## expect I64.shr_zf_wrap(0b0101_0000, 3) == 0b0000_1010
+			##
+			## expect I64.shr_zf_wrap(32, 64) == 32
 			## ```
-			shift_right_zf_by : I64, U8 -> I64
+			shr_zf_wrap : I64, U8 -> I64
 
 			## Returns the bitwise AND of two [I64] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
@@ -11160,7 +11660,6 @@ Builtin :: [].{
 			## expect I64.count_leading_zero_bits(0) == 64
 			## ```
 			count_leading_zero_bits : I64 -> U8
-			count_leading_zero_bits = |value| signed_count_leading_zero_bits(64, 0, 2, value)
 
 			## Count the zero bits after the last one bit, starting at the least significant bit.
 			## ```roc
@@ -11169,7 +11668,6 @@ Builtin :: [].{
 			## expect I64.count_trailing_zero_bits(0) == 64
 			## ```
 			count_trailing_zero_bits : I64 -> U8
-			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(64, 0, 2, value)
 
 			## Count the one bits in the value.
 			## ```roc
@@ -11178,7 +11676,6 @@ Builtin :: [].{
 			## expect I64.count_one_bits(0) == 0
 			## ```
 			count_one_bits : I64 -> U8
-			count_one_bits = |value| signed_count_one_bits(64, 0, 2, value)
 
 			## Iterator of integers beginning with this `I64` and ending with the other `I64`.
 			## (Use [I64.until] instead to end with the other `I64` minus one.)
@@ -11196,8 +11693,8 @@ Builtin :: [].{
 					if start > end {
 						Known(0)
 					} else {
-						match I64.sub_try(end, start) {
-							Ok(diff) => match I64.add_try(diff, 1) {
+						match I64.minus_try(end, start) {
+							Ok(diff) => match I64.plus_try(diff, 1) {
 								Ok(d1) => Known(I64.to_u64_wrap(d1))
 								Err(Overflow) => Unknown
 							}
@@ -11208,7 +11705,7 @@ Builtin :: [].{
 						if start <= end {
 							One({
 								item: start,
-								rest: match I64.add_try(start, 1) {
+								rest: match I64.plus_try(start, 1) {
 									Ok(next) => if next <= end {
 										I64.to(next, end)
 									} else {
@@ -11238,7 +11735,7 @@ Builtin :: [].{
 					if start >= end {
 						Known(0)
 					} else {
-						match I64.sub_try(end, start) {
+						match I64.minus_try(end, start) {
 							Ok(diff) => Known(I64.to_u64_wrap(diff))
 							Err(Overflow) => Unknown
 						}
@@ -11247,7 +11744,7 @@ Builtin :: [].{
 						if start < end {
 							One({
 								item: start,
-								rest: match I64.add_try(start, 1) {
+								rest: match I64.plus_try(start, 1) {
 									Ok(next) => if next < end {
 										I64.until(next, end)
 									} else {
@@ -11652,10 +12149,16 @@ Builtin :: [].{
 			## ```
 			plus : U128, U128 -> U128
 
-			## Add two [U128] values, returning `Err(Overflow)` instead of wrapping
+			## Add two [U128] values, wrapping on overflow.
+			## ```roc
+			## expect U128.plus_wrap(U128.highest, 1) == 0
+			## ```
+			plus_wrap : U128, U128 -> U128
+
+			## Add two [U128] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in a [U128].
-			add_try : U128, U128 -> Try(U128, [Overflow, ..])
-			add_try = |a, b| unsigned_add_try(U128.highest, a, b)
+			plus_try : U128, U128 -> Try(U128, [Overflow, ..])
+			plus_try = |a, b| unsigned_plus_try(U128.highest, a, b)
 
 			## Iterator over [U128] values from `start` up to but not including `end`.
 			## Returns an empty iterator if `start >= end`. This is what `start..<end`
@@ -11680,7 +12183,7 @@ Builtin :: [].{
 			range_inclusive = |start, end| {
 				len_if_known = if start <= end
 					match start.abs_diff(end).to_u64_try() {
-						Ok(steps) => match steps.add_try(1) {
+						Ok(steps) => match steps.plus_try(1) {
 							Ok(len) => Known(len)
 							Err(Overflow) => Unknown
 						}
@@ -11711,10 +12214,16 @@ Builtin :: [].{
 			## ```
 			minus : U128, U128 -> U128
 
+			## Subtract the second [U128] from the first, wrapping on overflow.
+			## ```roc
+			## expect U128.minus_wrap(0, 1) == U128.highest
+			## ```
+			minus_wrap : U128, U128 -> U128
+
 			## Subtract the second [U128] from the first, returning `Err(Overflow)`
-			## instead of wrapping if the result does not fit in a [U128].
-			sub_try : U128, U128 -> Try(U128, [Overflow, ..])
-			sub_try = |a, b| unsigned_sub_try(a, b)
+			## instead of crashing or wrapping if the result does not fit in a [U128].
+			minus_try : U128, U128 -> Try(U128, [Overflow, ..])
+			minus_try = |a, b| unsigned_minus_try(a, b)
 
 			## Subtract the second [U128] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -11731,10 +12240,16 @@ Builtin :: [].{
 			## ```
 			times : U128, U128 -> U128
 
+			## Multiply two [U128] values, wrapping on overflow.
+			## ```roc
+			## expect U128.times_wrap(U128.highest, 2) == U128.highest - 1
+			## ```
+			times_wrap : U128, U128 -> U128
+
 			## Multiply two [U128] values, returning `Err(Overflow)` instead of
-			## wrapping if the result does not fit in a [U128].
-			mul_try : U128, U128 -> Try(U128, [Overflow, ..])
-			mul_try = |a, b| unsigned_mul_try(U128.highest, 0, a, b)
+			## crashing or wrapping if the result does not fit in a [U128].
+			times_try : U128, U128 -> Try(U128, [Overflow, ..])
+			times_try = |a, b| unsigned_times_try(U128.highest, 0, a, b)
 
 			## Multiply two [U128] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -11852,34 +12367,43 @@ Builtin :: [].{
 			## Bits shifted past the most significant bit are discarded, and zeros
 			## are shifted in on the right. Each left shift by one is equivalent to
 			## multiplying by 2 (modulo 2^128).
+			## The count is taken modulo 128, so shifting by 128 leaves the value unchanged and shifting by 129 shifts by 1.
 			## ```roc
-			## expect U128.shift_left_by(1, 3) == 8
+			## expect U128.shl_wrap(1, 3) == 8
 			##
-			## expect U128.shift_left_by(0b0000_0101, 2) == 0b0001_0100
+			## expect U128.shl_wrap(0b0000_0101, 2) == 0b0001_0100
+			##
+			## expect U128.shl_wrap(1, 128) == 1
 			## ```
-			shift_left_by : U128, U8 -> U128
+			shl_wrap : U128, U8 -> U128
 
 			## Shift the bits of a [U128] to the right by the given number of positions.
 			## Bits shifted past the least significant bit are discarded, and zeros
 			## are shifted in on the left. Each right shift by one is equivalent to
 			## integer division by 2. For unsigned integers this behaves the same as
-			## [U128.shift_right_zf_by].
+			## [U128.shr_zf_wrap].
+			## The count is taken modulo 128, so shifting by 128 leaves the value unchanged and shifting by 129 shifts by 1.
 			## ```roc
-			## expect U128.shift_right_by(32, 2) == 8
+			## expect U128.shr_wrap(32, 2) == 8
 			##
-			## expect U128.shift_right_by(0b1010_0000, 3) == 0b0001_0100
+			## expect U128.shr_wrap(0b1010_0000, 3) == 0b0001_0100
+			##
+			## expect U128.shr_wrap(32, 128) == 32
 			## ```
-			shift_right_by : U128, U8 -> U128
+			shr_wrap : U128, U8 -> U128
 
 			## Shift the bits of a [U128] to the right by the given number of positions,
 			## filling the vacated high bits with zeros ("zero-fill"). For unsigned
-			## integers this behaves the same as [U128.shift_right_by].
+			## integers this behaves the same as [U128.shr_wrap].
+			## The count is taken modulo 128, so shifting by 128 leaves the value unchanged and shifting by 129 shifts by 1.
 			## ```roc
-			## expect U128.shift_right_zf_by(32, 2) == 8
+			## expect U128.shr_zf_wrap(32, 2) == 8
 			##
-			## expect U128.shift_right_zf_by(0b1010_0000, 3) == 0b0001_0100
+			## expect U128.shr_zf_wrap(0b1010_0000, 3) == 0b0001_0100
+			##
+			## expect U128.shr_zf_wrap(32, 128) == 32
 			## ```
-			shift_right_zf_by : U128, U8 -> U128
+			shr_zf_wrap : U128, U8 -> U128
 
 			## Returns the bitwise AND of two [U128] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
@@ -11916,7 +12440,6 @@ Builtin :: [].{
 			## expect U128.count_leading_zero_bits(0) == 128
 			## ```
 			count_leading_zero_bits : U128 -> U8
-			count_leading_zero_bits = |value| unsigned_count_leading_zero_bits(128, 0, 2, value)
 
 			## Count the zero bits after the last one bit, starting at the least significant bit.
 			## ```roc
@@ -11925,7 +12448,6 @@ Builtin :: [].{
 			## expect U128.count_trailing_zero_bits(0) == 128
 			## ```
 			count_trailing_zero_bits : U128 -> U8
-			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(128, 0, 2, value)
 
 			## Count the one bits in the value.
 			## ```roc
@@ -11934,7 +12456,6 @@ Builtin :: [].{
 			## expect U128.count_one_bits(0) == 0
 			## ```
 			count_one_bits : U128 -> U8
-			count_one_bits = |value| unsigned_count_one_bits(0, 2, value)
 
 			## Iterator of integers beginning with this `U128` and ending with the other `U128`.
 			## (Use [U128.until] instead to end with the other `U128` minus one.)
@@ -11953,7 +12474,7 @@ Builtin :: [].{
 						Known(0)
 					} else {
 						match U128.to_u64_try(end - start) {
-							Ok(diff_u64) => match U64.add_try(diff_u64, 1) {
+							Ok(diff_u64) => match U64.plus_try(diff_u64, 1) {
 								Ok(len) => Known(len)
 								Err(Overflow) => Unknown
 							}
@@ -11964,7 +12485,7 @@ Builtin :: [].{
 						if start <= end {
 							One({
 								item: start,
-								rest: match U128.add_try(start, 1) {
+								rest: match U128.plus_try(start, 1) {
 									Ok(next) => if next <= end {
 										U128.to(next, end)
 									} else {
@@ -12003,7 +12524,7 @@ Builtin :: [].{
 						if start < end {
 							One({
 								item: start,
-								rest: match U128.add_try(start, 1) {
+								rest: match U128.plus_try(start, 1) {
 									Ok(next) => if next < end {
 										U128.until(next, end)
 									} else {
@@ -12469,10 +12990,16 @@ Builtin :: [].{
 			## ```
 			plus : I128, I128 -> I128
 
-			## Add two [I128] values, returning `Err(Overflow)` instead of wrapping
+			## Add two [I128] values, wrapping on overflow.
+			## ```roc
+			## expect I128.plus_wrap(I128.highest, 1) == I128.lowest
+			## ```
+			plus_wrap : I128, I128 -> I128
+
+			## Add two [I128] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in an [I128].
-			add_try : I128, I128 -> Try(I128, [Overflow, ..])
-			add_try = |a, b| signed_add_try(I128.lowest, I128.highest, 0, a, b)
+			plus_try : I128, I128 -> Try(I128, [Overflow, ..])
+			plus_try = |a, b| signed_plus_try(I128.lowest, I128.highest, 0, a, b)
 
 			## Iterator over [I128] values from `start` up to but not including `end`.
 			## Returns an empty iterator if `start >= end`. This is what `start..<end`
@@ -12497,7 +13024,7 @@ Builtin :: [].{
 			range_inclusive = |start, end| {
 				len_if_known = if start <= end
 					match start.abs_diff(end).to_u64_try() {
-						Ok(steps) => match steps.add_try(1) {
+						Ok(steps) => match steps.plus_try(1) {
 							Ok(len) => Known(len)
 							Err(Overflow) => Unknown
 						}
@@ -12532,10 +13059,16 @@ Builtin :: [].{
 			## ```
 			minus : I128, I128 -> I128
 
+			## Subtract the second [I128] from the first, wrapping on overflow.
+			## ```roc
+			## expect I128.minus_wrap(I128.lowest, 1) == I128.highest
+			## ```
+			minus_wrap : I128, I128 -> I128
+
 			## Subtract the second [I128] from the first, returning `Err(Overflow)`
-			## instead of wrapping if the result does not fit in an [I128].
-			sub_try : I128, I128 -> Try(I128, [Overflow, ..])
-			sub_try = |a, b| signed_sub_try(I128.lowest, I128.highest, 0, a, b)
+			## instead of crashing or wrapping if the result does not fit in an [I128].
+			minus_try : I128, I128 -> Try(I128, [Overflow, ..])
+			minus_try = |a, b| signed_minus_try(I128.lowest, I128.highest, 0, a, b)
 
 			## Subtract the second [I128] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -12554,10 +13087,16 @@ Builtin :: [].{
 			## ```
 			times : I128, I128 -> I128
 
+			## Multiply two [I128] values, wrapping on overflow.
+			## ```roc
+			## expect I128.times_wrap(I128.lowest, -1) == I128.lowest
+			## ```
+			times_wrap : I128, I128 -> I128
+
 			## Multiply two [I128] values, returning `Err(Overflow)` instead of
-			## wrapping if the result does not fit in an [I128].
-			mul_try : I128, I128 -> Try(I128, [Overflow, ..])
-			mul_try = |a, b| signed_mul_try(I128.lowest, I128.highest, 0, -1, a, b)
+			## crashing or wrapping if the result does not fit in an [I128].
+			times_try : I128, I128 -> Try(I128, [Overflow, ..])
+			times_try = |a, b| signed_times_try(I128.lowest, I128.highest, 0, -1, a, b)
 
 			## Multiply two [I128] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -12715,33 +13254,42 @@ Builtin :: [].{
 			## Shift the bits of an [I128] to the left by the given number of
 			## positions. Bits shifted past the most significant bit are discarded,
 			## and zeros are shifted in on the right.
+			## The count is taken modulo 128, so shifting by 128 leaves the value unchanged and shifting by 129 shifts by 1.
 			## ```roc
-			## expect I128.shift_left_by(1, 3) == 8
+			## expect I128.shl_wrap(1, 3) == 8
 			##
-			## expect I128.shift_left_by(0b0000_0101, 2) == 0b0001_0100
+			## expect I128.shl_wrap(0b0000_0101, 2) == 0b0001_0100
+			##
+			## expect I128.shl_wrap(1, 128) == 1
 			## ```
-			shift_left_by : I128, U8 -> I128
+			shl_wrap : I128, U8 -> I128
 
 			## Shift the bits of an [I128] to the right by the given number of
 			## positions, preserving the sign ("arithmetic shift"). The sign bit
 			## is shifted in on the left, so negative values remain negative. Each
 			## right shift by one is equivalent to integer division by 2 (rounding
 			## toward negative infinity).
+			## The count is taken modulo 128, so shifting by 128 leaves the value unchanged and shifting by 129 shifts by 1.
 			## ```roc
-			## expect I128.shift_right_by(32, 2) == 8
+			## expect I128.shr_wrap(32, 2) == 8
 			##
-			## expect I128.shift_right_by(-32, 2) == -8
+			## expect I128.shr_wrap(-32, 2) == -8
+			##
+			## expect I128.shr_wrap(32, 128) == 32
 			## ```
-			shift_right_by : I128, U8 -> I128
+			shr_wrap : I128, U8 -> I128
 
 			## Shift the bits of an [I128] to the right by the given number of
 			## positions.
+			## The count is taken modulo 128, so shifting by 128 leaves the value unchanged and shifting by 129 shifts by 1.
 			## ```roc
-			## expect I128.shift_right_zf_by(32, 2) == 8
+			## expect I128.shr_zf_wrap(32, 2) == 8
 			##
-			## expect I128.shift_right_zf_by(0b0101_0000, 3) == 0b0000_1010
+			## expect I128.shr_zf_wrap(0b0101_0000, 3) == 0b0000_1010
+			##
+			## expect I128.shr_zf_wrap(32, 128) == 32
 			## ```
-			shift_right_zf_by : I128, U8 -> I128
+			shr_zf_wrap : I128, U8 -> I128
 
 			## Returns the bitwise AND of two [I128] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
@@ -12779,7 +13327,6 @@ Builtin :: [].{
 			## expect I128.count_leading_zero_bits(0) == 128
 			## ```
 			count_leading_zero_bits : I128 -> U8
-			count_leading_zero_bits = |value| signed_count_leading_zero_bits(128, 0, 2, value)
 
 			## Count the zero bits after the last one bit, starting at the least significant bit.
 			## ```roc
@@ -12788,7 +13335,6 @@ Builtin :: [].{
 			## expect I128.count_trailing_zero_bits(0) == 128
 			## ```
 			count_trailing_zero_bits : I128 -> U8
-			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(128, 0, 2, value)
 
 			## Count the one bits in the value.
 			## ```roc
@@ -12797,7 +13343,6 @@ Builtin :: [].{
 			## expect I128.count_one_bits(0) == 0
 			## ```
 			count_one_bits : I128 -> U8
-			count_one_bits = |value| signed_count_one_bits(128, 0, 2, value)
 
 			## Iterator of integers beginning with this `I128` and ending with the other `I128`.
 			## (Use [I128.until] instead to end with the other `I128` minus one.)
@@ -12815,9 +13360,9 @@ Builtin :: [].{
 					if start > end {
 						Known(0)
 					} else {
-						match I128.sub_try(end, start) {
+						match I128.minus_try(end, start) {
 							Ok(diff) => match I128.to_u64_try(diff) {
-								Ok(diff_u64) => match U64.add_try(diff_u64, 1) {
+								Ok(diff_u64) => match U64.plus_try(diff_u64, 1) {
 									Ok(len) => Known(len)
 									Err(Overflow) => Unknown
 								}
@@ -12830,7 +13375,7 @@ Builtin :: [].{
 						if start <= end {
 							One({
 								item: start,
-								rest: match I128.add_try(start, 1) {
+								rest: match I128.plus_try(start, 1) {
 									Ok(next) => if next <= end {
 										I128.to(next, end)
 									} else {
@@ -12860,7 +13405,7 @@ Builtin :: [].{
 					if start >= end {
 						Known(0)
 					} else {
-						match I128.sub_try(end, start) {
+						match I128.minus_try(end, start) {
 							Ok(diff) => match I128.to_u64_try(diff) {
 								Ok(len) => Known(len)
 								Err(OutOfRange) => Unknown
@@ -12872,7 +13417,7 @@ Builtin :: [].{
 						if start < end {
 							One({
 								item: start,
-								rest: match I128.add_try(start, 1) {
+								rest: match I128.plus_try(start, 1) {
 									Ok(next) => if next < end {
 										I128.until(next, end)
 									} else {
@@ -13325,10 +13870,10 @@ Builtin :: [].{
 			## ```
 			plus : Dec, Dec -> Dec
 
-			## Add two [Dec] values, returning `Err(Overflow)` instead of wrapping
+			## Add two [Dec] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result is outside [Dec.lowest] through [Dec.highest].
-			add_try : Dec, Dec -> Try(Dec, [Overflow, ..])
-			add_try = |a, b| signed_add_try(Dec.lowest, Dec.highest, 0.0, a, b)
+			plus_try : Dec, Dec -> Try(Dec, [Overflow, ..])
+			plus_try = |a, b| signed_plus_try(Dec.lowest, Dec.highest, 0.0, a, b)
 
 			## Conservative placeholder: always returns `Unknown`. Counting the steps
 			## in a fractional `[start, end)` range advancing by `1` would require
@@ -13377,10 +13922,10 @@ Builtin :: [].{
 			minus : Dec, Dec -> Dec
 
 			## Subtract the second [Dec] from the first, returning
-			## `Err(Overflow)` instead of wrapping if the result is outside
+			## `Err(Overflow)` instead of crashing or wrapping if the result is outside
 			## [Dec.lowest] through [Dec.highest].
-			sub_try : Dec, Dec -> Try(Dec, [Overflow, ..])
-			sub_try = |a, b| signed_sub_try(Dec.lowest, Dec.highest, 0.0, a, b)
+			minus_try : Dec, Dec -> Try(Dec, [Overflow, ..])
+			minus_try = |a, b| signed_minus_try(Dec.lowest, Dec.highest, 0.0, a, b)
 
 			## Subtract the second [Dec] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -13516,215 +14061,215 @@ Builtin :: [].{
 			## ```
 			abs_diff : Dec, Dec -> Dec
 
-			## Round a [Dec] to the nearest [I8]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## Round a [Dec] to the nearest [I8]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.round_to_i8(3.4) == 3
+			## expect Dec.round_to_i8_try(3.4) == Ok(3)
 			## ```
-			round_to_i8 : Dec -> I8
-			round_to_i8 = |self| out_of_range_or_crash(Dec.to_i8_try(dec_round_to_whole(self)))
+			round_to_i8_try : Dec -> Try(I8, [OutOfRange])
+			round_to_i8_try = |self| Dec.to_i8_try(dec_round_to_whole(self))
 
-			## Round a [Dec] to the nearest [I16]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## Round a [Dec] to the nearest [I16]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.round_to_i16(3.4) == 3
+			## expect Dec.round_to_i16_try(3.4) == Ok(3)
 			## ```
-			round_to_i16 : Dec -> I16
-			round_to_i16 = |self| out_of_range_or_crash(Dec.to_i16_try(dec_round_to_whole(self)))
+			round_to_i16_try : Dec -> Try(I16, [OutOfRange])
+			round_to_i16_try = |self| Dec.to_i16_try(dec_round_to_whole(self))
 
-			## Round a [Dec] to the nearest [I32]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## Round a [Dec] to the nearest [I32]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.round_to_i32(-3.6) == -4
+			## expect Dec.round_to_i32_try(-3.6) == Ok(-4)
 			## ```
-			round_to_i32 : Dec -> I32
-			round_to_i32 = |self| out_of_range_or_crash(Dec.to_i32_try(dec_round_to_whole(self)))
+			round_to_i32_try : Dec -> Try(I32, [OutOfRange])
+			round_to_i32_try = |self| Dec.to_i32_try(dec_round_to_whole(self))
 
-			## Round a [Dec] to the nearest [I64]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## Round a [Dec] to the nearest [I64]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.round_to_i64(7.2) == 7
+			## expect Dec.round_to_i64_try(7.2) == Ok(7)
 			## ```
-			round_to_i64 : Dec -> I64
-			round_to_i64 = |self| out_of_range_or_crash(Dec.to_i64_try(dec_round_to_whole(self)))
+			round_to_i64_try : Dec -> Try(I64, [OutOfRange])
+			round_to_i64_try = |self| Dec.to_i64_try(dec_round_to_whole(self))
 
-			## Round a [Dec] to the nearest [I128]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## Round a [Dec] to the nearest [I128]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.round_to_i128(7.2) == 7
+			## expect Dec.round_to_i128_try(7.2) == Ok(7)
 			## ```
-			round_to_i128 : Dec -> I128
-			round_to_i128 = |self| out_of_range_or_crash(Dec.to_i128_try(dec_round_to_whole(self)))
+			round_to_i128_try : Dec -> Try(I128, [OutOfRange])
+			round_to_i128_try = |self| Dec.to_i128_try(dec_round_to_whole(self))
 
-			## Round a [Dec] to the nearest [U8]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## Round a [Dec] to the nearest [U8]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.round_to_u8(3.4) == 3
+			## expect Dec.round_to_u8_try(3.4) == Ok(3)
 			## ```
-			round_to_u8 : Dec -> U8
-			round_to_u8 = |self| out_of_range_or_crash(Dec.to_u8_try(dec_round_to_whole(self)))
+			round_to_u8_try : Dec -> Try(U8, [OutOfRange])
+			round_to_u8_try = |self| Dec.to_u8_try(dec_round_to_whole(self))
 
-			## Round a [Dec] to the nearest [U16]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## Round a [Dec] to the nearest [U16]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.round_to_u16(3.4) == 3
+			## expect Dec.round_to_u16_try(3.4) == Ok(3)
 			## ```
-			round_to_u16 : Dec -> U16
-			round_to_u16 = |self| out_of_range_or_crash(Dec.to_u16_try(dec_round_to_whole(self)))
+			round_to_u16_try : Dec -> Try(U16, [OutOfRange])
+			round_to_u16_try = |self| Dec.to_u16_try(dec_round_to_whole(self))
 
-			## Round a [Dec] to the nearest [U32]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## Round a [Dec] to the nearest [U32]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.round_to_u32(7.2) == 7
+			## expect Dec.round_to_u32_try(7.2) == Ok(7)
 			## ```
-			round_to_u32 : Dec -> U32
-			round_to_u32 = |self| out_of_range_or_crash(Dec.to_u32_try(dec_round_to_whole(self)))
+			round_to_u32_try : Dec -> Try(U32, [OutOfRange])
+			round_to_u32_try = |self| Dec.to_u32_try(dec_round_to_whole(self))
 
-			## Round a [Dec] to the nearest [U64]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## Round a [Dec] to the nearest [U64]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.round_to_u64(7.2) == 7
+			## expect Dec.round_to_u64_try(7.2) == Ok(7)
 			## ```
-			round_to_u64 : Dec -> U64
-			round_to_u64 = |self| out_of_range_or_crash(Dec.to_u64_try(dec_round_to_whole(self)))
+			round_to_u64_try : Dec -> Try(U64, [OutOfRange])
+			round_to_u64_try = |self| Dec.to_u64_try(dec_round_to_whole(self))
 
-			## Round a [Dec] to the nearest [U128]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## Round a [Dec] to the nearest [U128]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.round_to_u128(7.2) == 7
+			## expect Dec.round_to_u128_try(7.2) == Ok(7)
 			## ```
-			round_to_u128 : Dec -> U128
-			round_to_u128 = |self| out_of_range_or_crash(Dec.to_u128_try(dec_round_to_whole(self)))
+			round_to_u128_try : Dec -> Try(U128, [OutOfRange])
+			round_to_u128_try = |self| Dec.to_u128_try(dec_round_to_whole(self))
 
-			## Round a [Dec] down to an [I8]. Crashes if the rounded value is out of range.
+			## Round a [Dec] down to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.floor_to_i8(-3.2) == -4
+			## expect Dec.floor_to_i8_try(-3.2) == Ok(-4)
 			## ```
-			floor_to_i8 : Dec -> I8
-			floor_to_i8 = |self| out_of_range_or_crash(Dec.to_i8_try(dec_floor_to_whole(self)))
+			floor_to_i8_try : Dec -> Try(I8, [OutOfRange])
+			floor_to_i8_try = |self| Dec.to_i8_try(dec_floor_to_whole(self))
 
-			## Round a [Dec] down to an [I16]. Crashes if the rounded value is out of range.
+			## Round a [Dec] down to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.floor_to_i16(-3.2) == -4
+			## expect Dec.floor_to_i16_try(-3.2) == Ok(-4)
 			## ```
-			floor_to_i16 : Dec -> I16
-			floor_to_i16 = |self| out_of_range_or_crash(Dec.to_i16_try(dec_floor_to_whole(self)))
+			floor_to_i16_try : Dec -> Try(I16, [OutOfRange])
+			floor_to_i16_try = |self| Dec.to_i16_try(dec_floor_to_whole(self))
 
-			## Round a [Dec] down to an [I32]. Crashes if the rounded value is out of range.
+			## Round a [Dec] down to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.floor_to_i32(3.8) == 3
+			## expect Dec.floor_to_i32_try(3.8) == Ok(3)
 			## ```
-			floor_to_i32 : Dec -> I32
-			floor_to_i32 = |self| out_of_range_or_crash(Dec.to_i32_try(dec_floor_to_whole(self)))
+			floor_to_i32_try : Dec -> Try(I32, [OutOfRange])
+			floor_to_i32_try = |self| Dec.to_i32_try(dec_floor_to_whole(self))
 
-			## Round a [Dec] down to an [I64]. Crashes if the rounded value is out of range.
+			## Round a [Dec] down to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.floor_to_i64(3.8) == 3
+			## expect Dec.floor_to_i64_try(3.8) == Ok(3)
 			## ```
-			floor_to_i64 : Dec -> I64
-			floor_to_i64 = |self| out_of_range_or_crash(Dec.to_i64_try(dec_floor_to_whole(self)))
+			floor_to_i64_try : Dec -> Try(I64, [OutOfRange])
+			floor_to_i64_try = |self| Dec.to_i64_try(dec_floor_to_whole(self))
 
-			## Round a [Dec] down to an [I128]. Crashes if the rounded value is out of range.
+			## Round a [Dec] down to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.floor_to_i128(3.8) == 3
+			## expect Dec.floor_to_i128_try(3.8) == Ok(3)
 			## ```
-			floor_to_i128 : Dec -> I128
-			floor_to_i128 = |self| out_of_range_or_crash(Dec.to_i128_try(dec_floor_to_whole(self)))
+			floor_to_i128_try : Dec -> Try(I128, [OutOfRange])
+			floor_to_i128_try = |self| Dec.to_i128_try(dec_floor_to_whole(self))
 
-			## Round a [Dec] down to a [U8]. Crashes if the rounded value is out of range.
+			## Round a [Dec] down to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.floor_to_u8(3.8) == 3
+			## expect Dec.floor_to_u8_try(3.8) == Ok(3)
 			## ```
-			floor_to_u8 : Dec -> U8
-			floor_to_u8 = |self| out_of_range_or_crash(Dec.to_u8_try(dec_floor_to_whole(self)))
+			floor_to_u8_try : Dec -> Try(U8, [OutOfRange])
+			floor_to_u8_try = |self| Dec.to_u8_try(dec_floor_to_whole(self))
 
-			## Round a [Dec] down to a [U16]. Crashes if the rounded value is out of range.
+			## Round a [Dec] down to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.floor_to_u16(3.8) == 3
+			## expect Dec.floor_to_u16_try(3.8) == Ok(3)
 			## ```
-			floor_to_u16 : Dec -> U16
-			floor_to_u16 = |self| out_of_range_or_crash(Dec.to_u16_try(dec_floor_to_whole(self)))
+			floor_to_u16_try : Dec -> Try(U16, [OutOfRange])
+			floor_to_u16_try = |self| Dec.to_u16_try(dec_floor_to_whole(self))
 
-			## Round a [Dec] down to a [U32]. Crashes if the rounded value is out of range.
+			## Round a [Dec] down to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.floor_to_u32(3.8) == 3
+			## expect Dec.floor_to_u32_try(3.8) == Ok(3)
 			## ```
-			floor_to_u32 : Dec -> U32
-			floor_to_u32 = |self| out_of_range_or_crash(Dec.to_u32_try(dec_floor_to_whole(self)))
+			floor_to_u32_try : Dec -> Try(U32, [OutOfRange])
+			floor_to_u32_try = |self| Dec.to_u32_try(dec_floor_to_whole(self))
 
-			## Round a [Dec] down to a [U64]. Crashes if the rounded value is out of range.
+			## Round a [Dec] down to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.floor_to_u64(3.8) == 3
+			## expect Dec.floor_to_u64_try(3.8) == Ok(3)
 			## ```
-			floor_to_u64 : Dec -> U64
-			floor_to_u64 = |self| out_of_range_or_crash(Dec.to_u64_try(dec_floor_to_whole(self)))
+			floor_to_u64_try : Dec -> Try(U64, [OutOfRange])
+			floor_to_u64_try = |self| Dec.to_u64_try(dec_floor_to_whole(self))
 
-			## Round a [Dec] down to a [U128]. Crashes if the rounded value is out of range.
+			## Round a [Dec] down to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.floor_to_u128(3.8) == 3
+			## expect Dec.floor_to_u128_try(3.8) == Ok(3)
 			## ```
-			floor_to_u128 : Dec -> U128
-			floor_to_u128 = |self| out_of_range_or_crash(Dec.to_u128_try(dec_floor_to_whole(self)))
+			floor_to_u128_try : Dec -> Try(U128, [OutOfRange])
+			floor_to_u128_try = |self| Dec.to_u128_try(dec_floor_to_whole(self))
 
-			## Round a [Dec] up to an [I8]. Crashes if the rounded value is out of range.
+			## Round a [Dec] up to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.ceiling_to_i8(-3.2) == -3
+			## expect Dec.ceiling_to_i8_try(-3.2) == Ok(-3)
 			## ```
-			ceiling_to_i8 : Dec -> I8
-			ceiling_to_i8 = |self| out_of_range_or_crash(Dec.to_i8_try(dec_ceiling_to_whole(self)))
+			ceiling_to_i8_try : Dec -> Try(I8, [OutOfRange])
+			ceiling_to_i8_try = |self| Dec.to_i8_try(dec_ceiling_to_whole(self))
 
-			## Round a [Dec] up to an [I16]. Crashes if the rounded value is out of range.
+			## Round a [Dec] up to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.ceiling_to_i16(-3.2) == -3
+			## expect Dec.ceiling_to_i16_try(-3.2) == Ok(-3)
 			## ```
-			ceiling_to_i16 : Dec -> I16
-			ceiling_to_i16 = |self| out_of_range_or_crash(Dec.to_i16_try(dec_ceiling_to_whole(self)))
+			ceiling_to_i16_try : Dec -> Try(I16, [OutOfRange])
+			ceiling_to_i16_try = |self| Dec.to_i16_try(dec_ceiling_to_whole(self))
 
-			## Round a [Dec] up to an [I32]. Crashes if the rounded value is out of range.
+			## Round a [Dec] up to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.ceiling_to_i32(3.2) == 4
+			## expect Dec.ceiling_to_i32_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i32 : Dec -> I32
-			ceiling_to_i32 = |self| out_of_range_or_crash(Dec.to_i32_try(dec_ceiling_to_whole(self)))
+			ceiling_to_i32_try : Dec -> Try(I32, [OutOfRange])
+			ceiling_to_i32_try = |self| Dec.to_i32_try(dec_ceiling_to_whole(self))
 
-			## Round a [Dec] up to an [I64]. Crashes if the rounded value is out of range.
+			## Round a [Dec] up to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.ceiling_to_i64(3.2) == 4
+			## expect Dec.ceiling_to_i64_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i64 : Dec -> I64
-			ceiling_to_i64 = |self| out_of_range_or_crash(Dec.to_i64_try(dec_ceiling_to_whole(self)))
+			ceiling_to_i64_try : Dec -> Try(I64, [OutOfRange])
+			ceiling_to_i64_try = |self| Dec.to_i64_try(dec_ceiling_to_whole(self))
 
-			## Round a [Dec] up to an [I128]. Crashes if the rounded value is out of range.
+			## Round a [Dec] up to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.ceiling_to_i128(3.2) == 4
+			## expect Dec.ceiling_to_i128_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i128 : Dec -> I128
-			ceiling_to_i128 = |self| out_of_range_or_crash(Dec.to_i128_try(dec_ceiling_to_whole(self)))
+			ceiling_to_i128_try : Dec -> Try(I128, [OutOfRange])
+			ceiling_to_i128_try = |self| Dec.to_i128_try(dec_ceiling_to_whole(self))
 
-			## Round a [Dec] up to a [U8]. Crashes if the rounded value is out of range.
+			## Round a [Dec] up to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.ceiling_to_u8(3.2) == 4
+			## expect Dec.ceiling_to_u8_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u8 : Dec -> U8
-			ceiling_to_u8 = |self| out_of_range_or_crash(Dec.to_u8_try(dec_ceiling_to_whole(self)))
+			ceiling_to_u8_try : Dec -> Try(U8, [OutOfRange])
+			ceiling_to_u8_try = |self| Dec.to_u8_try(dec_ceiling_to_whole(self))
 
-			## Round a [Dec] up to a [U16]. Crashes if the rounded value is out of range.
+			## Round a [Dec] up to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.ceiling_to_u16(3.2) == 4
+			## expect Dec.ceiling_to_u16_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u16 : Dec -> U16
-			ceiling_to_u16 = |self| out_of_range_or_crash(Dec.to_u16_try(dec_ceiling_to_whole(self)))
+			ceiling_to_u16_try : Dec -> Try(U16, [OutOfRange])
+			ceiling_to_u16_try = |self| Dec.to_u16_try(dec_ceiling_to_whole(self))
 
-			## Round a [Dec] up to a [U32]. Crashes if the rounded value is out of range.
+			## Round a [Dec] up to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.ceiling_to_u32(3.2) == 4
+			## expect Dec.ceiling_to_u32_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u32 : Dec -> U32
-			ceiling_to_u32 = |self| out_of_range_or_crash(Dec.to_u32_try(dec_ceiling_to_whole(self)))
+			ceiling_to_u32_try : Dec -> Try(U32, [OutOfRange])
+			ceiling_to_u32_try = |self| Dec.to_u32_try(dec_ceiling_to_whole(self))
 
-			## Round a [Dec] up to a [U64]. Crashes if the rounded value is out of range.
+			## Round a [Dec] up to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.ceiling_to_u64(3.2) == 4
+			## expect Dec.ceiling_to_u64_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u64 : Dec -> U64
-			ceiling_to_u64 = |self| out_of_range_or_crash(Dec.to_u64_try(dec_ceiling_to_whole(self)))
+			ceiling_to_u64_try : Dec -> Try(U64, [OutOfRange])
+			ceiling_to_u64_try = |self| Dec.to_u64_try(dec_ceiling_to_whole(self))
 
-			## Round a [Dec] up to a [U128]. Crashes if the rounded value is out of range.
+			## Round a [Dec] up to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.ceiling_to_u128(3.2) == 4
+			## expect Dec.ceiling_to_u128_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u128 : Dec -> U128
-			ceiling_to_u128 = |self| out_of_range_or_crash(Dec.to_u128_try(dec_ceiling_to_whole(self)))
+			ceiling_to_u128_try : Dec -> Try(U128, [OutOfRange])
+			ceiling_to_u128_try = |self| Dec.to_u128_try(dec_ceiling_to_whole(self))
 
 			## Build a [Dec] from a list of base-10 digits, most significant
 			## first. Each element of the list must be a digit in the range `0`
@@ -14038,7 +14583,7 @@ Builtin :: [].{
 						if start <= end {
 							One({
 								item: start,
-								rest: match Dec.add_try(start, 1.0) {
+								rest: match Dec.plus_try(start, 1.0) {
 									Ok(next) => if next <= end {
 										Dec.to(next, end)
 									} else {
@@ -14072,7 +14617,7 @@ Builtin :: [].{
 						if start < end {
 							One({
 								item: start,
-								rest: match Dec.add_try(start, 1.0) {
+								rest: match Dec.plus_try(start, 1.0) {
 									Ok(next) => if next < end {
 										Dec.until(next, end)
 									} else {
@@ -14168,7 +14713,8 @@ Builtin :: [].{
 			tau : F32
 			tau = F32.from_bits(1086918619)
 
-			## Convert an [F32] to its decimal string representation.
+			## Convert an [F32] to its decimal string representation. Every NaN
+			## representation, including negative NaNs, becomes `"nan"`.
 			## ```roc
 			## expect F32.to_str(42.5) == "42.5"
 			##
@@ -14176,7 +14722,9 @@ Builtin :: [].{
 			## ```
 			to_str : F32 -> Str
 
-			## Return the raw IEEE 754 bit pattern of an [F32].
+			## Return the IEEE 754 bit pattern of an [F32]. All `NaN` values return
+			## the canonical quiet-NaN bits `2143289344`; every non-NaN value
+			## returns its exact bits.
 			## ```roc
 			## expect F32.to_bits(F32.from_bits(1069547520)) == 1069547520
 			##
@@ -14184,7 +14732,9 @@ Builtin :: [].{
 			## ```
 			to_bits : F32 -> U32
 
-			## Build an [F32] from a raw IEEE 754 bit pattern.
+			## Build an [F32] from a raw IEEE 754 bit pattern. Any NaN payload or
+			## sign can be supplied, but [F32.to_bits] and hashing intentionally
+			## collapse all NaN representations.
 			## ```roc
 			## expect F32.from_bits(F32.to_bits(-0.0)).to_bits() == F32.to_bits(-0.0)
 			##
@@ -14518,215 +15068,215 @@ Builtin :: [].{
 			## ```
 			abs_diff : F32, F32 -> F32
 
-			## Round an [F32] to the nearest [I8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] to the nearest [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.round_to_i8(3.4) == 3
+			## expect F32.round_to_i8_try(3.4) == Ok(3)
 			## ```
-			round_to_i8 : F32 -> I8
-			round_to_i8 = |self| out_of_range_or_crash(F32.to_i8_try(f32_round_to_whole(self)))
+			round_to_i8_try : F32 -> Try(I8, [OutOfRange])
+			round_to_i8_try = |self| F32.to_i8_try(f32_round_to_whole(self))
 
-			## Round an [F32] to the nearest [I16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] to the nearest [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.round_to_i16(3.4) == 3
+			## expect F32.round_to_i16_try(3.4) == Ok(3)
 			## ```
-			round_to_i16 : F32 -> I16
-			round_to_i16 = |self| out_of_range_or_crash(F32.to_i16_try(f32_round_to_whole(self)))
+			round_to_i16_try : F32 -> Try(I16, [OutOfRange])
+			round_to_i16_try = |self| F32.to_i16_try(f32_round_to_whole(self))
 
-			## Round an [F32] to the nearest [I32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] to the nearest [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.round_to_i32(-3.6) == -4
+			## expect F32.round_to_i32_try(-3.6) == Ok(-4)
 			## ```
-			round_to_i32 : F32 -> I32
-			round_to_i32 = |self| out_of_range_or_crash(F32.to_i32_try(f32_round_to_whole(self)))
+			round_to_i32_try : F32 -> Try(I32, [OutOfRange])
+			round_to_i32_try = |self| F32.to_i32_try(f32_round_to_whole(self))
 
-			## Round an [F32] to the nearest [I64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] to the nearest [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.round_to_i64(7.2) == 7
+			## expect F32.round_to_i64_try(7.2) == Ok(7)
 			## ```
-			round_to_i64 : F32 -> I64
-			round_to_i64 = |self| out_of_range_or_crash(F32.to_i64_try(f32_round_to_whole(self)))
+			round_to_i64_try : F32 -> Try(I64, [OutOfRange])
+			round_to_i64_try = |self| F32.to_i64_try(f32_round_to_whole(self))
 
-			## Round an [F32] to the nearest [I128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] to the nearest [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.round_to_i128(7.2) == 7
+			## expect F32.round_to_i128_try(7.2) == Ok(7)
 			## ```
-			round_to_i128 : F32 -> I128
-			round_to_i128 = |self| out_of_range_or_crash(F32.to_i128_try(f32_round_to_whole(self)))
+			round_to_i128_try : F32 -> Try(I128, [OutOfRange])
+			round_to_i128_try = |self| F32.to_i128_try(f32_round_to_whole(self))
 
-			## Round an [F32] to the nearest [U8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] to the nearest [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.round_to_u8(3.4) == 3
+			## expect F32.round_to_u8_try(3.4) == Ok(3)
 			## ```
-			round_to_u8 : F32 -> U8
-			round_to_u8 = |self| out_of_range_or_crash(F32.to_u8_try(f32_round_to_whole(self)))
+			round_to_u8_try : F32 -> Try(U8, [OutOfRange])
+			round_to_u8_try = |self| F32.to_u8_try(f32_round_to_whole(self))
 
-			## Round an [F32] to the nearest [U16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] to the nearest [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.round_to_u16(3.4) == 3
+			## expect F32.round_to_u16_try(3.4) == Ok(3)
 			## ```
-			round_to_u16 : F32 -> U16
-			round_to_u16 = |self| out_of_range_or_crash(F32.to_u16_try(f32_round_to_whole(self)))
+			round_to_u16_try : F32 -> Try(U16, [OutOfRange])
+			round_to_u16_try = |self| F32.to_u16_try(f32_round_to_whole(self))
 
-			## Round an [F32] to the nearest [U32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] to the nearest [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.round_to_u32(7.2) == 7
+			## expect F32.round_to_u32_try(7.2) == Ok(7)
 			## ```
-			round_to_u32 : F32 -> U32
-			round_to_u32 = |self| out_of_range_or_crash(F32.to_u32_try(f32_round_to_whole(self)))
+			round_to_u32_try : F32 -> Try(U32, [OutOfRange])
+			round_to_u32_try = |self| F32.to_u32_try(f32_round_to_whole(self))
 
-			## Round an [F32] to the nearest [U64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] to the nearest [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.round_to_u64(7.2) == 7
+			## expect F32.round_to_u64_try(7.2) == Ok(7)
 			## ```
-			round_to_u64 : F32 -> U64
-			round_to_u64 = |self| out_of_range_or_crash(F32.to_u64_try(f32_round_to_whole(self)))
+			round_to_u64_try : F32 -> Try(U64, [OutOfRange])
+			round_to_u64_try = |self| F32.to_u64_try(f32_round_to_whole(self))
 
-			## Round an [F32] to the nearest [U128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] to the nearest [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.round_to_u128(7.2) == 7
+			## expect F32.round_to_u128_try(7.2) == Ok(7)
 			## ```
-			round_to_u128 : F32 -> U128
-			round_to_u128 = |self| out_of_range_or_crash(F32.to_u128_try(f32_round_to_whole(self)))
+			round_to_u128_try : F32 -> Try(U128, [OutOfRange])
+			round_to_u128_try = |self| F32.to_u128_try(f32_round_to_whole(self))
 
-			## Round an [F32] down to an [I8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] down to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.floor_to_i8(-3.2) == -4
+			## expect F32.floor_to_i8_try(-3.2) == Ok(-4)
 			## ```
-			floor_to_i8 : F32 -> I8
-			floor_to_i8 = |self| out_of_range_or_crash(F32.to_i8_try(f32_floor_unsafe(self)))
+			floor_to_i8_try : F32 -> Try(I8, [OutOfRange])
+			floor_to_i8_try = |self| F32.to_i8_try(f32_floor_unsafe(self))
 
-			## Round an [F32] down to an [I16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] down to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.floor_to_i16(-3.2) == -4
+			## expect F32.floor_to_i16_try(-3.2) == Ok(-4)
 			## ```
-			floor_to_i16 : F32 -> I16
-			floor_to_i16 = |self| out_of_range_or_crash(F32.to_i16_try(f32_floor_unsafe(self)))
+			floor_to_i16_try : F32 -> Try(I16, [OutOfRange])
+			floor_to_i16_try = |self| F32.to_i16_try(f32_floor_unsafe(self))
 
-			## Round an [F32] down to an [I32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] down to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.floor_to_i32(3.8) == 3
+			## expect F32.floor_to_i32_try(3.8) == Ok(3)
 			## ```
-			floor_to_i32 : F32 -> I32
-			floor_to_i32 = |self| out_of_range_or_crash(F32.to_i32_try(f32_floor_unsafe(self)))
+			floor_to_i32_try : F32 -> Try(I32, [OutOfRange])
+			floor_to_i32_try = |self| F32.to_i32_try(f32_floor_unsafe(self))
 
-			## Round an [F32] down to an [I64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] down to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.floor_to_i64(3.8) == 3
+			## expect F32.floor_to_i64_try(3.8) == Ok(3)
 			## ```
-			floor_to_i64 : F32 -> I64
-			floor_to_i64 = |self| out_of_range_or_crash(F32.to_i64_try(f32_floor_unsafe(self)))
+			floor_to_i64_try : F32 -> Try(I64, [OutOfRange])
+			floor_to_i64_try = |self| F32.to_i64_try(f32_floor_unsafe(self))
 
-			## Round an [F32] down to an [I128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] down to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.floor_to_i128(3.8) == 3
+			## expect F32.floor_to_i128_try(3.8) == Ok(3)
 			## ```
-			floor_to_i128 : F32 -> I128
-			floor_to_i128 = |self| out_of_range_or_crash(F32.to_i128_try(f32_floor_unsafe(self)))
+			floor_to_i128_try : F32 -> Try(I128, [OutOfRange])
+			floor_to_i128_try = |self| F32.to_i128_try(f32_floor_unsafe(self))
 
-			## Round an [F32] down to a [U8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] down to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.floor_to_u8(3.8) == 3
+			## expect F32.floor_to_u8_try(3.8) == Ok(3)
 			## ```
-			floor_to_u8 : F32 -> U8
-			floor_to_u8 = |self| out_of_range_or_crash(F32.to_u8_try(f32_floor_unsafe(self)))
+			floor_to_u8_try : F32 -> Try(U8, [OutOfRange])
+			floor_to_u8_try = |self| F32.to_u8_try(f32_floor_unsafe(self))
 
-			## Round an [F32] down to a [U16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] down to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.floor_to_u16(3.8) == 3
+			## expect F32.floor_to_u16_try(3.8) == Ok(3)
 			## ```
-			floor_to_u16 : F32 -> U16
-			floor_to_u16 = |self| out_of_range_or_crash(F32.to_u16_try(f32_floor_unsafe(self)))
+			floor_to_u16_try : F32 -> Try(U16, [OutOfRange])
+			floor_to_u16_try = |self| F32.to_u16_try(f32_floor_unsafe(self))
 
-			## Round an [F32] down to a [U32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] down to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.floor_to_u32(3.8) == 3
+			## expect F32.floor_to_u32_try(3.8) == Ok(3)
 			## ```
-			floor_to_u32 : F32 -> U32
-			floor_to_u32 = |self| out_of_range_or_crash(F32.to_u32_try(f32_floor_unsafe(self)))
+			floor_to_u32_try : F32 -> Try(U32, [OutOfRange])
+			floor_to_u32_try = |self| F32.to_u32_try(f32_floor_unsafe(self))
 
-			## Round an [F32] down to a [U64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] down to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.floor_to_u64(3.8) == 3
+			## expect F32.floor_to_u64_try(3.8) == Ok(3)
 			## ```
-			floor_to_u64 : F32 -> U64
-			floor_to_u64 = |self| out_of_range_or_crash(F32.to_u64_try(f32_floor_unsafe(self)))
+			floor_to_u64_try : F32 -> Try(U64, [OutOfRange])
+			floor_to_u64_try = |self| F32.to_u64_try(f32_floor_unsafe(self))
 
-			## Round an [F32] down to a [U128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] down to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.floor_to_u128(3.8) == 3
+			## expect F32.floor_to_u128_try(3.8) == Ok(3)
 			## ```
-			floor_to_u128 : F32 -> U128
-			floor_to_u128 = |self| out_of_range_or_crash(F32.to_u128_try(f32_floor_unsafe(self)))
+			floor_to_u128_try : F32 -> Try(U128, [OutOfRange])
+			floor_to_u128_try = |self| F32.to_u128_try(f32_floor_unsafe(self))
 
-			## Round an [F32] up to an [I8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] up to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.ceiling_to_i8(-3.2) == -3
+			## expect F32.ceiling_to_i8_try(-3.2) == Ok(-3)
 			## ```
-			ceiling_to_i8 : F32 -> I8
-			ceiling_to_i8 = |self| out_of_range_or_crash(F32.to_i8_try(f32_ceiling_unsafe(self)))
+			ceiling_to_i8_try : F32 -> Try(I8, [OutOfRange])
+			ceiling_to_i8_try = |self| F32.to_i8_try(f32_ceiling_unsafe(self))
 
-			## Round an [F32] up to an [I16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] up to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.ceiling_to_i16(-3.2) == -3
+			## expect F32.ceiling_to_i16_try(-3.2) == Ok(-3)
 			## ```
-			ceiling_to_i16 : F32 -> I16
-			ceiling_to_i16 = |self| out_of_range_or_crash(F32.to_i16_try(f32_ceiling_unsafe(self)))
+			ceiling_to_i16_try : F32 -> Try(I16, [OutOfRange])
+			ceiling_to_i16_try = |self| F32.to_i16_try(f32_ceiling_unsafe(self))
 
-			## Round an [F32] up to an [I32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] up to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.ceiling_to_i32(3.2) == 4
+			## expect F32.ceiling_to_i32_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i32 : F32 -> I32
-			ceiling_to_i32 = |self| out_of_range_or_crash(F32.to_i32_try(f32_ceiling_unsafe(self)))
+			ceiling_to_i32_try : F32 -> Try(I32, [OutOfRange])
+			ceiling_to_i32_try = |self| F32.to_i32_try(f32_ceiling_unsafe(self))
 
-			## Round an [F32] up to an [I64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] up to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.ceiling_to_i64(3.2) == 4
+			## expect F32.ceiling_to_i64_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i64 : F32 -> I64
-			ceiling_to_i64 = |self| out_of_range_or_crash(F32.to_i64_try(f32_ceiling_unsafe(self)))
+			ceiling_to_i64_try : F32 -> Try(I64, [OutOfRange])
+			ceiling_to_i64_try = |self| F32.to_i64_try(f32_ceiling_unsafe(self))
 
-			## Round an [F32] up to an [I128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] up to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.ceiling_to_i128(3.2) == 4
+			## expect F32.ceiling_to_i128_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i128 : F32 -> I128
-			ceiling_to_i128 = |self| out_of_range_or_crash(F32.to_i128_try(f32_ceiling_unsafe(self)))
+			ceiling_to_i128_try : F32 -> Try(I128, [OutOfRange])
+			ceiling_to_i128_try = |self| F32.to_i128_try(f32_ceiling_unsafe(self))
 
-			## Round an [F32] up to a [U8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] up to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.ceiling_to_u8(3.2) == 4
+			## expect F32.ceiling_to_u8_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u8 : F32 -> U8
-			ceiling_to_u8 = |self| out_of_range_or_crash(F32.to_u8_try(f32_ceiling_unsafe(self)))
+			ceiling_to_u8_try : F32 -> Try(U8, [OutOfRange])
+			ceiling_to_u8_try = |self| F32.to_u8_try(f32_ceiling_unsafe(self))
 
-			## Round an [F32] up to a [U16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] up to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.ceiling_to_u16(3.2) == 4
+			## expect F32.ceiling_to_u16_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u16 : F32 -> U16
-			ceiling_to_u16 = |self| out_of_range_or_crash(F32.to_u16_try(f32_ceiling_unsafe(self)))
+			ceiling_to_u16_try : F32 -> Try(U16, [OutOfRange])
+			ceiling_to_u16_try = |self| F32.to_u16_try(f32_ceiling_unsafe(self))
 
-			## Round an [F32] up to a [U32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] up to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.ceiling_to_u32(3.2) == 4
+			## expect F32.ceiling_to_u32_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u32 : F32 -> U32
-			ceiling_to_u32 = |self| out_of_range_or_crash(F32.to_u32_try(f32_ceiling_unsafe(self)))
+			ceiling_to_u32_try : F32 -> Try(U32, [OutOfRange])
+			ceiling_to_u32_try = |self| F32.to_u32_try(f32_ceiling_unsafe(self))
 
-			## Round an [F32] up to a [U64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] up to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.ceiling_to_u64(3.2) == 4
+			## expect F32.ceiling_to_u64_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u64 : F32 -> U64
-			ceiling_to_u64 = |self| out_of_range_or_crash(F32.to_u64_try(f32_ceiling_unsafe(self)))
+			ceiling_to_u64_try : F32 -> Try(U64, [OutOfRange])
+			ceiling_to_u64_try = |self| F32.to_u64_try(f32_ceiling_unsafe(self))
 
-			## Round an [F32] up to a [U128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] up to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.ceiling_to_u128(3.2) == 4
+			## expect F32.ceiling_to_u128_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u128 : F32 -> U128
-			ceiling_to_u128 = |self| out_of_range_or_crash(F32.to_u128_try(f32_ceiling_unsafe(self)))
+			ceiling_to_u128_try : F32 -> Try(U128, [OutOfRange])
+			ceiling_to_u128_try = |self| F32.to_u128_try(f32_ceiling_unsafe(self))
 
 			## Build an [F32] from a list of base-10 digits, most significant
 			## first. Each element of the list must be a digit in the range `0`
@@ -14821,8 +15371,7 @@ Builtin :: [].{
 			## toward zero; the integer part wraps on overflow. Integer-part
 			## values from `-128` to `127` are preserved; other values wrap by
 			## truncating to the low 8 bits and reinterpreting them in two's
-			## complement. The result for `NaN`, `inf`, or `-inf` is
-			## implementation-defined.
+			## complement. `NaN`, `inf`, and `-inf` all return `0`.
 			## ```roc
 			## expect F32.to_i8_wrap(42.7) == 42
 			## ```
@@ -14845,8 +15394,7 @@ Builtin :: [].{
 			## toward zero; the integer part wraps on overflow. Integer-part
 			## values from `-32768` to `32767` are preserved; other values wrap
 			## by truncating to the low 16 bits and reinterpreting them in two's
-			## complement. The result for `NaN`, `inf`, or `-inf` is
-			## implementation-defined.
+			## complement. `NaN`, `inf`, and `-inf` all return `0`.
 			## ```roc
 			## expect F32.to_i16_wrap(42.5) == 42
 			## ```
@@ -14866,8 +15414,8 @@ Builtin :: [].{
 			to_i16_try = |num| out_of_range_try(f32_to_i16_try_unsafe(num))
 
 			## Convert an [F32] to an [I32]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## `NaN`, `inf`, or `-inf` is implementation-defined.
+			## toward zero; the integer part wraps on overflow. `NaN`, `inf`, and
+			## `-inf` all return `0`.
 			## ```roc
 			## expect F32.to_i32_wrap(42.5) == 42
 			## ```
@@ -14883,8 +15431,8 @@ Builtin :: [].{
 			to_i32_try = |num| out_of_range_try(f32_to_i32_try_unsafe(num))
 
 			## Convert an [F32] to an [I64]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## `NaN`, `inf`, or `-inf` is implementation-defined.
+			## toward zero; the integer part wraps on overflow. `NaN`, `inf`, and
+			## `-inf` all return `0`.
 			## ```roc
 			## expect F32.to_i64_wrap(42.5) == 42
 			## ```
@@ -14900,8 +15448,8 @@ Builtin :: [].{
 			to_i64_try = |num| out_of_range_try(f32_to_i64_try_unsafe(num))
 
 			## Convert an [F32] to an [I128]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## `NaN`, `inf`, or `-inf` is implementation-defined.
+			## toward zero; the integer part wraps modulo 2^128 and is interpreted
+			## using two's complement. `NaN`, `inf`, and `-inf` all return `0`.
 			## ```roc
 			## expect F32.to_i128_wrap(42.5) == 42
 			## ```
@@ -14919,9 +15467,8 @@ Builtin :: [].{
 			# Conversions to unsigned integers (all lossy - truncation + range check)
 
 			## Convert an [F32] to a [U8]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## negative values, `NaN`, `inf`, or `-inf` is
-			## implementation-defined.
+			## toward zero; the integer part wraps modulo 2^8. `NaN`, `inf`, and
+			## `-inf` all return `0`.
 			## ```roc
 			## expect F32.to_u8_wrap(42.7) == 42
 			## ```
@@ -14940,9 +15487,8 @@ Builtin :: [].{
 			to_u8_try = |num| out_of_range_try(f32_to_u8_try_unsafe(num))
 
 			## Convert an [F32] to a [U16]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## negative values, `NaN`, `inf`, or `-inf` is
-			## implementation-defined.
+			## toward zero; the integer part wraps modulo 2^16. `NaN`, `inf`, and
+			## `-inf` all return `0`.
 			## ```roc
 			## expect F32.to_u16_wrap(42.5) == 42
 			## ```
@@ -14959,9 +15505,8 @@ Builtin :: [].{
 			to_u16_try = |num| out_of_range_try(f32_to_u16_try_unsafe(num))
 
 			## Convert an [F32] to a [U32]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## negative values, `NaN`, `inf`, or `-inf` is
-			## implementation-defined.
+			## toward zero; the integer part wraps modulo 2^32. `NaN`, `inf`, and
+			## `-inf` all return `0`.
 			## ```roc
 			## expect F32.to_u32_wrap(42.5) == 42
 			## ```
@@ -14978,9 +15523,8 @@ Builtin :: [].{
 			to_u32_try = |num| out_of_range_try(f32_to_u32_try_unsafe(num))
 
 			## Convert an [F32] to a [U64]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## negative values, `NaN`, `inf`, or `-inf` is
-			## implementation-defined.
+			## toward zero; the integer part wraps modulo 2^64. `NaN`, `inf`, and
+			## `-inf` all return `0`.
 			## ```roc
 			## expect F32.to_u64_wrap(42.5) == 42
 			## ```
@@ -14997,9 +15541,8 @@ Builtin :: [].{
 			to_u64_try = |num| out_of_range_try(f32_to_u64_try_unsafe(num))
 
 			## Convert an [F32] to a [U128]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## negative values, `NaN`, `inf`, or `-inf` is
-			## implementation-defined.
+			## toward zero; the integer part wraps modulo 2^128. `NaN`, `inf`, and
+			## `-inf` all return `0`.
 			## ```roc
 			## expect F32.to_u128_wrap(42.5) == 42
 			## ```
@@ -15117,7 +15660,8 @@ Builtin :: [].{
 			tau : F64
 			tau = F64.from_bits(4618760256179416344)
 
-			## Convert an [F64] to its decimal string representation.
+			## Convert an [F64] to its decimal string representation. Every NaN
+			## representation, including negative NaNs, becomes `"nan"`.
 			## ```roc
 			## expect F64.to_str(42.5) == "42.5"
 			##
@@ -15125,7 +15669,9 @@ Builtin :: [].{
 			## ```
 			to_str : F64 -> Str
 
-			## Return the raw IEEE 754 bit pattern of an [F64].
+			## Return the IEEE 754 bit pattern of an [F64]. All `NaN` values return
+			## the canonical quiet-NaN bits `9221120237041090560`; every non-NaN
+			## value returns its exact bits.
 			## ```roc
 			## expect F64.to_bits(F64.from_bits(4609434218613702656)) == 4609434218613702656
 			##
@@ -15133,7 +15679,9 @@ Builtin :: [].{
 			## ```
 			to_bits : F64 -> U64
 
-			## Build an [F64] from a raw IEEE 754 bit pattern.
+			## Build an [F64] from a raw IEEE 754 bit pattern. Any NaN payload or
+			## sign can be supplied, but [F64.to_bits] and hashing intentionally
+			## collapse all NaN representations.
 			## ```roc
 			## expect F64.from_bits(F64.to_bits(-0.0)).to_bits() == F64.to_bits(-0.0)
 			##
@@ -15467,215 +16015,215 @@ Builtin :: [].{
 			## ```
 			abs_diff : F64, F64 -> F64
 
-			## Round an [F64] to the nearest [I8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] to the nearest [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.round_to_i8(3.4) == 3
+			## expect F64.round_to_i8_try(3.4) == Ok(3)
 			## ```
-			round_to_i8 : F64 -> I8
-			round_to_i8 = |self| out_of_range_or_crash(F64.to_i8_try(f64_round_to_whole(self)))
+			round_to_i8_try : F64 -> Try(I8, [OutOfRange])
+			round_to_i8_try = |self| F64.to_i8_try(f64_round_to_whole(self))
 
-			## Round an [F64] to the nearest [I16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] to the nearest [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.round_to_i16(3.4) == 3
+			## expect F64.round_to_i16_try(3.4) == Ok(3)
 			## ```
-			round_to_i16 : F64 -> I16
-			round_to_i16 = |self| out_of_range_or_crash(F64.to_i16_try(f64_round_to_whole(self)))
+			round_to_i16_try : F64 -> Try(I16, [OutOfRange])
+			round_to_i16_try = |self| F64.to_i16_try(f64_round_to_whole(self))
 
-			## Round an [F64] to the nearest [I32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] to the nearest [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.round_to_i32(-3.6) == -4
+			## expect F64.round_to_i32_try(-3.6) == Ok(-4)
 			## ```
-			round_to_i32 : F64 -> I32
-			round_to_i32 = |self| out_of_range_or_crash(F64.to_i32_try(f64_round_to_whole(self)))
+			round_to_i32_try : F64 -> Try(I32, [OutOfRange])
+			round_to_i32_try = |self| F64.to_i32_try(f64_round_to_whole(self))
 
-			## Round an [F64] to the nearest [I64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] to the nearest [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.round_to_i64(7.2) == 7
+			## expect F64.round_to_i64_try(7.2) == Ok(7)
 			## ```
-			round_to_i64 : F64 -> I64
-			round_to_i64 = |self| out_of_range_or_crash(F64.to_i64_try(f64_round_to_whole(self)))
+			round_to_i64_try : F64 -> Try(I64, [OutOfRange])
+			round_to_i64_try = |self| F64.to_i64_try(f64_round_to_whole(self))
 
-			## Round an [F64] to the nearest [I128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] to the nearest [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.round_to_i128(7.2) == 7
+			## expect F64.round_to_i128_try(7.2) == Ok(7)
 			## ```
-			round_to_i128 : F64 -> I128
-			round_to_i128 = |self| out_of_range_or_crash(F64.to_i128_try(f64_round_to_whole(self)))
+			round_to_i128_try : F64 -> Try(I128, [OutOfRange])
+			round_to_i128_try = |self| F64.to_i128_try(f64_round_to_whole(self))
 
-			## Round an [F64] to the nearest [U8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] to the nearest [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.round_to_u8(3.4) == 3
+			## expect F64.round_to_u8_try(3.4) == Ok(3)
 			## ```
-			round_to_u8 : F64 -> U8
-			round_to_u8 = |self| out_of_range_or_crash(F64.to_u8_try(f64_round_to_whole(self)))
+			round_to_u8_try : F64 -> Try(U8, [OutOfRange])
+			round_to_u8_try = |self| F64.to_u8_try(f64_round_to_whole(self))
 
-			## Round an [F64] to the nearest [U16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] to the nearest [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.round_to_u16(3.4) == 3
+			## expect F64.round_to_u16_try(3.4) == Ok(3)
 			## ```
-			round_to_u16 : F64 -> U16
-			round_to_u16 = |self| out_of_range_or_crash(F64.to_u16_try(f64_round_to_whole(self)))
+			round_to_u16_try : F64 -> Try(U16, [OutOfRange])
+			round_to_u16_try = |self| F64.to_u16_try(f64_round_to_whole(self))
 
-			## Round an [F64] to the nearest [U32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] to the nearest [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.round_to_u32(7.2) == 7
+			## expect F64.round_to_u32_try(7.2) == Ok(7)
 			## ```
-			round_to_u32 : F64 -> U32
-			round_to_u32 = |self| out_of_range_or_crash(F64.to_u32_try(f64_round_to_whole(self)))
+			round_to_u32_try : F64 -> Try(U32, [OutOfRange])
+			round_to_u32_try = |self| F64.to_u32_try(f64_round_to_whole(self))
 
-			## Round an [F64] to the nearest [U64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] to the nearest [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.round_to_u64(7.2) == 7
+			## expect F64.round_to_u64_try(7.2) == Ok(7)
 			## ```
-			round_to_u64 : F64 -> U64
-			round_to_u64 = |self| out_of_range_or_crash(F64.to_u64_try(f64_round_to_whole(self)))
+			round_to_u64_try : F64 -> Try(U64, [OutOfRange])
+			round_to_u64_try = |self| F64.to_u64_try(f64_round_to_whole(self))
 
-			## Round an [F64] to the nearest [U128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] to the nearest [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.round_to_u128(7.2) == 7
+			## expect F64.round_to_u128_try(7.2) == Ok(7)
 			## ```
-			round_to_u128 : F64 -> U128
-			round_to_u128 = |self| out_of_range_or_crash(F64.to_u128_try(f64_round_to_whole(self)))
+			round_to_u128_try : F64 -> Try(U128, [OutOfRange])
+			round_to_u128_try = |self| F64.to_u128_try(f64_round_to_whole(self))
 
-			## Round an [F64] down to an [I8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] down to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.floor_to_i8(-3.2) == -4
+			## expect F64.floor_to_i8_try(-3.2) == Ok(-4)
 			## ```
-			floor_to_i8 : F64 -> I8
-			floor_to_i8 = |self| out_of_range_or_crash(F64.to_i8_try(f64_floor_unsafe(self)))
+			floor_to_i8_try : F64 -> Try(I8, [OutOfRange])
+			floor_to_i8_try = |self| F64.to_i8_try(f64_floor_unsafe(self))
 
-			## Round an [F64] down to an [I16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] down to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.floor_to_i16(-3.2) == -4
+			## expect F64.floor_to_i16_try(-3.2) == Ok(-4)
 			## ```
-			floor_to_i16 : F64 -> I16
-			floor_to_i16 = |self| out_of_range_or_crash(F64.to_i16_try(f64_floor_unsafe(self)))
+			floor_to_i16_try : F64 -> Try(I16, [OutOfRange])
+			floor_to_i16_try = |self| F64.to_i16_try(f64_floor_unsafe(self))
 
-			## Round an [F64] down to an [I32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] down to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.floor_to_i32(3.8) == 3
+			## expect F64.floor_to_i32_try(3.8) == Ok(3)
 			## ```
-			floor_to_i32 : F64 -> I32
-			floor_to_i32 = |self| out_of_range_or_crash(F64.to_i32_try(f64_floor_unsafe(self)))
+			floor_to_i32_try : F64 -> Try(I32, [OutOfRange])
+			floor_to_i32_try = |self| F64.to_i32_try(f64_floor_unsafe(self))
 
-			## Round an [F64] down to an [I64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] down to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.floor_to_i64(3.8) == 3
+			## expect F64.floor_to_i64_try(3.8) == Ok(3)
 			## ```
-			floor_to_i64 : F64 -> I64
-			floor_to_i64 = |self| out_of_range_or_crash(F64.to_i64_try(f64_floor_unsafe(self)))
+			floor_to_i64_try : F64 -> Try(I64, [OutOfRange])
+			floor_to_i64_try = |self| F64.to_i64_try(f64_floor_unsafe(self))
 
-			## Round an [F64] down to an [I128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] down to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.floor_to_i128(3.8) == 3
+			## expect F64.floor_to_i128_try(3.8) == Ok(3)
 			## ```
-			floor_to_i128 : F64 -> I128
-			floor_to_i128 = |self| out_of_range_or_crash(F64.to_i128_try(f64_floor_unsafe(self)))
+			floor_to_i128_try : F64 -> Try(I128, [OutOfRange])
+			floor_to_i128_try = |self| F64.to_i128_try(f64_floor_unsafe(self))
 
-			## Round an [F64] down to a [U8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] down to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.floor_to_u8(3.8) == 3
+			## expect F64.floor_to_u8_try(3.8) == Ok(3)
 			## ```
-			floor_to_u8 : F64 -> U8
-			floor_to_u8 = |self| out_of_range_or_crash(F64.to_u8_try(f64_floor_unsafe(self)))
+			floor_to_u8_try : F64 -> Try(U8, [OutOfRange])
+			floor_to_u8_try = |self| F64.to_u8_try(f64_floor_unsafe(self))
 
-			## Round an [F64] down to a [U16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] down to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.floor_to_u16(3.8) == 3
+			## expect F64.floor_to_u16_try(3.8) == Ok(3)
 			## ```
-			floor_to_u16 : F64 -> U16
-			floor_to_u16 = |self| out_of_range_or_crash(F64.to_u16_try(f64_floor_unsafe(self)))
+			floor_to_u16_try : F64 -> Try(U16, [OutOfRange])
+			floor_to_u16_try = |self| F64.to_u16_try(f64_floor_unsafe(self))
 
-			## Round an [F64] down to a [U32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] down to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.floor_to_u32(3.8) == 3
+			## expect F64.floor_to_u32_try(3.8) == Ok(3)
 			## ```
-			floor_to_u32 : F64 -> U32
-			floor_to_u32 = |self| out_of_range_or_crash(F64.to_u32_try(f64_floor_unsafe(self)))
+			floor_to_u32_try : F64 -> Try(U32, [OutOfRange])
+			floor_to_u32_try = |self| F64.to_u32_try(f64_floor_unsafe(self))
 
-			## Round an [F64] down to a [U64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] down to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.floor_to_u64(3.8) == 3
+			## expect F64.floor_to_u64_try(3.8) == Ok(3)
 			## ```
-			floor_to_u64 : F64 -> U64
-			floor_to_u64 = |self| out_of_range_or_crash(F64.to_u64_try(f64_floor_unsafe(self)))
+			floor_to_u64_try : F64 -> Try(U64, [OutOfRange])
+			floor_to_u64_try = |self| F64.to_u64_try(f64_floor_unsafe(self))
 
-			## Round an [F64] down to a [U128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] down to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.floor_to_u128(3.8) == 3
+			## expect F64.floor_to_u128_try(3.8) == Ok(3)
 			## ```
-			floor_to_u128 : F64 -> U128
-			floor_to_u128 = |self| out_of_range_or_crash(F64.to_u128_try(f64_floor_unsafe(self)))
+			floor_to_u128_try : F64 -> Try(U128, [OutOfRange])
+			floor_to_u128_try = |self| F64.to_u128_try(f64_floor_unsafe(self))
 
-			## Round an [F64] up to an [I8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] up to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.ceiling_to_i8(-3.2) == -3
+			## expect F64.ceiling_to_i8_try(-3.2) == Ok(-3)
 			## ```
-			ceiling_to_i8 : F64 -> I8
-			ceiling_to_i8 = |self| out_of_range_or_crash(F64.to_i8_try(f64_ceiling_unsafe(self)))
+			ceiling_to_i8_try : F64 -> Try(I8, [OutOfRange])
+			ceiling_to_i8_try = |self| F64.to_i8_try(f64_ceiling_unsafe(self))
 
-			## Round an [F64] up to an [I16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] up to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.ceiling_to_i16(-3.2) == -3
+			## expect F64.ceiling_to_i16_try(-3.2) == Ok(-3)
 			## ```
-			ceiling_to_i16 : F64 -> I16
-			ceiling_to_i16 = |self| out_of_range_or_crash(F64.to_i16_try(f64_ceiling_unsafe(self)))
+			ceiling_to_i16_try : F64 -> Try(I16, [OutOfRange])
+			ceiling_to_i16_try = |self| F64.to_i16_try(f64_ceiling_unsafe(self))
 
-			## Round an [F64] up to an [I32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] up to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.ceiling_to_i32(3.2) == 4
+			## expect F64.ceiling_to_i32_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i32 : F64 -> I32
-			ceiling_to_i32 = |self| out_of_range_or_crash(F64.to_i32_try(f64_ceiling_unsafe(self)))
+			ceiling_to_i32_try : F64 -> Try(I32, [OutOfRange])
+			ceiling_to_i32_try = |self| F64.to_i32_try(f64_ceiling_unsafe(self))
 
-			## Round an [F64] up to an [I64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] up to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.ceiling_to_i64(3.2) == 4
+			## expect F64.ceiling_to_i64_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i64 : F64 -> I64
-			ceiling_to_i64 = |self| out_of_range_or_crash(F64.to_i64_try(f64_ceiling_unsafe(self)))
+			ceiling_to_i64_try : F64 -> Try(I64, [OutOfRange])
+			ceiling_to_i64_try = |self| F64.to_i64_try(f64_ceiling_unsafe(self))
 
-			## Round an [F64] up to an [I128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] up to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.ceiling_to_i128(3.2) == 4
+			## expect F64.ceiling_to_i128_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i128 : F64 -> I128
-			ceiling_to_i128 = |self| out_of_range_or_crash(F64.to_i128_try(f64_ceiling_unsafe(self)))
+			ceiling_to_i128_try : F64 -> Try(I128, [OutOfRange])
+			ceiling_to_i128_try = |self| F64.to_i128_try(f64_ceiling_unsafe(self))
 
-			## Round an [F64] up to a [U8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] up to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.ceiling_to_u8(3.2) == 4
+			## expect F64.ceiling_to_u8_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u8 : F64 -> U8
-			ceiling_to_u8 = |self| out_of_range_or_crash(F64.to_u8_try(f64_ceiling_unsafe(self)))
+			ceiling_to_u8_try : F64 -> Try(U8, [OutOfRange])
+			ceiling_to_u8_try = |self| F64.to_u8_try(f64_ceiling_unsafe(self))
 
-			## Round an [F64] up to a [U16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] up to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.ceiling_to_u16(3.2) == 4
+			## expect F64.ceiling_to_u16_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u16 : F64 -> U16
-			ceiling_to_u16 = |self| out_of_range_or_crash(F64.to_u16_try(f64_ceiling_unsafe(self)))
+			ceiling_to_u16_try : F64 -> Try(U16, [OutOfRange])
+			ceiling_to_u16_try = |self| F64.to_u16_try(f64_ceiling_unsafe(self))
 
-			## Round an [F64] up to a [U32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] up to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.ceiling_to_u32(3.2) == 4
+			## expect F64.ceiling_to_u32_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u32 : F64 -> U32
-			ceiling_to_u32 = |self| out_of_range_or_crash(F64.to_u32_try(f64_ceiling_unsafe(self)))
+			ceiling_to_u32_try : F64 -> Try(U32, [OutOfRange])
+			ceiling_to_u32_try = |self| F64.to_u32_try(f64_ceiling_unsafe(self))
 
-			## Round an [F64] up to a [U64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] up to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.ceiling_to_u64(3.2) == 4
+			## expect F64.ceiling_to_u64_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u64 : F64 -> U64
-			ceiling_to_u64 = |self| out_of_range_or_crash(F64.to_u64_try(f64_ceiling_unsafe(self)))
+			ceiling_to_u64_try : F64 -> Try(U64, [OutOfRange])
+			ceiling_to_u64_try = |self| F64.to_u64_try(f64_ceiling_unsafe(self))
 
-			## Round an [F64] up to a [U128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] up to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.ceiling_to_u128(3.2) == 4
+			## expect F64.ceiling_to_u128_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u128 : F64 -> U128
-			ceiling_to_u128 = |self| out_of_range_or_crash(F64.to_u128_try(f64_ceiling_unsafe(self)))
+			ceiling_to_u128_try : F64 -> Try(U128, [OutOfRange])
+			ceiling_to_u128_try = |self| F64.to_u128_try(f64_ceiling_unsafe(self))
 
 			## Build an [F64] from a list of base-10 digits, most significant
 			## first. Each element of the list must be a digit in the range `0`
@@ -15770,8 +16318,7 @@ Builtin :: [].{
 			## toward zero; the integer part wraps on overflow. Integer-part
 			## values from `-128` to `127` are preserved; other values wrap by
 			## truncating to the low 8 bits and reinterpreting them in two's
-			## complement. The result for `NaN`, `inf`, or `-inf` is
-			## implementation-defined.
+			## complement. `NaN`, `inf`, and `-inf` all return `0`.
 			## ```roc
 			## expect F64.to_i8_wrap(42.7) == 42
 			## ```
@@ -15794,8 +16341,7 @@ Builtin :: [].{
 			## toward zero; the integer part wraps on overflow. Integer-part
 			## values from `-32768` to `32767` are preserved; other values wrap
 			## by truncating to the low 16 bits and reinterpreting them in two's
-			## complement. The result for `NaN`, `inf`, or `-inf` is
-			## implementation-defined.
+			## complement. `NaN`, `inf`, and `-inf` all return `0`.
 			## ```roc
 			## expect F64.to_i16_wrap(42.5) == 42
 			## ```
@@ -15815,8 +16361,8 @@ Builtin :: [].{
 			to_i16_try = |num| out_of_range_try(f64_to_i16_try_unsafe(num))
 
 			## Convert an [F64] to an [I32]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## `NaN`, `inf`, or `-inf` is implementation-defined.
+			## toward zero; the integer part wraps on overflow. `NaN`, `inf`, and
+			## `-inf` all return `0`.
 			## ```roc
 			## expect F64.to_i32_wrap(42.5) == 42
 			## ```
@@ -15832,8 +16378,8 @@ Builtin :: [].{
 			to_i32_try = |num| out_of_range_try(f64_to_i32_try_unsafe(num))
 
 			## Convert an [F64] to an [I64]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## `NaN`, `inf`, or `-inf` is implementation-defined.
+			## toward zero; the integer part wraps on overflow. `NaN`, `inf`, and
+			## `-inf` all return `0`.
 			## ```roc
 			## expect F64.to_i64_wrap(42.5) == 42
 			## ```
@@ -15849,8 +16395,8 @@ Builtin :: [].{
 			to_i64_try = |num| out_of_range_try(f64_to_i64_try_unsafe(num))
 
 			## Convert an [F64] to an [I128]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## `NaN`, `inf`, or `-inf` is implementation-defined.
+			## toward zero; the integer part wraps modulo 2^128 and is interpreted
+			## using two's complement. `NaN`, `inf`, and `-inf` all return `0`.
 			## ```roc
 			## expect F64.to_i128_wrap(42.5) == 42
 			## ```
@@ -15868,9 +16414,8 @@ Builtin :: [].{
 			# Conversions to unsigned integers (all lossy - truncation + range check)
 
 			## Convert an [F64] to a [U8]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## negative values, `NaN`, `inf`, or `-inf` is
-			## implementation-defined.
+			## toward zero; the integer part wraps modulo 2^8. `NaN`, `inf`, and
+			## `-inf` all return `0`.
 			## ```roc
 			## expect F64.to_u8_wrap(42.7) == 42
 			## ```
@@ -15889,9 +16434,8 @@ Builtin :: [].{
 			to_u8_try = |num| out_of_range_try(f64_to_u8_try_unsafe(num))
 
 			## Convert an [F64] to a [U16]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## negative values, `NaN`, `inf`, or `-inf` is
-			## implementation-defined.
+			## toward zero; the integer part wraps modulo 2^16. `NaN`, `inf`, and
+			## `-inf` all return `0`.
 			## ```roc
 			## expect F64.to_u16_wrap(42.5) == 42
 			## ```
@@ -15908,9 +16452,8 @@ Builtin :: [].{
 			to_u16_try = |num| out_of_range_try(f64_to_u16_try_unsafe(num))
 
 			## Convert an [F64] to a [U32]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## negative values, `NaN`, `inf`, or `-inf` is
-			## implementation-defined.
+			## toward zero; the integer part wraps modulo 2^32. `NaN`, `inf`, and
+			## `-inf` all return `0`.
 			## ```roc
 			## expect F64.to_u32_wrap(42.5) == 42
 			## ```
@@ -15927,9 +16470,8 @@ Builtin :: [].{
 			to_u32_try = |num| out_of_range_try(f64_to_u32_try_unsafe(num))
 
 			## Convert an [F64] to a [U64]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## negative values, `NaN`, `inf`, or `-inf` is
-			## implementation-defined.
+			## toward zero; the integer part wraps modulo 2^64. `NaN`, `inf`, and
+			## `-inf` all return `0`.
 			## ```roc
 			## expect F64.to_u64_wrap(42.5) == 42
 			## ```
@@ -15946,9 +16488,8 @@ Builtin :: [].{
 			to_u64_try = |num| out_of_range_try(f64_to_u64_try_unsafe(num))
 
 			## Convert an [F64] to a [U128]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## negative values, `NaN`, `inf`, or `-inf` is
-			## implementation-defined.
+			## toward zero; the integer part wraps modulo 2^128. `NaN`, `inf`, and
+			## `-inf` all return `0`.
 			## ```roc
 			## expect F64.to_u128_wrap(42.5) == 42
 			## ```
@@ -16011,6 +16552,3602 @@ Builtin :: [].{
 				Fmt.decode_f64(format, source)
 			}
 		}
+
+		## A 128-bit SIMD vector of 16 unsigned 8-bit lanes.
+		##
+		## Lane `i` occupies bits `[i * 8, (i + 1) * 8)` of the vector, and the
+		## byte-serialized form (used by [U8x16.load], [U8x16.store], and
+		## [U8x16.to_list]) is little-endian with lane 0 first. Every operation
+		## has one pinned meaning that is bit-identical on every target; the
+		## compiler lowers each operation to the best instruction sequence for
+		## the target CPU (SSE/AVX on x86-64, NEON on AArch64, simd128 on wasm).
+		U8x16 :: [ProvidedByCompiler].{
+
+			## Returns the [U8x16] with every lane `0`.
+			## ```roc
+			## expect U8x16.default() == U8x16.splat(0)
+			## ```
+			default : () -> U8x16
+			default = || U8x16.splat(0)
+
+			## Returns a [U8x16] with every lane set to the given [U8].
+			##
+			## Lowers to `vpbroadcastb` on x86-64, `dup` on AArch64 NEON, and
+			## `i8x16.splat` on wasm.
+			## ```roc
+			## expect U8x16.splat(7).get_lane(15) == 7
+			## ```
+			splat : U8 -> U8x16
+
+			## Build a [U8x16] from exactly 16 lane values, lane 0 first.
+			## Returns `Err(WrongLength)` if the list's length is not 16.
+			from_list : List(U8) -> Try(U8x16, [WrongLength, ..])
+			from_list = |lanes|
+				if List.len(lanes) != 16 {
+					Err(WrongLength)
+				} else {
+					var $vector = U8x16.default()
+					var $i = 0.U64
+					while $i < 16 {
+						$vector = U8x16.with_lane($vector, $i, u8_list_get_unsafe(lanes, $i))
+						$i = $i + 1
+					}
+					Ok($vector)
+				}
+
+			## The 16 lane values as a list, lane 0 first.
+			## ```roc
+			## expect U8x16.splat(9).to_list() == List.repeat(9.U8, 16)
+			## ```
+			to_list : U8x16 -> List(U8)
+			to_list = |vector| {
+				var $out = List.with_capacity(16)
+				var $i = 0.U64
+				while $i < 16 {
+					$out = u8_list_append_unsafe($out, U8x16.get_lane(vector, $i))
+					$i = $i + 1
+				}
+				$out
+			}
+
+			## Returns `Bool.True` if all 128 bits of the two vectors are equal.
+			## (For a per-lane comparison producing a mask, see [U8x16.eq_lanes].)
+			##
+			## Lowers to `pxor` + `ptest` on x86-64, `cmeq` + `uminv` on AArch64
+			## NEON, and `v128.xor` + `v128.any_true` on wasm.
+			is_eq : U8x16, U8x16 -> Bool
+			is_eq = |a, b| a.to_u128_bits() == b.to_u128_bits()
+
+			## Feed a [U8x16] into a [Hasher].
+			to_hash : U8x16, Hasher -> Hasher
+			to_hash = |vector, hasher| Hasher.write_u128(hasher, vector.to_u128_bits())
+
+			## Render the lanes for debugging, e.g. `U8x16(1, 2, 3, ...)`.
+			to_inspect : U8x16 -> Str
+			to_inspect = |vector| Str.concat("U8x16(", Str.concat(Str.join_with(List.map(U8x16.to_list(vector), U8.to_str), ", "), ")"))
+
+			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
+			## `[i * 8, (i + 1) * 8)`. Free at runtime — no instructions.
+			to_u128_bits : U8x16 -> U128
+
+			## Build a [U8x16] from 128 raw bits. Free at runtime — no
+			## instructions.
+			from_u128_bits : U128 -> U8x16
+
+			## Reinterpret the same 128 bits as an [I8x16]. Free at runtime.
+			to_i8x16_bits : U8x16 -> I8x16
+			to_i8x16_bits = |vector| I8x16.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as a [U16x8]. Free at runtime.
+			to_u16x8_bits : U8x16 -> U16x8
+			to_u16x8_bits = |vector| U16x8.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as an [I16x8]. Free at runtime.
+			to_i16x8_bits : U8x16 -> I16x8
+			to_i16x8_bits = |vector| I16x8.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as a [U32x4]. Free at runtime.
+			to_u32x4_bits : U8x16 -> U32x4
+			to_u32x4_bits = |vector| U32x4.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as an [I32x4]. Free at runtime.
+			to_i32x4_bits : U8x16 -> I32x4
+			to_i32x4_bits = |vector| I32x4.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as a [U64x2]. Free at runtime.
+			to_u64x2_bits : U8x16 -> U64x2
+			to_u64x2_bits = |vector| U64x2.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as an [I64x2]. Free at runtime.
+			to_i64x2_bits : U8x16 -> I64x2
+			to_i64x2_bits = |vector| I64x2.from_u128_bits(vector.to_u128_bits())
+
+			## Add lane-wise, each lane wrapping mod 256.
+			##
+			## Lowers to `paddb` on x86-64, `add` (16×8-bit) on AArch64 NEON,
+			## and `i8x16.add` on wasm.
+			## ```roc
+			## expect U8x16.splat(200).plus_wrap(U8x16.splat(100)).get_lane(0) == 44
+			## ```
+			plus_wrap : U8x16, U8x16 -> U8x16
+
+			## Subtract lane-wise, each lane wrapping mod 256.
+			##
+			## Lowers to `psubb` on x86-64, `sub` (16×8-bit) on AArch64 NEON,
+			## and `i8x16.sub` on wasm.
+			minus_wrap : U8x16, U8x16 -> U8x16
+
+			## Add lane-wise, each lane saturating at 255 instead of wrapping.
+			##
+			## Lowers to `paddusb` on x86-64, `uqadd` on AArch64 NEON, and
+			## `i8x16.add_sat_u` on wasm.
+			## ```roc
+			## expect U8x16.splat(200).plus_saturated(U8x16.splat(100)).get_lane(0) == 255
+			## ```
+			plus_saturated : U8x16, U8x16 -> U8x16
+
+			## Subtract lane-wise, each lane saturating at 0 instead of wrapping.
+			##
+			## Lowers to `psubusb` on x86-64, `uqsub` on AArch64 NEON, and
+			## `i8x16.sub_sat_u` on wasm.
+			minus_saturated : U8x16, U8x16 -> U8x16
+
+			## The smaller of each pair of lanes.
+			##
+			## Lowers to `pminub` on x86-64, `umin` on AArch64 NEON, and
+			## `i8x16.min_u` on wasm.
+			min : U8x16, U8x16 -> U8x16
+
+			## The larger of each pair of lanes.
+			##
+			## Lowers to `pmaxub` on x86-64, `umax` on AArch64 NEON, and
+			## `i8x16.max_u` on wasm.
+			max : U8x16, U8x16 -> U8x16
+
+			## The absolute difference of each pair of lanes: `max - min`.
+			## A core building block of PNG's Paeth filter and video codec
+			## loop filters.
+			##
+			## Lowers to `psubusb` twice + `por` on x86-64 (no single
+			## instruction), `uabd` on AArch64 NEON, and `i8x16.max_u` +
+			## `i8x16.min_u` + `i8x16.sub` on wasm.
+			abs_diff : U8x16, U8x16 -> U8x16
+
+			## The rounding average of each pair of lanes: `(a + b + 1) >> 1`.
+			## Used by chroma upsampling and intra prediction in image codecs.
+			##
+			## Lowers to `pavgb` on x86-64, `urhadd` on AArch64 NEON, and
+			## `i8x16.avgr_u` on wasm.
+			## ```roc
+			## expect U8x16.splat(1).avg_rounded(U8x16.splat(2)).get_lane(0) == 2
+			## ```
+			avg_rounded : U8x16, U8x16 -> U8x16
+
+			## Returns the bitwise AND of the two vectors' 128 bits.
+			##
+			## Lowers to `pand` on x86-64, `and` on AArch64 NEON, and
+			## `v128.and` on wasm.
+			bitwise_and : U8x16, U8x16 -> U8x16
+
+			## Returns the bitwise OR of the two vectors' 128 bits.
+			##
+			## Lowers to `por` on x86-64, `orr` on AArch64 NEON, and `v128.or`
+			## on wasm.
+			bitwise_or : U8x16, U8x16 -> U8x16
+
+			## Returns the bitwise XOR of the two vectors' 128 bits.
+			##
+			## Lowers to `pxor` on x86-64, `eor` on AArch64 NEON, and
+			## `v128.xor` on wasm.
+			bitwise_xor : U8x16, U8x16 -> U8x16
+
+			## Flips every one of the vector's 128 bits.
+			##
+			## Lowers to `pxor` with all-ones on x86-64, `mvn` on AArch64 NEON,
+			## and `v128.not` on wasm.
+			bitwise_not : U8x16 -> U8x16
+
+			## Bitwise select: for each of the 128 bits, take the bit from
+			## `if_set` where this mask vector has a 1, and from `if_clear`
+			## where it has a 0. Combined with the `_lanes` comparisons, this
+			## is the branchless lane-wise `if`.
+			##
+			## Lowers to `pand`/`pandn`/`por` on x86-64, `bsl` on AArch64 NEON,
+			## and `v128.bitselect` on wasm.
+			bit_select : U8x16, U8x16, U8x16 -> U8x16
+
+			## Compare lane-wise for equality: each result lane is 255 where
+			## the lanes are equal and 0 where they differ.
+			##
+			## Lowers to `pcmpeqb` on x86-64, `cmeq` on AArch64 NEON, and
+			## `i8x16.eq` on wasm.
+			eq_lanes : U8x16, U8x16 -> U8x16
+
+			## Compare lane-wise: each result lane is 255 where a's lane is
+			## greater than b's (unsigned), else 0.
+			##
+			## x86-64 has no unsigned byte compare, so this lowers to
+			## `pmaxub` + `pcmpeqb` + inversion (or a sign-bias + `pcmpgtb`);
+			## AArch64 NEON `cmhi`; wasm `i8x16.gt_u`.
+			gt_lanes : U8x16, U8x16 -> U8x16
+
+			## Compare lane-wise: each result lane is 255 where a's lane is
+			## less than b's (unsigned), else 0. See [U8x16.gt_lanes] for the
+			## per-target lowerings.
+			lt_lanes : U8x16, U8x16 -> U8x16
+			lt_lanes = |a, b| U8x16.gt_lanes(b, a)
+
+			## Compare lane-wise: each result lane is 255 where a's lane is
+			## greater than or equal to b's (unsigned), else 0.
+			##
+			## Lowers to `pmaxub` + `pcmpeqb` on x86-64, `cmhs` on AArch64
+			## NEON, and `i8x16.ge_u` on wasm.
+			gte_lanes : U8x16, U8x16 -> U8x16
+
+			## Compare lane-wise: each result lane is 255 where a's lane is
+			## less than or equal to b's (unsigned), else 0. See
+			## [U8x16.gte_lanes] for the per-target lowerings.
+			lte_lanes : U8x16, U8x16 -> U8x16
+			lte_lanes = |a, b| U8x16.gte_lanes(b, a)
+
+			## One bit per lane (lane 0 in bit 0): 1 where the lane's most
+			## significant bit is set. On the all-0/all-1 masks produced by the
+			## `_lanes` comparisons, this packs the comparison results into a
+			## [U16] for scalar decision-making (find-first-match scans, etc.).
+			##
+			## Lowers to `pmovmskb` on x86-64, a short `ushr`/`usra` narrowing
+			## sequence on AArch64 NEON (no single instruction), and
+			## `i8x16.bitmask` on wasm.
+			## ```roc
+			## expect U8x16.splat(255).to_bitmask() == 65535
+			## ```
+			to_bitmask : U8x16 -> U16
+
+			## Returns `Bool.True` if any lane's most significant bit is set.
+			## On comparison masks: "did any lane match?"
+			any_lanes_set : U8x16 -> Bool
+			any_lanes_set = |vector| U8x16.to_bitmask(vector) != 0
+
+			## Returns `Bool.True` if every lane's most significant bit is set.
+			## On comparison masks: "did all lanes match?"
+			all_lanes_set : U8x16 -> Bool
+			all_lanes_set = |vector| U8x16.to_bitmask(vector) == 65535
+
+			## Shift every lane's bits left by the same count. The count is
+			## taken modulo 8: shifting by 8 leaves every lane unchanged and
+			## shifting by 9 shifts by 1, matching [U8.shl_wrap].
+			##
+			## x86-64 has no 8-bit lane shift, so this lowers to a 16-bit
+			## `psllw` + `pand` mask, with the count masked to the lane width
+			## first; AArch64 NEON `shl` takes the pre-masked count; wasm
+			## `i8x16.shl` masks the count natively.
+			shl_wrap : U8x16, U8 -> U8x16
+
+			## Shift every lane's bits right by the same count, filling with
+			## zeros. The count is taken modulo 8. For unsigned lanes this
+			## behaves the same as [U8x16.shr_zf_wrap].
+			shr_wrap : U8x16, U8 -> U8x16
+
+			## Shift every lane's bits right by the same count, filling the
+			## vacated high bits with zeros. The count is taken modulo 8:
+			## shifting by 8 leaves every lane unchanged and shifting by 9
+			## shifts by 1, matching [U8.shr_zf_wrap].
+			##
+			## Lowers to `psrlw` + `pand` on x86-64 (no 8-bit lane shift), with
+			## the count masked to the lane width first; `ushr` on AArch64 NEON
+			## takes the pre-masked count; `i8x16.shr_u` on wasm masks the count
+			## natively.
+			shr_zf_wrap : U8x16, U8 -> U8x16
+
+			## The value of the lane at the given index. Crashes if the index
+			## is 16 or greater. (Lane indices are expected to be compile-time
+			## constants in practice.)
+			##
+			## Lowers to `pextrb` on x86-64, `umov` on AArch64 NEON, and
+			## `i8x16.extract_lane_u` on wasm.
+			get_lane : U8x16, U64 -> U8
+			get_lane = |vector, index|
+				if index >= 16 {
+					crash "U8x16.get_lane: lane index out of range"
+				} else {
+					simd_u8x16_get_lane_unchecked(vector, index)
+				}
+
+			## Returns the vector with the lane at the given index replaced by
+			## the given value. Crashes if the index is 16 or greater.
+			##
+			## Lowers to `pinsrb` on x86-64, `ins` on AArch64 NEON, and
+			## `i8x16.replace_lane` on wasm.
+			with_lane : U8x16, U64, U8 -> U8x16
+			with_lane = |vector, index, value|
+				if index >= 16 {
+					crash "U8x16.with_lane: lane index out of range"
+				} else {
+					simd_u8x16_with_lane_unchecked(vector, index, value)
+				}
+
+			## Returns a vector with every lane set to the lane of this vector
+			## at the given index. Crashes if the index is 16 or greater.
+			##
+			## Lowers to `pshufb` with a constant pattern on x86-64, `dup`
+			## (lane form) on AArch64 NEON, and a constant `i8x16.shuffle` on
+			## wasm.
+			broadcast_lane : U8x16, U64 -> U8x16
+			broadcast_lane = |vector, index| U8x16.splat(U8x16.get_lane(vector, index))
+
+			## Interleave the low 8 lanes of the two vectors: result lanes are
+			## `a0, b0, a1, b1, ...` up through `a7, b7`. With
+			## [U8x16.interleave_hi], this is the building block of matrix
+			## transposes and of widening pixel data.
+			##
+			## Lowers to `punpcklbw` on x86-64, `zip1` on AArch64 NEON, and a
+			## constant `i8x16.shuffle` on wasm.
+			interleave_lo : U8x16, U8x16 -> U8x16
+
+			## Interleave the high 8 lanes of the two vectors: result lanes are
+			## `a8, b8, a9, b9, ...` up through `a15, b15`.
+			##
+			## Lowers to `punpckhbw` on x86-64, `zip2` on AArch64 NEON, and a
+			## constant `i8x16.shuffle` on wasm.
+			interleave_hi : U8x16, U8x16 -> U8x16
+
+			## The even-indexed lanes of a followed by the even-indexed lanes
+			## of b — the deinterleaving inverse of the interleave operations,
+			## used to split interleaved channel data apart.
+			##
+			## Lowers to `pshufb`-based shuffles on x86-64, `uzp1` on AArch64
+			## NEON, and a constant `i8x16.shuffle` on wasm.
+			even_lanes : U8x16, U8x16 -> U8x16
+
+			## The odd-indexed lanes of a followed by the odd-indexed lanes of
+			## b.
+			##
+			## Lowers to `pshufb`-based shuffles on x86-64, `uzp2` on AArch64
+			## NEON, and a constant `i8x16.shuffle` on wasm.
+			odd_lanes : U8x16, U8x16 -> U8x16
+
+			## Returns the vector with its 16 lanes in reverse order.
+			##
+			## Lowers to `pshufb` with a constant pattern on x86-64, `rev64` +
+			## `ext` on AArch64 NEON, and a constant `i8x16.shuffle` on wasm.
+			reverse_lanes : U8x16 -> U8x16
+
+			## Treat `lo` and `hi` as one 32-byte sequence (lo's bytes first)
+			## and return 16 consecutive bytes of it starting at byte `count`.
+			## `count` 0 returns `lo`; 16 returns `hi`. Crashes if `count` is
+			## greater than 16. This is the sliding-window operation behind
+			## filter kernels and overlapped LZ77 copies.
+			##
+			## A compile-time-constant count lowers to immediate `palignr` on
+			## x86-64, `ext` on AArch64 NEON, and `i8x16.shuffle` on wasm.
+			## Those instructions cannot take a runtime count; a dynamic count
+			## uses bit shifts and combines on native targets, and an equivalent
+			## spill plus dynamic 16-byte load on wasm.
+			concat_shift_bytes : U8x16, U8x16, U8 -> U8x16
+			concat_shift_bytes = |lo, hi, count|
+				if count > 16 {
+					crash "U8x16.concat_shift_bytes: count out of range"
+				} else {
+					simd_u8x16_concat_shift_bytes_unchecked(lo, hi, count)
+				}
+
+			## For each lane of `indices`: the lane of `table` it names, or 0
+			## if the index is 16 or greater. This dynamic byte shuffle powers
+			## palette lookups, nibble-table tricks, and byte rearrangement
+			## with runtime patterns.
+			##
+			## Lowers to `pshufb` plus a one-instruction fixup on x86-64
+			## (`pshufb` alone wraps indices 16-127), `tbl` on AArch64 NEON,
+			## and `i8x16.swizzle` on wasm — the out-of-range-to-zero
+			## semantics here matches `tbl` and `swizzle` exactly.
+			## ```roc
+			## expect U8x16.splat(42).table_lookup(U8x16.splat(20)).get_lane(0) == 0
+			## ```
+			table_lookup : U8x16, U8x16 -> U8x16
+
+			## Zero-extend the low 8 lanes into the 8 16-bit lanes of a
+			## [U16x8]. With [U8x16.to_u16x8_hi], this is the widening step of
+			## the widen-compute-narrow pattern most codec kernels use.
+			##
+			## Lowers to `pmovzxbw` on x86-64, `uxtl` on AArch64 NEON, and
+			## `i16x8.extend_low_i8x16_u` on wasm.
+			to_u16x8_lo : U8x16 -> U16x8
+
+			## Zero-extend the high 8 lanes into the 8 16-bit lanes of a
+			## [U16x8].
+			##
+			## Lowers to `punpckhbw` with zero on x86-64, `uxtl2` on AArch64
+			## NEON, and `i16x8.extend_high_i8x16_u` on wasm.
+			to_u16x8_hi : U8x16 -> U16x8
+
+			## Add adjacent pairs of lanes into the 8 16-bit lanes of a
+			## [U16x8]: result lane i is `lane(2i) + lane(2i+1)`. Used by
+			## checksum and histogram accumulation.
+			##
+			## Lowers to `pmaddubsw` with a ones vector on x86-64, `uaddlp` on
+			## AArch64 NEON, and `i16x8.extadd_pairwise_i8x16_u` on wasm.
+			pairwise_plus_to_u16x8 : U8x16 -> U16x8
+
+			## Multiply the low 8 lanes of the two vectors pairwise into the 8
+			## 16-bit lanes of a [U16x8] (no overflow is possible).
+			##
+			## Lowers to `punpcklbw` + `pmullw` on x86-64 (no single
+			## instruction), `umull` on AArch64 NEON, and
+			## `i16x8.extmul_low_i8x16_u` on wasm.
+			times_wide_lo : U8x16, U8x16 -> U16x8
+
+			## Multiply the high 8 lanes of the two vectors pairwise into the
+			## 8 16-bit lanes of a [U16x8].
+			##
+			## Lowers to `punpckhbw` + `pmullw` on x86-64, `umull2` on AArch64
+			## NEON, and `i16x8.extmul_high_i8x16_u` on wasm.
+			times_wide_hi : U8x16, U8x16 -> U16x8
+
+			## Multiply each unsigned lane of this vector with the signed lane
+			## of the [I8x16] at the same index, then add adjacent product
+			## pairs into the 8 16-bit lanes of an [I16x8], saturating on
+			## overflow: result lane i is
+			## `saturate(u(2i) * s(2i) + u(2i+1) * s(2i+1))`. This is the
+			## 8-tap-filter workhorse of convolution and color conversion
+			## kernels.
+			##
+			## Lowers to `pmaddubsw` on x86-64 (whose saturation semantics
+			## this operation pins), and to widening-multiply + saturating
+			## pairwise-add sequences on AArch64 NEON and wasm (no single
+			## instruction there).
+			dot_pairs_saturated : U8x16, I8x16 -> I16x8
+
+			## Sums of absolute differences: result lane 0 of the [U64x2] is
+			## the sum of `|a_i - b_i|` for lanes 0-7, and result lane 1 is
+			## the same for lanes 8-15. This is the encoder-search workhorse
+			## (SAD-based block matching, PNG filter selection).
+			##
+			## Lowers to `psadbw` on x86-64 (whose output layout this
+			## operation pins), a `uabdl`/`uadalp` sequence on AArch64 NEON,
+			## and an emulated sequence on wasm (no single instruction).
+			## ```roc
+			## expect U8x16.splat(9).sums_of_abs_diffs(U8x16.splat(6)).get_lane(0) == 24
+			## ```
+			sums_of_abs_diffs : U8x16, U8x16 -> U64x2
+
+			## The sum of all 16 lanes (at most 4080, so it always fits).
+			##
+			## Lowers to `psadbw` against zero + extract on x86-64, `uaddlv`
+			## on AArch64 NEON, and pairwise-add chains on wasm.
+			sum_lanes : U8x16 -> U32
+
+			## Read 16 bytes starting at the given byte index, as lanes in
+			## little-endian order. Returns `Err(OutOfBounds)` unless
+			## `index + 16 <= List.len(bytes)`. Any alignment is fine.
+			##
+			## Lowers to `movdqu` on x86-64, `ldr` (Q register) on AArch64,
+			## and `v128.load` on wasm.
+			load : List(U8), U64 -> Try(U8x16, [OutOfBounds, ..])
+			load = |bytes, index| {
+				len = List.len(bytes)
+				if index > len {
+					Err(OutOfBounds)
+				} else if len - index < 16 {
+					Err(OutOfBounds)
+				} else {
+					Ok(simd_u8x16_load_16_unchecked(bytes, index))
+				}
+			}
+
+			## Write these 16 bytes into the list starting at the given byte
+			## index (in place when the list is unique), little-endian.
+			## Returns `Err(OutOfBounds)` unless
+			## `index + 16 <= List.len(bytes)`.
+			##
+			## Lowers to `movdqu` (store form) on x86-64, `str` (Q register)
+			## on AArch64, and `v128.store` on wasm.
+			store : U8x16, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
+			store = |vector, bytes, index| {
+				len = List.len(bytes)
+				if index > len {
+					Err(OutOfBounds)
+				} else if len - index < 16 {
+					Err(OutOfBounds)
+				} else {
+					Ok(simd_u8x16_store_16_unchecked(vector, bytes, index))
+				}
+			}
+
+			## Append these 16 bytes (little-endian) to the end of the list.
+			append_to : U8x16, List(U8) -> List(U8)
+
+			## Iterate the list 16 bytes at a time: `chunks` yields one
+			## [U8x16] per full 16 bytes, and `tail` is the fewer-than-16
+			## leftover bytes. This is the streaming driver for chunked byte
+			## processing.
+			iter_list : List(U8) -> { chunks : Iter(U8x16), tail : List(U8) }
+			iter_list = |bytes| {
+				len = List.len(bytes)
+				chunk_count = len / 16
+				chunks = Iter.custom(
+					0.U64,
+					Known(chunk_count),
+					|start|
+						if len - start >= 16 {
+							Ok((simd_u8x16_load_16_unchecked(bytes, start), start + 16))
+						} else {
+							Err(NoMore)
+						},
+				)
+				{ chunks, tail: List.drop_first(bytes, chunk_count * 16) }
+			}
+		}
+
+		## A 128-bit SIMD vector of 16 signed 8-bit lanes (two's complement).
+		##
+		## Lane `i` occupies bits `[i * 8, (i + 1) * 8)` of the vector, and the
+		## byte-serialized form (used by [I8x16.load], [I8x16.store], and
+		## [I8x16.to_list]) is little-endian with lane 0 first. Every operation
+		## has one pinned meaning that is bit-identical on every target; the
+		## compiler lowers each operation to the best instruction sequence for
+		## the target CPU (SSE/AVX on x86-64, NEON on AArch64, simd128 on wasm).
+		I8x16 :: [ProvidedByCompiler].{
+
+			## Returns the [I8x16] with every lane `0`.
+			## ```roc
+			## expect I8x16.default() == I8x16.splat(0)
+			## ```
+			default : () -> I8x16
+			default = || I8x16.splat(0)
+
+			## Returns an [I8x16] with every lane set to the given [I8].
+			##
+			## Lowers to `vpbroadcastb` on x86-64, `dup` on AArch64 NEON, and
+			## `i8x16.splat` on wasm.
+			## ```roc
+			## expect I8x16.splat(7).get_lane(15) == 7
+			## ```
+			splat : I8 -> I8x16
+
+			## Build an [I8x16] from exactly 16 lane values, lane 0 first.
+			## Returns `Err(WrongLength)` if the list's length is not 16.
+			from_list : List(I8) -> Try(I8x16, [WrongLength, ..])
+			from_list = |lanes|
+				if List.len(lanes) != 16 {
+					Err(WrongLength)
+				} else {
+					var $vector = I8x16.default()
+					var $i = 0.U64
+					while $i < 16 {
+						$vector = I8x16.with_lane($vector, $i, list_get_unsafe(lanes, $i))
+						$i = $i + 1
+					}
+					Ok($vector)
+				}
+
+			## The 16 lane values as a list, lane 0 first.
+			## ```roc
+			## expect I8x16.splat(9).to_list() == List.repeat(9.I8, 16)
+			## ```
+			to_list : I8x16 -> List(I8)
+			to_list = |vector| {
+				var $out = List.with_capacity(16)
+				var $i = 0.U64
+				while $i < 16 {
+					$out = list_append_unsafe($out, I8x16.get_lane(vector, $i))
+					$i = $i + 1
+				}
+				$out
+			}
+
+			## Returns `Bool.True` if all 128 bits of the two vectors are equal.
+			## (For a per-lane comparison producing a mask, see [I8x16.eq_lanes].)
+			##
+			## Lowers to `pxor` + `ptest` on x86-64, `cmeq` + `uminv` on AArch64
+			## NEON, and `v128.xor` + `v128.any_true` on wasm.
+			is_eq : I8x16, I8x16 -> Bool
+			is_eq = |a, b| a.to_u128_bits() == b.to_u128_bits()
+
+			## Feed an [I8x16] into a [Hasher].
+			to_hash : I8x16, Hasher -> Hasher
+			to_hash = |vector, hasher| Hasher.write_u128(hasher, vector.to_u128_bits())
+
+			## Render the lanes for debugging, e.g. `I8x16(1, 2, 3, ...)`.
+			to_inspect : I8x16 -> Str
+			to_inspect = |vector| Str.concat("I8x16(", Str.concat(Str.join_with(List.map(I8x16.to_list(vector), I8.to_str), ", "), ")"))
+
+			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
+			## `[i * 8, (i + 1) * 8)`. Free at runtime — no instructions.
+			to_u128_bits : I8x16 -> U128
+
+			## Build an [I8x16] from 128 raw bits. Free at runtime — no
+			## instructions.
+			from_u128_bits : U128 -> I8x16
+
+			## Reinterpret the same 128 bits as a [U8x16]. Free at runtime.
+			to_u8x16_bits : I8x16 -> U8x16
+			to_u8x16_bits = |vector| U8x16.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as a [U16x8]. Free at runtime.
+			to_u16x8_bits : I8x16 -> U16x8
+			to_u16x8_bits = |vector| U16x8.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as an [I16x8]. Free at runtime.
+			to_i16x8_bits : I8x16 -> I16x8
+			to_i16x8_bits = |vector| I16x8.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as a [U32x4]. Free at runtime.
+			to_u32x4_bits : I8x16 -> U32x4
+			to_u32x4_bits = |vector| U32x4.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as an [I32x4]. Free at runtime.
+			to_i32x4_bits : I8x16 -> I32x4
+			to_i32x4_bits = |vector| I32x4.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as a [U64x2]. Free at runtime.
+			to_u64x2_bits : I8x16 -> U64x2
+			to_u64x2_bits = |vector| U64x2.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as an [I64x2]. Free at runtime.
+			to_i64x2_bits : I8x16 -> I64x2
+			to_i64x2_bits = |vector| I64x2.from_u128_bits(vector.to_u128_bits())
+
+			## Add lane-wise, each lane wrapping mod 256 (two's complement).
+			##
+			## Lowers to `paddb` on x86-64, `add` (16×8-bit) on AArch64 NEON,
+			## and `i8x16.add` on wasm.
+			## ```roc
+			## expect I8x16.splat(127).plus_wrap(I8x16.splat(1)).get_lane(0) == -128
+			## ```
+			plus_wrap : I8x16, I8x16 -> I8x16
+
+			## Subtract lane-wise, each lane wrapping mod 256 (two's complement).
+			##
+			## Lowers to `psubb` on x86-64, `sub` (16×8-bit) on AArch64 NEON,
+			## and `i8x16.sub` on wasm.
+			minus_wrap : I8x16, I8x16 -> I8x16
+
+			## Add lane-wise, each lane saturating within the signed range
+			## -128 to 127 instead of wrapping.
+			##
+			## Lowers to `paddsb` on x86-64, `sqadd` on AArch64 NEON, and
+			## `i8x16.add_sat_s` on wasm.
+			## ```roc
+			## expect I8x16.splat(100).plus_saturated(I8x16.splat(100)).get_lane(0) == 127
+			## ```
+			plus_saturated : I8x16, I8x16 -> I8x16
+
+			## Subtract lane-wise, each lane saturating within the signed range
+			## -128 to 127 instead of wrapping.
+			##
+			## Lowers to `psubsb` on x86-64, `sqsub` on AArch64 NEON, and
+			## `i8x16.sub_sat_s` on wasm.
+			minus_saturated : I8x16, I8x16 -> I8x16
+
+			## Negate each lane, wrapping mod 256. The lane holding -128 negates
+			## to itself (-128), since +128 is not representable.
+			##
+			## Lowers to `psubb` from zero on x86-64, `neg` on AArch64 NEON, and
+			## `i8x16.neg` on wasm.
+			## ```roc
+			## expect I8x16.splat(5).negate_wrap().get_lane(0) == -5
+			## ```
+			negate_wrap : I8x16 -> I8x16
+
+			## The absolute value of each lane. The lane holding -128 has no
+			## representable positive absolute value, so it wraps back to -128.
+			##
+			## Lowers to `pabsb` on x86-64, `abs` on AArch64 NEON, and
+			## `i8x16.abs` on wasm.
+			## ```roc
+			## expect I8x16.splat(-5).abs_wrap().get_lane(0) == 5
+			## ```
+			abs_wrap : I8x16 -> I8x16
+
+			## The smaller of each pair of lanes (signed).
+			##
+			## Lowers to `pminsb` (SSE4.1) on x86-64, `smin` on AArch64 NEON,
+			## and `i8x16.min_s` on wasm.
+			## ```roc
+			## expect I8x16.splat(-3).min(I8x16.splat(2)).get_lane(0) == -3
+			## ```
+			min : I8x16, I8x16 -> I8x16
+
+			## The larger of each pair of lanes (signed).
+			##
+			## Lowers to `pmaxsb` (SSE4.1) on x86-64, `smax` on AArch64 NEON,
+			## and `i8x16.max_s` on wasm.
+			max : I8x16, I8x16 -> I8x16
+
+			## Returns the bitwise AND of the two vectors' 128 bits.
+			##
+			## Lowers to `pand` on x86-64, `and` on AArch64 NEON, and
+			## `v128.and` on wasm.
+			bitwise_and : I8x16, I8x16 -> I8x16
+
+			## Returns the bitwise OR of the two vectors' 128 bits.
+			##
+			## Lowers to `por` on x86-64, `orr` on AArch64 NEON, and `v128.or`
+			## on wasm.
+			bitwise_or : I8x16, I8x16 -> I8x16
+
+			## Returns the bitwise XOR of the two vectors' 128 bits.
+			##
+			## Lowers to `pxor` on x86-64, `eor` on AArch64 NEON, and
+			## `v128.xor` on wasm.
+			bitwise_xor : I8x16, I8x16 -> I8x16
+
+			## Flips every one of the vector's 128 bits.
+			##
+			## Lowers to `pxor` with all-ones on x86-64, `mvn` on AArch64 NEON,
+			## and `v128.not` on wasm.
+			bitwise_not : I8x16 -> I8x16
+
+			## Bitwise select: for each of the 128 bits, take the bit from
+			## `if_set` where this mask vector has a 1, and from `if_clear`
+			## where it has a 0. Combined with the `_lanes` comparisons, this
+			## is the branchless lane-wise `if`.
+			##
+			## Lowers to `pand`/`pandn`/`por` on x86-64, `bsl` on AArch64 NEON,
+			## and `v128.bitselect` on wasm.
+			bit_select : I8x16, I8x16, I8x16 -> I8x16
+
+			## Compare lane-wise for equality: each result lane is -1 (all bits
+			## set) where the lanes are equal and 0 where they differ.
+			##
+			## Lowers to `pcmpeqb` on x86-64, `cmeq` on AArch64 NEON, and
+			## `i8x16.eq` on wasm.
+			eq_lanes : I8x16, I8x16 -> I8x16
+
+			## Compare lane-wise: each result lane is -1 (all bits set) where a's
+			## lane is greater than b's (signed), else 0.
+			##
+			## Lowers to `pcmpgtb` on x86-64, `cmgt` on AArch64 NEON, and
+			## `i8x16.gt_s` on wasm.
+			## ```roc
+			## expect I8x16.splat(1).gt_lanes(I8x16.splat(-1)).get_lane(0) == -1
+			## ```
+			gt_lanes : I8x16, I8x16 -> I8x16
+
+			## Compare lane-wise: each result lane is -1 (all bits set) where a's
+			## lane is less than b's (signed), else 0. See [I8x16.gt_lanes] for
+			## the per-target lowerings.
+			lt_lanes : I8x16, I8x16 -> I8x16
+			lt_lanes = |a, b| I8x16.gt_lanes(b, a)
+
+			## Compare lane-wise: each result lane is -1 (all bits set) where a's
+			## lane is greater than or equal to b's (signed), else 0.
+			##
+			## Lowers to `pcmpgtb` + `pcmpeqb` + `por` on x86-64, `cmge` on
+			## AArch64 NEON, and `i8x16.ge_s` on wasm.
+			gte_lanes : I8x16, I8x16 -> I8x16
+
+			## Compare lane-wise: each result lane is -1 (all bits set) where a's
+			## lane is less than or equal to b's (signed), else 0. See
+			## [I8x16.gte_lanes] for the per-target lowerings.
+			lte_lanes : I8x16, I8x16 -> I8x16
+			lte_lanes = |a, b| I8x16.gte_lanes(b, a)
+
+			## One bit per lane (lane 0 in bit 0): 1 where the lane's most
+			## significant bit is set. On the all-0/all-1 masks produced by the
+			## `_lanes` comparisons, this packs the comparison results into a
+			## [U16] for scalar decision-making (find-first-match scans, etc.).
+			##
+			## Lowers to `pmovmskb` on x86-64, a short `ushr`/`usra` narrowing
+			## sequence on AArch64 NEON (no single instruction), and
+			## `i8x16.bitmask` on wasm.
+			## ```roc
+			## expect I8x16.splat(-1).to_bitmask() == 65535
+			## ```
+			to_bitmask : I8x16 -> U16
+
+			## Returns `Bool.True` if any lane's most significant bit is set.
+			## On comparison masks: "did any lane match?"
+			any_lanes_set : I8x16 -> Bool
+			any_lanes_set = |vector| I8x16.to_bitmask(vector) != 0
+
+			## Returns `Bool.True` if every lane's most significant bit is set.
+			## On comparison masks: "did all lanes match?"
+			all_lanes_set : I8x16 -> Bool
+			all_lanes_set = |vector| I8x16.to_bitmask(vector) == 65535
+
+			## Shift every lane's bits left by the same count. The count is
+			## taken modulo 8: shifting by 8 leaves every lane unchanged and
+			## shifting by 9 shifts by 1, matching [I8.shl_wrap].
+			##
+			## x86-64 has no 8-bit lane shift, so this lowers to a 16-bit
+			## `psllw` + `pand` mask, with the count masked to the lane width
+			## first; AArch64 NEON `shl` takes the pre-masked count; wasm
+			## `i8x16.shl` masks the count natively.
+			shl_wrap : I8x16, U8 -> I8x16
+
+			## Shift every lane's bits right by the same count, filling the
+			## vacated high bits with zeros. The count is taken modulo 8:
+			## shifting by 8 leaves every lane unchanged and shifting by 9
+			## shifts by 1, matching [I8.shr_zf_wrap].
+			##
+			## Lowers to `psrlw` + `pand` on x86-64 (no 8-bit lane shift), with
+			## the count masked to the lane width first; `ushr` on AArch64 NEON
+			## takes the pre-masked count; `i8x16.shr_u` on wasm masks the count
+			## natively.
+			shr_zf_wrap : I8x16, U8 -> I8x16
+
+			## Shift every lane's bits right by the same count, replicating the
+			## sign bit into the vacated high bits. The count is taken modulo 8:
+			## shifting by 8 leaves every lane unchanged and shifting by 9
+			## shifts by 1, matching [I8.shr_wrap].
+			##
+			## Lowers to `psraw` + a mask sequence on x86-64 (no 8-bit lane
+			## shift), with the count masked to the lane width first; `sshr` on
+			## AArch64 NEON takes the pre-masked count; `i8x16.shr_s` on wasm
+			## masks the count natively.
+			## ```roc
+			## expect I8x16.splat(-8).shr_wrap(1).get_lane(0) == -4
+			## ```
+			shr_wrap : I8x16, U8 -> I8x16
+
+			## The value of the lane at the given index. Crashes if the index
+			## is 16 or greater. (Lane indices are expected to be compile-time
+			## constants in practice.)
+			##
+			## Lowers to `pextrb` on x86-64, `smov` on AArch64 NEON, and
+			## `i8x16.extract_lane_s` on wasm.
+			get_lane : I8x16, U64 -> I8
+			get_lane = |vector, index|
+				if index >= 16 {
+					crash "I8x16.get_lane: lane index out of range"
+				} else {
+					simd_i8x16_get_lane_unchecked(vector, index)
+				}
+
+			## Returns the vector with the lane at the given index replaced by
+			## the given value. Crashes if the index is 16 or greater.
+			##
+			## Lowers to `pinsrb` on x86-64, `ins` on AArch64 NEON, and
+			## `i8x16.replace_lane` on wasm.
+			with_lane : I8x16, U64, I8 -> I8x16
+			with_lane = |vector, index, value|
+				if index >= 16 {
+					crash "I8x16.with_lane: lane index out of range"
+				} else {
+					simd_i8x16_with_lane_unchecked(vector, index, value)
+				}
+
+			## Returns a vector with every lane set to the lane of this vector
+			## at the given index. Crashes if the index is 16 or greater.
+			##
+			## Lowers to `pshufb` with a constant pattern on x86-64, `dup`
+			## (lane form) on AArch64 NEON, and a constant `i8x16.shuffle` on
+			## wasm.
+			broadcast_lane : I8x16, U64 -> I8x16
+			broadcast_lane = |vector, index| I8x16.splat(I8x16.get_lane(vector, index))
+
+			## Interleave the low 8 lanes of the two vectors: result lanes are
+			## `a0, b0, a1, b1, ...` up through `a7, b7`. With
+			## [I8x16.interleave_hi], this is the building block of matrix
+			## transposes and of widening pixel data.
+			##
+			## Lowers to `punpcklbw` on x86-64, `zip1` on AArch64 NEON, and a
+			## constant `i8x16.shuffle` on wasm.
+			interleave_lo : I8x16, I8x16 -> I8x16
+
+			## Interleave the high 8 lanes of the two vectors: result lanes are
+			## `a8, b8, a9, b9, ...` up through `a15, b15`.
+			##
+			## Lowers to `punpckhbw` on x86-64, `zip2` on AArch64 NEON, and a
+			## constant `i8x16.shuffle` on wasm.
+			interleave_hi : I8x16, I8x16 -> I8x16
+
+			## The even-indexed lanes of a followed by the even-indexed lanes
+			## of b — the deinterleaving inverse of the interleave operations,
+			## used to split interleaved channel data apart.
+			##
+			## Lowers to `pshufb`-based shuffles on x86-64, `uzp1` on AArch64
+			## NEON, and a constant `i8x16.shuffle` on wasm.
+			even_lanes : I8x16, I8x16 -> I8x16
+
+			## The odd-indexed lanes of a followed by the odd-indexed lanes of
+			## b.
+			##
+			## Lowers to `pshufb`-based shuffles on x86-64, `uzp2` on AArch64
+			## NEON, and a constant `i8x16.shuffle` on wasm.
+			odd_lanes : I8x16, I8x16 -> I8x16
+
+			## Returns the vector with its 16 lanes in reverse order.
+			##
+			## Lowers to `pshufb` with a constant pattern on x86-64, `rev64` +
+			## `ext` on AArch64 NEON, and a constant `i8x16.shuffle` on wasm.
+			reverse_lanes : I8x16 -> I8x16
+
+			## Sign-extend the low 8 lanes into the 8 16-bit lanes of an
+			## [I16x8]. With [I8x16.to_i16x8_hi], this is the widening step of
+			## the widen-compute-narrow pattern most codec kernels use.
+			##
+			## Lowers to `pmovsxbw` (SSE4.1) on x86-64, `sxtl` on AArch64 NEON,
+			## and `i16x8.extend_low_i8x16_s` on wasm.
+			to_i16x8_lo : I8x16 -> I16x8
+
+			## Sign-extend the high 8 lanes into the 8 16-bit lanes of an
+			## [I16x8].
+			##
+			## Lowers to `pmovsxbw` of the high half on x86-64, `sxtl2` on
+			## AArch64 NEON, and `i16x8.extend_high_i8x16_s` on wasm.
+			to_i16x8_hi : I8x16 -> I16x8
+
+			## Add adjacent pairs of lanes into the 8 16-bit lanes of an
+			## [I16x8]: result lane i is `lane(2i) + lane(2i+1)` (signed, always
+			## in range). Used by checksum and histogram accumulation.
+			##
+			## Lowers to an emulated sequence on x86-64 (no single instruction),
+			## `saddlp` on AArch64 NEON, and `i16x8.extadd_pairwise_i8x16_s` on
+			## wasm.
+			pairwise_plus_to_i16x8 : I8x16 -> I16x8
+
+			## Multiply the low 8 lanes of the two vectors pairwise (signed)
+			## into the 8 16-bit lanes of an [I16x8] (no overflow is possible).
+			##
+			## Lowers to `pmovsxbw` + `pmullw` on x86-64 (no single
+			## instruction), `smull` on AArch64 NEON, and
+			## `i16x8.extmul_low_i8x16_s` on wasm.
+			times_wide_lo : I8x16, I8x16 -> I16x8
+
+			## Multiply the high 8 lanes of the two vectors pairwise (signed)
+			## into the 8 16-bit lanes of an [I16x8].
+			##
+			## Lowers to `pmovsxbw` + `pmullw` on x86-64 (no single
+			## instruction), `smull2` on AArch64 NEON, and
+			## `i16x8.extmul_high_i8x16_s` on wasm.
+			times_wide_hi : I8x16, I8x16 -> I16x8
+
+			## The sum of all 16 lanes (signed, in the range -2048 to 2032, so
+			## it always fits).
+			##
+			## Lowers to an emulated sequence on x86-64, `saddlv` on AArch64
+			## NEON, and pairwise-add chains on wasm.
+			## ```roc
+			## expect I8x16.splat(1).sum_lanes() == 16
+			## ```
+			sum_lanes : I8x16 -> I32
+
+			## Read 16 bytes starting at the given byte index, as lanes in
+			## little-endian order. Returns `Err(OutOfBounds)` unless
+			## `index + 16 <= List.len(bytes)`. Any alignment is fine.
+			##
+			## Lowers to `movdqu` on x86-64, `ldr` (Q register) on AArch64,
+			## and `v128.load` on wasm.
+			load : List(U8), U64 -> Try(I8x16, [OutOfBounds, ..])
+			load = |bytes, index| {
+				len = List.len(bytes)
+				if index > len {
+					Err(OutOfBounds)
+				} else if len - index < 16 {
+					Err(OutOfBounds)
+				} else {
+					Ok(simd_i8x16_load_16_unchecked(bytes, index))
+				}
+			}
+
+			## Write these 16 bytes into the list starting at the given byte
+			## index (in place when the list is unique), little-endian.
+			## Returns `Err(OutOfBounds)` unless
+			## `index + 16 <= List.len(bytes)`.
+			##
+			## Lowers to `movdqu` (store form) on x86-64, `str` (Q register)
+			## on AArch64, and `v128.store` on wasm.
+			store : I8x16, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
+			store = |vector, bytes, index| {
+				len = List.len(bytes)
+				if index > len {
+					Err(OutOfBounds)
+				} else if len - index < 16 {
+					Err(OutOfBounds)
+				} else {
+					Ok(simd_i8x16_store_16_unchecked(vector, bytes, index))
+				}
+			}
+
+			## Append these 16 bytes (little-endian) to the end of the list.
+			append_to : I8x16, List(U8) -> List(U8)
+
+		}
+
+		## A 128-bit SIMD vector of 8 unsigned 16-bit lanes.
+		##
+		## Lane `i` occupies bits `[i * 16, (i + 1) * 16)` of the vector, and
+		## the byte-serialized form (used by [U16x8.load] and [U16x8.store]) is
+		## little-endian: lane 0 first, each lane's two bytes least-significant
+		## first. Every operation has one pinned meaning that is bit-identical
+		## on every target; the compiler lowers each operation to the best
+		## instruction sequence for the target CPU (SSE/AVX on x86-64, NEON on
+		## AArch64, simd128 on wasm).
+		U16x8 :: [ProvidedByCompiler].{
+
+			## Returns the [U16x8] with every lane `0`.
+			## ```roc
+			## expect U16x8.default() == U16x8.splat(0)
+			## ```
+			default : () -> U16x8
+			default = || U16x8.splat(0)
+
+			## Returns a [U16x8] with every lane set to the given [U16].
+			##
+			## Lowers to `vpbroadcastw` on x86-64, `dup` on AArch64 NEON, and
+			## `i16x8.splat` on wasm.
+			## ```roc
+			## expect U16x8.splat(7).get_lane(7) == 7
+			## ```
+			splat : U16 -> U16x8
+
+			## Build a [U16x8] from exactly 8 lane values, lane 0 first.
+			## Returns `Err(WrongLength)` if the list's length is not 8.
+			from_list : List(U16) -> Try(U16x8, [WrongLength, ..])
+			from_list = |lanes|
+				if List.len(lanes) != 8 {
+					Err(WrongLength)
+				} else {
+					var $vector = U16x8.default()
+					var $i = 0.U64
+					while $i < 8 {
+						$vector = U16x8.with_lane($vector, $i, list_get_unsafe(lanes, $i))
+						$i = $i + 1
+					}
+					Ok($vector)
+				}
+
+			## The 8 lane values as a list, lane 0 first.
+			## ```roc
+			## expect U16x8.splat(9).to_list() == List.repeat(9.U16, 8)
+			## ```
+			to_list : U16x8 -> List(U16)
+			to_list = |vector| {
+				var $out = List.with_capacity(8)
+				var $i = 0.U64
+				while $i < 8 {
+					$out = list_append_unsafe($out, U16x8.get_lane(vector, $i))
+					$i = $i + 1
+				}
+				$out
+			}
+
+			## Returns `Bool.True` if all 128 bits of the two vectors are equal.
+			## (For a per-lane comparison producing a mask, see [U16x8.eq_lanes].)
+			##
+			## Lowers to `pxor` + `ptest` on x86-64, `cmeq` + `uminv` on AArch64
+			## NEON, and `v128.xor` + `v128.any_true` on wasm.
+			is_eq : U16x8, U16x8 -> Bool
+			is_eq = |a, b| a.to_u128_bits() == b.to_u128_bits()
+
+			## Feed a [U16x8] into a [Hasher].
+			to_hash : U16x8, Hasher -> Hasher
+			to_hash = |vector, hasher| Hasher.write_u128(hasher, vector.to_u128_bits())
+
+			## Render the lanes for debugging, e.g. `U16x8(1, 2, 3, ...)`.
+			to_inspect : U16x8 -> Str
+			to_inspect = |vector| Str.concat("U16x8(", Str.concat(Str.join_with(List.map(U16x8.to_list(vector), U16.to_str), ", "), ")"))
+
+			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
+			## `[i * 16, (i + 1) * 16)`. Free at runtime — no instructions.
+			to_u128_bits : U16x8 -> U128
+
+			## Build a [U16x8] from 128 raw bits. Free at runtime — no
+			## instructions.
+			from_u128_bits : U128 -> U16x8
+
+			## Reinterpret the same 128 bits as a [U8x16]. Free at runtime.
+			to_u8x16_bits : U16x8 -> U8x16
+			to_u8x16_bits = |vector| U8x16.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as an [I8x16]. Free at runtime.
+			to_i8x16_bits : U16x8 -> I8x16
+			to_i8x16_bits = |vector| I8x16.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as an [I16x8]. Free at runtime.
+			to_i16x8_bits : U16x8 -> I16x8
+			to_i16x8_bits = |vector| I16x8.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as a [U32x4]. Free at runtime.
+			to_u32x4_bits : U16x8 -> U32x4
+			to_u32x4_bits = |vector| U32x4.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as an [I32x4]. Free at runtime.
+			to_i32x4_bits : U16x8 -> I32x4
+			to_i32x4_bits = |vector| I32x4.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as a [U64x2]. Free at runtime.
+			to_u64x2_bits : U16x8 -> U64x2
+			to_u64x2_bits = |vector| U64x2.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as an [I64x2]. Free at runtime.
+			to_i64x2_bits : U16x8 -> I64x2
+			to_i64x2_bits = |vector| I64x2.from_u128_bits(vector.to_u128_bits())
+
+			## Add lane-wise, each lane wrapping mod 65536.
+			##
+			## Lowers to `paddw` on x86-64, `add` (8×16-bit) on AArch64 NEON,
+			## and `i16x8.add` on wasm.
+			## ```roc
+			## expect U16x8.splat(60000).plus_wrap(U16x8.splat(10000)).get_lane(0) == 4464
+			## ```
+			plus_wrap : U16x8, U16x8 -> U16x8
+
+			## Subtract lane-wise, each lane wrapping mod 65536.
+			##
+			## Lowers to `psubw` on x86-64, `sub` (8×16-bit) on AArch64 NEON,
+			## and `i16x8.sub` on wasm.
+			minus_wrap : U16x8, U16x8 -> U16x8
+
+			## Add lane-wise, each lane saturating at 65535 instead of wrapping.
+			##
+			## Lowers to `paddusw` on x86-64, `uqadd` on AArch64 NEON, and
+			## `i16x8.add_sat_u` on wasm.
+			## ```roc
+			## expect U16x8.splat(60000).plus_saturated(U16x8.splat(10000)).get_lane(0) == 65535
+			## ```
+			plus_saturated : U16x8, U16x8 -> U16x8
+
+			## Subtract lane-wise, each lane saturating at 0 instead of wrapping.
+			##
+			## Lowers to `psubusw` on x86-64, `uqsub` on AArch64 NEON, and
+			## `i16x8.sub_sat_u` on wasm.
+			minus_saturated : U16x8, U16x8 -> U16x8
+
+			## The smaller of each pair of lanes.
+			##
+			## Lowers to `pminuw` (SSE4.1) on x86-64, `umin` on AArch64 NEON,
+			## and `i16x8.min_u` on wasm.
+			min : U16x8, U16x8 -> U16x8
+
+			## The larger of each pair of lanes.
+			##
+			## Lowers to `pmaxuw` (SSE4.1) on x86-64, `umax` on AArch64 NEON,
+			## and `i16x8.max_u` on wasm.
+			max : U16x8, U16x8 -> U16x8
+
+			## The absolute difference of each pair of lanes: `max - min`.
+			##
+			## Lowers to `psubusw` twice + `por` on x86-64 (no single
+			## instruction), `uabd` on AArch64 NEON, and `i16x8.max_u` +
+			## `i16x8.min_u` + `i16x8.sub` on wasm.
+			abs_diff : U16x8, U16x8 -> U16x8
+
+			## The rounding average of each pair of lanes: `(a + b + 1) >> 1`.
+			##
+			## Lowers to `pavgw` on x86-64, `urhadd` on AArch64 NEON, and
+			## `i16x8.avgr_u` on wasm.
+			## ```roc
+			## expect U16x8.splat(10).avg_rounded(U16x8.splat(15)).get_lane(0) == 13
+			## ```
+			avg_rounded : U16x8, U16x8 -> U16x8
+
+			## Multiply lane-wise, each lane wrapping mod 65536.
+			##
+			## Lowers to `pmullw` on x86-64, `mul` on AArch64 NEON, and
+			## `i16x8.mul` on wasm.
+			## ```roc
+			## expect U16x8.splat(1000).times_wrap(U16x8.splat(1000)).get_lane(0) == 16960
+			## ```
+			times_wrap : U16x8, U16x8 -> U16x8
+
+			## The high 16 bits of each lane-wise product: `(a * b) >> 16`.
+			##
+			## Lowers to `pmulhuw` on x86-64, a `umull` + `shrn` sequence on
+			## AArch64 NEON (no single instruction), and an emulated sequence on
+			## wasm (no single instruction).
+			## ```roc
+			## expect U16x8.splat(1000).times_high(U16x8.splat(1000)).get_lane(0) == 15
+			## ```
+			times_high : U16x8, U16x8 -> U16x8
+
+			## Returns the bitwise AND of the two vectors' 128 bits.
+			##
+			## Lowers to `pand` on x86-64, `and` on AArch64 NEON, and
+			## `v128.and` on wasm.
+			bitwise_and : U16x8, U16x8 -> U16x8
+
+			## Returns the bitwise OR of the two vectors' 128 bits.
+			##
+			## Lowers to `por` on x86-64, `orr` on AArch64 NEON, and `v128.or`
+			## on wasm.
+			bitwise_or : U16x8, U16x8 -> U16x8
+
+			## Returns the bitwise XOR of the two vectors' 128 bits.
+			##
+			## Lowers to `pxor` on x86-64, `eor` on AArch64 NEON, and
+			## `v128.xor` on wasm.
+			bitwise_xor : U16x8, U16x8 -> U16x8
+
+			## Flips every one of the vector's 128 bits.
+			##
+			## Lowers to `pxor` with all-ones on x86-64, `mvn` on AArch64 NEON,
+			## and `v128.not` on wasm.
+			bitwise_not : U16x8 -> U16x8
+
+			## Bitwise select: for each of the 128 bits, take the bit from
+			## `if_set` where this mask vector has a 1, and from `if_clear`
+			## where it has a 0. Combined with the `_lanes` comparisons, this
+			## is the branchless lane-wise `if`.
+			##
+			## Lowers to `pand`/`pandn`/`por` on x86-64, `bsl` on AArch64 NEON,
+			## and `v128.bitselect` on wasm.
+			bit_select : U16x8, U16x8, U16x8 -> U16x8
+
+			## Compare lane-wise for equality: each result lane is 65535 where
+			## the lanes are equal and 0 where they differ.
+			##
+			## Lowers to `pcmpeqw` on x86-64, `cmeq` on AArch64 NEON, and
+			## `i16x8.eq` on wasm.
+			eq_lanes : U16x8, U16x8 -> U16x8
+
+			## Compare lane-wise: each result lane is 65535 where a's lane is
+			## greater than b's (unsigned), else 0.
+			##
+			## x86-64 has no unsigned 16-bit compare, so this lowers to
+			## `pmaxuw` + `pcmpeqw` + inversion (or a sign-bias + `pcmpgtw`);
+			## AArch64 NEON `cmhi`; wasm `i16x8.gt_u`.
+			gt_lanes : U16x8, U16x8 -> U16x8
+
+			## Compare lane-wise: each result lane is 65535 where a's lane is
+			## less than b's (unsigned), else 0. See [U16x8.gt_lanes] for the
+			## per-target lowerings.
+			lt_lanes : U16x8, U16x8 -> U16x8
+			lt_lanes = |a, b| U16x8.gt_lanes(b, a)
+
+			## Compare lane-wise: each result lane is 65535 where a's lane is
+			## greater than or equal to b's (unsigned), else 0.
+			##
+			## Lowers to `pmaxuw` + `pcmpeqw` on x86-64, `cmhs` on AArch64
+			## NEON, and `i16x8.ge_u` on wasm.
+			gte_lanes : U16x8, U16x8 -> U16x8
+
+			## Compare lane-wise: each result lane is 65535 where a's lane is
+			## less than or equal to b's (unsigned), else 0. See
+			## [U16x8.gte_lanes] for the per-target lowerings.
+			lte_lanes : U16x8, U16x8 -> U16x8
+			lte_lanes = |a, b| U16x8.gte_lanes(b, a)
+
+			## One bit per lane (lane 0 in bit 0): 1 where the lane's most
+			## significant bit is set. On the all-0/all-1 masks produced by the
+			## `_lanes` comparisons, this packs the comparison results into a
+			## [U8] for scalar decision-making (find-first-match scans, etc.).
+			##
+			## Lowers to a `packsswb` + `pmovmskb` sequence on x86-64, a short
+			## narrowing sequence on AArch64 NEON (no single instruction), and
+			## `i16x8.bitmask` on wasm.
+			## ```roc
+			## expect U16x8.splat(65535).to_bitmask() == 255
+			## ```
+			to_bitmask : U16x8 -> U8
+
+			## Returns `Bool.True` if any lane's most significant bit is set.
+			## On comparison masks: "did any lane match?"
+			any_lanes_set : U16x8 -> Bool
+			any_lanes_set = |vector| U16x8.to_bitmask(vector) != 0
+
+			## Returns `Bool.True` if every lane's most significant bit is set.
+			## On comparison masks: "did all lanes match?"
+			all_lanes_set : U16x8 -> Bool
+			all_lanes_set = |vector| U16x8.to_bitmask(vector) == 255
+
+			## Shift every lane's bits left by the same count. The count is
+			## taken modulo 16: shifting by 16 leaves every lane unchanged and
+			## shifting by 17 shifts by 1, matching [U16.shl_wrap].
+			##
+			## Lowers to `psllw` on x86-64 with the count masked to the lane
+			## width first, `shl` on AArch64 NEON taking the pre-masked count,
+			## and `i16x8.shl` on wasm, which masks the count natively.
+			shl_wrap : U16x8, U8 -> U16x8
+
+			## Shift every lane's bits right by the same count, filling with
+			## zeros. The count is taken modulo 16. For unsigned lanes this
+			## behaves the same as [U16x8.shr_zf_wrap].
+			shr_wrap : U16x8, U8 -> U16x8
+
+			## Shift every lane's bits right by the same count, filling the
+			## vacated high bits with zeros. The count is taken modulo 16:
+			## shifting by 16 leaves every lane unchanged and shifting by 17
+			## shifts by 1, matching [U16.shr_zf_wrap].
+			##
+			## Lowers to `psrlw` on x86-64 with the count masked to the lane
+			## width first, `ushr` on AArch64 NEON taking the pre-masked count,
+			## and `i16x8.shr_u` on wasm, which masks the count natively.
+			shr_zf_wrap : U16x8, U8 -> U16x8
+
+			## The value of the lane at the given index. Crashes if the index
+			## is 8 or greater. (Lane indices are expected to be compile-time
+			## constants in practice.)
+			##
+			## Lowers to `pextrw` on x86-64, `umov` on AArch64 NEON, and
+			## `i16x8.extract_lane_u` on wasm.
+			get_lane : U16x8, U64 -> U16
+			get_lane = |vector, index|
+				if index >= 8 {
+					crash "U16x8.get_lane: lane index out of range"
+				} else {
+					simd_u16x8_get_lane_unchecked(vector, index)
+				}
+
+			## Returns the vector with the lane at the given index replaced by
+			## the given value. Crashes if the index is 8 or greater.
+			##
+			## Lowers to `pinsrw` on x86-64, `ins` on AArch64 NEON, and
+			## `i16x8.replace_lane` on wasm.
+			with_lane : U16x8, U64, U16 -> U16x8
+			with_lane = |vector, index, value|
+				if index >= 8 {
+					crash "U16x8.with_lane: lane index out of range"
+				} else {
+					simd_u16x8_with_lane_unchecked(vector, index, value)
+				}
+
+			## Returns a vector with every lane set to the lane of this vector
+			## at the given index. Crashes if the index is 8 or greater.
+			##
+			## Lowers to `pshufb` with a constant pattern on x86-64, `dup`
+			## (lane form) on AArch64 NEON, and a constant `i8x16.shuffle` on
+			## wasm.
+			broadcast_lane : U16x8, U64 -> U16x8
+			broadcast_lane = |vector, index| U16x8.splat(U16x8.get_lane(vector, index))
+
+			## Interleave the low 4 lanes of the two vectors: result lanes are
+			## `a0, b0, a1, b1, ...` up through `a3, b3`. With
+			## [U16x8.interleave_hi], this is the building block of matrix
+			## transposes and of widening lane data.
+			##
+			## Lowers to `punpcklwd` on x86-64, `zip1` on AArch64 NEON, and a
+			## constant `i8x16.shuffle` on wasm.
+			interleave_lo : U16x8, U16x8 -> U16x8
+
+			## Interleave the high 4 lanes of the two vectors: result lanes are
+			## `a4, b4, a5, b5, ...` up through `a7, b7`.
+			##
+			## Lowers to `punpckhwd` on x86-64, `zip2` on AArch64 NEON, and a
+			## constant `i8x16.shuffle` on wasm.
+			interleave_hi : U16x8, U16x8 -> U16x8
+
+			## The even-indexed lanes of a followed by the even-indexed lanes
+			## of b — the deinterleaving inverse of the interleave operations,
+			## used to split interleaved channel data apart.
+			##
+			## Lowers to `pshufb`-based shuffles on x86-64, `uzp1` on AArch64
+			## NEON, and a constant `i8x16.shuffle` on wasm.
+			even_lanes : U16x8, U16x8 -> U16x8
+
+			## The odd-indexed lanes of a followed by the odd-indexed lanes of
+			## b.
+			##
+			## Lowers to `pshufb`-based shuffles on x86-64, `uzp2` on AArch64
+			## NEON, and a constant `i8x16.shuffle` on wasm.
+			odd_lanes : U16x8, U16x8 -> U16x8
+
+			## Returns the vector with its 8 lanes in reverse order.
+			##
+			## Lowers to `pshufb` with a constant pattern on x86-64, `rev64` +
+			## `ext` on AArch64 NEON, and a constant `i8x16.shuffle` on wasm.
+			reverse_lanes : U16x8 -> U16x8
+
+			## Zero-extend the low 4 lanes into the 4 32-bit lanes of a
+			## [U32x4]. With [U16x8.to_u32x4_hi], this is the widening step of
+			## the widen-compute-narrow pattern most codec kernels use.
+			##
+			## Lowers to `pmovzxwd` (SSE4.1) on x86-64, `uxtl` on AArch64 NEON,
+			## and `i32x4.extend_low_i16x8_u` on wasm.
+			to_u32x4_lo : U16x8 -> U32x4
+
+			## Zero-extend the high 4 lanes into the 4 32-bit lanes of a
+			## [U32x4].
+			##
+			## Lowers to `punpckhwd` with zero on x86-64, `uxtl2` on AArch64
+			## NEON, and `i32x4.extend_high_i16x8_u` on wasm.
+			to_u32x4_hi : U16x8 -> U32x4
+
+			## Add adjacent pairs of lanes into the 4 32-bit lanes of a
+			## [U32x4]: result lane i is `lane(2i) + lane(2i+1)`. Used by
+			## checksum and histogram accumulation.
+			##
+			## Lowers to an emulated sequence on x86-64 (no unsigned
+			## pairwise-add instruction), `uaddlp` on AArch64 NEON, and
+			## `i32x4.extadd_pairwise_i16x8_u` on wasm.
+			pairwise_plus_to_u32x4 : U16x8 -> U32x4
+
+			## Multiply the low 4 lanes of the two vectors pairwise into the 4
+			## 32-bit lanes of a [U32x4] (no overflow is possible).
+			##
+			## Lowers to a `pmullw` + `pmulhuw` + `punpcklwd` sequence on
+			## x86-64 (no single instruction), `umull` on AArch64 NEON, and
+			## `i32x4.extmul_low_i16x8_u` on wasm.
+			times_wide_lo : U16x8, U16x8 -> U32x4
+
+			## Multiply the high 4 lanes of the two vectors pairwise into the 4
+			## 32-bit lanes of a [U32x4].
+			##
+			## Lowers to a `pmullw` + `pmulhuw` + `punpckhwd` sequence on
+			## x86-64, `umull2` on AArch64 NEON, and `i32x4.extmul_high_i16x8_u`
+			## on wasm.
+			times_wide_hi : U16x8, U16x8 -> U32x4
+
+			## Truncate each 16-bit lane of the two vectors to its low 8 bits
+			## and pack them into a [U8x16]: result lanes 0-7 come from `a`,
+			## lanes 8-15 from `b`.
+			##
+			## Lowers to a `pand` + `packuswb` sequence on x86-64, `xtn` +
+			## `xtn2` on AArch64 NEON, and an emulated mask + narrow sequence on
+			## wasm.
+			narrow_to_u8x16_wrap : U16x8, U16x8 -> U8x16
+
+			## Clamp each 16-bit lane of the two vectors to at most 255 and
+			## pack the results into a [U8x16]: result lanes 0-7 come from `a`,
+			## lanes 8-15 from `b`.
+			##
+			## Lowers to a `pminuw` + `packuswb` sequence on x86-64 (no direct
+			## unsigned-source pack), `uqxtn` + `uqxtn2` on AArch64 NEON, and an
+			## emulated sequence on wasm.
+			narrow_to_u8x16_saturated : U16x8, U16x8 -> U8x16
+
+			## The sum of all 8 lanes (at most 524280, so it always fits).
+			##
+			## Lowers to an emulated sequence on x86-64, `uaddlv` on AArch64
+			## NEON, and pairwise-add chains on wasm.
+			sum_lanes : U16x8 -> U32
+
+			## Read 16 bytes starting at the given byte index as 8 little-endian
+			## 16-bit lanes. Returns `Err(OutOfBounds)` unless
+			## `index + 16 <= List.len(bytes)`. Any alignment is fine.
+			##
+			## Lowers to `movdqu` on x86-64, `ldr` (Q register) on AArch64,
+			## and `v128.load` on wasm.
+			load : List(U8), U64 -> Try(U16x8, [OutOfBounds, ..])
+			load = |bytes, index| {
+				len = List.len(bytes)
+				if index > len {
+					Err(OutOfBounds)
+				} else if len - index < 16 {
+					Err(OutOfBounds)
+				} else {
+					Ok(simd_u16x8_load_16_unchecked(bytes, index))
+				}
+			}
+
+			## Write these 8 lanes as 16 bytes into the list starting at the
+			## given byte index (in place when the list is unique),
+			## little-endian. Returns `Err(OutOfBounds)` unless
+			## `index + 16 <= List.len(bytes)`.
+			##
+			## Lowers to `movdqu` (store form) on x86-64, `str` (Q register)
+			## on AArch64, and `v128.store` on wasm.
+			store : U16x8, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
+			store = |vector, bytes, index| {
+				len = List.len(bytes)
+				if index > len {
+					Err(OutOfBounds)
+				} else if len - index < 16 {
+					Err(OutOfBounds)
+				} else {
+					Ok(simd_u16x8_store_16_unchecked(vector, bytes, index))
+				}
+			}
+
+			## Append these 8 lanes as 16 bytes (little-endian) to the end of
+			## the list.
+			append_to : U16x8, List(U8) -> List(U8)
+
+		}
+
+		## A 128-bit SIMD vector of 8 signed 16-bit lanes (two's complement).
+		##
+		## Lane `i` occupies bits `[i * 16, (i + 1) * 16)` of the vector, and
+		## the byte-serialized form (used by [I16x8.load] and [I16x8.store]) is
+		## little-endian: lane 0 first, each lane's two bytes least-significant
+		## first. Every operation has one pinned meaning that is bit-identical
+		## on every target; the compiler lowers each operation to the best
+		## instruction sequence for the target CPU (SSE/AVX on x86-64, NEON on
+		## AArch64, simd128 on wasm).
+		I16x8 :: [ProvidedByCompiler].{
+
+			## Returns the [I16x8] with every lane `0`.
+			## ```roc
+			## expect I16x8.default() == I16x8.splat(0)
+			## ```
+			default : () -> I16x8
+			default = || I16x8.splat(0)
+
+			## Returns an [I16x8] with every lane set to the given [I16].
+			##
+			## Lowers to `vpbroadcastw` on x86-64, `dup` on AArch64 NEON, and
+			## `i16x8.splat` on wasm.
+			## ```roc
+			## expect I16x8.splat(-7).get_lane(7) == -7
+			## ```
+			splat : I16 -> I16x8
+
+			## Build an [I16x8] from exactly 8 lane values, lane 0 first.
+			## Returns `Err(WrongLength)` if the list's length is not 8.
+			from_list : List(I16) -> Try(I16x8, [WrongLength, ..])
+			from_list = |lanes|
+				if List.len(lanes) != 8 {
+					Err(WrongLength)
+				} else {
+					var $vector = I16x8.default()
+					var $i = 0.U64
+					while $i < 8 {
+						$vector = I16x8.with_lane($vector, $i, list_get_unsafe(lanes, $i))
+						$i = $i + 1
+					}
+					Ok($vector)
+				}
+
+			## The 8 lane values as a list, lane 0 first.
+			## ```roc
+			## expect I16x8.splat(9).to_list() == List.repeat(9.I16, 8)
+			## ```
+			to_list : I16x8 -> List(I16)
+			to_list = |vector| {
+				var $out = List.with_capacity(8)
+				var $i = 0.U64
+				while $i < 8 {
+					$out = list_append_unsafe($out, I16x8.get_lane(vector, $i))
+					$i = $i + 1
+				}
+				$out
+			}
+
+			## Returns `Bool.True` if all 128 bits of the two vectors are equal.
+			## (For a per-lane comparison producing a mask, see [I16x8.eq_lanes].)
+			##
+			## Lowers to `pxor` + `ptest` on x86-64, `cmeq` + `uminv` on AArch64
+			## NEON, and `v128.xor` + `v128.any_true` on wasm.
+			is_eq : I16x8, I16x8 -> Bool
+			is_eq = |a, b| a.to_u128_bits() == b.to_u128_bits()
+
+			## Feed an [I16x8] into a [Hasher].
+			to_hash : I16x8, Hasher -> Hasher
+			to_hash = |vector, hasher| Hasher.write_u128(hasher, vector.to_u128_bits())
+
+			## Render the lanes for debugging, e.g. `I16x8(1, 2, 3, ...)`.
+			to_inspect : I16x8 -> Str
+			to_inspect = |vector| Str.concat("I16x8(", Str.concat(Str.join_with(List.map(I16x8.to_list(vector), I16.to_str), ", "), ")"))
+
+			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
+			## `[i * 16, (i + 1) * 16)`. Free at runtime — no instructions.
+			to_u128_bits : I16x8 -> U128
+
+			## Build an [I16x8] from 128 raw bits. Free at runtime — no
+			## instructions.
+			from_u128_bits : U128 -> I16x8
+
+			## Reinterpret the same 128 bits as a [U8x16]. Free at runtime.
+			to_u8x16_bits : I16x8 -> U8x16
+			to_u8x16_bits = |vector| U8x16.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as an [I8x16]. Free at runtime.
+			to_i8x16_bits : I16x8 -> I8x16
+			to_i8x16_bits = |vector| I8x16.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as a [U16x8]. Free at runtime.
+			to_u16x8_bits : I16x8 -> U16x8
+			to_u16x8_bits = |vector| U16x8.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as a [U32x4]. Free at runtime.
+			to_u32x4_bits : I16x8 -> U32x4
+			to_u32x4_bits = |vector| U32x4.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as an [I32x4]. Free at runtime.
+			to_i32x4_bits : I16x8 -> I32x4
+			to_i32x4_bits = |vector| I32x4.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as a [U64x2]. Free at runtime.
+			to_u64x2_bits : I16x8 -> U64x2
+			to_u64x2_bits = |vector| U64x2.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as an [I64x2]. Free at runtime.
+			to_i64x2_bits : I16x8 -> I64x2
+			to_i64x2_bits = |vector| I64x2.from_u128_bits(vector.to_u128_bits())
+
+			## Add lane-wise, each lane wrapping around mod 65536 (two's
+			## complement).
+			##
+			## Lowers to `paddw` on x86-64, `add` (8×16-bit) on AArch64 NEON,
+			## and `i16x8.add` on wasm.
+			plus_wrap : I16x8, I16x8 -> I16x8
+
+			## Subtract lane-wise, each lane wrapping around mod 65536 (two's
+			## complement).
+			##
+			## Lowers to `psubw` on x86-64, `sub` (8×16-bit) on AArch64 NEON,
+			## and `i16x8.sub` on wasm.
+			minus_wrap : I16x8, I16x8 -> I16x8
+
+			## Add lane-wise, each lane saturating at 32767 or -32768 instead
+			## of wrapping.
+			##
+			## Lowers to `paddsw` on x86-64, `sqadd` on AArch64 NEON, and
+			## `i16x8.add_sat_s` on wasm.
+			## ```roc
+			## expect I16x8.splat(30000).plus_saturated(I16x8.splat(30000)).get_lane(0) == 32767
+			## ```
+			plus_saturated : I16x8, I16x8 -> I16x8
+
+			## Subtract lane-wise, each lane saturating at 32767 or -32768
+			## instead of wrapping.
+			##
+			## Lowers to `psubsw` on x86-64, `sqsub` on AArch64 NEON, and
+			## `i16x8.sub_sat_s` on wasm.
+			minus_saturated : I16x8, I16x8 -> I16x8
+
+			## Negate each lane, wrapping around mod 65536. `-32768` negates to
+			## itself, since `32768` does not fit in a signed 16-bit lane.
+			##
+			## Lowers to `psubw` from zero on x86-64, `neg` on AArch64 NEON,
+			## and `i16x8.neg` on wasm.
+			## ```roc
+			## expect I16x8.splat(5).negate_wrap().get_lane(0) == -5
+			## ```
+			negate_wrap : I16x8 -> I16x8
+
+			## The absolute value of each lane, wrapping around mod 65536.
+			## `-32768` maps to itself, since `32768` does not fit in a signed
+			## 16-bit lane.
+			##
+			## Lowers to `pabsw` on x86-64, `abs` on AArch64 NEON, and
+			## `i16x8.abs` on wasm.
+			## ```roc
+			## expect I16x8.splat(-5).abs_wrap().get_lane(0) == 5
+			## ```
+			abs_wrap : I16x8 -> I16x8
+
+			## The smaller of each pair of lanes (signed).
+			##
+			## Lowers to `pminsw` on x86-64, `smin` on AArch64 NEON, and
+			## `i16x8.min_s` on wasm.
+			min : I16x8, I16x8 -> I16x8
+
+			## The larger of each pair of lanes (signed).
+			##
+			## Lowers to `pmaxsw` on x86-64, `smax` on AArch64 NEON, and
+			## `i16x8.max_s` on wasm.
+			max : I16x8, I16x8 -> I16x8
+
+			## Multiply lane-wise, each lane wrapping around mod 65536 (the low
+			## 16 bits of the product are the same whether the lanes are read as
+			## signed or unsigned).
+			##
+			## Lowers to `pmullw` on x86-64, `mul` on AArch64 NEON, and
+			## `i16x8.mul` on wasm.
+			times_wrap : I16x8, I16x8 -> I16x8
+
+			## The high 16 bits of each lane-wise signed product:
+			## `(a * b) >> 16` with a sign-preserving (arithmetic) shift.
+			##
+			## Lowers to `pmulhw` on x86-64, a `smull` + `shrn` sequence on
+			## AArch64 NEON (no single instruction), and an emulated sequence on
+			## wasm (no single instruction).
+			times_high : I16x8, I16x8 -> I16x8
+
+			## Fixed-point Q15 multiply with rounding and saturation: each lane
+			## is `saturate((2 * a * b + 32768) >> 16)`, treating the lanes as
+			## signed Q15 fractions. `(-32768, -32768)` saturates to `32767`,
+			## since its exact product `+1.0` is not representable. This is the
+			## fixed-point workhorse of color conversion and DCT kernels.
+			##
+			## Lowers to `pmulhrsw` plus a fixup for the `(-32768, -32768)`
+			## input on x86-64, `sqrdmulh` on AArch64 NEON, and
+			## `i16x8.q15mulr_sat_s` on wasm.
+			## ```roc
+			## expect I16x8.splat(-32768).times_fixed_q15_saturated(I16x8.splat(-32768)).get_lane(0) == 32767
+			## ```
+			times_fixed_q15_saturated : I16x8, I16x8 -> I16x8
+
+			## Multiply lanes pairwise and sum adjacent products into the 4
+			## 32-bit lanes of an [I32x4]: result lane i is
+			## `a(2i) * b(2i) + a(2i+1) * b(2i+1)`. The only input that wraps
+			## the 32-bit result is all four lanes `-32768`, matching the
+			## hardware. This is the DCT/IDCT/FIR workhorse — multiply-accumulate
+			## over signed 16-bit taps.
+			##
+			## Lowers to `pmaddwd` on x86-64, a `smull` + `smull2` +
+			## pairwise-add sequence on AArch64 NEON, and `i32x4.dot_i16x8_s`
+			## on wasm.
+			dot_pairs : I16x8, I16x8 -> I32x4
+
+			## Returns the bitwise AND of the two vectors' 128 bits.
+			##
+			## Lowers to `pand` on x86-64, `and` on AArch64 NEON, and
+			## `v128.and` on wasm.
+			bitwise_and : I16x8, I16x8 -> I16x8
+
+			## Returns the bitwise OR of the two vectors' 128 bits.
+			##
+			## Lowers to `por` on x86-64, `orr` on AArch64 NEON, and `v128.or`
+			## on wasm.
+			bitwise_or : I16x8, I16x8 -> I16x8
+
+			## Returns the bitwise XOR of the two vectors' 128 bits.
+			##
+			## Lowers to `pxor` on x86-64, `eor` on AArch64 NEON, and
+			## `v128.xor` on wasm.
+			bitwise_xor : I16x8, I16x8 -> I16x8
+
+			## Flips every one of the vector's 128 bits.
+			##
+			## Lowers to `pxor` with all-ones on x86-64, `mvn` on AArch64 NEON,
+			## and `v128.not` on wasm.
+			bitwise_not : I16x8 -> I16x8
+
+			## Bitwise select: for each of the 128 bits, take the bit from
+			## `if_set` where this mask vector has a 1, and from `if_clear`
+			## where it has a 0. Combined with the `_lanes` comparisons, this
+			## is the branchless lane-wise `if`.
+			##
+			## Lowers to `pand`/`pandn`/`por` on x86-64, `bsl` on AArch64 NEON,
+			## and `v128.bitselect` on wasm.
+			bit_select : I16x8, I16x8, I16x8 -> I16x8
+
+			## Compare lane-wise for equality: each result lane is all-ones
+			## (`-1`) where the lanes are equal and 0 where they differ.
+			##
+			## Lowers to `pcmpeqw` on x86-64, `cmeq` on AArch64 NEON, and
+			## `i16x8.eq` on wasm.
+			eq_lanes : I16x8, I16x8 -> I16x8
+
+			## Compare lane-wise: each result lane is all-ones (`-1`) where a's
+			## lane is greater than b's (signed), else 0.
+			##
+			## Lowers to `pcmpgtw` on x86-64, `cmgt` on AArch64 NEON, and
+			## `i16x8.gt_s` on wasm.
+			gt_lanes : I16x8, I16x8 -> I16x8
+
+			## Compare lane-wise: each result lane is all-ones (`-1`) where a's
+			## lane is less than b's (signed), else 0. See [I16x8.gt_lanes] for
+			## the per-target lowerings.
+			lt_lanes : I16x8, I16x8 -> I16x8
+			lt_lanes = |a, b| I16x8.gt_lanes(b, a)
+
+			## Compare lane-wise: each result lane is all-ones (`-1`) where a's
+			## lane is greater than or equal to b's (signed), else 0.
+			##
+			## Lowers to `pcmpgtw` + `pcmpeqw` + `por` on x86-64, `cmge` on
+			## AArch64 NEON, and `i16x8.ge_s` on wasm.
+			gte_lanes : I16x8, I16x8 -> I16x8
+
+			## Compare lane-wise: each result lane is all-ones (`-1`) where a's
+			## lane is less than or equal to b's (signed), else 0. See
+			## [I16x8.gte_lanes] for the per-target lowerings.
+			lte_lanes : I16x8, I16x8 -> I16x8
+			lte_lanes = |a, b| I16x8.gte_lanes(b, a)
+
+			## One bit per lane (lane 0 in bit 0): 1 where the lane's most
+			## significant (sign) bit is set. On the all-0/all-1 masks produced
+			## by the `_lanes` comparisons, this packs the comparison results
+			## into a [U8] for scalar decision-making (find-first-match scans,
+			## etc.).
+			##
+			## Lowers to a `packsswb` + `pmovmskb` sequence on x86-64, a short
+			## narrowing sequence on AArch64 NEON (no single instruction), and
+			## `i16x8.bitmask` on wasm.
+			to_bitmask : I16x8 -> U8
+
+			## Returns `Bool.True` if any lane's sign bit is set (any lane is
+			## negative). On comparison masks: "did any lane match?"
+			any_lanes_set : I16x8 -> Bool
+			any_lanes_set = |vector| I16x8.to_bitmask(vector) != 0
+
+			## Returns `Bool.True` if every lane's sign bit is set (every lane
+			## is negative). On comparison masks: "did all lanes match?"
+			all_lanes_set : I16x8 -> Bool
+			all_lanes_set = |vector| I16x8.to_bitmask(vector) == 255
+
+			## Shift every lane's bits left by the same count. The count is
+			## taken modulo 16: shifting by 16 leaves every lane unchanged and
+			## shifting by 17 shifts by 1, matching [I16.shl_wrap].
+			##
+			## Lowers to `psllw` on x86-64 with the count masked to the lane
+			## width first, `shl` on AArch64 NEON taking the pre-masked count,
+			## and `i16x8.shl` on wasm, which masks the count natively.
+			shl_wrap : I16x8, U8 -> I16x8
+
+			## Shift every lane's bits right by the same count, preserving the
+			## sign ("arithmetic shift"). The count is taken modulo 16: shifting
+			## by 16 leaves every lane unchanged and shifting by 17 shifts by 1,
+			## matching [I16.shr_wrap].
+			##
+			## Lowers to `psraw` on x86-64 with the count masked to the lane
+			## width first, `sshr` on AArch64 NEON taking the pre-masked count,
+			## and `i16x8.shr_s` on wasm, which masks the count natively.
+			shr_wrap : I16x8, U8 -> I16x8
+
+			## Shift every lane's bits right by the same count, filling the
+			## vacated high bits with zeros ("zero-fill"). The count is taken
+			## modulo 16: shifting by 16 leaves every lane unchanged and shifting
+			## by 17 shifts by 1, matching [I16.shr_zf_wrap].
+			##
+			## Lowers to `psrlw` on x86-64 with the count masked to the lane
+			## width first, `ushr` on AArch64 NEON taking the pre-masked count,
+			## and `i16x8.shr_u` on wasm, which masks the count natively.
+			shr_zf_wrap : I16x8, U8 -> I16x8
+
+			## Shift every lane right by the same count, rounding to nearest
+			## (round half up): each lane becomes
+			## `(a + (1 << (count - 1))) >> count` with a sign-preserving shift.
+			## A count of 0 returns the vector unchanged; counts of 16 or more
+			## produce 0 in every lane. This is the rounding-shift idiom of
+			## every transform stage.
+			##
+			## Lowers to a `paddw` + `psraw` sequence on x86-64 (no single
+			## instruction), `srshr` on AArch64 NEON, and an emulated sequence
+			## on wasm (no single instruction).
+			## ```roc
+			## expect I16x8.splat(5).shift_right_rounded_by(1).get_lane(0) == 3
+			## ```
+			shift_right_rounded_by : I16x8, U8 -> I16x8
+
+			## Clamp each 16-bit lane of the two vectors to the signed 8-bit
+			## range `-128` to `127` and pack the results into an [I8x16]:
+			## result lanes 0-7 come from `a`, lanes 8-15 from `b`.
+			##
+			## Lowers to `packsswb` on x86-64, `sqxtn` + `sqxtn2` on AArch64
+			## NEON, and `i8x16.narrow_i16x8_s` on wasm.
+			narrow_to_i8x16_saturated : I16x8, I16x8 -> I8x16
+
+			## Clamp each 16-bit lane of the two vectors to the unsigned 8-bit
+			## range `0` to `255` and pack the results into a [U8x16]: result
+			## lanes 0-7 come from `a`, lanes 8-15 from `b`. This is the final
+			## clamp-to-pixel step of image reconstruction.
+			##
+			## Lowers to `packuswb` on x86-64, `sqxtun` + `sqxtun2` on AArch64
+			## NEON, and `i8x16.narrow_i16x8_u` on wasm.
+			narrow_to_u8x16_saturated : I16x8, I16x8 -> U8x16
+
+			## Sign-extend the low 4 lanes into the 4 32-bit lanes of an
+			## [I32x4]. With [I16x8.to_i32x4_hi], this is the widening step of
+			## the widen-compute-narrow pattern most codec kernels use.
+			##
+			## Lowers to `pmovsxwd` on x86-64, `sxtl` on AArch64 NEON, and
+			## `i32x4.extend_low_i16x8_s` on wasm.
+			to_i32x4_lo : I16x8 -> I32x4
+
+			## Sign-extend the high 4 lanes into the 4 32-bit lanes of an
+			## [I32x4].
+			##
+			## Lowers to a `psrldq` + `pmovsxwd` sequence on x86-64, `sxtl2` on
+			## AArch64 NEON, and `i32x4.extend_high_i16x8_s` on wasm.
+			to_i32x4_hi : I16x8 -> I32x4
+
+			## Add adjacent pairs of lanes into the 4 32-bit lanes of an
+			## [I32x4]: result lane i is `a(2i) + a(2i+1)` (signed). Used by
+			## transform column sums and histogram accumulation.
+			##
+			## Lowers to `pmaddwd` with a ones vector on x86-64, `saddlp` on
+			## AArch64 NEON, and `i32x4.extadd_pairwise_i16x8_s` on wasm.
+			pairwise_plus_to_i32x4 : I16x8 -> I32x4
+
+			## Multiply the low 4 lanes of the two vectors pairwise into the 4
+			## 32-bit lanes of an [I32x4] (no overflow is possible).
+			##
+			## Lowers to a `pmullw` + `pmulhw` + `punpcklwd` sequence on x86-64
+			## (no single instruction), `smull` on AArch64 NEON, and
+			## `i32x4.extmul_low_i16x8_s` on wasm.
+			times_wide_lo : I16x8, I16x8 -> I32x4
+
+			## Multiply the high 4 lanes of the two vectors pairwise into the 4
+			## 32-bit lanes of an [I32x4].
+			##
+			## Lowers to a `pmullw` + `pmulhw` + `punpckhwd` sequence on
+			## x86-64, `smull2` on AArch64 NEON, and `i32x4.extmul_high_i16x8_s`
+			## on wasm.
+			times_wide_hi : I16x8, I16x8 -> I32x4
+
+			## The sum of all 8 lanes (signed; ranges from -262144 to 262136,
+			## so it always fits in an [I32]).
+			##
+			## Lowers to an emulated sequence on x86-64, `saddlv` on AArch64
+			## NEON, and pairwise-add chains on wasm.
+			sum_lanes : I16x8 -> I32
+
+			## The value of the lane at the given index. Crashes if the index
+			## is 8 or greater. (Lane indices are expected to be compile-time
+			## constants in practice.)
+			##
+			## Lowers to `pextrw` on x86-64, `smov` on AArch64 NEON, and
+			## `i16x8.extract_lane_s` on wasm.
+			get_lane : I16x8, U64 -> I16
+			get_lane = |vector, index|
+				if index >= 8 {
+					crash "I16x8.get_lane: lane index out of range"
+				} else {
+					simd_i16x8_get_lane_unchecked(vector, index)
+				}
+
+			## Returns the vector with the lane at the given index replaced by
+			## the given value. Crashes if the index is 8 or greater.
+			##
+			## Lowers to `pinsrw` on x86-64, `ins` on AArch64 NEON, and
+			## `i16x8.replace_lane` on wasm.
+			with_lane : I16x8, U64, I16 -> I16x8
+			with_lane = |vector, index, value|
+				if index >= 8 {
+					crash "I16x8.with_lane: lane index out of range"
+				} else {
+					simd_i16x8_with_lane_unchecked(vector, index, value)
+				}
+
+			## Returns a vector with every lane set to the lane of this vector
+			## at the given index. Crashes if the index is 8 or greater.
+			##
+			## Lowers to `pshufb` with a constant pattern on x86-64, `dup`
+			## (lane form) on AArch64 NEON, and a constant `i8x16.shuffle` on
+			## wasm.
+			broadcast_lane : I16x8, U64 -> I16x8
+			broadcast_lane = |vector, index| I16x8.splat(I16x8.get_lane(vector, index))
+
+			## Interleave the low 4 lanes of the two vectors: result lanes are
+			## `a0, b0, a1, b1, ...` up through `a3, b3`. With
+			## [I16x8.interleave_hi], this is the building block of matrix
+			## transposes and of widening lane data.
+			##
+			## Lowers to `punpcklwd` on x86-64, `zip1` on AArch64 NEON, and a
+			## constant `i8x16.shuffle` on wasm.
+			interleave_lo : I16x8, I16x8 -> I16x8
+
+			## Interleave the high 4 lanes of the two vectors: result lanes are
+			## `a4, b4, a5, b5, ...` up through `a7, b7`.
+			##
+			## Lowers to `punpckhwd` on x86-64, `zip2` on AArch64 NEON, and a
+			## constant `i8x16.shuffle` on wasm.
+			interleave_hi : I16x8, I16x8 -> I16x8
+
+			## The even-indexed lanes of a followed by the even-indexed lanes
+			## of b — the deinterleaving inverse of the interleave operations,
+			## used to split interleaved channel data apart.
+			##
+			## Lowers to `pshufb`-based shuffles on x86-64, `uzp1` on AArch64
+			## NEON, and a constant `i8x16.shuffle` on wasm.
+			even_lanes : I16x8, I16x8 -> I16x8
+
+			## The odd-indexed lanes of a followed by the odd-indexed lanes of
+			## b.
+			##
+			## Lowers to `pshufb`-based shuffles on x86-64, `uzp2` on AArch64
+			## NEON, and a constant `i8x16.shuffle` on wasm.
+			odd_lanes : I16x8, I16x8 -> I16x8
+
+			## Returns the vector with its 8 lanes in reverse order.
+			##
+			## Lowers to `pshufb` with a constant pattern on x86-64, `rev64` +
+			## `ext` on AArch64 NEON, and a constant `i8x16.shuffle` on wasm.
+			reverse_lanes : I16x8 -> I16x8
+
+			## Read 16 bytes starting at the given byte index as 8 little-endian
+			## 16-bit lanes. Returns `Err(OutOfBounds)` unless
+			## `index + 16 <= List.len(bytes)`. Any alignment is fine.
+			##
+			## Lowers to `movdqu` on x86-64, `ldr` (Q register) on AArch64,
+			## and `v128.load` on wasm.
+			load : List(U8), U64 -> Try(I16x8, [OutOfBounds, ..])
+			load = |bytes, index| {
+				len = List.len(bytes)
+				if index > len {
+					Err(OutOfBounds)
+				} else if len - index < 16 {
+					Err(OutOfBounds)
+				} else {
+					Ok(simd_i16x8_load_16_unchecked(bytes, index))
+				}
+			}
+
+			## Write these 8 lanes as 16 bytes into the list starting at the
+			## given byte index (in place when the list is unique),
+			## little-endian. Returns `Err(OutOfBounds)` unless
+			## `index + 16 <= List.len(bytes)`.
+			##
+			## Lowers to `movdqu` (store form) on x86-64, `str` (Q register)
+			## on AArch64, and `v128.store` on wasm.
+			store : I16x8, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
+			store = |vector, bytes, index| {
+				len = List.len(bytes)
+				if index > len {
+					Err(OutOfBounds)
+				} else if len - index < 16 {
+					Err(OutOfBounds)
+				} else {
+					Ok(simd_i16x8_store_16_unchecked(vector, bytes, index))
+				}
+			}
+
+			## Append these 8 lanes as 16 bytes (little-endian) to the end of
+			## the list.
+			append_to : I16x8, List(U8) -> List(U8)
+
+		}
+
+		## A 128-bit SIMD vector of 4 unsigned 32-bit lanes.
+		##
+		## Lane `i` occupies bits `[i * 32, (i + 1) * 32)` of the vector, and the
+		## byte-serialized form (used by [U32x4.load], [U32x4.store], and
+		## [U32x4.to_list]) is little-endian with lane 0 first. Every operation
+		## has one pinned meaning that is bit-identical on every target; the
+		## compiler lowers each operation to the best instruction sequence for
+		## the target CPU (SSE/AVX on x86-64, NEON on AArch64, simd128 on wasm).
+		U32x4 :: [ProvidedByCompiler].{
+
+			## Returns the [U32x4] with every lane `0`.
+			## ```roc
+			## expect U32x4.default() == U32x4.splat(0)
+			## ```
+			default : () -> U32x4
+			default = || U32x4.splat(0)
+
+			## Returns a [U32x4] with every lane set to the given [U32].
+			##
+			## Lowers to a scalar-register move + `pshufd` on x86-64, `dup` on
+			## AArch64 NEON, and `i32x4.splat` on wasm.
+			## ```roc
+			## expect U32x4.splat(7).get_lane(3) == 7
+			## ```
+			splat : U32 -> U32x4
+
+			## Build a [U32x4] from exactly 4 lane values, lane 0 first.
+			## Returns `Err(WrongLength)` if the list's length is not 4.
+			from_list : List(U32) -> Try(U32x4, [WrongLength, ..])
+			from_list = |lanes|
+				if List.len(lanes) != 4 {
+					Err(WrongLength)
+				} else {
+					var $vector = U32x4.default()
+					var $i = 0.U64
+					while $i < 4 {
+						$vector = U32x4.with_lane($vector, $i, list_get_unsafe(lanes, $i))
+						$i = $i + 1
+					}
+					Ok($vector)
+				}
+
+			## The 4 lane values as a list, lane 0 first.
+			## ```roc
+			## expect U32x4.splat(9).to_list() == List.repeat(9.U32, 4)
+			## ```
+			to_list : U32x4 -> List(U32)
+			to_list = |vector| {
+				var $out = List.with_capacity(4)
+				var $i = 0.U64
+				while $i < 4 {
+					$out = list_append_unsafe($out, U32x4.get_lane(vector, $i))
+					$i = $i + 1
+				}
+				$out
+			}
+
+			## Returns `Bool.True` if all 128 bits of the two vectors are equal.
+			## (For a per-lane comparison producing a mask, see [U32x4.eq_lanes].)
+			##
+			## Lowers to `pxor` + `ptest` on x86-64, `cmeq` + `uminv` on AArch64
+			## NEON, and `v128.xor` + `v128.any_true` on wasm.
+			is_eq : U32x4, U32x4 -> Bool
+			is_eq = |a, b| a.to_u128_bits() == b.to_u128_bits()
+
+			## Feed a [U32x4] into a [Hasher].
+			to_hash : U32x4, Hasher -> Hasher
+			to_hash = |vector, hasher| Hasher.write_u128(hasher, vector.to_u128_bits())
+
+			## Render the lanes for debugging, e.g. `U32x4(1, 2, 3, 4)`.
+			to_inspect : U32x4 -> Str
+			to_inspect = |vector| Str.concat("U32x4(", Str.concat(Str.join_with(List.map(U32x4.to_list(vector), U32.to_str), ", "), ")"))
+
+			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
+			## `[i * 32, (i + 1) * 32)`. Free at runtime — no instructions.
+			to_u128_bits : U32x4 -> U128
+
+			## Build a [U32x4] from 128 raw bits. Free at runtime — no
+			## instructions.
+			from_u128_bits : U128 -> U32x4
+
+			## Reinterpret the same 128 bits as a [U8x16]. Free at runtime.
+			to_u8x16_bits : U32x4 -> U8x16
+			to_u8x16_bits = |vector| U8x16.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as an [I8x16]. Free at runtime.
+			to_i8x16_bits : U32x4 -> I8x16
+			to_i8x16_bits = |vector| I8x16.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as a [U16x8]. Free at runtime.
+			to_u16x8_bits : U32x4 -> U16x8
+			to_u16x8_bits = |vector| U16x8.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as an [I16x8]. Free at runtime.
+			to_i16x8_bits : U32x4 -> I16x8
+			to_i16x8_bits = |vector| I16x8.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as an [I32x4]. Free at runtime.
+			to_i32x4_bits : U32x4 -> I32x4
+			to_i32x4_bits = |vector| I32x4.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as a [U64x2]. Free at runtime.
+			to_u64x2_bits : U32x4 -> U64x2
+			to_u64x2_bits = |vector| U64x2.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as an [I64x2]. Free at runtime.
+			to_i64x2_bits : U32x4 -> I64x2
+			to_i64x2_bits = |vector| I64x2.from_u128_bits(vector.to_u128_bits())
+
+			## Add lane-wise, each lane wrapping mod 4294967296.
+			##
+			## Lowers to `paddd` on x86-64, `add` (4×32-bit) on AArch64 NEON,
+			## and `i32x4.add` on wasm.
+			## ```roc
+			## expect U32x4.splat(4294967295).plus_wrap(U32x4.splat(1)).get_lane(0) == 0
+			## ```
+			plus_wrap : U32x4, U32x4 -> U32x4
+
+			## Subtract lane-wise, each lane wrapping mod 4294967296.
+			##
+			## Lowers to `psubd` on x86-64, `sub` (4×32-bit) on AArch64 NEON,
+			## and `i32x4.sub` on wasm.
+			## ```roc
+			## expect U32x4.splat(0).minus_wrap(U32x4.splat(1)).get_lane(0) == 4294967295
+			## ```
+			minus_wrap : U32x4, U32x4 -> U32x4
+
+			## The smaller of each pair of lanes (unsigned).
+			##
+			## Lowers to `pminud` (SSE4.1) on x86-64, `umin` on AArch64 NEON,
+			## and `i32x4.min_u` on wasm.
+			min : U32x4, U32x4 -> U32x4
+
+			## The larger of each pair of lanes (unsigned).
+			##
+			## Lowers to `pmaxud` (SSE4.1) on x86-64, `umax` on AArch64 NEON,
+			## and `i32x4.max_u` on wasm.
+			max : U32x4, U32x4 -> U32x4
+
+			## Multiply lane-wise, each lane wrapping mod 4294967296.
+			##
+			## Lowers to `pmulld` (SSE4.1) on x86-64, `mul` (4×32-bit) on
+			## AArch64 NEON, and `i32x4.mul` on wasm.
+			## ```roc
+			## expect U32x4.splat(65536).times_wrap(U32x4.splat(65536)).get_lane(0) == 0
+			## ```
+			times_wrap : U32x4, U32x4 -> U32x4
+
+			## Multiply lanes 0 and 1 of the two vectors pairwise into the two
+			## 64-bit lanes of a [U64x2] (no overflow is possible).
+			##
+			## Lowers to a `pmuludq`-based sequence on x86-64, `umull` on AArch64
+			## NEON, and `i64x2.extmul_low_i32x4_u` on wasm.
+			times_wide_lo : U32x4, U32x4 -> U64x2
+
+			## Multiply lanes 2 and 3 of the two vectors pairwise into the two
+			## 64-bit lanes of a [U64x2] (no overflow is possible).
+			##
+			## Lowers to a `pmuludq`-based sequence on x86-64, `umull2` on
+			## AArch64 NEON, and `i64x2.extmul_high_i32x4_u` on wasm.
+			times_wide_hi : U32x4, U32x4 -> U64x2
+
+			## Returns the bitwise AND of the two vectors' 128 bits.
+			##
+			## Lowers to `pand` on x86-64, `and` on AArch64 NEON, and
+			## `v128.and` on wasm.
+			bitwise_and : U32x4, U32x4 -> U32x4
+
+			## Returns the bitwise OR of the two vectors' 128 bits.
+			##
+			## Lowers to `por` on x86-64, `orr` on AArch64 NEON, and `v128.or`
+			## on wasm.
+			bitwise_or : U32x4, U32x4 -> U32x4
+
+			## Returns the bitwise XOR of the two vectors' 128 bits.
+			##
+			## Lowers to `pxor` on x86-64, `eor` on AArch64 NEON, and
+			## `v128.xor` on wasm.
+			bitwise_xor : U32x4, U32x4 -> U32x4
+
+			## Flips every one of the vector's 128 bits.
+			##
+			## Lowers to `pxor` with all-ones on x86-64, `mvn` on AArch64 NEON,
+			## and `v128.not` on wasm.
+			bitwise_not : U32x4 -> U32x4
+
+			## Bitwise select: for each of the 128 bits, take the bit from
+			## `if_set` where this mask vector has a 1, and from `if_clear`
+			## where it has a 0. Combined with the `_lanes` comparisons, this
+			## is the branchless lane-wise `if`.
+			##
+			## Lowers to `pand`/`pandn`/`por` on x86-64, `bsl` on AArch64 NEON,
+			## and `v128.bitselect` on wasm.
+			bit_select : U32x4, U32x4, U32x4 -> U32x4
+
+			## Compare lane-wise for equality: each result lane is all-ones
+			## (4294967295) where the lanes are equal and 0 where they differ.
+			##
+			## Lowers to `pcmpeqd` on x86-64, `cmeq` on AArch64 NEON, and
+			## `i32x4.eq` on wasm.
+			eq_lanes : U32x4, U32x4 -> U32x4
+
+			## Compare lane-wise: each result lane is all-ones where a's lane is
+			## greater than b's (unsigned), else 0.
+			##
+			## x86-64 has no unsigned dword compare, so this lowers to a
+			## sign-bias + `pcmpgtd`; AArch64 NEON `cmhi`; wasm `i32x4.gt_u`.
+			gt_lanes : U32x4, U32x4 -> U32x4
+
+			## Compare lane-wise: each result lane is all-ones where a's lane is
+			## less than b's (unsigned), else 0. See [U32x4.gt_lanes] for the
+			## per-target lowerings.
+			lt_lanes : U32x4, U32x4 -> U32x4
+			lt_lanes = |a, b| U32x4.gt_lanes(b, a)
+
+			## Compare lane-wise: each result lane is all-ones where a's lane is
+			## greater than or equal to b's (unsigned), else 0.
+			##
+			## x86-64 has no unsigned dword compare, so this lowers to a
+			## sign-bias + `pcmpgtd` + inversion; AArch64 NEON `cmhs`; wasm
+			## `i32x4.ge_u`.
+			gte_lanes : U32x4, U32x4 -> U32x4
+
+			## Compare lane-wise: each result lane is all-ones where a's lane is
+			## less than or equal to b's (unsigned), else 0. See
+			## [U32x4.gte_lanes] for the per-target lowerings.
+			lte_lanes : U32x4, U32x4 -> U32x4
+			lte_lanes = |a, b| U32x4.gte_lanes(b, a)
+
+			## One bit per lane (lane 0 in bit 0): 1 where the lane's most
+			## significant bit is set. On the all-0/all-1 masks produced by the
+			## `_lanes` comparisons, this packs the comparison results into a
+			## [U8] for scalar decision-making.
+			##
+			## Lowers to `movmskps` on x86-64, a short emulated narrowing
+			## sequence on AArch64 NEON (no single instruction), and
+			## `i32x4.bitmask` on wasm.
+			## ```roc
+			## expect U32x4.splat(4294967295).to_bitmask() == 15
+			## ```
+			to_bitmask : U32x4 -> U8
+
+			## Returns `Bool.True` if any lane's most significant bit is set.
+			## On comparison masks: "did any lane match?"
+			any_lanes_set : U32x4 -> Bool
+			any_lanes_set = |vector| U32x4.to_bitmask(vector) != 0
+
+			## Returns `Bool.True` if every lane's most significant bit is set.
+			## On comparison masks: "did all lanes match?"
+			all_lanes_set : U32x4 -> Bool
+			all_lanes_set = |vector| U32x4.to_bitmask(vector) == 15
+
+			## Shift every lane's bits left by the same count. The count is
+			## taken modulo 32: shifting by 32 leaves every lane unchanged and
+			## shifting by 33 shifts by 1, matching [U32.shl_wrap].
+			##
+			## Lowers to `pslld` on x86-64 with the count masked to the lane
+			## width first, `shl` on AArch64 NEON taking the pre-masked count,
+			## and `i32x4.shl` on wasm, which masks the count natively.
+			shl_wrap : U32x4, U8 -> U32x4
+
+			## Shift every lane's bits right by the same count, filling with
+			## zeros. The count is taken modulo 32. For unsigned lanes this
+			## behaves the same as [U32x4.shr_zf_wrap].
+			shr_wrap : U32x4, U8 -> U32x4
+
+			## Shift every lane's bits right by the same count, filling the
+			## vacated high bits with zeros. The count is taken modulo 32:
+			## shifting by 32 leaves every lane unchanged and shifting by 33
+			## shifts by 1, matching [U32.shr_zf_wrap].
+			##
+			## Lowers to `psrld` on x86-64 with the count masked to the lane
+			## width first, `ushr` on AArch64 NEON taking the pre-masked count,
+			## and `i32x4.shr_u` on wasm, which masks the count natively.
+			shr_zf_wrap : U32x4, U8 -> U32x4
+
+			## The value of the lane at the given index. Crashes if the index
+			## is 4 or greater. (Lane indices are expected to be compile-time
+			## constants in practice.)
+			##
+			## Lowers to `pextrd` (SSE4.1) on x86-64, `umov` on AArch64 NEON,
+			## and `i32x4.extract_lane` on wasm.
+			get_lane : U32x4, U64 -> U32
+			get_lane = |vector, index|
+				if index >= 4 {
+					crash "U32x4.get_lane: lane index out of range"
+				} else {
+					simd_u32x4_get_lane_unchecked(vector, index)
+				}
+
+			## Returns the vector with the lane at the given index replaced by
+			## the given value. Crashes if the index is 4 or greater.
+			##
+			## Lowers to `pinsrd` (SSE4.1) on x86-64, `ins` on AArch64 NEON, and
+			## `i32x4.replace_lane` on wasm.
+			with_lane : U32x4, U64, U32 -> U32x4
+			with_lane = |vector, index, value|
+				if index >= 4 {
+					crash "U32x4.with_lane: lane index out of range"
+				} else {
+					simd_u32x4_with_lane_unchecked(vector, index, value)
+				}
+
+			## Returns a vector with every lane set to the lane of this vector
+			## at the given index. Crashes if the index is 4 or greater.
+			##
+			## Lowers to `pshufd` with a constant pattern on x86-64, `dup`
+			## (lane form) on AArch64 NEON, and a constant `i32x4.shuffle` on
+			## wasm.
+			broadcast_lane : U32x4, U64 -> U32x4
+			broadcast_lane = |vector, index| U32x4.splat(U32x4.get_lane(vector, index))
+
+			## Interleave the low 2 lanes of the two vectors: result lanes are
+			## `a0, b0, a1, b1`. With [U32x4.interleave_hi], this is the building
+			## block of matrix transposes and of widening data.
+			##
+			## Lowers to `punpckldq` on x86-64, `zip1` on AArch64 NEON, and a
+			## constant `i32x4.shuffle` on wasm.
+			interleave_lo : U32x4, U32x4 -> U32x4
+
+			## Interleave the high 2 lanes of the two vectors: result lanes are
+			## `a2, b2, a3, b3`.
+			##
+			## Lowers to `punpckhdq` on x86-64, `zip2` on AArch64 NEON, and a
+			## constant `i32x4.shuffle` on wasm.
+			interleave_hi : U32x4, U32x4 -> U32x4
+
+			## The even-indexed lanes of a followed by the even-indexed lanes
+			## of b — the deinterleaving inverse of the interleave operations,
+			## used to split interleaved channel data apart.
+			##
+			## Lowers to `shufps`-class shuffles on x86-64, `uzp1` on AArch64
+			## NEON, and a constant `i32x4.shuffle` on wasm.
+			even_lanes : U32x4, U32x4 -> U32x4
+
+			## The odd-indexed lanes of a followed by the odd-indexed lanes of
+			## b.
+			##
+			## Lowers to `shufps`-class shuffles on x86-64, `uzp2` on AArch64
+			## NEON, and a constant `i32x4.shuffle` on wasm.
+			odd_lanes : U32x4, U32x4 -> U32x4
+
+			## Returns the vector with its 4 lanes in reverse order.
+			##
+			## Lowers to `pshufd` with a constant pattern on x86-64, `rev64` +
+			## `ext` on AArch64 NEON, and a constant `i32x4.shuffle` on wasm.
+			reverse_lanes : U32x4 -> U32x4
+
+			## Zero-extend lanes 0 and 1 into the two 64-bit lanes of a [U64x2].
+			## With [U32x4.to_u64x2_hi], this is the widening step of the
+			## widen-compute-narrow pattern.
+			##
+			## Lowers to `pmovzxdq` (SSE4.1) on x86-64, `uxtl` on AArch64 NEON,
+			## and `i64x2.extend_low_i32x4_u` on wasm.
+			to_u64x2_lo : U32x4 -> U64x2
+
+			## Zero-extend lanes 2 and 3 into the two 64-bit lanes of a [U64x2].
+			##
+			## Lowers to `punpckhdq` with zero on x86-64, `uxtl2` on AArch64
+			## NEON, and `i64x2.extend_high_i32x4_u` on wasm.
+			to_u64x2_hi : U32x4 -> U64x2
+
+			## Truncate each lane to its low 16 bits and pack into a [U16x8]:
+			## result lanes 0-3 come from `a`, lanes 4-7 from `b`.
+			##
+			## Lowers to a `pand` + `packusdw` sequence on x86-64, `xtn` + `xtn2`
+			## on AArch64 NEON, and an emulated sequence on wasm.
+			narrow_to_u16x8_wrap : U32x4, U32x4 -> U16x8
+
+			## Clamp each lane to `65535` and pack into a [U16x8]: result lanes
+			## 0-3 come from `a`, lanes 4-7 from `b`.
+			##
+			## Lowers to `pminud` + `packusdw` (SSE4.1) on x86-64, `uqxtn` +
+			## `uqxtn2` on AArch64 NEON, and an emulated sequence on wasm.
+			narrow_to_u16x8_saturated : U32x4, U32x4 -> U16x8
+
+			## The sum of all 4 lanes (at most 17179869180, so it always fits a
+			## [U64]).
+			##
+			## Lowers to a `phaddd`-style shuffle-add sequence on x86-64,
+			## `uaddlv` on AArch64 NEON, and a pairwise-add chain on wasm.
+			sum_lanes : U32x4 -> U64
+
+			## Read 16 bytes starting at the given byte index, as lanes in
+			## little-endian order. Returns `Err(OutOfBounds)` unless
+			## `index + 16 <= List.len(bytes)`. Any alignment is fine.
+			##
+			## Lowers to `movdqu` on x86-64, `ldr` (Q register) on AArch64,
+			## and `v128.load` on wasm.
+			load : List(U8), U64 -> Try(U32x4, [OutOfBounds, ..])
+			load = |bytes, index| {
+				len = List.len(bytes)
+				if index > len {
+					Err(OutOfBounds)
+				} else if len - index < 16 {
+					Err(OutOfBounds)
+				} else {
+					Ok(simd_u32x4_load_16_unchecked(bytes, index))
+				}
+			}
+
+			## Write these 16 bytes into the list starting at the given byte
+			## index (in place when the list is unique), little-endian.
+			## Returns `Err(OutOfBounds)` unless
+			## `index + 16 <= List.len(bytes)`.
+			##
+			## Lowers to `movdqu` (store form) on x86-64, `str` (Q register)
+			## on AArch64, and `v128.store` on wasm.
+			store : U32x4, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
+			store = |vector, bytes, index| {
+				len = List.len(bytes)
+				if index > len {
+					Err(OutOfBounds)
+				} else if len - index < 16 {
+					Err(OutOfBounds)
+				} else {
+					Ok(simd_u32x4_store_16_unchecked(vector, bytes, index))
+				}
+			}
+
+			## Append these 16 bytes (little-endian) to the end of the list.
+			append_to : U32x4, List(U8) -> List(U8)
+
+		}
+
+		## A 128-bit SIMD vector of 4 signed 32-bit lanes.
+		##
+		## Lane `i` occupies bits `[i * 32, (i + 1) * 32)` of the vector (two's
+		## complement), and the byte-serialized form (used by [I32x4.load],
+		## [I32x4.store], and [I32x4.to_list]) is little-endian with lane 0
+		## first. Every operation has one pinned meaning that is bit-identical
+		## on every target; the compiler lowers each operation to the best
+		## instruction sequence for the target CPU (SSE/AVX on x86-64, NEON on
+		## AArch64, simd128 on wasm).
+		I32x4 :: [ProvidedByCompiler].{
+
+			## Returns the [I32x4] with every lane `0`.
+			## ```roc
+			## expect I32x4.default() == I32x4.splat(0)
+			## ```
+			default : () -> I32x4
+			default = || I32x4.splat(0)
+
+			## Returns an [I32x4] with every lane set to the given [I32].
+			##
+			## Lowers to a scalar-register move + `pshufd` on x86-64, `dup` on
+			## AArch64 NEON, and `i32x4.splat` on wasm.
+			## ```roc
+			## expect I32x4.splat(-5).get_lane(2) == -5
+			## ```
+			splat : I32 -> I32x4
+
+			## Build an [I32x4] from exactly 4 lane values, lane 0 first.
+			## Returns `Err(WrongLength)` if the list's length is not 4.
+			from_list : List(I32) -> Try(I32x4, [WrongLength, ..])
+			from_list = |lanes|
+				if List.len(lanes) != 4 {
+					Err(WrongLength)
+				} else {
+					var $vector = I32x4.default()
+					var $i = 0.U64
+					while $i < 4 {
+						$vector = I32x4.with_lane($vector, $i, list_get_unsafe(lanes, $i))
+						$i = $i + 1
+					}
+					Ok($vector)
+				}
+
+			## The 4 lane values as a list, lane 0 first.
+			## ```roc
+			## expect I32x4.splat(9).to_list() == List.repeat(9.I32, 4)
+			## ```
+			to_list : I32x4 -> List(I32)
+			to_list = |vector| {
+				var $out = List.with_capacity(4)
+				var $i = 0.U64
+				while $i < 4 {
+					$out = list_append_unsafe($out, I32x4.get_lane(vector, $i))
+					$i = $i + 1
+				}
+				$out
+			}
+
+			## Returns `Bool.True` if all 128 bits of the two vectors are equal.
+			## (For a per-lane comparison producing a mask, see [I32x4.eq_lanes].)
+			##
+			## Lowers to `pxor` + `ptest` on x86-64, `cmeq` + `uminv` on AArch64
+			## NEON, and `v128.xor` + `v128.any_true` on wasm.
+			is_eq : I32x4, I32x4 -> Bool
+			is_eq = |a, b| a.to_u128_bits() == b.to_u128_bits()
+
+			## Feed an [I32x4] into a [Hasher].
+			to_hash : I32x4, Hasher -> Hasher
+			to_hash = |vector, hasher| Hasher.write_u128(hasher, vector.to_u128_bits())
+
+			## Render the lanes for debugging, e.g. `I32x4(-1, 2, -3, 4)`.
+			to_inspect : I32x4 -> Str
+			to_inspect = |vector| Str.concat("I32x4(", Str.concat(Str.join_with(List.map(I32x4.to_list(vector), I32.to_str), ", "), ")"))
+
+			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
+			## `[i * 32, (i + 1) * 32)`. Free at runtime — no instructions.
+			to_u128_bits : I32x4 -> U128
+
+			## Build an [I32x4] from 128 raw bits. Free at runtime — no
+			## instructions.
+			from_u128_bits : U128 -> I32x4
+
+			## Reinterpret the same 128 bits as a [U8x16]. Free at runtime.
+			to_u8x16_bits : I32x4 -> U8x16
+			to_u8x16_bits = |vector| U8x16.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as an [I8x16]. Free at runtime.
+			to_i8x16_bits : I32x4 -> I8x16
+			to_i8x16_bits = |vector| I8x16.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as a [U16x8]. Free at runtime.
+			to_u16x8_bits : I32x4 -> U16x8
+			to_u16x8_bits = |vector| U16x8.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as an [I16x8]. Free at runtime.
+			to_i16x8_bits : I32x4 -> I16x8
+			to_i16x8_bits = |vector| I16x8.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as a [U32x4]. Free at runtime.
+			to_u32x4_bits : I32x4 -> U32x4
+			to_u32x4_bits = |vector| U32x4.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as a [U64x2]. Free at runtime.
+			to_u64x2_bits : I32x4 -> U64x2
+			to_u64x2_bits = |vector| U64x2.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as an [I64x2]. Free at runtime.
+			to_i64x2_bits : I32x4 -> I64x2
+			to_i64x2_bits = |vector| I64x2.from_u128_bits(vector.to_u128_bits())
+
+			## Add lane-wise, each lane wrapping mod 4294967296.
+			##
+			## Lowers to `paddd` on x86-64, `add` (4×32-bit) on AArch64 NEON,
+			## and `i32x4.add` on wasm.
+			plus_wrap : I32x4, I32x4 -> I32x4
+
+			## Subtract lane-wise, each lane wrapping mod 4294967296.
+			##
+			## Lowers to `psubd` on x86-64, `sub` (4×32-bit) on AArch64 NEON,
+			## and `i32x4.sub` on wasm.
+			minus_wrap : I32x4, I32x4 -> I32x4
+
+			## Negate each lane, wrapping mod 4294967296. The most negative lane
+			## (-2147483648) negates to itself.
+			##
+			## Lowers to `psubd` from zero on x86-64, `neg` on AArch64 NEON, and
+			## `i32x4.neg` on wasm.
+			## ```roc
+			## expect I32x4.splat(5).negate_wrap().get_lane(0) == -5
+			## ```
+			negate_wrap : I32x4 -> I32x4
+
+			## The absolute value of each lane, wrapping mod 4294967296. The most
+			## negative lane (-2147483648) has no positive counterpart and stays
+			## -2147483648.
+			##
+			## Lowers to `pabsd` (SSSE3) on x86-64, `abs` on AArch64 NEON, and
+			## `i32x4.abs` on wasm.
+			## ```roc
+			## expect I32x4.splat(-5).abs_wrap().get_lane(0) == 5
+			## ```
+			abs_wrap : I32x4 -> I32x4
+
+			## The smaller of each pair of lanes (signed).
+			##
+			## Lowers to `pminsd` (SSE4.1) on x86-64, `smin` on AArch64 NEON,
+			## and `i32x4.min_s` on wasm.
+			## ```roc
+			## expect I32x4.splat(-5).min(I32x4.splat(3)).get_lane(0) == -5
+			## ```
+			min : I32x4, I32x4 -> I32x4
+
+			## The larger of each pair of lanes (signed).
+			##
+			## Lowers to `pmaxsd` (SSE4.1) on x86-64, `smax` on AArch64 NEON,
+			## and `i32x4.max_s` on wasm.
+			max : I32x4, I32x4 -> I32x4
+
+			## Multiply lane-wise, each lane wrapping mod 4294967296.
+			##
+			## Lowers to `pmulld` (SSE4.1) on x86-64, `mul` (4×32-bit) on
+			## AArch64 NEON, and `i32x4.mul` on wasm.
+			times_wrap : I32x4, I32x4 -> I32x4
+
+			## Multiply lanes 0 and 1 of the two vectors pairwise (signed) into
+			## the two 64-bit lanes of an [I64x2] (no overflow is possible).
+			##
+			## Lowers to `pmuldq` (SSE4.1) on x86-64, `smull` on AArch64 NEON,
+			## and `i64x2.extmul_low_i32x4_s` on wasm.
+			times_wide_lo : I32x4, I32x4 -> I64x2
+
+			## Multiply lanes 2 and 3 of the two vectors pairwise (signed) into
+			## the two 64-bit lanes of an [I64x2] (no overflow is possible).
+			##
+			## Lowers to `pmuldq` (SSE4.1) on x86-64, `smull2` on AArch64 NEON,
+			## and `i64x2.extmul_high_i32x4_s` on wasm.
+			times_wide_hi : I32x4, I32x4 -> I64x2
+
+			## Returns the bitwise AND of the two vectors' 128 bits.
+			##
+			## Lowers to `pand` on x86-64, `and` on AArch64 NEON, and
+			## `v128.and` on wasm.
+			bitwise_and : I32x4, I32x4 -> I32x4
+
+			## Returns the bitwise OR of the two vectors' 128 bits.
+			##
+			## Lowers to `por` on x86-64, `orr` on AArch64 NEON, and `v128.or`
+			## on wasm.
+			bitwise_or : I32x4, I32x4 -> I32x4
+
+			## Returns the bitwise XOR of the two vectors' 128 bits.
+			##
+			## Lowers to `pxor` on x86-64, `eor` on AArch64 NEON, and
+			## `v128.xor` on wasm.
+			bitwise_xor : I32x4, I32x4 -> I32x4
+
+			## Flips every one of the vector's 128 bits.
+			##
+			## Lowers to `pxor` with all-ones on x86-64, `mvn` on AArch64 NEON,
+			## and `v128.not` on wasm.
+			bitwise_not : I32x4 -> I32x4
+
+			## Bitwise select: for each of the 128 bits, take the bit from
+			## `if_set` where this mask vector has a 1, and from `if_clear`
+			## where it has a 0. Combined with the `_lanes` comparisons, this
+			## is the branchless lane-wise `if`.
+			##
+			## Lowers to `pand`/`pandn`/`por` on x86-64, `bsl` on AArch64 NEON,
+			## and `v128.bitselect` on wasm.
+			bit_select : I32x4, I32x4, I32x4 -> I32x4
+
+			## Compare lane-wise for equality: each result lane is all-ones
+			## where the lanes are equal and 0 where they differ.
+			##
+			## Lowers to `pcmpeqd` on x86-64, `cmeq` on AArch64 NEON, and
+			## `i32x4.eq` on wasm.
+			eq_lanes : I32x4, I32x4 -> I32x4
+
+			## Compare lane-wise: each result lane is all-ones where a's lane is
+			## greater than b's (signed), else 0.
+			##
+			## Lowers to `pcmpgtd` on x86-64, `cmgt` on AArch64 NEON, and
+			## `i32x4.gt_s` on wasm.
+			gt_lanes : I32x4, I32x4 -> I32x4
+
+			## Compare lane-wise: each result lane is all-ones where a's lane is
+			## less than b's (signed), else 0. See [I32x4.gt_lanes] for the
+			## per-target lowerings.
+			lt_lanes : I32x4, I32x4 -> I32x4
+			lt_lanes = |a, b| I32x4.gt_lanes(b, a)
+
+			## Compare lane-wise: each result lane is all-ones where a's lane is
+			## greater than or equal to b's (signed), else 0.
+			##
+			## Lowers to `pcmpgtd` + `pcmpeqd` + `por` on x86-64, `cmge` on
+			## AArch64 NEON, and `i32x4.ge_s` on wasm.
+			gte_lanes : I32x4, I32x4 -> I32x4
+
+			## Compare lane-wise: each result lane is all-ones where a's lane is
+			## less than or equal to b's (signed), else 0. See [I32x4.gte_lanes]
+			## for the per-target lowerings.
+			lte_lanes : I32x4, I32x4 -> I32x4
+			lte_lanes = |a, b| I32x4.gte_lanes(b, a)
+
+			## One bit per lane (lane 0 in bit 0): 1 where the lane's most
+			## significant (sign) bit is set. On the all-0/all-1 masks produced
+			## by the `_lanes` comparisons, this packs the comparison results
+			## into a [U8] for scalar decision-making.
+			##
+			## Lowers to `movmskps` on x86-64, a short emulated narrowing
+			## sequence on AArch64 NEON (no single instruction), and
+			## `i32x4.bitmask` on wasm.
+			to_bitmask : I32x4 -> U8
+
+			## Returns `Bool.True` if any lane's sign bit is set (any lane is
+			## negative, or on a comparison mask, "did any lane match?").
+			any_lanes_set : I32x4 -> Bool
+			any_lanes_set = |vector| I32x4.to_bitmask(vector) != 0
+
+			## Returns `Bool.True` if every lane's sign bit is set (every lane
+			## is negative, or on a comparison mask, "did all lanes match?").
+			all_lanes_set : I32x4 -> Bool
+			all_lanes_set = |vector| I32x4.to_bitmask(vector) == 15
+
+			## Shift every lane's bits left by the same count. The count is
+			## taken modulo 32: shifting by 32 leaves every lane unchanged and
+			## shifting by 33 shifts by 1, matching [I32.shl_wrap].
+			##
+			## Lowers to `pslld` on x86-64 with the count masked to the lane
+			## width first, `shl` on AArch64 NEON taking the pre-masked count,
+			## and `i32x4.shl` on wasm, which masks the count natively.
+			shl_wrap : I32x4, U8 -> I32x4
+
+			## Shift every lane's bits right by the same count, replicating the
+			## sign bit into the vacated high bits (arithmetic shift). The count
+			## is taken modulo 32: shifting by 32 leaves every lane unchanged and
+			## shifting by 33 shifts by 1, matching [I32.shr_wrap].
+			##
+			## Lowers to `psrad` on x86-64 with the count masked to the lane
+			## width first, `sshr` on AArch64 NEON taking the pre-masked count,
+			## and `i32x4.shr_s` on wasm, which masks the count natively.
+			shr_wrap : I32x4, U8 -> I32x4
+
+			## Shift every lane's bits right by the same count, filling the
+			## vacated high bits with zeros. The count is taken modulo 32:
+			## shifting by 32 leaves every lane unchanged and shifting by 33
+			## shifts by 1, matching [I32.shr_zf_wrap].
+			##
+			## Lowers to `psrld` on x86-64 with the count masked to the lane
+			## width first, `ushr` on AArch64 NEON taking the pre-masked count,
+			## and `i32x4.shr_u` on wasm, which masks the count natively.
+			shr_zf_wrap : I32x4, U8 -> I32x4
+
+			## Arithmetic right shift that rounds to nearest by adding a
+			## half-ULP bias first: each lane becomes
+			## `(lane + 2^(count-1)) >> count`, so halves round toward positive
+			## infinity. A count of `0` leaves the lane unchanged; counts of 32
+			## or more produce 0. This is the rounding step of fixed-point
+			## transform kernels.
+			##
+			## Lowers to a `paddd` + `psrad` sequence on x86-64, `srshr` on
+			## AArch64 NEON, and an emulated sequence on wasm.
+			shift_right_rounded_by : I32x4, U8 -> I32x4
+
+			## Clamp each signed lane to the [I16] range and pack into an
+			## [I16x8]: result lanes 0-3 come from `a`, lanes 4-7 from `b`.
+			##
+			## Lowers to `packssdw` on x86-64, `sqxtn` + `sqxtn2` on AArch64
+			## NEON, and `i16x8.narrow_i32x4_s` on wasm.
+			narrow_to_i16x8_saturated : I32x4, I32x4 -> I16x8
+
+			## Clamp each signed lane to the [U16] range (negatives become 0)
+			## and pack into a [U16x8]: result lanes 0-3 come from `a`, lanes
+			## 4-7 from `b`.
+			##
+			## Lowers to `packusdw` (SSE4.1) on x86-64, `sqxtun` + `sqxtun2` on
+			## AArch64 NEON, and `i16x8.narrow_i32x4_u` on wasm.
+			narrow_to_u16x8_saturated : I32x4, I32x4 -> U16x8
+
+			## Sign-extend lanes 0 and 1 into the two 64-bit lanes of an [I64x2].
+			## With [I32x4.to_i64x2_hi], this is the widening step of the
+			## widen-compute-narrow pattern.
+			##
+			## Lowers to `pmovsxdq` (SSE4.1) on x86-64, `sxtl` on AArch64 NEON,
+			## and `i64x2.extend_low_i32x4_s` on wasm.
+			to_i64x2_lo : I32x4 -> I64x2
+
+			## Sign-extend lanes 2 and 3 into the two 64-bit lanes of an [I64x2].
+			##
+			## Lowers to `pmovsxdq` (SSE4.1) on the high two lanes on x86-64,
+			## `sxtl2` on AArch64 NEON, and `i64x2.extend_high_i32x4_s` on wasm.
+			to_i64x2_hi : I32x4 -> I64x2
+
+			## The sum of all 4 lanes (signed), as an [I64] (the sum always
+			## fits).
+			##
+			## Lowers to a `phaddd`-style shuffle-add sequence on x86-64,
+			## `saddlv` on AArch64 NEON, and a pairwise-add chain on wasm.
+			sum_lanes : I32x4 -> I64
+
+			## The value of the lane at the given index. Crashes if the index
+			## is 4 or greater. (Lane indices are expected to be compile-time
+			## constants in practice.)
+			##
+			## Lowers to `pextrd` (SSE4.1) on x86-64, `smov` on AArch64 NEON,
+			## and `i32x4.extract_lane` on wasm.
+			get_lane : I32x4, U64 -> I32
+			get_lane = |vector, index|
+				if index >= 4 {
+					crash "I32x4.get_lane: lane index out of range"
+				} else {
+					simd_i32x4_get_lane_unchecked(vector, index)
+				}
+
+			## Returns the vector with the lane at the given index replaced by
+			## the given value. Crashes if the index is 4 or greater.
+			##
+			## Lowers to `pinsrd` (SSE4.1) on x86-64, `ins` on AArch64 NEON, and
+			## `i32x4.replace_lane` on wasm.
+			with_lane : I32x4, U64, I32 -> I32x4
+			with_lane = |vector, index, value|
+				if index >= 4 {
+					crash "I32x4.with_lane: lane index out of range"
+				} else {
+					simd_i32x4_with_lane_unchecked(vector, index, value)
+				}
+
+			## Returns a vector with every lane set to the lane of this vector
+			## at the given index. Crashes if the index is 4 or greater.
+			##
+			## Lowers to `pshufd` with a constant pattern on x86-64, `dup`
+			## (lane form) on AArch64 NEON, and a constant `i32x4.shuffle` on
+			## wasm.
+			broadcast_lane : I32x4, U64 -> I32x4
+			broadcast_lane = |vector, index| I32x4.splat(I32x4.get_lane(vector, index))
+
+			## Interleave the low 2 lanes of the two vectors: result lanes are
+			## `a0, b0, a1, b1`. With [I32x4.interleave_hi], this is the building
+			## block of matrix transposes and of widening data.
+			##
+			## Lowers to `punpckldq` on x86-64, `zip1` on AArch64 NEON, and a
+			## constant `i32x4.shuffle` on wasm.
+			interleave_lo : I32x4, I32x4 -> I32x4
+
+			## Interleave the high 2 lanes of the two vectors: result lanes are
+			## `a2, b2, a3, b3`.
+			##
+			## Lowers to `punpckhdq` on x86-64, `zip2` on AArch64 NEON, and a
+			## constant `i32x4.shuffle` on wasm.
+			interleave_hi : I32x4, I32x4 -> I32x4
+
+			## The even-indexed lanes of a followed by the even-indexed lanes
+			## of b — the deinterleaving inverse of the interleave operations,
+			## used to split interleaved channel data apart.
+			##
+			## Lowers to `shufps`-class shuffles on x86-64, `uzp1` on AArch64
+			## NEON, and a constant `i32x4.shuffle` on wasm.
+			even_lanes : I32x4, I32x4 -> I32x4
+
+			## The odd-indexed lanes of a followed by the odd-indexed lanes of
+			## b.
+			##
+			## Lowers to `shufps`-class shuffles on x86-64, `uzp2` on AArch64
+			## NEON, and a constant `i32x4.shuffle` on wasm.
+			odd_lanes : I32x4, I32x4 -> I32x4
+
+			## Returns the vector with its 4 lanes in reverse order.
+			##
+			## Lowers to `pshufd` with a constant pattern on x86-64, `rev64` +
+			## `ext` on AArch64 NEON, and a constant `i32x4.shuffle` on wasm.
+			reverse_lanes : I32x4 -> I32x4
+
+			## Read 16 bytes starting at the given byte index, as lanes in
+			## little-endian order. Returns `Err(OutOfBounds)` unless
+			## `index + 16 <= List.len(bytes)`. Any alignment is fine.
+			##
+			## Lowers to `movdqu` on x86-64, `ldr` (Q register) on AArch64,
+			## and `v128.load` on wasm.
+			load : List(U8), U64 -> Try(I32x4, [OutOfBounds, ..])
+			load = |bytes, index| {
+				len = List.len(bytes)
+				if index > len {
+					Err(OutOfBounds)
+				} else if len - index < 16 {
+					Err(OutOfBounds)
+				} else {
+					Ok(simd_i32x4_load_16_unchecked(bytes, index))
+				}
+			}
+
+			## Write these 16 bytes into the list starting at the given byte
+			## index (in place when the list is unique), little-endian.
+			## Returns `Err(OutOfBounds)` unless
+			## `index + 16 <= List.len(bytes)`.
+			##
+			## Lowers to `movdqu` (store form) on x86-64, `str` (Q register)
+			## on AArch64, and `v128.store` on wasm.
+			store : I32x4, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
+			store = |vector, bytes, index| {
+				len = List.len(bytes)
+				if index > len {
+					Err(OutOfBounds)
+				} else if len - index < 16 {
+					Err(OutOfBounds)
+				} else {
+					Ok(simd_i32x4_store_16_unchecked(vector, bytes, index))
+				}
+			}
+
+			## Append these 16 bytes (little-endian) to the end of the list.
+			append_to : I32x4, List(U8) -> List(U8)
+
+		}
+
+		## A 128-bit SIMD vector of 2 unsigned 64-bit lanes.
+		##
+		## Lane `i` occupies bits `[i * 64, (i + 1) * 64)` of the vector, and
+		## the byte-serialized form (used by [U64x2.load], [U64x2.store], and
+		## [U64x2.append_to]) is little-endian with lane 0 first. Every operation
+		## has one pinned meaning that is bit-identical on every target; the
+		## compiler lowers each operation to the best instruction sequence for
+		## the target CPU (SSE/AVX on x86-64, NEON on AArch64, simd128 on wasm).
+		U64x2 :: [ProvidedByCompiler].{
+
+			## Returns the [U64x2] with every lane `0`.
+			## ```roc
+			## expect U64x2.default() == U64x2.splat(0)
+			## ```
+			default : () -> U64x2
+			default = || U64x2.splat(0)
+
+			## Returns a [U64x2] with every lane set to the given [U64].
+			##
+			## Lowers to `pshufd` or `movddup` on x86-64, `dup` on AArch64 NEON,
+			## and `i64x2.splat` on wasm.
+			## ```roc
+			## expect U64x2.splat(7).get_lane(1) == 7
+			## ```
+			splat : U64 -> U64x2
+
+			## Build a [U64x2] from exactly 2 lane values, lane 0 first.
+			## Returns `Err(WrongLength)` if the list's length is not 2.
+			from_list : List(U64) -> Try(U64x2, [WrongLength, ..])
+			from_list = |lanes|
+				if List.len(lanes) != 2 {
+					Err(WrongLength)
+				} else {
+					var $vector = U64x2.default()
+					var $i = 0.U64
+					while $i < 2 {
+						$vector = U64x2.with_lane($vector, $i, list_get_unsafe(lanes, $i))
+						$i = $i + 1
+					}
+					Ok($vector)
+				}
+
+			## The 2 lane values as a list, lane 0 first.
+			## ```roc
+			## expect U64x2.splat(9).to_list() == List.repeat(9.U64, 2)
+			## ```
+			to_list : U64x2 -> List(U64)
+			to_list = |vector| {
+				var $out = List.with_capacity(2)
+				var $i = 0.U64
+				while $i < 2 {
+					$out = list_append_unsafe($out, U64x2.get_lane(vector, $i))
+					$i = $i + 1
+				}
+				$out
+			}
+
+			## Returns `Bool.True` if all 128 bits of the two vectors are equal.
+			## (For a per-lane comparison producing a mask, see [U64x2.eq_lanes].)
+			##
+			## Lowers to `pxor` + `ptest` on x86-64, `cmeq` + `uminv` on AArch64
+			## NEON, and `v128.xor` + `v128.any_true` on wasm.
+			is_eq : U64x2, U64x2 -> Bool
+			is_eq = |a, b| a.to_u128_bits() == b.to_u128_bits()
+
+			## Feed a [U64x2] into a [Hasher].
+			to_hash : U64x2, Hasher -> Hasher
+			to_hash = |vector, hasher| Hasher.write_u128(hasher, vector.to_u128_bits())
+
+			## Render the lanes for debugging, e.g. `U64x2(1, 2)`.
+			to_inspect : U64x2 -> Str
+			to_inspect = |vector| Str.concat("U64x2(", Str.concat(Str.join_with(List.map(U64x2.to_list(vector), U64.to_str), ", "), ")"))
+
+			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
+			## `[i * 64, (i + 1) * 64)`. Free at runtime — no instructions.
+			to_u128_bits : U64x2 -> U128
+
+			## Build a [U64x2] from 128 raw bits. Free at runtime — no
+			## instructions.
+			from_u128_bits : U128 -> U64x2
+
+			## Reinterpret the same 128 bits as a [U8x16]. Free at runtime.
+			to_u8x16_bits : U64x2 -> U8x16
+			to_u8x16_bits = |vector| U8x16.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as an [I8x16]. Free at runtime.
+			to_i8x16_bits : U64x2 -> I8x16
+			to_i8x16_bits = |vector| I8x16.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as a [U16x8]. Free at runtime.
+			to_u16x8_bits : U64x2 -> U16x8
+			to_u16x8_bits = |vector| U16x8.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as an [I16x8]. Free at runtime.
+			to_i16x8_bits : U64x2 -> I16x8
+			to_i16x8_bits = |vector| I16x8.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as a [U32x4]. Free at runtime.
+			to_u32x4_bits : U64x2 -> U32x4
+			to_u32x4_bits = |vector| U32x4.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as an [I32x4]. Free at runtime.
+			to_i32x4_bits : U64x2 -> I32x4
+			to_i32x4_bits = |vector| I32x4.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as an [I64x2]. Free at runtime.
+			to_i64x2_bits : U64x2 -> I64x2
+			to_i64x2_bits = |vector| I64x2.from_u128_bits(vector.to_u128_bits())
+
+			## Add lane-wise, each lane wrapping mod 2^64. Each lane widens to a
+			## [U128] for the add so the intermediate cannot overflow, then wraps
+			## back to 64 bits.
+			##
+			## Lowers to `paddq` on x86-64, `add` (2×64-bit) on AArch64 NEON, and
+			## `i64x2.add` on wasm.
+			## ```roc
+			## expect U64x2.splat(1).plus_wrap(U64x2.splat(2)).get_lane(0) == 3
+			## ```
+			plus_wrap : U64x2, U64x2 -> U64x2
+
+			## Subtract lane-wise, each lane wrapping mod 2^64. Each lane widens to
+			## a [U128] and borrows 2^64 before subtracting so the intermediate
+			## stays non-negative, then wraps back to 64 bits.
+			##
+			## Lowers to `psubq` on x86-64, `sub` (2×64-bit) on AArch64 NEON, and
+			## `i64x2.sub` on wasm.
+			minus_wrap : U64x2, U64x2 -> U64x2
+
+			## Returns the bitwise AND of the two vectors' 128 bits.
+			##
+			## Lowers to `pand` on x86-64, `and` on AArch64 NEON, and
+			## `v128.and` on wasm.
+			bitwise_and : U64x2, U64x2 -> U64x2
+
+			## Returns the bitwise OR of the two vectors' 128 bits.
+			##
+			## Lowers to `por` on x86-64, `orr` on AArch64 NEON, and `v128.or`
+			## on wasm.
+			bitwise_or : U64x2, U64x2 -> U64x2
+
+			## Returns the bitwise XOR of the two vectors' 128 bits.
+			##
+			## Lowers to `pxor` on x86-64, `eor` on AArch64 NEON, and
+			## `v128.xor` on wasm.
+			bitwise_xor : U64x2, U64x2 -> U64x2
+
+			## Flips every one of the vector's 128 bits.
+			##
+			## Lowers to `pxor` with all-ones on x86-64, `mvn` on AArch64 NEON,
+			## and `v128.not` on wasm.
+			bitwise_not : U64x2 -> U64x2
+
+			## Bitwise select: for each of the 128 bits, take the bit from
+			## `if_set` where this mask vector has a 1, and from `if_clear`
+			## where it has a 0. Combined with the `_lanes` comparisons, this
+			## is the branchless lane-wise `if`.
+			##
+			## Lowers to `pand`/`pandn`/`por` on x86-64, `bsl` on AArch64 NEON,
+			## and `v128.bitselect` on wasm.
+			bit_select : U64x2, U64x2, U64x2 -> U64x2
+
+			## Compare lane-wise for equality: each result lane is all-ones where
+			## the lanes are equal and 0 where they differ.
+			##
+			## Lowers to `pcmpeqq` (SSE4.1) on x86-64, `cmeq` on AArch64 NEON, and
+			## `i64x2.eq` on wasm.
+			eq_lanes : U64x2, U64x2 -> U64x2
+
+			## One bit per lane (lane 0 in bit 0): 1 where the lane's most
+			## significant bit is set. On the all-0/all-1 masks produced by
+			## [U64x2.eq_lanes], this packs the comparison results into a [U8] for
+			## scalar decision-making.
+			##
+			## Lowers to `movmskpd` on x86-64, a short emulated sequence on AArch64
+			## NEON (no single instruction), and `i64x2.bitmask` on wasm.
+			## ```roc
+			## expect U64x2.splat(18446744073709551615).to_bitmask() == 3
+			## ```
+			to_bitmask : U64x2 -> U8
+
+			## Returns `Bool.True` if any lane's most significant bit is set.
+			## On comparison masks: "did any lane match?"
+			any_lanes_set : U64x2 -> Bool
+			any_lanes_set = |vector| U64x2.to_bitmask(vector) != 0
+
+			## Returns `Bool.True` if every lane's most significant bit is set.
+			## On comparison masks: "did all lanes match?"
+			all_lanes_set : U64x2 -> Bool
+			all_lanes_set = |vector| U64x2.to_bitmask(vector) == 3
+
+			## Shift every lane's bits left by the same count. The count is
+			## taken modulo 64: shifting by 64 leaves every lane unchanged and
+			## shifting by 65 shifts by 1, matching [U64.shl_wrap].
+			##
+			## Lowers to `psllq` on x86-64 with the count masked to the lane
+			## width first, `shl` on AArch64 NEON taking the pre-masked count,
+			## and `i64x2.shl` on wasm, which masks the count natively.
+			shl_wrap : U64x2, U8 -> U64x2
+
+			## Shift every lane's bits right by the same count, filling with
+			## zeros. The count is taken modulo 64. For unsigned lanes this
+			## behaves the same as [U64x2.shr_zf_wrap].
+			shr_wrap : U64x2, U8 -> U64x2
+
+			## Shift every lane's bits right by the same count, filling the
+			## vacated high bits with zeros. The count is taken modulo 64:
+			## shifting by 64 leaves every lane unchanged and shifting by 65
+			## shifts by 1, matching [U64.shr_zf_wrap].
+			##
+			## Lowers to `psrlq` on x86-64 with the count masked to the lane
+			## width first, `ushr` on AArch64 NEON taking the pre-masked count,
+			## and `i64x2.shr_u` on wasm, which masks the count natively.
+			shr_zf_wrap : U64x2, U8 -> U64x2
+
+			## The value of the lane at the given index. Crashes if the index
+			## is 2 or greater. (Lane indices are expected to be compile-time
+			## constants in practice.)
+			##
+			## Lowers to `pextrq` (SSE4.1) on x86-64, `umov` on AArch64 NEON, and
+			## `i64x2.extract_lane` on wasm.
+			get_lane : U64x2, U64 -> U64
+			get_lane = |vector, index|
+				if index >= 2 {
+					crash "U64x2.get_lane: lane index out of range"
+				} else {
+					simd_u64x2_get_lane_unchecked(vector, index)
+				}
+
+			## Returns the vector with the lane at the given index replaced by
+			## the given value. Crashes if the index is 2 or greater.
+			##
+			## Lowers to `pinsrq` (SSE4.1) on x86-64, `ins` on AArch64 NEON, and
+			## `i64x2.replace_lane` on wasm.
+			with_lane : U64x2, U64, U64 -> U64x2
+			with_lane = |vector, index, value|
+				if index >= 2 {
+					crash "U64x2.with_lane: lane index out of range"
+				} else {
+					simd_u64x2_with_lane_unchecked(vector, index, value)
+				}
+
+			## Returns a vector with every lane set to the lane of this vector
+			## at the given index. Crashes if the index is 2 or greater.
+			##
+			## Lowers to `pshufd` with a constant pattern on x86-64, `dup` (lane
+			## form) on AArch64 NEON, and a constant `i8x16.shuffle` on wasm.
+			broadcast_lane : U64x2, U64 -> U64x2
+			broadcast_lane = |vector, index| U64x2.splat(U64x2.get_lane(vector, index))
+
+			## Interleave the low lanes of the two vectors: result lanes are
+			## `a0, b0`. With [U64x2.interleave_hi], this is the building block of
+			## matrix transposes and of widening data.
+			##
+			## Lowers to `punpcklqdq` on x86-64, `zip1` on AArch64 NEON, and a
+			## constant `i8x16.shuffle` on wasm.
+			interleave_lo : U64x2, U64x2 -> U64x2
+
+			## Interleave the high lanes of the two vectors: result lanes are
+			## `a1, b1`.
+			##
+			## Lowers to `punpckhqdq` on x86-64, `zip2` on AArch64 NEON, and a
+			## constant `i8x16.shuffle` on wasm.
+			interleave_hi : U64x2, U64x2 -> U64x2
+
+			## Returns the vector with its 2 lanes in reverse order.
+			##
+			## Lowers to `pshufd` with a constant pattern on x86-64, `ext` on
+			## AArch64 NEON, and a constant `i8x16.shuffle` on wasm.
+			reverse_lanes : U64x2 -> U64x2
+
+			## Truncate each 64-bit lane of both vectors to its low 32 bits,
+			## packing the four results into the 4 lanes of a [U32x4]: result
+			## lanes are `a0, a1, b0, b1`.
+			##
+			## Lowers to a `shufps`-class shuffle on x86-64, `xtn` + `xtn2` on
+			## AArch64 NEON, and an emulated shuffle on wasm.
+			narrow_to_u32x4_wrap : U64x2, U64x2 -> U32x4
+
+			## The wrapping sum of both lanes (mod 2^64). Both lanes widen to a
+			## [U128] for the add so the intermediate cannot overflow, then wrap
+			## back to 64 bits.
+			##
+			## Lowers to `paddq` + a shuffle on x86-64, `addp` (scalar `d`-form)
+			## on AArch64 NEON, and an emulated sequence on wasm.
+			## ```roc
+			## expect U64x2.splat(10).sum_lanes_wrap() == 20
+			## ```
+			sum_lanes_wrap : U64x2 -> U64
+
+			## The carryless (XOR-accumulate, no carries) 128-bit product of lane
+			## 0 of each input. The result vector's 128 bits are that product:
+			## result lane 0 is its low 64 bits and result lane 1 its high 64
+			## bits. This is the engine of CRC-32/CRC-64 folding and GHASH.
+			##
+			## Lowers to `pclmulqdq` (immediate `0x00`) on x86-64, `pmull`
+			## (polynomial, crypto extension) on AArch64 NEON, and a software
+			## sequence on wasm (no instruction).
+			## ```roc
+			## expect U64x2.splat(3).carryless_times_lo(U64x2.splat(5)).get_lane(0) == 15
+			## ```
+			carryless_times_lo : U64x2, U64x2 -> U64x2
+
+			## The carryless (XOR-accumulate, no carries) 128-bit product of lane
+			## 1 of each input. The result vector's 128 bits are that product:
+			## result lane 0 is its low 64 bits and result lane 1 its high 64
+			## bits. This is the engine of CRC-32/CRC-64 folding and GHASH.
+			##
+			## Lowers to `pclmulqdq` (immediate `0x11`) on x86-64, `pmull2`
+			## (polynomial, crypto extension) on AArch64 NEON, and a software
+			## sequence on wasm (no instruction).
+			carryless_times_hi : U64x2, U64x2 -> U64x2
+
+			## Read 16 bytes starting at the given byte index, as lanes in
+			## little-endian order. Returns `Err(OutOfBounds)` unless
+			## `index + 16 <= List.len(bytes)`. Any alignment is fine.
+			##
+			## Lowers to `movdqu` on x86-64, `ldr` (Q register) on AArch64,
+			## and `v128.load` on wasm.
+			load : List(U8), U64 -> Try(U64x2, [OutOfBounds, ..])
+			load = |bytes, index| {
+				len = List.len(bytes)
+				if index > len {
+					Err(OutOfBounds)
+				} else if len - index < 16 {
+					Err(OutOfBounds)
+				} else {
+					Ok(simd_u64x2_load_16_unchecked(bytes, index))
+				}
+			}
+
+			## Write these 16 bytes into the list starting at the given byte
+			## index (in place when the list is unique), little-endian.
+			## Returns `Err(OutOfBounds)` unless
+			## `index + 16 <= List.len(bytes)`.
+			##
+			## Lowers to `movdqu` (store form) on x86-64, `str` (Q register)
+			## on AArch64, and `v128.store` on wasm.
+			store : U64x2, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
+			store = |vector, bytes, index| {
+				len = List.len(bytes)
+				if index > len {
+					Err(OutOfBounds)
+				} else if len - index < 16 {
+					Err(OutOfBounds)
+				} else {
+					Ok(simd_u64x2_store_16_unchecked(vector, bytes, index))
+				}
+			}
+
+			## Append these 16 bytes (little-endian) to the end of the list.
+			append_to : U64x2, List(U8) -> List(U8)
+
+		}
+
+		## A 128-bit SIMD vector of 2 signed 64-bit lanes.
+		##
+		## Lane `i` occupies bits `[i * 64, (i + 1) * 64)` of the vector, and
+		## the byte-serialized form (used by [I64x2.load], [I64x2.store], and
+		## [I64x2.append_to]) is little-endian with lane 0 first. Every operation
+		## has one pinned meaning that is bit-identical on every target; the
+		## compiler lowers each operation to the best instruction sequence for
+		## the target CPU (SSE/AVX on x86-64, NEON on AArch64, simd128 on wasm).
+		I64x2 :: [ProvidedByCompiler].{
+
+			## Returns the [I64x2] with every lane `0`.
+			## ```roc
+			## expect I64x2.default() == I64x2.splat(0)
+			## ```
+			default : () -> I64x2
+			default = || I64x2.splat(0)
+
+			## Returns an [I64x2] with every lane set to the given [I64].
+			##
+			## Lowers to `pshufd` or `movddup` on x86-64, `dup` on AArch64 NEON,
+			## and `i64x2.splat` on wasm.
+			## ```roc
+			## expect I64x2.splat(-1).get_lane(0) == -1
+			## ```
+			splat : I64 -> I64x2
+
+			## Build an [I64x2] from exactly 2 lane values, lane 0 first.
+			## Returns `Err(WrongLength)` if the list's length is not 2.
+			from_list : List(I64) -> Try(I64x2, [WrongLength, ..])
+			from_list = |lanes|
+				if List.len(lanes) != 2 {
+					Err(WrongLength)
+				} else {
+					var $vector = I64x2.default()
+					var $i = 0.U64
+					while $i < 2 {
+						$vector = I64x2.with_lane($vector, $i, list_get_unsafe(lanes, $i))
+						$i = $i + 1
+					}
+					Ok($vector)
+				}
+
+			## The 2 lane values as a list, lane 0 first.
+			## ```roc
+			## expect I64x2.splat(7).to_list() == List.repeat(7.I64, 2)
+			## ```
+			to_list : I64x2 -> List(I64)
+			to_list = |vector| {
+				var $out = List.with_capacity(2)
+				var $i = 0.U64
+				while $i < 2 {
+					$out = list_append_unsafe($out, I64x2.get_lane(vector, $i))
+					$i = $i + 1
+				}
+				$out
+			}
+
+			## Returns `Bool.True` if all 128 bits of the two vectors are equal.
+			## (For a per-lane comparison producing a mask, see [I64x2.eq_lanes].)
+			##
+			## Lowers to `pxor` + `ptest` on x86-64, `cmeq` + `uminv` on AArch64
+			## NEON, and `v128.xor` + `v128.any_true` on wasm.
+			is_eq : I64x2, I64x2 -> Bool
+			is_eq = |a, b| a.to_u128_bits() == b.to_u128_bits()
+
+			## Feed an [I64x2] into a [Hasher].
+			to_hash : I64x2, Hasher -> Hasher
+			to_hash = |vector, hasher| Hasher.write_u128(hasher, vector.to_u128_bits())
+
+			## Render the lanes for debugging, e.g. `I64x2(-1, 2)`.
+			to_inspect : I64x2 -> Str
+			to_inspect = |vector| Str.concat("I64x2(", Str.concat(Str.join_with(List.map(I64x2.to_list(vector), I64.to_str), ", "), ")"))
+
+			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
+			## `[i * 64, (i + 1) * 64)`. Free at runtime — no instructions.
+			to_u128_bits : I64x2 -> U128
+
+			## Build an [I64x2] from 128 raw bits. Free at runtime — no
+			## instructions.
+			from_u128_bits : U128 -> I64x2
+
+			## Reinterpret the same 128 bits as a [U8x16]. Free at runtime.
+			to_u8x16_bits : I64x2 -> U8x16
+			to_u8x16_bits = |vector| U8x16.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as an [I8x16]. Free at runtime.
+			to_i8x16_bits : I64x2 -> I8x16
+			to_i8x16_bits = |vector| I8x16.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as a [U16x8]. Free at runtime.
+			to_u16x8_bits : I64x2 -> U16x8
+			to_u16x8_bits = |vector| U16x8.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as an [I16x8]. Free at runtime.
+			to_i16x8_bits : I64x2 -> I16x8
+			to_i16x8_bits = |vector| I16x8.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as a [U32x4]. Free at runtime.
+			to_u32x4_bits : I64x2 -> U32x4
+			to_u32x4_bits = |vector| U32x4.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as an [I32x4]. Free at runtime.
+			to_i32x4_bits : I64x2 -> I32x4
+			to_i32x4_bits = |vector| I32x4.from_u128_bits(vector.to_u128_bits())
+
+			## Reinterpret the same 128 bits as a [U64x2]. Free at runtime.
+			to_u64x2_bits : I64x2 -> U64x2
+			to_u64x2_bits = |vector| U64x2.from_u128_bits(vector.to_u128_bits())
+
+			## Add lane-wise, each lane wrapping mod 2^64 (two's complement). Each
+			## lane widens to a [U128] for the add so the intermediate cannot
+			## overflow, then wraps back to 64 bits.
+			##
+			## Lowers to `paddq` on x86-64, `add` (2×64-bit) on AArch64 NEON, and
+			## `i64x2.add` on wasm.
+			plus_wrap : I64x2, I64x2 -> I64x2
+
+			## Subtract lane-wise, each lane wrapping mod 2^64 (two's complement).
+			## Each lane widens to a [U128] and borrows 2^64 before subtracting so
+			## the intermediate stays non-negative, then wraps back to 64 bits.
+			##
+			## Lowers to `psubq` on x86-64, `sub` (2×64-bit) on AArch64 NEON, and
+			## `i64x2.sub` on wasm.
+			minus_wrap : I64x2, I64x2 -> I64x2
+
+			## Negate each lane, wrapping mod 2^64 (two's complement). Negating 0
+			## yields 0, and negating [I64.lowest] yields itself (its magnitude is
+			## not representable), matching the scalar wrapping negation.
+			##
+			## Lowers to `psubq` from a zero register on x86-64, `neg` on AArch64
+			## NEON, and `i64x2.neg` on wasm.
+			## ```roc
+			## expect I64x2.splat(5).negate_wrap().get_lane(0) == -5
+			## ```
+			negate_wrap : I64x2 -> I64x2
+
+			## Returns the bitwise AND of the two vectors' 128 bits.
+			##
+			## Lowers to `pand` on x86-64, `and` on AArch64 NEON, and
+			## `v128.and` on wasm.
+			bitwise_and : I64x2, I64x2 -> I64x2
+
+			## Returns the bitwise OR of the two vectors' 128 bits.
+			##
+			## Lowers to `por` on x86-64, `orr` on AArch64 NEON, and `v128.or`
+			## on wasm.
+			bitwise_or : I64x2, I64x2 -> I64x2
+
+			## Returns the bitwise XOR of the two vectors' 128 bits.
+			##
+			## Lowers to `pxor` on x86-64, `eor` on AArch64 NEON, and
+			## `v128.xor` on wasm.
+			bitwise_xor : I64x2, I64x2 -> I64x2
+
+			## Flips every one of the vector's 128 bits.
+			##
+			## Lowers to `pxor` with all-ones on x86-64, `mvn` on AArch64 NEON,
+			## and `v128.not` on wasm.
+			bitwise_not : I64x2 -> I64x2
+
+			## Bitwise select: for each of the 128 bits, take the bit from
+			## `if_set` where this mask vector has a 1, and from `if_clear`
+			## where it has a 0. Combined with the `_lanes` comparisons, this
+			## is the branchless lane-wise `if`.
+			##
+			## Lowers to `pand`/`pandn`/`por` on x86-64, `bsl` on AArch64 NEON,
+			## and `v128.bitselect` on wasm.
+			bit_select : I64x2, I64x2, I64x2 -> I64x2
+
+			## Compare lane-wise for equality: each result lane is all-ones where
+			## the lanes are equal and 0 where they differ.
+			##
+			## Lowers to `pcmpeqq` (SSE4.1) on x86-64, `cmeq` on AArch64 NEON, and
+			## `i64x2.eq` on wasm.
+			eq_lanes : I64x2, I64x2 -> I64x2
+
+			## Compare lane-wise: each result lane is all-ones where a's lane is
+			## greater than b's (signed), else 0.
+			##
+			## Lowers to `pcmpgtq` (SSE4.2) on x86-64, `cmgt` on AArch64 NEON, and
+			## `i64x2.gt_s` on wasm.
+			gt_lanes : I64x2, I64x2 -> I64x2
+
+			## Compare lane-wise: each result lane is all-ones where a's lane is
+			## less than b's (signed), else 0. See [I64x2.gt_lanes] for the
+			## per-target lowerings.
+			lt_lanes : I64x2, I64x2 -> I64x2
+			lt_lanes = |a, b| I64x2.gt_lanes(b, a)
+
+			## Compare lane-wise: each result lane is all-ones where a's lane is
+			## greater than or equal to b's (signed), else 0.
+			##
+			## Lowers to `pcmpgtq` + `pcmpeqq` + `por` on x86-64, `cmge` on AArch64
+			## NEON, and `i64x2.ge_s` on wasm.
+			gte_lanes : I64x2, I64x2 -> I64x2
+
+			## Compare lane-wise: each result lane is all-ones where a's lane is
+			## less than or equal to b's (signed), else 0. See [I64x2.gte_lanes]
+			## for the per-target lowerings.
+			lte_lanes : I64x2, I64x2 -> I64x2
+			lte_lanes = |a, b| I64x2.gte_lanes(b, a)
+
+			## One bit per lane (lane 0 in bit 0): 1 where the lane's most
+			## significant (sign) bit is set. On the all-0/all-1 masks produced
+			## by the `_lanes` comparisons, this packs the results into a [U8] for
+			## scalar decision-making.
+			##
+			## Lowers to `movmskpd` on x86-64, a short emulated sequence on AArch64
+			## NEON (no single instruction), and `i64x2.bitmask` on wasm.
+			## ```roc
+			## expect I64x2.splat(-1).to_bitmask() == 3
+			## ```
+			to_bitmask : I64x2 -> U8
+
+			## Returns `Bool.True` if any lane's most significant bit is set.
+			## On comparison masks: "did any lane match?"
+			any_lanes_set : I64x2 -> Bool
+			any_lanes_set = |vector| I64x2.to_bitmask(vector) != 0
+
+			## Returns `Bool.True` if every lane's most significant bit is set.
+			## On comparison masks: "did all lanes match?"
+			all_lanes_set : I64x2 -> Bool
+			all_lanes_set = |vector| I64x2.to_bitmask(vector) == 3
+
+			## Shift every lane's bits left by the same count. The count is
+			## taken modulo 64: shifting by 64 leaves every lane unchanged and
+			## shifting by 65 shifts by 1, matching [I64.shl_wrap].
+			##
+			## Lowers to `psllq` on x86-64 with the count masked to the lane
+			## width first, `shl` on AArch64 NEON taking the pre-masked count,
+			## and `i64x2.shl` on wasm, which masks the count natively.
+			shl_wrap : I64x2, U8 -> I64x2
+
+			## Shift every lane's bits right by the same count, replicating the
+			## sign bit into the vacated high bits (arithmetic shift). The count
+			## is taken modulo 64: shifting by 64 leaves every lane unchanged and
+			## shifting by 65 shifts by 1, matching [I64.shr_wrap].
+			##
+			## x86-64 has no signed 64-bit lane shift below AVX-512, so this lowers
+			## to a `psrlq` + sign-fixup sequence, with the count masked to the
+			## lane width first; AArch64 NEON `sshr` takes the pre-masked count;
+			## wasm `i64x2.shr_s` masks the count natively.
+			shr_wrap : I64x2, U8 -> I64x2
+
+			## Shift every lane's bits right by the same count, filling the
+			## vacated high bits with zeros. The count is taken modulo 64:
+			## shifting by 64 leaves every lane unchanged and shifting by 65
+			## shifts by 1, matching [I64.shr_zf_wrap].
+			##
+			## Lowers to `psrlq` on x86-64 with the count masked to the lane
+			## width first, `ushr` on AArch64 NEON taking the pre-masked count,
+			## and `i64x2.shr_u` on wasm, which masks the count natively.
+			shr_zf_wrap : I64x2, U8 -> I64x2
+
+			## The value of the lane at the given index. Crashes if the index
+			## is 2 or greater. (Lane indices are expected to be compile-time
+			## constants in practice.)
+			##
+			## Lowers to `pextrq` (SSE4.1) on x86-64, `smov` on AArch64 NEON, and
+			## `i64x2.extract_lane` on wasm.
+			get_lane : I64x2, U64 -> I64
+			get_lane = |vector, index|
+				if index >= 2 {
+					crash "I64x2.get_lane: lane index out of range"
+				} else {
+					simd_i64x2_get_lane_unchecked(vector, index)
+				}
+
+			## Returns the vector with the lane at the given index replaced by
+			## the given value. Crashes if the index is 2 or greater.
+			##
+			## Lowers to `pinsrq` (SSE4.1) on x86-64, `ins` on AArch64 NEON, and
+			## `i64x2.replace_lane` on wasm.
+			with_lane : I64x2, U64, I64 -> I64x2
+			with_lane = |vector, index, value|
+				if index >= 2 {
+					crash "I64x2.with_lane: lane index out of range"
+				} else {
+					simd_i64x2_with_lane_unchecked(vector, index, value)
+				}
+
+			## Returns a vector with every lane set to the lane of this vector
+			## at the given index. Crashes if the index is 2 or greater.
+			##
+			## Lowers to `pshufd` with a constant pattern on x86-64, `dup` (lane
+			## form) on AArch64 NEON, and a constant `i8x16.shuffle` on wasm.
+			broadcast_lane : I64x2, U64 -> I64x2
+			broadcast_lane = |vector, index| I64x2.splat(I64x2.get_lane(vector, index))
+
+			## Interleave the low lanes of the two vectors: result lanes are
+			## `a0, b0`. With [I64x2.interleave_hi], this is the building block of
+			## matrix transposes and of widening data.
+			##
+			## Lowers to `punpcklqdq` on x86-64, `zip1` on AArch64 NEON, and a
+			## constant `i8x16.shuffle` on wasm.
+			interleave_lo : I64x2, I64x2 -> I64x2
+
+			## Interleave the high lanes of the two vectors: result lanes are
+			## `a1, b1`.
+			##
+			## Lowers to `punpckhqdq` on x86-64, `zip2` on AArch64 NEON, and a
+			## constant `i8x16.shuffle` on wasm.
+			interleave_hi : I64x2, I64x2 -> I64x2
+
+			## Returns the vector with its 2 lanes in reverse order.
+			##
+			## Lowers to `pshufd` with a constant pattern on x86-64, `ext` on
+			## AArch64 NEON, and a constant `i8x16.shuffle` on wasm.
+			reverse_lanes : I64x2 -> I64x2
+
+			## The wrapping sum of both lanes (mod 2^64, two's complement). Both
+			## lanes widen to a [U128] for the add so the intermediate cannot
+			## overflow, then wrap back to 64 signed bits.
+			##
+			## Lowers to `paddq` + a shuffle on x86-64, `addp` (scalar `d`-form)
+			## on AArch64 NEON, and an emulated sequence on wasm.
+			## ```roc
+			## expect I64x2.splat(-3).sum_lanes_wrap() == -6
+			## ```
+			sum_lanes_wrap : I64x2 -> I64
+
+			## Read 16 bytes starting at the given byte index, as lanes in
+			## little-endian order. Returns `Err(OutOfBounds)` unless
+			## `index + 16 <= List.len(bytes)`. Any alignment is fine.
+			##
+			## Lowers to `movdqu` on x86-64, `ldr` (Q register) on AArch64,
+			## and `v128.load` on wasm.
+			load : List(U8), U64 -> Try(I64x2, [OutOfBounds, ..])
+			load = |bytes, index| {
+				len = List.len(bytes)
+				if index > len {
+					Err(OutOfBounds)
+				} else if len - index < 16 {
+					Err(OutOfBounds)
+				} else {
+					Ok(simd_i64x2_load_16_unchecked(bytes, index))
+				}
+			}
+
+			## Write these 16 bytes into the list starting at the given byte
+			## index (in place when the list is unique), little-endian.
+			## Returns `Err(OutOfBounds)` unless
+			## `index + 16 <= List.len(bytes)`.
+			##
+			## Lowers to `movdqu` (store form) on x86-64, `str` (Q register)
+			## on AArch64, and `v128.store` on wasm.
+			store : I64x2, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
+			store = |vector, bytes, index| {
+				len = List.len(bytes)
+				if index > len {
+					Err(OutOfBounds)
+				} else if len - index < 16 {
+					Err(OutOfBounds)
+				} else {
+					Ok(simd_i64x2_store_16_unchecked(vector, bytes, index))
+				}
+			}
+
+			## Append these 16 bytes (little-endian) to the end of the list.
+			append_to : I64x2, List(U8) -> List(U8)
+
+		}
 	}
 
 }
@@ -16048,7 +20185,7 @@ dict_empty_bucket : Dict.DictBucket
 dict_empty_bucket = { dist_and_fingerprint: 0, entry_index: 0 }
 
 dict_dist_inc : U32
-dict_dist_inc = U32.shift_left_by(1, 8)
+dict_dist_inc = U32.shl_wrap(1, 8)
 
 dict_fingerprint_mask : U32
 dict_fingerprint_mask = dict_dist_inc - 1
@@ -16077,20 +20214,20 @@ dict_actual_shifts = |shifts| U8.bitwise_and(shifts, dict_shifts_mask)
 dict_shifts_for_current_seed : U8 -> U8
 dict_shifts_for_current_seed = |shifts| {
 	actual = dict_actual_shifts(shifts)
-	seed_high_byte = U64.to_u8_wrap(U64.shift_right_zf_by(dict_seed(), 56))
+	seed_high_byte = U64.to_u8_wrap(U64.shr_zf_wrap(dict_seed(), 56))
 	runtime_bit = U8.bitwise_and(seed_high_byte, dict_runtime_seed_bit)
 	U8.bitwise_or(actual, runtime_bit)
 }
 
 dict_seed_for_shifts : U8 -> U64
 dict_seed_for_shifts = |shifts| {
-	seed_mask_i8 = I8.shift_right_by(U8.to_i8_wrap(shifts), 7)
+	seed_mask_i8 = I8.shr_wrap(U8.to_i8_wrap(shifts), 7)
 	seed_mask = I8.to_u64_wrap(seed_mask_i8)
 	U64.bitwise_and(dict_seed(), seed_mask)
 }
 
 dict_bucket_count_for_shifts : U8 -> U64
-dict_bucket_count_for_shifts = |shifts| U64.shift_left_by(1, 64 - dict_actual_shifts(shifts))
+dict_bucket_count_for_shifts = |shifts| U64.shl_wrap(1, 64 - dict_actual_shifts(shifts))
 
 dict_max_entries_for_bucket_count : U64 -> U64
 dict_max_entries_for_bucket_count = |bucket_count|
@@ -16152,7 +20289,7 @@ dict_entry_index_from_u64 = |index|
 	}
 
 dict_bucket_index_from_hash : U64, U8 -> U64
-dict_bucket_index_from_hash = |hash, shifts| U64.shift_right_zf_by(hash, dict_actual_shifts(shifts))
+dict_bucket_index_from_hash = |hash, shifts| U64.shr_zf_wrap(hash, dict_actual_shifts(shifts))
 
 dict_dist_and_fingerprint_from_hash : U64 -> U32
 dict_dist_and_fingerprint_from_hash = |hash| {
@@ -16743,7 +20880,7 @@ crypto_digest_to_hex_bytes = |bytes| {
 
 	while $index < crypto_digest_byte_len {
 		byte = u8_list_get_unsafe(bytes, $index)
-		$out = u8_append($out, crypto_hex_digit(U8.shift_right_zf_by(byte, 4)))
+		$out = u8_append($out, crypto_hex_digit(U8.shr_zf_wrap(byte, 4)))
 		$out = u8_append($out, crypto_hex_digit(U8.bitwise_and(byte, 15)))
 		$index = $index + 1
 	}
@@ -16791,7 +20928,7 @@ crypto_digest_from_hex = |hex| {
 	while $index < crypto_digest_hex_len {
 		high = crypto_hex_nibble(u8_list_get_unsafe(bytes, $index), $index)?
 		low = crypto_hex_nibble(u8_list_get_unsafe(bytes, $index + 1), $index + 1)?
-		$out = u8_append($out, U8.bitwise_or(U8.shift_left_by(high, 4), low))
+		$out = u8_append($out, U8.bitwise_or(U8.shl_wrap(high, 4), low))
 		$index = $index + 2
 	}
 
@@ -16830,15 +20967,6 @@ out_of_range_try = |answer|
 		Ok(answer.val_or_memory_garbage)
 	} else {
 		Err(OutOfRange)
-	}
-
-out_of_range_or_crash : Try(item, [OutOfRange]) -> item
-out_of_range_or_crash = |answer|
-	match answer {
-		Ok(value) => value
-		Err(OutOfRange) => {
-			crash "number is out of range"
-		}
 	}
 
 dec_round_to_whole : Dec -> Dec
@@ -16958,27 +21086,27 @@ bytes_to_str = |bytes|
 		Err(_) => Err(OutOfRange)
 	}
 
-unsigned_add_try : item, item, item -> Try(item, [Overflow, ..])
+unsigned_plus_try : item, item, item -> Try(item, [Overflow, ..])
 	where [item.is_gt : item, item -> Bool, item.minus : item, item -> item, item.plus : item, item -> item]
-unsigned_add_try = |highest, a, b|
+unsigned_plus_try = |highest, a, b|
 	if a > highest - b {
 		Err(Overflow)
 	} else {
 		Ok(a + b)
 	}
 
-unsigned_sub_try : item, item -> Try(item, [Overflow, ..])
+unsigned_minus_try : item, item -> Try(item, [Overflow, ..])
 	where [item.is_lt : item, item -> Bool, item.minus : item, item -> item]
-unsigned_sub_try = |a, b|
+unsigned_minus_try = |a, b|
 	if a < b {
 		Err(Overflow)
 	} else {
 		Ok(a - b)
 	}
 
-unsigned_mul_try : item, item, item, item -> Try(item, [Overflow, ..])
+unsigned_times_try : item, item, item, item -> Try(item, [Overflow, ..])
 	where [item.is_eq : item, item -> Bool, item.is_gt : item, item -> Bool, item.div_by : item, item -> item, item.times : item, item -> item]
-unsigned_mul_try = |highest, zero, a, b|
+unsigned_times_try = |highest, zero, a, b|
 	if b == zero {
 		Ok(zero)
 	} else if a > highest / b {
@@ -16996,9 +21124,9 @@ unsigned_div_try = |zero, a, b|
 		Ok(a / b)
 	}
 
-signed_add_try : item, item, item, item, item -> Try(item, [Overflow, ..])
+signed_plus_try : item, item, item, item, item -> Try(item, [Overflow, ..])
 	where [item.is_gt : item, item -> Bool, item.is_lt : item, item -> Bool, item.plus : item, item -> item, item.minus : item, item -> item]
-signed_add_try = |lowest, highest, zero, a, b|
+signed_plus_try = |lowest, highest, zero, a, b|
 	if b > zero {
 		if a > highest - b {
 			Err(Overflow)
@@ -17015,9 +21143,9 @@ signed_add_try = |lowest, highest, zero, a, b|
 		Ok(a)
 	}
 
-signed_sub_try : item, item, item, item, item -> Try(item, [Overflow, ..])
+signed_minus_try : item, item, item, item, item -> Try(item, [Overflow, ..])
 	where [item.is_gt : item, item -> Bool, item.is_lt : item, item -> Bool, item.plus : item, item -> item, item.minus : item, item -> item]
-signed_sub_try = |lowest, highest, zero, a, b|
+signed_minus_try = |lowest, highest, zero, a, b|
 	if b > zero {
 		if a < lowest + b {
 			Err(Overflow)
@@ -17034,7 +21162,7 @@ signed_sub_try = |lowest, highest, zero, a, b|
 		Ok(a)
 	}
 
-signed_mul_try : item, item, item, item, item, item -> Try(item, [Overflow, ..])
+signed_times_try : item, item, item, item, item, item -> Try(item, [Overflow, ..])
 	where [
 		item.is_gt : item, item -> Bool,
 		item.is_lt : item, item -> Bool,
@@ -17043,7 +21171,7 @@ signed_mul_try : item, item, item, item, item, item -> Try(item, [Overflow, ..])
 		item.times : item, item -> item,
 		item.div_trunc_by : item, item -> item,
 	]
-signed_mul_try = |lowest, highest, zero, neg_one, a, b|
+signed_times_try = |lowest, highest, zero, neg_one, a, b|
 	if a == zero {
 		Ok(zero)
 	} else if b == zero {
@@ -17125,7 +21253,7 @@ unsigned_pow_try_step = |highest, zero, one, two, acc, base, exponent|
 		next_acc = if exponent.rem_by(two) == zero {
 			Ok(acc)
 		} else {
-			unsigned_mul_try(highest, zero, acc, base)
+			unsigned_times_try(highest, zero, acc, base)
 		}
 
 		match next_acc {
@@ -17135,7 +21263,7 @@ unsigned_pow_try_step = |highest, zero, one, two, acc, base, exponent|
 				if next_exponent == zero {
 					Ok(updated_acc)
 				} else {
-					match unsigned_mul_try(highest, zero, base, base) {
+					match unsigned_times_try(highest, zero, base, base) {
 						Err(Overflow) => Err(Overflow)
 						Ok(updated_base) => unsigned_pow_try_step(highest, zero, one, two, updated_acc, updated_base, next_exponent)
 					}
@@ -17190,7 +21318,7 @@ signed_pow_try_step = |lowest, highest, zero, one, two, neg_one, acc, base, expo
 		next_acc = if exponent.rem_by(two) == zero {
 			Ok(acc)
 		} else {
-			match signed_mul_try(lowest, highest, zero, neg_one, acc, base) {
+			match signed_times_try(lowest, highest, zero, neg_one, acc, base) {
 				Ok(result) => Ok(result)
 				Err(Overflow) => Err(Overflow)
 			}
@@ -17204,7 +21332,7 @@ signed_pow_try_step = |lowest, highest, zero, one, two, neg_one, acc, base, expo
 				if next_exponent == zero {
 					Ok(updated_acc)
 				} else {
-					match signed_mul_try(lowest, highest, zero, neg_one, base, base) {
+					match signed_times_try(lowest, highest, zero, neg_one, base, base) {
 						Err(Overflow) => Err(Overflow)
 						Ok(updated_base) => signed_pow_try_step(lowest, highest, zero, one, two, neg_one, updated_acc, updated_base, next_exponent)
 					}
@@ -17250,7 +21378,7 @@ signed_div_ceil_try = |lowest, highest, zero, one, neg_one, a, b|
 				Ok(quotient)
 			} else if a > zero {
 				if b > zero {
-					match signed_add_try(lowest, highest, zero, quotient, one) {
+					match signed_plus_try(lowest, highest, zero, quotient, one) {
 						Ok(result) => Ok(result)
 						Err(Overflow) => Err(Overflow)
 					}
@@ -17259,7 +21387,7 @@ signed_div_ceil_try = |lowest, highest, zero, one, neg_one, a, b|
 				}
 			} else if a < zero {
 				if b < zero {
-					match signed_add_try(lowest, highest, zero, quotient, one) {
+					match signed_plus_try(lowest, highest, zero, quotient, one) {
 						Ok(result) => Ok(result)
 						Err(Overflow) => Err(Overflow)
 					}
@@ -17278,6 +21406,13 @@ list_append_if_ok = |list, maybe_item|
 		Err(_) => list
 	}
 
+list_prepend_if_ok : List(a), Try(a, err) -> List(a)
+list_prepend_if_ok = |list, maybe_item|
+	match maybe_item {
+		Ok(item) => List.prepend(list, item)
+		Err(_) => list
+	}
+
 unsigned_minus_saturated : item, item, item -> item
 	where [item.is_lt : item, item -> Bool, item.minus : item, item -> item]
 unsigned_minus_saturated = |zero, a, b|
@@ -17290,7 +21425,7 @@ unsigned_minus_saturated = |zero, a, b|
 signed_minus_saturated : item, item, item, item, item -> item
 	where [item.is_gt : item, item -> Bool, item.is_lt : item, item -> Bool, item.plus : item, item -> item, item.minus : item, item -> item]
 signed_minus_saturated = |lowest, highest, zero, a, b|
-	match signed_sub_try(lowest, highest, zero, a, b) {
+	match signed_minus_try(lowest, highest, zero, a, b) {
 		Ok(result) => result
 		Err(Overflow) =>
 			if b > zero {
@@ -17303,7 +21438,7 @@ signed_minus_saturated = |lowest, highest, zero, a, b|
 unsigned_times_saturated : item, item, item, item -> item
 	where [item.is_eq : item, item -> Bool, item.is_gt : item, item -> Bool, item.div_by : item, item -> item, item.times : item, item -> item]
 unsigned_times_saturated = |highest, zero, a, b|
-	match unsigned_mul_try(highest, zero, a, b) {
+	match unsigned_times_try(highest, zero, a, b) {
 		Ok(result) => result
 		Err(Overflow) => highest
 	}
@@ -17318,7 +21453,7 @@ signed_times_saturated : item, item, item, item, item, item -> item
 		item.div_trunc_by : item, item -> item,
 	]
 signed_times_saturated = |lowest, highest, zero, neg_one, a, b|
-	match signed_mul_try(lowest, highest, zero, neg_one, a, b) {
+	match signed_times_try(lowest, highest, zero, neg_one, a, b) {
 		Ok(result) => result
 		Err(Overflow) =>
 			if a < zero {
@@ -17333,79 +21468,6 @@ signed_times_saturated = |lowest, highest, zero, neg_one, a, b|
 				highest
 			}
 		}
-
-unsigned_count_leading_zero_bits : U8, item, item, item -> U8
-	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item]
-unsigned_count_leading_zero_bits = |width, zero, two, value| width - unsigned_bit_length(zero, two, value, 0)
-
-unsigned_bit_length : item, item, item, U8 -> U8
-	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item]
-unsigned_bit_length = |zero, two, value, count|
-	if value == zero {
-		count
-	} else {
-		unsigned_bit_length(zero, two, value / two, count + 1)
-	}
-
-signed_count_leading_zero_bits : U8, item, item, item -> U8
-	where [
-		item.is_eq : item, item -> Bool,
-		item.is_lt : item, item -> Bool,
-		item.div_by : item, item -> item,
-	]
-signed_count_leading_zero_bits = |width, zero, two, value|
-	if value < zero {
-		0
-	} else {
-		unsigned_count_leading_zero_bits(width, zero, two, value)
-	}
-
-integer_count_trailing_zero_bits : U8, item, item, item -> U8
-	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item, item.rem_by : item, item -> item]
-integer_count_trailing_zero_bits = |width, zero, two, value|
-	if value == zero {
-		width
-	} else {
-		integer_count_trailing_zero_bits_step(zero, two, value, 0)
-	}
-
-integer_count_trailing_zero_bits_step : item, item, item, U8 -> U8
-	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item, item.rem_by : item, item -> item]
-integer_count_trailing_zero_bits_step = |zero, two, value, count|
-	if value.rem_by(two) != zero {
-		count
-	} else {
-		integer_count_trailing_zero_bits_step(zero, two, value / two, count + 1)
-	}
-
-unsigned_count_one_bits : item, item, item -> U8
-	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item, item.rem_by : item, item -> item]
-unsigned_count_one_bits = |zero, two, value|
-	if value == zero {
-		0
-	} else {
-		bit = if value.rem_by(two) == zero {
-			0
-		} else {
-			1
-		}
-		bit + unsigned_count_one_bits(zero, two, value / two)
-	}
-
-signed_count_one_bits : U8, item, item, item -> U8
-	where [
-		item.is_eq : item, item -> Bool,
-		item.is_lt : item, item -> Bool,
-		item.div_by : item, item -> item,
-		item.rem_by : item, item -> item,
-		item.bitwise_not : item -> item,
-	]
-signed_count_one_bits = |width, zero, two, value|
-	if value < zero {
-		width - unsigned_count_one_bits(zero, two, value.bitwise_not())
-	} else {
-		unsigned_count_one_bits(zero, two, value)
-	}
 
 integer_is_even : item, item, item -> Bool
 	where [item.is_eq : item, item -> Bool, item.rem_by : item, item -> item]
@@ -17457,7 +21519,7 @@ range_done = || iter_from_step(
 range_exclusive_with_len : num, num, [Known(U64), Unknown] -> Iter(num)
 	where [
 		num.is_lt : num, num -> Bool,
-		num.add_try : num, num -> Try(num, [Overflow]),
+		num.plus_try : num, num -> Try(num, [Overflow]),
 		num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
 	]
 range_exclusive_with_len = |start, end, len_if_known|
@@ -17470,7 +21532,7 @@ range_exclusive_with_len = |start, end, len_if_known|
 range_inclusive_with_len : num, num, [Known(U64), Unknown] -> Iter(num)
 	where [
 		num.is_lte : num, num -> Bool,
-		num.add_try : num, num -> Try(num, [Overflow]),
+		num.plus_try : num, num -> Try(num, [Overflow]),
 		num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
 	]
 range_inclusive_with_len = |start, end, len_if_known|
@@ -17486,32 +21548,23 @@ ScannedJsonString : { after : Str, body : [NoEscapes(Str), HasEscapes(Str)] }
 ## along the way.
 scan_json_string_tail : Str -> Try(ScannedJsonString, [InvalidJson(Str), ..])
 scan_json_string_tail = |tail| {
-	bytes = Str.to_utf8(tail)
-	len = List.len(bytes)
+	len = Str.count_utf8_bytes(tail)
 	var $index = 0
 	var $had_escape = False
 
-	# Walk the bytes, consuming each escape atomically, until the closing quote.
-	# Every escape must be validated so that invalid escapes are rejected as invalid JSON
-	# (even inside skipped strings).
+	# Walk the string's bytes in place, consuming each escape atomically, until the
+	# closing quote. Every escape must be validated so that invalid escapes are
+	# rejected as invalid JSON (even inside skipped strings).
 	while $index < len {
-		byte = list_get_unsafe(bytes, $index)
+		byte = str_get_utf8_byte_unsafe(tail, $index)
 		match byte {
 			# Because we consume escapes atomically, if we hit a quote we know that it's the end
 			# of the string.
 			'"' => {
-				raw = match Str.from_utf8(List.take_first(bytes, $index)) {
-					Ok(body) => body
-					# unreachable: the split point is an ASCII quote, so the prefix is always valid UTF-8
-					Err(_) => {
-						crash "Json scanner invariant violated: split at a quote was not valid UTF-8"
-					}
-				}
-
-				# Str has no index-based slicing, so recover `after` by dropping the
-				# body (a content-matched prefix of `tail`) and then the closing
-				# quote — both zero-copy slice operations.
-				after = Str.drop_prefix(Str.drop_prefix(tail, raw), "\"")
+				# The quote is ASCII, so both cut points are UTF-8 boundaries and the
+				# slices are valid strings; slicing past the quote also skips it.
+				raw = str_substring_unsafe(tail, 0, $index)
+				after = str_drop_first_bytes_unsafe(tail, $index + 1)
 
 				return Ok({ after, body: if $had_escape HasEscapes(raw) else NoEscapes(raw) })
 			}
@@ -17519,14 +21572,14 @@ scan_json_string_tail = |tail| {
 			# escape sequence atomically
 			'\\' => {
 				$had_escape = True
-				escape = parse_json_escape_sequence(List.drop_first(bytes, $index + 1))?
-				$index = $index + 1 + escape.consumed
+				escape = parse_json_escaped_code_point(tail, $index)?
+				$index = $index + escape.consumed
 			}
-			# For any other character besides a quote or a backslash, we continue.
+			# For any other byte besides a quote or a backslash, we continue.
 			_ => {
 				# JSON requires U+0000 through U+001F to be escaped inside strings.
 				if byte < 32 {
-					return Err(Json.invalid_json)
+					return Err(InvalidJson("unescaped control character in string"))
 				} else {
 					$index = $index + 1
 				}
@@ -17535,7 +21588,7 @@ scan_json_string_tail = |tail| {
 	}
 
 	# no unescaped closing quote anywhere: the string is unterminated
-	Err(Json.invalid_json)
+	Err(InvalidJson("unterminated string"))
 }
 
 ## Find the end of a JSON string, for skipped values whose content is discarded.
@@ -17549,20 +21602,23 @@ skip_json_string_tail = |tail| {
 
 ## Decode a JSON string body: walk it, mapping each escape sequence to its code point and
 ## copying everything else.
+##
+## The scan already validated every escape, so decoding re-parses them. This double
+## parse is deliberate: it keeps scanning allocation-free, and skipped strings and
+## clean strings never decode at all.
 decode_json_string_body : Str -> Try(Str, [InvalidJson(Str), ..])
 decode_json_string_body = |raw| {
-	bytes = Str.to_utf8(raw)
-	len = List.len(bytes)
+	len = Str.count_utf8_bytes(raw)
 	var $out = u8_list_reserve([], len)
 	var $index = 0
 
 	while $index < len {
-		byte = list_get_unsafe(bytes, $index)
+		byte = str_get_utf8_byte_unsafe(raw, $index)
 		match byte {
 			'\\' => {
-				escape = parse_json_escape_sequence(List.drop_first(bytes, $index + 1))?
+				escape = parse_json_escaped_code_point(raw, $index)?
 				$out = append_utf8_code_point($out, escape.code_point)
-				$index = $index + 1 + escape.consumed
+				$index = $index + escape.consumed
 			}
 			_ => {
 				$out = u8_append($out, byte)
@@ -17581,49 +21637,84 @@ decode_json_string_body = |raw| {
 	}
 }
 
-## Parse one JSON escape sequence. `rest` is expected to hold the bytes after a backslash.
-## Every JSON escape denotes exactly one code point (surrogate pairs combine into one), so
-## this returns that code point plus the number of bytes consumed from `rest`.
-parse_json_escape_sequence : List(U8) -> Try({ code_point : U64, consumed : U64 }, [InvalidJson(Str), ..])
-parse_json_escape_sequence = |rest| match rest {
-	['"', ..] => Ok({ code_point: '"', consumed: 1 })
-	['\\', ..] => Ok({ code_point: '\\', consumed: 1 })
-	['/', ..] => Ok({ code_point: '/', consumed: 1 })
-	# backspace
-	['b', ..] => Ok({ code_point: 8, consumed: 1 })
-	# form feed
-	['f', ..] => Ok({ code_point: 12, consumed: 1 })
-	# newline
-	['n', ..] => Ok({ code_point: 10, consumed: 1 })
-	# carriage return
-	['r', ..] => Ok({ code_point: 13, consumed: 1 })
-	# tab
-	['t', ..] => Ok({ code_point: 9, consumed: 1 })
-	# \uXXXX names a UTF-16 code unit, not a code point, so surrogates may need pairing
-	['u', h0, h1, h2, h3, .. as tail] => {
-		unit = decode_json_hex4(h0, h1, h2, h3)?
-		if unit >= 55296 and unit <= 56319 {
-			# high surrogate (U+D800..U+DBFF): a \uDC00..\uDFFF escape must follow
-			match tail {
-				['\\', 'u', h4, h5, h6, h7, ..] => {
-					low = decode_json_hex4(h4, h5, h6, h7)?
-					if low >= 56320 and low <= 57343 {
-						Ok({ code_point: 65536 + (unit - 55296) * 1024 + (low - 56320), consumed: 11 })
-					} else {
-						Err(Json.invalid_json)
-					}
-				}
-				_ => Err(Json.invalid_json)
-			}
-		} else if unit >= 56320 and unit <= 57343 {
-			# unpaired low surrogate (U+DC00..U+DFFF)
-			Err(Json.invalid_json)
-		} else {
-			Ok({ code_point: unit, consumed: 5 })
-		}
+## Parse one escaped character from string `s`, starting at byte `index`.
+##
+## `index` is expected (but not verified) to be the index of the `\` character that starts
+## the escape. (Note that we index into `s`, rather than taking a slice and starting at 0,
+## because the latter was found to be slower empirically.)
+##
+## Returns the character's code point and the number of bytes consumed, which could be:
+##   2, for simple sequences like `\n`
+##   6, for characters represented by a single UTF-16 code unit, like `\u00E9` (é)
+##  12, for characters represented by a pair of UTF-16 code units, like `\uD83D\uDE00` (😀)
+##
+## Each branch checks the length before reading; the three checks mirror the three sizes
+## above.
+parse_json_escaped_code_point : Str, U64 -> Try({ code_point : U64, consumed : U64 }, [InvalidJson(Str), ..])
+parse_json_escaped_code_point = |s, index| {
+	len = Str.count_utf8_bytes(s)
+	if index + 2 > len {
+		# the backslash ends the input: a truncated escape
+		return Err(InvalidJson("truncated escape"))
 	}
-	# truncated or unknown escape
-	_ => Err(Json.invalid_json)
+
+	match str_get_utf8_byte_unsafe(s, index + 1) {
+		'"' => Ok({ code_point: '"', consumed: 2 })
+		'\\' => Ok({ code_point: '\\', consumed: 2 })
+		'/' => Ok({ code_point: '/', consumed: 2 })
+		# backspace
+		'b' => Ok({ code_point: 8, consumed: 2 })
+		# form feed
+		'f' => Ok({ code_point: 12, consumed: 2 })
+		# newline
+		'n' => Ok({ code_point: 10, consumed: 2 })
+		# carriage return
+		'r' => Ok({ code_point: 13, consumed: 2 })
+		# tab
+		't' => Ok({ code_point: 9, consumed: 2 })
+		# the four hex digits name a UTF-16 code unit
+		'u' => {
+			if index + 6 > len {
+				# truncated \uXXXX escape
+				return Err(InvalidJson("truncated \\uXXXX escape"))
+			}
+			unit = decode_json_hex4(
+				str_get_utf8_byte_unsafe(s, index + 2),
+				str_get_utf8_byte_unsafe(s, index + 3),
+				str_get_utf8_byte_unsafe(s, index + 4),
+				str_get_utf8_byte_unsafe(s, index + 5),
+			)?
+			if unit >= 0xD800 and unit <= 0xDBFF {
+				# a high surrogate (U+D800..U+DBFF) merges with the low
+				# surrogate escape that must follow
+				if index + 12 > len {
+					return Err(InvalidJson("high surrogate escape not followed by a low surrogate escape"))
+				}
+				if str_get_utf8_byte_unsafe(s, index + 6) != '\\' or str_get_utf8_byte_unsafe(s, index + 7) != 'u' {
+					return Err(InvalidJson("high surrogate escape not followed by a low surrogate escape"))
+				}
+				low = decode_json_hex4(
+					str_get_utf8_byte_unsafe(s, index + 8),
+					str_get_utf8_byte_unsafe(s, index + 9),
+					str_get_utf8_byte_unsafe(s, index + 10),
+					str_get_utf8_byte_unsafe(s, index + 11),
+				)?
+				if low >= 0xDC00 and low <= 0xDFFF {
+					Ok({ code_point: 0x10000 + (unit - 0xD800) * 0x400 + (low - 0xDC00), consumed: 12 })
+				} else {
+					Err(InvalidJson("high surrogate escape not followed by a low surrogate escape"))
+				}
+			} else if unit >= 0xDC00 and unit <= 0xDFFF {
+				# unpaired low surrogate (U+DC00..U+DFFF)
+				Err(InvalidJson("unpaired low surrogate escape"))
+			} else {
+				# a BMP code unit already is the code point
+				Ok({ code_point: unit, consumed: 6 })
+			}
+		}
+		# unknown escape
+		_ => Err(InvalidJson("unknown escape character"))
+	}
 }
 
 ## Combine 4 hex-digit bytes (as in \uXXXX) into their numeric value.
@@ -17638,7 +21729,9 @@ decode_json_hex4 = |b0, b1, b2, b3| {
 
 decode_json_hex_digit : U8 -> Try(U64, [InvalidJson(Str), ..])
 decode_json_hex_digit = |byte|
-	hex_digit_value(byte).map_ok(|value| value.to_u64()).map_err(|_| Json.invalid_json)
+	hex_digit_value(byte)
+		.map_ok(|value| value.to_u64())
+		.map_err(|_| InvalidJson("invalid hex digit in \\uXXXX escape"))
 
 ## JSON whitespace per RFC 8259: space, tab, `\n`, or `\r`.
 is_json_whitespace : U8 -> Bool
@@ -17654,24 +21747,21 @@ is_json_whitespace = |byte|
 ## or revalidated, so a call costs O(leading whitespace).
 json_trim_start : Str -> Str
 json_trim_start = |s| {
-	bytes = Str.to_utf8(s)
-
-	index = match List.find_first_index(bytes, |byte| !is_json_whitespace(byte)) {
-		Ok(idx) => idx
-		Err(NotFound) => List.len(bytes)
+	len = Str.count_utf8_bytes(s)
+	var $index = 0
+	while $index < len {
+		if is_json_whitespace(str_get_utf8_byte_unsafe(s, $index)) {
+			$index = $index + 1
+		} else {
+			break
+		}
 	}
 
-	if index == 0 {
+	if $index == 0 {
 		s
 	} else {
-		match Str.from_utf8(List.take_first(bytes, index)) {
-			# the prefix is ASCII whitespace, so it is always valid UTF-8 and
-			# dropping it is a byte compare plus a zero-copy slice
-			Ok(prefix) => Str.drop_prefix(s, prefix)
-			Err(_) => {
-				crash "json_trim_start invariant violated: an ASCII whitespace prefix was not valid UTF-8"
-			}
-		}
+		# the dropped prefix is ASCII whitespace, so the cut is a UTF-8 boundary
+		str_drop_first_bytes_unsafe(s, $index)
 	}
 }
 
@@ -17690,18 +21780,18 @@ append_utf8_code_point = |out, code_point|
 	if code_point < 128 {
 		u8_append(out, code_point.to_u8_wrap())
 	} else if code_point < 2048 {
-		b0 = 192 + code_point.shift_right_by(6)
+		b0 = 192 + code_point.shr_wrap(6)
 		b1 = 128 + code_point.bitwise_and(63)
 		u8_append(u8_append(out, b0.to_u8_wrap()), b1.to_u8_wrap())
 	} else if code_point < 65536 {
-		b0 = 224 + code_point.shift_right_by(12)
-		b1 = 128 + code_point.shift_right_by(6).bitwise_and(63)
+		b0 = 224 + code_point.shr_wrap(12)
+		b1 = 128 + code_point.shr_wrap(6).bitwise_and(63)
 		b2 = 128 + code_point.bitwise_and(63)
 		u8_append(u8_append(u8_append(out, b0.to_u8_wrap()), b1.to_u8_wrap()), b2.to_u8_wrap())
 	} else {
-		b0 = 240 + code_point.shift_right_by(18)
-		b1 = 128 + code_point.shift_right_by(12).bitwise_and(63)
-		b2 = 128 + code_point.shift_right_by(6).bitwise_and(63)
+		b0 = 240 + code_point.shr_wrap(18)
+		b1 = 128 + code_point.shr_wrap(12).bitwise_and(63)
+		b2 = 128 + code_point.shr_wrap(6).bitwise_and(63)
 		b3 = 128 + code_point.bitwise_and(63)
 		u8_append(u8_append(u8_append(u8_append(out, b0.to_u8_wrap()), b1.to_u8_wrap()), b2.to_u8_wrap()), b3.to_u8_wrap())
 	}
@@ -17723,11 +21813,34 @@ list_replace_unsafe : List(item), U64, item -> { list : List(item), prev : item 
 list_swap_unsafe : List(item), U64, U64 -> List(item)
 
 # Implemented by the compiler. Returns string slices into the source string.
-str_find_first_raw : Str, Str -> { before : Str, found : Bool, after : Str }
+str_split_first_raw : Str, Str -> { before : Str, found : Bool, after : Str }
+
+str_split_last_raw : Str, Str -> { before : Str, found : Bool, after : Str }
 
 # Implemented by the compiler. Returns a string slice after the prefix when the
 # source starts with the prefix using ASCII-caseless comparison.
 str_drop_prefix_caseless_ascii_raw : Str, Str -> { after : Str, found : Bool }
+
+# Implemented by the compiler. The caller guarantees the index is in bounds.
+str_get_utf8_byte_unsafe : Str, U64 -> U8
+
+# Implemented by the compiler. The caller guarantees the byte range is in bounds.
+# The result shares the source string's allocation.
+str_substring_unsafe : Str, U64, U64 -> Str
+
+## Drop `count` bytes from the front of a string as a zero-copy slice ("" when
+## `count` is at or past the end). Bounds are handled; what is NOT checked is
+## that `count` falls on a UTF-8 boundary — the caller guarantees that, so the
+## slice is a valid string. (`Str.drop_first_bytes` is the checked version.)
+str_drop_first_bytes_unsafe : Str, U64 -> Str
+str_drop_first_bytes_unsafe = |s, count| {
+	len = Str.count_utf8_bytes(s)
+	if count >= len {
+		""
+	} else {
+		str_substring_unsafe(s, count, len - count)
+	}
+}
 
 # Implemented by the compiler. Returns 1 (otherwise 0) when List.map may reuse
 # the input list's allocation for its output: the input and output element
@@ -17868,3 +21981,71 @@ f64_asin_unsafe : F64 -> F64
 f64_acos_unsafe : F64 -> F64
 
 f64_atan_unsafe : F64 -> F64
+
+# Private declarations used by the checked public lane and memory methods.
+
+simd_u8x16_get_lane_unchecked : Num.U8x16, U64 -> U8
+
+simd_u8x16_with_lane_unchecked : Num.U8x16, U64, U8 -> Num.U8x16
+
+simd_u8x16_load_16_unchecked : List(U8), U64 -> Num.U8x16
+
+simd_u8x16_store_16_unchecked : Num.U8x16, List(U8), U64 -> List(U8)
+
+simd_u8x16_concat_shift_bytes_unchecked : Num.U8x16, Num.U8x16, U8 -> Num.U8x16
+
+simd_i8x16_get_lane_unchecked : Num.I8x16, U64 -> I8
+
+simd_i8x16_with_lane_unchecked : Num.I8x16, U64, I8 -> Num.I8x16
+
+simd_i8x16_load_16_unchecked : List(U8), U64 -> Num.I8x16
+
+simd_i8x16_store_16_unchecked : Num.I8x16, List(U8), U64 -> List(U8)
+
+simd_u16x8_get_lane_unchecked : Num.U16x8, U64 -> U16
+
+simd_u16x8_with_lane_unchecked : Num.U16x8, U64, U16 -> Num.U16x8
+
+simd_u16x8_load_16_unchecked : List(U8), U64 -> Num.U16x8
+
+simd_u16x8_store_16_unchecked : Num.U16x8, List(U8), U64 -> List(U8)
+
+simd_i16x8_get_lane_unchecked : Num.I16x8, U64 -> I16
+
+simd_i16x8_with_lane_unchecked : Num.I16x8, U64, I16 -> Num.I16x8
+
+simd_i16x8_load_16_unchecked : List(U8), U64 -> Num.I16x8
+
+simd_i16x8_store_16_unchecked : Num.I16x8, List(U8), U64 -> List(U8)
+
+simd_u32x4_get_lane_unchecked : Num.U32x4, U64 -> U32
+
+simd_u32x4_with_lane_unchecked : Num.U32x4, U64, U32 -> Num.U32x4
+
+simd_u32x4_load_16_unchecked : List(U8), U64 -> Num.U32x4
+
+simd_u32x4_store_16_unchecked : Num.U32x4, List(U8), U64 -> List(U8)
+
+simd_i32x4_get_lane_unchecked : Num.I32x4, U64 -> I32
+
+simd_i32x4_with_lane_unchecked : Num.I32x4, U64, I32 -> Num.I32x4
+
+simd_i32x4_load_16_unchecked : List(U8), U64 -> Num.I32x4
+
+simd_i32x4_store_16_unchecked : Num.I32x4, List(U8), U64 -> List(U8)
+
+simd_u64x2_get_lane_unchecked : Num.U64x2, U64 -> U64
+
+simd_u64x2_with_lane_unchecked : Num.U64x2, U64, U64 -> Num.U64x2
+
+simd_u64x2_load_16_unchecked : List(U8), U64 -> Num.U64x2
+
+simd_u64x2_store_16_unchecked : Num.U64x2, List(U8), U64 -> List(U8)
+
+simd_i64x2_get_lane_unchecked : Num.I64x2, U64 -> I64
+
+simd_i64x2_with_lane_unchecked : Num.I64x2, U64, I64 -> Num.I64x2
+
+simd_i64x2_load_16_unchecked : List(U8), U64 -> Num.I64x2
+
+simd_i64x2_store_16_unchecked : Num.I64x2, List(U8), U64 -> List(U8)

@@ -378,6 +378,14 @@ pub const Resolver = struct {
             .f32 => .{ .canonical = .f32 },
             .f64 => .{ .canonical = .f64 },
             .dec => .{ .canonical = .dec },
+            .u8x16 => .{ .canonical = .u8x16 },
+            .i8x16 => .{ .canonical = .i8x16 },
+            .u16x8 => .{ .canonical = .u16x8 },
+            .i16x8 => .{ .canonical = .i16x8 },
+            .u32x4 => .{ .canonical = .u32x4 },
+            .i32x4 => .{ .canonical = .i32x4 },
+            .u64x2 => .{ .canonical = .u64x2 },
+            .i64x2 => .{ .canonical = .i64x2 },
             .list => blk: {
                 if (nominal.args.len == 0) break :blk .{ .canonical = .zst };
                 const child = try self.buildRefForType(artifact, nominal.args[0], .heap_indirect, build_state);
@@ -392,6 +400,9 @@ pub const Resolver = struct {
             .fields,
             .field,
             => .{ .canonical = .zst },
+            // `Try` is declaration-backed. Its concrete arguments must be
+            // substituted while opening that declaration's tag-union backing.
+            .try_, .iter => null,
             .dict,
             .set,
             .crypto_sha256_digest,

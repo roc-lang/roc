@@ -45,6 +45,26 @@ pub const MonoTypeDigest = names.TypeDigest;
 /// Primitive type copied from checked module data.
 pub const Primitive = checked.CheckedPrimitive;
 
+/// Static-dispatch owner head for a monomorphic receiver type.
+pub const OwnerHead = union(enum(u8)) {
+    none,
+    builtin: static_dispatch.BuiltinOwner,
+    named_type: TypeDef,
+};
+
+/// Checker-authored identities for the public iterator representation.
+pub const IteratorTopology = struct {
+    len_field: names.RecordFieldNameId,
+    step_field: names.RecordFieldNameId,
+    known_tag: names.TagNameId,
+    unknown_tag: names.TagNameId,
+    done_tag: names.TagNameId,
+    one_tag: names.TagNameId,
+    skip_tag: names.TagNameId,
+    item_field: names.RecordFieldNameId,
+    rest_field: names.RecordFieldNameId,
+};
+
 /// Named type definition owner.
 pub const TypeDef = struct {
     /// Deep content identity of the declaring module (dense id in the owning
@@ -67,6 +87,10 @@ pub const TypeDef = struct {
     iterator_kind: IteratorKind = .none,
     /// Producer-computed minted-chain depth. Meaningful only for `.minted`.
     iterator_depth: u8 = 0,
+    /// Checker-authored identities for the iterator representation.
+    /// Generated iterator types retain these as the exact representation roles
+    /// consumed by post-check stages.
+    iterator_topology: ?IteratorTopology = null,
 };
 
 /// Explicit representation tier assigned when an iterator nominal is created.
@@ -81,6 +105,7 @@ pub const IteratorKind = enum(u8) {
     none,
     custom,
     list,
+    str,
     single,
     range_exclusive,
     range_inclusive,
@@ -94,11 +119,61 @@ pub const IteratorKind = enum(u8) {
     forced_dynamic,
 };
 
-/// The representation-tier relation and join outcome shared by Monotype
-/// instantiation and Lambda Solved unification live in the shared
-/// representation policy (`representation_policy.zig`), which both stages read
-/// through their own adapters (reunify.md section 10.3).
-///
+/// Exceptional relation between two named iterator types. Equal identities
+/// and unrelated named types use ordinary named-type unification.
+pub const IteratorRelation = enum(u8) {
+    ordinary,
+    public_minted,
+    forced_dynamic,
+    minted_join,
+};
+
+/// Classifies the representation-tier relation shared by Monotype
+/// instantiation and Lambda Solved unification.
+pub fn iteratorRelation(left: anytype, right: anytype) IteratorRelation {
+    if (left.kind != right.kind) return .ordinary;
+    if (left.def.module != right.def.module or
+        left.def.type_name != right.def.type_name or
+        left.def.source_decl != right.def.source_decl)
+    {
+        return .ordinary;
+    }
+    if (!iteratorOwnerPair(left.builtin_owner, right.builtin_owner)) return .ordinary;
+
+    const left_representation = left.def.iterator_representation;
+    const right_representation = right.def.iterator_representation;
+    if ((left_representation == .forced_dynamic) != (right_representation == .forced_dynamic)) {
+        return .forced_dynamic;
+    }
+    if ((left_representation == .minted and right_representation == .none) or
+        (left_representation == .none and right_representation == .minted))
+    {
+        return .public_minted;
+    }
+    if (left_representation == .minted and
+        right_representation == .minted and
+        !optionalDigestEql(left.def.generated, right.def.generated))
+    {
+        return .minted_join;
+    }
+    return .ordinary;
+}
+
+fn iteratorOwnerPair(
+    left: ?static_dispatch.BuiltinOwner,
+    right: ?static_dispatch.BuiltinOwner,
+) bool {
+    const owner = left orelse right orelse return false;
+    if (!static_dispatch.isIteratorOwner(owner)) return false;
+    if (left) |left_owner| {
+        if (left_owner != owner) return false;
+    }
+    if (right) |right_owner| {
+        if (right_owner != owner) return false;
+    }
+    return true;
+}
+
 /// Named checked type instance.
 pub const NamedType = struct {
     module: names.CheckedModuleDigest,
@@ -111,10 +186,20 @@ pub const BackingUse = enum(u8) {
     runtime_layout_only,
 };
 
+/// Authority carried by a named backing. Checked-public backings describe the
+/// interface produced by checking. Generated-private backings carry explicit
+/// post-check specialization evidence and must never be merged into that
+/// public interface.
+pub const BackingAuthority = enum(u8) {
+    checked_public,
+    generated_private,
+};
+
 /// Backing type for a named type when checking output one.
 pub const NamedBacking = struct {
     ty: TypeId,
     use: BackingUse,
+    authority: BackingAuthority = .checked_public,
 };
 
 /// Kind of named type visible after checking.
@@ -187,27 +272,11 @@ pub const MonoTypeNode = union(enum(u8)) {
 /// Compatibility name for existing Monotype type-node content.
 pub const Content = MonoTypeNode;
 
+/// The content variant of a `Content`, without its payload.
+const ContentTag = std.meta.Tag(Content);
+
 /// Payload stored by `MonoTypeNode.named`.
 pub const NamedContent = std.meta.fieldInfo(MonoTypeNode, .named).type;
-
-const ContentTag = std.meta.Tag(Content);
-const DeclaredFieldTag = std.meta.Tag(DeclaredField);
-
-const NamedDigestMode = enum {
-    full,
-    identity_only,
-};
-
-const IdentityTypeSpan = enum {
-    named_args,
-    tuple_items,
-    func_args,
-};
-
-const IdentityBacking = enum {
-    none,
-    some,
-};
 
 /// Store for monomorphic types and their shared spans.
 pub const Store = struct {
@@ -637,6 +706,7 @@ pub const Store = struct {
     pub const RecursiveNamedBacking = struct {
         ty: RecursiveLink,
         use: BackingUse,
+        authority: BackingAuthority = .checked_public,
     };
 
     pub const RecursiveNamed = struct {
@@ -926,6 +996,7 @@ pub const Store = struct {
             .backing = if (named.backing) |backing| .{
                 .ty = self.lowerRecursiveLink(ids, root, backing.ty),
                 .use = backing.use,
+                .authority = backing.authority,
             } else null,
             .declared_order = named.declared_order,
         };
@@ -1103,46 +1174,41 @@ pub const Store = struct {
         self.declared_fields.restoreLen(mark_.declared_fields_len);
     }
 
-    /// Resolve `ty` through alias `named` nodes to the content that names its
-    /// dispatch head. Aliases are transparent for static dispatch, mirroring
-    /// the alias-transparent digest path: alias-over-alias and
-    /// alias-over-nominal unwrap uniformly (the backing of an
-    /// alias-over-nominal is itself a `named` node carrying the nominal's
-    /// identity). An alias `named` node carrying a builtin owner, or one with
-    /// no backing, is returned as-is. The walk terminates because alias
-    /// chains in checked output are finite.
-    pub fn dispatchHeadContent(self: *const Store, ty: TypeId) Content {
-        var current = ty;
-        while (true) {
-            const content = self.get(current);
-            switch (content) {
-                .named => |named| {
-                    if (named.builtin_owner == null and named.kind == .alias) {
-                        if (named.backing) |backing| {
-                            current = backing.ty;
-                            continue;
-                        }
-                    }
-                    return content;
-                },
-                else => return content,
-            }
-        }
+    pub fn ownerHead(self: *const Store, ty: TypeId) OwnerHead {
+        return switch (self.get(ty)) {
+            .primitive => |primitive| .{ .builtin = builtinOwner(primitive) },
+            .list => .{ .builtin = .list },
+            .box => .{ .builtin = .box },
+            .named => |named| if (named.builtin_owner) |owner|
+                .{ .builtin = owner }
+            else if (named.kind == .alias)
+                // Aliases are transparent for static dispatch: the owner is the
+                // backing's owner, mirroring the alias-transparent digest path
+                // above. This unwraps alias-over-alias and alias-over-nominal
+                // uniformly (the backing of an alias-over-nominal is itself a
+                // `named` node carrying the nominal's owner). The recursion
+                // terminates because alias chains in checked output are finite.
+                (if (named.backing) |backing|
+                    self.ownerHead(backing.ty)
+                else
+                    .none)
+            else
+                .{ .named_type = named.def },
+            else => .none,
+        };
     }
 
     pub fn typeDigest(self: *const Store, name_store: *const names.NameStore, ty: TypeId) names.TypeDigest {
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
         var visiting = DigestVisiting{};
-        var strategy = UncachedDigestStrategy{ .store = self, .name_store = name_store, .visiting = &visiting };
-        strategy.child(&hasher, ty, .full);
+        self.writeTypeDigest(name_store, &hasher, ty, .{ .cycle_tracking = &visiting }, .full);
         return .{ .bytes = hasher.finalResult() };
     }
 
     pub fn specializationDigest(self: *const Store, name_store: *const names.NameStore, ty: TypeId) names.TypeDigest {
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
         var visiting = DigestVisiting{};
-        var strategy = UncachedDigestStrategy{ .store = self, .name_store = name_store, .visiting = &visiting };
-        strategy.child(&hasher, ty, .identity_only);
+        self.writeTypeDigest(name_store, &hasher, ty, .{ .cycle_tracking = &visiting }, .identity_only);
         return .{ .bytes = hasher.finalResult() };
     }
 
@@ -1375,17 +1441,17 @@ pub const Store = struct {
     pub fn unfoldedDigest(self: *const Store, name_store: *const names.NameStore, ty: TypeId) names.TypeDigest {
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
         var budget: u32 = unrolled_key_budget;
-        var strategy = UnrolledDigestStrategy{ .store = self, .name_store = name_store, .budget = &budget };
-        strategy.child(&hasher, ty, .full);
+        self.writeTypeDigest(name_store, &hasher, ty, .{ .unfolding = &budget }, .full);
         return .{ .bytes = hasher.finalResult() };
     }
 
     /// Exact structural equality for closed Monotype types.
     ///
-    /// Equality consumes the same identity-field visitor as the digest paths.
-    /// Pair memoization and alias unwrapping stay local to the comparator, so
-    /// equality remains the exact confirmation step before one specialization
-    /// can reuse another.
+    /// This mirrors the intentional identity rules used by `typeDigest`:
+    /// aliases with backing compare as their backing, non-alias named types
+    /// compare by named identity and arguments, and structural rows compare by
+    /// label text and ordered children. Unlike the digest, this is authoritative
+    /// and must be checked before one specialization can reuse another.
     pub fn typeEql(
         self: *const Store,
         name_store: *const names.NameStore,
@@ -1403,12 +1469,32 @@ pub const Store = struct {
         len: usize = 0,
     };
 
+    /// How one uncached digest walk descends into a child type.
+    const DigestWalk = union(enum) {
+        /// Tracks the visiting stack, so a recursive reference back to an
+        /// in-progress type digests as a stable back reference by stack
+        /// position. This is what `typeDigest` / `specializationDigest` use.
+        cycle_tracking: *DigestVisiting,
+        /// Unfolds the type as the infinite tree it denotes, spending one unit
+        /// of the budget per node and writing a terminator once the budget runs
+        /// out. It never records a back reference, so two rooted graphs with the
+        /// same unfolding hash the same however each was constructed. This is
+        /// the dedup bucket key for a cyclic type; exact equality is still
+        /// decided by `typeEql`.
+        unfolding: *u32,
+    };
+
     const digest_visiting_max = 256;
 
     const CachedDigestContext = struct {
         items: [digest_visiting_max]TypeId = undefined,
         len: usize = 0,
         saw_cycle: bool = false,
+    };
+
+    const NamedDigestMode = enum {
+        full,
+        identity_only,
     };
 
     fn clearTypeDigestCache(self: *Store) void {
@@ -1538,8 +1624,7 @@ pub const Store = struct {
         const saw_cycle_before = ctx.saw_cycle;
         ctx.saw_cycle = false;
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        var strategy = CachedDigestStrategy{ .store = self, .name_store = name_store, .ctx = ctx, .stats = stats };
-        const direct_digest = self.writeIdentityDigest(name_store, &hasher, ty, named_mode, &strategy);
+        const direct_digest = self.writeCachedTypeDigest(name_store, &hasher, ty, named_mode, ctx, stats);
         ctx.len -= 1;
         const subtree_saw_cycle = ctx.saw_cycle;
         ctx.saw_cycle = saw_cycle_before or subtree_saw_cycle;
@@ -1560,776 +1645,382 @@ pub const Store = struct {
         return digest;
     }
 
-    /// Folds `child_ty` into `hasher` by inlining the child's identity bytes
-    /// directly into the running hash, tracking the visiting stack so a
-    /// recursive reference back to an in-progress type digests as a stable
-    /// back reference by stack position. This is the cycle-tracking and
-    /// child-emission strategy behind `typeDigest` / `specializationDigest`.
-    const UncachedDigestStrategy = struct {
-        store: *const Store,
-        name_store: *const names.NameStore,
-        visiting: *DigestVisiting,
-
-        fn child(
-            self: *UncachedDigestStrategy,
-            hasher: *std.crypto.hash.sha2.Sha256,
-            child_ty: TypeId,
-            named_mode: NamedDigestMode,
-        ) void {
-            for (self.visiting.items[0..self.visiting.len], 0..) |open_ty, position| {
-                if (open_ty == child_ty) {
-                    writeBytes(hasher, "cycle");
-                    writeU32(hasher, @intCast(position));
-                    return;
-                }
-            }
-            if (self.visiting.len == digest_visiting_max) {
-                writeDeepShape(hasher, std.meta.activeTag(self.store.get(child_ty)));
-                return;
-            }
-            self.visiting.items[self.visiting.len] = child_ty;
-            self.visiting.len += 1;
-            defer self.visiting.len -= 1;
-            _ = self.store.writeIdentityDigest(self.name_store, hasher, child_ty, named_mode, self);
-        }
-
-        fn transparent(
-            self: *UncachedDigestStrategy,
-            hasher: *std.crypto.hash.sha2.Sha256,
-            child_ty: TypeId,
-            named_mode: NamedDigestMode,
-        ) ?names.TypeDigest {
-            self.child(hasher, child_ty, named_mode);
-            return null;
-        }
-    };
-
-    /// Folds `child_ty` into `hasher` by unfolding the type as the infinite tree
-    /// it denotes, spending one unit of a shared budget per node and writing a
-    /// terminator once the budget runs out. It never records a back reference,
-    /// so two rooted graphs with the same unfolding hash the same however each
-    /// was constructed. This is the dedup bucket key for a cyclic type; exact
-    /// equality is still decided by `typeEql`.
-    const UnrolledDigestStrategy = struct {
-        store: *const Store,
-        name_store: *const names.NameStore,
-        budget: *u32,
-
-        fn child(
-            self: *UnrolledDigestStrategy,
-            hasher: *std.crypto.hash.sha2.Sha256,
-            child_ty: TypeId,
-            named_mode: NamedDigestMode,
-        ) void {
-            if (self.budget.* == 0) {
-                writeBytes(hasher, "unrolled-cut");
-                return;
-            }
-            self.budget.* -= 1;
-            _ = self.store.writeIdentityDigest(self.name_store, hasher, child_ty, named_mode, self);
-        }
-
-        fn transparent(
-            self: *UnrolledDigestStrategy,
-            hasher: *std.crypto.hash.sha2.Sha256,
-            child_ty: TypeId,
-            named_mode: NamedDigestMode,
-        ) ?names.TypeDigest {
-            self.child(hasher, child_ty, named_mode);
-            return null;
-        }
-    };
-
     /// How many nodes one unrolled bucket-key walk visits before it writes its
     /// terminator. The unfolding is walked in a fixed order, so two types with
     /// the same unfolding spend the budget on the same nodes and hash equal.
     const unrolled_key_budget: u32 = 512;
 
-    /// Folds `child_ty` into `hasher` as a nested sub-digest: the tag
-    /// `"type-digest"` followed by the child's own cached digest. Computing
-    /// parent digests from cached child digests is what lets structurally
-    /// growing records and function types reuse child work instead of walking
-    /// their whole prefix, and it is the cycle-tracking and child-emission
-    /// strategy behind `typeDigestCached` / `specializationDigestCached`.
-    const CachedDigestStrategy = struct {
-        store: *Store,
+    fn writeCachedChildDigest(
+        self: *Store,
         name_store: *const names.NameStore,
+        hasher: *std.crypto.hash.sha2.Sha256,
+        child: TypeId,
+        named_mode: NamedDigestMode,
         ctx: *CachedDigestContext,
         stats: ?*DigestStats,
+    ) void {
+        writeBytes(hasher, "type-digest");
+        const digest = self.cachedDigestInner(name_store, child, named_mode, ctx, stats);
+        hasher.update(&digest.bytes);
+    }
 
-        fn child(
-            self: *CachedDigestStrategy,
-            hasher: *std.crypto.hash.sha2.Sha256,
-            child_ty: TypeId,
-            named_mode: NamedDigestMode,
-        ) void {
-            writeBytes(hasher, "type-digest");
-            const digest = self.store.cachedDigestInner(self.name_store, child_ty, named_mode, self.ctx, self.stats);
-            hasher.update(&digest.bytes);
+    fn writeCachedTypeSpanDigest(
+        self: *Store,
+        name_store: *const names.NameStore,
+        hasher: *std.crypto.hash.sha2.Sha256,
+        span_: Span,
+        named_mode: NamedDigestMode,
+        ctx: *CachedDigestContext,
+        stats: ?*DigestStats,
+    ) void {
+        const values = self.span(span_);
+        writeU32(hasher, @intCast(values.len));
+        for (0..values.len) |index| {
+            const child = GuardedList.at(values, index);
+            self.writeCachedChildDigest(name_store, hasher, child, named_mode, ctx, stats);
         }
+    }
 
-        fn transparent(
-            self: *CachedDigestStrategy,
-            _: *std.crypto.hash.sha2.Sha256,
-            child_ty: TypeId,
-            named_mode: NamedDigestMode,
-        ) ?names.TypeDigest {
-            return self.store.cachedDigestInner(self.name_store, child_ty, named_mode, self.ctx, self.stats);
-        }
-    };
-
-    fn DigestIdentityDriver(comptime Strategy: type) type {
-        return struct {
-            const Self = @This();
-            const Error = error{};
-
-            store: *const Store,
-            name_store: *const names.NameStore,
-            hasher: *std.crypto.hash.sha2.Sha256,
-            content: Content,
-            named_mode: NamedDigestMode,
-            strategy: Strategy,
-            direct_digest: ?names.TypeDigest = null,
-
-            fn contentTag(self: *Self) ?ContentTag {
-                return std.meta.activeTag(self.content);
-            }
-
-            fn alias(self: *Self) Error!bool {
-                const named = self.content.named;
-                if (named.kind != .alias) return false;
+    /// Returns the digest this type takes directly, when a storage-transparent
+    /// alias makes it exactly its backing's digest; null when the digest is the
+    /// bytes written into `hasher`. An alias and its backing are `typeEql`, so
+    /// sharing one digest is what puts them in one interner bucket.
+    fn writeCachedTypeDigest(
+        self: *Store,
+        name_store: *const names.NameStore,
+        hasher: *std.crypto.hash.sha2.Sha256,
+        ty: TypeId,
+        named_mode: NamedDigestMode,
+        ctx: *CachedDigestContext,
+        stats: ?*DigestStats,
+    ) ?names.TypeDigest {
+        switch (self.get(ty)) {
+            .primitive => |primitive| {
+                writeBytes(hasher, "primitive");
+                writeBytes(hasher, @tagName(primitive));
+            },
+            .named => |named| {
                 // A builtin-owned alias carries an explicit checked dispatch
                 // owner that must survive interning, so it is nontransparent:
                 // fall through to the named identity walk, which hashes the
                 // owner. Only a storage-transparent alias — backed, with no
                 // builtin owner — unwraps to its backing here.
-                if (named.builtin_owner != null) return false;
-                const backing = named.backing orelse {
-                    writeBytes(self.hasher, "alias-without-backing");
-                    return true;
-                };
-                self.direct_digest = self.strategy.transparent(self.hasher, backing.ty, self.named_mode);
-                return true;
-            }
-
-            fn beginVariant(self: *Self, comptime label: []const u8) Error!bool {
-                writeBytes(self.hasher, label);
-                return true;
-            }
-
-            fn primitive(self: *Self) Error!bool {
-                writeBytes(self.hasher, @tagName(self.content.primitive));
-                return true;
-            }
-
-            fn namedModule(self: *Self) Error!bool {
-                self.hasher.update(&self.content.named.named_type.module.bytes);
-                return true;
-            }
-
-            fn namedDefModule(self: *Self) Error!bool {
-                writeBytes(self.hasher, self.name_store.moduleIdentityBytes(self.content.named.def.module));
-                return true;
-            }
-
-            fn namedSourceDecl(self: *Self) Error!bool {
-                writeOptionalU32(self.hasher, self.content.named.def.source_decl);
-                return true;
-            }
-
-            fn namedSourceDeclIsAbsent(self: *Self) bool {
-                return self.content.named.def.source_decl == null;
-            }
-
-            fn namedTypeName(self: *Self) Error!bool {
-                writeBytes(self.hasher, self.name_store.typeNameText(self.content.named.def.type_name));
-                return true;
-            }
-
-            fn namedGenerated(self: *Self) Error!bool {
-                writeOptionalDigest(self.hasher, self.content.named.def.generated);
-                return true;
-            }
-
-            fn namedIteratorRepresentation(self: *Self) Error!bool {
-                writeBytes(self.hasher, @tagName(self.content.named.def.iterator_representation));
-                return true;
-            }
-
-            fn namedIteratorKind(self: *Self) Error!bool {
-                writeBytes(self.hasher, @tagName(self.content.named.def.iterator_kind));
-                return true;
-            }
-
-            fn namedIteratorDepth(self: *Self) Error!bool {
-                writeU32(self.hasher, self.content.named.def.iterator_depth);
-                return true;
-            }
-
-            fn namedKind(self: *Self) Error!bool {
-                writeBytes(self.hasher, @tagName(self.content.named.kind));
-                return true;
-            }
-
-            fn namedBuiltinOwnerField(self: *Self) Error!bool {
-                if (self.content.named.builtin_owner) |owner| {
-                    writeBytes(self.hasher, "builtin");
-                    writeBytes(self.hasher, @tagName(owner));
+                if (named.kind == .alias and named.builtin_owner == null) {
+                    const backing = named.backing orelse {
+                        writeBytes(hasher, "alias-without-backing");
+                        return null;
+                    };
+                    return self.cachedDigestInner(name_store, backing.ty, named_mode, ctx, stats);
+                }
+                writeBytes(hasher, "named");
+                hasher.update(&named.named_type.module.bytes);
+                writeBytes(hasher, name_store.moduleIdentityBytes(named.def.module));
+                writeOptionalU32(hasher, named.def.source_decl);
+                if (named.def.source_decl == null) {
+                    writeBytes(hasher, name_store.typeNameText(named.def.type_name));
+                }
+                writeOptionalDigest(hasher, named.def.generated);
+                writeBytes(hasher, @tagName(named.def.iterator_representation));
+                writeBytes(hasher, @tagName(named.def.iterator_kind));
+                writeU32(hasher, named.def.iterator_depth);
+                writeIteratorTopology(hasher, name_store, named.def.iterator_topology);
+                writeBytes(hasher, @tagName(named.kind));
+                if (named.builtin_owner) |owner| {
+                    writeBytes(hasher, "builtin");
+                    writeBytes(hasher, @tagName(owner));
                 } else {
-                    writeBytes(self.hasher, "not-builtin");
+                    writeBytes(hasher, "not-builtin");
                 }
-                return true;
-            }
-
-            fn namedBuiltinOwnerValue(self: *Self) ?static_dispatch.BuiltinOwner {
-                return self.content.named.builtin_owner;
-            }
-
-            fn namedMode(self: *Self) NamedDigestMode {
-                return self.named_mode;
-            }
-
-            fn specializationBuiltinBackingMarker(self: *Self) Error!bool {
-                writeBytes(self.hasher, "specialization-builtin-backing");
-                return true;
-            }
-
-            fn specializationNamedIdentityMarker(self: *Self) Error!bool {
-                writeBytes(self.hasher, "specialization-named-identity");
-                return true;
-            }
-
-            fn typeSpan(self: *Self, role: IdentityTypeSpan) Span {
-                return switch (role) {
-                    .named_args => self.content.named.args,
-                    .tuple_items => self.content.tuple,
-                    .func_args => self.content.func.args,
-                };
-            }
-
-            fn typeSpanLen(self: *Self, role: IdentityTypeSpan) Error!?usize {
-                const values = self.store.span(self.typeSpan(role));
-                writeU32(self.hasher, @intCast(values.len));
-                return values.len;
-            }
-
-            fn typeSpanChild(self: *Self, role: IdentityTypeSpan, index: usize) Error!bool {
-                const values = self.store.span(self.typeSpan(role));
-                self.strategy.child(self.hasher, GuardedList.at(values, index), self.named_mode);
-                return true;
-            }
-
-            fn beginBacking(self: *Self) Error!bool {
-                writeBytes(self.hasher, "backing");
-                return true;
-            }
-
-            fn backingPresence(self: *Self) Error!?IdentityBacking {
-                if (self.content.named.backing == null) {
-                    writeBytes(self.hasher, "none");
-                    return .none;
+                self.writeCachedTypeSpanDigest(name_store, hasher, named.args, named_mode, ctx, stats);
+                if (named_mode == .full) {
+                    self.writeCachedNamedBackingDigest(name_store, hasher, named.backing, ctx, stats);
+                    self.writeCachedDeclaredOrderDigest(name_store, hasher, named.declared_order, ctx, stats);
+                } else if (specializationUsesBacking(named.backing)) {
+                    writeBytes(hasher, "specialization-generated-backing");
+                    self.writeCachedNamedBackingDigest(name_store, hasher, named.backing, ctx, stats);
+                } else {
+                    writeBytes(hasher, "specialization-named-identity");
                 }
-                return .some;
-            }
-
-            fn backingUse(self: *Self) Error!bool {
-                writeBytes(self.hasher, @tagName(self.content.named.backing.?.use));
-                return true;
-            }
-
-            fn backingType(self: *Self) Error!bool {
-                self.strategy.child(self.hasher, self.content.named.backing.?.ty, .full);
-                return true;
-            }
-
-            fn beginDeclaredOrder(self: *Self) Error!bool {
-                writeBytes(self.hasher, "declared_order");
-                return true;
-            }
-
-            fn declaredOrderLen(self: *Self) Error!?usize {
-                const entries = self.store.declaredFieldSpan(self.content.named.declared_order);
-                writeU32(self.hasher, @intCast(entries.len));
-                return entries.len;
-            }
-
-            fn declaredFieldTag(self: *Self, index: usize) Error!?DeclaredFieldTag {
-                const entries = self.store.declaredFieldSpan(self.content.named.declared_order);
-                return std.meta.activeTag(GuardedList.at(entries, index));
-            }
-
-            fn declaredFieldName(self: *Self, index: usize) Error!bool {
-                const entries = self.store.declaredFieldSpan(self.content.named.declared_order);
-                writeBytes(self.hasher, "named");
-                writeBytes(self.hasher, self.name_store.recordFieldLabelText(GuardedList.at(entries, index).named));
-                return true;
-            }
-
-            fn declaredPaddingType(self: *Self, index: usize) Error!bool {
-                const entries = self.store.declaredFieldSpan(self.content.named.declared_order);
-                writeBytes(self.hasher, "padding");
-                self.strategy.child(self.hasher, GuardedList.at(entries, index).padding, .full);
-                return true;
-            }
-
-            fn recordLen(self: *Self) Error!?usize {
-                const field_slice = self.store.fieldSpan(self.content.record);
-                writeU32(self.hasher, @intCast(field_slice.len));
-                return field_slice.len;
-            }
-
-            fn recordFieldName(self: *Self, index: usize) Error!bool {
-                const field_slice = self.store.fieldSpan(self.content.record);
-                writeBytes(self.hasher, self.name_store.recordFieldLabelText(GuardedList.at(field_slice, index).name));
-                return true;
-            }
-
-            fn recordFieldType(self: *Self, index: usize) Error!bool {
-                const field_slice = self.store.fieldSpan(self.content.record);
-                self.strategy.child(self.hasher, GuardedList.at(field_slice, index).ty, self.named_mode);
-                return true;
-            }
-
-            fn tagUnionLen(self: *Self) Error!?usize {
-                const tag_slice = self.store.tagSpan(self.content.tag_union);
-                writeU32(self.hasher, @intCast(tag_slice.len));
-                return tag_slice.len;
-            }
-
-            fn tagName(self: *Self, index: usize) Error!bool {
-                const tag_slice = self.store.tagSpan(self.content.tag_union);
-                writeBytes(self.hasher, self.name_store.tagLabelText(GuardedList.at(tag_slice, index).name));
-                return true;
-            }
-
-            fn tagPayloadLen(self: *Self, tag_index: usize) Error!?usize {
-                const tag_slice = self.store.tagSpan(self.content.tag_union);
-                const payloads = self.store.span(GuardedList.at(tag_slice, tag_index).payloads);
-                writeU32(self.hasher, @intCast(payloads.len));
-                return payloads.len;
-            }
-
-            fn tagPayloadType(self: *Self, tag_index: usize, payload_index: usize) Error!bool {
-                const tag_slice = self.store.tagSpan(self.content.tag_union);
-                const payloads = self.store.span(GuardedList.at(tag_slice, tag_index).payloads);
-                self.strategy.child(self.hasher, GuardedList.at(payloads, payload_index), self.named_mode);
-                return true;
-            }
-
-            fn listElem(self: *Self) Error!bool {
-                self.strategy.child(self.hasher, self.content.list, self.named_mode);
-                return true;
-            }
-
-            fn boxElem(self: *Self) Error!bool {
-                self.strategy.child(self.hasher, self.content.box, self.named_mode);
-                return true;
-            }
-
-            fn funcRet(self: *Self) Error!bool {
-                self.strategy.child(self.hasher, self.content.func.ret, self.named_mode);
-                return true;
-            }
-
-            fn erased(self: *Self) Error!bool {
-                self.hasher.update(&self.content.erased.bytes);
-                return true;
-            }
-        };
+            },
+            .record => |fields| {
+                writeBytes(hasher, "record");
+                const field_slice = self.fieldSpan(fields);
+                writeU32(hasher, @intCast(field_slice.len));
+                for (0..field_slice.len) |index| {
+                    const field = GuardedList.at(field_slice, index);
+                    writeBytes(hasher, name_store.recordFieldLabelText(field.name));
+                    self.writeCachedChildDigest(name_store, hasher, field.ty, named_mode, ctx, stats);
+                }
+            },
+            .tuple => |items| {
+                writeBytes(hasher, "tuple");
+                self.writeCachedTypeSpanDigest(name_store, hasher, items, named_mode, ctx, stats);
+            },
+            .tag_union => |tags| {
+                writeBytes(hasher, "tag_union");
+                const tag_slice = self.tagSpan(tags);
+                writeU32(hasher, @intCast(tag_slice.len));
+                for (0..tag_slice.len) |index| {
+                    const tag = GuardedList.at(tag_slice, index);
+                    writeBytes(hasher, name_store.tagLabelText(tag.name));
+                    self.writeCachedTypeSpanDigest(name_store, hasher, tag.payloads, named_mode, ctx, stats);
+                }
+            },
+            .list => |elem| {
+                writeBytes(hasher, "list");
+                self.writeCachedChildDigest(name_store, hasher, elem, named_mode, ctx, stats);
+            },
+            .box => |elem| {
+                writeBytes(hasher, "box");
+                self.writeCachedChildDigest(name_store, hasher, elem, named_mode, ctx, stats);
+            },
+            .func => |function| {
+                writeBytes(hasher, "func");
+                self.writeCachedTypeSpanDigest(name_store, hasher, function.args, named_mode, ctx, stats);
+                self.writeCachedChildDigest(name_store, hasher, function.ret, named_mode, ctx, stats);
+            },
+            .erased => |erased| {
+                writeBytes(hasher, "erased");
+                hasher.update(&erased.bytes);
+            },
+            .zst => writeBytes(hasher, "zst"),
+        }
+        return null;
     }
 
-    /// Digest identity fields through the same visitor used by equality.
-    /// Cached and uncached callers differ only in child folding and cycle state.
-    fn writeIdentityDigest(
+    fn writeCachedNamedBackingDigest(
+        self: *Store,
+        name_store: *const names.NameStore,
+        hasher: *std.crypto.hash.sha2.Sha256,
+        backing: ?NamedBacking,
+        ctx: *CachedDigestContext,
+        stats: ?*DigestStats,
+    ) void {
+        writeBytes(hasher, "backing");
+        if (backing) |named_backing| {
+            writeBytes(hasher, @tagName(named_backing.use));
+            writeBytes(hasher, @tagName(named_backing.authority));
+            self.writeCachedChildDigest(name_store, hasher, named_backing.ty, .full, ctx, stats);
+        } else {
+            writeBytes(hasher, "none");
+        }
+    }
+
+    fn writeCachedDeclaredOrderDigest(
+        self: *Store,
+        name_store: *const names.NameStore,
+        hasher: *std.crypto.hash.sha2.Sha256,
+        declared_order: Span,
+        ctx: *CachedDigestContext,
+        stats: ?*DigestStats,
+    ) void {
+        writeBytes(hasher, "declared_order");
+        const entries = self.declaredFieldSpan(declared_order);
+        writeU32(hasher, @intCast(entries.len));
+        for (0..entries.len) |index| {
+            const entry = GuardedList.at(entries, index);
+            switch (entry) {
+                .named => |field_name| {
+                    writeBytes(hasher, "named");
+                    writeBytes(hasher, name_store.recordFieldLabelText(field_name));
+                },
+                .padding => |padding_ty| {
+                    writeBytes(hasher, "padding");
+                    self.writeCachedChildDigest(name_store, hasher, padding_ty, .full, ctx, stats);
+                },
+            }
+        }
+    }
+
+    fn writeTypeDigest(
         self: *const Store,
         name_store: *const names.NameStore,
         hasher: *std.crypto.hash.sha2.Sha256,
         ty: TypeId,
+        walk: DigestWalk,
         named_mode: NamedDigestMode,
-        strategy: anytype,
-    ) ?names.TypeDigest {
-        var driver = DigestIdentityDriver(@TypeOf(strategy)){
-            .store = self,
-            .name_store = name_store,
-            .hasher = hasher,
-            .content = self.get(ty),
-            .named_mode = named_mode,
-            .strategy = strategy,
+    ) void {
+        switch (walk) {
+            .cycle_tracking => |visiting| {
+                for (visiting.items[0..visiting.len], 0..) |open_ty, position| {
+                    if (open_ty == ty) {
+                        writeBytes(hasher, "cycle");
+                        writeU32(hasher, @intCast(position));
+                        return;
+                    }
+                }
+                if (visiting.len == digest_visiting_max) {
+                    writeDeepShape(hasher, std.meta.activeTag(self.get(ty)));
+                    return;
+                }
+                visiting.items[visiting.len] = ty;
+                visiting.len += 1;
+            },
+            .unfolding => |budget| {
+                if (budget.* == 0) {
+                    writeBytes(hasher, "unrolled-cut");
+                    return;
+                }
+                budget.* -= 1;
+            },
+        }
+        defer switch (walk) {
+            .cycle_tracking => |visiting| {
+                visiting.len -= 1;
+            },
+            .unfolding => {},
         };
-        const ok = visitTypeIdentity(@TypeOf(driver), &driver) catch unreachable;
-        if (!ok) unreachable;
-        return driver.direct_digest;
+        switch (self.get(ty)) {
+            .primitive => |primitive| {
+                writeBytes(hasher, "primitive");
+                writeBytes(hasher, @tagName(primitive));
+            },
+            .named => |named| {
+                // A storage-transparent alias is its backing: its digest is the
+                // backing's. A builtin-owned alias is nontransparent because its
+                // explicit checked dispatch owner is part of its identity, so it
+                // falls through to the named identity walk below.
+                if (named.kind == .alias and named.builtin_owner == null) {
+                    const backing = named.backing orelse {
+                        writeBytes(hasher, "alias-without-backing");
+                        return;
+                    };
+                    self.writeTypeDigest(name_store, hasher, backing.ty, walk, named_mode);
+                    return;
+                }
+                writeBytes(hasher, "named");
+                hasher.update(&named.named_type.module.bytes);
+                writeBytes(hasher, name_store.moduleIdentityBytes(named.def.module));
+                writeOptionalU32(hasher, named.def.source_decl);
+                if (named.def.source_decl == null) {
+                    writeBytes(hasher, name_store.typeNameText(named.def.type_name));
+                }
+                writeOptionalDigest(hasher, named.def.generated);
+                writeBytes(hasher, @tagName(named.def.iterator_representation));
+                writeBytes(hasher, @tagName(named.def.iterator_kind));
+                writeU32(hasher, named.def.iterator_depth);
+                writeIteratorTopology(hasher, name_store, named.def.iterator_topology);
+                writeBytes(hasher, @tagName(named.kind));
+                if (named.builtin_owner) |owner| {
+                    writeBytes(hasher, "builtin");
+                    writeBytes(hasher, @tagName(owner));
+                } else {
+                    writeBytes(hasher, "not-builtin");
+                }
+                self.writeTypeSpanDigest(name_store, hasher, named.args, walk, named_mode);
+                if (named_mode == .full) {
+                    self.writeNamedBackingDigest(name_store, hasher, named.backing, walk);
+                    self.writeDeclaredOrderDigest(name_store, hasher, named.declared_order, walk);
+                } else if (specializationUsesBacking(named.backing)) {
+                    writeBytes(hasher, "specialization-generated-backing");
+                    self.writeNamedBackingDigest(name_store, hasher, named.backing, walk);
+                } else {
+                    writeBytes(hasher, "specialization-named-identity");
+                }
+            },
+            .record => |fields| {
+                writeBytes(hasher, "record");
+                const field_slice = self.fieldSpan(fields);
+                writeU32(hasher, @intCast(field_slice.len));
+                for (0..field_slice.len) |index| {
+                    const field = GuardedList.at(field_slice, index);
+                    writeBytes(hasher, name_store.recordFieldLabelText(field.name));
+                    self.writeTypeDigest(name_store, hasher, field.ty, walk, named_mode);
+                }
+            },
+            .tuple => |items| {
+                writeBytes(hasher, "tuple");
+                self.writeTypeSpanDigest(name_store, hasher, items, walk, named_mode);
+            },
+            .tag_union => |tags| {
+                writeBytes(hasher, "tag_union");
+                const tag_slice = self.tagSpan(tags);
+                writeU32(hasher, @intCast(tag_slice.len));
+                for (0..tag_slice.len) |index| {
+                    const tag = GuardedList.at(tag_slice, index);
+                    writeBytes(hasher, name_store.tagLabelText(tag.name));
+                    self.writeTypeSpanDigest(name_store, hasher, tag.payloads, walk, named_mode);
+                }
+            },
+            .list => |elem| {
+                writeBytes(hasher, "list");
+                self.writeTypeDigest(name_store, hasher, elem, walk, named_mode);
+            },
+            .box => |elem| {
+                writeBytes(hasher, "box");
+                self.writeTypeDigest(name_store, hasher, elem, walk, named_mode);
+            },
+            .func => |function| {
+                writeBytes(hasher, "func");
+                self.writeTypeSpanDigest(name_store, hasher, function.args, walk, named_mode);
+                self.writeTypeDigest(name_store, hasher, function.ret, walk, named_mode);
+            },
+            .erased => |erased| {
+                writeBytes(hasher, "erased");
+                hasher.update(&erased.bytes);
+            },
+            .zst => writeBytes(hasher, "zst"),
+        }
+    }
+
+    fn writeTypeSpanDigest(
+        self: *const Store,
+        name_store: *const names.NameStore,
+        hasher: *std.crypto.hash.sha2.Sha256,
+        span_: Span,
+        walk: DigestWalk,
+        named_mode: NamedDigestMode,
+    ) void {
+        const values = self.span(span_);
+        writeU32(hasher, @intCast(values.len));
+        for (0..values.len) |index| {
+            const child = GuardedList.at(values, index);
+            self.writeTypeDigest(name_store, hasher, child, walk, named_mode);
+        }
+    }
+
+    fn writeNamedBackingDigest(
+        self: *const Store,
+        name_store: *const names.NameStore,
+        hasher: *std.crypto.hash.sha2.Sha256,
+        backing: ?NamedBacking,
+        walk: DigestWalk,
+    ) void {
+        writeBytes(hasher, "backing");
+        if (backing) |named_backing| {
+            writeBytes(hasher, @tagName(named_backing.use));
+            writeBytes(hasher, @tagName(named_backing.authority));
+            self.writeTypeDigest(name_store, hasher, named_backing.ty, walk, .full);
+        } else {
+            writeBytes(hasher, "none");
+        }
+    }
+
+    fn writeDeclaredOrderDigest(
+        self: *const Store,
+        name_store: *const names.NameStore,
+        hasher: *std.crypto.hash.sha2.Sha256,
+        declared_order: Span,
+        walk: DigestWalk,
+    ) void {
+        writeBytes(hasher, "declared_order");
+        const entries = self.declaredFieldSpan(declared_order);
+        writeU32(hasher, @intCast(entries.len));
+        for (0..entries.len) |index| {
+            const entry = GuardedList.at(entries, index);
+            switch (entry) {
+                .named => |field_name| {
+                    writeBytes(hasher, "named");
+                    writeBytes(hasher, name_store.recordFieldLabelText(field_name));
+                },
+                .padding => |padding_ty| {
+                    writeBytes(hasher, "padding");
+                    self.writeTypeDigest(name_store, hasher, padding_ty, walk, .full);
+                },
+            }
+        }
     }
 };
-
-fn visitTypeIdentity(comptime Driver: type, driver: *Driver) Driver.Error!bool {
-    const tag = driver.contentTag() orelse return false;
-    return switch (tag) {
-        .primitive => blk: {
-            if (!try driver.beginVariant("primitive")) break :blk false;
-            break :blk try driver.primitive();
-        },
-        .named => blk: {
-            if (try driver.alias()) break :blk true;
-            if (!try driver.beginVariant("named")) break :blk false;
-            if (!try visitNamedIdentity(Driver, driver)) break :blk false;
-            break :blk true;
-        },
-        .record => blk: {
-            if (!try driver.beginVariant("record")) break :blk false;
-            const len = (try driver.recordLen()) orelse break :blk false;
-            for (0..len) |index| {
-                if (!try driver.recordFieldName(index)) break :blk false;
-                if (!try driver.recordFieldType(index)) break :blk false;
-            }
-            break :blk true;
-        },
-        .tuple => blk: {
-            if (!try driver.beginVariant("tuple")) break :blk false;
-            break :blk try visitTypeSpanIdentity(Driver, driver, .tuple_items);
-        },
-        .tag_union => blk: {
-            if (!try driver.beginVariant("tag_union")) break :blk false;
-            const len = (try driver.tagUnionLen()) orelse break :blk false;
-            for (0..len) |tag_index| {
-                if (!try driver.tagName(tag_index)) break :blk false;
-                if (!try visitTagPayloadIdentity(Driver, driver, tag_index)) break :blk false;
-            }
-            break :blk true;
-        },
-        .list => blk: {
-            if (!try driver.beginVariant("list")) break :blk false;
-            break :blk try driver.listElem();
-        },
-        .box => blk: {
-            if (!try driver.beginVariant("box")) break :blk false;
-            break :blk try driver.boxElem();
-        },
-        .func => blk: {
-            if (!try driver.beginVariant("func")) break :blk false;
-            if (!try visitTypeSpanIdentity(Driver, driver, .func_args)) break :blk false;
-            break :blk try driver.funcRet();
-        },
-        .erased => blk: {
-            if (!try driver.beginVariant("erased")) break :blk false;
-            break :blk try driver.erased();
-        },
-        .zst => try driver.beginVariant("zst"),
-    };
-}
-
-fn visitNamedIdentity(comptime Driver: type, driver: *Driver) Driver.Error!bool {
-    if (!try driver.namedModule()) return false;
-    if (!try driver.namedDefModule()) return false;
-    if (!try driver.namedSourceDecl()) return false;
-    if (driver.namedSourceDeclIsAbsent()) {
-        if (!try driver.namedTypeName()) return false;
-    }
-    if (!try driver.namedGenerated()) return false;
-    if (!try driver.namedIteratorRepresentation()) return false;
-    if (!try driver.namedIteratorKind()) return false;
-    if (!try driver.namedIteratorDepth()) return false;
-    if (!try driver.namedKind()) return false;
-    if (!try driver.namedBuiltinOwnerField()) return false;
-    if (!try visitTypeSpanIdentity(Driver, driver, .named_args)) return false;
-
-    switch (driver.namedMode()) {
-        .full => {
-            if (!try visitNamedBackingIdentity(Driver, driver)) return false;
-            return try visitDeclaredOrderIdentity(Driver, driver);
-        },
-        .identity_only => {
-            if (driver.namedBuiltinOwnerValue()) |owner| {
-                if (generatedEvidenceOwnerUsesBacking(owner)) {
-                    if (!try driver.specializationBuiltinBackingMarker()) return false;
-                    return try visitNamedBackingIdentity(Driver, driver);
-                }
-            }
-            return try driver.specializationNamedIdentityMarker();
-        },
-    }
-}
-
-fn visitTypeSpanIdentity(comptime Driver: type, driver: *Driver, role: IdentityTypeSpan) Driver.Error!bool {
-    const len = (try driver.typeSpanLen(role)) orelse return false;
-    for (0..len) |index| {
-        if (!try driver.typeSpanChild(role, index)) return false;
-    }
-    return true;
-}
-
-fn visitNamedBackingIdentity(comptime Driver: type, driver: *Driver) Driver.Error!bool {
-    if (!try driver.beginBacking()) return false;
-    switch ((try driver.backingPresence()) orelse return false) {
-        .none => return true,
-        .some => {
-            if (!try driver.backingUse()) return false;
-            return try driver.backingType();
-        },
-    }
-}
-
-fn visitDeclaredOrderIdentity(comptime Driver: type, driver: *Driver) Driver.Error!bool {
-    if (!try driver.beginDeclaredOrder()) return false;
-    const len = (try driver.declaredOrderLen()) orelse return false;
-    for (0..len) |index| {
-        switch ((try driver.declaredFieldTag(index)) orelse return false) {
-            .named => if (!try driver.declaredFieldName(index)) return false,
-            .padding => if (!try driver.declaredPaddingType(index)) return false,
-        }
-    }
-    return true;
-}
-
-fn visitTagPayloadIdentity(comptime Driver: type, driver: *Driver, tag_index: usize) Driver.Error!bool {
-    const len = (try driver.tagPayloadLen(tag_index)) orelse return false;
-    for (0..len) |payload_index| {
-        if (!try driver.tagPayloadType(tag_index, payload_index)) return false;
-    }
-    return true;
-}
-
-fn TypeViewIdentityEqlDriver(comptime TypeView: type) type {
-    return struct {
-        const Self = @This();
-        const Error = std.mem.Allocator.Error;
-
-        type_view: TypeView,
-        name_store: *const names.NameStore,
-        lhs_content: Content,
-        rhs_content: Content,
-        named_mode: NamedDigestMode,
-        visited: *std.AutoHashMap(u128, void),
-
-        fn contentTag(self: *Self) ?ContentTag {
-            const lhs_tag = std.meta.activeTag(self.lhs_content);
-            if (lhs_tag != std.meta.activeTag(self.rhs_content)) return null;
-            return lhs_tag;
-        }
-
-        fn alias(_: *Self) Error!bool {
-            return false;
-        }
-
-        fn beginVariant(_: *Self, comptime _: []const u8) Error!bool {
-            return true;
-        }
-
-        fn primitive(self: *Self) Error!bool {
-            return self.lhs_content.primitive == self.rhs_content.primitive;
-        }
-
-        fn namedModule(self: *Self) Error!bool {
-            return std.mem.eql(u8, self.lhs_content.named.named_type.module.bytes[0..], self.rhs_content.named.named_type.module.bytes[0..]);
-        }
-
-        fn namedDefModule(self: *Self) Error!bool {
-            return std.mem.eql(u8, self.name_store.moduleIdentityBytes(self.lhs_content.named.def.module), self.name_store.moduleIdentityBytes(self.rhs_content.named.def.module));
-        }
-
-        fn namedSourceDecl(self: *Self) Error!bool {
-            return self.lhs_content.named.def.source_decl == self.rhs_content.named.def.source_decl;
-        }
-
-        fn namedSourceDeclIsAbsent(self: *Self) bool {
-            return self.lhs_content.named.def.source_decl == null;
-        }
-
-        fn namedTypeName(self: *Self) Error!bool {
-            return std.mem.eql(u8, self.name_store.typeNameText(self.lhs_content.named.def.type_name), self.name_store.typeNameText(self.rhs_content.named.def.type_name));
-        }
-
-        fn namedGenerated(self: *Self) Error!bool {
-            return optionalDigestEql(self.lhs_content.named.def.generated, self.rhs_content.named.def.generated);
-        }
-
-        fn namedIteratorRepresentation(self: *Self) Error!bool {
-            return self.lhs_content.named.def.iterator_representation == self.rhs_content.named.def.iterator_representation;
-        }
-
-        fn namedIteratorKind(self: *Self) Error!bool {
-            return self.lhs_content.named.def.iterator_kind == self.rhs_content.named.def.iterator_kind;
-        }
-
-        fn namedIteratorDepth(self: *Self) Error!bool {
-            return self.lhs_content.named.def.iterator_depth == self.rhs_content.named.def.iterator_depth;
-        }
-
-        fn namedKind(self: *Self) Error!bool {
-            return self.lhs_content.named.kind == self.rhs_content.named.kind;
-        }
-
-        fn namedBuiltinOwnerField(self: *Self) Error!bool {
-            return self.lhs_content.named.builtin_owner == self.rhs_content.named.builtin_owner;
-        }
-
-        fn namedBuiltinOwnerValue(self: *Self) ?static_dispatch.BuiltinOwner {
-            return self.lhs_content.named.builtin_owner;
-        }
-
-        fn namedMode(self: *Self) NamedDigestMode {
-            return self.named_mode;
-        }
-
-        fn specializationBuiltinBackingMarker(_: *Self) Error!bool {
-            return true;
-        }
-
-        fn specializationNamedIdentityMarker(_: *Self) Error!bool {
-            return true;
-        }
-
-        fn lhsTypeSpan(self: *Self, role: IdentityTypeSpan) Span {
-            return switch (role) {
-                .named_args => self.lhs_content.named.args,
-                .tuple_items => self.lhs_content.tuple,
-                .func_args => self.lhs_content.func.args,
-            };
-        }
-
-        fn rhsTypeSpan(self: *Self, role: IdentityTypeSpan) Span {
-            return switch (role) {
-                .named_args => self.rhs_content.named.args,
-                .tuple_items => self.rhs_content.tuple,
-                .func_args => self.rhs_content.func.args,
-            };
-        }
-
-        fn typeSpanLen(self: *Self, role: IdentityTypeSpan) Error!?usize {
-            const lhs = self.type_view.span(self.lhsTypeSpan(role));
-            const rhs = self.type_view.span(self.rhsTypeSpan(role));
-            if (lhs.len != rhs.len) return null;
-            return lhs.len;
-        }
-
-        fn typeSpanChild(self: *Self, role: IdentityTypeSpan, index: usize) Error!bool {
-            const lhs = self.type_view.span(self.lhsTypeSpan(role));
-            const rhs = self.type_view.span(self.rhsTypeSpan(role));
-            return try typeViewEqlInner(self.type_view, self.name_store, lhs[index], rhs[index], self.named_mode, self.visited);
-        }
-
-        fn beginBacking(_: *Self) Error!bool {
-            return true;
-        }
-
-        fn backingPresence(self: *Self) Error!?IdentityBacking {
-            if (self.lhs_content.named.backing == null and self.rhs_content.named.backing == null) return .none;
-            if (self.lhs_content.named.backing == null or self.rhs_content.named.backing == null) return null;
-            return .some;
-        }
-
-        fn backingUse(self: *Self) Error!bool {
-            return self.lhs_content.named.backing.?.use == self.rhs_content.named.backing.?.use;
-        }
-
-        fn backingType(self: *Self) Error!bool {
-            return try typeViewEqlInner(
-                self.type_view,
-                self.name_store,
-                self.lhs_content.named.backing.?.ty,
-                self.rhs_content.named.backing.?.ty,
-                .full,
-                self.visited,
-            );
-        }
-
-        fn beginDeclaredOrder(_: *Self) Error!bool {
-            return true;
-        }
-
-        fn declaredOrderLen(self: *Self) Error!?usize {
-            const lhs = self.type_view.declaredFieldSpan(self.lhs_content.named.declared_order);
-            const rhs = self.type_view.declaredFieldSpan(self.rhs_content.named.declared_order);
-            if (lhs.len != rhs.len) return null;
-            return lhs.len;
-        }
-
-        fn declaredFieldTag(self: *Self, index: usize) Error!?DeclaredFieldTag {
-            const lhs = self.type_view.declaredFieldSpan(self.lhs_content.named.declared_order);
-            const rhs = self.type_view.declaredFieldSpan(self.rhs_content.named.declared_order);
-            const lhs_tag = std.meta.activeTag(lhs[index]);
-            if (lhs_tag != std.meta.activeTag(rhs[index])) return null;
-            return lhs_tag;
-        }
-
-        fn declaredFieldName(self: *Self, index: usize) Error!bool {
-            const lhs = self.type_view.declaredFieldSpan(self.lhs_content.named.declared_order);
-            const rhs = self.type_view.declaredFieldSpan(self.rhs_content.named.declared_order);
-            return std.mem.eql(u8, self.name_store.recordFieldLabelText(lhs[index].named), self.name_store.recordFieldLabelText(rhs[index].named));
-        }
-
-        fn declaredPaddingType(self: *Self, index: usize) Error!bool {
-            const lhs = self.type_view.declaredFieldSpan(self.lhs_content.named.declared_order);
-            const rhs = self.type_view.declaredFieldSpan(self.rhs_content.named.declared_order);
-            return try typeViewEqlInner(self.type_view, self.name_store, lhs[index].padding, rhs[index].padding, .full, self.visited);
-        }
-
-        fn recordLen(self: *Self) Error!?usize {
-            const lhs = self.type_view.fieldSpan(self.lhs_content.record);
-            const rhs = self.type_view.fieldSpan(self.rhs_content.record);
-            if (lhs.len != rhs.len) return null;
-            return lhs.len;
-        }
-
-        fn recordFieldName(self: *Self, index: usize) Error!bool {
-            const lhs = self.type_view.fieldSpan(self.lhs_content.record);
-            const rhs = self.type_view.fieldSpan(self.rhs_content.record);
-            return std.mem.eql(u8, self.name_store.recordFieldLabelText(lhs[index].name), self.name_store.recordFieldLabelText(rhs[index].name));
-        }
-
-        fn recordFieldType(self: *Self, index: usize) Error!bool {
-            const lhs = self.type_view.fieldSpan(self.lhs_content.record);
-            const rhs = self.type_view.fieldSpan(self.rhs_content.record);
-            return try typeViewEqlInner(self.type_view, self.name_store, lhs[index].ty, rhs[index].ty, self.named_mode, self.visited);
-        }
-
-        fn tagUnionLen(self: *Self) Error!?usize {
-            const lhs = self.type_view.tagSpan(self.lhs_content.tag_union);
-            const rhs = self.type_view.tagSpan(self.rhs_content.tag_union);
-            if (lhs.len != rhs.len) return null;
-            return lhs.len;
-        }
-
-        fn tagName(self: *Self, index: usize) Error!bool {
-            const lhs = self.type_view.tagSpan(self.lhs_content.tag_union);
-            const rhs = self.type_view.tagSpan(self.rhs_content.tag_union);
-            return std.mem.eql(u8, self.name_store.tagLabelText(lhs[index].name), self.name_store.tagLabelText(rhs[index].name));
-        }
-
-        fn tagPayloadLen(self: *Self, tag_index: usize) Error!?usize {
-            const lhs_tags = self.type_view.tagSpan(self.lhs_content.tag_union);
-            const rhs_tags = self.type_view.tagSpan(self.rhs_content.tag_union);
-            const lhs = self.type_view.span(lhs_tags[tag_index].payloads);
-            const rhs = self.type_view.span(rhs_tags[tag_index].payloads);
-            if (lhs.len != rhs.len) return null;
-            return lhs.len;
-        }
-
-        fn tagPayloadType(self: *Self, tag_index: usize, payload_index: usize) Error!bool {
-            const lhs_tags = self.type_view.tagSpan(self.lhs_content.tag_union);
-            const rhs_tags = self.type_view.tagSpan(self.rhs_content.tag_union);
-            const lhs = self.type_view.span(lhs_tags[tag_index].payloads);
-            const rhs = self.type_view.span(rhs_tags[tag_index].payloads);
-            return try typeViewEqlInner(self.type_view, self.name_store, lhs[payload_index], rhs[payload_index], self.named_mode, self.visited);
-        }
-
-        fn listElem(self: *Self) Error!bool {
-            return try typeViewEqlInner(self.type_view, self.name_store, self.lhs_content.list, self.rhs_content.list, self.named_mode, self.visited);
-        }
-
-        fn boxElem(self: *Self) Error!bool {
-            return try typeViewEqlInner(self.type_view, self.name_store, self.lhs_content.box, self.rhs_content.box, self.named_mode, self.visited);
-        }
-
-        fn funcRet(self: *Self) Error!bool {
-            return try typeViewEqlInner(self.type_view, self.name_store, self.lhs_content.func.ret, self.rhs_content.func.ret, self.named_mode, self.visited);
-        }
-
-        fn erased(self: *Self) Error!bool {
-            return std.mem.eql(u8, self.lhs_content.erased.bytes[0..], self.rhs_content.erased.bytes[0..]);
-        }
-    };
-}
 
 fn typeViewEql(
     type_view: anytype,
@@ -2338,9 +2029,9 @@ fn typeViewEql(
     lhs: TypeId,
     rhs: TypeId,
 ) std.mem.Allocator.Error!bool {
-    var visited = std.AutoHashMap(u128, void).init(allocator);
+    var visited = std.AutoHashMap(u64, void).init(allocator);
     defer visited.deinit();
-    return try typeViewEqlInner(type_view, name_store, lhs, rhs, .identity_only, &visited);
+    return try typeViewEqlInner(type_view, name_store, lhs, rhs, &visited);
 }
 
 fn typeViewEqlInner(
@@ -2348,8 +2039,7 @@ fn typeViewEqlInner(
     name_store: *const names.NameStore,
     raw_lhs: TypeId,
     raw_rhs: TypeId,
-    named_mode: NamedDigestMode,
-    visited: *std.AutoHashMap(u128, void),
+    visited: *std.AutoHashMap(u64, void),
 ) std.mem.Allocator.Error!bool {
     if (raw_lhs == raw_rhs) return true;
 
@@ -2360,38 +2050,161 @@ fn typeViewEqlInner(
     const lhs_content = type_view.get(raw_lhs);
     if (lhs_content == .named and lhs_content.named.kind == .alias and lhs_content.named.builtin_owner == null) {
         if (lhs_content.named.backing) |backing| {
-            return try typeViewEqlInner(type_view, name_store, backing.ty, raw_rhs, named_mode, visited);
+            return try typeViewEqlInner(type_view, name_store, backing.ty, raw_rhs, visited);
         }
     }
 
     const rhs_content = type_view.get(raw_rhs);
     if (rhs_content == .named and rhs_content.named.kind == .alias and rhs_content.named.builtin_owner == null) {
         if (rhs_content.named.backing) |backing| {
-            return try typeViewEqlInner(type_view, name_store, raw_lhs, backing.ty, named_mode, visited);
+            return try typeViewEqlInner(type_view, name_store, raw_lhs, backing.ty, visited);
         }
     }
 
-    const pair = typePairKey(raw_lhs, raw_rhs, named_mode);
+    const pair = typePairKey(raw_lhs, raw_rhs);
     const gop = try visited.getOrPut(pair);
     if (gop.found_existing) return true;
 
-    var driver = TypeViewIdentityEqlDriver(@TypeOf(type_view)){
-        .type_view = type_view,
-        .name_store = name_store,
-        .lhs_content = lhs_content,
-        .rhs_content = rhs_content,
-        .named_mode = named_mode,
-        .visited = visited,
+    return switch (lhs_content) {
+        .primitive => |lhs| switch (rhs_content) {
+            .primitive => |rhs| lhs == rhs,
+            else => false,
+        },
+        .named => |lhs| switch (rhs_content) {
+            .named => |rhs| try namedTypeViewEql(type_view, name_store, lhs, rhs, visited),
+            else => false,
+        },
+        .record => |lhs| switch (rhs_content) {
+            .record => |rhs| try fieldSpanViewEql(type_view, name_store, lhs, rhs, visited),
+            else => false,
+        },
+        .tuple => |lhs| switch (rhs_content) {
+            .tuple => |rhs| try typeSpanViewEql(type_view, name_store, lhs, rhs, visited),
+            else => false,
+        },
+        .tag_union => |lhs| switch (rhs_content) {
+            .tag_union => |rhs| try tagSpanViewEql(type_view, name_store, lhs, rhs, visited),
+            else => false,
+        },
+        .list => |lhs| switch (rhs_content) {
+            .list => |rhs| try typeViewEqlInner(type_view, name_store, lhs, rhs, visited),
+            else => false,
+        },
+        .box => |lhs| switch (rhs_content) {
+            .box => |rhs| try typeViewEqlInner(type_view, name_store, lhs, rhs, visited),
+            else => false,
+        },
+        .func => |lhs| switch (rhs_content) {
+            .func => |rhs| blk: {
+                if (!try typeSpanViewEql(type_view, name_store, lhs.args, rhs.args, visited)) break :blk false;
+                break :blk try typeViewEqlInner(type_view, name_store, lhs.ret, rhs.ret, visited);
+            },
+            else => false,
+        },
+        .erased => |lhs| switch (rhs_content) {
+            .erased => |rhs| std.mem.eql(u8, lhs.bytes[0..], rhs.bytes[0..]),
+            else => false,
+        },
+        .zst => rhs_content == .zst,
     };
-    return try visitTypeIdentity(@TypeOf(driver), &driver);
 }
 
-fn typePairKey(lhs: TypeId, rhs: TypeId, named_mode: NamedDigestMode) u128 {
+fn namedTypeViewEql(
+    type_view: anytype,
+    name_store: *const names.NameStore,
+    lhs: anytype,
+    rhs: anytype,
+    visited: *std.AutoHashMap(u64, void),
+) std.mem.Allocator.Error!bool {
+    if (lhs.kind != rhs.kind) return false;
+    if (!std.mem.eql(u8, lhs.named_type.module.bytes[0..], rhs.named_type.module.bytes[0..])) return false;
+    if (!std.mem.eql(u8, name_store.moduleIdentityBytes(lhs.def.module), name_store.moduleIdentityBytes(rhs.def.module))) return false;
+    if (lhs.def.source_decl != rhs.def.source_decl) return false;
+    if (lhs.def.source_decl == null and
+        !std.mem.eql(u8, name_store.typeNameText(lhs.def.type_name), name_store.typeNameText(rhs.def.type_name)))
+    {
+        return false;
+    }
+    if (!optionalDigestEql(lhs.def.generated, rhs.def.generated)) return false;
+    if (lhs.def.iterator_representation != rhs.def.iterator_representation) return false;
+    if (lhs.def.iterator_kind != rhs.def.iterator_kind) return false;
+    if (lhs.def.iterator_depth != rhs.def.iterator_depth) return false;
+    if (!std.meta.eql(lhs.def.iterator_topology, rhs.def.iterator_topology)) return false;
+    if (lhs.builtin_owner != rhs.builtin_owner) return false;
+    if (!try typeSpanViewEql(type_view, name_store, lhs.args, rhs.args, visited)) return false;
+
+    if (lhs.kind == .alias) {
+        const lhs_backing = lhs.backing orelse return rhs.backing == null;
+        const rhs_backing = rhs.backing orelse return false;
+        return try typeViewEqlInner(type_view, name_store, lhs_backing.ty, rhs_backing.ty, visited);
+    }
+
+    if (specializationUsesBacking(lhs.backing) or specializationUsesBacking(rhs.backing)) {
+        const lhs_backing = lhs.backing orelse return false;
+        const rhs_backing = rhs.backing orelse return false;
+        if (lhs_backing.use != rhs_backing.use or lhs_backing.authority != rhs_backing.authority) return false;
+        return try typeViewEqlInner(type_view, name_store, lhs_backing.ty, rhs_backing.ty, visited);
+    }
+
+    return true;
+}
+
+fn typeSpanViewEql(
+    type_view: anytype,
+    name_store: *const names.NameStore,
+    lhs_span: Span,
+    rhs_span: Span,
+    visited: *std.AutoHashMap(u64, void),
+) std.mem.Allocator.Error!bool {
+    const lhs = type_view.span(lhs_span);
+    const rhs = type_view.span(rhs_span);
+    if (lhs.len != rhs.len) return false;
+    for (lhs, rhs) |lhs_ty, rhs_ty| {
+        if (!try typeViewEqlInner(type_view, name_store, lhs_ty, rhs_ty, visited)) return false;
+    }
+    return true;
+}
+
+fn fieldSpanViewEql(
+    type_view: anytype,
+    name_store: *const names.NameStore,
+    lhs_span: Span,
+    rhs_span: Span,
+    visited: *std.AutoHashMap(u64, void),
+) std.mem.Allocator.Error!bool {
+    const lhs = type_view.fieldSpan(lhs_span);
+    const rhs = type_view.fieldSpan(rhs_span);
+    if (lhs.len != rhs.len) return false;
+    for (lhs, rhs) |lhs_field, rhs_field| {
+        if (!std.mem.eql(u8, name_store.recordFieldLabelText(lhs_field.name), name_store.recordFieldLabelText(rhs_field.name))) return false;
+        if (!try typeViewEqlInner(type_view, name_store, lhs_field.ty, rhs_field.ty, visited)) return false;
+    }
+    return true;
+}
+
+fn tagSpanViewEql(
+    type_view: anytype,
+    name_store: *const names.NameStore,
+    lhs_span: Span,
+    rhs_span: Span,
+    visited: *std.AutoHashMap(u64, void),
+) std.mem.Allocator.Error!bool {
+    const lhs = type_view.tagSpan(lhs_span);
+    const rhs = type_view.tagSpan(rhs_span);
+    if (lhs.len != rhs.len) return false;
+    for (lhs, rhs) |lhs_tag, rhs_tag| {
+        if (!std.mem.eql(u8, name_store.tagLabelText(lhs_tag.name), name_store.tagLabelText(rhs_tag.name))) return false;
+        if (!try typeSpanViewEql(type_view, name_store, lhs_tag.payloads, rhs_tag.payloads, visited)) return false;
+    }
+    return true;
+}
+
+fn typePairKey(lhs: TypeId, rhs: TypeId) u64 {
     const lhs_int = @intFromEnum(lhs);
     const rhs_int = @intFromEnum(rhs);
     const low = @min(lhs_int, rhs_int);
     const high = @max(lhs_int, rhs_int);
-    return (@as(u128, @intFromEnum(named_mode)) << 64) | (@as(u128, low) << 32) | @as(u128, high);
+    return (@as(u64, low) << 32) | @as(u64, high);
 }
 
 /// Read-only type-store view backed by durable cache sections.
@@ -2529,250 +2342,6 @@ pub const DurableView = struct {
     }
 };
 
-fn AcrossStoresIdentityEqlDriver(comptime LhsView: type, comptime RhsView: type) type {
-    return struct {
-        const Self = @This();
-        const Error = std.mem.Allocator.Error;
-
-        name_store: *const names.NameStore,
-        lhs_view: LhsView,
-        lhs_content: Content,
-        rhs_view: RhsView,
-        rhs_content: Content,
-        named_mode: NamedDigestMode,
-        visited: *std.AutoHashMap(u128, void),
-
-        fn contentTag(self: *Self) ?ContentTag {
-            const lhs_tag = std.meta.activeTag(self.lhs_content);
-            if (lhs_tag != std.meta.activeTag(self.rhs_content)) return null;
-            return lhs_tag;
-        }
-
-        fn alias(_: *Self) Error!bool {
-            return false;
-        }
-
-        fn beginVariant(_: *Self, comptime _: []const u8) Error!bool {
-            return true;
-        }
-
-        fn primitive(self: *Self) Error!bool {
-            return self.lhs_content.primitive == self.rhs_content.primitive;
-        }
-
-        fn namedModule(self: *Self) Error!bool {
-            return std.mem.eql(u8, self.lhs_content.named.named_type.module.bytes[0..], self.rhs_content.named.named_type.module.bytes[0..]);
-        }
-
-        fn namedDefModule(self: *Self) Error!bool {
-            return std.mem.eql(u8, self.name_store.moduleIdentityBytes(self.lhs_content.named.def.module), self.name_store.moduleIdentityBytes(self.rhs_content.named.def.module));
-        }
-
-        fn namedSourceDecl(self: *Self) Error!bool {
-            return self.lhs_content.named.def.source_decl == self.rhs_content.named.def.source_decl;
-        }
-
-        fn namedSourceDeclIsAbsent(self: *Self) bool {
-            return self.lhs_content.named.def.source_decl == null;
-        }
-
-        fn namedTypeName(self: *Self) Error!bool {
-            return std.mem.eql(u8, self.name_store.typeNameText(self.lhs_content.named.def.type_name), self.name_store.typeNameText(self.rhs_content.named.def.type_name));
-        }
-
-        fn namedGenerated(self: *Self) Error!bool {
-            return optionalDigestEql(self.lhs_content.named.def.generated, self.rhs_content.named.def.generated);
-        }
-
-        fn namedIteratorRepresentation(self: *Self) Error!bool {
-            return self.lhs_content.named.def.iterator_representation == self.rhs_content.named.def.iterator_representation;
-        }
-
-        fn namedIteratorKind(self: *Self) Error!bool {
-            return self.lhs_content.named.def.iterator_kind == self.rhs_content.named.def.iterator_kind;
-        }
-
-        fn namedIteratorDepth(self: *Self) Error!bool {
-            return self.lhs_content.named.def.iterator_depth == self.rhs_content.named.def.iterator_depth;
-        }
-
-        fn namedKind(self: *Self) Error!bool {
-            return self.lhs_content.named.kind == self.rhs_content.named.kind;
-        }
-
-        fn namedBuiltinOwnerField(self: *Self) Error!bool {
-            return self.lhs_content.named.builtin_owner == self.rhs_content.named.builtin_owner;
-        }
-
-        fn namedBuiltinOwnerValue(self: *Self) ?static_dispatch.BuiltinOwner {
-            return self.lhs_content.named.builtin_owner;
-        }
-
-        fn namedMode(self: *Self) NamedDigestMode {
-            return self.named_mode;
-        }
-
-        fn specializationBuiltinBackingMarker(_: *Self) Error!bool {
-            return true;
-        }
-
-        fn specializationNamedIdentityMarker(_: *Self) Error!bool {
-            return true;
-        }
-
-        fn lhsTypeSpan(self: *Self, role: IdentityTypeSpan) Span {
-            return switch (role) {
-                .named_args => self.lhs_content.named.args,
-                .tuple_items => self.lhs_content.tuple,
-                .func_args => self.lhs_content.func.args,
-            };
-        }
-
-        fn rhsTypeSpan(self: *Self, role: IdentityTypeSpan) Span {
-            return switch (role) {
-                .named_args => self.rhs_content.named.args,
-                .tuple_items => self.rhs_content.tuple,
-                .func_args => self.rhs_content.func.args,
-            };
-        }
-
-        fn typeSpanLen(self: *Self, role: IdentityTypeSpan) Error!?usize {
-            const lhs = self.lhs_view.span(self.lhsTypeSpan(role));
-            const rhs = self.rhs_view.span(self.rhsTypeSpan(role));
-            if (lhs.len != rhs.len) return null;
-            return lhs.len;
-        }
-
-        fn typeSpanChild(self: *Self, role: IdentityTypeSpan, index: usize) Error!bool {
-            const lhs = self.lhs_view.span(self.lhsTypeSpan(role));
-            const rhs = self.rhs_view.span(self.rhsTypeSpan(role));
-            return try typeEqlAcrossStoresInner(self.name_store, self.lhs_view, lhs[index], self.rhs_view, rhs[index], self.named_mode, self.visited);
-        }
-
-        fn beginBacking(_: *Self) Error!bool {
-            return true;
-        }
-
-        fn backingPresence(self: *Self) Error!?IdentityBacking {
-            if (self.lhs_content.named.backing == null and self.rhs_content.named.backing == null) return .none;
-            if (self.lhs_content.named.backing == null or self.rhs_content.named.backing == null) return null;
-            return .some;
-        }
-
-        fn backingUse(self: *Self) Error!bool {
-            return self.lhs_content.named.backing.?.use == self.rhs_content.named.backing.?.use;
-        }
-
-        fn backingType(self: *Self) Error!bool {
-            return try typeEqlAcrossStoresInner(
-                self.name_store,
-                self.lhs_view,
-                self.lhs_content.named.backing.?.ty,
-                self.rhs_view,
-                self.rhs_content.named.backing.?.ty,
-                .full,
-                self.visited,
-            );
-        }
-
-        fn beginDeclaredOrder(_: *Self) Error!bool {
-            return true;
-        }
-
-        fn declaredOrderLen(self: *Self) Error!?usize {
-            const lhs = self.lhs_view.declaredFieldSpan(self.lhs_content.named.declared_order);
-            const rhs = self.rhs_view.declaredFieldSpan(self.rhs_content.named.declared_order);
-            if (lhs.len != rhs.len) return null;
-            return lhs.len;
-        }
-
-        fn declaredFieldTag(self: *Self, index: usize) Error!?DeclaredFieldTag {
-            const lhs = self.lhs_view.declaredFieldSpan(self.lhs_content.named.declared_order);
-            const rhs = self.rhs_view.declaredFieldSpan(self.rhs_content.named.declared_order);
-            const lhs_tag = std.meta.activeTag(lhs[index]);
-            if (lhs_tag != std.meta.activeTag(rhs[index])) return null;
-            return lhs_tag;
-        }
-
-        fn declaredFieldName(self: *Self, index: usize) Error!bool {
-            const lhs = self.lhs_view.declaredFieldSpan(self.lhs_content.named.declared_order);
-            const rhs = self.rhs_view.declaredFieldSpan(self.rhs_content.named.declared_order);
-            return std.mem.eql(u8, self.name_store.recordFieldLabelText(lhs[index].named), self.name_store.recordFieldLabelText(rhs[index].named));
-        }
-
-        fn declaredPaddingType(self: *Self, index: usize) Error!bool {
-            const lhs = self.lhs_view.declaredFieldSpan(self.lhs_content.named.declared_order);
-            const rhs = self.rhs_view.declaredFieldSpan(self.rhs_content.named.declared_order);
-            return try typeEqlAcrossStoresInner(self.name_store, self.lhs_view, lhs[index].padding, self.rhs_view, rhs[index].padding, .full, self.visited);
-        }
-
-        fn recordLen(self: *Self) Error!?usize {
-            const lhs = self.lhs_view.fieldSpan(self.lhs_content.record);
-            const rhs = self.rhs_view.fieldSpan(self.rhs_content.record);
-            if (lhs.len != rhs.len) return null;
-            return lhs.len;
-        }
-
-        fn recordFieldName(self: *Self, index: usize) Error!bool {
-            const lhs = self.lhs_view.fieldSpan(self.lhs_content.record);
-            const rhs = self.rhs_view.fieldSpan(self.rhs_content.record);
-            return std.mem.eql(u8, self.name_store.recordFieldLabelText(lhs[index].name), self.name_store.recordFieldLabelText(rhs[index].name));
-        }
-
-        fn recordFieldType(self: *Self, index: usize) Error!bool {
-            const lhs = self.lhs_view.fieldSpan(self.lhs_content.record);
-            const rhs = self.rhs_view.fieldSpan(self.rhs_content.record);
-            return try typeEqlAcrossStoresInner(self.name_store, self.lhs_view, lhs[index].ty, self.rhs_view, rhs[index].ty, self.named_mode, self.visited);
-        }
-
-        fn tagUnionLen(self: *Self) Error!?usize {
-            const lhs = self.lhs_view.tagSpan(self.lhs_content.tag_union);
-            const rhs = self.rhs_view.tagSpan(self.rhs_content.tag_union);
-            if (lhs.len != rhs.len) return null;
-            return lhs.len;
-        }
-
-        fn tagName(self: *Self, index: usize) Error!bool {
-            const lhs = self.lhs_view.tagSpan(self.lhs_content.tag_union);
-            const rhs = self.rhs_view.tagSpan(self.rhs_content.tag_union);
-            return std.mem.eql(u8, self.name_store.tagLabelText(lhs[index].name), self.name_store.tagLabelText(rhs[index].name));
-        }
-
-        fn tagPayloadLen(self: *Self, tag_index: usize) Error!?usize {
-            const lhs_tags = self.lhs_view.tagSpan(self.lhs_content.tag_union);
-            const rhs_tags = self.rhs_view.tagSpan(self.rhs_content.tag_union);
-            const lhs = self.lhs_view.span(lhs_tags[tag_index].payloads);
-            const rhs = self.rhs_view.span(rhs_tags[tag_index].payloads);
-            if (lhs.len != rhs.len) return null;
-            return lhs.len;
-        }
-
-        fn tagPayloadType(self: *Self, tag_index: usize, payload_index: usize) Error!bool {
-            const lhs_tags = self.lhs_view.tagSpan(self.lhs_content.tag_union);
-            const rhs_tags = self.rhs_view.tagSpan(self.rhs_content.tag_union);
-            const lhs = self.lhs_view.span(lhs_tags[tag_index].payloads);
-            const rhs = self.rhs_view.span(rhs_tags[tag_index].payloads);
-            return try typeEqlAcrossStoresInner(self.name_store, self.lhs_view, lhs[payload_index], self.rhs_view, rhs[payload_index], self.named_mode, self.visited);
-        }
-
-        fn listElem(self: *Self) Error!bool {
-            return try typeEqlAcrossStoresInner(self.name_store, self.lhs_view, self.lhs_content.list, self.rhs_view, self.rhs_content.list, self.named_mode, self.visited);
-        }
-
-        fn boxElem(self: *Self) Error!bool {
-            return try typeEqlAcrossStoresInner(self.name_store, self.lhs_view, self.lhs_content.box, self.rhs_view, self.rhs_content.box, self.named_mode, self.visited);
-        }
-
-        fn funcRet(self: *Self) Error!bool {
-            return try typeEqlAcrossStoresInner(self.name_store, self.lhs_view, self.lhs_content.func.ret, self.rhs_view, self.rhs_content.func.ret, self.named_mode, self.visited);
-        }
-
-        fn erased(self: *Self) Error!bool {
-            return std.mem.eql(u8, self.lhs_content.erased.bytes[0..], self.rhs_content.erased.bytes[0..]);
-        }
-    };
-}
-
 /// Exact structural equality for closed Monotype types that live in two
 /// different type stores. Type ids are interpreted only against the view they
 /// came from; equality follows the same identity rules as `Store.typeEql`.
@@ -2784,9 +2353,9 @@ pub fn typeEqlAcrossStores(
     rhs_view: anytype,
     rhs: TypeId,
 ) std.mem.Allocator.Error!bool {
-    var visited = std.AutoHashMap(u128, void).init(allocator);
+    var visited = std.AutoHashMap(u64, void).init(allocator);
     defer visited.deinit();
-    return try typeEqlAcrossStoresInner(name_store, lhs_view, lhs, rhs_view, rhs, .identity_only, &visited);
+    return try typeEqlAcrossStoresInner(name_store, lhs_view, lhs, rhs_view, rhs, &visited);
 }
 
 fn typeEqlAcrossStoresInner(
@@ -2795,8 +2364,7 @@ fn typeEqlAcrossStoresInner(
     raw_lhs: TypeId,
     rhs_view: anytype,
     raw_rhs: TypeId,
-    named_mode: NamedDigestMode,
-    visited: *std.AutoHashMap(u128, void),
+    visited: *std.AutoHashMap(u64, void),
 ) std.mem.Allocator.Error!bool {
     // Match the storage/digest alias split: a storage-transparent alias (backed,
     // no builtin owner) unwraps to its backing; a builtin-owned alias is
@@ -2804,35 +2372,161 @@ fn typeEqlAcrossStoresInner(
     const lhs_content = lhs_view.get(raw_lhs);
     if (lhs_content == .named and lhs_content.named.kind == .alias and lhs_content.named.builtin_owner == null) {
         if (lhs_content.named.backing) |backing| {
-            return try typeEqlAcrossStoresInner(name_store, lhs_view, backing.ty, rhs_view, raw_rhs, named_mode, visited);
+            return try typeEqlAcrossStoresInner(name_store, lhs_view, backing.ty, rhs_view, raw_rhs, visited);
         }
     }
 
     const rhs_content = rhs_view.get(raw_rhs);
     if (rhs_content == .named and rhs_content.named.kind == .alias and rhs_content.named.builtin_owner == null) {
         if (rhs_content.named.backing) |backing| {
-            return try typeEqlAcrossStoresInner(name_store, lhs_view, raw_lhs, rhs_view, backing.ty, named_mode, visited);
+            return try typeEqlAcrossStoresInner(name_store, lhs_view, raw_lhs, rhs_view, backing.ty, visited);
         }
     }
 
-    const pair = directionalTypePair(raw_lhs, raw_rhs, named_mode);
+    const pair = directionalTypePair(raw_lhs, raw_rhs);
     const gop = try visited.getOrPut(pair);
     if (gop.found_existing) return true;
 
-    var driver = AcrossStoresIdentityEqlDriver(@TypeOf(lhs_view), @TypeOf(rhs_view)){
-        .name_store = name_store,
-        .lhs_view = lhs_view,
-        .lhs_content = lhs_content,
-        .rhs_view = rhs_view,
-        .rhs_content = rhs_content,
-        .named_mode = named_mode,
-        .visited = visited,
+    return switch (lhs_content) {
+        .primitive => |lhs_primitive| switch (rhs_content) {
+            .primitive => |rhs_primitive| lhs_primitive == rhs_primitive,
+            else => false,
+        },
+        .named => |lhs_named| switch (rhs_content) {
+            .named => |rhs_named| try namedTypeEqlAcrossStores(name_store, lhs_view, lhs_named, rhs_view, rhs_named, visited),
+            else => false,
+        },
+        .record => |lhs_fields| switch (rhs_content) {
+            .record => |rhs_fields| try fieldSpanEqlAcrossStores(name_store, lhs_view, lhs_fields, rhs_view, rhs_fields, visited),
+            else => false,
+        },
+        .tuple => |lhs_items| switch (rhs_content) {
+            .tuple => |rhs_items| try typeSpanEqlAcrossStores(name_store, lhs_view, lhs_items, rhs_view, rhs_items, visited),
+            else => false,
+        },
+        .tag_union => |lhs_tags| switch (rhs_content) {
+            .tag_union => |rhs_tags| try tagSpanEqlAcrossStores(name_store, lhs_view, lhs_tags, rhs_view, rhs_tags, visited),
+            else => false,
+        },
+        .list => |lhs_elem| switch (rhs_content) {
+            .list => |rhs_elem| try typeEqlAcrossStoresInner(name_store, lhs_view, lhs_elem, rhs_view, rhs_elem, visited),
+            else => false,
+        },
+        .box => |lhs_elem| switch (rhs_content) {
+            .box => |rhs_elem| try typeEqlAcrossStoresInner(name_store, lhs_view, lhs_elem, rhs_view, rhs_elem, visited),
+            else => false,
+        },
+        .func => |lhs_func| switch (rhs_content) {
+            .func => |rhs_func| blk: {
+                if (!try typeSpanEqlAcrossStores(name_store, lhs_view, lhs_func.args, rhs_view, rhs_func.args, visited)) break :blk false;
+                break :blk try typeEqlAcrossStoresInner(name_store, lhs_view, lhs_func.ret, rhs_view, rhs_func.ret, visited);
+            },
+            else => false,
+        },
+        .erased => |lhs_digest| switch (rhs_content) {
+            .erased => |rhs_digest| std.mem.eql(u8, lhs_digest.bytes[0..], rhs_digest.bytes[0..]),
+            else => false,
+        },
+        .zst => rhs_content == .zst,
     };
-    return try visitTypeIdentity(@TypeOf(driver), &driver);
 }
 
-fn directionalTypePair(lhs: TypeId, rhs: TypeId, named_mode: NamedDigestMode) u128 {
-    return (@as(u128, @intFromEnum(named_mode)) << 64) | (@as(u128, @intFromEnum(lhs)) << 32) | @as(u128, @intFromEnum(rhs));
+fn namedTypeEqlAcrossStores(
+    name_store: *const names.NameStore,
+    lhs_view: anytype,
+    lhs: NamedContent,
+    rhs_view: anytype,
+    rhs: NamedContent,
+    visited: *std.AutoHashMap(u64, void),
+) std.mem.Allocator.Error!bool {
+    if (lhs.kind != rhs.kind) return false;
+    if (!std.mem.eql(u8, lhs.named_type.module.bytes[0..], rhs.named_type.module.bytes[0..])) return false;
+    if (!std.mem.eql(u8, name_store.moduleIdentityBytes(lhs.def.module), name_store.moduleIdentityBytes(rhs.def.module))) return false;
+    if (lhs.def.source_decl != rhs.def.source_decl) return false;
+    if (lhs.def.source_decl == null and
+        !std.mem.eql(u8, name_store.typeNameText(lhs.def.type_name), name_store.typeNameText(rhs.def.type_name)))
+    {
+        return false;
+    }
+    if (!optionalDigestEql(lhs.def.generated, rhs.def.generated)) return false;
+    if (lhs.def.iterator_representation != rhs.def.iterator_representation) return false;
+    if (lhs.def.iterator_kind != rhs.def.iterator_kind) return false;
+    if (lhs.def.iterator_depth != rhs.def.iterator_depth) return false;
+    if (!std.meta.eql(lhs.def.iterator_topology, rhs.def.iterator_topology)) return false;
+    if (lhs.builtin_owner != rhs.builtin_owner) return false;
+    if (!try typeSpanEqlAcrossStores(name_store, lhs_view, lhs.args, rhs_view, rhs.args, visited)) return false;
+
+    if (lhs.kind == .alias) {
+        const lhs_backing = lhs.backing orelse return rhs.backing == null;
+        const rhs_backing = rhs.backing orelse return false;
+        return try typeEqlAcrossStoresInner(name_store, lhs_view, lhs_backing.ty, rhs_view, rhs_backing.ty, visited);
+    }
+
+    if (specializationUsesBacking(lhs.backing) or specializationUsesBacking(rhs.backing)) {
+        const lhs_backing = lhs.backing orelse return false;
+        const rhs_backing = rhs.backing orelse return false;
+        if (lhs_backing.use != rhs_backing.use or lhs_backing.authority != rhs_backing.authority) return false;
+        return try typeEqlAcrossStoresInner(name_store, lhs_view, lhs_backing.ty, rhs_view, rhs_backing.ty, visited);
+    }
+
+    return true;
+}
+
+fn typeSpanEqlAcrossStores(
+    name_store: *const names.NameStore,
+    lhs_view: anytype,
+    lhs_span: Span,
+    rhs_view: anytype,
+    rhs_span: Span,
+    visited: *std.AutoHashMap(u64, void),
+) std.mem.Allocator.Error!bool {
+    const lhs = lhs_view.span(lhs_span);
+    const rhs = rhs_view.span(rhs_span);
+    if (lhs.len != rhs.len) return false;
+    for (lhs, rhs) |lhs_ty, rhs_ty| {
+        if (!try typeEqlAcrossStoresInner(name_store, lhs_view, lhs_ty, rhs_view, rhs_ty, visited)) return false;
+    }
+    return true;
+}
+
+fn fieldSpanEqlAcrossStores(
+    name_store: *const names.NameStore,
+    lhs_view: anytype,
+    lhs_span: Span,
+    rhs_view: anytype,
+    rhs_span: Span,
+    visited: *std.AutoHashMap(u64, void),
+) std.mem.Allocator.Error!bool {
+    const lhs = lhs_view.fieldSpan(lhs_span);
+    const rhs = rhs_view.fieldSpan(rhs_span);
+    if (lhs.len != rhs.len) return false;
+    for (lhs, rhs) |lhs_field, rhs_field| {
+        if (!std.mem.eql(u8, name_store.recordFieldLabelText(lhs_field.name), name_store.recordFieldLabelText(rhs_field.name))) return false;
+        if (!try typeEqlAcrossStoresInner(name_store, lhs_view, lhs_field.ty, rhs_view, rhs_field.ty, visited)) return false;
+    }
+    return true;
+}
+
+fn tagSpanEqlAcrossStores(
+    name_store: *const names.NameStore,
+    lhs_view: anytype,
+    lhs_span: Span,
+    rhs_view: anytype,
+    rhs_span: Span,
+    visited: *std.AutoHashMap(u64, void),
+) std.mem.Allocator.Error!bool {
+    const lhs = lhs_view.tagSpan(lhs_span);
+    const rhs = rhs_view.tagSpan(rhs_span);
+    if (lhs.len != rhs.len) return false;
+    for (lhs, rhs) |lhs_tag, rhs_tag| {
+        if (!std.mem.eql(u8, name_store.tagLabelText(lhs_tag.name), name_store.tagLabelText(rhs_tag.name))) return false;
+        if (!try typeSpanEqlAcrossStores(name_store, lhs_view, lhs_tag.payloads, rhs_view, rhs_tag.payloads, visited)) return false;
+    }
+    return true;
+}
+
+fn directionalTypePair(lhs: TypeId, rhs: TypeId) u64 {
+    return (@as(u64, @intFromEnum(lhs)) << 32) | @as(u64, @intFromEnum(rhs));
 }
 
 /// Interning state: a store with content dedup enabled plus the name store its
@@ -3535,6 +3229,10 @@ pub fn generatedEvidenceOwnerUsesBacking(owner: static_dispatch.BuiltinOwner) bo
     };
 }
 
+fn specializationUsesBacking(backing: ?NamedBacking) bool {
+    return if (backing) |present| present.authority == .generated_private else false;
+}
+
 fn writeU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
     const little = std.mem.nativeToLittle(u32, value);
     hasher.update(std.mem.asBytes(&little));
@@ -3547,19 +3245,44 @@ fn writeOptionalU32(hasher: *std.crypto.hash.sha2.Sha256, value: ?u32) void {
 }
 
 fn writeOptionalDigest(hasher: *std.crypto.hash.sha2.Sha256, value: ?names.TypeDigest) void {
-    const present: u8 = if (value == null) 0 else 1;
-    hasher.update(std.mem.asBytes(&present));
-    if (value) |v| hasher.update(&v.bytes);
+    if (value) |digest| {
+        writeBytes(hasher, "digest");
+        hasher.update(&digest.bytes);
+    } else {
+        writeBytes(hasher, "no-digest");
+    }
+}
+
+fn writeIteratorTopology(
+    hasher: *std.crypto.hash.sha2.Sha256,
+    name_store: *const names.NameStore,
+    topology: ?IteratorTopology,
+) void {
+    const value = topology orelse {
+        writeBytes(hasher, "no-iterator-topology");
+        return;
+    };
+    writeBytes(hasher, "iterator-topology");
+    writeBytes(hasher, name_store.recordFieldLabelText(value.len_field));
+    writeBytes(hasher, name_store.recordFieldLabelText(value.step_field));
+    writeBytes(hasher, name_store.tagLabelText(value.known_tag));
+    writeBytes(hasher, name_store.tagLabelText(value.unknown_tag));
+    writeBytes(hasher, name_store.tagLabelText(value.done_tag));
+    writeBytes(hasher, name_store.tagLabelText(value.one_tag));
+    writeBytes(hasher, name_store.tagLabelText(value.skip_tag));
+    writeBytes(hasher, name_store.recordFieldLabelText(value.item_field));
+    writeBytes(hasher, name_store.recordFieldLabelText(value.rest_field));
 }
 
 fn optionalDigestEql(lhs: ?names.TypeDigest, rhs: ?names.TypeDigest) bool {
-    if (lhs == null and rhs == null) return true;
-    if (lhs == null or rhs == null) return false;
-    return std.mem.eql(u8, lhs.?.bytes[0..], rhs.?.bytes[0..]);
+    if (lhs) |lhs_digest| {
+        const rhs_digest = rhs orelse return false;
+        return std.mem.eql(u8, lhs_digest.bytes[0..], rhs_digest.bytes[0..]);
+    }
+    return rhs == null;
 }
 
-/// The builtin method owner a primitive monotype belongs to, by definition.
-pub fn builtinOwnerForPrimitive(primitive: Primitive) static_dispatch.BuiltinOwner {
+fn builtinOwner(primitive: Primitive) static_dispatch.BuiltinOwner {
     return switch (primitive) {
         .bool => .bool,
         .str => .str,
@@ -3576,6 +3299,14 @@ pub fn builtinOwnerForPrimitive(primitive: Primitive) static_dispatch.BuiltinOwn
         .f32 => .f32,
         .f64 => .f64,
         .dec => .dec,
+        .u8x16 => .u8x16,
+        .i8x16 => .i8x16,
+        .u16x8 => .u16x8,
+        .i16x8 => .i16x8,
+        .u32x4 => .u32x4,
+        .i32x4 => .i32x4,
+        .u64x2 => .u64x2,
+        .i64x2 => .i64x2,
     };
 }
 
@@ -4099,6 +3830,40 @@ test "monotype store empty field span equals a zero-length record-field span" {
     try std.testing.expectEqual(Span.empty(), from_fields);
 }
 
+test "monotype named type digest includes generic arguments" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const type_name = try name_store.internTypeName("Box");
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const i64_ty = try store.add(.{ .primitive = .i64 });
+    const str = try store.add(.{ .primitive = .str });
+    const i64_args = try store.addSpan(&.{i64_ty});
+    const str_args = try store.addSpan(&.{str});
+    const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+
+    const named_i64 = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .nominal,
+        .args = i64_args,
+    } });
+    const named_str = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .nominal,
+        .args = str_args,
+    } });
+
+    const i64_digest = store.typeDigest(&name_store, named_i64);
+    const str_digest = store.typeDigest(&name_store, named_str);
+    try std.testing.expect(!std.mem.eql(u8, i64_digest.bytes[0..], str_digest.bytes[0..]));
+}
+
 test "monotype store keeps function-containing shapes distinct" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
@@ -4209,6 +3974,36 @@ test "monotype type verifier rejects malformed rows and references" {
     }
 }
 
+test "monotype digest terminates on recursive structural types" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const field_name = try name_store.internRecordFieldLabel("step");
+
+    // A record whose field is a function returning the record itself.
+    const rec_a = try store.reserveSlot();
+    const fn_a = try store.add(.{ .func = .{ .args = Span.empty(), .ret = rec_a } });
+    const fields_a = try store.addFields(&.{.{ .name = field_name, .ty = fn_a }});
+    try store.fillReservedSlot(rec_a, .{ .record = fields_a });
+
+    const first = store.typeDigest(&name_store, rec_a);
+    const again = store.typeDigest(&name_store, rec_a);
+    try std.testing.expect(std.mem.eql(u8, first.bytes[0..], again.bytes[0..]));
+
+    // An isomorphic cycle at different ids digests identically: cycles are
+    // encoded as back references by position, not by id.
+    const rec_b = try store.reserveSlot();
+    const fn_b = try store.add(.{ .func = .{ .args = Span.empty(), .ret = rec_b } });
+    const fields_b = try store.addFields(&.{.{ .name = field_name, .ty = fn_b }});
+    try store.fillReservedSlot(rec_b, .{ .record = fields_b });
+
+    const other = store.typeDigest(&name_store, rec_b);
+    try std.testing.expect(std.mem.eql(u8, first.bytes[0..], other.bytes[0..]));
+}
+
 test "monotype cached digest reuses acyclic child digests and invalidates on reserved refill" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
@@ -4246,6 +4041,99 @@ test "monotype cached digest reuses acyclic child digests and invalidates on res
     try std.testing.expectEqual(@as(u64, 0), after_refill_stats.cache_hits);
     try std.testing.expectEqual(@as(u64, 1), after_refill_stats.cache_misses);
     try std.testing.expectEqual(@as(u64, 1), after_refill_stats.nodes_visited);
+}
+
+test "monotype type equality accepts isomorphic recursive structural types" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const field_name = try name_store.internRecordFieldLabel("step");
+
+    const rec_a = try store.reserveSlot();
+    const fn_a = try store.add(.{ .func = .{ .args = Span.empty(), .ret = rec_a } });
+    const fields_a = try store.addFields(&.{.{ .name = field_name, .ty = fn_a }});
+    try store.fillReservedSlot(rec_a, .{ .record = fields_a });
+
+    const rec_b = try store.reserveSlot();
+    const fn_b = try store.add(.{ .func = .{ .args = Span.empty(), .ret = rec_b } });
+    const fields_b = try store.addFields(&.{.{ .name = field_name, .ty = fn_b }});
+    try store.fillReservedSlot(rec_b, .{ .record = fields_b });
+
+    try std.testing.expect(try store.typeEql(&name_store, rec_a, rec_b));
+
+    const str = try store.add(.{ .primitive = .str });
+    const rec_c = try store.reserveSlot();
+    const fields_c = try store.addFields(&.{.{ .name = field_name, .ty = str }});
+    try store.fillReservedSlot(rec_c, .{ .record = fields_c });
+    try std.testing.expect(!try store.typeEql(&name_store, rec_a, rec_c));
+}
+
+test "monotype digest treats aliases as their backing" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const type_name = try name_store.internTypeName("Pretty");
+    const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+
+    const str = try store.add(.{ .primitive = .str });
+    const aliased = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .alias,
+        .args = Span.empty(),
+        .backing = .{ .ty = str, .use = .inspectable },
+    } });
+    const nominal = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .nominal,
+        .args = Span.empty(),
+        .backing = .{ .ty = str, .use = .inspectable },
+    } });
+
+    const str_digest = store.typeDigest(&name_store, str);
+    const alias_digest = store.typeDigest(&name_store, aliased);
+    const nominal_digest = store.typeDigest(&name_store, nominal);
+    try std.testing.expect(std.mem.eql(u8, str_digest.bytes[0..], alias_digest.bytes[0..]));
+    try std.testing.expect(!std.mem.eql(u8, str_digest.bytes[0..], nominal_digest.bytes[0..]));
+}
+
+test "monotype type equality treats aliases as their backing" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const type_name = try name_store.internTypeName("Pretty");
+    const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+
+    const str = try store.add(.{ .primitive = .str });
+    const aliased = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .alias,
+        .args = Span.empty(),
+        .backing = .{ .ty = str, .use = .inspectable },
+    } });
+    const nominal = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .nominal,
+        .args = Span.empty(),
+        .backing = .{ .ty = str, .use = .inspectable },
+    } });
+
+    try std.testing.expect(try store.typeEql(&name_store, str, aliased));
+    try std.testing.expect(!try store.typeEql(&name_store, str, nominal));
 }
 
 test "monotype cached and uncached digests agree on type identity" {
@@ -4658,7 +4546,7 @@ test "monotype named type digest includes backing" {
     try std.testing.expect(std.mem.eql(u8, i64_spec_digest.bytes[0..], str_spec_digest.bytes[0..]));
 }
 
-test "monotype specialization digest includes builtin evidence backing" {
+test "monotype specialization identity includes generated backing without builtin owner" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
@@ -4666,31 +4554,74 @@ test "monotype specialization digest includes builtin evidence backing" {
     defer store.deinit();
 
     const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
-    const type_name = try name_store.internTypeName("FieldNames");
+    const type_name = try name_store.internTypeName("GeneratedEvidence");
     const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
     const i64_ty = try store.add(.{ .primitive = .i64 });
     const str_ty = try store.add(.{ .primitive = .str });
 
-    const fields_i64 = try store.add(.{ .named = .{
+    const evidence_i64 = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .@"opaque",
-        .builtin_owner = .fields,
         .args = Span.empty(),
-        .backing = .{ .ty = i64_ty, .use = .runtime_layout_only },
+        .backing = .{ .ty = i64_ty, .use = .runtime_layout_only, .authority = .generated_private },
     } });
-    const fields_str = try store.add(.{ .named = .{
+    const evidence_str = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .@"opaque",
-        .builtin_owner = .fields,
         .args = Span.empty(),
-        .backing = .{ .ty = str_ty, .use = .runtime_layout_only },
+        .backing = .{ .ty = str_ty, .use = .runtime_layout_only, .authority = .generated_private },
     } });
 
-    const i64_spec_digest = store.specializationDigest(&name_store, fields_i64);
-    const str_spec_digest = store.specializationDigest(&name_store, fields_str);
+    const i64_spec_digest = store.specializationDigest(&name_store, evidence_i64);
+    const str_spec_digest = store.specializationDigest(&name_store, evidence_str);
     try std.testing.expect(!std.mem.eql(u8, i64_spec_digest.bytes[0..], str_spec_digest.bytes[0..]));
+    try std.testing.expect(!try store.typeEql(&name_store, evidence_i64, evidence_str));
+    try std.testing.expect(!try typeEqlAcrossStores(
+        std.testing.allocator,
+        &name_store,
+        store.view(),
+        evidence_i64,
+        store.view(),
+        evidence_str,
+    ));
+}
+
+test "monotype named backing authority participates in durable identity" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAC} ** 32));
+    const type_name = try name_store.internTypeName("UnownedEvidence");
+    const backing = try store.add(.{ .record = Span.empty() });
+    const base = NamedContent{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .@"opaque",
+        .args = Span.empty(),
+        .backing = .{ .ty = backing, .use = .runtime_layout_only },
+    };
+    const public = try store.add(.{ .named = base });
+    var private_content = base;
+    private_content.backing.?.authority = .generated_private;
+    const private = try store.add(.{ .named = private_content });
+
+    const public_digest = store.specializationDigest(&name_store, public);
+    const private_digest = store.specializationDigest(&name_store, private);
+    try std.testing.expect(!std.mem.eql(u8, public_digest.bytes[0..], private_digest.bytes[0..]));
+    try std.testing.expect(!try store.typeEql(&name_store, public, private));
+    try std.testing.expect(!try typeEqlAcrossStores(
+        std.testing.allocator,
+        &name_store,
+        store.view(),
+        public,
+        store.view(),
+        private,
+    ));
 }
 
 test "monotype named type digest includes nested named backing" {

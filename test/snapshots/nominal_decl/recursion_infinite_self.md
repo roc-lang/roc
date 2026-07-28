@@ -83,10 +83,7 @@ NO CHANGE
 	(d-let
 		(p-assign (ident "t"))
 		(e-nominal (nominal "T")
-			(e-tuple
-				(elems
-					(e-runtime-error (tag "self_referential_definition"))
-					(e-num (value "1")))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-lookup (name "T") (local))))
 	(s-nominal-decl

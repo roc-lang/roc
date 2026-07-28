@@ -738,12 +738,14 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) std.mem.Allocator.Err
             node.main_token = i.ident_tok;
         },
         .tag => |t| {
+            std.debug.assert(!t.record_shorthand or (t.backing_value and t.args.span.len == 1));
             const data_start = @as(u32, @intCast(store.extra_data.items.len));
             try store.extra_data.append(store.gpa, t.args.span.len);
             try store.extra_data.append(store.gpa, t.qualifiers.span.start);
             try store.extra_data.append(store.gpa, t.qualifiers.span.len);
             try store.extra_data.append(store.gpa, @intFromBool(t.backing_value));
             try store.extra_data.append(store.gpa, @intFromBool(t.has_args));
+            try store.extra_data.append(store.gpa, @intFromBool(t.record_shorthand));
 
             node.tag = .tag_patt;
             node.region = t.region;
@@ -1788,6 +1790,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pat
             const qualifiers_len = store.extra_data.items[ed_start + 2];
             const backing_value = store.extra_data.items[ed_start + 3] != 0;
             const has_args = store.extra_data.items[ed_start + 4] != 0;
+            const record_shorthand = store.extra_data.items[ed_start + 5] != 0;
 
             return .{ .tag = .{
                 .tag_tok = node.main_token,
@@ -1801,6 +1804,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pat
                 } },
                 .backing_value = backing_value,
                 .has_args = has_args,
+                .record_shorthand = record_shorthand,
                 .region = node.region,
             } };
         },

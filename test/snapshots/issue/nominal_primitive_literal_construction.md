@@ -142,19 +142,17 @@ goodValue = "test"
 (can-ir
 	(d-let
 		(p-assign (ident "uid"))
-		(e-num (value "0"))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "UserId") (local))))
 	(d-let
 		(p-assign (ident "token"))
-		(e-string
-			(e-literal (string "abc")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "Token") (local))))
 	(d-let
 		(p-assign (ident "goodValue"))
-		(e-string
-			(e-literal (string "test")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "GoodDerived") (local))))
 	(s-nominal-decl

@@ -214,6 +214,7 @@ var matcher_mismatch_detail_count: usize = 0;
 var evidence_dispatch_wired = std.atomic.Value(u64).init(0);
 var evidence_dispatch_no_pair_record = std.atomic.Value(u64).init(0);
 var evidence_dispatch_no_evidence_node = std.atomic.Value(u64).init(0);
+var evidence_dispatch_nested_from_callable = std.atomic.Value(u64).init(0);
 var evidence_value_wired = std.atomic.Value(u64).init(0);
 var evidence_value_no_site_entry = std.atomic.Value(u64).init(0);
 var evidence_shared_wired = std.atomic.Value(u64).init(0);
@@ -623,6 +624,11 @@ pub const EvidenceCarryOutcome = enum {
     dispatch_wired,
     dispatch_no_pair_record,
     dispatch_no_evidence_node,
+    /// The target's own evidence vector is not a published range: checking
+    /// settled the dispatcher before the target was selected, so the
+    /// specialization edge derives the target's declared evidence params from
+    /// their recorded paths. There is no range for the site to carry.
+    dispatch_nested_from_callable,
     value_wired,
     value_no_site_entry,
     shared_wired,
@@ -636,6 +642,7 @@ pub fn recordEvidenceCarry(outcome: EvidenceCarryOutcome) void {
         .dispatch_wired => _ = evidence_dispatch_wired.fetchAdd(1, .monotonic),
         .dispatch_no_pair_record => _ = evidence_dispatch_no_pair_record.fetchAdd(1, .monotonic),
         .dispatch_no_evidence_node => _ = evidence_dispatch_no_evidence_node.fetchAdd(1, .monotonic),
+        .dispatch_nested_from_callable => _ = evidence_dispatch_nested_from_callable.fetchAdd(1, .monotonic),
         .value_wired => _ = evidence_value_wired.fetchAdd(1, .monotonic),
         .value_no_site_entry => _ = evidence_value_no_site_entry.fetchAdd(1, .monotonic),
         .shared_wired => _ = evidence_shared_wired.fetchAdd(1, .monotonic),
@@ -756,6 +763,7 @@ pub fn dumpAppend() void {
     sink.print("evidence_dispatch_wired={d}\n", .{evidence_dispatch_wired.load(.monotonic)});
     sink.print("evidence_dispatch_no_pair_record={d}\n", .{evidence_dispatch_no_pair_record.load(.monotonic)});
     sink.print("evidence_dispatch_no_evidence_node={d}\n", .{evidence_dispatch_no_evidence_node.load(.monotonic)});
+    sink.print("evidence_dispatch_nested_from_callable={d}\n", .{evidence_dispatch_nested_from_callable.load(.monotonic)});
     sink.print("evidence_value_wired={d}\n", .{evidence_value_wired.load(.monotonic)});
     sink.print("evidence_value_no_site_entry={d}\n", .{evidence_value_no_site_entry.load(.monotonic)});
     sink.print("evidence_shared_wired={d}\n", .{evidence_shared_wired.load(.monotonic)});

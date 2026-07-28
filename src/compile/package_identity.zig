@@ -10,6 +10,7 @@
 const std = @import("std");
 const CoreCtx = @import("ctx").CoreCtx;
 const package_resolution = @import("package_resolution.zig");
+const compiler_platforms = @import("compiler_platforms.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -40,6 +41,8 @@ pub const PackageProvenance = union(enum) {
     synthetic_app,
     /// Compiler-synthesized default platform.
     synthetic_platform,
+    /// Compiler-owned platform source embedded in this compiler build.
+    compiler_owned_platform: compiler_platforms.CompilerOwnedPlatform,
 };
 
 /// Derive the stable identity string for one package. URL packages key by the
@@ -57,6 +60,7 @@ pub fn packageIdentityFor(
         .local_path => |path| try canonicalOrLogicalPath(filesystem, path, allocator),
         .synthetic_app => try allocator.dupe(u8, synthetic_app_identity),
         .synthetic_platform => try allocator.dupe(u8, synthetic_platform_identity),
+        .compiler_owned_platform => |platform| try allocator.dupe(u8, compiler_platforms.identity(platform)),
     };
 }
 
@@ -128,7 +132,9 @@ pub fn buildPackageKeys(
     }
 
     for (resolved.packages, 0..) |package, i| {
-        const provenance: PackageProvenance = if (i == package_resolution.Resolved.root_index and options.synthetic_root)
+        const provenance: PackageProvenance = if (package.compiler_owned_platform) |platform|
+            .{ .compiler_owned_platform = platform }
+        else if (i == package_resolution.Resolved.root_index and options.synthetic_root)
             .synthetic_app
         else if (options.synthetic_platform and package.kind == .platform)
             .synthetic_platform

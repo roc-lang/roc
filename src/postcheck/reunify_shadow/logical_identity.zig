@@ -1108,8 +1108,10 @@ const CheckedWalk = struct {
                     return try self.owner.box(try self.node(n.args[0]));
                 },
                 .bool_tag_union,
+                .try_nominal,
                 .dict,
                 .set,
+                .iterator,
                 .parse_tag_union_spec,
                 .fields,
                 .field,

@@ -14,38 +14,44 @@ const Type = @import("type.zig");
 const fsid = @import("final_spec_id.zig");
 const checked = check.CheckedModule;
 const checked_names = check.CheckedNames;
+const static_dispatch = check.StaticDispatchRegistry;
 
 const TestCompareError = error{
     TestExpectedEqual,
     TestUnexpectedResult,
 };
 
+const TestEvidenceMappingError = std.mem.Allocator.Error || CacheError || error{
+    TestExpectedError,
+    TestUnexpectedError,
+};
+
 /// Magic bytes at the start of a specialization cache file.
 pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// Serialization format version for specialization cache files.
-/// Version 3: `SpecRecord` carries an immutable requested-type identity plus
-/// separate request/solved type views.
-/// Version 4: Type definitions carry generated iterator backing evidence.
-/// Version 5: Monotype programs carry restored static-data candidate records.
-/// Version 6: specialization identities include the checked method lookup
-/// scope whose generated dispatch targets are embedded in the body.
-/// Version 7: expression tags include post-lift join-point control forms.
-/// Version 8: cached type digests are alias-transparent.
-/// Version 9: cached type digests keep a builtin-owned alias nontransparent
-/// (its dispatch owner is part of its identity) and digest a walk deeper than
-/// the visiting stack by content shape rather than by allocation id. Both paths
-/// are measured inert on the current corpus, so the bump only guards against
-/// reading a record written under the old digest algorithm.
-/// Version 10: specialization records carry a parallel, lookup-inert FinalSpecId
+/// Version 9: function metadata records whether a signature is independent
+/// roots or one exact producer-authored graph.
+/// Version 8: specialization and function-template identity includes the
+/// SHA-256 digest of exact compile-time evidence topology.
+/// Version 11: specialization records carry a parallel, lookup-inert FinalSpecId
 /// identity, and the cache carries three new sections keyed by `SpecId` — the
 /// serialized FinalSpecId output-summary components, their per-record byte
 /// slices, and a sealing-component relocation table (reunify.md 11.5, Slice 7
 /// Stage D). The load path still keys and matches records by request/solved
 /// digests exactly as before; the new sections are carried data, not lookup
 /// inputs, so the bump only guards against reading the old record layout.
-pub const FORMAT_VERSION: u32 = 10;
+pub const FORMAT_VERSION: u32 = 11;
 
-const SECTION_COUNT = 43;
+const SECTION_COUNT = 45;
+
+fn testMethodTarget() static_dispatch.MethodTarget {
+    return .{
+        .module_idx = 0,
+        .def_idx = @enumFromInt(1),
+        .kind = .{ .structural = .parser },
+        .callable_ty = @enumFromInt(1),
+    };
+}
 /// Required byte alignment for every section payload. This covers all typed
 /// Monotype cache sections so mapping can produce process slices directly.
 pub const SECTION_ALIGNMENT: u64 = 16;
@@ -69,6 +75,8 @@ pub const SectionId = enum(u8) {
     type_digests,
     specs,
     fns,
+    const_fn_evidence,
+    const_fn_evidence_frames,
     defs,
     nested_defs,
     exprs,
@@ -209,6 +217,8 @@ pub const SpecializationCacheHeader = extern struct {
     /// Specialization records and Monotype function/body sections.
     specs: FileSlice = .{},
     fns: FileSlice = .{},
+    const_fn_evidence: FileSlice = .{},
+    const_fn_evidence_frames: FileSlice = .{},
     defs: FileSlice = .{},
     nested_defs: FileSlice = .{},
     exprs: FileSlice = .{},
@@ -269,7 +279,7 @@ pub const MappedView = struct {
 
     pub fn sectionsView(self: MappedView) CacheError!MappedSections {
         const header = self.header;
-        return .{
+        const mapped: MappedSections = .{
             .names = try self.sectionBytes(header.names),
             .type_nodes = try self.sectionTyped(Type.Content, header.type_nodes),
             .type_args = try self.sectionTyped(Type.TypeId, header.type_args),
@@ -280,6 +290,8 @@ pub const MappedView = struct {
             .type_digests = try self.sectionTyped(checked_names.TypeDigest, header.type_digests),
             .specs = try self.sectionTyped(Ast.SpecRecord, header.specs),
             .fns = try self.sectionTyped(Ast.Fn, header.fns),
+            .const_fn_evidence = try self.sectionTyped(check.ConstStore.ConstFnEvidence, header.const_fn_evidence),
+            .const_fn_evidence_frames = try self.sectionTyped(check.ConstStore.ConstFnEvidenceFrame, header.const_fn_evidence_frames),
             .defs = try self.sectionTyped(Ast.Def, header.defs),
             .nested_defs = try self.sectionTyped(Ast.NestedDef, header.nested_defs),
             .exprs = try self.sectionTyped(Ast.Expr, header.exprs),
@@ -314,6 +326,8 @@ pub const MappedView = struct {
             .final_spec_component_slices = try self.sectionTyped(Ast.FinalSpecComponentSlice, header.final_spec_component_slices),
             .final_spec_relocations = try self.sectionTyped(Ast.FinalSpecRelocation, header.final_spec_relocations),
         };
+        if (!mapped.verifyFnTemplateEvidence()) return error.CorruptSpecializationCacheFile;
+        return mapped;
     }
 };
 
@@ -329,6 +343,8 @@ pub const MappedSections = struct {
     type_digests: []const checked_names.TypeDigest,
     specs: []const Ast.SpecRecord,
     fns: []const Ast.Fn,
+    const_fn_evidence: []const check.ConstStore.ConstFnEvidence,
+    const_fn_evidence_frames: []const check.ConstStore.ConstFnEvidenceFrame,
     defs: []const Ast.Def,
     nested_defs: []const Ast.NestedDef,
     exprs: []const Ast.Expr,
@@ -373,7 +389,121 @@ pub const MappedSections = struct {
             .declared_fields = self.declared_fields,
         };
     }
+
+    fn verifyFnTemplateEvidence(self: MappedSections) bool {
+        for (self.fns) |function| {
+            if (!fnTemplateEvidenceValid(function.source, self.const_fn_evidence, self.const_fn_evidence_frames)) return false;
+        }
+        for (self.defs) |def| {
+            if (def.fn_def) |template| {
+                if (!fnTemplateEvidenceValid(template, self.const_fn_evidence, self.const_fn_evidence_frames)) return false;
+            }
+        }
+        for (self.nested_defs) |def| {
+            if (!fnTemplateEvidenceValid(def.fn_def, self.const_fn_evidence, self.const_fn_evidence_frames)) return false;
+        }
+        for (self.specs) |spec| {
+            const raw_fn = @intFromEnum(spec.fn_id);
+            if (raw_fn >= self.fns.len) return false;
+            if (!std.meta.eql(spec.identity.evidence_digest, self.fns[raw_fn].source.evidence_digest)) return false;
+        }
+        return true;
+    }
 };
+
+fn fnTemplateEvidenceValid(
+    template: Ast.FnTemplate,
+    all_evidence: []const check.ConstStore.ConstFnEvidence,
+    all_frames: []const check.ConstStore.ConstFnEvidenceFrame,
+) bool {
+    if (!spanInBounds(all_evidence.len, template.const_evidence.start, template.const_evidence.len)) return false;
+    if (!spanInBounds(all_frames.len, template.const_evidence_frames.start, template.const_evidence_frames.len)) return false;
+
+    const evidence = all_evidence[template.const_evidence.start..][0..template.const_evidence.len];
+    const frames = all_frames[template.const_evidence_frames.start..][0..template.const_evidence_frames.len];
+    if (!std.meta.eql(template.evidence_digest, Ast.fnEvidenceDigest(evidence, frames, template.const_evidence_frame_head))) return false;
+    if (frames.len == 0) {
+        return switch (template.fn_def) {
+            .parser_runtime, .encoder_for_runtime => evidence.len == 0 and template.const_evidence_frame_head == null,
+            .local_template,
+            .imported_template,
+            .nested,
+            .local_hosted,
+            .imported_hosted,
+            .checked_generated,
+            => false,
+        };
+    }
+
+    const head = template.const_evidence_frame_head orelse return false;
+    if (head != @as(u32, @intCast(frames.len - 1))) return false;
+
+    var cursor: usize = 0;
+    for (frames, 0..) |frame, index| {
+        if (index == 0) {
+            if (frame.scope() != .root or frame.parent != null) return false;
+        } else {
+            switch (frame.scope()) {
+                .root => return false,
+                .generalized => {},
+            }
+            if (frame.parent == null or frame.parent.? != @as(u32, @intCast(index - 1))) return false;
+        }
+        if (frame.roots_start != @as(u32, @intCast(cursor))) return false;
+        cursor = evidenceVectorEnd(evidence, cursor, frame.roots_len) orelse return false;
+    }
+    return cursor == evidence.len;
+}
+
+fn evidenceVectorEnd(
+    evidence: []const check.ConstStore.ConstFnEvidence,
+    start: usize,
+    count: u32,
+) ?usize {
+    var cursor = start;
+    for (0..count) |_| {
+        if (cursor >= evidence.len) return null;
+        const node = evidence[cursor];
+        cursor += 1;
+        switch (node) {
+            .target => |target| {
+                switch (target.nested) {
+                    .resolved => |nested| {
+                        const nested_start = cursor;
+                        cursor = evidenceVectorEnd(evidence, cursor, nested.count) orelse return null;
+                        if (cursor - nested_start != nested.subtree_len) return null;
+                    },
+                    .from_callable => {},
+                }
+            },
+            .structural, .unreachable_value, .checked_error => {},
+        }
+    }
+    return cursor;
+}
+
+test "specialization cache evidence topology accepts callable-derived targets" {
+    const evidence = [_]check.ConstStore.ConstFnEvidence{.{ .target = .{
+        .view = .{},
+        .method = testMethodTarget(),
+        .instantiation = null,
+        .nested = .from_callable,
+    } }};
+    const frames = [_]check.ConstStore.ConstFnEvidenceFrame{
+        check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 1),
+    };
+    const template = Ast.FnTemplate{
+        .fn_def = .{ .checked_generated = testProcedureTemplate(1, 1) },
+        .source_fn_ty = @enumFromInt(1),
+        .source_fn_key = .{},
+        .mono_fn_ty = undefined,
+        .evidence_digest = Ast.fnEvidenceDigest(&evidence, &frames, 0),
+        .const_evidence = .{ .start = 0, .len = 1 },
+        .const_evidence_frames = .{ .start = 0, .len = 1 },
+        .const_evidence_frame_head = 0,
+    };
+    try std.testing.expect(fnTemplateEvidenceValid(template, &evidence, &frames));
+}
 
 /// Program-shaped view over mapped cache sections.
 pub const MappedProgramView = struct {
@@ -382,6 +512,8 @@ pub const MappedProgramView = struct {
     specs: []const Ast.SpecRecord,
     imported_fns: []const Ast.ImportedFn,
     fns: []const Ast.Fn,
+    const_fn_evidence: []const check.ConstStore.ConstFnEvidence,
+    const_fn_evidence_frames: []const check.ConstStore.ConstFnEvidenceFrame,
     defs: []const Ast.Def,
     nested_defs: []const Ast.NestedDef,
     exprs: []const Ast.Expr,
@@ -443,6 +575,14 @@ pub const MappedProgramView = struct {
             return .{ .first_spec = @intCast(index), .member_count = 1 };
         }
         return self.final_spec_relocations[index];
+    }
+
+    pub fn constFnEvidence(self: MappedProgramView, span: Ast.Span(check.ConstStore.ConstFnEvidence)) []const check.ConstStore.ConstFnEvidence {
+        return self.const_fn_evidence[span.start..][0..span.len];
+    }
+
+    pub fn constFnEvidenceFrames(self: MappedProgramView, span: Ast.Span(check.ConstStore.ConstFnEvidenceFrame)) []const check.ConstStore.ConstFnEvidenceFrame {
+        return self.const_fn_evidence_frames[span.start..][0..span.len];
     }
 
     /// Verify the mapped program and resolve its top-level import table.
@@ -620,6 +760,7 @@ pub const MappedProgramView = struct {
 
     fn verifyExprData(self: MappedProgramView, data: Ast.ExprData) bool {
         return switch (data) {
+            .@"unreachable" => true,
             .local => |local| self.localRefInBounds(local),
             .unit,
             .int_lit,
@@ -928,6 +1069,8 @@ pub fn mappedProgramView(view: MappedView) CacheError!MappedProgramView {
         .specs = sections_.specs,
         .imported_fns = sections_.imports,
         .fns = sections_.fns,
+        .const_fn_evidence = sections_.const_fn_evidence,
+        .const_fn_evidence_frames = sections_.const_fn_evidence_frames,
         .defs = sections_.defs,
         .nested_defs = sections_.nested_defs,
         .exprs = sections_.exprs,
@@ -1160,6 +1303,8 @@ pub fn computeCompilerLayoutHash() [32]u8 {
     writeLayout(&hasher, Ast.FnSlot);
     writeLayout(&hasher, Ast.SpecRecord);
     writeLayout(&hasher, Ast.Fn);
+    writeLayout(&hasher, check.ConstStore.ConstFnEvidence);
+    writeLayout(&hasher, check.ConstStore.ConstFnEvidenceFrame);
     writeLayout(&hasher, Ast.Def);
     writeLayout(&hasher, Ast.NestedDef);
     writeLayout(&hasher, Ast.Expr);
@@ -1210,6 +1355,8 @@ fn sections(header: *const SpecializationCacheHeader) [SECTION_COUNT]FileSlice {
         header.type_digests,
         header.specs,
         header.fns,
+        header.const_fn_evidence,
+        header.const_fn_evidence_frames,
         header.defs,
         header.nested_defs,
         header.exprs,
@@ -1257,6 +1404,8 @@ const section_order = [_]SectionId{
     .type_digests,
     .specs,
     .fns,
+    .const_fn_evidence,
+    .const_fn_evidence_frames,
     .defs,
     .nested_defs,
     .exprs,
@@ -1304,39 +1453,41 @@ fn sectionIndex(id: SectionId) usize {
         .type_digests => 7,
         .specs => 8,
         .fns => 9,
-        .defs => 10,
-        .nested_defs => 11,
-        .exprs => 12,
-        .pats => 13,
-        .stmts => 14,
-        .locals => 15,
-        .expr_ids => 16,
-        .pat_ids => 17,
-        .typed_locals => 18,
-        .stmt_ids => 19,
-        .field_exprs => 20,
-        .fn_def_captures => 21,
-        .record_destructs => 22,
-        .str_pattern_steps => 23,
-        .branches => 24,
-        .if_branches => 25,
-        .string_literals => 26,
-        .imports => 27,
-        .roots => 28,
-        .layout_requests => 29,
-        .runtime_schema_requests => 30,
-        .static_data_values => 31,
-        .comptime_sites => 32,
-        .source_files => 33,
-        .expr_locs => 34,
-        .expr_regions => 35,
-        .stmt_locs => 36,
-        .stmt_regions => 37,
-        .local_names => 38,
-        .debug_names => 39,
-        .final_spec_components => 40,
-        .final_spec_component_slices => 41,
-        .final_spec_relocations => 42,
+        .const_fn_evidence => 10,
+        .const_fn_evidence_frames => 11,
+        .defs => 12,
+        .nested_defs => 13,
+        .exprs => 14,
+        .pats => 15,
+        .stmts => 16,
+        .locals => 17,
+        .expr_ids => 18,
+        .pat_ids => 19,
+        .typed_locals => 20,
+        .stmt_ids => 21,
+        .field_exprs => 22,
+        .fn_def_captures => 23,
+        .record_destructs => 24,
+        .str_pattern_steps => 25,
+        .branches => 26,
+        .if_branches => 27,
+        .string_literals => 28,
+        .imports => 29,
+        .roots => 30,
+        .layout_requests => 31,
+        .runtime_schema_requests => 32,
+        .static_data_values => 33,
+        .comptime_sites => 34,
+        .source_files => 35,
+        .expr_locs => 36,
+        .expr_regions => 37,
+        .stmt_locs => 38,
+        .stmt_regions => 39,
+        .local_names => 40,
+        .debug_names => 41,
+        .final_spec_components => 42,
+        .final_spec_component_slices => 43,
+        .final_spec_relocations => 44,
     };
 }
 
@@ -1375,6 +1526,8 @@ fn setSection(header: *SpecializationCacheHeader, id: SectionId, slice: FileSlic
         .type_digests => header.type_digests = slice,
         .specs => header.specs = slice,
         .fns => header.fns = slice,
+        .const_fn_evidence => header.const_fn_evidence = slice,
+        .const_fn_evidence_frames => header.const_fn_evidence_frames = slice,
         .defs => header.defs = slice,
         .nested_defs => header.nested_defs = slice,
         .exprs => header.exprs = slice,
@@ -1629,6 +1782,18 @@ fn writeRootRequest(hasher: *std.crypto.hash.sha2.Sha256, request: checked.RootR
     writeOptionalProcedureTemplate(hasher, request.procedure_template);
     writeOptionalTopLevelProcedureBinding(hasher, request.procedure_binding);
     writeOptionalProcedureUseTemplate(hasher, request.procedure_use);
+    writeOptionalCheckedEvidenceSpan(hasher, request.root_evidence);
+}
+
+fn writeOptionalCheckedEvidenceSpan(hasher: *std.crypto.hash.sha2.Sha256, evidence: ?checked.CheckedEvidenceSpan) void {
+    if (evidence) |actual| {
+        writeHashBool(hasher, true);
+        writeHashBytes32(hasher, actual.checked_module.bytes);
+        writeHashU32(hasher, actual.span.start);
+        writeHashU32(hasher, actual.span.len);
+    } else {
+        writeHashBool(hasher, false);
+    }
 }
 
 fn writeRootSource(hasher: *std.crypto.hash.sha2.Sha256, source: checked.RootSource) void {
@@ -1742,6 +1907,7 @@ fn writeSpecRecord(hasher: *std.crypto.hash.sha2.Sha256, spec: Ast.SpecRecord) v
     writeCallableIdentity(hasher, spec.identity.callable);
     writeHashBytes32(hasher, spec.identity.method_scope.bytes);
     writeHashBytes32(hasher, spec.identity.source_fn_ty_digest.bytes);
+    writeHashBytes32(hasher, spec.identity.evidence_digest.bytes);
     writeHashBytes32(hasher, spec.identity.request_fn_ty_digest.bytes);
     writeHashBytes32(hasher, spec.request_fn_ty_digest.bytes);
     writeHashBytes32(hasher, spec.solved_fn_ty_digest.bytes);
@@ -2116,6 +2282,9 @@ test "monotype specialization cache creates mapped program view without body fix
         } },
     };
     const type_digests = [_]checked_names.TypeDigest{ .{}, .{} };
+    const evidence_frames = [_]check.ConstStore.ConstFnEvidenceFrame{
+        check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 0),
+    };
     const fn_id: Ast.FnId = @enumFromInt(first_fn_index);
     const fns = [_]Ast.Fn{.{
         .source = .{
@@ -2123,6 +2292,9 @@ test "monotype specialization cache creates mapped program view without body fix
             .source_fn_ty = @enumFromInt(1),
             .source_fn_key = .{},
             .mono_fn_ty = fn_ty,
+            .evidence_digest = Ast.fnEvidenceDigest(&.{}, &evidence_frames, 0),
+            .const_evidence_frames = .{ .start = 0, .len = 1 },
+            .const_evidence_frame_head = 0,
         },
     }};
     const defs = [_]Ast.Def{.{
@@ -2145,6 +2317,7 @@ test "monotype specialization cache creates mapped program view without body fix
         .{ .id = .type_nodes, .bytes = std.mem.sliceAsBytes(type_nodes[0..]) },
         .{ .id = .type_digests, .bytes = std.mem.sliceAsBytes(type_digests[0..]) },
         .{ .id = .fns, .bytes = std.mem.sliceAsBytes(fns[0..]) },
+        .{ .id = .const_fn_evidence_frames, .bytes = std.mem.sliceAsBytes(evidence_frames[0..]) },
         .{ .id = .defs, .bytes = std.mem.sliceAsBytes(defs[0..]) },
         .{ .id = .exprs, .bytes = std.mem.sliceAsBytes(exprs[0..]) },
     });
@@ -2296,12 +2469,18 @@ test "monotype specialization cache round trips empty program functions imports 
         } },
     };
     const type_digests = [_]checked_names.TypeDigest{ .{}, .{}, .{}, .{}, .{}, .{} };
+    const evidence_frames = [_]check.ConstStore.ConstFnEvidenceFrame{
+        check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 0),
+    };
     const fn_id: Ast.FnId = @enumFromInt(first_fn_index);
     const fn_template = Ast.FnTemplate{
         .fn_def = .{ .checked_generated = testProcedureTemplate(1, 1) },
         .source_fn_ty = @enumFromInt(1),
         .source_fn_key = .{},
         .mono_fn_ty = fn_ty,
+        .evidence_digest = Ast.fnEvidenceDigest(&.{}, &evidence_frames, 0),
+        .const_evidence_frames = .{ .start = 0, .len = 1 },
+        .const_evidence_frame_head = 0,
     };
     const fns = [_]Ast.Fn{.{ .source = fn_template }};
     const defs = [_]Ast.Def{.{
@@ -2340,6 +2519,7 @@ test "monotype specialization cache round trips empty program functions imports 
         .{ .id = .declared_fields, .bytes = std.mem.sliceAsBytes(declared_fields[0..]) },
         .{ .id = .type_digests, .bytes = std.mem.sliceAsBytes(type_digests[0..]) },
         .{ .id = .fns, .bytes = std.mem.sliceAsBytes(fns[0..]) },
+        .{ .id = .const_fn_evidence_frames, .bytes = std.mem.sliceAsBytes(evidence_frames[0..]) },
         .{ .id = .defs, .bytes = std.mem.sliceAsBytes(defs[0..]) },
         .{ .id = .nested_defs, .bytes = std.mem.sliceAsBytes(nested_defs[0..]) },
         .{ .id = .imports, .bytes = std.mem.sliceAsBytes(imports[0..]) },
@@ -2407,11 +2587,22 @@ test "monotype specialization cache maps fresh single-shard program view equival
     const call_args = try program.addExprSpan(&.{local_expr});
     const typed_args = try program.addTypedLocalSpan(&.{.{ .local = local, .ty = unit_ty }});
 
+    const fn_evidence_nodes = [_]check.ConstStore.ConstFnEvidence{.{ .structural = .equality }};
+    const fn_evidence_frame_nodes = [_]check.ConstStore.ConstFnEvidenceFrame{
+        check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 1),
+    };
+    const fn_evidence = try program.addConstFnEvidence(&fn_evidence_nodes);
+    const fn_evidence_frames = try program.addConstFnEvidenceFrames(&fn_evidence_frame_nodes);
+
     const fn_template = Ast.FnTemplate{
         .fn_def = .{ .checked_generated = testProcedureTemplate(1, 1) },
         .source_fn_ty = @enumFromInt(1),
         .source_fn_key = .{},
         .mono_fn_ty = fn_ty,
+        .evidence_digest = Ast.fnEvidenceDigest(&fn_evidence_nodes, &fn_evidence_frame_nodes, 0),
+        .const_evidence = fn_evidence,
+        .const_evidence_frames = fn_evidence_frames,
+        .const_evidence_frame_head = 0,
     };
     const fn_id = try program.addFn(fn_template);
     _ = try program.addImportedFn(.{ .shard = @enumFromInt(2), .fn_id = @enumFromInt(3) });
@@ -2447,6 +2638,7 @@ test "monotype specialization cache maps fresh single-shard program view equival
             } },
             .method_scope = testModuleDigest(5),
             .source_fn_ty_digest = .{},
+            .evidence_digest = fn_template.evidence_digest,
             .request_fn_ty_digest = .{},
             .request_fn_ty = fn_ty,
         },
@@ -2506,6 +2698,8 @@ test "monotype specialization cache maps fresh single-shard program view equival
         .{ .id = .specs, .bytes = std.mem.sliceAsBytes(fresh.specs) },
         .{ .id = .imports, .bytes = std.mem.sliceAsBytes(fresh.imported_fns) },
         .{ .id = .fns, .bytes = std.mem.sliceAsBytes(fresh.fns) },
+        .{ .id = .const_fn_evidence, .bytes = std.mem.sliceAsBytes(fresh.const_fn_evidence) },
+        .{ .id = .const_fn_evidence_frames, .bytes = std.mem.sliceAsBytes(fresh.const_fn_evidence_frames) },
         .{ .id = .defs, .bytes = std.mem.sliceAsBytes(fresh.defs) },
         .{ .id = .nested_defs, .bytes = std.mem.sliceAsBytes(fresh.nested_defs) },
         .{ .id = .exprs, .bytes = std.mem.sliceAsBytes(fresh.exprs) },
@@ -2538,6 +2732,104 @@ test "monotype specialization cache maps fresh single-shard program view equival
     const mapped_program = try mappedProgramView(mapped);
 
     try expectEquivalentProgramViews(fresh, concrete_type_digests, mapped_program);
+    const mapped_template = mapped_program.fns[0].source;
+    try std.testing.expectEqualSlices(
+        check.ConstStore.ConstFnEvidence,
+        fresh.const_fn_evidence,
+        mapped_program.constFnEvidence(mapped_template.const_evidence),
+    );
+    try std.testing.expectEqualSlices(
+        check.ConstStore.ConstFnEvidenceFrame,
+        fresh.const_fn_evidence_frames,
+        mapped_program.constFnEvidenceFrames(mapped_template.const_evidence_frames),
+    );
+}
+
+test "monotype specialization cache mapped view survives source builder deallocation" {
+    const allocator = std.testing.allocator;
+
+    var image: []u8 = undefined;
+    {
+        var type_nodes = std.ArrayList(Type.Content).empty;
+        defer type_nodes.deinit(allocator);
+        var type_digests = std.ArrayList(checked_names.TypeDigest).empty;
+        defer type_digests.deinit(allocator);
+        var fns = std.ArrayList(Ast.Fn).empty;
+        defer fns.deinit(allocator);
+        var defs = std.ArrayList(Ast.Def).empty;
+        defer defs.deinit(allocator);
+        var exprs = std.ArrayList(Ast.Expr).empty;
+        defer exprs.deinit(allocator);
+
+        const first_type_index: u32 = std.math.minInt(u32);
+        const first_fn_index: u32 = std.math.minInt(u32);
+        const unit_ty: Type.TypeId = @enumFromInt(first_type_index);
+        const fn_ty: Type.TypeId = @enumFromInt(1);
+        try type_nodes.append(allocator, .zst);
+        try type_nodes.append(allocator, .{ .func = .{
+            .args = Type.Span.empty(),
+            .ret = unit_ty,
+        } });
+        try type_digests.appendNTimes(allocator, .{}, type_nodes.items.len);
+
+        const evidence_frames = [_]check.ConstStore.ConstFnEvidenceFrame{
+            check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 0),
+        };
+        const fn_id: Ast.FnId = @enumFromInt(first_fn_index);
+        const fn_template = Ast.FnTemplate{
+            .fn_def = .{ .checked_generated = testProcedureTemplate(1, 1) },
+            .source_fn_ty = @enumFromInt(1),
+            .source_fn_key = .{},
+            .mono_fn_ty = fn_ty,
+            .evidence_digest = Ast.fnEvidenceDigest(&.{}, &evidence_frames, 0),
+            .const_evidence_frames = .{ .start = 0, .len = 1 },
+            .const_evidence_frame_head = 0,
+        };
+        try fns.append(allocator, .{
+            .source = fn_template,
+            .signature_relation = .exact_graph,
+        });
+        try defs.append(allocator, .{
+            .symbol = @enumFromInt(1),
+            .fn_def = fn_template,
+            .fn_id = fn_id,
+            .args = Ast.Span(Ast.TypedLocal).empty(),
+            .body = .hosted,
+            .ret = unit_ty,
+        });
+        try exprs.append(allocator, .{
+            .ty = unit_ty,
+            .data = .{ .call_proc = .{
+                .callee = Ast.localProcCallee(fn_id),
+                .args = Ast.Span(Ast.ExprId).empty(),
+            } },
+        });
+
+        image = try buildImage(allocator, zeroHash(), zeroHash(), &.{
+            .{ .id = .type_nodes, .bytes = std.mem.sliceAsBytes(type_nodes.items) },
+            .{ .id = .type_digests, .bytes = std.mem.sliceAsBytes(type_digests.items) },
+            .{ .id = .fns, .bytes = std.mem.sliceAsBytes(fns.items) },
+            .{ .id = .const_fn_evidence_frames, .bytes = std.mem.sliceAsBytes(evidence_frames[0..]) },
+            .{ .id = .defs, .bytes = std.mem.sliceAsBytes(defs.items) },
+            .{ .id = .exprs, .bytes = std.mem.sliceAsBytes(exprs.items) },
+        });
+    }
+    defer allocator.free(image);
+
+    var header: SpecializationCacheHeader = undefined;
+    @memcpy(std.mem.asBytes(&header), image[0..@sizeOf(SpecializationCacheHeader)]);
+    const mapped = try viewMappedFile(&header, image.ptr, image.len, zeroHash(), zeroHash(), 0);
+    const program = try mappedProgramView(mapped);
+    var name_store = checked_names.NameStore.init(allocator);
+    defer name_store.deinit();
+    const loaded_shards = [_]LoadedShard{.{
+        .shard_id = program.shard_id,
+        .fn_count = @intCast(program.fns.len),
+    }};
+    var resolved: [0]ResolvedImportedFn = .{};
+    _ = try program.verifyAndResolveImports(&name_store, loaded_shards[0..], resolved[0..]);
+    try std.testing.expectEqual(@as(usize, 1), program.exprs.len);
+    try std.testing.expectEqual(Ast.SignatureRelation.exact_graph, program.fns[0].signature_relation);
 }
 
 test "monotype specialization cache reports malformed internal data as corruption" {
@@ -2571,6 +2863,9 @@ test "monotype specialization cache reports malformed internal data as corruptio
         const unit_ty: Type.TypeId = @enumFromInt(first_type_index);
         const type_nodes = [_]Type.Content{.zst};
         const type_digests = [_]checked_names.TypeDigest{.{}};
+        const evidence_frames = [_]check.ConstStore.ConstFnEvidenceFrame{
+            check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 0),
+        };
         const fn_id: Ast.FnId = @enumFromInt(first_fn_index);
         const fns = [_]Ast.Fn{.{
             .source = .{
@@ -2578,6 +2873,9 @@ test "monotype specialization cache reports malformed internal data as corruptio
                 .source_fn_ty = @enumFromInt(1),
                 .source_fn_key = .{},
                 .mono_fn_ty = unit_ty,
+                .evidence_digest = Ast.fnEvidenceDigest(&.{}, &evidence_frames, 0),
+                .const_evidence_frames = .{ .start = 0, .len = 1 },
+                .const_evidence_frame_head = 0,
             },
         }};
         const exprs = [_]Ast.Expr{.{
@@ -2591,6 +2889,7 @@ test "monotype specialization cache reports malformed internal data as corruptio
             .{ .id = .type_nodes, .bytes = std.mem.sliceAsBytes(type_nodes[0..]) },
             .{ .id = .type_digests, .bytes = std.mem.sliceAsBytes(type_digests[0..]) },
             .{ .id = .fns, .bytes = std.mem.sliceAsBytes(fns[0..]) },
+            .{ .id = .const_fn_evidence_frames, .bytes = std.mem.sliceAsBytes(evidence_frames[0..]) },
             .{ .id = .exprs, .bytes = std.mem.sliceAsBytes(exprs[0..]) },
         });
         defer allocator.free(image);
@@ -2636,6 +2935,78 @@ test "monotype specialization cache reports malformed internal data as corruptio
             program.verifyAndResolveImports(&name_store, &.{}, resolved[0..]),
         );
     }
+}
+
+test "monotype specialization cache rejects corrupt function evidence topology before mapping sections" {
+    const empty_template = Ast.FnTemplate{
+        .fn_def = .{ .checked_generated = testProcedureTemplate(1, 1) },
+        .source_fn_ty = @enumFromInt(1),
+        .source_fn_key = .{},
+        // This helper exercises section-level evidence validation, which runs
+        // before and does not inspect the function's Monotype reference.
+        .mono_fn_ty = undefined,
+    };
+
+    var out_of_bounds_evidence = empty_template;
+    out_of_bounds_evidence.const_evidence = .{ .start = 0, .len = 1 };
+    try expectFnEvidenceMappingCorruption(out_of_bounds_evidence, &.{}, &.{});
+
+    var out_of_bounds_frames = empty_template;
+    out_of_bounds_frames.const_evidence_frames = .{ .start = 0, .len = 1 };
+    out_of_bounds_frames.const_evidence_frame_head = 0;
+    try expectFnEvidenceMappingCorruption(out_of_bounds_frames, &.{}, &.{});
+
+    const one_evidence = [_]check.ConstStore.ConstFnEvidence{.{ .structural = .equality }};
+    const root_frame = check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 1);
+    var missing_head = empty_template;
+    missing_head.const_evidence = .{ .start = 0, .len = 1 };
+    missing_head.const_evidence_frames = .{ .start = 0, .len = 1 };
+    try expectFnEvidenceMappingCorruption(missing_head, &one_evidence, &.{root_frame});
+
+    var bad_root = missing_head;
+    bad_root.const_evidence_frame_head = 0;
+    const generalized_root = check.ConstStore.ConstFnEvidenceFrame.init(.{ .generalized = 7 }, null, 0, 1);
+    try expectFnEvidenceMappingCorruption(bad_root, &one_evidence, &.{generalized_root});
+
+    const two_evidence = [_]check.ConstStore.ConstFnEvidence{
+        .{ .structural = .equality },
+        .{ .structural = .hash },
+    };
+    var two_frame_template = empty_template;
+    two_frame_template.const_evidence = .{ .start = 0, .len = 2 };
+    two_frame_template.const_evidence_frames = .{ .start = 0, .len = 2 };
+    two_frame_template.const_evidence_frame_head = 1;
+    const bad_parent_frames = [_]check.ConstStore.ConstFnEvidenceFrame{
+        root_frame,
+        check.ConstStore.ConstFnEvidenceFrame.init(.{ .generalized = 7 }, null, 1, 1),
+    };
+    try expectFnEvidenceMappingCorruption(two_frame_template, &two_evidence, &bad_parent_frames);
+
+    const bad_root_start_frames = [_]check.ConstStore.ConstFnEvidenceFrame{
+        root_frame,
+        check.ConstStore.ConstFnEvidenceFrame.init(.{ .generalized = 7 }, 0, 0, 1),
+    };
+    try expectFnEvidenceMappingCorruption(two_frame_template, &two_evidence, &bad_root_start_frames);
+
+    const bad_nested_evidence = [_]check.ConstStore.ConstFnEvidence{
+        .{
+            .target = .{
+                .view = .{},
+                // Evidence topology validation reads only the explicit nested
+                // count/subtree metadata from this target node.
+                .method = testMethodTarget(),
+                .instantiation = null,
+                .nested = .{ .resolved = .{ .count = 1, .subtree_len = 0 } },
+            },
+        },
+        .checked_error,
+    };
+    var bad_nested_template = empty_template;
+    bad_nested_template.const_evidence = .{ .start = 0, .len = 2 };
+    bad_nested_template.const_evidence_frames = .{ .start = 0, .len = 1 };
+    bad_nested_template.const_evidence_frame_head = 0;
+    const nested_root = check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 1);
+    try expectFnEvidenceMappingCorruption(bad_nested_template, &bad_nested_evidence, &.{nested_root});
 }
 
 test "monotype specialization cache writer rejects duplicate sections" {
@@ -2728,6 +3099,7 @@ test "monotype specialization cache validity includes stored specialization iden
             } },
             .method_scope = testModuleDigest(8),
             .source_fn_ty_digest = first_source_digest,
+            .evidence_digest = Ast.fnEvidenceDigest(&.{}, &.{}, null),
             .request_fn_ty_digest = mono_digest,
             .request_fn_ty = spec_ty,
         },
@@ -2779,6 +3151,8 @@ fn expectEquivalentProgramViews(
     try std.testing.expectEqualSlices(Ast.SpecRecord, fresh.specs, mapped.specs);
     try std.testing.expectEqualSlices(Ast.ImportedFn, fresh.imported_fns, mapped.imported_fns);
     try std.testing.expectEqualSlices(Ast.Fn, fresh.fns, mapped.fns);
+    try std.testing.expectEqualSlices(check.ConstStore.ConstFnEvidence, fresh.const_fn_evidence, mapped.const_fn_evidence);
+    try std.testing.expectEqualSlices(check.ConstStore.ConstFnEvidenceFrame, fresh.const_fn_evidence_frames, mapped.const_fn_evidence_frames);
     try std.testing.expectEqualSlices(Ast.Def, fresh.defs, mapped.defs);
     try std.testing.expectEqualSlices(Ast.NestedDef, fresh.nested_defs, mapped.nested_defs);
     try std.testing.expectEqualSlices(Ast.Expr, fresh.exprs, mapped.exprs);
@@ -2803,6 +3177,26 @@ fn expectEquivalentProgramViews(
     try std.testing.expectEqualSlices(Base.Region, fresh.expr_regions, mapped.expr_regions);
     try std.testing.expectEqualSlices(Base.SourceLoc, fresh.stmt_locs, mapped.stmt_locs);
     try std.testing.expectEqualSlices(Base.Region, fresh.stmt_regions, mapped.stmt_regions);
+}
+
+fn expectFnEvidenceMappingCorruption(
+    template: Ast.FnTemplate,
+    evidence: []const check.ConstStore.ConstFnEvidence,
+    frames: []const check.ConstStore.ConstFnEvidenceFrame,
+) TestEvidenceMappingError!void {
+    const allocator = std.testing.allocator;
+    const fns = [_]Ast.Fn{.{ .source = template }};
+    const image = try buildImage(allocator, zeroHash(), zeroHash(), &.{
+        .{ .id = .fns, .bytes = std.mem.sliceAsBytes(fns[0..]) },
+        .{ .id = .const_fn_evidence, .bytes = std.mem.sliceAsBytes(evidence) },
+        .{ .id = .const_fn_evidence_frames, .bytes = std.mem.sliceAsBytes(frames) },
+    });
+    defer allocator.free(image);
+
+    var header: SpecializationCacheHeader = undefined;
+    @memcpy(std.mem.asBytes(&header), image[0..@sizeOf(SpecializationCacheHeader)]);
+    const mapped = try viewMappedFile(&header, image.ptr, image.len, zeroHash(), zeroHash(), 0);
+    try std.testing.expectError(error.CorruptSpecializationCacheFile, mapped.sectionsView());
 }
 
 fn assertMappedSectionPayloadsContainNoRuntimeOwnedFields() void {
@@ -2882,12 +3276,44 @@ fn specIdAt(index: u32) Ast.SpecId {
     return @enumFromInt(index);
 }
 
+/// The single root evidence frame every Stage D image's function templates
+/// declare. Mapping validates each template's frame chain and digest, so the
+/// frames section and the digest below must agree.
+const stage_d_evidence_frames = [_]check.ConstStore.ConstFnEvidenceFrame{
+    check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 0),
+};
+
+fn stageDEvidenceDigest() Ast.EvidenceDigest {
+    return Ast.fnEvidenceDigest(&.{}, stage_d_evidence_frames[0..], 0);
+}
+
+/// The `fns` entries a Stage D image needs: mapping validates that every spec
+/// record's `fn_id` indexes this section and that both sides carry the same
+/// evidence digest.
+fn stageDFns(request_ty: Type.TypeId) [2]Ast.Fn {
+    const source: Ast.FnTemplate = .{
+        .fn_def = .{ .checked_generated = testProcedureTemplate(1, 1) },
+        .source_fn_ty = @enumFromInt(1),
+        .source_fn_key = .{},
+        .mono_fn_ty = request_ty,
+        .evidence_digest = stageDEvidenceDigest(),
+        .const_evidence_frames = .{ .start = 0, .len = 1 },
+        .const_evidence_frame_head = 0,
+    };
+    return .{ .{ .source = source }, .{ .source = source } };
+}
+
 fn stageDSpecRecord(request_ty: Type.TypeId, computed: bool) Ast.SpecRecord {
+    return stageDSpecRecordAt(request_ty, computed, 0);
+}
+
+fn stageDSpecRecordAt(request_ty: Type.TypeId, computed: bool, fn_index: u32) Ast.SpecRecord {
     return .{
         .identity = .{
             .callable = .{ .proc_template = .{ .module = .{}, .proc_base = 1, .template = 2 } },
             .method_scope = testModuleDigest(4),
             .source_fn_ty_digest = .{},
+            .evidence_digest = stageDEvidenceDigest(),
             .request_fn_ty_digest = .{},
             .request_fn_ty = request_ty,
         },
@@ -2895,7 +3321,7 @@ fn stageDSpecRecord(request_ty: Type.TypeId, computed: bool) Ast.SpecRecord {
         .request_fn_ty_digest = .{},
         .solved_fn_ty = request_ty,
         .solved_fn_ty_digest = .{},
-        .fn_id = @enumFromInt(1),
+        .fn_id = @enumFromInt(fn_index),
         .status = .ready,
         .final_spec = .{ .computed = computed },
     };
@@ -2944,12 +3370,15 @@ test "monotype specialization cache round trips FinalSpecId component sections" 
         .{ .first_spec = 1, .member_count = 1 },
     };
     const specs = [_]Ast.SpecRecord{
-        stageDSpecRecord(@enumFromInt(1), true),
-        stageDSpecRecord(@enumFromInt(1), true),
+        stageDSpecRecordAt(@enumFromInt(1), true, 0),
+        stageDSpecRecordAt(@enumFromInt(1), true, 1),
     };
+    const fns = stageDFns(@enumFromInt(1));
 
     const image = try buildImage(allocator, zeroHash(), zeroHash(), &.{
         .{ .id = .specs, .bytes = std.mem.sliceAsBytes(specs[0..]) },
+        .{ .id = .fns, .bytes = std.mem.sliceAsBytes(fns[0..]) },
+        .{ .id = .const_fn_evidence_frames, .bytes = std.mem.sliceAsBytes(stage_d_evidence_frames[0..]) },
         .{ .id = .final_spec_components, .bytes = components.items },
         .{ .id = .final_spec_component_slices, .bytes = std.mem.sliceAsBytes(slices[0..]) },
         .{ .id = .final_spec_relocations, .bytes = std.mem.sliceAsBytes(relocations[0..]) },
@@ -3021,12 +3450,15 @@ test "monotype specialization cache rejects corrupt FinalSpecId section shapes" 
     const allocator = std.testing.allocator;
 
     const one_spec = [_]Ast.SpecRecord{stageDSpecRecord(@enumFromInt(1), true)};
+    const fns = stageDFns(@enumFromInt(1));
 
     // The slice index must carry one entry per specialization record.
     {
         const two_slices = [_]Ast.FinalSpecComponentSlice{ .{}, .{} };
         const image = try buildImage(allocator, zeroHash(), zeroHash(), &.{
             .{ .id = .specs, .bytes = std.mem.sliceAsBytes(one_spec[0..]) },
+            .{ .id = .fns, .bytes = std.mem.sliceAsBytes(fns[0..]) },
+            .{ .id = .const_fn_evidence_frames, .bytes = std.mem.sliceAsBytes(stage_d_evidence_frames[0..]) },
             .{ .id = .final_spec_component_slices, .bytes = std.mem.sliceAsBytes(two_slices[0..]) },
         });
         defer allocator.free(image);
@@ -3043,6 +3475,8 @@ test "monotype specialization cache rejects corrupt FinalSpecId section shapes" 
         const bad_slice = [_]Ast.FinalSpecComponentSlice{.{ .offset = 0, .len = 999 }};
         const image = try buildImage(allocator, zeroHash(), zeroHash(), &.{
             .{ .id = .specs, .bytes = std.mem.sliceAsBytes(one_spec[0..]) },
+            .{ .id = .fns, .bytes = std.mem.sliceAsBytes(fns[0..]) },
+            .{ .id = .const_fn_evidence_frames, .bytes = std.mem.sliceAsBytes(stage_d_evidence_frames[0..]) },
             .{ .id = .final_spec_components, .bytes = small_bytes[0..] },
             .{ .id = .final_spec_component_slices, .bytes = std.mem.sliceAsBytes(bad_slice[0..]) },
         });
@@ -3059,6 +3493,8 @@ test "monotype specialization cache rejects corrupt FinalSpecId section shapes" 
         const bad_reloc = [_]Ast.FinalSpecRelocation{.{ .first_spec = 0, .member_count = 5 }};
         const image = try buildImage(allocator, zeroHash(), zeroHash(), &.{
             .{ .id = .specs, .bytes = std.mem.sliceAsBytes(one_spec[0..]) },
+            .{ .id = .fns, .bytes = std.mem.sliceAsBytes(fns[0..]) },
+            .{ .id = .const_fn_evidence_frames, .bytes = std.mem.sliceAsBytes(stage_d_evidence_frames[0..]) },
             .{ .id = .final_spec_relocations, .bytes = std.mem.sliceAsBytes(bad_reloc[0..]) },
         });
         defer allocator.free(image);

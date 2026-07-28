@@ -26,6 +26,13 @@ gpa: Allocator,
 /// Use for small and miscellaneous allocations that are never freed individually.
 arena: Allocator,
 
+/// A non-allocating question about one environment variable. Implementations
+/// answer while the environment value is valid; no borrowed pointer escapes.
+pub const EnvVarQuery = union(enum) {
+    non_empty,
+    equals: []const u8,
+};
+
 /// Function pointer table for I/O operations.
 /// Implementations provide concrete functions; `ctx` is passed through as
 /// the first argument, allowing implementations to carry state.
@@ -76,6 +83,10 @@ pub const VTable = struct {
     /// Look up environment variable `key`. Caller owns the returned slice.
     getEnvVar: *const fn (?*anyopaque, std.Io, []const u8, Allocator) GetEnvVarError![]u8,
 
+    /// Evaluate a non-allocating query against a statically named environment
+    /// variable without exposing the environment's borrowed storage.
+    queryEnvVar: *const fn (?*anyopaque, std.Io, [:0]const u8, EnvVarQuery) bool = &missingEnvVarQuery,
+
     /// Download `url` and extract its contents into `dest_path`, enforcing an
     /// optional limit on the decompressed size in bytes. Returns the total
     /// decompressed size.
@@ -120,7 +131,44 @@ pub const VTable = struct {
     /// Return the width (in columns) of the stderr terminal, or `null` if it
     /// is not a terminal or the width cannot be determined.
     terminalWidth: *const fn (?*anyopaque, std.Io) ?u16,
+
+    // --- File mapping ---
+
+    /// Map the file at `path` into memory as a private, copy-on-write
+    /// mapping: writes to the returned bytes stay process-private and never
+    /// reach the file on disk. Returns `null` when this implementation cannot
+    /// map files (virtual filesystems, targets without `mmap`) or when this
+    /// particular file cannot be mapped; callers then read the file through
+    /// `readFile` instead. Release a returned mapping with `MappedFile.unmap`.
+    mapFilePrivate: *const fn (?*anyopaque, std.Io, []const u8) ?MappedFile = &defaultMapFilePrivate,
 };
+
+/// Whether this target can produce private file mappings.
+pub const can_map_files = @hasDecl(std.posix, "mmap") and
+    builtin.target.os.tag != .windows and
+    builtin.target.os.tag != .freestanding;
+
+/// A private, copy-on-write file mapping produced by `mapFilePrivate`.
+pub const MappedFile = struct {
+    /// The mapped region, page-aligned. The leading `file_len` bytes are the
+    /// file's contents; any bytes beyond them are zero padding to page size.
+    region: []align(std.heap.page_size_min) u8,
+    /// The mapped file's size in bytes.
+    file_len: usize,
+
+    /// The file's bytes within the mapping.
+    pub fn bytes(self: MappedFile) []u8 {
+        return self.region[0..self.file_len];
+    }
+
+    pub fn unmap(self: MappedFile) void {
+        if (comptime can_map_files) std.posix.munmap(self.region);
+    }
+};
+
+fn defaultMapFilePrivate(_: ?*anyopaque, _: std.Io, _: []const u8) ?MappedFile {
+    return null;
+}
 
 // --- Filesystem wrapper methods ---
 
@@ -147,6 +195,12 @@ pub fn fileExists(self: Self, path: []const u8) bool {
 /// Get metadata for `path`.
 pub fn stat(self: Self, path: []const u8) StatError!FileInfo {
     return self.vtable.stat(self.ctx, self.std_io, path);
+}
+
+/// Map the file at `path` as a private, copy-on-write mapping, or `null` when
+/// this context or target cannot map it. Release with `MappedFile.unmap`.
+pub fn mapFilePrivate(self: Self, path: []const u8) ?MappedFile {
+    return self.vtable.mapFilePrivate(self.ctx, self.std_io, path);
 }
 
 /// Backward-compat alias for `stat`.
@@ -193,6 +247,18 @@ pub fn rename(self: Self, old_path: []const u8, new_path: []const u8) RenameErro
 /// Look up environment variable `key`. Caller owns the returned slice.
 pub fn getEnvVar(self: Self, key: []const u8, allocator: Allocator) GetEnvVarError![]u8 {
     return self.vtable.getEnvVar(self.ctx, self.std_io, key, allocator);
+}
+
+/// Return whether a statically named environment variable has a non-empty
+/// value, without allocating or exposing borrowed environment storage.
+pub fn envVarIsNonEmpty(self: Self, key: [:0]const u8) bool {
+    return self.vtable.queryEnvVar(self.ctx, self.std_io, key, .non_empty);
+}
+
+/// Compare a statically named environment variable with `expected`, without
+/// allocating or exposing borrowed environment storage.
+pub fn envVarEquals(self: Self, key: [:0]const u8, expected: []const u8) bool {
+    return self.vtable.queryEnvVar(self.ctx, self.std_io, key, .{ .equals = expected });
 }
 
 /// Download `url` and extract into `dest_path` directory, enforcing an
@@ -336,7 +402,7 @@ pub const CanonicalizeError = error{
     IoError,
 };
 
-/// Errors that can occur when looking up an environment variable.
+/// Errors that can occur when looking up an owned environment variable.
 pub const GetEnvVarError = error{
     EnvironmentVariableMissing,
     OutOfMemory,
@@ -446,6 +512,7 @@ const os_vtable = VTable{
     .makePath = &osMakePath,
     .rename = &osRename,
     .getEnvVar = &osGetEnvVar,
+    .queryEnvVar = &osQueryEnvVar,
     .fetchUrl = &osFetchUrl,
     .deleteFile = &osDeleteFile,
     .deleteDir = &osDeleteDir,
@@ -458,6 +525,7 @@ const os_vtable = VTable{
     .readStdin = &osReadStdin,
     .isTty = &osIsTty,
     .terminalWidth = &osTerminalWidth,
+    .mapFilePrivate = &osMapFilePrivate,
 };
 
 const testing_vtable = VTable{
@@ -543,6 +611,25 @@ pub fn writeFileCwd(io: std.Io, sub_path: []const u8, data: []const u8) std.Io.D
 }
 
 // --- OS implementations ---
+
+fn osMapFilePrivate(_: ?*anyopaque, std_io: std.Io, path: []const u8) ?MappedFile {
+    if (comptime !can_map_files) return null;
+
+    var file = std.Io.Dir.cwd().openFile(std_io, path, .{}) catch return null;
+    defer file.close(std_io);
+
+    const info = file.stat(std_io) catch return null;
+    const size = std.math.cast(usize, info.size) orelse return null;
+    // mmap rejects a zero length; an empty file has no bytes worth mapping.
+    if (size == 0) return null;
+
+    // Copy-on-write: writes into the mapping stay process-private and never
+    // reach the file on disk.
+    const prot: std.posix.PROT = .{ .READ = true, .WRITE = true };
+    const flags: std.posix.MAP = .{ .TYPE = .PRIVATE };
+    const region = std.posix.mmap(null, size, prot, flags, file.handle, 0) catch return null;
+    return .{ .region = region, .file_len = size };
+}
 
 fn osReadFile(_: ?*anyopaque, std_io: std.Io, path: []const u8, allocator: Allocator) ReadError![]u8 {
     return std.Io.Dir.cwd().readFileAlloc(std_io, path, allocator, .limited(max_file_size)) catch |err| return switch (err) {
@@ -700,12 +787,23 @@ fn osRename(_: ?*anyopaque, std_io: std.Io, old_path: []const u8, new_path: []co
 }
 
 fn osGetEnvVar(_: ?*anyopaque, _: std.Io, key: []const u8, allocator: Allocator) GetEnvVarError![]u8 {
-    // In Zig 0.16, environment access is via std.c.getenv (no allocator needed for lookup)
     const key_z = allocator.dupeZ(u8, key) catch return error.OutOfMemory;
     defer allocator.free(key_z);
     const value = std.c.getenv(key_z) orelse return error.EnvironmentVariableMissing;
-    const len = std.mem.len(value);
-    return allocator.dupe(u8, value[0..len]) catch return error.OutOfMemory;
+    return allocator.dupe(u8, std.mem.span(value)) catch return error.OutOfMemory;
+}
+
+fn osQueryEnvVar(_: ?*anyopaque, _: std.Io, key: [:0]const u8, query: EnvVarQuery) bool {
+    const value = std.c.getenv(key) orelse return false;
+    const bytes = std.mem.span(value);
+    return switch (query) {
+        .non_empty => bytes.len > 0,
+        .equals => |expected| std.mem.eql(u8, bytes, expected),
+    };
+}
+
+fn missingEnvVarQuery(_: ?*anyopaque, _: std.Io, _: [:0]const u8, _: EnvVarQuery) bool {
+    return false;
 }
 
 /// fetchUrl is intentionally a stub in the default OS vtable.

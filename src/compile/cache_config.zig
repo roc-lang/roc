@@ -50,34 +50,44 @@ pub const Constants = struct {
     /// 24: CommonIdents carries the range_exclusive/range_inclusive method idents.
     /// 25: Canonical node storage records where-clause rigid ownership.
     /// 26: ModuleEnv scheme instantiation evidence was renamed to scheme-use evidence.
-    /// 27: Field access canonicalization no longer contains method or qualified-dispatch fallbacks.
-    /// 28: String interpolation constraint metadata moved into the type store.
+    /// 27: Empty-row provenance and checked iterator-step topology changed serialized state.
+    /// 28: Field access canonicalization no longer contains method or qualified-dispatch fallbacks.
+    /// 29: String interpolation constraint metadata moved into the type store.
     /// 30: Checked interpolation nodes retain their explicit dispatcher type variable.
-    /// 31: ModuleEnv carries pristine scheme snapshots; checked schemes carry a snapshot root and binder range.
-    /// 32: ModuleEnv carries dense positional scheme-use sites; checked store carries published instantiation sites.
-    /// 33: scheme snapshots carry their root var; checked schemes carry owner + captured binders; scheme keys encode binder/free.
-    /// 34: checked store carries a scheme owner index and residual-variable dispositions.
-    /// 35: procedure bindings carry their source scheme's dense id for postcheck scheme resolution.
-    /// 36: checked store carries a consuming-side imported-scheme table (projected defining scheme root + binders).
-    /// 37: published instantiation sites carry an evidence-vector reference into the plan table's evidence refs.
-    /// 38: residual-variable dispositions cover every function argument and nested-function position, not only scheme root and return.
-    /// 39: Monotype specialization records carry a parallel FinalSpecId identity and the spec cache gained FinalSpecId component/relocation sections (spec cache FORMAT_VERSION 10).
-    /// 40: published instantiation sites carry the checked expression id of their
+    /// 31: Canonical expression storage includes compiler-derived method nodes.
+    /// 32: Builtin indices include width-specific f32 conversion and math wrappers.
+    /// 33: Builtin indices, identifiers, and checked layouts include integer SIMD vectors.
+    /// 34: Combined the empty-row and interpolation checked-artifact layouts.
+    /// 35: Platform requirement roots carry producer-authored dispatch evidence.
+    /// 36: Checked iterator procedure identity includes Str.iter_utf8.
+    /// 37: Nested procedure sites declare their producer-authored evidence source.
+    /// 38: Platform provides entries include their exact platform-local definition.
+    /// 39: ModuleEnv stores exact top-level demand dependencies.
+    /// 40: ModuleEnv carries pristine scheme snapshots; checked schemes carry a snapshot root and binder range.
+    /// 41: ModuleEnv carries dense positional scheme-use sites; checked store carries published instantiation sites.
+    /// 42: scheme snapshots carry their root var; checked schemes carry owner + captured binders; scheme keys encode binder/free.
+    /// 43: checked store carries a scheme owner index and residual-variable dispositions.
+    /// 44: procedure bindings carry their source scheme's dense id for postcheck scheme resolution.
+    /// 45: checked store carries a consuming-side imported-scheme table (projected defining scheme root + binders).
+    /// 46: published instantiation sites carry an evidence-vector reference into the plan table's evidence refs.
+    /// 47: residual-variable dispositions cover every function argument and nested-function position, not only scheme root and return.
+    /// 48: Monotype specialization records carry a parallel FinalSpecId identity and the spec cache gained FinalSpecId component/relocation sections (spec cache FORMAT_VERSION 10).
+    /// 49: published instantiation sites carry the checked expression id of their
     ///     CIR use node, so a consumer reading a frozen artifact names an edge by
     ///     its use rather than by the instantiated root.
-    /// 41: checked procedure templates carry their owning scheme's dense id, and a
+    /// 50: checked procedure templates carry their owning scheme's dense id, and a
     ///     scheme's captured-binder closure covers the enclosing binders its body
     ///     reaches rather than only those its root reaches.
-    /// 42: an instantiation site whose use instantiated an annotated definition's
+    /// 51: an instantiation site whose use instantiated an annotated definition's
     ///     annotation pre-declaration is published under that definition's own
     ///     scheme owner node, so one definition has one scheme owner identity.
-    /// 43: a residual whose `uninhabited` disposition a resolved dispatch target's
+    /// 52: a residual whose `uninhabited` disposition a resolved dispatch target's
     ///     own signature contradicts is published `contextual` at that signature's
     ///     type instead.
-    /// 44: a specialized static-dispatch plan callable keeps the identity every
+    /// 53: a specialized static-dispatch plan callable keeps the identity every
     ///     variable the target's signature does not substitute already had,
     ///     instead of reserving a fresh root the artifact names nowhere.
-    pub const CACHE_VERSION = 44;
+    pub const CACHE_VERSION = 53;
 };
 
 /// Configuration for the Roc cache system.

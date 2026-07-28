@@ -83,6 +83,16 @@ pub fn checkedOp(op: LIR.LowLevel, layout_idx: layout.Idx) ?LIR.LowLevel {
     };
 }
 
+/// Commits the source arithmetic policy to its LIR operation.
+pub fn lowerOp(op: LIR.LowLevel, layout_idx: layout.Idx) LIR.LowLevel {
+    return switch (op) {
+        .num_plus_wrap => .num_plus,
+        .num_minus_wrap => .num_minus,
+        .num_times_wrap => .num_times,
+        else => checkedOp(op, layout_idx) orelse op,
+    };
+}
+
 /// Returns the plain wrapping LIR operation for a checked arithmetic operation.
 pub fn uncheckedOp(op: LIR.LowLevel) ?LIR.LowLevel {
     return switch (op) {
@@ -188,6 +198,14 @@ test "checkedOp maps every integer arithmetic operation and skips non-integers" 
     try std.testing.expectEqual(@as(?LIR.LowLevel, null), checkedOp(.num_plus, .f64));
     try std.testing.expectEqual(@as(?LIR.LowLevel, null), checkedOp(.num_abs, .u64));
     try std.testing.expectEqual(@as(?LIR.LowLevel, null), checkedOp(.num_negate, .u128));
+}
+
+test "lowerOp preserves explicit wrapping arithmetic" {
+    try std.testing.expectEqual(LIR.LowLevel.num_plus, lowerOp(.num_plus_wrap, .u8));
+    try std.testing.expectEqual(LIR.LowLevel.num_minus, lowerOp(.num_minus_wrap, .i16));
+    try std.testing.expectEqual(LIR.LowLevel.num_times, lowerOp(.num_times_wrap, .u128));
+    try std.testing.expectEqual(LIR.LowLevel.num_plus_checked, lowerOp(.num_plus, .u8));
+    try std.testing.expectEqual(LIR.LowLevel.num_plus, lowerOp(.num_plus, .f64));
 }
 
 test "checkedOp round trips through uncheckedOp" {

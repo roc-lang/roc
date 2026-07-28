@@ -32,6 +32,9 @@ pub const Class = union(enum) {
     double_integer,
     /// A homogeneous float aggregate passed in 1..4 SIMD registers.
     float_array: FloatArray,
+    /// An aggregate that transparently wraps exactly one short vector, passed
+    /// directly in one Q register like the vector itself.
+    vector: layout.Vector,
 };
 
 /// A homogeneous aggregate of `count` floats, each `elem_bits` wide (32 or 64).
@@ -61,6 +64,8 @@ pub fn classifyType(store: *const Store, idx: Idx) Class {
                 .frac => return .byval,
                 // RocStr is a three-word aggregate; classify it by size like any aggregate.
                 .str => return classifyBySize(store, lay),
+                // A short vector is passed directly in one Q register.
+                .vector => return .byval,
             }
         },
         // A Box is a single pointer.
@@ -68,6 +73,19 @@ pub fn classifyType(store: *const Store, idx: Idx) Class {
         // RocList is a three-word aggregate.
         .list, .list_of_zst => return classifyBySize(store, lay),
         .struct_ => {
+            // A single-vector aggregate is ABI-equivalent to the vector itself and
+            // travels in one Q register. Aggregates with two or more vector members
+            // are memory-class at the Roc<->host boundary: the boundary contract must
+            // be the one every supported host language's natural declarations
+            // compile to, and C, Zig, and Rust all agree on the memory-class
+            // convention for these aggregates (generated C glue spells their vector
+            // members as vector/byte unions to pin that classification), whereas
+            // only C toolchains implement AAPCS64's multi-member HVA register rule.
+            var maybe_vector_kind: ?layout.Vector = null;
+            const vector_count = countVectors(store, idx, &maybe_vector_kind);
+            if (vector_count == 1) {
+                return .{ .vector = maybe_vector_kind.? };
+            }
             var maybe_float_bits: ?u16 = null;
             const float_count = countFloats(store, idx, &maybe_float_bits);
             if (float_count >= 1 and float_count <= max_hfa_floats) {
@@ -78,10 +96,59 @@ pub fn classifyType(store: *const Store, idx: Idx) Class {
             }
             return classifyBySize(store, lay);
         },
-        // Tag unions carry a discriminant, closures and erased callables carry pointers, so
-        // none of these are homogeneous float aggregates — classify them purely by size.
-        .tag_union, .closure, .erased_callable => return classifyBySize(store, lay),
+        .tag_union => {
+            // Glue unwraps a single-variant union to its payload. Its layout has
+            // no runtime discriminant, so classification must unwrap it too.
+            // In particular, a transparent vector is a direct Q-register value
+            // and a transparent float is a direct SIMD-register value.
+            const info = store.getTagUnionInfo(lay);
+            if (info.variants.len == 1 and info.data.discriminant_size == 0) {
+                return classifyType(store, info.variants.get(0).payload_layout);
+            }
+            return classifyBySize(store, lay);
+        },
+        // Closures and erased callables carry pointers and are not homogeneous
+        // aggregates, so classify them purely by size.
+        .closure, .erased_callable => return classifyBySize(store, lay),
         .zst => unreachable, // filtered out by the assert above; ZSTs are never passed
+    }
+}
+
+/// Count the vector members of an aggregate whose leaves are exclusively short
+/// vectors, returning `invalid_float_count` (sentinel) the moment any other
+/// member (or unnamed padding) is seen. Exactly one vector member makes the
+/// aggregate a transparent Q-register value; two or more make it memory-class.
+/// Counting stops at two because higher counts classify identically.
+fn countVectors(store: *const Store, idx: Idx, maybe_kind: *?layout.Vector) u8 {
+    const lay = store.getLayout(idx);
+    switch (lay.tag) {
+        .struct_ => {
+            const struct_idx = lay.getStruct().idx;
+            const field_count = store.getStructData(struct_idx).fields.count;
+            var count: u8 = 0;
+            var i: u32 = 0;
+            while (i < field_count) : (i += 1) {
+                if (store.getStructFieldIsPadding(struct_idx, i)) return invalid_float_count;
+                const field_count_vectors = countVectors(store, store.getStructFieldLayout(struct_idx, i), maybe_kind);
+                if (field_count_vectors == invalid_float_count) return invalid_float_count;
+                count += field_count_vectors;
+                if (count > 1) return count;
+            }
+            return count;
+        },
+        .scalar => {
+            const scalar = lay.getScalar();
+            if (scalar.tag != .vector) return invalid_float_count;
+            const kind = scalar.getVector();
+            if (maybe_kind.* == null) maybe_kind.* = kind;
+            return 1;
+        },
+        .tag_union => {
+            const info = store.getTagUnionInfo(lay);
+            if (info.variants.len != 1 or info.data.discriminant_size != 0) return invalid_float_count;
+            return countVectors(store, info.variants.get(0).payload_layout, maybe_kind);
+        },
+        else => return invalid_float_count,
     }
 }
 
@@ -137,7 +204,13 @@ fn countFloats(store: *const Store, idx: Idx, maybe_float_bits: *?u16) u8 {
             maybe_float_bits.* = bits;
             return 1;
         },
-        // Anything else (pointer, list, box, tag union, …) makes the aggregate non-homogeneous.
+        .tag_union => {
+            const info = store.getTagUnionInfo(lay);
+            if (info.variants.len != 1 or info.data.discriminant_size != 0) return invalid_float_count;
+            return countFloats(store, info.variants.get(0).payload_layout, maybe_float_bits);
+        },
+        // Anything else (pointer, list, box, non-transparent tag union, …)
+        // makes the aggregate non-homogeneous.
         else => return invalid_float_count,
     }
 }
@@ -164,6 +237,37 @@ test "aarch64 classify: scalars pass by value" {
     try testing.expectEqual(Class.byval, classifyType(&store, .f64));
     try testing.expectEqual(Class.byval, classifyType(&store, .dec));
     try testing.expectEqual(Class.byval, classifyType(&store, .opaque_ptr));
+    try testing.expectEqual(Class.byval, classifyType(&store, .u8x16));
+}
+
+test "aarch64 classify: vector aggregates" {
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    // A single-vector aggregate is a transparent Q-register value, including
+    // through a transparent single-variant tag wrapper.
+    const one = try testStruct(&store, &.{.u16x8});
+    try testing.expectEqual(Class{ .vector = .u16x8 }, classifyType(&store, one));
+
+    const wrapped = try store.putTagUnion(&.{.i16x8});
+    try testing.expectEqual(Class.byval, classifyType(&store, wrapped));
+
+    const wrapped_one = try testStruct(&store, &.{wrapped});
+    try testing.expectEqual(Class{ .vector = .i16x8 }, classifyType(&store, wrapped_one));
+
+    // Aggregates with two or more vector members are memory-class at the host
+    // boundary, regardless of nesting or lane kinds.
+    const nested_pair = try testStruct(&store, &.{ one, one });
+    try testing.expectEqual(Class.memory, classifyType(&store, nested_pair));
+
+    const four = try testStruct(&store, &.{ .i32x4, .i32x4, .i32x4, .i32x4 });
+    try testing.expectEqual(Class.memory, classifyType(&store, four));
+
+    const mixed = try testStruct(&store, &.{ .u8x16, .i8x16 });
+    try testing.expectEqual(Class.memory, classifyType(&store, mixed));
+
+    const wrapped_pair = try testStruct(&store, &.{ wrapped, .u8x16 });
+    try testing.expectEqual(Class.memory, classifyType(&store, wrapped_pair));
 }
 
 test "aarch64 classify: three-word aggregates go to memory" {
@@ -213,6 +317,10 @@ test "aarch64 classify: homogeneous float aggregates" {
 
     const four_f64 = try testStruct(&store, &.{ .f64, .f64, .f64, .f64 });
     try testing.expectEqual(Class{ .float_array = .{ .count = 4, .elem_bits = 64 } }, classifyType(&store, four_f64));
+
+    const wrapped_f64 = try store.putTagUnion(&.{.f64});
+    const wrapped_pair = try testStruct(&store, &.{ wrapped_f64, .f64 });
+    try testing.expectEqual(Class{ .float_array = .{ .count = 2, .elem_bits = 64 } }, classifyType(&store, wrapped_pair));
 
     // Five floats exceeds the HFA limit (and is 40 bytes) -> memory.
     const five_f64 = try testStruct(&store, &.{ .f64, .f64, .f64, .f64, .f64 });
