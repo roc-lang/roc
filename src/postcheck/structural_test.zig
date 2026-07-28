@@ -40,11 +40,17 @@ fn sourceSliceBetween(source: []const u8, start: []const u8, end: []const u8) []
 }
 
 fn expectContains(haystack: []const u8, needle: []const u8) error{TestUnexpectedResult}!void {
-    try std.testing.expect(std.mem.find(u8, haystack, needle) != null);
+    if (std.mem.find(u8, haystack, needle) == null) {
+        std.debug.print("expected source slice to contain: {s}\n", .{needle});
+        return error.TestUnexpectedResult;
+    }
 }
 
 fn expectNotContains(haystack: []const u8, needle: []const u8) error{TestUnexpectedResult}!void {
-    try std.testing.expect(std.mem.find(u8, haystack, needle) == null);
+    if (std.mem.find(u8, haystack, needle) != null) {
+        std.debug.print("expected source slice not to contain: {s}\n", .{needle});
+        return error.TestUnexpectedResult;
+    }
 }
 
 test "Monotype has direct call and structural expression forms" {
@@ -550,6 +556,23 @@ test "Monotype prepares consts inside equality before frozen equality emission" 
     try expectNotContains(lower_source, "EvidenceComponentSnapshot");
 }
 
+test "Monotype materializes every draft function interface before identity lookup" {
+    const lower_source = @embedFile("monotype/lower.zig");
+    const commit = sourceSliceBetween(
+        lower_source,
+        "fn buildDraftCommitMap(",
+        "fn sealActiveBodyDraft(",
+    );
+    const materialize = std.mem.find(u8, commit, "for (body_draft.fns.items, sealed_templates)") orelse
+        return error.TestUnexpectedResult;
+    const identify = std.mem.find(u8, commit, "for (sealed_templates, 0..)") orelse
+        return error.TestUnexpectedResult;
+    const digest = std.mem.find(u8, commit, "const digest = self.specializationTypeDigest(fn_ty)") orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expect(materialize < identify);
+    try std.testing.expect(identify < digest);
+}
+
 test "Monotype rejects unfilled deferred equality emission plans" {
     const lower_source = @embedFile("monotype/lower.zig");
     try expectContains(lower_source, "deferred structural equality had no prepared emission plan");
@@ -596,9 +619,34 @@ test "Monotype loop carries remain graph-native through headers and backedges" {
     try expectContains(loop_source, "fn loopStateTypeCell");
     try expectContains(loop_source, "try self.addExprWithTypeCell(carry.ty");
     try expectContains(loop_source, "try self.addPatWithTypeCell(carry.ty");
-    try expectContains(loop_source, "try self.draft.addTypedLocalSpan(params)");
+    try expectContains(loop_source, "try self.addDraftTypedLocalSpan(params)");
     try expectNotContains(loop_source, "try self.localType(initial)");
     try expectNotContains(loop_source, "fn loopStateType(");
+}
+
+test "Monotype draft IR retains partition-owned live cells" {
+    const lower_source = @embedFile("monotype/lower.zig");
+    const solve_source = @embedFile("monotype/solve.zig");
+
+    const retention = sourceSliceBetween(
+        solve_source,
+        "pub fn retainPartitionCell(",
+        "pub fn destroy(",
+    );
+    try expectContains(retention, "self.partitionRepresentative(node)");
+    try expectContains(retention, "self.hasInterfacePartitionPath(self.nodePartition(node))");
+    try expectContains(retention, "self.newNode(.{ .unresolved = InstVariable.placeholder() })");
+    try expectContains(retention, "try self.unifyRootsTransitively(owned, node, true)");
+    try expectContains(retention, "try self.unify(owned, node)");
+    try expectNotContains(retention, "projectInterfaceNode");
+
+    const body_cells = sourceSliceBetween(
+        lower_source,
+        "fn addExprWithTypeCell(",
+        "fn addFn(",
+    );
+    try expectContains(body_cells, "try self.ownedTypeCell(ty)");
+    try expectContains(body_cells, "self.graph.retainPartitionCell(node)");
 }
 
 test "Monotype indirect calls retain graph-native function provenance" {
@@ -638,18 +686,29 @@ test "Monotype open specialization lookup covers the complete function interface
         try expectContains(lookup_source, "classMemberIterator(interface_node)");
         try expectContains(lookup_source, "seen_specs.getOrPut(raw_spec)");
         try expectContains(lookup_source, "sameFunctionInterface(spec.request_fn_node, request_fn_node)");
-        try expectContains(lookup_source, "draftOpenCandidateQualifies(");
         try expectContains(lookup_source, "spec.runtime_demand_guard_frames");
         try expectContains(lookup_source, "source_ctx.runtimeDemandGuardFrameAddresses()");
-        try expectContains(lookup_source, "if (!selection.add(raw_spec, exact_interface))");
+        try expectContains(lookup_source, "selection.add(raw_spec, true)");
         try expectContains(lookup_source, "if (selection.selected()) |raw_spec|");
-        try expectContains(lookup_source, "try source_ctx.graph.unifyRecursiveFunctionInterface(");
-        try expectContains(lookup_source, "spec.initial_request_arg_classes");
         try expectContains(lookup_source, "indexed_nodes.getOrPut(interface_node)");
         try expectContains(lookup_source, "draftOpenRequestKey(interface_node)");
         try expectNotContains(lookup_source, "functionInterfaceAnchor");
+        try expectNotContains(lookup_source, "draftOpenCandidateQualifies(");
+        try expectNotContains(lookup_source, "draftRequestOverlapsInitialArgumentClass(");
     }
+    try expectContains(template_source, "const source_fn_ty = template.checked_fn_root;");
+    try expectContains(template_source, "const source_fn_key = view.types.rootKey(source_fn_ty);");
+    try expectContains(template_source, "self.recursiveGroupForTemplate(source_ctx.owner_template)");
+    try expectContains(template_source, "candidate_family.sameRecursiveCallable(family)");
+    try expectContains(template_source, "candidate_group = self.recursiveGroupForTemplate(candidate.template_ref)");
+    try expectContains(template_source, "try candidate_graph.unifyRecursiveFunctionInterface(");
+    try expectContains(template_source, "candidate.initial_request_arg_classes");
     try expectContains(nested_source, "std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)");
+    try expectContains(nested_source, "spec.state != .lowering");
+    try expectContains(nested_source, "source_ctx.draft.ownerDescendsFromDraftFn(");
+    try expectContains(nested_source, "try source_ctx.graph.unifyRecursiveFunctionInterface(");
+    try expectContains(nested_source, "spec.initial_request_arg_classes");
+    try expectNotContains(nested_source, "draftNestedCaptureAnchoredRecursiveCandidate(");
 }
 
 test "Monotype match lowering relates patterns before specialization and projects graph cells" {
@@ -804,7 +863,8 @@ test "Monotype inspect-only unresolved values defer until final graph sealing" {
         "fn emitDraftDeferredInspects(",
         "fn emitDraftStructuralEq(",
     );
-    try expectContains(emit_inspect, "FrozenRuntimeImpossibilityProofEvaluator.init(self.allocator, graph, body_draft)");
+    try expectContains(emit_inspect, "FrozenRuntimeImpossibilityProofEvaluator.init(self.allocator, session_graph, body_draft)");
+    try expectContains(emit_inspect, "const graph = demandGraphForPartition(session_graph, body_draft, boundary.partition)");
     try expectContains(emit_inspect, "try graph.finalizesAsUninhabited(boundary.value_node)");
     try expectContains(emit_inspect, "try impossibility_evaluator.holds(boundary.impossibility_proof)");
     try expectContains(emit_inspect, "try ctx.zeroBranchMatchAtTypeCell(boundary.value");
@@ -1127,11 +1187,6 @@ test "Monotype evidence chains retain checker-recorded lexical scope topology" {
 
 test "Monotype generated-private call requests retain separate request nodes" {
     const lower_source = @embedFile("monotype/lower.zig");
-    const partial_with_ret = sourceSliceBetween(
-        lower_source,
-        "fn instantiateTargetCallTypeFromMonoArgAtIndexAndRet",
-        "fn instantiateTargetCallNodeFromMonoArgAtIndex",
-    );
     const partial_arg = sourceSliceBetween(
         lower_source,
         "fn instantiateTargetCallNodeFromMonoArgAtIndex",
@@ -1143,13 +1198,12 @@ test "Monotype generated-private call requests retain separate request nodes" {
         "fn iteratorOperandNode",
     );
 
-    try expectContains(partial_with_ret, "checkedMonoRequestNode");
-    try expectContains(partial_with_ret, "self.graphFunctionNode(request_args, request_ret)");
     try expectContains(partial_arg, "checkedMonoRequestNode");
     try expectContains(partial_arg, "self.graphFunctionNode(request_args, function_nodes.ret)");
     try expectContains(iterator, "checkedMonoRequestNode");
     try expectContains(iterator, "self.graphFunctionNode(request_args, request_ret)");
     try expectNotContains(iterator, "self.graph.unify(formal_node, try self.graph.importMono(evidence_ty))");
+    try expectNotContains(lower_source, "fn instantiateTargetCallTypeFromMonoArgAtIndexAndRet");
 }
 
 test "hosted Try adaptation consumes checker-recorded nominal provenance" {

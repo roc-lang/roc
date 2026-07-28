@@ -240,6 +240,16 @@ const RelationState = enum {
 /// Session-global identity of one specialization-owned graph partition.
 pub const PartitionId = enum(u32) { _ };
 
+const PartitionType = struct {
+    partition: PartitionId,
+    ty: Type.TypeId,
+};
+
+const ActiveSnapshotLink = struct {
+    partition: PartitionId,
+    node: NodeId,
+};
+
 /// Shared relation storage for one connected specialization-demand component.
 /// Nodes are session-global so an explicit interface edge can relate caller
 /// and callee cells directly, while `InstGraph` remains the allocation
@@ -256,7 +266,8 @@ const SolveSession = struct {
     processed_relations: std.AutoHashMap(RelationStamp, void),
     node_snapshots: std.AutoHashMap(NodeId, std.ArrayList(Type.TypeId)),
     current_snapshots: std.AutoHashMap(NodeId, Type.TypeId),
-    linked_type_nodes: std.AutoHashMap(Type.TypeId, NodeId),
+    imported_type_nodes: std.AutoHashMap(PartitionType, NodeId),
+    active_snapshot_nodes: std.AutoHashMap(Type.TypeId, ActiveSnapshotLink),
     imported_monos: std.AutoHashMap(NodeId, Type.TypeId),
     row_exts: std.AutoHashMap(NodeId, NodeId),
     row_parents: std.AutoHashMap(NodeId, std.ArrayList(NodeId)),
@@ -265,9 +276,20 @@ const SolveSession = struct {
     forced_dynamic_iterator_roots: std.ArrayList(NodeId),
     recursive_argument_slots: std.ArrayList(NodeId),
     interface_edges: std.ArrayList(InterfaceEdge),
+    /// Next never-issued partition identity. The root graph and every
+    /// specialization graph acquire identities through the same allocator;
+    /// no partition value is reserved as an invalid marker.
     next_partition: u32,
+
+    fn allocatePartition(self: *SolveSession) PartitionId {
+        const partition: PartitionId = @enumFromInt(self.next_partition);
+        self.next_partition += 1;
+        return partition;
+    }
 };
 
+/// Auditable cross-partition capability connecting one caller-owned interface
+/// root to one callee-owned interface copy in the same solve session.
 pub const InterfaceEdge = struct {
     caller_partition: PartitionId,
     caller_root: NodeId,
@@ -325,9 +347,13 @@ pub const InstGraph = struct {
     /// Latest immutable snapshot for a root. Any relation mutation clears this
     /// cache; a subsequent inspection materializes a fresh snapshot.
     current_snapshots: *std.AutoHashMap(NodeId, Type.TypeId),
-    /// Reverse active-snapshot links, also the import memo: a Monotype already
-    /// connected to this graph reuses its node instead of being copied.
-    linked_type_nodes: *std.AutoHashMap(Type.TypeId, NodeId),
+    /// Partition-local import memo. A finished Monotype imported by two body
+    /// specializations receives distinct nodes; only an explicit interface
+    /// edge may relate those partition-owned copies.
+    imported_type_nodes: *std.AutoHashMap(PartitionType, NodeId),
+    /// Reverse links for immutable active snapshots. Snapshot ids are unique,
+    /// and retain the partition that was authorized to materialize them.
+    active_snapshot_nodes: *std.AutoHashMap(Type.TypeId, ActiveSnapshotLink),
     /// Exact immutable Monotype snapshot imported at each permanent node.
     /// Unlike `node_snapshots`, these are producer-owned representation
     /// witnesses. Keeping the direct node association lets consumers of an
@@ -380,7 +406,8 @@ pub const InstGraph = struct {
             .processed_relations = std.AutoHashMap(RelationStamp, void).init(allocator),
             .node_snapshots = std.AutoHashMap(NodeId, std.ArrayList(Type.TypeId)).init(allocator),
             .current_snapshots = std.AutoHashMap(NodeId, Type.TypeId).init(allocator),
-            .linked_type_nodes = std.AutoHashMap(Type.TypeId, NodeId).init(allocator),
+            .imported_type_nodes = std.AutoHashMap(PartitionType, NodeId).init(allocator),
+            .active_snapshot_nodes = std.AutoHashMap(Type.TypeId, ActiveSnapshotLink).init(allocator),
             .imported_monos = std.AutoHashMap(NodeId, Type.TypeId).init(allocator),
             .row_exts = std.AutoHashMap(NodeId, NodeId).init(allocator),
             .row_parents = std.AutoHashMap(NodeId, std.ArrayList(NodeId)).init(allocator),
@@ -389,10 +416,10 @@ pub const InstGraph = struct {
             .forced_dynamic_iterator_roots = .empty,
             .recursive_argument_slots = .empty,
             .interface_edges = .empty,
-            .next_partition = 1,
+            .next_partition = 0,
         };
         const graph = try allocator.create(InstGraph);
-        graph.* = initPartition(allocator, types, name_store, session, @enumFromInt(0), true);
+        graph.* = initPartition(allocator, types, name_store, session, session.allocatePartition(), true);
         return graph;
     }
 
@@ -422,7 +449,8 @@ pub const InstGraph = struct {
             .processed_relations = &session.processed_relations,
             .node_snapshots = &session.node_snapshots,
             .current_snapshots = &session.current_snapshots,
-            .linked_type_nodes = &session.linked_type_nodes,
+            .imported_type_nodes = &session.imported_type_nodes,
+            .active_snapshot_nodes = &session.active_snapshot_nodes,
             .imported_monos = &session.imported_monos,
             .row_exts = &session.row_exts,
             .row_parents = &session.row_parents,
@@ -435,18 +463,297 @@ pub const InstGraph = struct {
 
     pub fn createPartition(self: *InstGraph) Allocator.Error!*InstGraph {
         self.requireRelationProduction();
-        const raw = self.session.next_partition;
-        self.session.next_partition += 1;
         const graph = try self.allocator.create(InstGraph);
         graph.* = initPartition(
             self.allocator,
             self.types,
             self.name_store,
             self.session,
-            @enumFromInt(raw),
+            self.session.allocatePartition(),
             false,
         );
         return graph;
+    }
+
+    /// Copy one live specialization interface into this partition. The
+    /// destination owns fresh permanent node ids for every reachable live graph
+    /// cell while preserving the exact producer-authored structure, including
+    /// generated-private iterator provenance. This is the representation
+    /// transfer half of an explicit cross-partition interface edge: body IR in
+    /// the destination may retain only the returned partition-owned nodes.
+    pub fn projectInterfaceRoot(
+        self: *InstGraph,
+        source_graph: *InstGraph,
+        source_root: NodeId,
+    ) Allocator.Error!NodeId {
+        self.requireRelationProduction();
+        if (self.session != source_graph.session) {
+            Common.invariant("specialization interface copy crossed solve sessions");
+        }
+        if (self.partition == source_graph.partition) {
+            Common.invariant("specialization interface copy stayed within one graph partition");
+        }
+        if (source_graph.nodePartition(source_root) != source_graph.partition) {
+            Common.invariant("specialization interface copy source was not owned by its graph partition");
+        }
+        var projected = std.AutoHashMap(NodeId, NodeId).init(self.allocator);
+        defer projected.deinit();
+        const destination_root = try self.projectInterfaceNode(source_graph, source_root, &projected);
+
+        // Every projected cell is the same logical interface cell as its
+        // producer counterpart. Join the complete copy under this
+        // explicit interface capability so later nominal selection, row
+        // growth, and generated-private representation evidence propagate in
+        // either direction. Permanent node identities remain partition-owned
+        // even when their live relation classes are shared.
+        var pairs = projected.iterator();
+        while (pairs.next()) |pair| {
+            try self.unify(pair.key_ptr.*, pair.value_ptr.*);
+        }
+        return destination_root;
+    }
+
+    fn projectInterfaceNode(
+        self: *InstGraph,
+        source_graph: *InstGraph,
+        raw_source: NodeId,
+        projected: *std.AutoHashMap(NodeId, NodeId),
+    ) Allocator.Error!NodeId {
+        const source = source_graph.find(raw_source);
+        if (projected.get(source)) |existing| return existing;
+
+        if (self.imported_monos.get(source)) |finished_ty| {
+            const imported = try self.importMono(finished_ty);
+            try projected.put(source, imported);
+            return imported;
+        }
+
+        const destination = try self.newNode(.{ .unresolved = InstVariable.placeholder() });
+        try projected.put(source, destination);
+
+        const projected_content: InstNode = switch (source_graph.nodes.items[@intFromEnum(source)]) {
+            .redirect => unreachable,
+            .unresolved => |variable| .{ .unresolved = variable },
+            .primitive => |primitive| .{ .primitive = primitive },
+            .list => |elem| .{ .list = try self.projectInterfaceNode(source_graph, elem, projected) },
+            .box => |elem| .{ .box = try self.projectInterfaceNode(source_graph, elem, projected) },
+            .tuple => |items| blk: {
+                const copied = try self.arena().alloc(NodeId, items.len);
+                for (items, copied) |item, *out| {
+                    out.* = try self.projectInterfaceNode(source_graph, item, projected);
+                }
+                break :blk .{ .tuple = copied };
+            },
+            .func => |function| blk: {
+                const args = try self.arena().alloc(NodeId, function.args.len);
+                for (function.args, args) |arg, *out| {
+                    out.* = try self.projectInterfaceNode(source_graph, arg, projected);
+                }
+                break :blk .{ .func = .{
+                    .args = args,
+                    .ret = try self.projectInterfaceNode(source_graph, function.ret, projected),
+                } };
+            },
+            .tag_union => |row| blk: {
+                const tags = try self.arena().alloc(InstTag, row.tags.len);
+                for (row.tags, tags) |tag, *out| {
+                    const payloads = try self.arena().alloc(NodeId, tag.payloads.len);
+                    for (tag.payloads, payloads) |payload, *payload_out| {
+                        payload_out.* = try self.projectInterfaceNode(source_graph, payload, projected);
+                    }
+                    out.* = .{
+                        .name = tag.name,
+                        .checked_name = tag.checked_name,
+                        .payloads = payloads,
+                    };
+                }
+                break :blk .{ .tag_union = .{
+                    .tags = tags,
+                    .ext = try self.projectInterfaceNode(source_graph, row.ext, projected),
+                } };
+            },
+            .record => |row| blk: {
+                const fields = try self.arena().alloc(InstField, row.fields.len);
+                for (row.fields, fields) |field, *out| {
+                    out.* = .{
+                        .name = field.name,
+                        .ty = try self.projectInterfaceNode(source_graph, field.ty, projected),
+                    };
+                }
+                break :blk .{ .record = .{
+                    .fields = fields,
+                    .ext = try self.projectInterfaceNode(source_graph, row.ext, projected),
+                } };
+            },
+            .empty_tag_union => .empty_tag_union,
+            .empty_record => .empty_record,
+            .named => |named| blk: {
+                const args = try self.arena().alloc(NodeId, named.args.len);
+                for (named.args, args) |arg, *out| {
+                    out.* = try self.projectInterfaceNode(source_graph, arg, projected);
+                }
+                const backing: ?InstBacking = if (named.backing) |source_backing| .{
+                    .node = try self.projectInterfaceNode(source_graph, source_backing.node, projected),
+                    .use = source_backing.use,
+                    .authority = source_backing.authority,
+                } else null;
+                const declared_order = try self.projectInterfaceDeclaredOrder(
+                    source_graph,
+                    named.declared_order,
+                    projected,
+                );
+                const generated_iterator: ?InstGeneratedIterator = if (named.generated_iterator) |generated| .{
+                    .callable_evidence = generated.callable_evidence,
+                    .public_source = .{
+                        .named_type = generated.public_source.named_type,
+                        .def = generated.public_source.def,
+                        .kind = generated.public_source.kind,
+                        .builtin_owner = generated.public_source.builtin_owner,
+                        .backing = .{
+                            .node = try self.projectInterfaceNode(
+                                source_graph,
+                                generated.public_source.backing.node,
+                                projected,
+                            ),
+                            .use = generated.public_source.backing.use,
+                            .authority = generated.public_source.backing.authority,
+                        },
+                        .declared_order = try self.projectInterfaceDeclaredOrder(
+                            source_graph,
+                            generated.public_source.declared_order,
+                            projected,
+                        ),
+                    },
+                } else null;
+                break :blk .{ .named = .{
+                    .named_type = named.named_type,
+                    .def = named.def,
+                    .kind = named.kind,
+                    .builtin_owner = named.builtin_owner,
+                    .args = args,
+                    .backing = backing,
+                    .generated_iterator = generated_iterator,
+                    .declared_order = declared_order,
+                } };
+            },
+            .erased => |digest| .{ .erased = digest },
+            .zst => .zst,
+        };
+        try self.setContent(destination, projected_content);
+
+        if (source_graph.requestSourceInterface(source)) |source_interface| {
+            try self.registerRequestSourceInterface(
+                destination,
+                try self.projectInterfaceNode(source_graph, source_interface, projected),
+            );
+        }
+        for (self.forced_dynamic_iterator_roots.items) |forced| {
+            if (source_graph.find(forced) == source) {
+                try self.forced_dynamic_iterator_roots.append(self.allocator, destination);
+                break;
+            }
+        }
+        for (self.recursive_argument_slots.items) |recursive_slot| {
+            if (source_graph.find(recursive_slot) == source) {
+                try self.recursive_argument_slots.append(self.allocator, destination);
+                break;
+            }
+        }
+        return destination;
+    }
+
+    fn projectInterfaceDeclaredOrder(
+        self: *InstGraph,
+        source_graph: *InstGraph,
+        source_order: []const InstDeclaredField,
+        projected: *std.AutoHashMap(NodeId, NodeId),
+    ) Allocator.Error![]const InstDeclaredField {
+        const order = try self.arena().alloc(InstDeclaredField, source_order.len);
+        for (source_order, order) |declared, *out| {
+            out.* = switch (declared) {
+                .named => |name| .{ .named = name },
+                .padding => |padding| .{
+                    .padding = try self.projectInterfaceNode(source_graph, padding, projected),
+                },
+            };
+        }
+        return order;
+    }
+
+    pub fn partitionId(self: *const InstGraph) PartitionId {
+        return self.partition;
+    }
+
+    pub fn nodePartition(self: *const InstGraph, node: NodeId) PartitionId {
+        return self.node_partitions.items[@intFromEnum(node)];
+    }
+
+    /// Return a permanent member of `node`'s live union class owned by this
+    /// graph partition. Union-find roots are relation representatives, not
+    /// ownership identities: an explicit interface edge may join two
+    /// unresolved cells and choose either partition's node as the class root.
+    pub fn partitionRepresentative(self: *InstGraph, node: NodeId) ?NodeId {
+        var members = self.classMemberIterator(node);
+        while (members.next()) |member| {
+            if (self.nodePartition(member) == self.partition) return member;
+        }
+        return null;
+    }
+
+    /// Return a permanent cell identity owned by this partition for a live
+    /// graph class that body IR is about to retain. Structural relation
+    /// selection can expose a producer-owned descendant beneath an
+    /// already-related interface: the descendant did not exist in a generic
+    /// consumer interface when that interface was created. Give the consumer
+    /// an explicit unresolved cell in the exact same class at the retention
+    /// boundary. This neither copies structure nor selects a representation;
+    /// it only separates permanent ownership identity from the session-global
+    /// relation representative.
+    pub fn retainPartitionCell(self: *InstGraph, node: NodeId) Allocator.Error!NodeId {
+        if (self.nodePartition(node) == self.partition) return node;
+        if (self.partitionRepresentative(node)) |owned| return owned;
+        if (!try self.hasInterfacePartitionPath(self.nodePartition(node))) {
+            Common.invariant("draft IR tried to retain a foreign graph cell without an interface-edge capability");
+        }
+        const owned = try self.newNode(.{ .unresolved = InstVariable.placeholder() });
+        if (try self.containsGeneratedPrivate(node)) {
+            // The producer has already selected this representation. Retaining
+            // a partition-owned identity is not another public/private
+            // selection and is valid even when the private structure contains
+            // an immutable imported Monotype. The fresh unresolved cell adds
+            // no competing evidence.
+            try self.unifyRootsTransitively(owned, node, true);
+        } else {
+            try self.unify(owned, node);
+        }
+        return owned;
+    }
+
+    fn hasInterfacePartitionPath(
+        self: *InstGraph,
+        target: PartitionId,
+    ) Allocator.Error!bool {
+        if (self.partition == target) return true;
+        var pending = std.ArrayList(PartitionId).empty;
+        defer pending.deinit(self.allocator);
+        var seen = std.AutoHashMap(PartitionId, void).init(self.allocator);
+        defer seen.deinit();
+        try pending.append(self.allocator, self.partition);
+        try seen.put(self.partition, {});
+        while (pending.pop()) |current| {
+            for (self.session.interface_edges.items) |edge| {
+                const next = if (edge.caller_partition == current)
+                    edge.callee_partition
+                else if (edge.callee_partition == current)
+                    edge.caller_partition
+                else
+                    continue;
+                if (next == target) return true;
+                const entry = try seen.getOrPut(next);
+                if (!entry.found_existing) try pending.append(self.allocator, next);
+            }
+        }
+        return false;
     }
 
     pub fn destroy(self: *InstGraph) void {
@@ -477,7 +784,8 @@ pub const InstGraph = struct {
         self.row_parents.deinit();
         self.row_exts.deinit();
         self.imported_monos.deinit();
-        self.linked_type_nodes.deinit();
+        self.active_snapshot_nodes.deinit();
+        self.imported_type_nodes.deinit();
         self.processed_relations.deinit();
         self.class_member_tail.deinit(allocator);
         self.class_member_head.deinit(allocator);
@@ -2490,7 +2798,9 @@ pub const InstGraph = struct {
             if (!entry.found_existing) entry.value_ptr.* = .empty;
             try entry.value_ptr.appendSlice(self.allocator, moved_list.items);
             for (moved_list.items) |ty| {
-                try self.linked_type_nodes.put(ty, winner);
+                const link = self.active_snapshot_nodes.getPtr(ty) orelse
+                    Common.invariant("active snapshot provenance disappeared during graph union");
+                link.node = winner;
             }
             moved_list.deinit(self.allocator);
         }
@@ -3487,20 +3797,27 @@ pub const InstGraph = struct {
         }
     }
 
-    /// Import a Monotype into the graph. A Monotype already linked to a node
-    /// reconnects to it; an unlinked one copies in as closed structure, so a
-    /// later attempt to widen it is a unification conflict rather than a silent
-    /// mutation of another specialization's final type.
+    /// Import a Monotype into this specialization partition. A Monotype already
+    /// imported by this partition reconnects to its node; another partition's
+    /// import is deliberately copied so sharing can occur only through an
+    /// explicit specialization interface edge.
     pub fn importMono(self: *InstGraph, ty: Type.TypeId) Allocator.Error!NodeId {
         self.requireRelationProduction();
-        if (self.linked_type_nodes.get(ty)) |existing| return existing;
+        if (self.active_snapshot_nodes.get(ty)) |link| {
+            if (link.partition != self.partition) {
+                Common.invariant("active Monotype snapshot crossed specialization partitions");
+            }
+            return link.node;
+        }
+        const import_key = PartitionType{ .partition = self.partition, .ty = ty };
+        if (self.imported_type_nodes.get(import_key)) |existing| return existing;
         const node = try self.newNode(.{ .unresolved = InstVariable.placeholder() });
         // One-way memo: every import is a finished Monotype from outside this
         // graph (ids materialized here hit the memo above), so it enters as a
         // snapshot. Registering a view would let this specialization's
         // evidence rewrite another specialization's final type, destabilizing
         // every digest taken from it.
-        try self.linked_type_nodes.put(ty, node);
+        try self.imported_type_nodes.put(import_key, node);
         try self.imported_monos.put(node, ty);
 
         const types = self.types;
@@ -3637,7 +3954,10 @@ pub const InstGraph = struct {
             const entry = try self.node_snapshots.getOrPut(snapshot_node);
             if (!entry.found_existing) entry.value_ptr.* = .empty;
             try entry.value_ptr.append(self.allocator, snapshot_ty);
-            try self.linked_type_nodes.put(snapshot_ty, snapshot_node);
+            try self.active_snapshot_nodes.put(snapshot_ty, .{
+                .partition = self.partition,
+                .node = snapshot_node,
+            });
             try self.current_snapshots.put(snapshot_node, snapshot_ty);
         }
         return ty;
@@ -3736,8 +4056,8 @@ pub const InstGraph = struct {
     }
 
     fn isActiveSnapshotType(self: *InstGraph, ty: Type.TypeId) bool {
-        const raw_node = self.linked_type_nodes.get(ty) orelse return false;
-        const node = self.find(raw_node);
+        const link = self.active_snapshot_nodes.get(ty) orelse return false;
+        const node = self.find(link.node);
         const views = self.node_snapshots.get(node) orelse return false;
         for (views.items) |view| {
             if (view == ty) return true;
@@ -3748,8 +4068,23 @@ pub const InstGraph = struct {
     /// Return the current root node for a TypeId that is one of this graph's
     /// immutable active snapshots. Closed imported TypeIds return null.
     pub fn activeSnapshotNode(self: *InstGraph, ty: Type.TypeId) ?NodeId {
-        const raw_node = self.linked_type_nodes.get(ty) orelse return null;
-        const node = self.find(raw_node);
+        const link = self.active_snapshot_nodes.get(ty) orelse return null;
+        if (link.partition != self.partition) return null;
+        const node = self.find(link.node);
+        const views = self.node_snapshots.get(node) orelse return null;
+        for (views.items) |view| {
+            if (view == ty) return node;
+        }
+        return null;
+    }
+
+    /// Return the live producer node for an active snapshot from any partition
+    /// in this solve session. Consumers use this only to create their own
+    /// partition cell before retaining the type in draft IR; the snapshot
+    /// itself remains owned by its producer partition.
+    pub fn activeSnapshotSourceNode(self: *InstGraph, ty: Type.TypeId) ?NodeId {
+        const link = self.active_snapshot_nodes.get(ty) orelse return null;
+        const node = self.find(link.node);
         const views = self.node_snapshots.get(node) orelse return null;
         for (views.items) |view| {
             if (view == ty) return node;
@@ -3789,8 +4124,8 @@ pub const GraphTypeFinals = struct {
     }
 
     pub fn sealType(self: *GraphTypeFinals, ty: Type.TypeId) Allocator.Error!Type.TypeId {
-        if (self.graph.linked_type_nodes.get(ty)) |raw_node| {
-            const node = self.graph.find(raw_node);
+        if (self.graph.active_snapshot_nodes.get(ty)) |link| {
+            const node = self.graph.find(link.node);
             if (self.graph.node_snapshots.get(node)) |views| {
                 for (views.items) |view| {
                     if (view == ty) return try self.sealNode(node);
@@ -4098,11 +4433,27 @@ test "specialization partitions share relations only through explicit interface 
     const callee = try caller.createPartition();
     defer callee.destroy();
 
+    const finished_u64 = try type_store.add(.{ .primitive = .u64 });
+    const caller_import = try caller.importMono(finished_u64);
+    try std.testing.expectEqual(caller_import, try caller.importMono(finished_u64));
+    const callee_import = try callee.importMono(finished_u64);
+    try std.testing.expect(caller_import != callee_import);
+    try std.testing.expectEqual(caller.partition, caller.node_partitions.items[@intFromEnum(caller_import)]);
+    try std.testing.expectEqual(callee.partition, caller.node_partitions.items[@intFromEnum(callee_import)]);
+
     const caller_ret = try caller.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
     const caller_fn = try caller.newNode(.{ .func = .{
         .args = try caller.arena().alloc(NodeId, 0),
         .ret = caller_ret,
     } });
+    const projected_fn = try callee.projectInterfaceRoot(caller, caller_fn);
+    const projected_ret = (try callee.functionNodes(projected_fn)).ret;
+    try std.testing.expect(projected_fn != caller_fn);
+    try std.testing.expect(projected_ret != caller_ret);
+    try std.testing.expectEqual(callee.partition, caller.node_partitions.items[@intFromEnum(projected_fn)]);
+    try std.testing.expectEqual(callee.partition, caller.node_partitions.items[@intFromEnum(projected_ret)]);
+    try std.testing.expect(callee.sameClass(caller_fn, projected_fn));
+    try std.testing.expect(callee.sameClass(caller_ret, projected_ret));
 
     const callee_ext = try callee.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) });
     const tag_name = try name_store.internTagLabel("BodyOnly");
@@ -4118,13 +4469,24 @@ test "specialization partitions share relations only through explicit interface 
         .ret = callee_ret,
     } });
 
-    try caller.registerInterfaceEdge(caller_fn, callee, callee_fn);
-    try caller.unify(caller_fn, callee_fn);
+    try caller.registerInterfaceEdge(caller_fn, callee, projected_fn);
+    try callee.unify(projected_fn, callee_fn);
 
     try std.testing.expectEqual(@as(usize, 1), caller.session.interface_edges.items.len);
     try std.testing.expect(caller.sameClass(caller_ret, callee_ret));
     try std.testing.expectEqual(caller.partition, caller.node_partitions.items[@intFromEnum(caller_fn)]);
     try std.testing.expectEqual(callee.partition, caller.node_partitions.items[@intFromEnum(callee_fn)]);
+
+    // A concrete descendant can become visible only after a generic interface
+    // relation selects its exact producer-authored structure. Draft IR retains
+    // a callee-owned permanent identity for that live cell without copying the
+    // structure or changing its relation class.
+    const producer_only = try caller.newNode(.{ .primitive = .bool });
+    try std.testing.expectEqual(null, callee.partitionRepresentative(producer_only));
+    const retained = try callee.retainPartitionCell(producer_only);
+    try std.testing.expectEqual(callee.partition, callee.nodePartition(retained));
+    try std.testing.expect(callee.sameClass(producer_only, retained));
+    try std.testing.expectEqual(retained, try callee.retainPartitionCell(producer_only));
 }
 
 fn instNodeEql(left: InstNode, right: InstNode) bool {

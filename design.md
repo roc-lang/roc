@@ -3194,7 +3194,23 @@ the caller-owned request cells and the callee-owned function-root cells. The
 session's relation worklist may propagate constraints across that edge, but no
 callee body is allocated in the caller's partition and no ordinary graph
 operation may cross a partition boundary. Cross-partition edges are therefore
-auditable capabilities, not implicit node sharing or copied type structure.
+auditable capabilities, not implicit node sharing or detached snapshots of
+live type structure. Interface copying allocates partition-owned permanent
+identities for the complete reachable structure and immediately joins every
+copied cell to its exact producer cell; the copied cells form an ownership view
+of one live relation, not an independently mutable copy.
+
+An interface relation can select concrete producer structure beneath a
+consumer cell that was still generic when the edge was created. If lowering
+then retains one of those newly exposed descendants in draft IR, the consumer
+partition first allocates its own permanent unresolved cell and relates that
+cell to the exact live descendant class. This retention is permitted only when
+the producer and consumer partitions are connected by registered interface
+edges. It does not copy the selected structure, snapshot a mutable shape, or
+choose a representation; it gives the consumer an ownership identity for the
+already-explicit live relation. Consequently every graph cell stored in a
+body's draft IR is owned by that body's partition even when union-find chooses
+another partition's node as the session-global relation representative.
 
 A missing context-free specialization first receives a session-local
 specialization-demand id. Its body lowers exactly once in its own partition,
@@ -3237,12 +3253,23 @@ specialization path.
 A fresh procedure specialization reserves a session-local demand identity
 before lowering its body; it does not reserve a global function id or create a
 Monotype type snapshot. A call from that body rejoins an in-progress demand
-only when the checked artifact identifies the target as a member of the same
+only when checked module data identifies the target as a member of the same
 recursive procedure group and the call's procedure, method scope, and dispatch
 evidence select that member's demand. The checked source root used to reach the
 declaration is not recursive ownership: different checked occurrences may
 reach the same procedure. Argument-class overlap, partial type structure, and
 source-root similarity are never evidence of recursion.
+
+A nested procedure has a separate explicit body-demand identity because its
+captures are ordinary parameters of the emitted function. Before closed types
+exist, that identity consists of the checked nested-procedure site, its
+source-context key, method scope, dispatch-evidence topology, and the ordered
+capture-entry graph cells. Two requests with that complete identity name one
+in-progress nested body even when a generated-private result makes their
+function roots temporarily non-identical. The join marks the differing result
+slot as recursive representation flow. Arity, argument overlap, capture shape
+without cell identity, and source-location resemblance are never used to infer
+the join.
 
 Checking must also validate a mono-specialization default against the complete
 method callable type before placing direct evidence in the checked dispatch
@@ -3520,13 +3547,16 @@ const SpecRecord = struct {
 };
 ```
 
-`source_fn_ty_digest` records the checked source function type after
-instantiation into the requesting graph. `request_fn_ty_digest` records the
-closed function type REQUESTED by the call site that reserved the record. The
-digests make lookup fast, but they are not the only correctness check. When a
-digest match is found, the store must also verify the checked callable identity
-and exact structural equality of the closed Monotype function type. Digest
-collisions are therefore harmless.
+`source_fn_ty_digest` records the producer-owned checked declaration root for
+the procedure template. A call-occurrence source root contributes its explicit
+relations to the caller's request cells, but it does not become callee identity:
+transparent aliases at different call sites cannot create distinct bodies when
+the callable, dispatch evidence, and closed requested function type are equal.
+`request_fn_ty_digest` records the closed function type REQUESTED by the call
+site that reserved the record. The digests make lookup fast, but they are not
+the only correctness check. When a digest match is found, the store must also
+verify the checked callable identity and exact structural equality of the
+closed Monotype function type. Digest collisions are therefore harmless.
 
 The identity is immutable: it is written once when the record is reserved and
 never rewritten, so no structure that indexes by identity ever needs a rekey or
@@ -3636,6 +3666,14 @@ the interner, computes and stores type digests once, and then copies the fully
 sealed records into `MonoProgramBuilder`. This copy also turns draft-local ids
 and spans into final shard-local ids and spans. If sealing finds a graph node in
 any completed record after this step, that is a compiler bug.
+
+All draft function interfaces are materialized before any specialization
+identity digest is computed or any reuse lookup is performed. A recursive
+Monotype `TypeId` can be reserved while one interface is materialized and
+receive its content while another interface is materialized; interleaving
+identity lookup with that process would compare incomplete and complete views
+of the same type. The complete interface set is therefore the explicit input
+to the later identity-and-deduplication phase.
 
 This split is required for future specialization caching. Cache files contain
 only sealed `MonoProgramView` sections: fixed-width records, ids, spans, and

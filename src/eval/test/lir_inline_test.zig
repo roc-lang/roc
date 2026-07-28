@@ -1724,13 +1724,13 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
         .nested_misses = 8,
         .template_lookup_candidates = 0,
         .nested_lookup_candidates = 0,
-        .specialization_type_digest_requests = 60,
-        .specialization_type_digest_cache_hits = 110,
-        .specialization_type_digest_cache_misses = 107,
-        .specialization_type_digest_nodes_visited = 107,
+        .specialization_type_digest_requests = 38,
+        .specialization_type_digest_cache_hits = 45,
+        .specialization_type_digest_cache_misses = 10,
+        .specialization_type_digest_nodes_visited = 10,
         .exact_type_checks = 0,
         .nominal_backing_reuses = 1,
-        .nominal_backing_instantiations = 86,
+        .nominal_backing_instantiations = 81,
     }, counters);
 }
 
@@ -1772,13 +1772,13 @@ test "issue 9802 growing-structural map2 specialization counters are bounded" {
         .nested_misses = 6,
         .template_lookup_candidates = 0,
         .nested_lookup_candidates = 0,
-        .specialization_type_digest_requests = 52,
-        .specialization_type_digest_cache_hits = 214,
-        .specialization_type_digest_cache_misses = 251,
-        .specialization_type_digest_nodes_visited = 251,
+        .specialization_type_digest_requests = 47,
+        .specialization_type_digest_cache_hits = 83,
+        .specialization_type_digest_cache_misses = 34,
+        .specialization_type_digest_nodes_visited = 34,
         .exact_type_checks = 0,
         .nominal_backing_reuses = 8,
-        .nominal_backing_instantiations = 149,
+        .nominal_backing_instantiations = 128,
     }, counters);
 }
 
