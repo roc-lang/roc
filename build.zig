@@ -2582,6 +2582,7 @@ pub fn build(b: *std.Build) void {
     const run_check_builtin_format_step = b.step("run-check-builtin-format", "Check Builtin.roc formatting");
     const run_check_glue_abi_step = b.step("run-check-glue-abi", "Check generated Zig glue against the canonical host ABI");
     const run_check_simd_codegen_step = b.step("run-check-simd-codegen", "Check that optimized x86-64 integer SIMD kernels select native instructions");
+    const run_check_match_extension_codegen_step = b.step("run-check-match-extension-codegen", "Check the pinned instruction counts for the match-extension loop");
     const build_snapshot_tool_step = b.step("build-snapshot-tool", "Build the snapshot tool");
     const run_check_snapshots_step = b.step("run-check-snapshots", "Regenerate snapshots and fail if tracked snapshots changed");
     const build_test_zig_step = b.step("build-test-zig", "Build Zig unit-test binaries");
@@ -3100,6 +3101,11 @@ pub fn build(b: *std.Build) void {
     run_simd_codegen_check.addArtifactArg(roc_exe);
     run_simd_codegen_check.step.dependOn(build_test_hosts_step);
     run_check_simd_codegen_step.dependOn(&run_simd_codegen_check.step);
+
+    const run_match_extension_codegen_check = b.addSystemCommand(&.{ "bash", "ci/check_match_extension_codegen.sh" });
+    run_match_extension_codegen_check.addArtifactArg(roc_exe);
+    run_match_extension_codegen_check.step.dependOn(build_test_hosts_step);
+    run_check_match_extension_codegen_step.dependOn(&run_match_extension_codegen_check.step);
 
     // Glue ABI locks compile the generated bindings themselves. Zig is checked
     // for every native architecture/OS plus wasm, C is checked against the
