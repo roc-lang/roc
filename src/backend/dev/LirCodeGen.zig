@@ -4332,9 +4332,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .simd_interleave_hi,
                 => return self.generateBasicSimdVector(ll, args),
                 .simd_splat => return self.generateSimdSplat(ll, args),
-                .simd_get_lane_unchecked => return self.generateSimdGetLane(ll, args),
+                .simd_get_lane_unchecked => return self.generateSimdGetLane(args),
                 .simd_with_lane_unchecked => return self.generateSimdWithLane(ll, args),
-                .simd_to_u128_bits => return self.generateSimdToBits(ll, args),
+                .simd_to_u128_bits => return self.generateSimdToBits(args),
                 .simd_from_u128_bits => return self.generateSimdFromBits(ll, args),
                 .simd_mul_wrap,
                 .simd_mul_high,
@@ -4346,12 +4346,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .simd_dot_pairs_sat,
                 .simd_sad,
                 => return self.generateSimdDot(ll, args),
-                .simd_bitmask => return self.generateSimdBitmask(ll, args),
+                .simd_bitmask => return self.generateSimdBitmask(args),
                 .simd_shl_wrap,
                 .simd_shr_wrap,
                 .simd_shr_zf_wrap,
                 => return self.generateSimdShift(ll, args),
-                .simd_shr_rounded => return self.generateSimdRoundedShift(ll, args),
+                .simd_shr_rounded => return self.generateSimdRoundedShift(args),
                 .simd_even_lanes,
                 .simd_odd_lanes,
                 .simd_reverse_lanes,
@@ -4366,7 +4366,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 => return self.generateSimdWidthChange(ll, args),
                 .simd_sum_lanes,
                 .simd_sum_lanes_wrap,
-                => return self.generateSimdSum(ll, args),
+                => return self.generateSimdSum(args),
                 .simd_clmul_lo,
                 .simd_clmul_hi,
                 => return self.generateSimdClmul(ll, args),
@@ -4790,8 +4790,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .vector_reg = .{ .reg = result, .kind = kind } };
         }
 
-        fn generateSimdToBits(self: *Self, ll: anytype, args: anytype) Allocator.Error!ValueLocation {
-            _ = ll;
+        fn generateSimdToBits(self: *Self, args: anytype) Allocator.Error!ValueLocation {
             const vector_local = GuardedList.at(args, 0);
             const kind = self.simdKindForLayout(self.localLayout(vector_local)) orelse unreachable;
             const vector = try self.acquireVectorLocal(vector_local, kind, 0);
@@ -4801,8 +4800,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .stack_i128 = slot };
         }
 
-        fn generateSimdGetLane(self: *Self, ll: anytype, args: anytype) Allocator.Error!ValueLocation {
-            _ = ll;
+        fn generateSimdGetLane(self: *Self, args: anytype) Allocator.Error!ValueLocation {
             const vector_local = GuardedList.at(args, 0);
             const kind = self.simdKindForLayout(self.localLayout(vector_local)) orelse unreachable;
             const vector = try self.acquireVectorLocal(vector_local, kind, 0);
@@ -4856,17 +4854,32 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const scalar = try self.ensureInGeneralReg(scalar_loc);
             defer self.codegen.freeGeneral(scalar);
 
-            const index_vector = try self.allocTempVector(protected);
-            defer self.codegen.freeFloat(index_vector);
-            protected |= floatRegMask(index_vector);
-            try self.emitSimdSplatFromGeneral(index_vector, index, .u8x16);
-            const lane_indices = try self.materializeVectorConstant(simdLaneIndexBytes(kind), protected);
-            defer self.releaseAcquiredVector(lane_indices);
-            protected |= floatRegMask(lane_indices.reg);
-            const mask = try self.allocTempVector(protected);
+            // The index vectors are only needed to construct the mask. Releasing
+            // them here keeps the remaining instruction sequence within the six
+            // volatile XMM registers available under the Windows x64 ABI.
+            const mask = mask: {
+                var mask_protected = protected;
+                const index_vector = try self.allocTempVector(mask_protected);
+                defer self.codegen.freeFloat(index_vector);
+                mask_protected |= floatRegMask(index_vector);
+                try self.emitSimdSplatFromGeneral(index_vector, index, .u8x16);
+                const lane_indices = try self.materializeVectorConstant(simdLaneIndexBytes(kind), mask_protected);
+                defer self.releaseAcquiredVector(lane_indices);
+                mask_protected |= floatRegMask(lane_indices.reg);
+                const result = try self.allocTempVector(mask_protected);
+                try self.emitBasicSimdVector(
+                    .simd_eq_lanes,
+                    .u8x16,
+                    result,
+                    lane_indices.reg,
+                    index_vector,
+                    null,
+                    mask_protected | floatRegMask(result),
+                );
+                break :mask result;
+            };
             defer self.codegen.freeFloat(mask);
             protected |= floatRegMask(mask);
-            try self.emitBasicSimdVector(.simd_eq_lanes, .u8x16, mask, lane_indices.reg, index_vector, null, protected);
 
             const splat = try self.allocTempVector(protected);
             defer self.codegen.freeFloat(splat);
@@ -5352,8 +5365,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.codegen.emit.simdTwoReg(0x6F000400 | (@as(u32, encoded_imm) << 16), dst, src);
         }
 
-        fn generateSimdBitmask(self: *Self, ll: anytype, args: anytype) Allocator.Error!ValueLocation {
-            _ = ll;
+        fn generateSimdBitmask(self: *Self, args: anytype) Allocator.Error!ValueLocation {
             const vector_local = GuardedList.at(args, 0);
             const kind = self.simdKindForLayout(self.localLayout(vector_local)) orelse unreachable;
             const vector = try self.acquireVectorLocal(vector_local, kind, 0);
@@ -5566,7 +5578,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitX86PackedBinary(.map_0f, 0xEB, dst, dst, narrowed_high);
         }
 
-        fn generateSimdRoundedShift(self: *Self, ll: anytype, args: anytype) Allocator.Error!ValueLocation {
+        fn generateSimdRoundedShift(self: *Self, args: anytype) Allocator.Error!ValueLocation {
             const vector_local = GuardedList.at(args, 0);
             const kind = self.simdKindForLayout(self.localLayout(vector_local)) orelse unreachable;
             std.debug.assert(kind == .i16x8 or kind == .i32x4);
@@ -5656,12 +5668,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const done = self.codegen.currentOffset();
             self.codegen.patchJump(normal_done, done);
             self.codegen.patchJump(range_done, done);
-            _ = ll;
             return .{ .vector_reg = .{ .reg = result, .kind = kind } };
         }
 
-        fn generateSimdSum(self: *Self, ll: anytype, args: anytype) Allocator.Error!ValueLocation {
-            _ = ll;
+        fn generateSimdSum(self: *Self, args: anytype) Allocator.Error!ValueLocation {
             const vector_local = GuardedList.at(args, 0);
             const kind = self.simdKindForLayout(self.localLayout(vector_local)) orelse unreachable;
             const vector = try self.acquireVectorLocal(vector_local, kind, 0);
