@@ -960,8 +960,8 @@ fn allocateCaptureTable(allocator: Allocator, count: usize) Allocator.Error![]st
 ///
 ///   - Producer-authored operands may declare the slot's checked capture
 ///     identity before a post-lift rewrite gives that slot a fresh runtime
-///     CaptureId. The checked id is a fallback key only; the runtime slot id
-///     above is still the canonical final ABI key.
+///     CaptureId. The runtime slot id above is still the final ABI key; the
+///     checked id names the same checked binding at older operand sites.
 ///
 /// An exact value-CaptureId match always takes precedence over a declared-id
 /// match; a declared-id match is used only when no exact match exists.
