@@ -4556,6 +4556,7 @@ fn snapshotReplProblemIsError(problem: check.problem.Problem) bool {
     return switch (problem) {
         .effectful_function_name,
         .redundant_pattern,
+        .redundant_open_tag_union,
         .unmatchable_pattern,
         .comptime_unused_branch,
         .comptime_condition,

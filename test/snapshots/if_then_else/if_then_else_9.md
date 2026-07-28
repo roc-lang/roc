@@ -54,7 +54,7 @@ MISSING METHOD - if_then_else_9.md:6:2:6:3
 
     The value's type, which does not have a method named `from_numeral`, is:
 
-        [A, ..]
+        [A]
 
 
 ┌────────────────┐
@@ -67,7 +67,7 @@ MISSING METHOD - if_then_else_9.md:6:2:6:3
 
     The value's type, which does not have a method named `from_numeral`, is:
 
-        [A, ..]
+        [A]
 
 # TOKENS
 ~~~zig
@@ -118,5 +118,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[A, ..]"))
+(expr (type "[A]"))
 ~~~

@@ -137,7 +137,7 @@ expect {
 				(e-match
 					(match
 						(cond
-							(e-call (constraint-fn-var 307)
+							(e-call (constraint-fn-var 311)
 								(e-lookup-local
 									(p-assign (ident "f")))
 								(e-num (value "3"))))

@@ -14604,13 +14604,25 @@ const BodyContext = struct {
             },
             .record => |checked_row| switch (produced_content) {
                 .record => |produced_row| {
-                    return try self.producedRecordValueWitness(checked_row, produced_row, produced_node, visiting);
+                    _ = checked_row;
+                    _ = produced_row;
+                    // Rows may still be extension chains here; compare their
+                    // flattened forms so a widened checked row is recognized.
+                    const checked_flat = try self.graph.flattenRecordRow(checked_node);
+                    const produced_flat = try self.graph.flattenRecordRow(produced_node);
+                    return try self.producedRecordValueWitness(checked_flat, produced_flat, produced_node, visiting);
                 },
                 else => return null,
             },
             .tag_union => |checked_row| switch (produced_content) {
                 .tag_union => |produced_row| {
-                    return try self.producedTagValueWitness(checked_row, produced_row, produced_node, visiting);
+                    _ = checked_row;
+                    _ = produced_row;
+                    // Rows may still be extension chains here; compare their
+                    // flattened forms so a widened checked row is recognized.
+                    const checked_flat = try self.graph.flattenTagRow(checked_node);
+                    const produced_flat = try self.graph.flattenTagRow(produced_node);
+                    return try self.producedTagValueWitness(checked_flat, produced_flat, produced_node, visiting);
                 },
                 else => return null,
             },
@@ -14660,24 +14672,43 @@ const BodyContext = struct {
         produced_node: NodeId,
         visiting: *std.AutoHashMap(ProducedValuePair, void),
     ) Allocator.Error!?NodeId {
-        if (checked_row.tags.len != produced_row.tags.len) return null;
+        // The checked use may name tags the produced value's row lacks:
+        // implicit output-position openness (polarity) lets a use site widen
+        // a stored value's ground row. Every produced tag must appear in the
+        // checked row; checked-only tags join the witness so the value is
+        // restored at the widened representation instead of unifying two
+        // closed rows that disagree.
+        if (checked_row.tags.len < produced_row.tags.len) return null;
         if (!self.rowExtsAreValueCompatible(checked_row.ext, produced_row.ext, .tag_union)) return null;
-        const tags = try self.graph.arena().alloc(InstTag, produced_row.tags.len);
+        const tags = try self.graph.arena().alloc(InstTag, checked_row.tags.len);
+        var shared: usize = 0;
         var changed = false;
-        for (checked_row.tags, produced_row.tags, tags) |checked_tag, produced_tag, *out| {
-            if (checked_tag.name != produced_tag.name or checked_tag.payloads.len != produced_tag.payloads.len) return null;
-            const payloads = try self.graph.arena().alloc(NodeId, produced_tag.payloads.len);
-            for (checked_tag.payloads, produced_tag.payloads, payloads) |checked_payload, produced_payload, *payload_out| {
+        for (checked_row.tags, tags) |checked_tag, *out| {
+            const matched: InstTag = blk: {
+                for (produced_row.tags) |candidate| {
+                    if (self.graph.name_store.tagLabelTextEql(checked_tag.name, candidate.name)) break :blk candidate;
+                }
+                // A checked-only tag: the value never constructs it, so the
+                // checked cells are its only payload authority.
+                changed = true;
+                out.* = checked_tag;
+                continue;
+            };
+            if (checked_tag.payloads.len != matched.payloads.len) return null;
+            shared += 1;
+            const payloads = try self.graph.arena().alloc(NodeId, matched.payloads.len);
+            for (checked_tag.payloads, matched.payloads, payloads) |checked_payload, produced_payload, *payload_out| {
                 const payload = try self.relateCheckedNodeToProducedValueInner(checked_payload, produced_payload, visiting);
                 payload_out.* = payload;
                 changed = changed or !self.graph.sameClass(payload, produced_payload);
             }
             out.* = .{
-                .name = produced_tag.name,
-                .checked_name = produced_tag.checked_name,
+                .name = matched.name,
+                .checked_name = matched.checked_name,
                 .payloads = payloads,
             };
         }
+        if (shared != produced_row.tags.len) return null;
         if (!changed) return produced_node;
         return try self.graph.newNode(.{ .tag_union = .{
             .tags = tags,
@@ -15533,7 +15564,11 @@ const BodyContext = struct {
         return switch (template.state) {
             .stored_const => |stored| blk: {
                 const stored_node = try self.storedConstRootTypeNode(self.view, stored, entry.checked_type);
-                try relateRequestComponent(self.graph, request_node, stored_node);
+                // The caller's request may widen the stored ground row
+                // (implicit output-position openness), so relate it as a
+                // produced-value witness instead of unifying two closed rows.
+                const value_node = try self.relateCheckedNodeToProducedValue(request_node, stored_node);
+                try relateRequestComponent(self.graph, request_node, value_node);
                 const saved_loc = self.builder.program.current_loc;
                 defer self.builder.program.current_loc = saved_loc;
                 const saved_region = self.builder.program.current_region;
@@ -15544,7 +15579,7 @@ const BodyContext = struct {
                     self.view,
                     self.view,
                     stored.node,
-                    stored_node,
+                    value_node,
                     entry.const_ref,
                     entry.checked_type,
                     .disallow,
@@ -25124,7 +25159,11 @@ const BodyContext = struct {
             .stored_const => |stored| blk: {
                 const stored_node = try self.storedConstRootTypeNode(store_view, stored, requested_ty);
                 const interface_node = try self.instNode(requested_ty);
-                try relateRequestComponent(self.graph, request_node, stored_node);
+                // The caller's request may widen the stored ground row
+                // (implicit output-position openness), so relate it as a
+                // produced-value witness instead of unifying two closed rows.
+                const value_node = try self.relateCheckedNodeToProducedValue(request_node, stored_node);
+                try relateRequestComponent(self.graph, request_node, value_node);
                 var active_const_scope: ActiveConstBindingScope = .{};
                 const has_active_const_binding = try self.enterActiveConstBindingAtCell(
                     store_view,
@@ -25137,7 +25176,7 @@ const BodyContext = struct {
                     store_view,
                     self.view,
                     stored.node,
-                    stored_node,
+                    value_node,
                     const_use.const_ref,
                     requested_ty,
                     .disallow,
@@ -34213,6 +34252,14 @@ const BodyContext = struct {
         errdefer out.deinit(self.allocator);
         for (self.draft.prepared_codec_calls.items) |prepared| {
             if (prepared.boundary_expr != boundary_expr) continue;
+            if (!self.frozen_sealed_emission) {
+                // With implicitly open output rows (polarity), a stored codec
+                // restore's request can still carry live checked defaults
+                // here; commit them so the pre-freeze emission sees the same
+                // rows final sealing would produce.
+                try self.graph.groundUnresolvedDefaults(prepared.shape_node);
+                try self.graph.groundUnresolvedDefaults(prepared.callable_node);
+            }
             try out.append(self.allocator, .{
                 .kind = prepared.kind,
                 .shape_ty = try self.currentPhaseTypeForNode(prepared.shape_node),

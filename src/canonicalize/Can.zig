@@ -17950,17 +17950,21 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                     const region = self.parse_ir.tokenizedRegionToRegion(tag_union.region);
                     const mb_ext_anno: ?TypeAnno.Idx = switch (tag_union.ext) {
                         .closed => null,
-                        .open => blk: {
+                        .open => |open_tok| blk: {
+                            // Give the ext anno the `..` token's own region so
+                            // diagnostics about it (eg the redundant-open-ext
+                            // warning in output positions) point at the `..`.
+                            const open_region = self.parse_ir.tokenizedRegionToRegion(.{ .start = open_tok, .end = open_tok + 1 });
                             switch (type_anno_ctx.type) {
                                 .local_anno, .for_clause_anno => {
                                     break :blk try self.env.addTypeAnno(.{ .rigid_var = .{
                                         .name = self.env.idents.open_ext,
-                                    } }, region);
+                                    } }, open_region);
                                 },
                                 .type_decl_anno => {
                                     last = try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{
                                         .open_ext_not_allowed_in_type_decl = .{
-                                            .region = self.parse_ir.tokenizedRegionToRegion(.{ .start = tag_union.ext.open, .end = tag_union.ext.open + 1 }),
+                                            .region = open_region,
                                         },
                                     });
                                     break :blk null;

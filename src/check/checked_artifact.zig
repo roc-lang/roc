@@ -1622,8 +1622,12 @@ fn checkedTypeIsConcreteCompileTimeRootInner(
     return switch (checked_types.payload(@enumFromInt(index))) {
         .pending => checkedArtifactInvariant("compile-time root checked type was pending", .{}),
         .err => false,
-        .flex => false,
-        .rigid => walk == .decl_template,
+        // A row variable that publication gave a row default (the implicit
+        // openness of an output-position tag union or record row) can never
+        // gain entries after checking, so it is concrete — the same rule the
+        // const-producer scheme walk applies.
+        .flex => |variable| variable.row_default != null,
+        .rigid => |variable| walk == .decl_template or variable.row_default != null,
         .empty_record,
         .empty_tag_union,
         => true,

@@ -184,6 +184,13 @@ pub const Store = struct {
     formatted_strings: std.AutoHashMapUnmanaged(SnapshotContentIdx, ByteListRange),
     formatted_strings_backing: ByteList,
 
+    /// The polarity of the position currently being deep-copied: `.pos` at
+    /// the snapshot root, negated through function argument positions. Each
+    /// nested type's formatted string starts its own polarity walk here, so
+    /// error messages hide implicit output-position openness (`..`) exactly
+    /// where the full type's rendering would.
+    current_polarity: types.Polarity = .pos,
+
     pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
         return .{
             .gpa = gpa,
@@ -309,6 +316,7 @@ pub const Store = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
+        self.current_polarity = .pos;
         const snapshot_idx = try self.deepCopyVarInternal(store, type_writer, var_);
         return snapshot_idx;
     }
@@ -357,7 +365,7 @@ pub const Store = struct {
         // Here, we run the TypeWriter, writing directly into our backing
         {
             const formatted_strings_start = self.formatted_strings_backing.items.len;
-            type_writer.writeInto(&self.formatted_strings_backing, var_, .wrap) catch return error.OutOfMemory;
+            type_writer.writeIntoAtPolarity(&self.formatted_strings_backing, var_, .wrap, self.current_polarity) catch return error.OutOfMemory;
             const formatted_strings_end = self.formatted_strings_backing.items.len;
 
             const formatted_range = ByteListRange{
@@ -532,11 +540,18 @@ pub const Store = struct {
         // Mark starting position in the scratch array
         const scratch_top = self.scratch_content.top();
 
+        // Argument positions negate the surrounding polarity; the return
+        // position preserves it.
+        const saved_polarity = self.current_polarity;
+        defer self.current_polarity = saved_polarity;
+
         // Iterate and append directly
+        self.current_polarity = saved_polarity.flip();
         for (args_slice) |arg_var| {
             const deep_arg = try self.deepCopyVarInternal(store, type_writer, arg_var);
             try self.scratch_content.append(deep_arg);
         }
+        self.current_polarity = saved_polarity;
 
         // Append scratch to backing array, and shrink scratch
         const args_range = try self.content_indexes.appendSlice(self.gpa, self.scratch_content.sliceFromStart(scratch_top));

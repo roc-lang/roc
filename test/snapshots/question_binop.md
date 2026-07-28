@@ -222,9 +222,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(Str) -> Try(Str, [NoFirstError([ListWasEmpty, ..]), ..])"))
-		(patt (type "List(Str) -> Try(Str, [NoFirstError([ListWasEmpty, ..]), ..])")))
+		(patt (type "List(Str) -> Try(Str, [NoFirstError([ListWasEmpty])])"))
+		(patt (type "List(Str) -> Try(Str, [NoFirstError([ListWasEmpty])])")))
 	(expressions
-		(expr (type "List(Str) -> Try(Str, [NoFirstError([ListWasEmpty, ..]), ..])"))
-		(expr (type "List(Str) -> Try(Str, [NoFirstError([ListWasEmpty, ..]), ..])"))))
+		(expr (type "List(Str) -> Try(Str, [NoFirstError([ListWasEmpty])])"))
+		(expr (type "List(Str) -> Try(Str, [NoFirstError([ListWasEmpty])])"))))
 ~~~

@@ -93,7 +93,7 @@ test "polymorphic record constructor" {
     ;
     try typeCheck(
         source,
-        "{ pair1: { first: Dec, second: Str }, pair2: { first: Str, second: Dec }, pair3: { first: [True, ..], second: [False, ..] } }",
+        "{ pair1: { first: Dec, second: Str }, pair2: { first: Str, second: Dec }, pair3: { first: [True], second: [False] } }",
     );
 }
 
@@ -109,7 +109,7 @@ test "polymorphic identity with various numeric types" {
     ;
     try typeCheck(
         source,
-        "{ bool_val: [True, ..], float_val: Dec, int_val: Dec }",
+        "{ bool_val: [True], float_val: Dec, int_val: Dec }",
     );
 }
 
@@ -160,7 +160,7 @@ test "polymorphic swap function" {
     ;
     try typeCheck(
         source,
-        "{ swapped1: { first: Str, second: Dec }, swapped2: { first: Dec, second: [True, ..] } }",
+        "{ swapped1: { first: Str, second: Dec }, swapped2: { first: Dec, second: [True] } }",
     );
 }
 

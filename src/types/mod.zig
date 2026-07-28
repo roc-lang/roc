@@ -58,6 +58,7 @@ pub const Store = store.Store;
 pub const DescStoreIdx = store.DescStoreIdx;
 
 pub const Polarity = types.Polarity;
+pub const polarity_var_text = types.polarity_var_text;
 
 test {
     std.testing.refAllDecls(@import("test/test_rigid_instantiation.zig"));

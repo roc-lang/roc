@@ -281,12 +281,12 @@ main! = |_| {
 		(patt (type "U64 => U64"))
 		(patt (type "U64 => U64"))
 		(patt (type "U64 => U64"))
-		(patt (type "_arg => [Ok({}), ..]")))
+		(patt (type "_arg => [Ok({})]")))
 	(expressions
 		(expr (type "Str => {}"))
 		(expr (type "U64 => U64"))
 		(expr (type "U64 => U64"))
 		(expr (type "U64 => U64"))
 		(expr (type "U64 => U64"))
-		(expr (type "_arg => [Ok({}), ..]"))))
+		(expr (type "_arg => [Ok({})]"))))
 ~~~

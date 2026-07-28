@@ -38,7 +38,7 @@ TYPE MISMATCH - fuzz_crash_097.md:1:4:2:4
 
     It is:
 
-        [X(_b), ..]
+        [X(_b)]
 
     But I need a record with a `a` field.
 

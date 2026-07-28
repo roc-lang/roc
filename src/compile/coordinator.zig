@@ -5003,7 +5003,7 @@ fn writeCacheKeyPurityFixture(tmp_dir: *std.testing.TmpDir, sub_dir: []const u8)
         },
         .{ .rel = "app/.roc_echo_platform/main.roc", .data =
         \\platform ""
-        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8)]) }
         \\    exposes [Echo]
         \\    packages {}
         \\    provides { "roc_main": main_for_host! }
@@ -5065,7 +5065,7 @@ fn writeIssue9883Fixture(tmp_dir: *std.testing.TmpDir, sub_dir: []const u8) (std
         },
         .{ .rel = "app/.roc_echo_platform/main.roc", .data =
         \\platform ""
-        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8)]) }
         \\    exposes [Echo]
         \\    packages {}
         \\    provides { "roc_main": main_for_host! }
@@ -5422,7 +5422,7 @@ fn writeDeferredPlatformComptimeErrorFixture(tmp_dir: *std.testing.TmpDir) (std.
         .sub_path = "app/.roc_error_platform/main.roc",
         .data =
         \\platform ""
-        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8)]) }
         \\    exposes []
         \\    packages {}
         \\    provides { "roc_entry": entry }
@@ -5583,7 +5583,7 @@ fn writeHostedDistinctnessFixture(tmp_dir: *std.testing.TmpDir) (std.Io.Dir.Crea
         .sub_path = "app/.roc_hosted_platform/main.roc",
         .data =
         \\platform ""
-        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8)]) }
         \\    exposes [EchoA, EchoB]
         \\    packages {}
         \\    provides { "roc_main": main_for_host! }
@@ -6086,7 +6086,7 @@ test "Coordinator checked module cache preserves hoisted roots on hit" {
         .sub_path = "app/.roc_echo_platform/main.roc",
         .data =
         \\platform ""
-        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8)]) }
         \\    exposes [Echo]
         \\    packages {}
         \\    provides { "roc_main": main_for_host! }

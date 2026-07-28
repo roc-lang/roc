@@ -173,7 +173,7 @@ test "hoisted local constants are finalized and restored during runtime lowering
         .sub_path = ".roc_echo_platform/main.roc",
         .data =
         \\platform ""
-        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8)]) }
         \\    exposes [Echo]
         \\    packages {}
         \\    provides { "roc_main": main_for_host! }
@@ -344,7 +344,7 @@ test "imported checked bodies restore their module's hoisted constants" {
         .sub_path = ".roc_echo_platform/main.roc",
         .data =
         \\platform ""
-        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8)]) }
         \\    exposes [Echo]
         \\    packages {}
         \\    provides { "roc_main": main_for_host! }
@@ -700,7 +700,7 @@ test "callable binding with alias annotation is const-evaluated" {
         .sub_path = ".roc_echo_platform/main.roc",
         .data =
         \\platform ""
-        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8)]) }
         \\    exposes [Echo]
         \\    packages {}
         \\    provides { "roc_main": main_for_host! }
@@ -794,7 +794,7 @@ test "hoisted constant crash reports original source region" {
         .sub_path = ".roc_echo_platform/main.roc",
         .data =
         \\platform ""
-        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8)]) }
         \\    exposes [Echo]
         \\    packages {}
         \\    provides { "roc_main": main_for_host! }
@@ -895,7 +895,7 @@ test "inlined hoisted constant crash reports hoisted source region" {
         .sub_path = ".roc_echo_platform/main.roc",
         .data =
         \\platform ""
-        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8)]) }
         \\    exposes [Echo]
         \\    packages {}
         \\    provides { "roc_main": main_for_host! }
@@ -991,7 +991,7 @@ test "hoisted pattern extraction failure reports original destructure region" {
         .sub_path = ".roc_echo_platform/main.roc",
         .data =
         \\platform ""
-        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8)]) }
         \\    exposes [Echo]
         \\    packages {}
         \\    provides { "roc_main": main_for_host! }
@@ -1089,7 +1089,7 @@ test "hoisted pattern extraction base match failure reports match" {
         .sub_path = ".roc_echo_platform/main.roc",
         .data =
         \\platform ""
-        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8)]) }
         \\    exposes [Echo]
         \\    packages {}
         \\    provides { "roc_main": main_for_host! }
@@ -1190,7 +1190,7 @@ test "hoisted pattern extraction successful base match resolves pending diagnost
         .sub_path = ".roc_echo_platform/main.roc",
         .data =
         \\platform ""
-        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8)]) }
         \\    exposes [Echo]
         \\    packages {}
         \\    provides { "roc_main": main_for_host! }
@@ -1734,7 +1734,7 @@ fn writeEchoPlatform(dir: anytype) HoistedConstantsTestError!void {
         .sub_path = ".roc_echo_platform/main.roc",
         .data =
         \\platform ""
-        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8)]) }
         \\    exposes [Echo]
         \\    packages {}
         \\    provides { "roc_main": main_for_host! }

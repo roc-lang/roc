@@ -226,6 +226,9 @@ pub const CommonIdents = extern struct {
     question_err: Ident.Idx,
     // Synthetic identifier for .. implicit rigids in open tag unions or records
     open_ext: Ident.Idx,
+    // Synthetic identifier for polarity-deferred tag union extensions in alias
+    // declaration bodies (see types.polarity_var_text)
+    polarity_var: Ident.Idx,
 
     /// Insert all well-known identifiers into a CommonEnv.
     /// Use this when creating a fresh ModuleEnv from scratch.
@@ -352,6 +355,8 @@ pub const CommonIdents = extern struct {
             .question_err = try common.insertIdent(gpa, Ident.for_text("#err")),
             // Synthetic identifier for .. implicit rigids in open tag unions or records
             .open_ext = try common.insertIdent(gpa, Ident.for_text("#others")),
+            // Synthetic identifier for polarity-deferred tag union extensions
+            .polarity_var = try common.insertIdent(gpa, Ident.for_text(types_mod.polarity_var_text)),
         };
     }
 
@@ -481,6 +486,8 @@ pub const CommonIdents = extern struct {
             .question_err = common.findIdent("#err") orelse unreachable,
             // Synthetic identifier for .. implicit rigids in open tag unions or records
             .open_ext = common.findIdent("#others") orelse unreachable,
+            // Synthetic identifier for polarity-deferred tag union extensions
+            .polarity_var = common.findIdent(types_mod.polarity_var_text) orelse unreachable,
         };
     }
 };

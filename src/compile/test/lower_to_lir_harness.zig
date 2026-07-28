@@ -189,7 +189,7 @@ fn runToLir(
         .sub_path = ".roc_echo_platform/main.roc",
         .data =
         \\platform ""
-        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8)]) }
         \\    exposes [Echo]
         \\    packages {}
         \\    provides { "roc_main": main_for_host! }

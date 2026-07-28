@@ -569,17 +569,23 @@ test "check type - tag union inequality" {
 // tags //
 
 test "check type - tag - args" {
+    // The tag union is open (inferred at output polarity), but an anonymous
+    // unshared flex ext in an output position is not displayed as `..`.
     const source =
         \\MyTag("hello", 1)
     ;
     try checkTypesExpr(
         source,
         .pass,
-        "[MyTag(Str, Dec), ..]",
+        "[MyTag(Str, Dec)]",
     );
 }
 
-test "check type - tag union - tag typo" {
+test "check type - tag union - tag typo absorbed at output position" {
+    // Polarity: an alias of a tag union used in an output position (here the
+    // root of a value annotation) is implicitly open, so an unknown tag is
+    // absorbed rather than rejected. The typo is only caught where the union
+    // is closed — see the input-position test below.
     const source =
         \\main! = |_| {}
         \\
@@ -588,20 +594,35 @@ test "check type - tag union - tag typo" {
         \\color : Color
         \\color = Greeen
     ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "color" } }, "Color");
+}
+
+test "check type - tag union - tag typo" {
+    // In an input position the alias stays closed, so the typo is caught.
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Color : [Red, Green, Blue]
+        \\
+        \\to_str : Color -> Str
+        \\to_str = |_| "color"
+        \\
+        \\name = to_str(Greeen)
+    ;
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This expression is used in an unexpected way.
-        \\**test:6:9:6:15:**
+        \\The first argument being passed to this function has the wrong type.
+        \\**test:8:8:**
         \\```roc
-        \\color = Greeen
+        \\name = to_str(Greeen)
         \\```
-        \\        ^^^^^^
+        \\              ^^^^^^
         \\
-        \\It has the type:
+        \\This argument has the type:
         \\
-        \\    [Greeen, ..]
+        \\    [Greeen]
         \\
-        \\But the annotation says it should be:
+        \\But `to_str` needs the first argument to be:
         \\
         \\    Color
         \\
@@ -612,28 +633,33 @@ test "check type - tag union - tag typo" {
 }
 
 test "check type - tag - ext - typo" {
+    // The alias's own ext is bound to a type argument, so it is exactly what
+    // the application supplies. In an input position the applied `[Green]`
+    // arg stays closed, so the typo is caught.
     const source =
         \\main! = |_| {}
         \\
         \\Color(ext) : [Red, Blue, ..ext]
         \\
-        \\color : Color([Green])
-        \\color = Greeen
+        \\to_str : Color([Green]) -> Str
+        \\to_str = |_| "color"
+        \\
+        \\name = to_str(Greeen)
     ;
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This expression is used in an unexpected way.
-        \\**test:6:9:6:15:**
+        \\The first argument being passed to this function has the wrong type.
+        \\**test:8:8:**
         \\```roc
-        \\color = Greeen
+        \\name = to_str(Greeen)
         \\```
-        \\        ^^^^^^
+        \\              ^^^^^^
         \\
-        \\It has the type:
+        \\This argument has the type:
         \\
-        \\    [Greeen, ..]
+        \\    [Greeen]
         \\
-        \\But the annotation says it should be:
+        \\But `to_str` needs the first argument to be:
         \\
         \\    Color([Green])
         \\
@@ -1843,7 +1869,7 @@ test "check type - match - diff cond types 1" {
         \\
         \\The value's type, which does not have a method named `from_quote`, is:
         \\
-        \\    [True, ..]
+        \\    [True]
         \\
         \\
         ,
@@ -2357,16 +2383,18 @@ test "check type - patterns num" {
 }
 
 test "check type - patterns int mismatch" {
-    // Test that matching a tag against incompatible tag patterns fails
+    // Test that matching a tag against incompatible tag patterns fails.
+    // The scrutinee is a function argument (input position) so its annotated
+    // union stays closed; in an output position polarity would open it and
+    // the foreign patterns would surface as a non-exhaustive match instead.
     const source =
-        \\{
-        \\  x : [Ok(I64), Err(Str)]
-        \\  x = Ok(42)
-        \\
-        \\  match(x) {
+        \\|x| {
+        \\  y : [Ok(I64), Err(Str)] -> Str
+        \\  y = |tag| match(tag) {
         \\    Some(_) => "found",
         \\    None => "empty",
         \\  }
+        \\  y(x)
         \\}
     ;
     try checkTypesExpr(source, .fail, "Type Mismatch");
@@ -4110,24 +4138,26 @@ test "check type - bool diagnostic - !Bool.True or !Bool.True" {
 // See also: corresponding lowering coverage in eval/backend integration tests.
 
 test "check type - structural tag - bare True is open tag union" {
+    // The union is open (inferred at output polarity); implicit
+    // output-position openness is not displayed as `..`.
     const source =
         \\x = True
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "[True, ..]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "[True]");
 }
 
 test "check type - structural tag - bare False is open tag union" {
     const source =
         \\x = False
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "[False, ..]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "[False]");
 }
 
 test "check type - structural tag - if True True else False is open tag union" {
     const source =
         \\x = if True True else False
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "[False, True, ..]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "[False, True]");
 }
 
 // helpers - module //
@@ -4388,7 +4418,7 @@ test "check type - try return with match and error propagation should type-check
     try checkTypesModule(source, .{ .pass_with_warnings = .{
         .def = .last_def,
         .warnings = &.{"Unconditional Condition"},
-    } }, "{} -> Try(Str, [Impossible, ListWasEmpty, ..])");
+    } }, "{} -> Try(Str, [Impossible, ListWasEmpty])");
 }
 
 test "check type - try operator on method call should apply to whole expression (#8646)" {
@@ -4404,26 +4434,26 @@ test "check type - try operator on method call should apply to whole expression 
         \\    Ok(first_str)
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "List(Str) -> Try(Str, [ListWasEmpty, ..])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "List(Str) -> Try(Str, [ListWasEmpty])");
 }
 
-test "check type - try does not widen closed error row into open return error row" {
-    // Verifies intended behavior for https://github.com/roc-lang/roc/issues/9798:
-    // `?` does not widen a callee's closed error tag union into the enclosing
-    // annotation's open error row, so this program is a type error. The sole
-    // exception is a direct call of a hosted function (design.md "Hosted Try
-    // Question Widening"); `inner` is not hosted, so no widening applies.
+test "check type - try flows error row between open output rows" {
+    // Under polarity, every error row in an output position is implicitly
+    // open, so `?` flows `inner`'s errors into `outer`'s row through ordinary
+    // unification. (Before polarity this was a type error — issue #9798 —
+    // because `inner`'s written row was closed; that closed spelling no
+    // longer exists in output positions.)
     const source =
         \\inner : {} -> Try({}, [InnerErr])
         \\inner = |{}| Err(InnerErr)
         \\
-        \\outer : {} -> Try({}, [InnerErr, ..])
+        \\outer : {} -> Try({}, [InnerErr, OuterErr])
         \\outer = |{}| {
         \\    inner({})?
-        \\    Ok({})
+        \\    Err(OuterErr)
         \\}
     ;
-    try checkTypesModule(source, .fail, "Type Mismatch");
+    try checkTypesModule(source, .{ .pass = .{ .def = "outer" } }, "{} -> Try({}, [InnerErr, OuterErr])");
 }
 
 // record extension in type annotations //
@@ -4551,7 +4581,7 @@ test "check type - List.get method syntax" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        "Try(Dec, [OutOfBounds, ..])",
+        "Try(Dec, [OutOfBounds])",
     );
 }
 
@@ -4611,11 +4641,12 @@ test "check type - List.first method syntax should not create cyclic types" {
     const source =
         \\result = [1].first()
     ;
-    // Expected: Try(Dec, [ListWasEmpty, ..]) after from_numeral resolution
+    // Expected: Try(Dec, [ListWasEmpty]) after from_numeral resolution (the
+    // error row is open, but implicit output-position openness isn't displayed)
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        "Try(Dec, [ListWasEmpty, ..])",
+        "Try(Dec, [ListWasEmpty])",
     );
 }
 
@@ -6133,10 +6164,12 @@ test "check type - polarity - output is inferred as open" {
     const source =
         \\mk_my_tag = || MyTag
     ;
+    // The return union is open (its ext is an unbound flex var), but implicit
+    // output-position openness is not displayed as `..`.
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "mk_my_tag", .expected = "({}) -> [MyTag, ..]" },
+            .{ .def = "mk_my_tag", .expected = "({}) -> [MyTag]" },
         },
     );
 }
@@ -6151,6 +6184,140 @@ test "check type - polarity - input is inferred as closed" {
             .{ .def = "mk_my_tag", .expected = "[MyTag] -> [MyTag]" },
         },
     );
+}
+
+test "check type - polarity - annotated output union is implicitly open" {
+    // An extensionless tag union in an output position means the same as one
+    // written with `..`: the body may produce tags the annotation omits.
+    const source =
+        \\parse : Str -> [Fail]
+        \\parse = |input| {
+        \\  if Str.is_empty(input) Empty else Fail
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "parse", .expected = "Str -> [Empty, Fail]" },
+        },
+    );
+}
+
+test "check type - polarity - annotated input union stays closed" {
+    // In an input position the same union is closed, so foreign tags are
+    // rejected.
+    const source =
+        \\handle : [Known] -> Str
+        \\handle = |_| "ok"
+        \\
+        \\bad = handle(Unknown)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - argument position negates through nested functions" {
+    // In `use : ([A] -> Str) -> Str` the callback's own argument sits two
+    // argument positions deep, so its polarity is positive again: `use`
+    // produces the values the callback consumes. The union is implicitly
+    // open, and a callback accepting more tags is fine.
+    const source =
+        \\use : ([A] -> Str) -> Str
+        \\use = |callback| callback(A)
+        \\
+        \\accepts_more : [A, B] -> Str
+        \\accepts_more = |_| "ok"
+        \\
+        \\result = use(accepts_more)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "result" } }, "Str");
+}
+
+test "check type - polarity - callback return position stays input" {
+    // The return of a callback taken as an argument is a value the annotated
+    // function consumes (negative position), so it stays closed: a callback
+    // producing extra tags is rejected.
+    const source =
+        \\run : (Str -> [Done]) -> Str
+        \\run = |callback| {
+        \\  match callback("go") {
+        \\    Done => "done"
+        \\  }
+        \\}
+        \\
+        \\produces_more : Str -> [Done, Extra]
+        \\produces_more = |_| Extra
+        \\
+        \\bad = run(produces_more)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - alias defers openness to use-site polarity" {
+    // `Errs` is written closed. In an output position it is implicitly open
+    // (the body's extra tag is absorbed); in an input position it stays
+    // closed (the foreign tag errors). The single expected error is the
+    // input-position one.
+    const source =
+        \\Errs : [E1, E2]
+        \\
+        \\produce : Str -> Errs
+        \\produce = |_| E3
+        \\
+        \\consume : Errs -> Str
+        \\consume = |_| "ok"
+        \\
+        \\bad = consume(E3)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - explicit anonymous ext in output position warns redundant" {
+    const source =
+        \\parse : Str -> [Fail, Ok, ..]
+        \\parse = |_| Ok
+    ;
+    try checkTypesModule(source, .{ .pass_with_warnings = .{
+        .def = .last_def,
+        .warnings = &.{"Redundant Open Tag Union"},
+    } }, "Str -> [Fail, Ok]");
+}
+
+test "check type - polarity - named ext in output position does not warn" {
+    const source =
+        \\parse : Str -> [Fail, Ok, ..others]
+        \\parse = |_| Ok
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> [Fail, Ok, ..others]");
+}
+
+test "check type - polarity - annotated value with output union generalizes implicit ext" {
+    // A value annotation whose union is implicitly opened denotes a scheme
+    // (it means `[Boom, ..]`), so each use instantiates a fresh extension —
+    // two uses at incompatible wider unions must both succeed.
+    const source =
+        \\err_value : [Boom]
+        \\err_value = Boom
+        \\
+        \\use_a : Str -> [A, Boom]
+        \\use_a = |_| err_value
+        \\
+        \\use_b : Str -> [B, Boom]
+        \\use_b = |_| err_value
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "use_a", .expected = "Str -> [A, Boom]" },
+        .{ .def = "use_b", .expected = "Str -> [B, Boom]" },
+    });
+}
+
+test "check type - polarity - empty tag union stays closed in output position" {
+    // `[]` asserts uninhabitedness (eg `Try(a, [])` needs no `Err` branch);
+    // polarity must not open it, so producing any error tag is rejected.
+    const source =
+        \\never : {} -> Try(U8, [])
+        \\never = |{}| Err(Boom)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 test "check type - wildcard match is inferred as open" {
@@ -6782,7 +6949,7 @@ test "check type - exhaustive match does not over-close static dispatch return t
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "Test.Maker.get", .expected = "_arg -> [Red, ..]" },
+            .{ .def = "Test.Maker.get", .expected = "_arg -> [Red]" },
             .{ .def = "narrow", .expected = "Str" },
             .{ .def = "broad", .expected = "Str" },
         },
@@ -6810,7 +6977,7 @@ test "check type - exhaustive match close does not leak through shared variable"
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "Test.Maker.get", .expected = "_arg -> [Red, ..]" },
+            .{ .def = "Test.Maker.get", .expected = "_arg -> [Red]" },
             .{ .def = "test", .expected = "Str" },
         },
     );
@@ -6911,13 +7078,11 @@ test "check type - exhaustive match close with value reuse - no static dispatch"
 }
 
 test "check type - annotation keeps tag union open despite exhaustive match" {
-    // The function annotation declares an open return type [Red, ..].
-    // Even though the caller matches exhaustively without a wildcard,
-    // the rigid ext var from the annotation prevents closing.
-    // Each call site gets an instantiation with the rigid ext var,
-    // so the value can still be used at a broader type.
+    // The function's return union is implicitly open (output polarity).
+    // The caller's first match keeps a wildcard, so the instantiated ext
+    // stays open and the value can still be used at a broader type.
     const source =
-        \\make : {} -> [Red, ..]
+        \\make : {} -> [Red]
         \\make = |{}| Red
         \\
         \\accept_broad = |color| {
@@ -6940,7 +7105,7 @@ test "check type - annotation keeps tag union open despite exhaustive match" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "make", .expected = "{} -> [Red, ..]" },
+            .{ .def = "make", .expected = "{} -> [Red]" },
             .{ .def = "test", .expected = "Str" },
         },
     );
@@ -6968,12 +7133,12 @@ test "check type - annotated open arg not closed by exhaustive match in body" {
 }
 
 test "check type - annotated open return type preserved after caller exhaustive match" {
-    // Static dispatch method annotated with open return type.
-    // Caller matches exhaustively then reuses the value — the annotation
-    // prevents closing, so the second use at a broader type succeeds.
+    // Static dispatch method whose return union is implicitly open (output
+    // polarity). Caller matches with a wildcard then reuses the value — the
+    // openness survives, so the second use at a broader type succeeds.
     const source =
         \\Maker := [Maker].{
-        \\  get : Maker -> [Red, ..]
+        \\  get : Maker -> [Red]
         \\  get = |_maker| Red
         \\}
         \\
@@ -6997,19 +7162,19 @@ test "check type - annotated open return type preserved after caller exhaustive 
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "Test.Maker.get", .expected = "Maker -> [Red, ..]" },
+            .{ .def = "Test.Maker.get", .expected = "Maker -> [Red]" },
             .{ .def = "test", .expected = "Str" },
         },
     );
 }
 
 test "check type - annotated open return type still closed by exhaustive match without wildcard" {
-    // `make` is annotated as returning [Red, ..] (open), but when instantiated
-    // at the call site, the rigid ext var becomes flex. The exhaustive match
-    // without a wildcard closes that flex var, so `val` becomes [Red] (closed)
-    // and can't unify with [Blue, Red]. Confirmed by Rust compiler.
+    // `make`'s return union is implicitly open (output polarity), and each
+    // call site instantiates a fresh flex ext. The exhaustive match without a
+    // wildcard closes that flex var, so `val` becomes [Red] (closed) and
+    // can't unify with [Blue, Red]. Confirmed by Rust compiler.
     const source =
-        \\make : {} -> [Red, ..]
+        \\make : {} -> [Red]
         \\make = |{}| Red
         \\
         \\accept_broad = |color| {
@@ -7096,21 +7261,20 @@ test "check type - annotated open arg not closed even with exhaustive match" {
 }
 
 test "check type - tag union - ext hints 1" {
+    // A closed union (the input-position arg) flowing into a named-rigid
+    // open row: closed where open was expected.
     const source =
-        \\bar : [A, B] -> [X, Y]
-        \\bar = |_| X
-        \\
-        \\foo : [A, B] -> [X, Y, ..]
-        \\foo = |tag| bar(tag)
+        \\foo : [X, Y] -> [X, Y, ..ext]
+        \\foo = |tag| tag
     ;
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\This expression is used in an unexpected way.
-        \\**test:5:13:5:21:**
+        \\**test:2:13:2:16:**
         \\```roc
-        \\foo = |tag| bar(tag)
+        \\foo = |tag| tag
         \\```
-        \\            ^^^^^^^^
+        \\            ^^^
         \\
         \\It has the type:
         \\
@@ -7118,33 +7282,39 @@ test "check type - tag union - ext hints 1" {
         \\
         \\But the annotation says it should be:
         \\
-        \\    [X, Y, ..]
+        \\    [X, Y, ..ext]
         \\
-        \\**Hint:** This tag union is closed, but I expected it to be open.
+        \\**Hint:** This tag union is closed, but I expected it be extended by `ext`.
         \\
         \\
     );
 }
 
 test "check type - tag union - ext hints 2" {
+    // An open union (the anonymous `..` on an input-position arg) flowing
+    // into a closed union (another function's input-position arg): open
+    // where closed was expected.
     const source =
-        \\foo : [A, B, ..] -> [A, B]
-        \\foo = |a| a
+        \\bar : [A, B] -> Str
+        \\bar = |_| "tag"
+        \\
+        \\foo : [A, B, ..] -> Str
+        \\foo = |a| bar(a)
     ;
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This expression is used in an unexpected way.
-        \\**test:2:11:2:12:**
+        \\The first argument being passed to this function has the wrong type.
+        \\**test:5:11:**
         \\```roc
-        \\foo = |a| a
+        \\foo = |a| bar(a)
         \\```
-        \\          ^
+        \\              ^
         \\
-        \\It has the type:
+        \\This argument has the type:
         \\
         \\    [A, B, ..]
         \\
-        \\But the annotation says it should be:
+        \\But `bar` needs the first argument to be:
         \\
         \\    [A, B]
         \\

@@ -43,7 +43,9 @@ const Rigid = types_mod.Rigid;
 const Content = types_mod.Content;
 const FlatType = types_mod.FlatType;
 const Rank = types_mod.Rank;
+const Polarity = types_mod.Polarity;
 const Instantiator = types_mod.instantiate.Instantiator;
+const PolarityVarBehavior = Instantiator.PolarityVarBehavior;
 const Generalizer = types_mod.generalize.Generalizer;
 const VarPool = types_mod.generalize.VarPool;
 const SnapshotStore = snapshot_mod.Store;
@@ -334,6 +336,19 @@ erroneous_value_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void),
 /// Tracks bindings whose defining expression is known erroneous and whose
 /// subsequent local lookups must therefore become explicit runtime errors.
 erroneous_value_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
+/// Annotations that describe host-boundary values (hosted lambdas and
+/// `provides` defs). Their rows are generated as written — implicit polarity
+/// opening does not apply across the host boundary. Populated once per check
+/// from the module's defs and provides entries.
+host_boundary_annotations: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, void),
+/// Annotations whose *generated* type contains type variables (flex or rigid)
+/// even though the source text mentions none — eg an implicitly-opened
+/// output-position tag union, directly or through an alias. Such an annotation
+/// denotes a scheme, so its value binding must generalize exactly as if the
+/// variable had been written (`[E, ..]`). Recorded by
+/// `predeclareAnnotationScheme`, the one place the annotation type exists
+/// before the generalization decision is made.
+annotation_scheme_has_vars: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, void),
 /// Stack of expressions currently being checked for top-level-equivalent
 /// compile-time hoisting. This is temporary checker state only.
 hoist_frames: std.ArrayListUnmanaged(HoistFrame),
@@ -541,6 +556,11 @@ bench_probe_refuted: usize = 0,
 /// Union-find roots resolve at consumption time (eager roots would go stale).
 /// Duplicates are harmless — the consumer inserts into a set.
 checked_lambda_params: std.ArrayListUnmanaged(CIR.Pattern.Span),
+/// Constraint fn vars of dispatch uses that resolved to annotation-only
+/// Builtin intrinsics. Monotype implements those methods and retypes rows
+/// their instantiated signatures reach, so `closeUnquantifiedTagRowExts`
+/// keeps everything reachable from these vars open.
+intrinsic_dispatch_fn_vars: std.ArrayListUnmanaged(Var),
 /// Lambdas whose bodies actually perform effects. This records direct checker
 /// output so binding-name diagnostics do not infer effectfulness from
 /// annotations that only make a pure body have an effectful function type.
@@ -1505,6 +1525,8 @@ fn initAssumePrepared(
         .type_writer = try types_mod.TypeWriter.initFromParts(gpa, types, cir.getIdentStore(), null),
         .value_lookup_tracking = .empty,
         .erroneous_value_exprs = .empty,
+        .host_boundary_annotations = .empty,
+        .annotation_scheme_has_vars = .empty,
         .erroneous_value_patterns = .empty,
         .hoist_frames = .empty,
         .hoist_expr_candidates = .empty,
@@ -1555,6 +1577,7 @@ fn initAssumePrepared(
         .known_empty_payload_vars_destructure = .empty,
         .known_empty_payload_vars_match = .empty,
         .checked_lambda_params = .empty,
+        .intrinsic_dispatch_fn_vars = .empty,
         .effectful_lambda_bodies = std.AutoHashMap(CIR.Expr.Idx, void).init(gpa),
         .pending_function_effect_dependencies = .empty,
         .function_effect_dependency_frame_starts = .empty,
@@ -1589,6 +1612,8 @@ pub fn deinit(self: *Self) void {
     self.predeclared_local_scheme_vars.deinit(self.gpa);
     self.value_lookup_tracking.deinit(self.gpa);
     self.erroneous_value_exprs.deinit(self.gpa);
+    self.host_boundary_annotations.deinit(self.gpa);
+    self.annotation_scheme_has_vars.deinit(self.gpa);
     self.erroneous_value_patterns.deinit(self.gpa);
     self.hoist_frames.deinit(self.gpa);
     self.hoist_expr_candidates.deinit(self.gpa);
@@ -1677,6 +1702,7 @@ pub fn deinit(self: *Self) void {
     self.known_empty_payload_vars_destructure.deinit(self.gpa);
     self.known_empty_payload_vars_match.deinit(self.gpa);
     self.checked_lambda_params.deinit(self.gpa);
+    self.intrinsic_dispatch_fn_vars.deinit(self.gpa);
     self.effectful_lambda_bodies.deinit();
     self.pending_function_effect_dependencies.deinit(self.gpa);
     self.function_effect_dependency_frame_starts.deinit(self.gpa);
@@ -3680,6 +3706,39 @@ fn instantiateVar(
 
         .current_rank = env.rank(),
         .rigid_behavior = .fresh_flex,
+        // Positions instantiated through this generic path have no meaningful
+        // polarity; closing reproduces the written (pre-polarity) row.
+        .polarity_var_ident = self.cir.idents.polarity_var,
+        .polarity_var_behavior = .close,
+    };
+    return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior);
+}
+
+/// Instantiate a type declaration's var for use in a type annotation,
+/// resolving polarity vars (the deferred tag-union extensions of alias
+/// declaration bodies) per `polarity_behavior`, starting the polarity walk at
+/// `polarity` (the polarity of the annotation position being generated).
+fn instantiateVarPolarized(
+    self: *Self,
+    var_to_instantiate: Var,
+    env: *Env,
+    region_behavior: InstantiateRegionBehavior,
+    polarity_behavior: PolarityVarBehavior,
+    polarity: Polarity,
+) std.mem.Allocator.Error!Var {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    var instantiate_ctx = Instantiator{
+        .store = self.types,
+        .idents = self.cir.getIdentStoreConst(),
+        .var_map = &self.var_map,
+
+        .current_rank = env.rank(),
+        .rigid_behavior = .fresh_flex,
+        .polarity_var_ident = self.cir.idents.polarity_var,
+        .polarity_var_behavior = polarity_behavior,
+        .current_polarity = polarity,
     };
     return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior);
 }
@@ -3704,6 +3763,9 @@ fn instantiateVarOrphan(
         .current_rank = env.rank(),
         .rigid_behavior = .fresh_rigid,
         .rank_behavior = .ignore_rank,
+        // An orphan copy is a faithful copy/paste: keep polarity vars deferred.
+        .polarity_var_ident = self.cir.idents.polarity_var,
+        .polarity_var_behavior = .preserve,
     };
     return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior);
 }
@@ -3723,6 +3785,20 @@ fn instantiateVarWithSubs(
     env: *Env,
     region_behavior: InstantiateRegionBehavior,
 ) std.mem.Allocator.Error!Var {
+    return self.instantiateVarWithSubsPolarized(var_to_instantiate, subs, env, region_behavior, .close, .pos);
+}
+
+/// `instantiateVarWithSubs` with explicit polarity var handling; see
+/// `instantiateVarPolarized`.
+fn instantiateVarWithSubsPolarized(
+    self: *Self,
+    var_to_instantiate: Var,
+    subs: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
+    env: *Env,
+    region_behavior: InstantiateRegionBehavior,
+    polarity_behavior: PolarityVarBehavior,
+    polarity: Polarity,
+) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -3733,6 +3809,9 @@ fn instantiateVarWithSubs(
 
         .current_rank = env.rank(),
         .rigid_behavior = .{ .substitute_rigids = subs },
+        .polarity_var_ident = self.cir.idents.polarity_var,
+        .polarity_var_behavior = polarity_behavior,
+        .current_polarity = polarity,
     };
     return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior);
 }
@@ -3760,6 +3839,10 @@ fn instantiateVarWithPartialSubs(
 
         .current_rank = env.rank(),
         .rigid_behavior = .{ .substitute_rigids_fresh_flex = subs },
+        // Requirement schemes are annotation types; polarity vars were already
+        // resolved when they were generated, so this is a no-op safeguard.
+        .polarity_var_ident = self.cir.idents.polarity_var,
+        .polarity_var_behavior = .close,
     };
     return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior);
 }
@@ -5223,6 +5306,11 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     // Fill in types store up to the size of CIR nodes
     try ensureTypeStoreIsFilled(self);
 
+    // Record which annotations type host-boundary values before any
+    // annotation is generated (their rows are kept as written rather than
+    // implicitly opened by polarity).
+    try self.collectHostBoundaryAnnotations();
+
     // Create a solver env
     var env = try self.env_pool.acquire();
     defer self.env_pool.release(env);
@@ -5407,6 +5495,8 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     try self.reportNonExhaustiveLambdaParams(&env);
     try self.reportNonExhaustiveForPatterns(&env);
+
+    try self.closeUnquantifiedTagRowExts(&env);
 
     try self.pruneSelectedHoistedRootsAfterSolving();
 
@@ -7878,6 +7968,69 @@ fn varsHaveUnresolvedContent(
     return false;
 }
 
+/// Whether any flex or rigid var is reachable anywhere in this type — ie
+/// whether the type is a scheme rather than fully concrete. Unlike
+/// `varHasUnresolvedContent`, this looks inside functions and alias args:
+/// every position matters when deciding whether an annotation generalizes.
+fn varContainsTypeVars(
+    self: *Self,
+    var_: Var,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
+    const resolved = self.types.resolveVar(var_);
+    if (visited.contains(resolved.var_)) return false;
+    try visited.put(resolved.var_, {});
+
+    return switch (resolved.desc.content) {
+        .flex, .rigid => true,
+        .err => false,
+        .alias => |alias| blk: {
+            if (try self.varsContainTypeVars(self.types.sliceAliasArgs(alias), visited)) break :blk true;
+            break :blk try self.varContainsTypeVars(self.types.getAliasBackingVar(alias), visited);
+        },
+        .structure => |flat_type| switch (flat_type) {
+            .tuple => |tuple| try self.varsContainTypeVars(self.types.sliceVars(tuple.elems), visited),
+            // A nominal application's own type is determined by its args; the
+            // declaration's backing template is a separate graph whose formals
+            // are always rigid and must not count as this type's variables.
+            .nominal_type => |nominal| try self.varsContainTypeVars(self.types.sliceNominalArgs(nominal), visited),
+            .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
+                if (try self.varsContainTypeVars(self.types.sliceVars(func.args), visited)) break :blk true;
+                if (try self.varContainsTypeVars(func.ret, visited)) break :blk true;
+                break :blk try self.varsContainTypeVars(self.types.sliceVars(func.effect_deps), visited);
+            },
+            .record => |record| blk: {
+                const fields = self.types.getRecordFieldsSlice(record.fields);
+                if (try self.varsContainTypeVars(fields.items(.var_), visited)) break :blk true;
+                break :blk try self.varContainsTypeVars(record.ext, visited);
+            },
+            .record_unbound => |fields_range| blk: {
+                const fields = self.types.getRecordFieldsSlice(fields_range);
+                break :blk try self.varsContainTypeVars(fields.items(.var_), visited);
+            },
+            .tag_union => |tag_union| blk: {
+                const tags = self.types.getTagsSlice(tag_union.tags);
+                for (tags.items(.args)) |args| {
+                    if (try self.varsContainTypeVars(self.types.sliceVars(args), visited)) break :blk true;
+                }
+                break :blk try self.varContainsTypeVars(tag_union.ext, visited);
+            },
+            .empty_record, .empty_tag_union => false,
+        },
+    };
+}
+
+fn varsContainTypeVars(
+    self: *Self,
+    vars: []const Var,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
+    for (vars) |var_| {
+        if (try self.varContainsTypeVars(var_, visited)) return true;
+    }
+    return false;
+}
+
 fn varHasUnresolvedStaticDispatchConstraints(
     self: *Self,
     var_: Var,
@@ -8277,7 +8430,10 @@ fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
         // Then, generate the type for the actual required type
         //   { [Model : model] for main : { init : model, ... } }
         //                                ^^^^^^^^^^^^^^^^^^^^^^
-        try self.generateAnnoTypeInPlace(required_type.type_anno, env, .{ .annotation = null });
+        try self.generateAnnoTypeInPlace(required_type.type_anno, env, .{ .annotation = .{
+            .where = null,
+            .opening = .implicit_open,
+        } }, .pos);
     }
 }
 
@@ -8573,6 +8729,38 @@ fn exposedAppDefByIdent(self: *Self, ident: Ident.Idx) ?CIR.Def.Idx {
     const cir_node: CIR.Node.Idx = @enumFromInt(node_idx);
     if (self.cir.store.nodes.get(cir_node).tag != .def) return null;
     return @enumFromInt(node_idx);
+}
+
+/// Record every annotation that types a host-boundary value — a hosted
+/// lambda or a `provides` def — so annotation generation keeps its rows as
+/// written instead of implicitly opening output-position tag unions (see
+/// `GenTypeAnnoCtx.AnnotationGenCtx.opening`).
+fn collectHostBoundaryAnnotations(self: *Self) std.mem.Allocator.Error!void {
+    self.host_boundary_annotations.clearRetainingCapacity();
+
+    for (self.cir.provides_entries.items.items) |provides_entry| {
+        const def_idx = provides_entry.local_def orelse continue;
+        const def = self.cir.store.getDef(def_idx);
+        const annotation_idx = def.annotation orelse continue;
+        try self.host_boundary_annotations.put(self.gpa, annotation_idx, {});
+    }
+
+    // Hosted lambdas hoisted out of (possibly nested) type modules appear in
+    // global_value_defs only, so scan both def lists (the set dedupes).
+    for (0..self.cir.all_defs.span.len) |def_offset| {
+        const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
+        try self.recordHostBoundaryAnnotationIfHosted(def_idx);
+    }
+    for (self.cir.store.sliceDefs(self.cir.global_value_defs)) |def_idx| {
+        try self.recordHostBoundaryAnnotationIfHosted(def_idx);
+    }
+}
+
+fn recordHostBoundaryAnnotationIfHosted(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
+    const def = self.cir.store.getDef(def_idx);
+    const annotation_idx = def.annotation orelse return;
+    if (self.cir.store.getExpr(def.expr) != .e_hosted_lambda) return;
+    try self.host_boundary_annotations.put(self.gpa, annotation_idx, {});
 }
 
 fn topLevelDefByIdent(self: *Self, ident: Ident.Idx) ?CIR.Def.Idx {
@@ -9085,6 +9273,17 @@ fn predeclareAnnotationScheme(self: *Self, annotation_idx: CIR.Annotation.Idx, e
     );
     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
     env.var_pool.popRank();
+
+    // The generated type is the ground truth for whether this annotation
+    // denotes a scheme: implicit polarity opening can introduce type
+    // variables the source text never mentions (an extensionless tag union in
+    // an output position, directly or through an alias). Record that here so
+    // the generalization decision treats the binding exactly like one whose
+    // annotation spelled the variable out.
+    self.var_set.clearRetainingCapacity();
+    if (try self.varContainsTypeVars(scheme_var, &self.var_set)) {
+        try self.annotation_scheme_has_vars.put(self.gpa, annotation_idx, {});
+    }
 
     self.problems.truncate(problems_len);
     self.snapshots.truncateToMark(snapshots_mark);
@@ -9671,7 +9870,7 @@ fn generateAliasDecl(
         .backing_var = backing_var,
         .is_opaque = false,
         .num_args = @intCast(header_args.len),
-    } });
+    } }, .pos);
 
     if (!try self.validateAliasRows(backing_var, env, self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(alias.anno)))) {
         try self.unifyWithTargetRank(decl_var, .err, env);
@@ -9740,7 +9939,7 @@ fn generateNominalDecl(
         .backing_var = backing_var,
         .is_opaque = nominal.is_opaque,
         .num_args = @intCast(header_args.len),
-    } });
+    } }, .pos);
 
     // A malformed backing (its error was already reported while generating
     // the annotation) invalidates the declaration: mark it in the table and
@@ -9775,8 +9974,8 @@ fn generateStandaloneTypeAnno(
 
     // Generate the type from the annotation
     const anno_var: Var = ModuleEnv.varFrom(type_anno.anno);
-    const ctx = GenTypeAnnoCtx{ .annotation = type_anno.where };
-    try self.generateAnnoTypeInPlace(type_anno.anno, env, ctx);
+    const ctx = GenTypeAnnoCtx{ .annotation = .{ .where = type_anno.where, .opening = .implicit_open } };
+    try self.generateAnnoTypeInPlace(type_anno.anno, env, ctx, .pos);
     if (type_anno.where) |where_span| {
         if (try self.generateRemainingWhereConstraintOwners(where_span, env, ctx)) {
             try self.unifyWith(anno_var, .err, env);
@@ -9839,7 +10038,7 @@ const OutVar = enum {
 
 /// The context use for free var generation
 const GenTypeAnnoCtx = union(enum) {
-    annotation: ?CIR.WhereClause.Span,
+    annotation: AnnotationGenCtx,
     type_decl: struct {
         idx: CIR.Statement.Idx,
         name: Ident.Idx,
@@ -9848,6 +10047,40 @@ const GenTypeAnnoCtx = union(enum) {
         is_opaque: bool,
         num_args: u32,
     },
+
+    const AnnotationGenCtx = struct {
+        where: ?CIR.WhereClause.Span,
+        /// Whether extensionless tag unions in output (positive) positions are
+        /// implicitly opened (given a fresh flex ext instead of `[]`), and
+        /// polarity vars in referenced aliases resolved by position.
+        ///
+        /// Disabled for host-boundary annotations (hosted lambdas and
+        /// `provides` defs): the host is not a Roc producer participating in
+        /// unification, so those rows keep their written, closed meaning —
+        /// implicit opening would otherwise trip the host-boundary open-row
+        /// rule on every boundary tag union.
+        opening: OpeningBehavior,
+
+        pub const OpeningBehavior = enum { implicit_open, as_written };
+    };
+
+    /// How polarity vars in referenced type declarations should be
+    /// instantiated when this ctx generates a lookup/apply of a declaration.
+    fn polarityVarBehavior(self: GenTypeAnnoCtx) PolarityVarBehavior {
+        return switch (self) {
+            .annotation => |anno_ctx| switch (anno_ctx.opening) {
+                .implicit_open => .resolve_by_polarity,
+                .as_written => .close,
+            },
+            // An alias body keeps the decision deferred (its own use sites
+            // decide); a nominal body has no use-site polarity, so its rows
+            // close as written.
+            .type_decl => |decl| switch (decl.type_) {
+                .alias => .preserve,
+                .nominal => .close,
+            },
+        };
+    }
 };
 
 fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: *Env) std.mem.Allocator.Error!void {
@@ -9866,9 +10099,17 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
     const scratch_static_dispatch_constraints_top = self.scratch_static_dispatch_constraints.top();
     defer self.scratch_static_dispatch_constraints.clearFrom(scratch_static_dispatch_constraints_top);
 
-    // Then, generate the type for the annotation
-    const ctx = GenTypeAnnoCtx{ .annotation = annotation.where };
-    try self.generateAnnoTypeInPlace(annotation.anno, env, ctx);
+    // Then, generate the type for the annotation.
+    //
+    // Host-boundary annotations (hosted lambdas and `provides` defs) keep
+    // their rows as written: the host side is a fixed ABI, not a Roc producer,
+    // so implicit polarity opening does not apply across that boundary.
+    const opening: GenTypeAnnoCtx.AnnotationGenCtx.OpeningBehavior = if (self.host_boundary_annotations.contains(annotation_idx))
+        .as_written
+    else
+        .implicit_open;
+    const ctx = GenTypeAnnoCtx{ .annotation = .{ .where = annotation.where, .opening = opening } };
+    try self.generateAnnoTypeInPlace(annotation.anno, env, ctx, .pos);
     if (annotation.where) |where_span| {
         if (try self.generateRemainingWhereConstraintOwners(where_span, env, ctx)) {
             try self.unifyWith(ModuleEnv.varFrom(annotation.anno), .err, env);
@@ -9923,15 +10164,17 @@ fn completeOwnedStaticDispatchConstraint(
         return;
     }
 
-    try self.generateAnnoTypeInPlace(method.var_, env, ctx);
+    try self.generateAnnoTypeInPlace(method.var_, env, ctx, .neg);
 
+    // A where-clause method signature carries the same polarity structure as
+    // any function annotation: its args are inputs, its return an output.
     const args_anno_slice = self.cir.store.sliceTypeAnnos(method.args);
     for (args_anno_slice) |arg_anno_idx| {
-        try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx);
+        try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx, .neg);
     }
     const anno_arg_vars: []Var = @ptrCast(args_anno_slice);
 
-    try self.generateAnnoTypeInPlace(method.ret, env, ctx);
+    try self.generateAnnoTypeInPlace(method.ret, env, ctx, .pos);
     const ret_var = ModuleEnv.varFrom(method.ret);
 
     const func_content = if (method.effectful)
@@ -9951,7 +10194,8 @@ fn generateRemainingWhereConstraintOwners(
     var invalid_receiver = false;
     for (self.cir.store.sliceWhereClauseOwners(where_span)) |owner| {
         if (owner.introduced_in_scope) {
-            try self.generateAnnoTypeInPlace(@enumFromInt(owner.rigid_var), env, ctx);
+            // The owner is a rigid var anno; polarity is irrelevant for it.
+            try self.generateAnnoTypeInPlace(@enumFromInt(owner.rigid_var), env, ctx, .neg);
             continue;
         }
 
@@ -10002,7 +10246,14 @@ fn reportUnsupportedWhereAliases(self: *Self, where_span: CIR.WhereClause.Span) 
 /// So `a` get the node CIR.TypeAnno.rigid_var{ .. }
 /// And `b` & `c` get the node CIR.TypeAnno.rigid_var_lookup{ .ref = <a_id> }
 /// Then, any reference to `b` or `c` are replaced with `a` in `generateAnnoTypeInPlace`.
-fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, ctx: GenTypeAnnoCtx) std.mem.Allocator.Error!void {
+///
+/// `polarity` is the position of this anno within the annotation being
+/// generated: annotations start at `.pos` (output) and function argument
+/// positions negate it. Extensionless tag unions are implicitly opened in
+/// `.pos` positions (see `AnnotationGenCtx.opening`); within type
+/// declarations polarity is unused because the open-vs-closed decision is
+/// deferred to use-site instantiation via polarity vars.
+fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, ctx: GenTypeAnnoCtx, polarity: Polarity) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -10030,8 +10281,8 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 }
             }
             const owned_where_clauses: []const CIR.WhereClause.Idx = switch (ctx) {
-                .annotation => |mb_where| blk: {
-                    const where_span = mb_where orelse break :blk &.{};
+                .annotation => |anno_ctx| blk: {
+                    const where_span = anno_ctx.where orelse break :blk &.{};
                     for (self.cir.store.sliceWhereClauseOwners(where_span)) |owner| {
                         if (owner.rigid_var == @intFromEnum(anno_idx) and owner.introduced_in_scope) {
                             break :blk self.cir.store.sliceWhereClausesForOwner(owner);
@@ -10176,16 +10427,24 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                             try self.unifyWith(anno_var, .err, env);
                             return;
                         }
-                        const instantiated_var = try self.instantiateVar(local_decl_var, env, .{ .explicit = anno_region });
+                        const instantiated_var = try self.instantiateVarPolarized(
+                            local_decl_var,
+                            env,
+                            .{ .explicit = anno_region },
+                            ctx.polarityVarBehavior(),
+                            polarity,
+                        );
                         _ = try self.unify(anno_var, instantiated_var, env);
                     }
                 },
                 .external => |ext| {
                     if (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) |ext_ref| {
-                        const ext_instantiated_var = try self.instantiateVar(
+                        const ext_instantiated_var = try self.instantiateVarPolarized(
                             ext_ref.local_var,
                             env,
                             .{ .explicit = anno_region },
+                            ctx.polarityVarBehavior(),
+                            polarity,
                         );
                         _ = try self.unify(anno_var, ext_instantiated_var, env);
                     } else {
@@ -10202,10 +10461,12 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             }
         },
         .apply => |a| {
-            // Generate the types for the arguments
+            // Generate the types for the arguments. Type application args
+            // inherit the application's polarity: `Try(U8, [E])` in an output
+            // position puts `[E]` in an output position too.
             const anno_args = self.cir.store.sliceTypeAnnos(a.args);
             for (anno_args) |anno_arg| {
-                try self.generateAnnoTypeInPlace(anno_arg, env, ctx);
+                try self.generateAnnoTypeInPlace(anno_arg, env, ctx, polarity);
             }
             const anno_arg_vars: []Var = @ptrCast(anno_args);
 
@@ -10336,11 +10597,13 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                     // Then instantiate the variable, substituting the rigid
                     // variables in the definition with the applied args from
                     // the annotation
-                    const instantiated_var = try self.instantiateVarWithSubs(
+                    const instantiated_var = try self.instantiateVarWithSubsPolarized(
                         decl_var,
                         &self.rigid_var_substitutions,
                         env,
                         .{ .explicit = anno_region },
+                        ctx.polarityVarBehavior(),
+                        polarity,
                     );
                     if (decl_is_alias and !try self.validateAliasRows(instantiated_var, env, anno_region)) {
                         try self.unifyWith(anno_var, .err, env);
@@ -10417,11 +10680,13 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         // Then instantiate the variable, substituting the rigid
                         // variables in the definition with the applied args from
                         // the annotation
-                        const instantiated_var = try self.instantiateVarWithSubs(
+                        const instantiated_var = try self.instantiateVarWithSubsPolarized(
                             ext_ref.local_var,
                             &self.rigid_var_substitutions,
                             env,
                             .{ .explicit = anno_region },
+                            ctx.polarityVarBehavior(),
+                            polarity,
                         );
                         if (ext_is_alias and !try self.validateAliasRows(instantiated_var, env, anno_region)) {
                             try self.unifyWith(anno_var, .err, env);
@@ -10442,13 +10707,15 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             }
         },
         .@"fn" => |func| {
+            // Argument positions negate the surrounding polarity; the return
+            // position preserves it.
             const args_anno_slice = self.cir.store.sliceTypeAnnos(func.args);
             for (args_anno_slice) |arg_anno_idx| {
-                try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx);
+                try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx, polarity.flip());
             }
             const args_var_slice: []Var = @ptrCast(args_anno_slice);
 
-            try self.generateAnnoTypeInPlace(func.ret, env, ctx);
+            try self.generateAnnoTypeInPlace(func.ret, env, ctx, polarity);
 
             const fn_type = inner_blk: {
                 if (func.effectful) {
@@ -10480,7 +10747,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 // Generate the types for each tag arg
                 const tag_anno_args_slice = self.cir.store.sliceTypeAnnos(tag.args);
                 for (tag_anno_args_slice) |tag_arg_idx| {
-                    try self.generateAnnoTypeInPlace(tag_arg_idx, env, ctx);
+                    try self.generateAnnoTypeInPlace(tag_arg_idx, env, ctx, polarity);
                 }
                 const tag_vars_slice: []Var = @ptrCast(tag_anno_args_slice);
 
@@ -10506,14 +10773,67 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             // stable range here mirrors the record case below.
             const tags_range = try self.types.appendTags(tags_slice);
 
-            // Process the ext if it exists. Absence means it's a closed union
+            // Process the ext.
+            //
+            // An explicit ext anno is generated in place, with one exception:
+            // an anonymous `..` in an output position of an opening annotation
+            // is redundant (extensionless unions there are implicitly open),
+            // so it warns and is generated exactly as if it were absent.
+            //
+            // An absent ext means:
+            //   * in an opening annotation: implicitly open (fresh flex ext)
+            //     in output positions, closed (`[]`) in input positions;
+            //   * in an alias declaration body: deferred — a polarity var
+            //     resolved by the polarity of each use site (see
+            //     `types.polarity_var_text`);
+            //   * otherwise (nominal bodies, host-boundary annotations):
+            //     closed, as written.
+            //
+            // A union with no tags is exempt from all of this: `[]` asserts
+            // uninhabitedness (eg `Try(a, [])` needs no `Err` branch), which
+            // opening would silently destroy. It always means the closed
+            // empty union, and a `..` on it (`[..]`) is never redundant.
+            const anno_has_tags = tag_anno_slices.len > 0;
             const ext_var = inner_blk: {
                 if (tag_union.ext) |ext_anno_idx| {
-                    try self.generateAnnoTypeInPlace(ext_anno_idx, env, ctx);
+                    if (anno_has_tags and
+                        polarity == .pos and
+                        ctx == .annotation and
+                        ctx.annotation.opening == .implicit_open and
+                        self.annoIsAnonymousOpenExt(ext_anno_idx))
+                    {
+                        _ = try self.problems.appendProblem(self.gpa, .{ .redundant_open_tag_union = .{
+                            .region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(ext_anno_idx)),
+                        } });
+
+                        const redundant_ext_var = ModuleEnv.varFrom(ext_anno_idx);
+                        try self.setVarRank(redundant_ext_var, env);
+                        self.markTypeAnnoSeen(ext_anno_idx);
+                        try self.unifyWith(redundant_ext_var, .{ .flex = Flex.init() }, env);
+                        break :inner_blk redundant_ext_var;
+                    }
+
+                    try self.generateAnnoTypeInPlace(ext_anno_idx, env, ctx, polarity);
                     break :inner_blk ModuleEnv.varFrom(ext_anno_idx);
-                } else {
+                }
+
+                if (!anno_has_tags) {
                     break :inner_blk try self.freshFromContent(.{ .structure = .empty_tag_union }, env, anno_region);
                 }
+
+                break :inner_blk switch (ctx) {
+                    .annotation => |anno_ctx| switch (anno_ctx.opening) {
+                        .implicit_open => switch (polarity) {
+                            .pos => try self.fresh(env, anno_region),
+                            .neg => try self.freshFromContent(.{ .structure = .empty_tag_union }, env, anno_region),
+                        },
+                        .as_written => try self.freshFromContent(.{ .structure = .empty_tag_union }, env, anno_region),
+                    },
+                    .type_decl => |decl| switch (decl.type_) {
+                        .alias => try self.freshFromContent(.{ .rigid = Rigid.init(self.cir.idents.polarity_var) }, env, anno_region),
+                        .nominal => try self.freshFromContent(.{ .structure = .empty_tag_union }, env, anno_region),
+                    },
+                };
             };
 
             // Set the anno's type
@@ -10546,7 +10866,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 // not real record fields: keep them out of the structural row so
                 // they are never unified, name-resolved, or required at
                 // construction (and so repeated `_` names cannot collide).
-                try self.generateAnnoTypeInPlace(rec_field.ty, env, ctx);
+                try self.generateAnnoTypeInPlace(rec_field.ty, env, ctx, polarity);
                 if (rec_field.is_unnamed) continue;
                 const record_field_var = ModuleEnv.varFrom(rec_field.ty);
 
@@ -10568,7 +10888,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
             // Process the ext if it exists. Absence (null) means it's a closed record.
             const ext_var = if (rec.ext) |ext_anno_idx| blk: {
-                try self.generateAnnoTypeInPlace(ext_anno_idx, env, ctx);
+                try self.generateAnnoTypeInPlace(ext_anno_idx, env, ctx, polarity);
                 break :blk ModuleEnv.varFrom(ext_anno_idx);
             } else blk: {
                 break :blk try self.freshFromContent(.{ .structure = .empty_record }, env, anno_region);
@@ -10590,20 +10910,28 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
             const elems_anno_slice = self.cir.store.sliceTypeAnnos(tuple.elems);
             for (elems_anno_slice) |arg_anno_idx| {
-                try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx);
+                try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx, polarity);
                 try self.scratch_vars.append(ModuleEnv.varFrom(arg_anno_idx));
             }
             const elems_range = try self.types.appendVars(self.scratch_vars.sliceFromStart(scratch_vars_top));
             try self.unifyWith(anno_var, .{ .structure = .{ .tuple = .{ .elems = elems_range } } }, env);
         },
         .parens => |parens| {
-            try self.generateAnnoTypeInPlace(parens.anno, env, ctx);
+            try self.generateAnnoTypeInPlace(parens.anno, env, ctx, polarity);
             _ = try self.unify(anno_var, ModuleEnv.varFrom(parens.anno), env);
         },
         .malformed => {
             try self.unifyWith(anno_var, .err, env);
         },
     }
+}
+
+/// Whether this ext anno is the anonymous `..` of an open tag union or
+/// record (canonicalized as a rigid var named `#others`). User-written type
+/// vars can never collide: `#` is not valid in source identifiers.
+fn annoIsAnonymousOpenExt(self: *const Self, ext_anno_idx: CIR.TypeAnno.Idx) bool {
+    const ext_anno = self.cir.store.getTypeAnno(ext_anno_idx);
+    return ext_anno == .rigid_var and ext_anno.rigid_var.name.eql(self.cir.idents.open_ext);
 }
 
 fn validateAliasRows(self: *Self, var_: Var, env: *Env, region: Region) Allocator.Error!bool {
@@ -11087,8 +11415,8 @@ const TryArgs = struct {
 
 // pattern //
 
-/// The "polarity" of a tag union or record
-const Polarity = enum { open, closed };
+/// Whether a pattern's tag union or record row should be inferred open or closed
+const RowOpenness = enum { open, closed };
 
 /// The context that this pattern is being called in
 /// This determines if, for tag unions & records, they should be inferred
@@ -11100,7 +11428,7 @@ const PatternCtx = enum {
     for_,
     match_branch,
 
-    fn toPolarity(self: PatternCtx) Polarity {
+    fn toRowOpenness(self: PatternCtx) RowOpenness {
         return switch (self) {
             .bound, .fn_arg, .for_ => .closed,
             .from_annotation, .match_branch => .open,
@@ -11307,7 +11635,7 @@ fn checkPatternHelp(
             };
 
             // Create the type
-            const ext_var = switch (ctx.toPolarity()) {
+            const ext_var = switch (ctx.toRowOpenness()) {
                 .open => try self.fresh(env, pattern_region),
                 .closed => try self.freshFromContent(.{ .structure = .empty_tag_union }, env, pattern_region),
             };
@@ -14224,6 +14552,12 @@ fn shouldGeneralize(
 /// type variable. The polymorphic annotation is the opt-in, honored regardless
 /// of whether the RHS does work (an expansive definition pays per-specialization
 /// — the cost the author chose by writing the scheme).
+///
+/// A variable can be introduced implicitly as well as spelled out: polarity
+/// opening gives an extensionless tag union in an output position a flex
+/// extension (directly, or through an alias whose declaration deferred the
+/// decision). Those annotations denote schemes too, so consult the recorded
+/// generation-time ground truth alongside the syntactic flag.
 fn isGeneralizableValueBinding(
     self: *const Self,
     annotation: ?CIR.Annotation.Idx,
@@ -14231,7 +14565,8 @@ fn isGeneralizableValueBinding(
 ) bool {
     if (!is_binding_rhs) return false;
     const annotation_idx = annotation orelse return false;
-    return self.cir.store.getAnnotation(annotation_idx).mentions_type_var;
+    if (self.cir.store.getAnnotation(annotation_idx).mentions_type_var) return true;
+    return self.annotation_scheme_has_vars.contains(annotation_idx);
 }
 
 fn exprAlwaysCrashes(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
@@ -18867,12 +19202,34 @@ fn staticDispatchConstraintAcceptsCandidate(
         break :blk try self.instantiateVar(copied_var, env, .{ .explicit = self.getRegionAt(candidate_var) });
     };
 
+    try self.recordIntrinsicDispatchUse(method_lookup, method_var);
+
     // The real unify wrapper, not the throwaway-store probe unify: on the commit
     // path this merge (and its rank/region/deferred-constraint bookkeeping) is
     // kept. A mismatch records a problem and poisons the operands, all of which the
     // commit-probe rollback rewinds.
     const result = try self.unify(method_var, constraint.fn_var, env);
     return result.isOk();
+}
+
+/// Record a dispatch use whose resolved method is an annotation-only Builtin
+/// intrinsic. Monotype implements those methods and retypes rows reachable
+/// from their instantiated signatures (e.g. the derived tag-union parser
+/// widens a `ParseTagUnionSpec.parse` options row with the parent parser's
+/// errors), so `closeUnquantifiedTagRowExts` keeps those rows open.
+fn recordIntrinsicDispatchUse(
+    self: *Self,
+    method_lookup: StaticDispatchMethodBinding,
+    method_var: Var,
+) std.mem.Allocator.Error!void {
+    const method_env = method_lookup.env;
+    const def = method_env.store.getDef(method_lookup.binding.def_idx);
+    const anno = switch (method_env.store.getExpr(def.expr)) {
+        .e_anno_only => |anno| anno,
+        else => return,
+    };
+    if (!can.BuiltinLowLevel.isIntrinsicAnnotation(method_env, anno.ident)) return;
+    try self.intrinsic_dispatch_fn_vars.append(self.gpa, method_var);
 }
 
 /// Whether every numeral literal in a defaulting component's combined fit set
@@ -19114,6 +19471,7 @@ fn dispatchTargetMethodVar(
         const copied_var = try self.copyVar(method_type_var, method_lookup.env, region);
         break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
     };
+    try self.recordIntrinsicDispatchUse(method_lookup, method_var);
 
     // A target that reused an in-flight cycle var performed no instantiation,
     // but its checked scheme still owns the nested evidence contract. Publish
@@ -19995,6 +20353,10 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         }
                     } else if (constraint.fn_name.eql(self.cir.idents.parser_for)) {
                         const region = self.getRegionAt(deferred_constraint.var_);
+                        // A derived parser determines each tag row exactly, so
+                        // implicit output-position openness collapses first
+                        // (see closeTagRowsForDerivation).
+                        try self.closeTagRowsForDerivation(deferred_constraint.var_, env);
                         switch (try self.typeSupportsDerivedParse(dispatcher_content.structure, env, region)) {
                             .supported => {
                                 try self.satisfyImplicitParserConstraint(
@@ -20030,6 +20392,10 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         }
                     } else if (constraint.fn_name.eql(self.cir.idents.encoder_for)) {
                         const region = self.getRegionAt(deferred_constraint.var_);
+                        // A derived encoder determines each tag row exactly, so
+                        // implicit output-position openness collapses first
+                        // (see closeTagRowsForDerivation).
+                        try self.closeTagRowsForDerivation(deferred_constraint.var_, env);
                         const encoding_var = self.encoderForConstraintEncodingVar(constraint) orelse {
                             try self.reportConstraintError(
                                 deferred_constraint.var_,
@@ -20848,6 +21214,334 @@ fn nominalIsBuiltinBoolType(self: *const Self, nominal_type: types_mod.NominalTy
     return ident.eql(self.cir.idents.bool) or ident.eql(self.cir.idents.bool_type);
 }
 
+/// Close every reachable tag union row whose extension is an unbound flex var
+/// before deriving a structural parser or encoder for `var_`.
+///
+/// Under polarity, annotated tag unions in output positions carry an implicit
+/// flex extension. A derived parser/encoder determines the row exactly (it can
+/// only produce/consume the listed tags), so the openness collapses here: each
+/// flex ext unifies with `[]`, exactly like an exhaustive match closing an
+/// inferred row. Downstream shape checks (closed-row requirements, the
+/// `[Missing]`/`[Null]` optional-field conventions) then see the closed rows.
+///
+/// Only the ext of an existing tag union structure is closed. A bare flex var
+/// elsewhere (eg the unbound err row of `Try(ok, _)`, which parse derivation
+/// pins to `[Missing]` separately) is left untouched.
+fn closeTagRowsForDerivation(self: *Self, var_: Var, env: *Env) Allocator.Error!void {
+    self.var_set.clearRetainingCapacity();
+    try self.closeTagRowsForDerivationHelp(var_, env, &self.var_set);
+}
+
+fn closeTagRowsForDerivationHelp(
+    self: *Self,
+    var_: Var,
+    env: *Env,
+    visited: *std.AutoHashMap(Var, void),
+) Allocator.Error!void {
+    const resolved = self.types.resolveVar(var_);
+    if (visited.contains(resolved.var_)) return;
+    try visited.put(resolved.var_, {});
+
+    switch (resolved.desc.content) {
+        .flex, .rigid, .err => {},
+        .alias => |alias| {
+            // Index-based iteration: recursion can append vars, invalidating
+            // any slice into the store's backing array.
+            var arg_span = alias.vars.nonempty;
+            arg_span.dropFirstElem();
+            var i: usize = 0;
+            while (i < arg_span.count) : (i += 1) {
+                const arg_var = self.types.vars.items.items[@intFromEnum(arg_span.start) + i];
+                try self.closeTagRowsForDerivationHelp(arg_var, env, visited);
+            }
+            try self.closeTagRowsForDerivationHelp(self.types.getAliasBackingVar(alias), env, visited);
+        },
+        .structure => |flat_type| switch (flat_type) {
+            .record => |record| {
+                const fields_range = record.fields;
+                var i: usize = 0;
+                while (i < fields_range.count) : (i += 1) {
+                    // Re-fetch per iteration: recursion can grow the store.
+                    const field = self.types.record_fields.get(@enumFromInt(@intFromEnum(fields_range.start) + i));
+                    try self.closeTagRowsForDerivationHelp(field.var_, env, visited);
+                }
+                try self.closeTagRowsForDerivationHelp(record.ext, env, visited);
+            },
+            .record_unbound => |fields_range| {
+                var i: usize = 0;
+                while (i < fields_range.count) : (i += 1) {
+                    const field = self.types.record_fields.get(@enumFromInt(@intFromEnum(fields_range.start) + i));
+                    try self.closeTagRowsForDerivationHelp(field.var_, env, visited);
+                }
+            },
+            .tuple => |tuple| {
+                var i: usize = 0;
+                while (i < tuple.elems.count) : (i += 1) {
+                    const elem_var = self.types.vars.items.items[@intFromEnum(tuple.elems.start) + i];
+                    try self.closeTagRowsForDerivationHelp(elem_var, env, visited);
+                }
+            },
+            .nominal_type => |nominal| {
+                const args_range = types_mod.store.Store.getNominalArgsRange(nominal);
+                var i: usize = 0;
+                while (i < args_range.count) : (i += 1) {
+                    const arg_var = self.types.vars.items.items[@intFromEnum(args_range.start) + i];
+                    try self.closeTagRowsForDerivationHelp(arg_var, env, visited);
+                }
+            },
+            .tag_union => |tag_union| {
+                const tags_range = tag_union.tags;
+                var tag_i: usize = 0;
+                while (tag_i < tags_range.count) : (tag_i += 1) {
+                    const tag_args = self.types.tags.get(@enumFromInt(@intFromEnum(tags_range.start) + tag_i)).args;
+                    var arg_i: usize = 0;
+                    while (arg_i < tag_args.count) : (arg_i += 1) {
+                        const arg_var = self.types.vars.items.items[@intFromEnum(tag_args.start) + arg_i];
+                        try self.closeTagRowsForDerivationHelp(arg_var, env, visited);
+                    }
+                }
+
+                const ext_resolved = self.types.resolveVar(tag_union.ext);
+                if (ext_resolved.desc.content == .flex) {
+                    const ext_region = self.getRegionAt(ext_resolved.var_);
+                    const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, ext_region);
+                    _ = try self.unify(tag_union.ext, empty_tu_var, env);
+                } else {
+                    try self.closeTagRowsForDerivationHelp(tag_union.ext, env, visited);
+                }
+            },
+            .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => {},
+        },
+    }
+}
+
+/// After the module has fully solved, ground every tag-row extension that is
+/// still an unconstrained flex variable and is not quantified by anything a
+/// later instantiation consumes. Polarity's implicit output-position openness
+/// leaves such extensions throughout checked bodies; nothing can constrain
+/// them once checking settles, so they would only reach the same empty
+/// default at Monotype sealing — while costing Monotype its structural
+/// specialization identity along the way (an unresolved request has no
+/// durable key, so recursive helpers re-specialize without bound).
+///
+/// Quantified rows keep their openness: instantiation copies them fresh at
+/// each use, which is where output-position widening actually happens. The
+/// instantiation sources are top-level def schemes, generalized local
+/// function schemes, expression-position function schemes recorded at
+/// construction edges, type declarations (including their backing
+/// templates), standalone type annotations, and platform requirements.
+fn closeUnquantifiedTagRowExts(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const num_vars: u32 = @intCast(self.types.len());
+    var keep_open = try std.DynamicBitSetUnmanaged.initEmpty(self.gpa, num_vars);
+    defer keep_open.deinit(self.gpa);
+    var worklist: std.ArrayListUnmanaged(Var) = .empty;
+    defer worklist.deinit(self.gpa);
+
+    // Top-level defs are scheme roots regardless of generalization: their
+    // published types are what importers and Monotype roots consume.
+    for (0..self.cir.all_defs.span.len) |def_offset| {
+        const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
+        try self.appendKeepOpenRootsForDef(def_idx, &worklist);
+    }
+    for (self.cir.store.sliceDefs(self.cir.global_value_defs)) |def_idx| {
+        try self.appendKeepOpenRootsForDef(def_idx, &worklist);
+    }
+
+    // Local declarations binding a function generalize to local schemes
+    // (the same criteria the checked artifact's `local_schemes` table uses);
+    // type declarations and standalone annotations are instantiated
+    // templates.
+    var raw_node: u32 = 0;
+    const num_nodes: u32 = @intCast(self.cir.store.nodes.len());
+    while (raw_node < num_nodes) : (raw_node += 1) {
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node);
+        switch (self.cir.store.nodes.get(node_idx).tag) {
+            .statement_decl => {
+                const decl = switch (self.cir.store.getStatement(@enumFromInt(raw_node))) {
+                    .s_decl => |decl| decl,
+                    else => continue,
+                };
+                switch (self.cir.store.getExpr(decl.expr)) {
+                    .e_lambda, .e_closure => {},
+                    else => continue,
+                }
+                const pattern_var = ModuleEnv.varFrom(decl.pattern);
+                if (self.types.resolveVar(pattern_var).desc.rank != .generalized) continue;
+                try worklist.append(self.gpa, pattern_var);
+            },
+            .expr_lambda, .expr_closure => {
+                // A generalized function expression is a scheme wherever it
+                // sits (a local decl, or expression position stored in a
+                // containing value); each use instantiates it fresh, so its
+                // quantified rows stay open.
+                const lambda_var: Var = @enumFromInt(raw_node);
+                if (self.types.resolveVar(lambda_var).desc.rank != .generalized) continue;
+                try worklist.append(self.gpa, lambda_var);
+            },
+            .statement_alias_decl, .statement_nominal_decl, .statement_type_anno => {
+                try worklist.append(self.gpa, @enumFromInt(raw_node));
+            },
+            .expr_var => {
+                // Monotype implements annotation-only Builtin intrinsics and
+                // retypes rows their instantiated signatures reach (e.g. the
+                // derived tag-union parser widens a `ParseTagUnionSpec.parse`
+                // options row with the parent parser's errors), so those rows
+                // must stay open.
+                const lookup = switch (self.cir.store.getExpr(@enumFromInt(raw_node))) {
+                    .e_lookup_local => |lookup| lookup,
+                    else => continue,
+                };
+                const processing_def = self.topLevelPattern(lookup.pattern_idx) orelse continue;
+                const target_def = self.cir.store.getDef(processing_def.def_idx);
+                const anno = switch (self.cir.store.getExpr(target_def.expr)) {
+                    .e_anno_only => |anno| anno,
+                    else => continue,
+                };
+                if (!can.BuiltinLowLevel.isIntrinsicAnnotation(self.cir, anno.ident)) continue;
+                try worklist.append(self.gpa, @enumFromInt(raw_node));
+            },
+            else => {},
+        }
+    }
+
+    // Expression-position function schemes recorded at construction edges,
+    // and the per-edge instantiated copies recorded as dispatch evidence:
+    // publication resolves those exact vars and Monotype replays their
+    // relations, so both sides of every recorded pair stay open.
+    for (self.cir.scheme_uses.items.items) |record| {
+        try worklist.append(self.gpa, @enumFromInt(record.scheme_root));
+    }
+    for (self.cir.scheme_use_pairs.items.items) |pair| {
+        try worklist.append(self.gpa, @enumFromInt(pair.old_var));
+        try worklist.append(self.gpa, @enumFromInt(pair.fresh_var));
+    }
+
+    // Instantiated signatures of annotation-only Builtin intrinsics:
+    // Monotype implements those methods and retypes rows they reach.
+    for (self.intrinsic_dispatch_fn_vars.items) |fn_var| {
+        try worklist.append(self.gpa, fn_var);
+    }
+
+    // Declaration backing templates are instantiated per application.
+    for (0..self.types.nominal_decls.len()) |decl_offset| {
+        const decl = self.types.nominal_decls.get(@enumFromInt(decl_offset)).*;
+        try worklist.append(self.gpa, decl.backing);
+    }
+
+    // Platform requirement types are instantiated by app modules.
+    for (self.cir.requires_types.items.items) |required_type| {
+        try worklist.append(self.gpa, ModuleEnv.varFrom(required_type.type_anno));
+    }
+
+    // Mark everything reachable from the roots as keep-open.
+    while (worklist.pop()) |var_| {
+        const resolved = self.types.resolveVar(var_);
+        const raw_root = @intFromEnum(resolved.var_);
+        if (raw_root < num_vars) {
+            if (keep_open.isSet(raw_root)) continue;
+            keep_open.set(raw_root);
+        }
+        switch (resolved.desc.content) {
+            .flex, .rigid, .err => {},
+            .alias => |alias| {
+                var arg_span = alias.vars.nonempty;
+                arg_span.dropFirstElem();
+                var i: usize = 0;
+                while (i < arg_span.count) : (i += 1) {
+                    try worklist.append(self.gpa, self.types.vars.items.items[@intFromEnum(arg_span.start) + i]);
+                }
+                try worklist.append(self.gpa, self.types.getAliasBackingVar(alias));
+            },
+            .structure => |flat_type| switch (flat_type) {
+                .record => |record| {
+                    var i: usize = 0;
+                    while (i < record.fields.count) : (i += 1) {
+                        const field = self.types.record_fields.get(@enumFromInt(@intFromEnum(record.fields.start) + i));
+                        try worklist.append(self.gpa, field.var_);
+                    }
+                    try worklist.append(self.gpa, record.ext);
+                },
+                .record_unbound => |fields_range| {
+                    var i: usize = 0;
+                    while (i < fields_range.count) : (i += 1) {
+                        const field = self.types.record_fields.get(@enumFromInt(@intFromEnum(fields_range.start) + i));
+                        try worklist.append(self.gpa, field.var_);
+                    }
+                },
+                .tuple => |tuple| {
+                    var i: usize = 0;
+                    while (i < tuple.elems.count) : (i += 1) {
+                        try worklist.append(self.gpa, self.types.vars.items.items[@intFromEnum(tuple.elems.start) + i]);
+                    }
+                },
+                .nominal_type => |nominal| {
+                    const args_range = types_mod.store.Store.getNominalArgsRange(nominal);
+                    var i: usize = 0;
+                    while (i < args_range.count) : (i += 1) {
+                        try worklist.append(self.gpa, self.types.vars.items.items[@intFromEnum(args_range.start) + i]);
+                    }
+                },
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    var i: usize = 0;
+                    while (i < func.args.count) : (i += 1) {
+                        try worklist.append(self.gpa, self.types.vars.items.items[@intFromEnum(func.args.start) + i]);
+                    }
+                    try worklist.append(self.gpa, func.ret);
+                },
+                .tag_union => |tag_union| {
+                    var tag_i: usize = 0;
+                    while (tag_i < tag_union.tags.count) : (tag_i += 1) {
+                        const tag_args = self.types.tags.get(@enumFromInt(@intFromEnum(tag_union.tags.start) + tag_i)).args;
+                        var arg_i: usize = 0;
+                        while (arg_i < tag_args.count) : (arg_i += 1) {
+                            try worklist.append(self.gpa, self.types.vars.items.items[@intFromEnum(tag_args.start) + arg_i]);
+                        }
+                    }
+                    try worklist.append(self.gpa, tag_union.ext);
+                },
+                .empty_record, .empty_tag_union => {},
+            },
+        }
+    }
+
+    // Sweep: close every tag-union extension that resolves to an unmarked
+    // flex var. Fresh vars appended by the closing unifications sit past
+    // `num_vars` and are never tag unions themselves.
+    var var_int: u32 = 0;
+    while (var_int < num_vars) : (var_int += 1) {
+        const resolved = self.types.resolveVar(@enumFromInt(var_int));
+        if (!resolved.is_root) continue;
+        if (resolved.desc.content != .structure) continue;
+        if (resolved.desc.content.structure != .tag_union) continue;
+        const ext = resolved.desc.content.structure.tag_union.ext;
+        const ext_resolved = self.types.resolveVar(ext);
+        if (ext_resolved.desc.content != .flex) continue;
+        const raw_ext = @intFromEnum(ext_resolved.var_);
+        if (raw_ext < num_vars and keep_open.isSet(raw_ext)) continue;
+        const ext_region = self.getRegionAt(ext_resolved.var_);
+        const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, ext_region);
+        _ = try self.unify(ext, empty_tu_var, env);
+    }
+}
+
+/// Append a top-level def's scheme roots (its def, pattern, and annotation
+/// vars) to the keep-open worklist for `closeUnquantifiedTagRowExts`.
+fn appendKeepOpenRootsForDef(
+    self: *Self,
+    def_idx: CIR.Def.Idx,
+    worklist: *std.ArrayListUnmanaged(Var),
+) std.mem.Allocator.Error!void {
+    const def = self.cir.store.getDef(def_idx);
+    try worklist.append(self.gpa, ModuleEnv.varFrom(def_idx));
+    try worklist.append(self.gpa, ModuleEnv.varFrom(def.pattern));
+    if (def.annotation) |annotation_idx| {
+        try worklist.append(self.gpa, ModuleEnv.varFrom(annotation_idx));
+    }
+}
+
 fn typeSupportsDerivedParse(
     self: *Self,
     flat_type: types_mod.FlatType,
@@ -20956,6 +21650,9 @@ fn varSupportsDerivedParseTagExt(
         },
         .alias => |alias| try self.varSupportsDerivedParseTagExt(self.types.getAliasBackingVar(alias), env, region),
         .err => .supported,
+        // An unbound flex ext can be implicit output-position openness
+        // (polarity); closeTagRowsForDerivation grounds reachable rows before
+        // this check, so a still-flex ext is a genuinely unresolved row.
         .flex => .unresolved,
         .rigid => .unsupported,
     };
@@ -23276,7 +23973,15 @@ fn validateDerivedParseTagExt(
         },
         .alias => |alias| try self.validateDerivedParseTagExt(self.types.getAliasBackingVar(alias), encoding_var, state_var, err_var, constraint, env, region, visited),
         .err => .ok,
-        .flex, .rigid => .unsupported,
+        // An unbound flex ext is implicit output-position openness (polarity):
+        // a derived parser produces exactly the listed tags, so close the row
+        // here, exactly as derived encoding does below.
+        .flex => blk: {
+            const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
+            const result = try self.unify(ext_var, empty_tu_var, env);
+            break :blk if (result.isOk()) .ok else .reported_error;
+        },
+        .rigid => .unsupported,
     };
 }
 

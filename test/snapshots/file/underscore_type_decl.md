@@ -96,7 +96,7 @@ Pair3(_, _) = Pair(0, 1)
 (inferred-types
 	(defs)
 	(expressions
-		(expr (type "[Pair(Dec, Dec), Pair1([], []), ..]"))
-		(expr (type "[Pair(Dec, Dec), Pair2([], []), ..]"))
-		(expr (type "[Pair(Dec, Dec), Pair3([], []), ..]"))))
+		(expr (type "[Pair(Dec, Dec), Pair1([], [])]"))
+		(expr (type "[Pair(Dec, Dec), Pair2([], [])]"))
+		(expr (type "[Pair(Dec, Dec), Pair3([], [])]"))))
 ~~~

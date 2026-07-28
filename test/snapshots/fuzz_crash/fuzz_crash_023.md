@@ -982,7 +982,7 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 
     The value's type, which does not have a method named `from_quote`, is:
 
-        [Blue, Green, Red, ..]
+        [Blue, Green, Red]
 
 
 ┌────────────────┐
@@ -995,7 +995,7 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 
     The value's type, which does not have a method named `from_quote`, is:
 
-        [Blue, Green, Red, ..]
+        [Blue, Green, Red]
 
 
 ┌───────────────┐
@@ -1070,7 +1070,7 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 
     But the expression between the `match` parenthesis has the type:
 
-        [Blue, Green, Red, ..]
+        [Blue, Green, Red]
 
     These can never match! Either the pattern or expression has a problem.
 

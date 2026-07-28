@@ -317,10 +317,10 @@ Builtin :: [].{
 				}
 			}
 
-			invalid_json : [InvalidJson(Str), ..]
+			invalid_json : [InvalidJson(Str)]
 			invalid_json = InvalidJson("Invalid JSON")
 
-			parse_json_bool : Str -> Try({ value : Bool, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_json_bool : Str -> Try({ value : Bool, rest : JsonState }, [InvalidJson(Str)])
 			parse_json_bool = |raw| {
 				trimmed = json_trim_start(raw)
 				parts = Json.split_json_scalar_tail(trimmed)?
@@ -334,7 +334,7 @@ Builtin :: [].{
 				}
 			}
 
-			parse_json_null : Str -> Try(JsonState, [InvalidJson(Str), ..])
+			parse_json_null : Str -> Try(JsonState, [InvalidJson(Str)])
 			parse_json_null = |raw| {
 				trimmed = json_trim_start(raw)
 				parts = Json.split_json_scalar_tail(trimmed)?
@@ -348,7 +348,7 @@ Builtin :: [].{
 
 			## A JSON array never declares its element count up front, so list
 			## parsing always runs in Uncounted mode.
-			parse_list_start_from_json : Str -> Try([Counted({ len : U64, rest : JsonState }), Uncounted(JsonState)], [InvalidJson(Str), ..])
+			parse_list_start_from_json : Str -> Try([Counted({ len : U64, rest : JsonState }), Uncounted(JsonState)], [InvalidJson(Str)])
 			parse_list_start_from_json = |raw| {
 				trimmed = json_trim_start(raw)
 
@@ -359,7 +359,7 @@ Builtin :: [].{
 				}
 			}
 
-			parse_list_next_from_json : Str -> Try([Element(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
+			parse_list_next_from_json : Str -> Try([Element(JsonState), Done(JsonState)], [InvalidJson(Str)])
 			parse_list_next_from_json = |raw| {
 				trimmed = json_trim_start(raw)
 
@@ -370,7 +370,7 @@ Builtin :: [].{
 				}
 			}
 
-			parse_list_after_element_from_json : JsonEncoding, Str -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
+			parse_list_after_element_from_json : JsonEncoding, Str -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str)])
 			parse_list_after_element_from_json = |encoding, raw| {
 				trimmed = json_trim_start(raw)
 
@@ -396,7 +396,7 @@ Builtin :: [].{
 			## JSON writes tuples as arrays. Because the arity is known, a
 			## mismatch is detected here rather than by the driver, so the error
 			## can point at the element position that actually disagreed.
-			parse_tuple_start_from_json : Str, U64 -> Try(JsonState, [InvalidJson(Str), ..])
+			parse_tuple_start_from_json : Str, U64 -> Try(JsonState, [InvalidJson(Str)])
 			parse_tuple_start_from_json = |raw, len| {
 				trimmed = json_trim_start(raw)
 
@@ -419,7 +419,7 @@ Builtin :: [].{
 				}
 			}
 
-			parse_tuple_next_from_json : Str -> Try(JsonState, [InvalidJson(Str), ..])
+			parse_tuple_next_from_json : Str -> Try(JsonState, [InvalidJson(Str)])
 			parse_tuple_next_from_json = |raw| {
 				trimmed = json_trim_start(raw)
 
@@ -430,7 +430,7 @@ Builtin :: [].{
 				Ok(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, ","))))
 			}
 
-			parse_tuple_end_from_json : JsonEncoding, Str, U64 -> Try(JsonState, [InvalidJson(Str), ..])
+			parse_tuple_end_from_json : JsonEncoding, Str, U64 -> Try(JsonState, [InvalidJson(Str)])
 			parse_tuple_end_from_json = |encoding, raw, len| {
 				trimmed = json_trim_start(raw)
 
@@ -453,7 +453,7 @@ Builtin :: [].{
 				Err(Json.invalid_json)
 			}
 
-			parse_json_unsigned_int : Str, (Str -> Try(a, [BadNumStr])) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_json_unsigned_int : Str, (Str -> Try(a, [BadNumStr])) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str)])
 			parse_json_unsigned_int = |raw, parse_num| {
 				trimmed = json_trim_start(raw)
 				parts = Json.split_json_scalar_tail(trimmed)?
@@ -468,7 +468,7 @@ Builtin :: [].{
 				}
 			}
 
-			parse_json_signed_int : Str, (Str -> Try(a, [BadNumStr])) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_json_signed_int : Str, (Str -> Try(a, [BadNumStr])) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str)])
 			parse_json_signed_int = |raw, parse_num| {
 				trimmed = json_trim_start(raw)
 				parts = Json.split_json_scalar_tail(trimmed)?
@@ -483,7 +483,7 @@ Builtin :: [].{
 				}
 			}
 
-			parse_json_number : Str, (Str -> Try(a, [BadNumStr])) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_json_number : Str, (Str -> Try(a, [BadNumStr])) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str)])
 			parse_json_number = |raw, parse_num| {
 				trimmed = json_trim_start(raw)
 				parts = Json.split_json_scalar_tail(trimmed)?
@@ -618,7 +618,7 @@ Builtin :: [].{
 
 			## Read one quoted object key at the cursor, leaving the cursor
 			## just past the closing quote.
-			take_json_key : Str -> Try({ value : Str, rest : JsonState }, [InvalidJson(Str), ..])
+			take_json_key : Str -> Try({ value : Str, rest : JsonState }, [InvalidJson(Str)])
 			take_json_key = |raw| {
 				trimmed = json_trim_start(raw)
 
@@ -631,7 +631,7 @@ Builtin :: [].{
 				Ok({ value: parts.value, rest: JsonState.Input(json_trim_start(parts.after)) })
 			}
 
-			parse_json_key_unsigned_int : Str, (Str -> Try(a, [BadNumStr])) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_json_key_unsigned_int : Str, (Str -> Try(a, [BadNumStr])) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str)])
 			parse_json_key_unsigned_int = |raw, parse_num| {
 				parts = Json.take_json_key(raw)?
 
@@ -645,7 +645,7 @@ Builtin :: [].{
 				}
 			}
 
-			parse_json_key_signed_int : Str, (Str -> Try(a, [BadNumStr])) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_json_key_signed_int : Str, (Str -> Try(a, [BadNumStr])) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str)])
 			parse_json_key_signed_int = |raw, parse_num| {
 				parts = Json.take_json_key(raw)?
 
@@ -659,7 +659,7 @@ Builtin :: [].{
 				}
 			}
 
-			parse_json_key_number : Str, (Str -> Try(a, [BadNumStr])) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_json_key_number : Str, (Str -> Try(a, [BadNumStr])) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str)])
 			parse_json_key_number = |raw, parse_num| {
 				parts = Json.take_json_key(raw)?
 
@@ -819,7 +819,7 @@ Builtin :: [].{
 					value + 87
 				}
 
-			parse_record_start_from_json : Str -> Try([Counted({ len : U64, rest : JsonState }), Uncounted(JsonState)], [InvalidJson(Str), ..])
+			parse_record_start_from_json : Str -> Try([Counted({ len : U64, rest : JsonState }), Uncounted(JsonState)], [InvalidJson(Str)])
 			parse_record_start_from_json = |raw| {
 				trimmed = json_trim_start(raw)
 
@@ -840,7 +840,7 @@ Builtin :: [].{
 					Continue(JsonState),
 					Done(JsonState),
 				],
-				[InvalidJson(Str), ..],
+				[InvalidJson(Str)],
 			)
 			parse_record_field_from_json = |raw| {
 				remaining = json_trim_start(raw)
@@ -854,7 +854,7 @@ Builtin :: [].{
 				Ok(TryField({ name: key_parts.name, rest: key_parts.rest }))
 			}
 
-			parse_record_after_field_from_json : JsonEncoding, Str -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
+			parse_record_after_field_from_json : JsonEncoding, Str -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str)])
 			parse_record_after_field_from_json = |encoding, raw| {
 				trimmed = json_trim_start(raw)
 
@@ -881,7 +881,7 @@ Builtin :: [].{
 				Ok(Continue(JsonState.Input(after_comma)))
 			}
 
-			parse_json_object_key : Str -> Try({ name : Str, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_json_object_key : Str -> Try({ name : Str, rest : JsonState }, [InvalidJson(Str)])
 			parse_json_object_key = |remaining| {
 				if !Str.starts_with(remaining, "\"") {
 					return Err(Json.invalid_json)
@@ -935,7 +935,7 @@ Builtin :: [].{
 				}
 			}
 
-			skip_json_value : JsonEncoding, JsonState -> Try(JsonState, [InvalidJson(Str), ..])
+			skip_json_value : JsonEncoding, JsonState -> Try(JsonState, [InvalidJson(Str)])
 			skip_json_value = |encoding, state|
 				match state {
 					Input(raw) => {
@@ -959,7 +959,7 @@ Builtin :: [].{
 					}
 				}
 
-			skip_json_object : JsonEncoding, Str -> Try(JsonState, [InvalidJson(Str), ..])
+			skip_json_object : JsonEncoding, Str -> Try(JsonState, [InvalidJson(Str)])
 			skip_json_object = |encoding, raw| {
 				remaining = json_trim_start(raw)
 
@@ -1016,7 +1016,7 @@ Builtin :: [].{
 				}
 			}
 
-			skip_json_array : JsonEncoding, Str -> Try(JsonState, [InvalidJson(Str), ..])
+			skip_json_array : JsonEncoding, Str -> Try(JsonState, [InvalidJson(Str)])
 			skip_json_array = |encoding, raw| {
 				remaining = json_trim_start(raw)
 
@@ -1061,7 +1061,7 @@ Builtin :: [].{
 				}
 			}
 
-			parse_tag_union_from_json : Str, JsonEncoding, ParseTagUnionSpec(a) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_tag_union_from_json : Str, JsonEncoding, ParseTagUnionSpec(a) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str)])
 			parse_tag_union_from_json = |raw, encoding, spec| {
 				remaining = json_trim_start(raw)
 
@@ -1134,14 +1134,14 @@ Builtin :: [].{
 				}
 			}
 
-			start_string_tag_payloads : JsonState, U64 -> Try(JsonState, [InvalidJson(Str), ..])
+			start_string_tag_payloads : JsonState, U64 -> Try(JsonState, [InvalidJson(Str)])
 			start_string_tag_payloads = |state, count|
 				if count == 0 Ok(state) else Err(Json.invalid_json)
 
-			next_string_tag_payload : JsonState, U64, U64 -> Try(JsonState, [InvalidJson(Str), ..])
+			next_string_tag_payload : JsonState, U64, U64 -> Try(JsonState, [InvalidJson(Str)])
 			next_string_tag_payload = |_, _, _| Err(Json.invalid_json)
 
-			finish_string_tag_payloads : JsonState, U64 -> Try(JsonState, [InvalidJson(Str), ..])
+			finish_string_tag_payloads : JsonState, U64 -> Try(JsonState, [InvalidJson(Str)])
 			finish_string_tag_payloads = |state, count|
 				if count == 0 Ok(state) else Err(Json.invalid_json)
 
@@ -1149,7 +1149,7 @@ Builtin :: [].{
 			## a fixed-arity sequence, so it reads back through the tuple
 			## methods. A single payload is written bare, and a payload-free tag
 			## is written as an empty object.
-			start_object_tag_payloads : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str), ..])
+			start_object_tag_payloads : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str)])
 			start_object_tag_payloads = |encoding, state, count|
 				if count == 0 {
 					match state {
@@ -1164,7 +1164,7 @@ Builtin :: [].{
 					JsonEncoding.parse_tuple_start(encoding, state, count)
 				}
 
-			next_object_tag_payload : JsonEncoding, JsonState, U64, U64 -> Try(JsonState, [InvalidJson(Str), ..])
+			next_object_tag_payload : JsonEncoding, JsonState, U64, U64 -> Try(JsonState, [InvalidJson(Str)])
 			next_object_tag_payload = |encoding, state, index, count|
 				if count <= 1 {
 					Err(Json.invalid_json)
@@ -1172,7 +1172,7 @@ Builtin :: [].{
 					JsonEncoding.parse_tuple_next(encoding, state, index, count)
 				}
 
-			finish_object_tag_payloads : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str), ..])
+			finish_object_tag_payloads : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str)])
 			finish_object_tag_payloads = |encoding, state, count|
 				if count <= 1 {
 					Ok(state)
@@ -1180,7 +1180,7 @@ Builtin :: [].{
 					JsonEncoding.parse_tuple_end(encoding, state, count)
 				}
 
-			finish_tag_payload : JsonEncoding, a, Str -> Try({ value : a, rest : JsonState }, [InvalidJson(Str), ..])
+			finish_tag_payload : JsonEncoding, a, Str -> Try({ value : a, rest : JsonState }, [InvalidJson(Str)])
 			finish_tag_payload = |encoding, value, raw| {
 				remaining = json_trim_start(raw)
 
@@ -1205,7 +1205,7 @@ Builtin :: [].{
 				Err(Json.invalid_json)
 			}
 
-			consume_empty_json_object : Str -> Try({ after : Str }, [InvalidJson(Str), ..])
+			consume_empty_json_object : Str -> Try({ after : Str }, [InvalidJson(Str)])
 			consume_empty_json_object = |raw| {
 				remaining = json_trim_start(raw)
 
@@ -1425,7 +1425,7 @@ Builtin :: [].{
 			## \uXXXX (with surrogate pairs combined into one code point). Unknown escapes, incomplete
 			## escapes, and unpaired surrogates are invalid JSON. Strings without escapes return
 			## zero-copy slices.
-			split_json_string_tail : Str -> Try({ value : Str, after : Str }, [InvalidJson(Str), ..])
+			split_json_string_tail : Str -> Try({ value : Str, after : Str }, [InvalidJson(Str)])
 			split_json_string_tail = |tail| {
 				{ body, after } = scan_json_string_tail(tail)?
 				value = match body {
@@ -1438,7 +1438,7 @@ Builtin :: [].{
 			## Split a JSON scalar (number, boolean, or null) from the text after it.
 			## The scalar ends at the first `,`, `}`, `]`, or JSON whitespace; `after`
 			## keeps that delimiter. Both results are zero-copy slices.
-			split_json_scalar_tail : Str -> Try({ value : Str, after : Str }, [InvalidJson(Str), ..])
+			split_json_scalar_tail : Str -> Try({ value : Str, after : Str }, [InvalidJson(Str)])
 			split_json_scalar_tail = |raw| {
 				len = Str.count_utf8_bytes(raw)
 				var $index = 0
@@ -1492,7 +1492,7 @@ Builtin :: [].{
 					TrailingCommas => True
 				}
 
-			parse_str : JsonEncoding, JsonState -> Try({ value : Str, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_str : JsonEncoding, JsonState -> Try({ value : Str, rest : JsonState }, [InvalidJson(Str)])
 			parse_str = |_, state|
 				match state {
 					Input(raw) => {
@@ -1507,127 +1507,127 @@ Builtin :: [].{
 					}
 				}
 
-			parse_bool : JsonEncoding, JsonState -> Try({ value : Bool, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_bool : JsonEncoding, JsonState -> Try({ value : Bool, rest : JsonState }, [InvalidJson(Str)])
 			parse_bool = |_, state|
 				match state {
 					Input(raw) => Json.parse_json_bool(raw)
 				}
 
-			parse_u8 : JsonEncoding, JsonState -> Try({ value : U8, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_u8 : JsonEncoding, JsonState -> Try({ value : U8, rest : JsonState }, [InvalidJson(Str)])
 			parse_u8 = |_, state|
 				match state {
 					Input(raw) => Json.parse_json_unsigned_int(raw, u8_from_str)
 				}
 
-			parse_i8 : JsonEncoding, JsonState -> Try({ value : I8, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_i8 : JsonEncoding, JsonState -> Try({ value : I8, rest : JsonState }, [InvalidJson(Str)])
 			parse_i8 = |_, state|
 				match state {
 					Input(raw) => Json.parse_json_signed_int(raw, i8_from_str)
 				}
 
-			parse_u16 : JsonEncoding, JsonState -> Try({ value : U16, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_u16 : JsonEncoding, JsonState -> Try({ value : U16, rest : JsonState }, [InvalidJson(Str)])
 			parse_u16 = |_, state|
 				match state {
 					Input(raw) => Json.parse_json_unsigned_int(raw, u16_from_str)
 				}
 
-			parse_i16 : JsonEncoding, JsonState -> Try({ value : I16, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_i16 : JsonEncoding, JsonState -> Try({ value : I16, rest : JsonState }, [InvalidJson(Str)])
 			parse_i16 = |_, state|
 				match state {
 					Input(raw) => Json.parse_json_signed_int(raw, i16_from_str)
 				}
 
-			parse_u32 : JsonEncoding, JsonState -> Try({ value : U32, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_u32 : JsonEncoding, JsonState -> Try({ value : U32, rest : JsonState }, [InvalidJson(Str)])
 			parse_u32 = |_, state|
 				match state {
 					Input(raw) => Json.parse_json_unsigned_int(raw, u32_from_str)
 				}
 
-			parse_i32 : JsonEncoding, JsonState -> Try({ value : I32, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_i32 : JsonEncoding, JsonState -> Try({ value : I32, rest : JsonState }, [InvalidJson(Str)])
 			parse_i32 = |_, state|
 				match state {
 					Input(raw) => Json.parse_json_signed_int(raw, i32_from_str)
 				}
 
-			parse_u64 : JsonEncoding, JsonState -> Try({ value : U64, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_u64 : JsonEncoding, JsonState -> Try({ value : U64, rest : JsonState }, [InvalidJson(Str)])
 			parse_u64 = |_, state|
 				match state {
 					Input(raw) => Json.parse_json_unsigned_int(raw, u64_from_str)
 				}
 
-			parse_i64 : JsonEncoding, JsonState -> Try({ value : I64, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_i64 : JsonEncoding, JsonState -> Try({ value : I64, rest : JsonState }, [InvalidJson(Str)])
 			parse_i64 = |_, state|
 				match state {
 					Input(raw) => Json.parse_json_signed_int(raw, i64_from_str)
 				}
 
-			parse_u128 : JsonEncoding, JsonState -> Try({ value : U128, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_u128 : JsonEncoding, JsonState -> Try({ value : U128, rest : JsonState }, [InvalidJson(Str)])
 			parse_u128 = |_, state|
 				match state {
 					Input(raw) => Json.parse_json_unsigned_int(raw, u128_from_str)
 				}
 
-			parse_i128 : JsonEncoding, JsonState -> Try({ value : I128, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_i128 : JsonEncoding, JsonState -> Try({ value : I128, rest : JsonState }, [InvalidJson(Str)])
 			parse_i128 = |_, state|
 				match state {
 					Input(raw) => Json.parse_json_signed_int(raw, i128_from_str)
 				}
 
-			parse_dec : JsonEncoding, JsonState -> Try({ value : Dec, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_dec : JsonEncoding, JsonState -> Try({ value : Dec, rest : JsonState }, [InvalidJson(Str)])
 			parse_dec = |_, state|
 				match state {
 					Input(raw) => Json.parse_json_number(raw, Json.dec_from_json_number)
 				}
 
-			parse_f32 : JsonEncoding, JsonState -> Try({ value : F32, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_f32 : JsonEncoding, JsonState -> Try({ value : F32, rest : JsonState }, [InvalidJson(Str)])
 			parse_f32 = |_, state|
 				match state {
 					Input(raw) => Json.parse_json_number(raw, f32_from_str)
 				}
 
-			parse_f64 : JsonEncoding, JsonState -> Try({ value : F64, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_f64 : JsonEncoding, JsonState -> Try({ value : F64, rest : JsonState }, [InvalidJson(Str)])
 			parse_f64 = |_, state|
 				match state {
 					Input(raw) => Json.parse_json_number(raw, f64_from_str)
 				}
 
-			parse_null : JsonEncoding, JsonState -> Try(JsonState, [InvalidJson(Str), ..])
+			parse_null : JsonEncoding, JsonState -> Try(JsonState, [InvalidJson(Str)])
 			parse_null = |_, state|
 				match state {
 					Input(raw) => Json.parse_json_null(raw)
 				}
 
-			parse_list_start : JsonEncoding, JsonState -> Try([Counted({ len : U64, rest : JsonState }), Uncounted(JsonState)], [InvalidJson(Str), ..])
+			parse_list_start : JsonEncoding, JsonState -> Try([Counted({ len : U64, rest : JsonState }), Uncounted(JsonState)], [InvalidJson(Str)])
 			parse_list_start = |_, state|
 				match state {
 					Input(raw) => Json.parse_list_start_from_json(raw)
 				}
 
-			parse_list_next : JsonEncoding, JsonState -> Try([Element(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
+			parse_list_next : JsonEncoding, JsonState -> Try([Element(JsonState), Done(JsonState)], [InvalidJson(Str)])
 			parse_list_next = |_, state|
 				match state {
 					Input(raw) => Json.parse_list_next_from_json(raw)
 				}
 
-			parse_list_after_element : JsonEncoding, JsonState -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
+			parse_list_after_element : JsonEncoding, JsonState -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str)])
 			parse_list_after_element = |encoding, state|
 				match state {
 					Input(raw) => Json.parse_list_after_element_from_json(encoding, raw)
 				}
 
-			parse_tuple_start : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str), ..])
+			parse_tuple_start : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str)])
 			parse_tuple_start = |_, state, len|
 				match state {
 					Input(raw) => Json.parse_tuple_start_from_json(raw, len)
 				}
 
-			parse_tuple_next : JsonEncoding, JsonState, U64, U64 -> Try(JsonState, [InvalidJson(Str), ..])
+			parse_tuple_next : JsonEncoding, JsonState, U64, U64 -> Try(JsonState, [InvalidJson(Str)])
 			parse_tuple_next = |_, state, _, _|
 				match state {
 					Input(raw) => Json.parse_tuple_next_from_json(raw)
 				}
 
-			parse_tuple_end : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str), ..])
+			parse_tuple_end : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str)])
 			parse_tuple_end = |encoding, state, len|
 				match state {
 					Input(raw) => Json.parse_tuple_end_from_json(encoding, raw, len)
@@ -1636,7 +1636,7 @@ Builtin :: [].{
 			## A JSON object never declares its entry count up front, so record
 			## parsing always runs in Uncounted mode: the driver learns the end
 			## of the record from parse_record_field or parse_record_after_field.
-			parse_record_start : JsonEncoding, JsonState -> Try([Counted({ len : U64, rest : JsonState }), Uncounted(JsonState)], [InvalidJson(Str), ..])
+			parse_record_start : JsonEncoding, JsonState -> Try([Counted({ len : U64, rest : JsonState }), Uncounted(JsonState)], [InvalidJson(Str)])
 			parse_record_start = |_, state|
 				match state {
 					Input(raw) => Json.parse_record_start_from_json(raw)
@@ -1652,14 +1652,14 @@ Builtin :: [].{
 					Continue(JsonState),
 					Done(JsonState),
 				],
-				[InvalidJson(Str), ..],
+				[InvalidJson(Str)],
 			)
 			parse_record_field = |_, _, state|
 				match state {
 					Input(raw) => Json.parse_record_field_from_json(raw)
 				}
 
-			parse_record_after_field : JsonEncoding, JsonState -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
+			parse_record_after_field : JsonEncoding, JsonState -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str)])
 			parse_record_after_field = |encoding, state|
 				match state {
 					Input(raw) => Json.parse_record_after_field_from_json(encoding, raw)
@@ -1667,13 +1667,13 @@ Builtin :: [].{
 
 			## A JSON object never declares its entry count up front, so dict
 			## parsing always runs in Uncounted mode.
-			parse_dict_start : JsonEncoding, JsonState -> Try([Counted({ len : U64, rest : JsonState }), Uncounted(JsonState)], [InvalidJson(Str), ..])
+			parse_dict_start : JsonEncoding, JsonState -> Try([Counted({ len : U64, rest : JsonState }), Uncounted(JsonState)], [InvalidJson(Str)])
 			parse_dict_start = |_, state|
 				match state {
 					Input(raw) => Json.parse_record_start_from_json(raw)
 				}
 
-			parse_dict_next : JsonEncoding, JsonState -> Try([Entry(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
+			parse_dict_next : JsonEncoding, JsonState -> Try([Entry(JsonState), Done(JsonState)], [InvalidJson(Str)])
 			parse_dict_next = |_, state|
 				match state {
 					Input(raw) => {
@@ -1687,7 +1687,7 @@ Builtin :: [].{
 					}
 				}
 
-			parse_dict_after_key : JsonEncoding, JsonState -> Try(JsonState, [InvalidJson(Str), ..])
+			parse_dict_after_key : JsonEncoding, JsonState -> Try(JsonState, [InvalidJson(Str)])
 			parse_dict_after_key = |_, state|
 				match state {
 					Input(raw) => {
@@ -1701,19 +1701,19 @@ Builtin :: [].{
 					}
 				}
 
-			parse_dict_after_entry : JsonEncoding, JsonState -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
+			parse_dict_after_entry : JsonEncoding, JsonState -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str)])
 			parse_dict_after_entry = |encoding, state|
 				match state {
 					Input(raw) => Json.parse_record_after_field_from_json(encoding, raw)
 				}
 
-			skip_record_field : JsonEncoding, JsonState -> Try(JsonState, [InvalidJson(Str), ..])
+			skip_record_field : JsonEncoding, JsonState -> Try(JsonState, [InvalidJson(Str)])
 			skip_record_field = |encoding, state| Json.skip_json_value(encoding, state)
 
-			invalid_value : JsonEncoding, JsonState -> [InvalidJson(Str), ..]
+			invalid_value : JsonEncoding, JsonState -> [InvalidJson(Str)]
 			invalid_value = |_, _| Json.invalid_json
 
-			parse_tag_union : JsonEncoding, ParseTagUnionSpec(a), JsonState -> Try({ value : a, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_tag_union : JsonEncoding, ParseTagUnionSpec(a), JsonState -> Try({ value : a, rest : JsonState }, [InvalidJson(Str)])
 			parse_tag_union = |encoding, spec, state|
 				match state {
 					Input(value) => Json.parse_tag_union_from_json(value, encoding, spec)
@@ -1868,13 +1868,13 @@ Builtin :: [].{
 
 			## Dict keys arrive as JSON strings, so each key parser reads the
 			## quoted text at the cursor and converts it to the key type.
-			parse_key_str : JsonEncoding, JsonState -> Try({ value : Str, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_str : JsonEncoding, JsonState -> Try({ value : Str, rest : JsonState }, [InvalidJson(Str)])
 			parse_key_str = |_, state|
 				match state {
 					Input(raw) => Json.take_json_key(raw)
 				}
 
-			parse_key_bool : JsonEncoding, JsonState -> Try({ value : Bool, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_bool : JsonEncoding, JsonState -> Try({ value : Bool, rest : JsonState }, [InvalidJson(Str)])
 			parse_key_bool = |_, state|
 				match state {
 					Input(raw) => {
@@ -1890,79 +1890,79 @@ Builtin :: [].{
 					}
 				}
 
-			parse_key_u8 : JsonEncoding, JsonState -> Try({ value : U8, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_u8 : JsonEncoding, JsonState -> Try({ value : U8, rest : JsonState }, [InvalidJson(Str)])
 			parse_key_u8 = |_, state|
 				match state {
 					Input(raw) => Json.parse_json_key_unsigned_int(raw, u8_from_str)
 				}
 
-			parse_key_i8 : JsonEncoding, JsonState -> Try({ value : I8, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_i8 : JsonEncoding, JsonState -> Try({ value : I8, rest : JsonState }, [InvalidJson(Str)])
 			parse_key_i8 = |_, state|
 				match state {
 					Input(raw) => Json.parse_json_key_signed_int(raw, i8_from_str)
 				}
 
-			parse_key_u16 : JsonEncoding, JsonState -> Try({ value : U16, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_u16 : JsonEncoding, JsonState -> Try({ value : U16, rest : JsonState }, [InvalidJson(Str)])
 			parse_key_u16 = |_, state|
 				match state {
 					Input(raw) => Json.parse_json_key_unsigned_int(raw, u16_from_str)
 				}
 
-			parse_key_i16 : JsonEncoding, JsonState -> Try({ value : I16, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_i16 : JsonEncoding, JsonState -> Try({ value : I16, rest : JsonState }, [InvalidJson(Str)])
 			parse_key_i16 = |_, state|
 				match state {
 					Input(raw) => Json.parse_json_key_signed_int(raw, i16_from_str)
 				}
 
-			parse_key_u32 : JsonEncoding, JsonState -> Try({ value : U32, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_u32 : JsonEncoding, JsonState -> Try({ value : U32, rest : JsonState }, [InvalidJson(Str)])
 			parse_key_u32 = |_, state|
 				match state {
 					Input(raw) => Json.parse_json_key_unsigned_int(raw, u32_from_str)
 				}
 
-			parse_key_i32 : JsonEncoding, JsonState -> Try({ value : I32, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_i32 : JsonEncoding, JsonState -> Try({ value : I32, rest : JsonState }, [InvalidJson(Str)])
 			parse_key_i32 = |_, state|
 				match state {
 					Input(raw) => Json.parse_json_key_signed_int(raw, i32_from_str)
 				}
 
-			parse_key_u64 : JsonEncoding, JsonState -> Try({ value : U64, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_u64 : JsonEncoding, JsonState -> Try({ value : U64, rest : JsonState }, [InvalidJson(Str)])
 			parse_key_u64 = |_, state|
 				match state {
 					Input(raw) => Json.parse_json_key_unsigned_int(raw, u64_from_str)
 				}
 
-			parse_key_i64 : JsonEncoding, JsonState -> Try({ value : I64, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_i64 : JsonEncoding, JsonState -> Try({ value : I64, rest : JsonState }, [InvalidJson(Str)])
 			parse_key_i64 = |_, state|
 				match state {
 					Input(raw) => Json.parse_json_key_signed_int(raw, i64_from_str)
 				}
 
-			parse_key_u128 : JsonEncoding, JsonState -> Try({ value : U128, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_u128 : JsonEncoding, JsonState -> Try({ value : U128, rest : JsonState }, [InvalidJson(Str)])
 			parse_key_u128 = |_, state|
 				match state {
 					Input(raw) => Json.parse_json_key_unsigned_int(raw, u128_from_str)
 				}
 
-			parse_key_i128 : JsonEncoding, JsonState -> Try({ value : I128, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_i128 : JsonEncoding, JsonState -> Try({ value : I128, rest : JsonState }, [InvalidJson(Str)])
 			parse_key_i128 = |_, state|
 				match state {
 					Input(raw) => Json.parse_json_key_signed_int(raw, i128_from_str)
 				}
 
-			parse_key_dec : JsonEncoding, JsonState -> Try({ value : Dec, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_dec : JsonEncoding, JsonState -> Try({ value : Dec, rest : JsonState }, [InvalidJson(Str)])
 			parse_key_dec = |_, state|
 				match state {
 					Input(raw) => Json.parse_json_key_number(raw, Json.dec_from_json_number)
 				}
 
-			parse_key_f32 : JsonEncoding, JsonState -> Try({ value : F32, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_f32 : JsonEncoding, JsonState -> Try({ value : F32, rest : JsonState }, [InvalidJson(Str)])
 			parse_key_f32 = |_, state|
 				match state {
 					Input(raw) => Json.parse_json_key_number(raw, f32_from_str)
 				}
 
-			parse_key_f64 : JsonEncoding, JsonState -> Try({ value : F64, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_f64 : JsonEncoding, JsonState -> Try({ value : F64, rest : JsonState }, [InvalidJson(Str)])
 			parse_key_f64 = |_, state|
 				match state {
 					Input(raw) => Json.parse_json_key_number(raw, f64_from_str)
@@ -2047,13 +2047,13 @@ Builtin :: [].{
 			rename_field : HttpHeaderEncoding, Str -> Str
 			rename_field = |_, name| HttpHeader.underscores_to_dashes(name)
 
-			parse_str : HttpHeaderEncoding, HttpHeaderState -> Try({ value : Str, rest : HttpHeaderState }, [BadHeader, ..])
+			parse_str : HttpHeaderEncoding, HttpHeaderState -> Try({ value : Str, rest : HttpHeaderState }, [BadHeader])
 			parse_str = |_, state| {
 				value_parts = HttpHeader.take_header_value(state.raw)?
 				Ok({ value: value_parts.value, rest: HttpHeaderState.{ raw: value_parts.after } })
 			}
 
-			parse_u64 : HttpHeaderEncoding, HttpHeaderState -> Try({ value : U64, rest : HttpHeaderState }, [BadHeader, ..])
+			parse_u64 : HttpHeaderEncoding, HttpHeaderState -> Try({ value : U64, rest : HttpHeaderState }, [BadHeader])
 			parse_u64 = |_, state| {
 				value_parts = HttpHeader.take_header_value(state.raw)?
 
@@ -2066,7 +2066,7 @@ Builtin :: [].{
 			## Header sequences have no opening delimiter and no way to declare a
 			## header count up front, so parsing always starts in Uncounted mode
 			## on the unchanged input.
-			parse_record_start : HttpHeaderEncoding, HttpHeaderState -> Try([Counted({ len : U64, rest : HttpHeaderState }), Uncounted(HttpHeaderState)], [BadHeader, ..])
+			parse_record_start : HttpHeaderEncoding, HttpHeaderState -> Try([Counted({ len : U64, rest : HttpHeaderState }), Uncounted(HttpHeaderState)], [BadHeader])
 			parse_record_start = |_, state| Ok(Uncounted(state))
 
 			parse_record_field : HttpHeaderEncoding,
@@ -2079,17 +2079,17 @@ Builtin :: [].{
 					Continue(HttpHeaderState),
 					Done(HttpHeaderState),
 				],
-				[BadHeader, ..],
+				[BadHeader],
 			)
 			parse_record_field = |_, fields, state|
 				HttpHeader.parse_record_field_from_headers(fields, state.raw)
 
 			## Each header value consumes its own CRLF terminator, so the cursor
 			## is already at the next entry boundary after every field.
-			parse_record_after_field : HttpHeaderEncoding, HttpHeaderState -> Try([Continue(HttpHeaderState), Done(HttpHeaderState)], [BadHeader, ..])
+			parse_record_after_field : HttpHeaderEncoding, HttpHeaderState -> Try([Continue(HttpHeaderState), Done(HttpHeaderState)], [BadHeader])
 			parse_record_after_field = |_, state| Ok(Continue(state))
 
-			skip_record_field : HttpHeaderEncoding, HttpHeaderState -> Try(HttpHeaderState, [BadHeader, ..])
+			skip_record_field : HttpHeaderEncoding, HttpHeaderState -> Try(HttpHeaderState, [BadHeader])
 			skip_record_field = |_, state| {
 				parts = HttpHeader.take_header_value(state.raw)?
 				Ok(HttpHeaderState.{ raw: parts.after })
@@ -2125,10 +2125,10 @@ Builtin :: [].{
 				Ok(parsed.value)
 			}
 
-			parse_str : HttpHeaderEncoding, HttpHeaderState -> Try({ value : Str, rest : HttpHeaderState }, [BadHeader, ..])
+			parse_str : HttpHeaderEncoding, HttpHeaderState -> Try({ value : Str, rest : HttpHeaderState }, [BadHeader])
 			parse_str = |encoding, state| HttpHeaderEncoding.parse_str(encoding, state)
 
-			parse_u64 : HttpHeaderEncoding, HttpHeaderState -> Try({ value : U64, rest : HttpHeaderState }, [BadHeader, ..])
+			parse_u64 : HttpHeaderEncoding, HttpHeaderState -> Try({ value : U64, rest : HttpHeaderState }, [BadHeader])
 			parse_u64 = |encoding, state| HttpHeaderEncoding.parse_u64(encoding, state)
 
 			parse_record_field_from_headers : FieldName.FieldNames(_shape),
@@ -2140,7 +2140,7 @@ Builtin :: [].{
 					Continue(HttpHeaderState),
 					Done(HttpHeaderState),
 				],
-				[BadHeader, ..],
+				[BadHeader],
 			)
 			parse_record_field_from_headers = |fields, headers|
 				if Str.is_empty(headers) {
@@ -2184,7 +2184,7 @@ Builtin :: [].{
 					}
 				}
 
-			take_header_value : Str -> Try({ value : Str, after : Str }, [BadHeader, ..])
+			take_header_value : Str -> Try({ value : Str, after : Str }, [BadHeader])
 			take_header_value = |raw|
 				match Str.split_first(raw, "\r\n") {
 					Ok({ before, after }) => Ok({ value: Str.trim(before), after })
@@ -2525,7 +2525,7 @@ Builtin :: [].{
 		## Drop a byte count from the start of a string. Counts at or beyond the
 		## byte length return `Ok("")`; an in-range cut inside a UTF-8 code point
 		## returns `Err(BadUtf8)`. Valid slices do not allocate.
-		drop_first_bytes : Str, U64 -> Try(Str, [BadUtf8, ..])
+		drop_first_bytes : Str, U64 -> Try(Str, [BadUtf8])
 		drop_first_bytes = |str, count| {
 			if count < Str.count_utf8_bytes(str) {
 				byte = str_get_utf8_byte_unsafe(str, count)
@@ -2539,7 +2539,7 @@ Builtin :: [].{
 		## Drop a byte count from the end of a string. Counts at or beyond the byte
 		## length return `Ok("")`; an in-range cut inside a UTF-8 code point returns
 		## `Err(BadUtf8)`. Valid slices do not allocate.
-		drop_last_bytes : Str, U64 -> Try(Str, [BadUtf8, ..])
+		drop_last_bytes : Str, U64 -> Try(Str, [BadUtf8])
 		drop_last_bytes = |str, count| {
 			if count == 0 {
 				Ok(str)
@@ -2705,7 +2705,7 @@ Builtin :: [].{
 		## expect Str.from_utf8([]) == Ok("")
 		## expect Str.from_utf8([255]).is_err()
 		## ```
-		from_utf8 : List(U8) -> Try(Str, [BadUtf8({ problem : Str.Utf8Problem, index : U64 }), ..])
+		from_utf8 : List(U8) -> Try(Str, [BadUtf8({ problem : Str.Utf8Problem, index : U64 })])
 
 		## Converts a string literal to a [Str].
 		##
@@ -3884,7 +3884,7 @@ Builtin :: [].{
 		## expect [1, 2, 3].first() == Ok(1)
 		## expect [].first() == Err(ListWasEmpty)
 		## ```
-		first : List(item) -> Try(item, [ListWasEmpty, ..])
+		first : List(item) -> Try(item, [ListWasEmpty])
 		first = |list| if List.is_empty(list) {
 			Try.Err(ListWasEmpty)
 		} else {
@@ -3898,7 +3898,7 @@ Builtin :: [].{
 		## expect [100, 200, 300].get(1) == Ok(200)
 		## expect [100, 200, 300].get(5) == Err(OutOfBounds)
 		## ```
-		get : List(item), U64 -> Try(item, [OutOfBounds, ..])
+		get : List(item), U64 -> Try(item, [OutOfBounds])
 		get = |list, index| if index < List.len(list) {
 			Try.Ok(list_get_unsafe(list, index))
 		} else {
@@ -3913,7 +3913,7 @@ Builtin :: [].{
 		## expect ["bird", "lizard"].subscript(0) == Ok("bird")
 		## expect ["bird", "lizard"].subscript(5) == Err(OutOfBounds)
 		## ```
-		subscript : List(item), U64 -> Try(item, [OutOfBounds, ..])
+		subscript : List(item), U64 -> Try(item, [OutOfBounds])
 		subscript = |list, index| List.get(list, index)
 
 		## Returns the element at the given index, wrapping back to the start when the
@@ -3926,7 +3926,7 @@ Builtin :: [].{
 		## ```roc
 		## expect ["a", "b", "c"].get_wrap(4) == Ok("b")
 		## ```
-		get_wrap : List(item), U64 -> Try(item, [ListWasEmpty, ..])
+		get_wrap : List(item), U64 -> Try(item, [ListWasEmpty])
 		get_wrap = |list, index| {
 			len = List.len(list)
 			if len == 0 {
@@ -3942,7 +3942,7 @@ Builtin :: [].{
 		##
 		## expect [10, 20, 30].set(5, 99) == Err(OutOfBounds)
 		## ```
-		set : List(a), U64, a -> Try(List(a), [OutOfBounds, ..])
+		set : List(a), U64, a -> Try(List(a), [OutOfBounds])
 		set = |list, index, value|
 			if index < List.len(list) {
 				Ok(list_set_unsafe(list, index, value))
@@ -3956,7 +3956,7 @@ Builtin :: [].{
 		## expect [10, 20, 30].replace(1, 99) == Ok({ list: [10, 99, 30], prev: 20 })
 		## expect [10, 20, 30].replace(5, 99) == Err(OutOfBounds)
 		## ```
-		replace : List(a), U64, a -> Try({ list : List(a), prev : a }, [OutOfBounds, ..])
+		replace : List(a), U64, a -> Try({ list : List(a), prev : a }, [OutOfBounds])
 		replace = |list, index, new_value|
 			if index < List.len(list) {
 				Ok(list_replace_unsafe(list, index, new_value))
@@ -3970,7 +3970,7 @@ Builtin :: [].{
 		##
 		## expect [10, 20, 30].update(5, |x| x + 5) == Err(OutOfBounds)
 		## ```
-		update : List(a), U64, (a -> a) -> Try(List(a), [OutOfBounds, ..])
+		update : List(a), U64, (a -> a) -> Try(List(a), [OutOfBounds])
 		update = |list, index, func| if index < List.len(list) {
 			Ok(list_replace_unsafe(list, index, func(list_get_unsafe(list, index))).list)
 		} else {
@@ -3983,7 +3983,7 @@ Builtin :: [].{
 		##
 		## expect [10, 20, 30].swap(0, 5) == Err(OutOfBounds)
 		## ```
-		swap : List(a), U64, U64 -> Try(List(a), [OutOfBounds, ..])
+		swap : List(a), U64, U64 -> Try(List(a), [OutOfBounds])
 		swap = |list, index_1, index_2| {
 			len = List.len(list)
 			if index_1 < len and index_2 < len {
@@ -4000,7 +4000,7 @@ Builtin :: [].{
 		##
 		## expect [1.I64, 2, 3].insert(5, 9) == Err(OutOfBounds)
 		## ```
-		insert : List(a), U64, a -> Try(List(a), [OutOfBounds, ..])
+		insert : List(a), U64, a -> Try(List(a), [OutOfBounds])
 		insert = |list, index, item| {
 			len = List.len(list)
 			if index > len {
@@ -4569,7 +4569,7 @@ Builtin :: [].{
 		## expect [1, 2, 3].last() == Ok(3.0)
 		## expect [].last() == Err(ListWasEmpty)
 		## ```
-		last : List(item) -> Try(item, [ListWasEmpty, ..])
+		last : List(item) -> Try(item, [ListWasEmpty])
 		last = |list| if List.is_empty(list) {
 			Try.Err(ListWasEmpty)
 		} else {
@@ -5552,7 +5552,7 @@ Builtin :: [].{
 		## expect dictionary.get(1) == Ok("Apple")
 		## expect dictionary.get(2000) == Err(KeyNotFound)
 		## ```
-		get : Dict(k, v), k -> Try(v, [KeyNotFound, ..])
+		get : Dict(k, v), k -> Try(v, [KeyNotFound])
 			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
 		get = |dict, key| match dict {
 			HashMap(data) => match dict_find(data, key) {
@@ -6340,7 +6340,7 @@ Builtin :: [].{
 
 			## Add two [U8] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in a [U8].
-			plus_try : U8, U8 -> Try(U8, [Overflow, ..])
+			plus_try : U8, U8 -> Try(U8, [Overflow])
 			plus_try = |a, b| unsigned_plus_try(U8.highest, a, b)
 
 			## Iterator over [U8] values from `start` up to but not including `end`.
@@ -6396,7 +6396,7 @@ Builtin :: [].{
 
 			## Subtract the second [U8] from the first, returning `Err(Overflow)`
 			## instead of crashing or wrapping if the result does not fit in a [U8].
-			minus_try : U8, U8 -> Try(U8, [Overflow, ..])
+			minus_try : U8, U8 -> Try(U8, [Overflow])
 			minus_try = |a, b| unsigned_minus_try(a, b)
 
 			## Subtract the second [U8] from the first, saturating at the nearest bound on overflow.
@@ -6422,7 +6422,7 @@ Builtin :: [].{
 
 			## Multiply two [U8] values, returning `Err(Overflow)` instead of
 			## crashing or wrapping if the result does not fit in a [U8].
-			times_try : U8, U8 -> Try(U8, [Overflow, ..])
+			times_try : U8, U8 -> Try(U8, [Overflow])
 			times_try = |a, b| unsigned_times_try(U8.highest, 0, a, b)
 
 			## Multiply two [U8] values, saturating at the nearest bound on overflow.
@@ -6457,7 +6457,7 @@ Builtin :: [].{
 			##
 			## expect U8.pow_try(U8.highest, 2) == Err(Overflow)
 			## ```
-			pow_try : U8, U8 -> Try(U8, [Overflow, ..])
+			pow_try : U8, U8 -> Try(U8, [Overflow])
 			pow_try = |base, exponent| unsigned_pow_try(U8.highest, 0, 1, 2, base, exponent)
 
 			## Divide the first [U8] by the second, discarding any remainder. Crashes if the second [U8] is zero.
@@ -6470,7 +6470,7 @@ Builtin :: [].{
 
 			## Divide the first [U8] by the second, returning `Err(DivByZero)`
 			## instead of crashing if the divisor is zero.
-			div_try : U8, U8 -> Try(U8, [DivByZero, ..])
+			div_try : U8, U8 -> Try(U8, [DivByZero])
 			div_try = |a, b| unsigned_div_try(0, a, b)
 
 			## Divide the first [U8] by the second, rounding the result toward positive infinity.
@@ -6496,7 +6496,7 @@ Builtin :: [].{
 			##
 			## expect U8.div_ceil_try(1, 0) == Err(DivByZero)
 			## ```
-			div_ceil_try : U8, U8 -> Try(U8, [DivByZero, ..])
+			div_ceil_try : U8, U8 -> Try(U8, [DivByZero])
 			div_ceil_try = |a, b| unsigned_div_ceil_try(0, 1, a, b)
 
 			## Divide the first [U8] by the second, rounding the result toward negative infinity.
@@ -6655,7 +6655,7 @@ Builtin :: [].{
 			##
 			## expect U8.from_str("-1") == Err(BadNumStr)
 			## ```
-			from_str : Str -> Try(U8, [BadNumStr, ..])
+			from_str : Str -> Try(U8, [BadNumStr])
 
 			## Iterator of integers beginning with this `U8` and ending with the other `U8`.
 			## (Use [U8.until] instead to end with the other `U8` minus one.)
@@ -6743,7 +6743,7 @@ Builtin :: [].{
 			##
 			## expect U8.to_i8_try(200) == Err(OutOfRange)
 			## ```
-			to_i8_try : U8 -> Try(I8, [OutOfRange, ..])
+			to_i8_try : U8 -> Try(I8, [OutOfRange])
 
 			## Convert a [U8] to an [I16]. This widening conversion preserves
 			## every [U8] value exactly.
@@ -7024,7 +7024,7 @@ Builtin :: [].{
 
 			## Add two [I8] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in an [I8].
-			plus_try : I8, I8 -> Try(I8, [Overflow, ..])
+			plus_try : I8, I8 -> Try(I8, [Overflow])
 			plus_try = |a, b| signed_plus_try(I8.lowest, I8.highest, 0, a, b)
 
 			## Iterator over [I8] values from `start` up to but not including `end`.
@@ -7084,7 +7084,7 @@ Builtin :: [].{
 
 			## Subtract the second [I8] from the first, returning `Err(Overflow)`
 			## instead of crashing or wrapping if the result does not fit in an [I8].
-			minus_try : I8, I8 -> Try(I8, [Overflow, ..])
+			minus_try : I8, I8 -> Try(I8, [Overflow])
 			minus_try = |a, b| signed_minus_try(I8.lowest, I8.highest, 0, a, b)
 
 			## Subtract the second [I8] from the first, saturating at the nearest bound on overflow.
@@ -7112,7 +7112,7 @@ Builtin :: [].{
 
 			## Multiply two [I8] values, returning `Err(Overflow)` instead of
 			## crashing or wrapping if the result does not fit in an [I8].
-			times_try : I8, I8 -> Try(I8, [Overflow, ..])
+			times_try : I8, I8 -> Try(I8, [Overflow])
 			times_try = |a, b| signed_times_try(I8.lowest, I8.highest, 0, -1, a, b)
 
 			## Multiply two [I8] values, saturating at the nearest bound on overflow.
@@ -7156,7 +7156,7 @@ Builtin :: [].{
 			##
 			## expect I8.pow_try(-1, -3) == Ok(-1)
 			## ```
-			pow_try : I8, I8 -> Try(I8, [Overflow, Underflow, ..])
+			pow_try : I8, I8 -> Try(I8, [Overflow, Underflow])
 			pow_try = |base, exponent| signed_pow_try(I8.lowest, I8.highest, 0, 1, 2, -1, base, exponent)
 
 			## Divide the first [I8] by the second, discarding any remainder. Crashes if the second [I8] is zero.
@@ -7169,7 +7169,7 @@ Builtin :: [].{
 
 			## Divide the first [I8] by the second. Returns `Err(DivByZero)` if
 			## the divisor is zero, or `Err(Overflow)` for `I8.lowest / -1`.
-			div_try : I8, I8 -> Try(I8, [DivByZero, Overflow, ..])
+			div_try : I8, I8 -> Try(I8, [DivByZero, Overflow])
 			div_try = |a, b| signed_div_try(I8.lowest, 0, -1, a, b)
 
 			## Divide the first [I8] by the second, rounding the result toward positive infinity.
@@ -7204,7 +7204,7 @@ Builtin :: [].{
 			##
 			## expect I8.div_ceil_try(I8.lowest, -1) == Err(Overflow)
 			## ```
-			div_ceil_try : I8, I8 -> Try(I8, [DivByZero, Overflow, ..])
+			div_ceil_try : I8, I8 -> Try(I8, [DivByZero, Overflow])
 			div_ceil_try = |a, b| signed_div_ceil_try(I8.lowest, I8.highest, 0, 1, -1, a, b)
 
 			## Divide the first [I8] by the second, rounding the result toward negative infinity.
@@ -7454,7 +7454,7 @@ Builtin :: [].{
 			##
 			## expect I8.from_str("200") == Err(BadNumStr)
 			## ```
-			from_str : Str -> Try(I8, [BadNumStr, ..])
+			from_str : Str -> Try(I8, [BadNumStr])
 
 			## No-op: leave an [I8] unchanged as an [I8].
 			to_i8 : I8 -> I8
@@ -7505,7 +7505,7 @@ Builtin :: [].{
 			##
 			## expect I8.to_u8_try(-1) == Err(OutOfRange)
 			## ```
-			to_u8_try : I8 -> Try(U8, [OutOfRange, ..])
+			to_u8_try : I8 -> Try(U8, [OutOfRange])
 
 			## Convert an [I8] to a [U16], sign-extending the bits on overflow.
 			## Non-negative values are preserved; negative values wrap into the
@@ -7526,7 +7526,7 @@ Builtin :: [].{
 			##
 			## expect I8.to_u16_try(-1) == Err(OutOfRange)
 			## ```
-			to_u16_try : I8 -> Try(U16, [OutOfRange, ..])
+			to_u16_try : I8 -> Try(U16, [OutOfRange])
 
 			## Convert an [I8] to a [U32], sign-extending the bits on overflow.
 			## Non-negative values are preserved; negative values wrap into the
@@ -7547,7 +7547,7 @@ Builtin :: [].{
 			##
 			## expect I8.to_u32_try(-1) == Err(OutOfRange)
 			## ```
-			to_u32_try : I8 -> Try(U32, [OutOfRange, ..])
+			to_u32_try : I8 -> Try(U32, [OutOfRange])
 
 			## Convert an [I8] to a [U64], sign-extending the bits on overflow.
 			## Non-negative values are preserved; negative values wrap into the
@@ -7568,7 +7568,7 @@ Builtin :: [].{
 			##
 			## expect I8.to_u64_try(-1) == Err(OutOfRange)
 			## ```
-			to_u64_try : I8 -> Try(U64, [OutOfRange, ..])
+			to_u64_try : I8 -> Try(U64, [OutOfRange])
 
 			## Convert an [I8] to a [U128], sign-extending the bits on overflow.
 			## Non-negative values are preserved; negative values wrap into the
@@ -7587,7 +7587,7 @@ Builtin :: [].{
 			##
 			## expect I8.to_u128_try(-1) == Err(OutOfRange)
 			## ```
-			to_u128_try : I8 -> Try(U128, [OutOfRange, ..])
+			to_u128_try : I8 -> Try(U128, [OutOfRange])
 
 			# Conversions to floating point (all safe)
 			## Convert an [I8] to an [F32]. Every [I8] value is exactly
@@ -7780,7 +7780,7 @@ Builtin :: [].{
 
 			## Add two [U16] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in a [U16].
-			plus_try : U16, U16 -> Try(U16, [Overflow, ..])
+			plus_try : U16, U16 -> Try(U16, [Overflow])
 			plus_try = |a, b| unsigned_plus_try(U16.highest, a, b)
 
 			## Iterator over [U16] values from `start` up to but not including `end`.
@@ -7836,7 +7836,7 @@ Builtin :: [].{
 
 			## Subtract the second [U16] from the first, returning `Err(Overflow)`
 			## instead of crashing or wrapping if the result does not fit in a [U16].
-			minus_try : U16, U16 -> Try(U16, [Overflow, ..])
+			minus_try : U16, U16 -> Try(U16, [Overflow])
 			minus_try = |a, b| unsigned_minus_try(a, b)
 
 			## Subtract the second [U16] from the first, saturating at the nearest bound on overflow.
@@ -7862,7 +7862,7 @@ Builtin :: [].{
 
 			## Multiply two [U16] values, returning `Err(Overflow)` instead of
 			## crashing or wrapping if the result does not fit in a [U16].
-			times_try : U16, U16 -> Try(U16, [Overflow, ..])
+			times_try : U16, U16 -> Try(U16, [Overflow])
 			times_try = |a, b| unsigned_times_try(U16.highest, 0, a, b)
 
 			## Multiply two [U16] values, saturating at the nearest bound on overflow.
@@ -7897,7 +7897,7 @@ Builtin :: [].{
 			##
 			## expect U16.pow_try(U16.highest, 2) == Err(Overflow)
 			## ```
-			pow_try : U16, U16 -> Try(U16, [Overflow, ..])
+			pow_try : U16, U16 -> Try(U16, [Overflow])
 			pow_try = |base, exponent| unsigned_pow_try(U16.highest, 0, 1, 2, base, exponent)
 
 			## Divide the first [U16] by the second, discarding any remainder. Crashes if the second [U16] is zero.
@@ -7910,7 +7910,7 @@ Builtin :: [].{
 
 			## Divide the first [U16] by the second, returning `Err(DivByZero)`
 			## instead of crashing if the divisor is zero.
-			div_try : U16, U16 -> Try(U16, [DivByZero, ..])
+			div_try : U16, U16 -> Try(U16, [DivByZero])
 			div_try = |a, b| unsigned_div_try(0, a, b)
 
 			## Divide the first [U16] by the second, rounding the result toward positive infinity.
@@ -7936,7 +7936,7 @@ Builtin :: [].{
 			##
 			## expect U16.div_ceil_try(1, 0) == Err(DivByZero)
 			## ```
-			div_ceil_try : U16, U16 -> Try(U16, [DivByZero, ..])
+			div_ceil_try : U16, U16 -> Try(U16, [DivByZero])
 			div_ceil_try = |a, b| unsigned_div_ceil_try(0, 1, a, b)
 
 			## Divide the first [U16] by the second, rounding the result toward negative infinity.
@@ -8161,7 +8161,7 @@ Builtin :: [].{
 			##
 			## expect U16.from_str("-1") == Err(BadNumStr)
 			## ```
-			from_str : Str -> Try(U16, [BadNumStr, ..])
+			from_str : Str -> Try(U16, [BadNumStr])
 
 			# Conversions to signed integers
 
@@ -8183,7 +8183,7 @@ Builtin :: [].{
 			##
 			## expect U16.to_i8_try(200) == Err(OutOfRange)
 			## ```
-			to_i8_try : U16 -> Try(I8, [OutOfRange, ..])
+			to_i8_try : U16 -> Try(I8, [OutOfRange])
 
 			## Convert a [U16] to an [I16], wrapping on overflow. Values from `0` to
 			## `32767` are preserved; values from `32768` to `65535` wrap into the
@@ -8204,7 +8204,7 @@ Builtin :: [].{
 			##
 			## expect U16.to_i16_try(40000) == Err(OutOfRange)
 			## ```
-			to_i16_try : U16 -> Try(I16, [OutOfRange, ..])
+			to_i16_try : U16 -> Try(I16, [OutOfRange])
 
 			## Convert a [U16] to an [I32]. This widening conversion preserves
 			## every [U16] value exactly.
@@ -8238,7 +8238,7 @@ Builtin :: [].{
 			##
 			## expect U16.to_u8_try(300) == Err(OutOfRange)
 			## ```
-			to_u8_try : U16 -> Try(U8, [OutOfRange, ..])
+			to_u8_try : U16 -> Try(U8, [OutOfRange])
 
 			## No-op: leave a [U16] unchanged as a [U16].
 			to_u16 : U16 -> U16
@@ -8497,7 +8497,7 @@ Builtin :: [].{
 
 			## Add two [I16] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in an [I16].
-			plus_try : I16, I16 -> Try(I16, [Overflow, ..])
+			plus_try : I16, I16 -> Try(I16, [Overflow])
 			plus_try = |a, b| signed_plus_try(I16.lowest, I16.highest, 0, a, b)
 
 			## Iterator over [I16] values from `start` up to but not including `end`.
@@ -8557,7 +8557,7 @@ Builtin :: [].{
 
 			## Subtract the second [I16] from the first, returning `Err(Overflow)`
 			## instead of crashing or wrapping if the result does not fit in an [I16].
-			minus_try : I16, I16 -> Try(I16, [Overflow, ..])
+			minus_try : I16, I16 -> Try(I16, [Overflow])
 			minus_try = |a, b| signed_minus_try(I16.lowest, I16.highest, 0, a, b)
 
 			## Subtract the second [I16] from the first, saturating at the nearest bound on overflow.
@@ -8585,7 +8585,7 @@ Builtin :: [].{
 
 			## Multiply two [I16] values, returning `Err(Overflow)` instead of
 			## crashing or wrapping if the result does not fit in an [I16].
-			times_try : I16, I16 -> Try(I16, [Overflow, ..])
+			times_try : I16, I16 -> Try(I16, [Overflow])
 			times_try = |a, b| signed_times_try(I16.lowest, I16.highest, 0, -1, a, b)
 
 			## Multiply two [I16] values, saturating at the nearest bound on overflow.
@@ -8629,7 +8629,7 @@ Builtin :: [].{
 			##
 			## expect I16.pow_try(-1, -3) == Ok(-1)
 			## ```
-			pow_try : I16, I16 -> Try(I16, [Overflow, Underflow, ..])
+			pow_try : I16, I16 -> Try(I16, [Overflow, Underflow])
 			pow_try = |base, exponent| signed_pow_try(I16.lowest, I16.highest, 0, 1, 2, -1, base, exponent)
 
 			## Divide the first [I16] by the second, discarding any remainder. Crashes if the second [I16] is zero.
@@ -8642,7 +8642,7 @@ Builtin :: [].{
 
 			## Divide the first [I16] by the second. Returns `Err(DivByZero)` if
 			## the divisor is zero, or `Err(Overflow)` for `I16.lowest / -1`.
-			div_try : I16, I16 -> Try(I16, [DivByZero, Overflow, ..])
+			div_try : I16, I16 -> Try(I16, [DivByZero, Overflow])
 			div_try = |a, b| signed_div_try(I16.lowest, 0, -1, a, b)
 
 			## Divide the first [I16] by the second, rounding the result toward positive infinity.
@@ -8677,7 +8677,7 @@ Builtin :: [].{
 			##
 			## expect I16.div_ceil_try(I16.lowest, -1) == Err(Overflow)
 			## ```
-			div_ceil_try : I16, I16 -> Try(I16, [DivByZero, Overflow, ..])
+			div_ceil_try : I16, I16 -> Try(I16, [DivByZero, Overflow])
 			div_ceil_try = |a, b| signed_div_ceil_try(I16.lowest, I16.highest, 0, 1, -1, a, b)
 
 			## Divide the first [I16] by the second, rounding the result toward negative infinity.
@@ -8927,7 +8927,7 @@ Builtin :: [].{
 			##
 			## expect I16.from_str("40000") == Err(BadNumStr)
 			## ```
-			from_str : Str -> Try(I16, [BadNumStr, ..])
+			from_str : Str -> Try(I16, [BadNumStr])
 
 			# Conversions to signed integers
 
@@ -8949,7 +8949,7 @@ Builtin :: [].{
 			##
 			## expect I16.to_i8_try(200) == Err(OutOfRange)
 			## ```
-			to_i8_try : I16 -> Try(I8, [OutOfRange, ..])
+			to_i8_try : I16 -> Try(I8, [OutOfRange])
 
 			## No-op: leave an [I16] unchanged as an [I16].
 			to_i16 : I16 -> I16
@@ -8995,7 +8995,7 @@ Builtin :: [].{
 			##
 			## expect I16.to_u8_try(-1) == Err(OutOfRange)
 			## ```
-			to_u8_try : I16 -> Try(U8, [OutOfRange, ..])
+			to_u8_try : I16 -> Try(U8, [OutOfRange])
 
 			## Convert an [I16] to a [U16], wrapping on overflow. Non-negative
 			## values are preserved; negative values wrap into the upper end of the
@@ -9015,7 +9015,7 @@ Builtin :: [].{
 			##
 			## expect I16.to_u16_try(-1) == Err(OutOfRange)
 			## ```
-			to_u16_try : I16 -> Try(U16, [OutOfRange, ..])
+			to_u16_try : I16 -> Try(U16, [OutOfRange])
 
 			## Convert an [I16] to a [U32], sign-extending the bits on overflow.
 			## Non-negative values are preserved; negative values wrap into the
@@ -9036,7 +9036,7 @@ Builtin :: [].{
 			##
 			## expect I16.to_u32_try(-1) == Err(OutOfRange)
 			## ```
-			to_u32_try : I16 -> Try(U32, [OutOfRange, ..])
+			to_u32_try : I16 -> Try(U32, [OutOfRange])
 
 			## Convert an [I16] to a [U64], sign-extending the bits on overflow.
 			## Non-negative values are preserved; negative values wrap into the
@@ -9057,7 +9057,7 @@ Builtin :: [].{
 			##
 			## expect I16.to_u64_try(-1) == Err(OutOfRange)
 			## ```
-			to_u64_try : I16 -> Try(U64, [OutOfRange, ..])
+			to_u64_try : I16 -> Try(U64, [OutOfRange])
 
 			## Convert an [I16] to a [U128], sign-extending the bits on overflow.
 			## Non-negative values are preserved; negative values wrap into the
@@ -9076,7 +9076,7 @@ Builtin :: [].{
 			##
 			## expect I16.to_u128_try(-1) == Err(OutOfRange)
 			## ```
-			to_u128_try : I16 -> Try(U128, [OutOfRange, ..])
+			to_u128_try : I16 -> Try(U128, [OutOfRange])
 
 			# Conversions to floating point (all safe)
 			## Convert an [I16] to an [F32]. Every [I16] value is exactly
@@ -9268,7 +9268,7 @@ Builtin :: [].{
 
 			## Add two [U32] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in a [U32].
-			plus_try : U32, U32 -> Try(U32, [Overflow, ..])
+			plus_try : U32, U32 -> Try(U32, [Overflow])
 			plus_try = |a, b| unsigned_plus_try(U32.highest, a, b)
 
 			## Iterator over [U32] values from `start` up to but not including `end`.
@@ -9324,7 +9324,7 @@ Builtin :: [].{
 
 			## Subtract the second [U32] from the first, returning `Err(Overflow)`
 			## instead of crashing or wrapping if the result does not fit in a [U32].
-			minus_try : U32, U32 -> Try(U32, [Overflow, ..])
+			minus_try : U32, U32 -> Try(U32, [Overflow])
 			minus_try = |a, b| unsigned_minus_try(a, b)
 
 			## Subtract the second [U32] from the first, saturating at the nearest bound on overflow.
@@ -9350,7 +9350,7 @@ Builtin :: [].{
 
 			## Multiply two [U32] values, returning `Err(Overflow)` instead of
 			## crashing or wrapping if the result does not fit in a [U32].
-			times_try : U32, U32 -> Try(U32, [Overflow, ..])
+			times_try : U32, U32 -> Try(U32, [Overflow])
 			times_try = |a, b| unsigned_times_try(U32.highest, 0, a, b)
 
 			## Multiply two [U32] values, saturating at the nearest bound on overflow.
@@ -9385,7 +9385,7 @@ Builtin :: [].{
 			##
 			## expect U32.pow_try(U32.highest, 2) == Err(Overflow)
 			## ```
-			pow_try : U32, U32 -> Try(U32, [Overflow, ..])
+			pow_try : U32, U32 -> Try(U32, [Overflow])
 			pow_try = |base, exponent| unsigned_pow_try(U32.highest, 0, 1, 2, base, exponent)
 
 			## Divide the first [U32] by the second, discarding any remainder. Crashes if the second [U32] is zero.
@@ -9398,7 +9398,7 @@ Builtin :: [].{
 
 			## Divide the first [U32] by the second, returning `Err(DivByZero)`
 			## instead of crashing if the divisor is zero.
-			div_try : U32, U32 -> Try(U32, [DivByZero, ..])
+			div_try : U32, U32 -> Try(U32, [DivByZero])
 			div_try = |a, b| unsigned_div_try(0, a, b)
 
 			## Divide the first [U32] by the second, rounding the result toward positive infinity.
@@ -9424,7 +9424,7 @@ Builtin :: [].{
 			##
 			## expect U32.div_ceil_try(1, 0) == Err(DivByZero)
 			## ```
-			div_ceil_try : U32, U32 -> Try(U32, [DivByZero, ..])
+			div_ceil_try : U32, U32 -> Try(U32, [DivByZero])
 			div_ceil_try = |a, b| unsigned_div_ceil_try(0, 1, a, b)
 
 			## Divide the first [U32] by the second, rounding the result toward negative infinity.
@@ -9649,7 +9649,7 @@ Builtin :: [].{
 			##
 			## expect U32.from_str("-1") == Err(BadNumStr)
 			## ```
-			from_str : Str -> Try(U32, [BadNumStr, ..])
+			from_str : Str -> Try(U32, [BadNumStr])
 
 			# Conversions to signed integers
 
@@ -9671,7 +9671,7 @@ Builtin :: [].{
 			##
 			## expect U32.to_i8_try(200) == Err(OutOfRange)
 			## ```
-			to_i8_try : U32 -> Try(I8, [OutOfRange, ..])
+			to_i8_try : U32 -> Try(I8, [OutOfRange])
 
 			## Convert a [U32] to an [I16], wrapping on overflow. Values from `0` to
 			## `32767` are preserved; larger values wrap by truncating to the low 16
@@ -9691,7 +9691,7 @@ Builtin :: [].{
 			##
 			## expect U32.to_i16_try(40000) == Err(OutOfRange)
 			## ```
-			to_i16_try : U32 -> Try(I16, [OutOfRange, ..])
+			to_i16_try : U32 -> Try(I16, [OutOfRange])
 
 			## Convert a [U32] to an [I32], wrapping on overflow. Values from `0` to
 			## `2147483647` are preserved; values from `2147483648` to `4294967295`
@@ -9712,7 +9712,7 @@ Builtin :: [].{
 			##
 			## expect U32.to_i32_try(3000000000) == Err(OutOfRange)
 			## ```
-			to_i32_try : U32 -> Try(I32, [OutOfRange, ..])
+			to_i32_try : U32 -> Try(I32, [OutOfRange])
 
 			## Convert a [U32] to an [I64]. This widening conversion preserves
 			## every [U32] value exactly.
@@ -9742,7 +9742,7 @@ Builtin :: [].{
 			##
 			## expect U32.to_u8_try(300) == Err(OutOfRange)
 			## ```
-			to_u8_try : U32 -> Try(U8, [OutOfRange, ..])
+			to_u8_try : U32 -> Try(U8, [OutOfRange])
 
 			## Convert a [U32] to a [U16], wrapping on overflow. Values from `0` to
 			## `65535` are preserved; larger values wrap by truncating to the low 16
@@ -9762,7 +9762,7 @@ Builtin :: [].{
 			##
 			## expect U32.to_u16_try(70000) == Err(OutOfRange)
 			## ```
-			to_u16_try : U32 -> Try(U16, [OutOfRange, ..])
+			to_u16_try : U32 -> Try(U16, [OutOfRange])
 
 			## No-op: leave a [U32] unchanged as a [U32].
 			to_u32 : U32 -> U32
@@ -10017,7 +10017,7 @@ Builtin :: [].{
 
 			## Add two [I32] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in an [I32].
-			plus_try : I32, I32 -> Try(I32, [Overflow, ..])
+			plus_try : I32, I32 -> Try(I32, [Overflow])
 			plus_try = |a, b| signed_plus_try(I32.lowest, I32.highest, 0, a, b)
 
 			## Iterator over [I32] values from `start` up to but not including `end`.
@@ -10077,7 +10077,7 @@ Builtin :: [].{
 
 			## Subtract the second [I32] from the first, returning `Err(Overflow)`
 			## instead of crashing or wrapping if the result does not fit in an [I32].
-			minus_try : I32, I32 -> Try(I32, [Overflow, ..])
+			minus_try : I32, I32 -> Try(I32, [Overflow])
 			minus_try = |a, b| signed_minus_try(I32.lowest, I32.highest, 0, a, b)
 
 			## Subtract the second [I32] from the first, saturating at the nearest bound on overflow.
@@ -10105,7 +10105,7 @@ Builtin :: [].{
 
 			## Multiply two [I32] values, returning `Err(Overflow)` instead of
 			## crashing or wrapping if the result does not fit in an [I32].
-			times_try : I32, I32 -> Try(I32, [Overflow, ..])
+			times_try : I32, I32 -> Try(I32, [Overflow])
 			times_try = |a, b| signed_times_try(I32.lowest, I32.highest, 0, -1, a, b)
 
 			## Multiply two [I32] values, saturating at the nearest bound on overflow.
@@ -10149,7 +10149,7 @@ Builtin :: [].{
 			##
 			## expect I32.pow_try(-1, -3) == Ok(-1)
 			## ```
-			pow_try : I32, I32 -> Try(I32, [Overflow, Underflow, ..])
+			pow_try : I32, I32 -> Try(I32, [Overflow, Underflow])
 			pow_try = |base, exponent| signed_pow_try(I32.lowest, I32.highest, 0, 1, 2, -1, base, exponent)
 
 			## Divide the first [I32] by the second, discarding any remainder. Crashes if the second [I32] is zero.
@@ -10162,7 +10162,7 @@ Builtin :: [].{
 
 			## Divide the first [I32] by the second. Returns `Err(DivByZero)` if
 			## the divisor is zero, or `Err(Overflow)` for `I32.lowest / -1`.
-			div_try : I32, I32 -> Try(I32, [DivByZero, Overflow, ..])
+			div_try : I32, I32 -> Try(I32, [DivByZero, Overflow])
 			div_try = |a, b| signed_div_try(I32.lowest, 0, -1, a, b)
 
 			## Divide the first [I32] by the second, rounding the result toward positive infinity.
@@ -10197,7 +10197,7 @@ Builtin :: [].{
 			##
 			## expect I32.div_ceil_try(I32.lowest, -1) == Err(Overflow)
 			## ```
-			div_ceil_try : I32, I32 -> Try(I32, [DivByZero, Overflow, ..])
+			div_ceil_try : I32, I32 -> Try(I32, [DivByZero, Overflow])
 			div_ceil_try = |a, b| signed_div_ceil_try(I32.lowest, I32.highest, 0, 1, -1, a, b)
 
 			## Divide the first [I32] by the second, rounding the result toward negative infinity.
@@ -10447,7 +10447,7 @@ Builtin :: [].{
 			##
 			## expect I32.from_str("3000000000") == Err(BadNumStr)
 			## ```
-			from_str : Str -> Try(I32, [BadNumStr, ..])
+			from_str : Str -> Try(I32, [BadNumStr])
 
 			# Conversions to signed integers
 
@@ -10469,7 +10469,7 @@ Builtin :: [].{
 			##
 			## expect I32.to_i8_try(200) == Err(OutOfRange)
 			## ```
-			to_i8_try : I32 -> Try(I8, [OutOfRange, ..])
+			to_i8_try : I32 -> Try(I8, [OutOfRange])
 
 			## Convert an [I32] to an [I16], wrapping on overflow. Values from
 			## `-32768` to `32767` are preserved; other values wrap by truncating
@@ -10489,7 +10489,7 @@ Builtin :: [].{
 			##
 			## expect I32.to_i16_try(40000) == Err(OutOfRange)
 			## ```
-			to_i16_try : I32 -> Try(I16, [OutOfRange, ..])
+			to_i16_try : I32 -> Try(I16, [OutOfRange])
 
 			## No-op: leave an [I32] unchanged as an [I32].
 			to_i32 : I32 -> I32
@@ -10531,7 +10531,7 @@ Builtin :: [].{
 			##
 			## expect I32.to_u8_try(-1) == Err(OutOfRange)
 			## ```
-			to_u8_try : I32 -> Try(U8, [OutOfRange, ..])
+			to_u8_try : I32 -> Try(U8, [OutOfRange])
 
 			## Convert an [I32] to a [U16], wrapping on overflow. Values from `0` to
 			## `65535` are preserved; other values wrap by truncating to the low 16
@@ -10551,7 +10551,7 @@ Builtin :: [].{
 			##
 			## expect I32.to_u16_try(-1) == Err(OutOfRange)
 			## ```
-			to_u16_try : I32 -> Try(U16, [OutOfRange, ..])
+			to_u16_try : I32 -> Try(U16, [OutOfRange])
 
 			## Convert an [I32] to a [U32], wrapping on overflow. Non-negative
 			## values are preserved; negative values wrap into the upper end of the
@@ -10571,7 +10571,7 @@ Builtin :: [].{
 			##
 			## expect I32.to_u32_try(-1) == Err(OutOfRange)
 			## ```
-			to_u32_try : I32 -> Try(U32, [OutOfRange, ..])
+			to_u32_try : I32 -> Try(U32, [OutOfRange])
 
 			## Convert an [I32] to a [U64], sign-extending the bits on overflow.
 			## Non-negative values are preserved; negative values wrap into the
@@ -10592,7 +10592,7 @@ Builtin :: [].{
 			##
 			## expect I32.to_u64_try(-1) == Err(OutOfRange)
 			## ```
-			to_u64_try : I32 -> Try(U64, [OutOfRange, ..])
+			to_u64_try : I32 -> Try(U64, [OutOfRange])
 
 			## Convert an [I32] to a [U128], sign-extending the bits on overflow.
 			## Non-negative values are preserved; negative values wrap into the
@@ -10611,7 +10611,7 @@ Builtin :: [].{
 			##
 			## expect I32.to_u128_try(-1) == Err(OutOfRange)
 			## ```
-			to_u128_try : I32 -> Try(U128, [OutOfRange, ..])
+			to_u128_try : I32 -> Try(U128, [OutOfRange])
 
 			# Conversions to floating point (all safe)
 			## Convert an [I32] to an [F32]. This conversion may round because
@@ -10805,7 +10805,7 @@ Builtin :: [].{
 
 			## Add two [U64] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in a [U64].
-			plus_try : U64, U64 -> Try(U64, [Overflow, ..])
+			plus_try : U64, U64 -> Try(U64, [Overflow])
 			plus_try = |a, b| unsigned_plus_try(U64.highest, a, b)
 
 			## Iterator over [U64] values from `start` up to but not including `end`.
@@ -10864,7 +10864,7 @@ Builtin :: [].{
 
 			## Subtract the second [U64] from the first, returning `Err(Overflow)`
 			## instead of crashing or wrapping if the result does not fit in a [U64].
-			minus_try : U64, U64 -> Try(U64, [Overflow, ..])
+			minus_try : U64, U64 -> Try(U64, [Overflow])
 			minus_try = |a, b| unsigned_minus_try(a, b)
 
 			## Subtract the second [U64] from the first, saturating at the nearest bound on overflow.
@@ -10890,7 +10890,7 @@ Builtin :: [].{
 
 			## Multiply two [U64] values, returning `Err(Overflow)` instead of
 			## crashing or wrapping if the result does not fit in a [U64].
-			times_try : U64, U64 -> Try(U64, [Overflow, ..])
+			times_try : U64, U64 -> Try(U64, [Overflow])
 			times_try = |a, b| unsigned_times_try(U64.highest, 0, a, b)
 
 			## Multiply two [U64] values, saturating at the nearest bound on overflow.
@@ -10925,7 +10925,7 @@ Builtin :: [].{
 			##
 			## expect U64.pow_try(U64.highest, 2) == Err(Overflow)
 			## ```
-			pow_try : U64, U64 -> Try(U64, [Overflow, ..])
+			pow_try : U64, U64 -> Try(U64, [Overflow])
 			pow_try = |base, exponent| unsigned_pow_try(U64.highest, 0, 1, 2, base, exponent)
 
 			## Divide the first [U64] by the second, discarding any remainder. Crashes if the second [U64] is zero.
@@ -10938,7 +10938,7 @@ Builtin :: [].{
 
 			## Divide the first [U64] by the second, returning `Err(DivByZero)`
 			## instead of crashing if the divisor is zero.
-			div_try : U64, U64 -> Try(U64, [DivByZero, ..])
+			div_try : U64, U64 -> Try(U64, [DivByZero])
 			div_try = |a, b| unsigned_div_try(0, a, b)
 
 			## Divide the first [U64] by the second, rounding the result toward positive infinity.
@@ -10964,7 +10964,7 @@ Builtin :: [].{
 			##
 			## expect U64.div_ceil_try(1, 0) == Err(DivByZero)
 			## ```
-			div_ceil_try : U64, U64 -> Try(U64, [DivByZero, ..])
+			div_ceil_try : U64, U64 -> Try(U64, [DivByZero])
 			div_ceil_try = |a, b| unsigned_div_ceil_try(0, 1, a, b)
 
 			## Divide the first [U64] by the second, rounding the result toward negative infinity.
@@ -11192,7 +11192,7 @@ Builtin :: [].{
 			##
 			## expect U64.from_str("-1") == Err(BadNumStr)
 			## ```
-			from_str : Str -> Try(U64, [BadNumStr, ..])
+			from_str : Str -> Try(U64, [BadNumStr])
 
 			# Conversions to signed integers
 
@@ -11214,7 +11214,7 @@ Builtin :: [].{
 			##
 			## expect U64.to_i8_try(200) == Err(OutOfRange)
 			## ```
-			to_i8_try : U64 -> Try(I8, [OutOfRange, ..])
+			to_i8_try : U64 -> Try(I8, [OutOfRange])
 
 			## Convert a [U64] to an [I16], wrapping on overflow. Values from `0` to
 			## `32767` are preserved; larger values wrap by truncating to the low 16
@@ -11234,7 +11234,7 @@ Builtin :: [].{
 			##
 			## expect U64.to_i16_try(40000) == Err(OutOfRange)
 			## ```
-			to_i16_try : U64 -> Try(I16, [OutOfRange, ..])
+			to_i16_try : U64 -> Try(I16, [OutOfRange])
 
 			## Convert a [U64] to an [I32], wrapping on overflow. Values from `0` to
 			## `2147483647` are preserved; larger values wrap by truncating to the
@@ -11254,7 +11254,7 @@ Builtin :: [].{
 			##
 			## expect U64.to_i32_try(3000000000) == Err(OutOfRange)
 			## ```
-			to_i32_try : U64 -> Try(I32, [OutOfRange, ..])
+			to_i32_try : U64 -> Try(I32, [OutOfRange])
 
 			## Convert a [U64] to an [I64], wrapping on overflow. Values from `0` to
 			## `9223372036854775807` are preserved; values from `9223372036854775808`
@@ -11276,7 +11276,7 @@ Builtin :: [].{
 			##
 			## expect U64.to_i64_try(10000000000000000000) == Err(OutOfRange)
 			## ```
-			to_i64_try : U64 -> Try(I64, [OutOfRange, ..])
+			to_i64_try : U64 -> Try(I64, [OutOfRange])
 
 			## Convert a [U64] to an [I128]. This widening conversion preserves
 			## every [U64] value exactly.
@@ -11302,7 +11302,7 @@ Builtin :: [].{
 			##
 			## expect U64.to_u8_try(300) == Err(OutOfRange)
 			## ```
-			to_u8_try : U64 -> Try(U8, [OutOfRange, ..])
+			to_u8_try : U64 -> Try(U8, [OutOfRange])
 
 			## Convert a [U64] to a [U16], wrapping on overflow. Values from `0` to
 			## `65535` are preserved; larger values wrap by truncating to the low 16
@@ -11322,7 +11322,7 @@ Builtin :: [].{
 			##
 			## expect U64.to_u16_try(70000) == Err(OutOfRange)
 			## ```
-			to_u16_try : U64 -> Try(U16, [OutOfRange, ..])
+			to_u16_try : U64 -> Try(U16, [OutOfRange])
 
 			## Convert a [U64] to a [U32], wrapping on overflow. Values from `0` to
 			## `4294967295` are preserved; larger values wrap by truncating to the
@@ -11342,7 +11342,7 @@ Builtin :: [].{
 			##
 			## expect U64.to_u32_try(5000000000) == Err(OutOfRange)
 			## ```
-			to_u32_try : U64 -> Try(U32, [OutOfRange, ..])
+			to_u32_try : U64 -> Try(U32, [OutOfRange])
 
 			## No-op: leave a [U64] unchanged as a [U64].
 			to_u64 : U64 -> U64
@@ -11596,7 +11596,7 @@ Builtin :: [].{
 
 			## Add two [I64] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in an [I64].
-			plus_try : I64, I64 -> Try(I64, [Overflow, ..])
+			plus_try : I64, I64 -> Try(I64, [Overflow])
 			plus_try = |a, b| signed_plus_try(I64.lowest, I64.highest, 0, a, b)
 
 			## Iterator over [I64] values from `start` up to but not including `end`.
@@ -11659,7 +11659,7 @@ Builtin :: [].{
 
 			## Subtract the second [I64] from the first, returning `Err(Overflow)`
 			## instead of crashing or wrapping if the result does not fit in an [I64].
-			minus_try : I64, I64 -> Try(I64, [Overflow, ..])
+			minus_try : I64, I64 -> Try(I64, [Overflow])
 			minus_try = |a, b| signed_minus_try(I64.lowest, I64.highest, 0, a, b)
 
 			## Subtract the second [I64] from the first, saturating at the nearest bound on overflow.
@@ -11687,7 +11687,7 @@ Builtin :: [].{
 
 			## Multiply two [I64] values, returning `Err(Overflow)` instead of
 			## crashing or wrapping if the result does not fit in an [I64].
-			times_try : I64, I64 -> Try(I64, [Overflow, ..])
+			times_try : I64, I64 -> Try(I64, [Overflow])
 			times_try = |a, b| signed_times_try(I64.lowest, I64.highest, 0, -1, a, b)
 
 			## Multiply two [I64] values, saturating at the nearest bound on overflow.
@@ -11731,7 +11731,7 @@ Builtin :: [].{
 			##
 			## expect I64.pow_try(-1, -3) == Ok(-1)
 			## ```
-			pow_try : I64, I64 -> Try(I64, [Overflow, Underflow, ..])
+			pow_try : I64, I64 -> Try(I64, [Overflow, Underflow])
 			pow_try = |base, exponent| signed_pow_try(I64.lowest, I64.highest, 0, 1, 2, -1, base, exponent)
 
 			## Divide the first [I64] by the second, discarding any remainder. Crashes if the second [I64] is zero.
@@ -11744,7 +11744,7 @@ Builtin :: [].{
 
 			## Divide the first [I64] by the second. Returns `Err(DivByZero)` if
 			## the divisor is zero, or `Err(Overflow)` for `I64.lowest / -1`.
-			div_try : I64, I64 -> Try(I64, [DivByZero, Overflow, ..])
+			div_try : I64, I64 -> Try(I64, [DivByZero, Overflow])
 			div_try = |a, b| signed_div_try(I64.lowest, 0, -1, a, b)
 
 			## Divide the first [I64] by the second, rounding the result toward positive infinity.
@@ -11779,7 +11779,7 @@ Builtin :: [].{
 			##
 			## expect I64.div_ceil_try(I64.lowest, -1) == Err(Overflow)
 			## ```
-			div_ceil_try : I64, I64 -> Try(I64, [DivByZero, Overflow, ..])
+			div_ceil_try : I64, I64 -> Try(I64, [DivByZero, Overflow])
 			div_ceil_try = |a, b| signed_div_ceil_try(I64.lowest, I64.highest, 0, 1, -1, a, b)
 
 			## Divide the first [I64] by the second, rounding the result toward negative infinity.
@@ -12036,7 +12036,7 @@ Builtin :: [].{
 			##
 			## expect I64.from_str("-1") == Ok(-1)
 			## ```
-			from_str : Str -> Try(I64, [BadNumStr, ..])
+			from_str : Str -> Try(I64, [BadNumStr])
 
 			# Conversions to signed integers
 
@@ -12058,7 +12058,7 @@ Builtin :: [].{
 			##
 			## expect I64.to_i8_try(200) == Err(OutOfRange)
 			## ```
-			to_i8_try : I64 -> Try(I8, [OutOfRange, ..])
+			to_i8_try : I64 -> Try(I8, [OutOfRange])
 
 			## Convert an [I64] to an [I16], wrapping on overflow. Values from
 			## `-32768` to `32767` are preserved; other values wrap by truncating
@@ -12078,7 +12078,7 @@ Builtin :: [].{
 			##
 			## expect I64.to_i16_try(40000) == Err(OutOfRange)
 			## ```
-			to_i16_try : I64 -> Try(I16, [OutOfRange, ..])
+			to_i16_try : I64 -> Try(I16, [OutOfRange])
 
 			## Convert an [I64] to an [I32], wrapping on overflow. Values from
 			## `-2147483648` to `2147483647` are preserved; other values wrap by
@@ -12099,7 +12099,7 @@ Builtin :: [].{
 			##
 			## expect I64.to_i32_try(3000000000) == Err(OutOfRange)
 			## ```
-			to_i32_try : I64 -> Try(I32, [OutOfRange, ..])
+			to_i32_try : I64 -> Try(I32, [OutOfRange])
 
 			## No-op: leave an [I64] unchanged as an [I64].
 			to_i64 : I64 -> I64
@@ -12137,7 +12137,7 @@ Builtin :: [].{
 			##
 			## expect I64.to_u8_try(-1) == Err(OutOfRange)
 			## ```
-			to_u8_try : I64 -> Try(U8, [OutOfRange, ..])
+			to_u8_try : I64 -> Try(U8, [OutOfRange])
 
 			## Convert an [I64] to a [U16], wrapping on overflow. Values from `0` to
 			## `65535` are preserved; other values wrap by truncating to the low 16
@@ -12157,7 +12157,7 @@ Builtin :: [].{
 			##
 			## expect I64.to_u16_try(-1) == Err(OutOfRange)
 			## ```
-			to_u16_try : I64 -> Try(U16, [OutOfRange, ..])
+			to_u16_try : I64 -> Try(U16, [OutOfRange])
 
 			## Convert an [I64] to a [U32], wrapping on overflow. Values from `0` to
 			## `4294967295` are preserved; other values wrap by truncating to the
@@ -12177,7 +12177,7 @@ Builtin :: [].{
 			##
 			## expect I64.to_u32_try(-1) == Err(OutOfRange)
 			## ```
-			to_u32_try : I64 -> Try(U32, [OutOfRange, ..])
+			to_u32_try : I64 -> Try(U32, [OutOfRange])
 
 			## Convert an [I64] to a [U64], wrapping on overflow. Non-negative
 			## values are preserved; negative values wrap into the upper end of the
@@ -12197,7 +12197,7 @@ Builtin :: [].{
 			##
 			## expect I64.to_u64_try(-1) == Err(OutOfRange)
 			## ```
-			to_u64_try : I64 -> Try(U64, [OutOfRange, ..])
+			to_u64_try : I64 -> Try(U64, [OutOfRange])
 
 			## Convert an [I64] to a [U128], sign-extending the bits on overflow.
 			## Non-negative values are preserved; negative values wrap into the
@@ -12216,7 +12216,7 @@ Builtin :: [].{
 			##
 			## expect I64.to_u128_try(-1) == Err(OutOfRange)
 			## ```
-			to_u128_try : I64 -> Try(U128, [OutOfRange, ..])
+			to_u128_try : I64 -> Try(U128, [OutOfRange])
 
 			# Conversions to floating point (all safe)
 			## Convert an [I64] to an [F32]. This conversion may round because
@@ -12409,7 +12409,7 @@ Builtin :: [].{
 
 			## Add two [U128] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in a [U128].
-			plus_try : U128, U128 -> Try(U128, [Overflow, ..])
+			plus_try : U128, U128 -> Try(U128, [Overflow])
 			plus_try = |a, b| unsigned_plus_try(U128.highest, a, b)
 
 			## Iterator over [U128] values from `start` up to but not including `end`.
@@ -12474,7 +12474,7 @@ Builtin :: [].{
 
 			## Subtract the second [U128] from the first, returning `Err(Overflow)`
 			## instead of crashing or wrapping if the result does not fit in a [U128].
-			minus_try : U128, U128 -> Try(U128, [Overflow, ..])
+			minus_try : U128, U128 -> Try(U128, [Overflow])
 			minus_try = |a, b| unsigned_minus_try(a, b)
 
 			## Subtract the second [U128] from the first, saturating at the nearest bound on overflow.
@@ -12500,7 +12500,7 @@ Builtin :: [].{
 
 			## Multiply two [U128] values, returning `Err(Overflow)` instead of
 			## crashing or wrapping if the result does not fit in a [U128].
-			times_try : U128, U128 -> Try(U128, [Overflow, ..])
+			times_try : U128, U128 -> Try(U128, [Overflow])
 			times_try = |a, b| unsigned_times_try(U128.highest, 0, a, b)
 
 			## Multiply two [U128] values, saturating at the nearest bound on overflow.
@@ -12535,7 +12535,7 @@ Builtin :: [].{
 			##
 			## expect U128.pow_try(U128.highest, 2) == Err(Overflow)
 			## ```
-			pow_try : U128, U128 -> Try(U128, [Overflow, ..])
+			pow_try : U128, U128 -> Try(U128, [Overflow])
 			pow_try = |base, exponent| unsigned_pow_try(U128.highest, 0, 1, 2, base, exponent)
 
 			## Divide the first [U128] by the second, discarding any remainder. Crashes if the second [U128] is zero.
@@ -12548,7 +12548,7 @@ Builtin :: [].{
 
 			## Divide the first [U128] by the second, returning `Err(DivByZero)`
 			## instead of crashing if the divisor is zero.
-			div_try : U128, U128 -> Try(U128, [DivByZero, ..])
+			div_try : U128, U128 -> Try(U128, [DivByZero])
 			div_try = |a, b| unsigned_div_try(0, a, b)
 
 			## Divide the first [U128] by the second, rounding the result toward positive infinity.
@@ -12574,7 +12574,7 @@ Builtin :: [].{
 			##
 			## expect U128.div_ceil_try(1, 0) == Err(DivByZero)
 			## ```
-			div_ceil_try : U128, U128 -> Try(U128, [DivByZero, ..])
+			div_ceil_try : U128, U128 -> Try(U128, [DivByZero])
 			div_ceil_try = |a, b| unsigned_div_ceil_try(0, 1, a, b)
 
 			## Divide the first [U128] by the second, rounding the result toward negative infinity.
@@ -12809,7 +12809,7 @@ Builtin :: [].{
 			##
 			## expect U128.from_str("-1") == Err(BadNumStr)
 			## ```
-			from_str : Str -> Try(U128, [BadNumStr, ..])
+			from_str : Str -> Try(U128, [BadNumStr])
 
 			# Conversions to signed integers
 
@@ -12831,7 +12831,7 @@ Builtin :: [].{
 			##
 			## expect U128.to_i8_try(200) == Err(OutOfRange)
 			## ```
-			to_i8_try : U128 -> Try(I8, [OutOfRange, ..])
+			to_i8_try : U128 -> Try(I8, [OutOfRange])
 
 			## Convert a [U128] to an [I16], wrapping on overflow. Values from `0`
 			## to `32767` are preserved; larger values wrap by truncating to the
@@ -12851,7 +12851,7 @@ Builtin :: [].{
 			##
 			## expect U128.to_i16_try(40000) == Err(OutOfRange)
 			## ```
-			to_i16_try : U128 -> Try(I16, [OutOfRange, ..])
+			to_i16_try : U128 -> Try(I16, [OutOfRange])
 
 			## Convert a [U128] to an [I32], wrapping on overflow. Values from `0`
 			## to `2147483647` are preserved; larger values wrap by truncating to
@@ -12871,7 +12871,7 @@ Builtin :: [].{
 			##
 			## expect U128.to_i32_try(3000000000) == Err(OutOfRange)
 			## ```
-			to_i32_try : U128 -> Try(I32, [OutOfRange, ..])
+			to_i32_try : U128 -> Try(I32, [OutOfRange])
 
 			## Convert a [U128] to an [I64], wrapping on overflow. Values from `0`
 			## to `9223372036854775807` are preserved; larger values wrap by
@@ -12892,7 +12892,7 @@ Builtin :: [].{
 			##
 			## expect U128.to_i64_try(10000000000000000000) == Err(OutOfRange)
 			## ```
-			to_i64_try : U128 -> Try(I64, [OutOfRange, ..])
+			to_i64_try : U128 -> Try(I64, [OutOfRange])
 
 			## Convert a [U128] to an [I128], wrapping on overflow. Values from `0`
 			## to `170141183460469231731687303715884105727` are preserved; larger
@@ -12913,7 +12913,7 @@ Builtin :: [].{
 			##
 			## expect U128.to_i128_try(200000000000000000000000000000000000000) == Err(OutOfRange)
 			## ```
-			to_i128_try : U128 -> Try(I128, [OutOfRange, ..])
+			to_i128_try : U128 -> Try(I128, [OutOfRange])
 
 			# Conversions to unsigned integers
 
@@ -12935,7 +12935,7 @@ Builtin :: [].{
 			##
 			## expect U128.to_u8_try(300) == Err(OutOfRange)
 			## ```
-			to_u8_try : U128 -> Try(U8, [OutOfRange, ..])
+			to_u8_try : U128 -> Try(U8, [OutOfRange])
 
 			## Convert a [U128] to a [U16], wrapping on overflow. Values from `0` to
 			## `65535` are preserved; larger values wrap by truncating to the low 16
@@ -12955,7 +12955,7 @@ Builtin :: [].{
 			##
 			## expect U128.to_u16_try(70000) == Err(OutOfRange)
 			## ```
-			to_u16_try : U128 -> Try(U16, [OutOfRange, ..])
+			to_u16_try : U128 -> Try(U16, [OutOfRange])
 
 			## Convert a [U128] to a [U32], wrapping on overflow. Values from `0` to
 			## `4294967295` are preserved; larger values wrap by truncating to the
@@ -12975,7 +12975,7 @@ Builtin :: [].{
 			##
 			## expect U128.to_u32_try(5000000000) == Err(OutOfRange)
 			## ```
-			to_u32_try : U128 -> Try(U32, [OutOfRange, ..])
+			to_u32_try : U128 -> Try(U32, [OutOfRange])
 
 			## Convert a [U128] to a [U64], wrapping on overflow. Values from `0` to
 			## `18446744073709551615` are preserved; larger values wrap by truncating
@@ -12991,7 +12991,7 @@ Builtin :: [].{
 			## ```roc
 			## expect U128.to_u64_try(42) == Ok(42)
 			## ```
-			to_u64_try : U128 -> Try(U64, [OutOfRange, ..])
+			to_u64_try : U128 -> Try(U64, [OutOfRange])
 
 			## No-op: leave a [U128] unchanged as a [U128].
 			to_u128 : U128 -> U128
@@ -13244,7 +13244,7 @@ Builtin :: [].{
 
 			## Add two [I128] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in an [I128].
-			plus_try : I128, I128 -> Try(I128, [Overflow, ..])
+			plus_try : I128, I128 -> Try(I128, [Overflow])
 			plus_try = |a, b| signed_plus_try(I128.lowest, I128.highest, 0, a, b)
 
 			## Iterator over [I128] values from `start` up to but not including `end`.
@@ -13313,7 +13313,7 @@ Builtin :: [].{
 
 			## Subtract the second [I128] from the first, returning `Err(Overflow)`
 			## instead of crashing or wrapping if the result does not fit in an [I128].
-			minus_try : I128, I128 -> Try(I128, [Overflow, ..])
+			minus_try : I128, I128 -> Try(I128, [Overflow])
 			minus_try = |a, b| signed_minus_try(I128.lowest, I128.highest, 0, a, b)
 
 			## Subtract the second [I128] from the first, saturating at the nearest bound on overflow.
@@ -13341,7 +13341,7 @@ Builtin :: [].{
 
 			## Multiply two [I128] values, returning `Err(Overflow)` instead of
 			## crashing or wrapping if the result does not fit in an [I128].
-			times_try : I128, I128 -> Try(I128, [Overflow, ..])
+			times_try : I128, I128 -> Try(I128, [Overflow])
 			times_try = |a, b| signed_times_try(I128.lowest, I128.highest, 0, -1, a, b)
 
 			## Multiply two [I128] values, saturating at the nearest bound on overflow.
@@ -13385,7 +13385,7 @@ Builtin :: [].{
 			##
 			## expect I128.pow_try(-1, -3) == Ok(-1)
 			## ```
-			pow_try : I128, I128 -> Try(I128, [Overflow, Underflow, ..])
+			pow_try : I128, I128 -> Try(I128, [Overflow, Underflow])
 			pow_try = |base, exponent| signed_pow_try(I128.lowest, I128.highest, 0, 1, 2, -1, base, exponent)
 
 			## Divide the first [I128] by the second, discarding any remainder. Crashes if the second [I128] is zero.
@@ -13398,7 +13398,7 @@ Builtin :: [].{
 
 			## Divide the first [I128] by the second. Returns `Err(DivByZero)` if
 			## the divisor is zero, or `Err(Overflow)` for `I128.lowest / -1`.
-			div_try : I128, I128 -> Try(I128, [DivByZero, Overflow, ..])
+			div_try : I128, I128 -> Try(I128, [DivByZero, Overflow])
 			div_try = |a, b| signed_div_try(I128.lowest, 0, -1, a, b)
 
 			## Divide the first [I128] by the second, rounding the result toward positive infinity.
@@ -13433,7 +13433,7 @@ Builtin :: [].{
 			##
 			## expect I128.div_ceil_try(I128.lowest, -1) == Err(Overflow)
 			## ```
-			div_ceil_try : I128, I128 -> Try(I128, [DivByZero, Overflow, ..])
+			div_ceil_try : I128, I128 -> Try(I128, [DivByZero, Overflow])
 			div_ceil_try = |a, b| signed_div_ceil_try(I128.lowest, I128.highest, 0, 1, -1, a, b)
 
 			## Divide the first [I128] by the second, rounding the result toward negative infinity.
@@ -13699,7 +13699,7 @@ Builtin :: [].{
 			##
 			## expect I128.from_str("-1") == Ok(-1)
 			## ```
-			from_str : Str -> Try(I128, [BadNumStr, ..])
+			from_str : Str -> Try(I128, [BadNumStr])
 
 			# Conversions to signed integers
 
@@ -13721,7 +13721,7 @@ Builtin :: [].{
 			##
 			## expect I128.to_i8_try(200) == Err(OutOfRange)
 			## ```
-			to_i8_try : I128 -> Try(I8, [OutOfRange, ..])
+			to_i8_try : I128 -> Try(I8, [OutOfRange])
 
 			## Convert an [I128] to an [I16], wrapping on overflow. Values from
 			## `-32768` to `32767` are preserved; other values wrap by truncating
@@ -13741,7 +13741,7 @@ Builtin :: [].{
 			##
 			## expect I128.to_i16_try(40000) == Err(OutOfRange)
 			## ```
-			to_i16_try : I128 -> Try(I16, [OutOfRange, ..])
+			to_i16_try : I128 -> Try(I16, [OutOfRange])
 
 			## Convert an [I128] to an [I32], wrapping on overflow. Values from
 			## `-2147483648` to `2147483647` are preserved; other values wrap by
@@ -13762,7 +13762,7 @@ Builtin :: [].{
 			##
 			## expect I128.to_i32_try(3000000000) == Err(OutOfRange)
 			## ```
-			to_i32_try : I128 -> Try(I32, [OutOfRange, ..])
+			to_i32_try : I128 -> Try(I32, [OutOfRange])
 
 			## Convert an [I128] to an [I64], wrapping on overflow. Values from
 			## `-9223372036854775808` to `9223372036854775807` are preserved; other
@@ -13779,7 +13779,7 @@ Builtin :: [].{
 			## ```roc
 			## expect I128.to_i64_try(42) == Ok(42)
 			## ```
-			to_i64_try : I128 -> Try(I64, [OutOfRange, ..])
+			to_i64_try : I128 -> Try(I64, [OutOfRange])
 
 			## No-op: leave an [I128] unchanged as an [I128].
 			to_i128 : I128 -> I128
@@ -13813,7 +13813,7 @@ Builtin :: [].{
 			##
 			## expect I128.to_u8_try(-1) == Err(OutOfRange)
 			## ```
-			to_u8_try : I128 -> Try(U8, [OutOfRange, ..])
+			to_u8_try : I128 -> Try(U8, [OutOfRange])
 
 			## Convert an [I128] to a [U16], wrapping on overflow. Values from `0`
 			## to `65535` are preserved; other values wrap by truncating to the low
@@ -13833,7 +13833,7 @@ Builtin :: [].{
 			##
 			## expect I128.to_u16_try(-1) == Err(OutOfRange)
 			## ```
-			to_u16_try : I128 -> Try(U16, [OutOfRange, ..])
+			to_u16_try : I128 -> Try(U16, [OutOfRange])
 
 			## Convert an [I128] to a [U32], wrapping on overflow. Values from `0`
 			## to `4294967295` are preserved; other values wrap by truncating to
@@ -13853,7 +13853,7 @@ Builtin :: [].{
 			##
 			## expect I128.to_u32_try(-1) == Err(OutOfRange)
 			## ```
-			to_u32_try : I128 -> Try(U32, [OutOfRange, ..])
+			to_u32_try : I128 -> Try(U32, [OutOfRange])
 
 			## Convert an [I128] to a [U64], wrapping on overflow. Values from `0`
 			## to `18446744073709551615` are preserved; other values wrap by
@@ -13874,7 +13874,7 @@ Builtin :: [].{
 			##
 			## expect I128.to_u64_try(-1) == Err(OutOfRange)
 			## ```
-			to_u64_try : I128 -> Try(U64, [OutOfRange, ..])
+			to_u64_try : I128 -> Try(U64, [OutOfRange])
 
 			## Convert an [I128] to a [U128], wrapping on overflow. Non-negative
 			## values are preserved; negative values wrap into the upper end of
@@ -13894,7 +13894,7 @@ Builtin :: [].{
 			##
 			## expect I128.to_u128_try(-1) == Err(OutOfRange)
 			## ```
-			to_u128_try : I128 -> Try(U128, [OutOfRange, ..])
+			to_u128_try : I128 -> Try(U128, [OutOfRange])
 
 			# Conversions to floating point (all safe)
 			## Convert an [I128] to an [F32]. This conversion may round because
@@ -14112,7 +14112,7 @@ Builtin :: [].{
 
 			## Add two [Dec] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result is outside [Dec.lowest] through [Dec.highest].
-			plus_try : Dec, Dec -> Try(Dec, [Overflow, ..])
+			plus_try : Dec, Dec -> Try(Dec, [Overflow])
 			plus_try = |a, b| signed_plus_try(Dec.lowest, Dec.highest, 0.0, a, b)
 
 			## Conservative placeholder: always returns `Unknown`. Counting the steps
@@ -14164,7 +14164,7 @@ Builtin :: [].{
 			## Subtract the second [Dec] from the first, returning
 			## `Err(Overflow)` instead of crashing or wrapping if the result is outside
 			## [Dec.lowest] through [Dec.highest].
-			minus_try : Dec, Dec -> Try(Dec, [Overflow, ..])
+			minus_try : Dec, Dec -> Try(Dec, [Overflow])
 			minus_try = |a, b| signed_minus_try(Dec.lowest, Dec.highest, 0.0, a, b)
 
 			## Subtract the second [Dec] from the first, saturating at the nearest bound on overflow.
@@ -14219,7 +14219,7 @@ Builtin :: [].{
 			## Return the square root of a [Dec], or `Err(SqrtOfNegative)` if the
 			## input is negative. The result is truncated to [Dec]'s fixed 18
 			## fractional decimal places.
-			sqrt_try : Dec -> Try(Dec, [SqrtOfNegative, ..])
+			sqrt_try : Dec -> Try(Dec, [SqrtOfNegative])
 			sqrt_try = |self|
 				if self < 0 {
 					Err(SqrtOfNegative)
@@ -14551,7 +14551,7 @@ Builtin :: [].{
 			##
 			## expect Dec.from_str("not a number") == Err(BadNumStr)
 			## ```
-			from_str : Str -> Try(Dec, [BadNumStr, ..])
+			from_str : Str -> Try(Dec, [BadNumStr])
 
 			# Conversions to signed integers (all lossy - truncates fractional part)
 
@@ -15170,7 +15170,7 @@ Builtin :: [].{
 			##
 			## expect F32.sqrt_try(-1.0) == Err(SqrtOfNegative)
 			## ```
-			sqrt_try : F32 -> Try(F32, [SqrtOfNegative, ..])
+			sqrt_try : F32 -> Try(F32, [SqrtOfNegative])
 			sqrt_try = |self|
 				if self < 0 {
 					Err(SqrtOfNegative)
@@ -15597,7 +15597,7 @@ Builtin :: [].{
 			##
 			## expect Try.is_err(F32.from_str("not a number"))
 			## ```
-			from_str : Str -> Try(F32, [BadNumStr, ..])
+			from_str : Str -> Try(F32, [BadNumStr])
 
 			# Conversions to signed integers (all lossy - truncation + range check)
 
@@ -16117,7 +16117,7 @@ Builtin :: [].{
 			##
 			## expect F64.sqrt_try(-1.0) == Err(SqrtOfNegative)
 			## ```
-			sqrt_try : F64 -> Try(F64, [SqrtOfNegative, ..])
+			sqrt_try : F64 -> Try(F64, [SqrtOfNegative])
 			sqrt_try = |self|
 				if self < 0 {
 					Err(SqrtOfNegative)
@@ -16544,7 +16544,7 @@ Builtin :: [].{
 			##
 			## expect Try.is_err(F64.from_str("not a number"))
 			## ```
-			from_str : Str -> Try(F64, [BadNumStr, ..])
+			from_str : Str -> Try(F64, [BadNumStr])
 
 			# Conversions to signed integers (all lossy - truncation + range check)
 
@@ -16815,7 +16815,7 @@ Builtin :: [].{
 
 			## Build a [U8x16] from exactly 16 lane values, lane 0 first.
 			## Returns `Err(WrongLength)` if the list's length is not 16.
-			from_list : List(U8) -> Try(U8x16, [WrongLength, ..])
+			from_list : List(U8) -> Try(U8x16, [WrongLength])
 			from_list = |lanes|
 				if List.len(lanes) != 16 {
 					Err(WrongLength)
@@ -17256,7 +17256,7 @@ Builtin :: [].{
 			##
 			## Lowers to `movdqu` on x86-64, `ldr` (Q register) on AArch64,
 			## and `v128.load` on wasm.
-			load : List(U8), U64 -> Try(U8x16, [OutOfBounds, ..])
+			load : List(U8), U64 -> Try(U8x16, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
 				if index > len {
@@ -17275,7 +17275,7 @@ Builtin :: [].{
 			##
 			## Lowers to `movdqu` (store form) on x86-64, `str` (Q register)
 			## on AArch64, and `v128.store` on wasm.
-			store : U8x16, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
+			store : U8x16, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
 				if index > len {
@@ -17340,7 +17340,7 @@ Builtin :: [].{
 
 			## Build an [I8x16] from exactly 16 lane values, lane 0 first.
 			## Returns `Err(WrongLength)` if the list's length is not 16.
-			from_list : List(I8) -> Try(I8x16, [WrongLength, ..])
+			from_list : List(I8) -> Try(I8x16, [WrongLength])
 			from_list = |lanes|
 				if List.len(lanes) != 16 {
 					Err(WrongLength)
@@ -17744,7 +17744,7 @@ Builtin :: [].{
 			##
 			## Lowers to `movdqu` on x86-64, `ldr` (Q register) on AArch64,
 			## and `v128.load` on wasm.
-			load : List(U8), U64 -> Try(I8x16, [OutOfBounds, ..])
+			load : List(U8), U64 -> Try(I8x16, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
 				if index > len {
@@ -17763,7 +17763,7 @@ Builtin :: [].{
 			##
 			## Lowers to `movdqu` (store form) on x86-64, `str` (Q register)
 			## on AArch64, and `v128.store` on wasm.
-			store : I8x16, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
+			store : I8x16, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
 				if index > len {
@@ -17809,7 +17809,7 @@ Builtin :: [].{
 
 			## Build a [U16x8] from exactly 8 lane values, lane 0 first.
 			## Returns `Err(WrongLength)` if the list's length is not 8.
-			from_list : List(U16) -> Try(U16x8, [WrongLength, ..])
+			from_list : List(U16) -> Try(U16x8, [WrongLength])
 			from_list = |lanes|
 				if List.len(lanes) != 8 {
 					Err(WrongLength)
@@ -18224,7 +18224,7 @@ Builtin :: [].{
 			##
 			## Lowers to `movdqu` on x86-64, `ldr` (Q register) on AArch64,
 			## and `v128.load` on wasm.
-			load : List(U8), U64 -> Try(U16x8, [OutOfBounds, ..])
+			load : List(U8), U64 -> Try(U16x8, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
 				if index > len {
@@ -18243,7 +18243,7 @@ Builtin :: [].{
 			##
 			## Lowers to `movdqu` (store form) on x86-64, `str` (Q register)
 			## on AArch64, and `v128.store` on wasm.
-			store : U16x8, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
+			store : U16x8, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
 				if index > len {
@@ -18290,7 +18290,7 @@ Builtin :: [].{
 
 			## Build an [I16x8] from exactly 8 lane values, lane 0 first.
 			## Returns `Err(WrongLength)` if the list's length is not 8.
-			from_list : List(I16) -> Try(I16x8, [WrongLength, ..])
+			from_list : List(I16) -> Try(I16x8, [WrongLength])
 			from_list = |lanes|
 				if List.len(lanes) != 8 {
 					Err(WrongLength)
@@ -18750,7 +18750,7 @@ Builtin :: [].{
 			##
 			## Lowers to `movdqu` on x86-64, `ldr` (Q register) on AArch64,
 			## and `v128.load` on wasm.
-			load : List(U8), U64 -> Try(I16x8, [OutOfBounds, ..])
+			load : List(U8), U64 -> Try(I16x8, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
 				if index > len {
@@ -18769,7 +18769,7 @@ Builtin :: [].{
 			##
 			## Lowers to `movdqu` (store form) on x86-64, `str` (Q register)
 			## on AArch64, and `v128.store` on wasm.
-			store : I16x8, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
+			store : I16x8, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
 				if index > len {
@@ -18815,7 +18815,7 @@ Builtin :: [].{
 
 			## Build a [U32x4] from exactly 4 lane values, lane 0 first.
 			## Returns `Err(WrongLength)` if the list's length is not 4.
-			from_list : List(U32) -> Try(U32x4, [WrongLength, ..])
+			from_list : List(U32) -> Try(U32x4, [WrongLength])
 			from_list = |lanes|
 				if List.len(lanes) != 4 {
 					Err(WrongLength)
@@ -19176,7 +19176,7 @@ Builtin :: [].{
 			##
 			## Lowers to `movdqu` on x86-64, `ldr` (Q register) on AArch64,
 			## and `v128.load` on wasm.
-			load : List(U8), U64 -> Try(U32x4, [OutOfBounds, ..])
+			load : List(U8), U64 -> Try(U32x4, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
 				if index > len {
@@ -19195,7 +19195,7 @@ Builtin :: [].{
 			##
 			## Lowers to `movdqu` (store form) on x86-64, `str` (Q register)
 			## on AArch64, and `v128.store` on wasm.
-			store : U32x4, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
+			store : U32x4, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
 				if index > len {
@@ -19241,7 +19241,7 @@ Builtin :: [].{
 
 			## Build an [I32x4] from exactly 4 lane values, lane 0 first.
 			## Returns `Err(WrongLength)` if the list's length is not 4.
-			from_list : List(I32) -> Try(I32x4, [WrongLength, ..])
+			from_list : List(I32) -> Try(I32x4, [WrongLength])
 			from_list = |lanes|
 				if List.len(lanes) != 4 {
 					Err(WrongLength)
@@ -19630,7 +19630,7 @@ Builtin :: [].{
 			##
 			## Lowers to `movdqu` on x86-64, `ldr` (Q register) on AArch64,
 			## and `v128.load` on wasm.
-			load : List(U8), U64 -> Try(I32x4, [OutOfBounds, ..])
+			load : List(U8), U64 -> Try(I32x4, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
 				if index > len {
@@ -19649,7 +19649,7 @@ Builtin :: [].{
 			##
 			## Lowers to `movdqu` (store form) on x86-64, `str` (Q register)
 			## on AArch64, and `v128.store` on wasm.
-			store : I32x4, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
+			store : I32x4, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
 				if index > len {
@@ -19694,7 +19694,7 @@ Builtin :: [].{
 
 			## Build a [U64x2] from exactly 2 lane values, lane 0 first.
 			## Returns `Err(WrongLength)` if the list's length is not 2.
-			from_list : List(U64) -> Try(U64x2, [WrongLength, ..])
+			from_list : List(U64) -> Try(U64x2, [WrongLength])
 			from_list = |lanes|
 				if List.len(lanes) != 2 {
 					Err(WrongLength)
@@ -19984,7 +19984,7 @@ Builtin :: [].{
 			##
 			## Lowers to `movdqu` on x86-64, `ldr` (Q register) on AArch64,
 			## and `v128.load` on wasm.
-			load : List(U8), U64 -> Try(U64x2, [OutOfBounds, ..])
+			load : List(U8), U64 -> Try(U64x2, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
 				if index > len {
@@ -20003,7 +20003,7 @@ Builtin :: [].{
 			##
 			## Lowers to `movdqu` (store form) on x86-64, `str` (Q register)
 			## on AArch64, and `v128.store` on wasm.
-			store : U64x2, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
+			store : U64x2, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
 				if index > len {
@@ -20048,7 +20048,7 @@ Builtin :: [].{
 
 			## Build an [I64x2] from exactly 2 lane values, lane 0 first.
 			## Returns `Err(WrongLength)` if the list's length is not 2.
-			from_list : List(I64) -> Try(I64x2, [WrongLength, ..])
+			from_list : List(I64) -> Try(I64x2, [WrongLength])
 			from_list = |lanes|
 				if List.len(lanes) != 2 {
 					Err(WrongLength)
@@ -20347,7 +20347,7 @@ Builtin :: [].{
 			##
 			## Lowers to `movdqu` on x86-64, `ldr` (Q register) on AArch64,
 			## and `v128.load` on wasm.
-			load : List(U8), U64 -> Try(I64x2, [OutOfBounds, ..])
+			load : List(U8), U64 -> Try(I64x2, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
 				if index > len {
@@ -20366,7 +20366,7 @@ Builtin :: [].{
 			##
 			## Lowers to `movdqu` (store form) on x86-64, `str` (Q register)
 			## on AArch64, and `v128.store` on wasm.
-			store : I64x2, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
+			store : I64x2, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
 				if index > len {
@@ -21320,7 +21320,7 @@ bytes_to_str = |bytes|
 		Err(_) => Err(OutOfRange)
 	}
 
-unsigned_plus_try : item, item, item -> Try(item, [Overflow, ..])
+unsigned_plus_try : item, item, item -> Try(item, [Overflow])
 	where [item.is_gt : item, item -> Bool, item.minus : item, item -> item, item.plus : item, item -> item]
 unsigned_plus_try = |highest, a, b|
 	if a > highest - b {
@@ -21329,7 +21329,7 @@ unsigned_plus_try = |highest, a, b|
 		Ok(a + b)
 	}
 
-unsigned_minus_try : item, item -> Try(item, [Overflow, ..])
+unsigned_minus_try : item, item -> Try(item, [Overflow])
 	where [item.is_lt : item, item -> Bool, item.minus : item, item -> item]
 unsigned_minus_try = |a, b|
 	if a < b {
@@ -21338,7 +21338,7 @@ unsigned_minus_try = |a, b|
 		Ok(a - b)
 	}
 
-unsigned_times_try : item, item, item, item -> Try(item, [Overflow, ..])
+unsigned_times_try : item, item, item, item -> Try(item, [Overflow])
 	where [item.is_eq : item, item -> Bool, item.is_gt : item, item -> Bool, item.div_by : item, item -> item, item.times : item, item -> item]
 unsigned_times_try = |highest, zero, a, b|
 	if b == zero {
@@ -21349,7 +21349,7 @@ unsigned_times_try = |highest, zero, a, b|
 		Ok(a * b)
 	}
 
-unsigned_div_try : item, item, item -> Try(item, [DivByZero, ..])
+unsigned_div_try : item, item, item -> Try(item, [DivByZero])
 	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item]
 unsigned_div_try = |zero, a, b|
 	if b == zero {
@@ -21358,7 +21358,7 @@ unsigned_div_try = |zero, a, b|
 		Ok(a / b)
 	}
 
-signed_plus_try : item, item, item, item, item -> Try(item, [Overflow, ..])
+signed_plus_try : item, item, item, item, item -> Try(item, [Overflow])
 	where [item.is_gt : item, item -> Bool, item.is_lt : item, item -> Bool, item.plus : item, item -> item, item.minus : item, item -> item]
 signed_plus_try = |lowest, highest, zero, a, b|
 	if b > zero {
@@ -21377,7 +21377,7 @@ signed_plus_try = |lowest, highest, zero, a, b|
 		Ok(a)
 	}
 
-signed_minus_try : item, item, item, item, item -> Try(item, [Overflow, ..])
+signed_minus_try : item, item, item, item, item -> Try(item, [Overflow])
 	where [item.is_gt : item, item -> Bool, item.is_lt : item, item -> Bool, item.plus : item, item -> item, item.minus : item, item -> item]
 signed_minus_try = |lowest, highest, zero, a, b|
 	if b > zero {
@@ -21396,7 +21396,7 @@ signed_minus_try = |lowest, highest, zero, a, b|
 		Ok(a)
 	}
 
-signed_times_try : item, item, item, item, item, item -> Try(item, [Overflow, ..])
+signed_times_try : item, item, item, item, item, item -> Try(item, [Overflow])
 	where [
 		item.is_gt : item, item -> Bool,
 		item.is_lt : item, item -> Bool,
@@ -21446,7 +21446,7 @@ signed_times_try = |lowest, highest, zero, neg_one, a, b|
 		Ok(a * b)
 	}
 
-signed_div_try : item, item, item, item, item -> Try(item, [DivByZero, Overflow, ..])
+signed_div_try : item, item, item, item, item -> Try(item, [DivByZero, Overflow])
 	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item]
 signed_div_try = |lowest, zero, neg_one, a, b|
 	if b == zero {
@@ -21461,7 +21461,7 @@ signed_div_try = |lowest, zero, neg_one, a, b|
 		Ok(a / b)
 	}
 
-unsigned_pow_try : item, item, item, item, item, item -> Try(item, [Overflow, ..])
+unsigned_pow_try : item, item, item, item, item, item -> Try(item, [Overflow])
 	where [
 		item.is_eq : item, item -> Bool,
 		item.is_gt : item, item -> Bool,
@@ -21472,7 +21472,7 @@ unsigned_pow_try : item, item, item, item, item, item -> Try(item, [Overflow, ..
 unsigned_pow_try = |highest, zero, one, two, base, exponent|
 	unsigned_pow_try_step(highest, zero, one, two, one, base, exponent)
 
-unsigned_pow_try_step : item, item, item, item, item, item, item -> Try(item, [Overflow, ..])
+unsigned_pow_try_step : item, item, item, item, item, item, item -> Try(item, [Overflow])
 	where [
 		item.is_eq : item, item -> Bool,
 		item.is_gt : item, item -> Bool,
@@ -21506,7 +21506,7 @@ unsigned_pow_try_step = |highest, zero, one, two, acc, base, exponent|
 		}
 	}
 
-signed_pow_try : item, item, item, item, item, item, item, item -> Try(item, [Overflow, Underflow, ..])
+signed_pow_try : item, item, item, item, item, item, item, item -> Try(item, [Overflow, Underflow])
 	where [
 		item.is_eq : item, item -> Bool,
 		item.is_gt : item, item -> Bool,
@@ -21534,7 +21534,7 @@ signed_pow_try = |lowest, highest, zero, one, two, neg_one, base, exponent|
 		signed_pow_try_step(lowest, highest, zero, one, two, neg_one, one, base, exponent)
 	}
 
-signed_pow_try_step : item, item, item, item, item, item, item, item, item -> Try(item, [Overflow, Underflow, ..])
+signed_pow_try_step : item, item, item, item, item, item, item, item, item -> Try(item, [Overflow, Underflow])
 	where [
 		item.is_eq : item, item -> Bool,
 		item.is_gt : item, item -> Bool,
@@ -21575,7 +21575,7 @@ signed_pow_try_step = |lowest, highest, zero, one, two, neg_one, acc, base, expo
 		}
 	}
 
-unsigned_div_ceil_try : item, item, item, item -> Try(item, [DivByZero, ..])
+unsigned_div_ceil_try : item, item, item, item -> Try(item, [DivByZero])
 	where [
 		item.is_eq : item, item -> Bool,
 		item.plus : item, item -> item,
@@ -21593,7 +21593,7 @@ unsigned_div_ceil_try = |zero, one, a, b|
 			}
 		}
 
-signed_div_ceil_try : item, item, item, item, item, item, item -> Try(item, [DivByZero, Overflow, ..])
+signed_div_ceil_try : item, item, item, item, item, item, item -> Try(item, [DivByZero, Overflow])
 	where [
 		item.is_eq : item, item -> Bool,
 		item.is_gt : item, item -> Bool,
@@ -21791,7 +21791,7 @@ ScannedJsonString : { after : Str, body : [NoEscapes(Str), HasEscapes(Str)] }
 
 ## Scan a JSON string body to its closing (unescaped) quote, validating escapes
 ## along the way.
-scan_json_string_tail : Str -> Try(ScannedJsonString, [InvalidJson(Str), ..])
+scan_json_string_tail : Str -> Try(ScannedJsonString, [InvalidJson(Str)])
 scan_json_string_tail = |tail| {
 	len = Str.count_utf8_bytes(tail)
 	var $index = 0
@@ -21839,7 +21839,7 @@ scan_json_string_tail = |tail| {
 ## Find the end of a JSON string, for skipped values whose content is discarded.
 ## Escapes are still validated (invalid escapes in skipped fields remain invalid
 ## JSON), but the body is never decoded. Returns the text after the closing quote.
-skip_json_string_tail : Str -> Try(Str, [InvalidJson(Str), ..])
+skip_json_string_tail : Str -> Try(Str, [InvalidJson(Str)])
 skip_json_string_tail = |tail| {
 	{ after, .. } = scan_json_string_tail(tail)?
 	Ok(after)
@@ -21851,7 +21851,7 @@ skip_json_string_tail = |tail| {
 ## The scan already validated every escape, so decoding re-parses them. This double
 ## parse is deliberate: it keeps scanning allocation-free, and skipped strings and
 ## clean strings never decode at all.
-decode_json_string_body : Str -> Try(Str, [InvalidJson(Str), ..])
+decode_json_string_body : Str -> Try(Str, [InvalidJson(Str)])
 decode_json_string_body = |raw| {
 	len = Str.count_utf8_bytes(raw)
 	var $out = u8_list_reserve([], len)
@@ -21895,7 +21895,7 @@ decode_json_string_body = |raw| {
 ##
 ## Each branch checks the length before reading; the three checks mirror the three sizes
 ## above.
-parse_json_escaped_code_point : Str, U64 -> Try({ code_point : U64, consumed : U64 }, [InvalidJson(Str), ..])
+parse_json_escaped_code_point : Str, U64 -> Try({ code_point : U64, consumed : U64 }, [InvalidJson(Str)])
 parse_json_escaped_code_point = |s, index| {
 	len = Str.count_utf8_bytes(s)
 	if index + 2 > len {
@@ -21963,7 +21963,7 @@ parse_json_escaped_code_point = |s, index| {
 }
 
 ## Combine 4 hex-digit bytes (as in \uXXXX) into their numeric value.
-decode_json_hex4 : U8, U8, U8, U8 -> Try(U64, [InvalidJson(Str), ..])
+decode_json_hex4 : U8, U8, U8, U8 -> Try(U64, [InvalidJson(Str)])
 decode_json_hex4 = |b0, b1, b2, b3| {
 	d0 = decode_json_hex_digit(b0)?
 	d1 = decode_json_hex_digit(b1)?
@@ -21972,7 +21972,7 @@ decode_json_hex4 = |b0, b1, b2, b3| {
 	Ok(((d0 * 16 + d1) * 16 + d2) * 16 + d3)
 }
 
-decode_json_hex_digit : U8 -> Try(U64, [InvalidJson(Str), ..])
+decode_json_hex_digit : U8 -> Try(U64, [InvalidJson(Str)])
 decode_json_hex_digit = |byte|
 	hex_digit_value(byte)
 		.map_ok(|value| value.to_u64())
