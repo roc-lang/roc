@@ -34579,16 +34579,25 @@ const BodyContext = struct {
             .list, .box => |payload| try self.graphParserShapeNeedsInvalidValue(payload, err_node, seen),
             .tuple => true,
             .record => blk: {
+                const has_missing_required_field = try self.graphRowHasTag(err_node, "MissingRequiredField");
                 for ((try self.graph.recordNodes(node)).fields) |field| {
                     if (try self.graphMissingTryOkNode(field.ty)) |payload| {
                         if (try self.graphParserShapeNeedsInvalidValue(payload, err_node, seen)) break :blk true;
-                    } else if (!try self.graphRowHasTag(err_node, "MissingRequiredField")) {
-                        break :blk true;
+                    } else {
+                        if (!has_missing_required_field) break :blk true;
+                        if (try self.graphParserShapeNeedsInvalidValue(field.ty, err_node, seen)) break :blk true;
                     }
                 }
                 break :blk false;
             },
-            .tag_union => true,
+            .tag_union => blk: {
+                for ((try self.graph.tagRowNodes(node)).tags) |tag| {
+                    for (tag.payloads) |payload| {
+                        if (try self.graphParserShapeNeedsInvalidValue(payload, err_node, seen)) break :blk true;
+                    }
+                }
+                break :blk false;
+            },
             .named => |named| blk: {
                 if (named.builtin_owner == .set and named.args.len == 1) {
                     break :blk try self.graphParserShapeNeedsInvalidValue(named.args[0], err_node, seen);
@@ -34868,6 +34877,11 @@ const BodyContext = struct {
                 }
             },
             .record, .zst, .empty_record => {
+                const fields = switch (self.graph.content(structural_node)) {
+                    .record => (try self.graph.recordNodes(structural_node)).fields,
+                    .zst, .empty_record => &.{},
+                    else => Common.invariant("record codec preparation reached a non-record shape"),
+                };
                 if (kind == .encoder) {
                     added = try self.prepareEncodeContainerCodecCall(
                         boundary_expr,
@@ -34876,28 +34890,26 @@ const BodyContext = struct {
                         "encode_record",
                     ) or added;
                 }
-                added = try self.prepareRenameRecordFieldCodecCall(
-                    boundary_expr,
-                    kind,
-                    shape_node,
-                    boundary_callable_node,
-                ) or added;
-                if (kind == .parser) {
-                    added = try self.prepareSkipRecordFieldCodecCall(
+                if (fields.len != 0) {
+                    added = try self.prepareRenameRecordFieldCodecCall(
                         boundary_expr,
+                        kind,
                         shape_node,
                         boundary_callable_node,
                     ) or added;
-                    added = try self.prepareParseRecordFieldCodecCall(
-                        boundary_expr,
-                        shape_node,
-                        boundary_callable_node,
-                    ) or added;
+                    if (kind == .parser) {
+                        added = try self.prepareSkipRecordFieldCodecCall(
+                            boundary_expr,
+                            shape_node,
+                            boundary_callable_node,
+                        ) or added;
+                        added = try self.prepareParseRecordFieldCodecCall(
+                            boundary_expr,
+                            shape_node,
+                            boundary_callable_node,
+                        ) or added;
+                    }
                 }
-                const fields = switch (self.graph.content(shape_node)) {
-                    .zst => &.{},
-                    else => (try self.graph.recordNodes(structural_node)).fields,
-                };
                 for (fields) |field|
                     added = try self.prepareCustomCodecCallsAtNode(boundary_expr, kind, field.ty, boundary_callable_node, seen) or added;
             },

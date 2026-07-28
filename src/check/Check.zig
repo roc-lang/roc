@@ -22947,10 +22947,6 @@ fn validateDerivedParseTagUnion(
         .ok => {},
         .unsupported, .reported_error => |result| return result,
     }
-    switch (try self.validateInvalidValueMethod(encoding_var, state_var, err_var, constraint, env, region)) {
-        .ok => {},
-        .unsupported, .reported_error => |result| return result,
-    }
 
     const tags = self.types.getTagsSlice(tag_union.tags);
     for (tags.items(.args)) |tag_args_range| {
