@@ -865,6 +865,7 @@ fn relateCheckedMonoRequestNodeAt(
                             try relateCheckedMonoRequestNodeAt(graph, checked_field.ty, request_field.ty, seen);
                         }
                         try relateCheckedMonoRequestNodeAt(graph, checked_row.ext, request_row.ext, seen);
+                        try graph.joinRelatedRequestContainer(checked_root, request_root);
                         return;
                     }
                 }
@@ -883,6 +884,7 @@ fn relateCheckedMonoRequestNodeAt(
                             }
                         }
                         try relateCheckedMonoRequestNodeAt(graph, checked_row.ext, request_row.ext, seen);
+                        try graph.joinRelatedRequestContainer(checked_root, request_root);
                         return;
                     }
                 }
@@ -42875,6 +42877,65 @@ test "checked-to-mono relation preserves generated-private evidence inside a com
     try std.testing.expect(!graph.sameClass(checked_backing, mono_backing));
     try std.testing.expectEqual(Type.BackingAuthority.checked_public, graph.content(checked_opaque).named.backing.?.authority);
     try std.testing.expectEqual(Type.BackingAuthority.generated_private, graph.content(mono_opaque).named.backing.?.authority);
+}
+
+test "checked-to-mono relation joins exact tag request roots without collapsing named payloads" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xCF} ** 32));
+    const type_name = try name_store.internTypeName("PayloadEvidence");
+    const tag_name = try name_store.internTagLabel("One");
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(2) };
+    const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
+    const checked_backing = try graph.newNode(.empty_record);
+    const mono_backing = try graph.newNode(.empty_record);
+    const checked_payload = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .@"opaque",
+        .builtin_owner = .fields,
+        .args = try graph.arena().alloc(NodeId, 0),
+        .backing = .{ .node = checked_backing, .use = .runtime_layout_only },
+    } });
+    const mono_payload = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .@"opaque",
+        .builtin_owner = .fields,
+        .args = try graph.arena().alloc(NodeId, 0),
+        .backing = .{ .node = mono_backing, .use = .runtime_layout_only },
+    } });
+    const checked_row = try graph.newNode(.{ .tag_union = .{
+        .tags = try graph.arena().dupe(InstTag, &.{.{
+            .name = tag_name,
+            .checked_name = tag_name,
+            .payloads = try graph.arena().dupe(NodeId, &.{checked_payload}),
+        }}),
+        .ext = try graph.newNode(.empty_tag_union),
+    } });
+    const mono_row = try graph.newNode(.{ .tag_union = .{
+        .tags = try graph.arena().dupe(InstTag, &.{.{
+            .name = tag_name,
+            .checked_name = tag_name,
+            .payloads = try graph.arena().dupe(NodeId, &.{mono_payload}),
+        }}),
+        .ext = try graph.newNode(.empty_tag_union),
+    } });
+
+    try relateCheckedNodeToMono(graph, checked_row, mono_row);
+
+    try std.testing.expect(graph.sameClass(checked_row, mono_row));
+    try std.testing.expect(!graph.sameClass(checked_payload, mono_payload));
+    try std.testing.expect(graph.sameClass(checked_backing, mono_backing));
 }
 
 test "direct call request preserves generated-private return provenance" {

@@ -2466,6 +2466,38 @@ pub const InstGraph = struct {
                 },
                 else => Common.invariant("request container join received different type structure"),
             },
+            .record => switch (request_content) {
+                .record => {
+                    const public_row = try self.flattenRecordRow(public_root);
+                    const request_row = try self.flattenRecordRow(request_root);
+                    if (public_row.fields.len != request_row.fields.len) {
+                        Common.invariant("request container join received records with different field counts");
+                    }
+                    for (public_row.fields, request_row.fields) |public_field, request_field| {
+                        if (!Ident.textEql(self.fieldLabelText(public_field.name), self.fieldLabelText(request_field.name))) {
+                            Common.invariant("request container join received records with different fields");
+                        }
+                    }
+                },
+                else => Common.invariant("request container join received different type structure"),
+            },
+            .tag_union => switch (request_content) {
+                .tag_union => {
+                    const public_row = try self.flattenTagRow(public_root);
+                    const request_row = try self.flattenTagRow(request_root);
+                    if (public_row.tags.len != request_row.tags.len) {
+                        Common.invariant("request container join received tag unions with different tag counts");
+                    }
+                    for (public_row.tags, request_row.tags) |public_tag, request_tag| {
+                        if (!Ident.textEql(self.tagLabelText(public_tag.name), self.tagLabelText(request_tag.name)) or
+                            public_tag.payloads.len != request_tag.payloads.len)
+                        {
+                            Common.invariant("request container join received tag unions with different tags");
+                        }
+                    }
+                },
+                else => Common.invariant("request container join received different type structure"),
+            },
             else => Common.invariant("request container join received a non-container public type"),
         }
         try self.union_(request_root, public_root);
