@@ -2697,27 +2697,10 @@ pub const InstGraph = struct {
                                 }
                             }
 
-                            // A graph-owned producer still has the public-source
-                            // provenance required to finalize a newly joined
-                            // representation; an imported finished Monotype
-                            // deliberately does not. Preserve that explicit
-                            // authority when only one side owns it. This is
-                            // especially important for recursive joins, whose
-                            // selected root must still be rewritable to the
-                            // forced-dynamic fixed point below.
-                            const left_owns_provenance = left_named.generated_iterator != null;
-                            const right_owns_provenance = right_named.generated_iterator != null;
-                            if (left_owns_provenance != right_owns_provenance) {
-                                if (left_owns_provenance) {
-                                    try self.union_(left, right);
-                                } else {
-                                    try self.union_(right, left);
-                                }
-                            } else if (left_named.builtin_owner) |left_owner| {
-                                // Close recursive `rest` references before the
-                                // backing pair is drained. Otherwise each
-                                // nominal unwrap creates another fresh
-                                // structural node.
+                            // Close recursive `rest` references before the
+                            // backing pair is drained. Otherwise each nominal
+                            // unwrap creates another fresh structural node.
+                            if (left_named.builtin_owner) |left_owner| {
                                 if (!static_dispatch.isIteratorOwner(left_owner)) unreachable;
                                 try self.union_(left, right);
                             } else {
@@ -5121,99 +5104,6 @@ test "generated iterator depth visits wide graphs without a size cutoff" {
     const finalized = graph.content(adapter).named.def;
     try std.testing.expectEqual(Type.IteratorRepresentation.minted, finalized.iterator_representation);
     try std.testing.expectEqual(@as(u8, 2), finalized.iterator_depth);
-}
-
-test "recursive join keeps graph-owned iterator provenance over a finished Monotype" {
-    const gpa = std.testing.allocator;
-
-    var type_store = Type.Store.init(gpa);
-    defer type_store.deinit();
-
-    var name_store = names.NameStore.init(gpa);
-    defer name_store.deinit();
-
-    const graph = try InstGraph.create(gpa, &type_store, &name_store);
-    defer graph.destroy();
-
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0x65} ** 32));
-    const type_name = try name_store.internTypeName("Iter");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(6) };
-    const public_def: Type.TypeDef = .{
-        .module = module_identity,
-        .type_name = type_name,
-        .iterator_topology = .{
-            .len_field = try name_store.internRecordFieldLabel("len"),
-            .step_field = try name_store.internRecordFieldLabel("step"),
-            .known_tag = try name_store.internTagLabel("Known"),
-            .unknown_tag = try name_store.internTagLabel("Unknown"),
-            .done_tag = try name_store.internTagLabel("Done"),
-            .one_tag = try name_store.internTagLabel("One"),
-            .skip_tag = try name_store.internTagLabel("Skip"),
-            .item_field = try name_store.internRecordFieldLabel("item"),
-            .rest_field = try name_store.internRecordFieldLabel("rest"),
-        },
-    };
-    const item = try graph.newNode(.{ .primitive = .u64 });
-    const public_backing = try graph.newNode(.empty_record);
-    const public_source: InstIteratorPublicSource = .{
-        .named_type = named_type,
-        .def = public_def,
-        .kind = .@"opaque",
-        .builtin_owner = .iter,
-        .backing = .{ .node = public_backing, .use = .runtime_layout_only },
-        .declared_order = &.{},
-    };
-
-    var finished_def = public_def;
-    finished_def.generated = .{ .bytes = [_]u8{0xA5} ** 32 };
-    finished_def.iterator_representation = .minted;
-    finished_def.iterator_kind = .list;
-    finished_def.iterator_depth = 1;
-    const finished = try graph.newNode(.{ .named = .{
-        .named_type = named_type,
-        .def = finished_def,
-        .kind = .@"opaque",
-        .builtin_owner = .iter,
-        .args = try graph.arena().dupe(NodeId, &.{item}),
-        .backing = .{
-            .node = try graph.newNode(.empty_record),
-            .use = .runtime_layout_only,
-            .authority = .generated_private,
-        },
-    } });
-
-    var owned_def = public_def;
-    owned_def.iterator_representation = .minted;
-    owned_def.iterator_kind = .list;
-    owned_def.iterator_depth = 1;
-    const owned = try graph.newNode(.{ .named = .{
-        .named_type = named_type,
-        .def = owned_def,
-        .kind = .@"opaque",
-        .builtin_owner = .iter,
-        .args = try graph.arena().dupe(NodeId, &.{item}),
-        .backing = .{
-            .node = try graph.newNode(.empty_record),
-            .use = .runtime_layout_only,
-            .authority = .generated_private,
-        },
-        .generated_iterator = .{
-            .callable_evidence = null,
-            .public_source = public_source,
-        },
-    } });
-
-    // This order is significant: the finished type is the left side of the
-    // recursive join, but only the graph-owned side can author the final
-    // forced-dynamic representation.
-    try graph.markRecursiveValueSlot(finished);
-    try graph.unify(finished, owned);
-    try graph.finalizeGeneratedIteratorRepresentations();
-
-    const finalized = graph.content(finished).named;
-    try std.testing.expect(finalized.generated_iterator != null);
-    try std.testing.expectEqual(Type.IteratorRepresentation.forced_dynamic, finalized.def.iterator_representation);
-    try std.testing.expectEqual(Type.IteratorKind.forced_dynamic, finalized.def.iterator_kind);
 }
 
 test "opaque interface relation preserves nested generated-private backing" {
