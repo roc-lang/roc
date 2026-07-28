@@ -587,6 +587,26 @@ pub fn CodeGen(comptime target: RocTarget) type {
             try self.emit.movssRegMem(dst, .RBP, offset);
         }
 
+        pub fn emitLoadStackV128(self: *Self, dst: FloatReg, offset: i32) Allocator.Error!void {
+            try self.emit.movdquRegMem(dst, .RBP, offset);
+        }
+
+        pub fn emitStoreStackV128(self: *Self, offset: i32, src: FloatReg) Allocator.Error!void {
+            try self.emit.movdquMemReg(.RBP, offset, src);
+        }
+
+        pub fn emitMoveV128(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
+            if (dst != src) try self.emit.movdqaRegReg(dst, src);
+        }
+
+        pub fn emitLoadV128(self: *Self, dst: FloatReg, base: GeneralReg, offset: i32) Allocator.Error!void {
+            try self.emit.movdquRegMem(dst, base, offset);
+        }
+
+        pub fn emitStoreV128(self: *Self, base: GeneralReg, offset: i32, src: FloatReg) Allocator.Error!void {
+            try self.emit.movdquMemReg(base, offset, src);
+        }
+
         /// Store float32 to stack slot.
         pub fn emitStoreStackF32(self: *Self, offset: i32, src: FloatReg) Allocator.Error!void {
             try self.emit.movssMemReg(.RBP, offset, src);
@@ -745,6 +765,16 @@ test "float allocation never relocates an allocated register" {
     try std.testing.expectEqual(code_len, cg.getCode().len);
 
     for (regs[0..count]) |reg| cg.freeFloat(reg);
+}
+
+test "Windows vector allocation excludes nonvolatile XMM registers" {
+    var cg = WinCodeGen.init(std.testing.allocator);
+    defer cg.deinit();
+
+    for (0..6) |index| {
+        try std.testing.expectEqual(@as(FloatReg, @enumFromInt(index)), cg.allocFloat().?);
+    }
+    try std.testing.expectEqual(@as(?FloatReg, null), cg.allocFloat());
 }
 
 test "allocate caller-saved registers first" {

@@ -1420,6 +1420,100 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emit32(inst);
         }
 
+        /// MOV Vd.16B, Vn.16B (alias of ORR Vd.16B, Vn.16B, Vn.16B).
+        pub fn movVectorRegReg(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
+            const inst: u32 = 0x4EA01C00 |
+                (@as(u32, src.enc()) << 16) |
+                (@as(u32, src.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
+        }
+
+        /// Emit a register-only Advanced SIMD instruction whose opcode bits
+        /// are supplied without Rm, Rn, or Rd.
+        pub fn simdThreeReg(
+            self: *Self,
+            opcode: u32,
+            dst: FloatReg,
+            lhs: FloatReg,
+            rhs: FloatReg,
+        ) Allocator.Error!void {
+            std.debug.assert((opcode & 0x001F03FF) == 0);
+            try self.emit32(opcode |
+                (@as(u32, rhs.enc()) << 16) |
+                (@as(u32, lhs.enc()) << 5) |
+                dst.enc());
+        }
+
+        /// Emit a register-only Advanced SIMD instruction whose opcode bits
+        /// are supplied without Rn or Rd.
+        pub fn simdTwoReg(
+            self: *Self,
+            opcode: u32,
+            dst: FloatReg,
+            src: FloatReg,
+        ) Allocator.Error!void {
+            std.debug.assert((opcode & 0x000003FF) == 0);
+            try self.emit32(opcode |
+                (@as(u32, src.enc()) << 5) |
+                dst.enc());
+        }
+
+        fn simdElementImm5(lane_bits: u7, index: u4) u5 {
+            return switch (lane_bits) {
+                8 => (@as(u5, index) << 1) | 1,
+                16 => (@as(u5, index) << 2) | 2,
+                32 => (@as(u5, index) << 3) | 4,
+                64 => (@as(u5, index) << 4) | 8,
+                else => unreachable,
+            };
+        }
+
+        pub fn duplicateGeneralToVector(
+            self: *Self,
+            dst: FloatReg,
+            src: GeneralReg,
+            lane_bits: u7,
+        ) Allocator.Error!void {
+            const opcode: u32 = switch (lane_bits) {
+                8 => 0x4E010C00,
+                16 => 0x4E020C00,
+                32 => 0x4E040C00,
+                64 => 0x4E080C00,
+                else => unreachable,
+            };
+            try self.emit32(opcode | (@as(u32, src.enc()) << 5) | dst.enc());
+        }
+
+        pub fn insertGeneralVectorLane(
+            self: *Self,
+            dst: FloatReg,
+            src: GeneralReg,
+            lane_bits: u7,
+            index: u4,
+        ) Allocator.Error!void {
+            const imm5 = simdElementImm5(lane_bits, index);
+            try self.emit32(0x4E001C00 |
+                (@as(u32, imm5) << 16) |
+                (@as(u32, src.enc()) << 5) |
+                dst.enc());
+        }
+
+        pub fn extractVectorLaneUnsigned(
+            self: *Self,
+            dst: GeneralReg,
+            src: FloatReg,
+            lane_bits: u7,
+            index: u4,
+        ) Allocator.Error!void {
+            const imm5 = simdElementImm5(lane_bits, index);
+            const opcode: u32 = if (lane_bits == 64) 0x4E003C00 else 0x0E003C00;
+            try self.emit32(opcode |
+                (@as(u32, imm5) << 16) |
+                (@as(u32, src.enc()) << 5) |
+                dst.enc());
+        }
+
         /// FMOV from general register to float register
         pub fn fmovFloatFromGen(self: *Self, ftype: FloatType, dst: FloatReg, src: GeneralReg) Allocator.Error!void {
             // FMOV <Sd>, <Wn> (single) or FMOV <Dd>, <Xn> (double)
@@ -1884,6 +1978,39 @@ test "fadd" {
     // fadd d0, d1, d2 (0x1E622820)
     try asm_buf.faddRegRegReg(.double, .V0, .V1, .V2);
     try std.testing.expectEqualSlices(u8, &[_]u8{ 0x20, 0x28, 0x62, 0x1E }, asm_buf.buf.items);
+}
+
+test "packed integer vector encodings" {
+    var asm_buf = LinuxEmit.init(std.testing.allocator);
+    defer asm_buf.deinit();
+
+    // mov v3.16b, v7.16b
+    try asm_buf.movVectorRegReg(.V3, .V7);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xE3, 0x1C, 0xA7, 0x4E }, asm_buf.buf.items);
+
+    asm_buf.buf.clearRetainingCapacity();
+    // add v3.16b, v7.16b, v12.16b
+    try asm_buf.simdThreeReg(0x4E208400, .V3, .V7, .V12);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xE3, 0x84, 0x2C, 0x4E }, asm_buf.buf.items);
+}
+
+test "packed integer scalar lane bridges" {
+    var asm_buf = LinuxEmit.init(std.testing.allocator);
+    defer asm_buf.deinit();
+
+    // dup v9.4s, w10
+    try asm_buf.duplicateGeneralToVector(.V9, .X10, 32);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x49, 0x0D, 0x04, 0x4E }, asm_buf.buf.items);
+
+    asm_buf.buf.clearRetainingCapacity();
+    // ins v9.s[3], w10
+    try asm_buf.insertGeneralVectorLane(.V9, .X10, 32, 3);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x49, 0x1D, 0x1C, 0x4E }, asm_buf.buf.items);
+
+    asm_buf.buf.clearRetainingCapacity();
+    // umov w10, v9.h[5]
+    try asm_buf.extractVectorLaneUnsigned(.X10, .V9, 16, 5);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x2A, 0x3D, 0x16, 0x0E }, asm_buf.buf.items);
 }
 
 test "signed-offset memory helpers use exact byte offsets" {
