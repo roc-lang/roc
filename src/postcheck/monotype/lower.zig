@@ -4926,6 +4926,7 @@ const Builder = struct {
             body_draft,
         );
         defer ctx.deinit();
+        try ctx.inheritActiveConstBindingId(boundary.active_const_binding);
         ctx.evidence = boundary.context_evidence;
         ctx.current_fn_key = boundary.current_fn_key;
         try ctx.restoreCodecLexicalContext(boundary.lexical);
@@ -6019,10 +6020,13 @@ const Builder = struct {
         var out_index: usize = 0;
         for (fn_value.captures) |capture| {
             if (!capture.id.isCanonical()) continue;
-            out.items[out_index].value = if (static_data_const_locator) |const_locator|
-                try fn_ctx.restoredStaticDataCandidateNode(store_view, fn_view, capture.value, out.items[out_index].ty, const_locator, checkedBinderType(fn_view, capture.id.binder()), .allow)
-            else
-                try fn_ctx.restoreConstNodeAtType(store_view, fn_view, capture.value, out.items[out_index].ty);
+            out.items[out_index].value = switch (capture.value) {
+                .node => |node| if (static_data_const_locator) |const_locator|
+                    try fn_ctx.restoredStaticDataCandidateNode(store_view, fn_view, node, out.items[out_index].ty, const_locator, checkedBinderType(fn_view, capture.id.binder()), .allow)
+                else
+                    try fn_ctx.restoreConstNodeAtType(store_view, fn_view, node, out.items[out_index].ty),
+                .recursive_const => try fn_ctx.restoreRecursiveConstCaptureAtType(capture.id, out.items[out_index].ty),
+            };
             out_index += 1;
         }
 
@@ -6627,10 +6631,13 @@ const Builder = struct {
             initialized += 1;
         }
         for (fn_value.captures, 0..) |capture, index| {
-            captures[index].value = if (static_data_const_locator) |const_locator|
-                try fn_ctx.restoredStaticDataCandidateNode(store_view, fn_view, capture.value, captures[index].ty, const_locator, checkedBinderType(fn_view, constCaptureBinder(capture.id)), .allow)
-            else
-                try fn_ctx.restoreConstNodeAtType(store_view, fn_view, capture.value, captures[index].ty);
+            captures[index].value = switch (capture.value) {
+                .node => |node| if (static_data_const_locator) |const_locator|
+                    try fn_ctx.restoredStaticDataCandidateNode(store_view, fn_view, node, captures[index].ty, const_locator, checkedBinderType(fn_view, constCaptureBinder(capture.id)), .allow)
+                else
+                    try fn_ctx.restoreConstNodeAtType(store_view, fn_view, node, captures[index].ty),
+                .recursive_const => try fn_ctx.restoreRecursiveConstCaptureAtType(capture.id, captures[index].ty),
+            };
         }
         const template = try self.constFnTemplateToMono(fn_value, ty);
         const nested = switch (template.fn_def) {
@@ -8923,6 +8930,10 @@ const DraftDeferredConstUse = struct {
     context_evidence: EvidenceChain,
     use_evidence: []const SpecEvidence,
     current_fn_key: names.TypeDigest,
+    /// Durable ancestry of constant expansions active at the use site. The
+    /// deferred expansion must restore this chain so a delayed recursive edge
+    /// resolves to its already-reserved local.
+    active_const_binding: ?ActiveConstBindingId,
     lexical: DraftCodecLexicalContext,
     /// Stable proof node stored with the reservation expression. Parents
     /// may reference it before const restoration expands this boundary.
@@ -9330,6 +9341,7 @@ const BodyDraftStore = struct {
     template_specs: std.ArrayList(DraftTemplateSpec),
     template_spec_lookup: std.AutoHashMap(DraftTemplateLookupAddress, std.ArrayList(u32)),
     active_callable_eval_bindings: std.ArrayList(ActiveCallableEvalBinding),
+    active_const_bindings: std.ArrayList(ActiveConstBinding),
     deferred_const_uses: std.ArrayList(DraftDeferredConstUse),
     deferred_structural_eqs: std.ArrayList(DraftDeferredStructuralEq),
     deferred_structural_serializations: std.ArrayList(DraftDeferredStructuralSerialization),
@@ -9397,6 +9409,7 @@ const BodyDraftStore = struct {
             .template_specs = .empty,
             .template_spec_lookup = std.AutoHashMap(DraftTemplateLookupAddress, std.ArrayList(u32)).init(allocator),
             .active_callable_eval_bindings = .empty,
+            .active_const_bindings = .empty,
             .deferred_const_uses = .empty,
             .deferred_structural_eqs = .empty,
             .deferred_structural_serializations = .empty,
@@ -9522,6 +9535,7 @@ const BodyDraftStore = struct {
         self.deferred_structural_eqs.deinit(self.allocator);
         self.deferred_const_uses.deinit(self.allocator);
         self.active_callable_eval_bindings.deinit(self.allocator);
+        self.active_const_bindings.deinit(self.allocator);
         self.string_bytes.deinit(self.allocator);
         self.string_literals.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
@@ -10885,16 +10899,24 @@ const ActiveReturnTarget = struct {
     cell: DraftTypeCell,
 };
 
+const ActiveConstBindingId = enum(u32) { _ };
+
 const ActiveConstBinding = struct {
+    parent: ?ActiveConstBindingId,
     const_use: checked.ConstLocator,
     binder: checked.PatternBinderId,
     local: DraftLocalId,
+    cell: DraftTypeCell,
+    owner: DraftOwner,
+    reservation: DraftExprId,
+    restored_source: ?DraftExprId = null,
     used: bool = false,
+    wrapped: bool = false,
 };
 
 const ActiveConstBindingScope = struct {
-    active: ActiveConstBinding = undefined,
-    previous_active: ?*ActiveConstBinding = null,
+    active: ActiveConstBindingId = undefined,
+    previous_active: ?ActiveConstBindingId = null,
     binder: checked.PatternBinderId = undefined,
     previous_local: ?DraftLocalId = null,
     entered: bool = false,
@@ -11003,7 +11025,7 @@ const BodyContext = struct {
     /// restored. Recursive references to that exact checked const identity
     /// consume this local so the restored value becomes an explicit recursive
     /// binding instead of an unbounded chain of deferred const expansions.
-    active_const_binding: ?*ActiveConstBinding = null,
+    active_const_binding: ?ActiveConstBindingId = null,
     /// Evidence for the current callable's dispatch requirements (innermost
     /// vector plus lexical parents for nested local functions). Body contexts
     /// created for the same specialization (dispatch call contexts, nested
@@ -16250,7 +16272,7 @@ const BodyContext = struct {
             else => null,
         };
         if (maybe_ref) |ref_id| {
-            if (self.currentLocalForResolvedValue(ref_id)) |local_id| {
+            if (try self.currentLocalForResolvedValue(ref_id)) |local_id| {
                 const local_ty = try self.localType(local_id);
                 if (!self.sameType(ty, local_ty)) {
                     Common.invariant("checked parse intrinsic local argument type differed from its concrete local type");
@@ -23228,7 +23250,7 @@ const BodyContext = struct {
             else => return null,
         };
         const ref_id = maybe_ref orelse Common.invariant("checked callee lookup reached Monotype without resolved value ref");
-        const local_id = self.currentLocalForResolvedValue(ref_id) orelse return null;
+        const local_id = (try self.currentLocalForResolvedValue(ref_id)) orelse return null;
         const fn_ty = switch (self.localTypeCell(local_id)) {
             .sealed => |ty| ty,
             .graph_node => return null,
@@ -23751,7 +23773,7 @@ const BodyContext = struct {
                 .selected_hoisted_const => break :local,
                 else => {},
             }
-            if (self.currentLocalForResolvedValue(ref_id) == null) break :local;
+            if ((try self.currentLocalForResolvedValue(ref_id)) == null) break :local;
             // A generated-private evidence node (e.g. a minted iterator) may
             // still carry unresolved leaves whose defaults apply at final
             // sealing, so it stays a graph node instead of forcing an eager
@@ -23782,7 +23804,7 @@ const BodyContext = struct {
             },
             else => {},
         }
-        if (self.currentLocalForResolvedValue(ref_id) != null) {
+        if ((try self.currentLocalForResolvedValue(ref_id)) != null) {
             return try self.localCallArgumentEvidenceType(checked_ty, ref_id, expected_ty);
         }
         return switch (record.ref) {
@@ -23820,7 +23842,7 @@ const BodyContext = struct {
         ref_id: checked.ResolvedValueId,
         expected_ty: ?Type.TypeId,
     ) Allocator.Error!?NodeId {
-        const local_id = self.currentLocalForResolvedValue(ref_id) orelse
+        const local_id = (try self.currentLocalForResolvedValue(ref_id)) orelse
             Common.invariant("local call argument evidence requested without a current local");
         const cell = self.localTypeCell(local_id);
         const node = switch (cell) {
@@ -23888,7 +23910,7 @@ const BodyContext = struct {
             .promoted_top_level_proc,
             => {},
         }
-        if (self.currentLocalForResolvedValue(ref_id)) |local_id| {
+        if (try self.currentLocalForResolvedValue(ref_id)) |local_id| {
             const local_ty = try self.localType(local_id);
             try self.relateCheckedTypeToMono(checked_ty, local_ty);
             return local_ty;
@@ -24406,8 +24428,9 @@ const BodyContext = struct {
         };
     }
 
-    fn currentConstLocalForResolvedValue(self: *BodyContext, ref_id: checked.ResolvedValueId) ?DraftLocalId {
-        const active = self.active_const_binding orelse return null;
+    fn currentConstLocalForResolvedValue(self: *BodyContext, ref_id: checked.ResolvedValueId) Allocator.Error!?DraftLocalId {
+        var active_id = self.active_const_binding;
+        if (active_id == null) return null;
         const raw = @intFromEnum(ref_id);
         if (raw >= self.view.resolved_refs.records.len) {
             Common.invariant("checked lookup resolved value id was outside resolved value table");
@@ -24419,9 +24442,74 @@ const BodyContext = struct {
             .platform_required_const => |required| required.const_use,
             else => return null,
         };
-        if (!constUseEql(active.const_use, const_use.const_ref)) return null;
-        active.used = true;
-        return active.local;
+        while (active_id) |id| {
+            const index = @intFromEnum(id);
+            const active = self.draft.active_const_bindings.items[index];
+            if (constUseEql(active.const_use, const_use.const_ref)) {
+                self.draft.active_const_bindings.items[index].used = true;
+                try self.materializeActiveConstBinding(id);
+                return active.local;
+            }
+            active_id = active.parent;
+        }
+        return null;
+    }
+
+    fn markActiveConstBinderUsed(self: *BodyContext, binder: checked.PatternBinderId) Allocator.Error!void {
+        var active_id = self.active_const_binding;
+        while (active_id) |id| {
+            const index = @intFromEnum(id);
+            const active = self.draft.active_const_bindings.items[index];
+            if (moduleBytesEqual(checked.constModuleId(active.const_use).bytes, self.view.key.bytes) and active.binder == binder) {
+                self.draft.active_const_bindings.items[index].used = true;
+                try self.materializeActiveConstBinding(id);
+                return;
+            }
+            active_id = active.parent;
+        }
+    }
+
+    fn activeConstLocalForCaptureId(self: *BodyContext, capture_id: checked.CaptureId) Allocator.Error!?DraftLocalId {
+        var active_id = self.active_const_binding;
+        while (active_id) |id| {
+            const index = @intFromEnum(id);
+            const active = self.draft.active_const_bindings.items[index];
+            const active_capture_id = self.draft.locals.items[@intFromEnum(active.local)].capture_id;
+            if (active_capture_id != null and std.meta.eql(active_capture_id.?, capture_id)) {
+                self.draft.active_const_bindings.items[index].used = true;
+                try self.materializeActiveConstBinding(id);
+                return active.local;
+            }
+            active_id = active.parent;
+        }
+        return null;
+    }
+
+    fn restoreRecursiveConstCaptureAtType(
+        self: *BodyContext,
+        capture_id: checked.CaptureId,
+        ty: Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        const local = (try self.activeConstLocalForCaptureId(capture_id)) orelse
+            Common.invariant("stored recursive const capture had no active const binding");
+        const local_ty = try self.localType(local);
+        if (!self.sameType(local_ty, ty)) {
+            Common.invariant("stored recursive const capture type differed from its active const binding");
+        }
+        return try self.addExpr(.{ .ty = local_ty, .data = .{ .local = local } });
+    }
+
+    fn restoreRecursiveConstCaptureAtNode(
+        self: *BodyContext,
+        capture_id: checked.CaptureId,
+        request_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        const local = (try self.activeConstLocalForCaptureId(capture_id)) orelse
+            Common.invariant("stored recursive const capture had no active const binding");
+        const cell = self.localTypeCell(local);
+        const local_node = try cell.toGraphNode(self.graph);
+        try relateRequestComponent(self.graph, local_node, request_node);
+        return try self.addExprWithTypeCell(cell, .{ .local = local });
     }
 
     fn topLevelConstBinderForUse(store_view: ModuleView, const_use: checked.ConstLocator) ?checked.PatternBinderId {
@@ -24453,10 +24541,25 @@ const BodyContext = struct {
     }
 
     fn inheritActiveConstBinding(self: *BodyContext, parent: *BodyContext) Allocator.Error!void {
-        self.active_const_binding = parent.active_const_binding;
-        const active = self.active_const_binding orelse return;
-        if (!moduleBytesEqual(checked.constModuleId(active.const_use).bytes, self.view.key.bytes)) return;
-        try self.binders.put(active.binder, active.local);
+        try self.inheritActiveConstBindingId(parent.active_const_binding);
+    }
+
+    fn inheritActiveConstBindingId(self: *BodyContext, active_id: ?ActiveConstBindingId) Allocator.Error!void {
+        self.active_const_binding = active_id;
+        var chain = std.ArrayList(ActiveConstBindingId).empty;
+        defer chain.deinit(self.allocator);
+        var cursor = active_id;
+        while (cursor) |id| {
+            try chain.append(self.allocator, id);
+            cursor = self.draft.active_const_bindings.items[@intFromEnum(id)].parent;
+        }
+        var index = chain.items.len;
+        while (index > 0) {
+            index -= 1;
+            const active = self.draft.active_const_bindings.items[@intFromEnum(chain.items[index])];
+            if (!moduleBytesEqual(checked.constModuleId(active.const_use).bytes, self.view.key.bytes)) continue;
+            try self.binders.put(active.binder, active.local);
+        }
     }
 
     fn enterActiveConstBindingAtCell(
@@ -24467,26 +24570,77 @@ const BodyContext = struct {
         scope: *ActiveConstBindingScope,
     ) Allocator.Error!bool {
         const binder = topLevelConstBinderForUse(store_view, const_use) orelse return false;
-        const local = try self.addLocalWithBinderCell(
+        const local = try self.addFreshLocalWithBinderCell(
             self.builder.symbols.fresh(),
             cell,
-            null,
+            binder,
         );
         try self.bindLocalNameFromView(store_view, local, binder);
+        const reservation = try self.addExprWithTypeCell(cell, .pending_deferred);
+        const active_id: ActiveConstBindingId = @enumFromInt(@as(u32, @intCast(self.draft.active_const_bindings.items.len)));
+        try self.draft.active_const_bindings.append(self.allocator, .{
+            .parent = self.active_const_binding,
+            .const_use = const_use,
+            .binder = binder,
+            .local = local,
+            .cell = cell,
+            .owner = self.draft.current_owner,
+            .reservation = reservation,
+        });
         scope.* = .{
-            .active = .{
-                .const_use = const_use,
-                .binder = binder,
-                .local = local,
-            },
+            .active = active_id,
             .previous_active = self.active_const_binding,
             .binder = binder,
             .previous_local = self.binders.get(binder),
             .entered = true,
         };
         try self.binders.put(binder, local);
-        self.active_const_binding = &scope.active;
+        self.active_const_binding = active_id;
         return true;
+    }
+
+    fn copyActiveConstReservation(self: *BodyContext, reservation: DraftExprId, source: DraftExprId) void {
+        const reservation_index = @intFromEnum(reservation);
+        const source_index = @intFromEnum(source);
+        self.draft.exprs.items[reservation_index] = self.draft.exprs.items[source_index];
+        self.draft.expr_locs.items[reservation_index] = self.draft.expr_locs.items[source_index];
+        self.draft.expr_regions.items[reservation_index] = self.draft.expr_regions.items[source_index];
+        self.draft.expr_impossibility_proofs.items[reservation_index] = self.draft.expr_impossibility_proofs.items[source_index];
+    }
+
+    fn finishActiveConstBinding(self: *BodyContext, active_id: ActiveConstBindingId, source: DraftExprId) Allocator.Error!DraftExprId {
+        const index = @intFromEnum(active_id);
+        if (self.draft.active_const_bindings.items[index].restored_source != null) {
+            Common.invariant("active const binding was finished more than once");
+        }
+        const reservation = self.draft.active_const_bindings.items[index].reservation;
+        self.draft.active_const_bindings.items[index].restored_source = source;
+        self.copyActiveConstReservation(reservation, source);
+        try self.materializeActiveConstBinding(active_id);
+        return reservation;
+    }
+
+    fn materializeActiveConstBinding(self: *BodyContext, active_id: ActiveConstBindingId) Allocator.Error!void {
+        const index = @intFromEnum(active_id);
+        const active = self.draft.active_const_bindings.items[index];
+        if (!active.used or active.wrapped) return;
+        const source = active.restored_source orelse return;
+
+        const owner_scope = try self.draft.enterOwner(active.owner);
+        defer owner_scope.leave();
+        const saved_loc = self.builder.program.current_loc;
+        defer self.builder.program.current_loc = saved_loc;
+        const saved_region = self.builder.program.current_region;
+        defer self.builder.program.current_region = saved_region;
+        self.builder.program.current_loc = self.draft.expr_locs.items[@intFromEnum(source)];
+        self.builder.program.current_region = self.draft.expr_regions.items[@intFromEnum(source)];
+
+        const wrapped = try self.wrapRecursiveConstLocalAtTypeCell(active.local, active.cell, source);
+        self.copyActiveConstReservation(active.reservation, wrapped);
+        self.draft.expr_locs.items[@intFromEnum(active.reservation)] = self.draft.expr_locs.items[@intFromEnum(source)];
+        self.draft.expr_regions.items[@intFromEnum(active.reservation)] = self.draft.expr_regions.items[@intFromEnum(source)];
+        self.draft.expr_impossibility_proofs.items[@intFromEnum(active.reservation)] = self.draft.expr_impossibility_proofs.items[@intFromEnum(source)];
+        self.draft.active_const_bindings.items[index].wrapped = true;
     }
 
     fn leaveActiveConstBinding(self: *BodyContext, scope: *const ActiveConstBindingScope) void {
@@ -24501,9 +24655,9 @@ const BodyContext = struct {
         self.active_const_binding = scope.previous_active;
     }
 
-    fn currentLocalForResolvedValue(self: *BodyContext, ref_id: checked.ResolvedValueId) ?DraftLocalId {
+    fn currentLocalForResolvedValue(self: *BodyContext, ref_id: checked.ResolvedValueId) Allocator.Error!?DraftLocalId {
         if (self.currentLocalBindingForResolvedValue(ref_id)) |binding| return binding.local;
-        return self.currentConstLocalForResolvedValue(ref_id);
+        return try self.currentConstLocalForResolvedValue(ref_id);
     }
 
     fn currentTypedLocalBindingForResolvedValue(
@@ -24598,7 +24752,7 @@ const BodyContext = struct {
             if (use_ty != local_ty) try self.setLocalType(local_id, use_ty);
             return try self.addExpr(.{ .ty = use_ty, .data = .{ .local = local_id } });
         }
-        if (self.currentConstLocalForResolvedValue(ref_id)) |local_id| {
+        if (try self.currentConstLocalForResolvedValue(ref_id)) |local_id| {
             const local_cell = self.localTypeCell(local_id);
             const local_node = try local_cell.toGraphNode(self.graph);
             try self.constrainCheckedInterfaceToCell(checked_ty, local_cell);
@@ -24709,7 +24863,7 @@ const BodyContext = struct {
                 .{ .local = binding.local },
             );
         }
-        if (self.currentConstLocalForResolvedValue(ref_id)) |local_id| {
+        if (try self.currentConstLocalForResolvedValue(ref_id)) |local_id| {
             const checked_ty = self.view.bodies.expr(checked_expr).ty;
             const local_cell = self.localTypeCell(local_id);
             const local_node = try local_cell.toGraphNode(self.graph);
@@ -24862,6 +25016,7 @@ const BodyContext = struct {
             .context_evidence = self.evidence,
             .use_evidence = use_evidence,
             .current_fn_key = self.current_fn_key,
+            .active_const_binding = self.active_const_binding,
             .lexical = lexical,
             .proof_reservation = proof_reservation,
         });
@@ -25041,13 +25196,7 @@ const BodyContext = struct {
                     requested_ty,
                     .disallow,
                 );
-                if (has_active_const_binding and active_const_scope.active.used) {
-                    break :blk try self.wrapRecursiveConstLocalAtTypeCell(
-                        active_const_scope.active.local,
-                        try self.draftTypeCell(stored_ty),
-                        restored,
-                    );
-                }
+                if (has_active_const_binding) break :blk try self.finishActiveConstBinding(active_const_scope.active, restored);
                 break :blk restored;
             },
             .reserved => Common.invariant("reserved checked const template reached Monotype"),
@@ -25097,13 +25246,7 @@ const BodyContext = struct {
                     requested_ty,
                     .disallow,
                 );
-                if (has_active_const_binding and active_const_scope.active.used) {
-                    break :blk try self.wrapRecursiveConstLocalAtTypeCell(
-                        active_const_scope.active.local,
-                        DraftTypeCell.fromGraphNode(interface_node),
-                        restored,
-                    );
-                }
+                if (has_active_const_binding) break :blk try self.finishActiveConstBinding(active_const_scope.active, restored);
                 break :blk restored;
             },
             .reserved => Common.invariant("reserved checked const template reached Monotype"),
@@ -25225,6 +25368,7 @@ const BodyContext = struct {
             self.graph,
             self.draft,
         );
+        try body_ctx.inheritActiveConstBinding(self);
         body_ctx.evidence = rootEvidence(eval.entry_template, self.restore_evidence.vector);
         if (self.restore_evidence.vector.len < entry_template.evidence_params.len) {
             const eval_root = store_view.compile_time_roots.root(body.root);
@@ -25241,47 +25385,14 @@ const BodyContext = struct {
             .root = body.root,
         };
 
-        var active_const_binding: ActiveConstBinding = undefined;
-        var has_active_const_binding = false;
-        switch (const_use.owner) {
-            .top_level_binding => |owner| {
-                if (!moduleBytesEqual(checked.constModuleId(const_use).bytes, store_view.key.bytes)) {
-                    Common.invariant("top-level const eval template referenced a different checked module");
-                }
-                const root = store_view.compile_time_roots.root(body.root);
-                if (root.kind != .constant) {
-                    Common.invariant("top-level const eval template did not reference a constant root");
-                }
-                if (root.module_idx != owner.module_idx) {
-                    Common.invariant("top-level const eval template root had a mismatched module index");
-                }
-                const pattern = root.pattern orelse
-                    Common.invariant("top-level const eval template root had no checked pattern");
-                if (pattern != owner.pattern) {
-                    Common.invariant("top-level const eval template root had a mismatched checked pattern");
-                }
-                const binder = switch (store_view.bodies.pattern(pattern).data) {
-                    .assign => |binder| binder,
-                    else => Common.invariant("top-level const root pattern was not a binder"),
-                };
-                const cell = DraftTypeCell.fromGraphNode(request_node);
-                const local = try body_ctx.addFreshLocalWithBinderCell(
-                    self.builder.symbols.fresh(),
-                    cell,
-                    binder,
-                );
-                try body_ctx.bindLocalName(local, binder);
-                try body_ctx.binders.put(binder, local);
-                active_const_binding = .{
-                    .const_use = const_use,
-                    .binder = binder,
-                    .local = local,
-                };
-                body_ctx.active_const_binding = &active_const_binding;
-                has_active_const_binding = true;
-            },
-            .hoisted_expr => {},
-        }
+        var active_const_scope: ActiveConstBindingScope = .{};
+        const has_active_const_binding = try body_ctx.enterActiveConstBindingAtCell(
+            store_view,
+            const_use,
+            DraftTypeCell.fromGraphNode(request_node),
+            &active_const_scope,
+        );
+        defer body_ctx.leaveActiveConstBinding(&active_const_scope);
 
         // A checked source key is stable while the request remains a live
         // graph node. Nested specializations additionally key their concrete
@@ -25302,13 +25413,7 @@ const BodyContext = struct {
             body.body_expr,
             DraftTypeCell.fromGraphNode(request_node),
         );
-        if (has_active_const_binding and active_const_binding.used) {
-            return try body_ctx.wrapRecursiveConstLocalAtTypeCell(
-                active_const_binding.local,
-                DraftTypeCell.fromGraphNode(request_node),
-                restored,
-            );
-        }
+        if (has_active_const_binding) return try body_ctx.finishActiveConstBinding(active_const_scope.active, restored);
         return restored;
     }
 
@@ -26226,23 +26331,26 @@ const BodyContext = struct {
             initialized += 1;
         }
         for (fn_value.captures, 0..) |capture, index| {
-            captures[index].value = if (static_data_const_locator) |const_locator|
-                try fn_ctx.restoredStaticDataCandidateNodeAtNode(
-                    store_view,
-                    fn_view,
-                    capture.value,
-                    captures[index].node,
-                    const_locator,
-                    checkedBinderType(fn_view, constCaptureBinder(capture.id)),
-                    .allow,
-                )
-            else
-                try fn_ctx.restoreConstNodeAtNode(
-                    store_view,
-                    fn_view,
-                    capture.value,
-                    captures[index].node,
-                );
+            captures[index].value = switch (capture.value) {
+                .node => |node| if (static_data_const_locator) |const_locator|
+                    try fn_ctx.restoredStaticDataCandidateNodeAtNode(
+                        store_view,
+                        fn_view,
+                        node,
+                        captures[index].node,
+                        const_locator,
+                        checkedBinderType(fn_view, constCaptureBinder(capture.id)),
+                        .allow,
+                    )
+                else
+                    try fn_ctx.restoreConstNodeAtNode(
+                        store_view,
+                        fn_view,
+                        node,
+                        captures[index].node,
+                    ),
+                .recursive_const => try fn_ctx.restoreRecursiveConstCaptureAtNode(capture.id, captures[index].node),
+            };
         }
 
         const capture_nested = switch (fn_def) {
@@ -26452,10 +26560,13 @@ const BodyContext = struct {
             initialized += 1;
         }
         for (fn_value.captures, 0..) |capture, index| {
-            captures[index].value = if (static_data_const_locator) |const_locator|
-                try fn_ctx.restoredStaticDataCandidateNode(store_view, fn_view, capture.value, captures[index].ty, const_locator, checkedBinderType(fn_view, constCaptureBinder(capture.id)), .allow)
-            else
-                try fn_ctx.restoreConstNodeAtType(store_view, fn_view, capture.value, captures[index].ty);
+            captures[index].value = switch (capture.value) {
+                .node => |node| if (static_data_const_locator) |const_locator|
+                    try fn_ctx.restoredStaticDataCandidateNode(store_view, fn_view, node, captures[index].ty, const_locator, checkedBinderType(fn_view, constCaptureBinder(capture.id)), .allow)
+                else
+                    try fn_ctx.restoreConstNodeAtType(store_view, fn_view, node, captures[index].ty),
+                .recursive_const => try fn_ctx.restoreRecursiveConstCaptureAtType(capture.id, captures[index].ty),
+            };
         }
 
         const capture_nested = switch (template.fn_def) {
@@ -27222,7 +27333,7 @@ const BodyContext = struct {
             try relateRequestComponent(self.graph, local_node, expected_node);
             return;
         }
-        if (self.currentConstLocalForResolvedValue(ref_id)) |local_id| {
+        if (try self.currentConstLocalForResolvedValue(ref_id)) |local_id| {
             const local_cell = self.localTypeCell(local_id);
             const local_node = try local_cell.toGraphNode(self.graph);
             try self.constrainCheckedInterfaceToCell(expr.ty, local_cell);
@@ -28838,9 +28949,7 @@ const BodyContext = struct {
         for (captures) |capture| {
             const binder = checkedCaptureBinder(self.view, capture.pattern);
             const local = self.binders.get(binder) orelse continue;
-            if (self.active_const_binding) |active| {
-                if (active.binder == binder) active.used = true;
-            }
+            try self.markActiveConstBinderUsed(binder);
             const cell = self.localTypeCell(local);
             try self.constrainCheckedInterfaceToCell(checkedBinderType(self.view, binder), cell);
             const value = try self.addExprWithTypeCell(
@@ -28908,9 +29017,7 @@ const BodyContext = struct {
                 for (closure.captures) |capture| {
                     const binder = checkedCaptureBinder(self.view, capture.pattern);
                     const local = self.binders.get(binder) orelse continue;
-                    if (self.active_const_binding) |active| {
-                        if (active.binder == binder) active.used = true;
-                    }
+                    try self.markActiveConstBinderUsed(binder);
                     const cell = self.localTypeCell(local);
                     try self.constrainCheckedInterfaceToCell(checkedBinderType(self.view, binder), cell);
                     try capture_nodes.append(self.allocator, try cell.toGraphNode(self.graph));
@@ -43489,7 +43596,10 @@ fn constCaptureBinder(id: check.ConstStore.CaptureId) checked.PatternBinderId {
 fn constGeneratedCaptureNode(fn_value: check.ConstStore.ConstFn, capture_id: u32) ?checked.ConstNodeId {
     const needle = checked.CaptureId.generatedCheck(capture_id);
     for (fn_value.captures) |capture| {
-        if (capture.id == needle) return capture.value;
+        if (capture.id == needle) return switch (capture.value) {
+            .node => |node| node,
+            .recursive_const => Common.invariant("generated ConstStore capture was marked as a recursive source constant"),
+        };
     }
     return null;
 }

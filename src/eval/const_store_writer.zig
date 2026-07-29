@@ -461,7 +461,10 @@ pub const Writer = struct {
                 captures[index] = .{
                     .id = slot.id,
                     .ty = try self.cloneCaptureType(slot.ty),
-                    .value = try self.storeValue(slot.plan, .zst, Value.zst),
+                    .value = if (slot.recursive_const)
+                        .recursive_const
+                    else
+                        .{ .node = try self.storeValue(slot.plan, .zst, Value.zst) },
                 };
             }
         } else if (layout_value.tag == .struct_) {
@@ -471,14 +474,20 @@ pub const Writer = struct {
                 captures[index] = .{
                     .id = slot.id,
                     .ty = try self.cloneCaptureType(slot.ty),
-                    .value = try self.storeValue(slot.plan, field_layout, payload_value.offset(offset)),
+                    .value = if (slot.recursive_const)
+                        .recursive_const
+                    else
+                        .{ .node = try self.storeValue(slot.plan, field_layout, payload_value.offset(offset)) },
                 };
             }
         } else if (slots.len == 1) {
             captures[0] = .{
                 .id = slots[0].id,
                 .ty = try self.cloneCaptureType(slots[0].ty),
-                .value = try self.storeValue(slots[0].plan, payload_layout, payload_value),
+                .value = if (slots[0].recursive_const)
+                    .recursive_const
+                else
+                    .{ .node = try self.storeValue(slots[0].plan, payload_layout, payload_value) },
             };
         } else {
             writerInvariant("multi-capture function did not use a struct capture layout");
@@ -689,15 +698,18 @@ pub const Writer = struct {
         if (slots.len == 0) return;
         const layout_value = self.program.layouts.getLayout(payload_layout);
         if (layout_value.tag == .zst) {
-            for (slots) |slot| try self.collectStrBackings(slot.plan, .zst, Value.zst);
+            for (slots) |slot| {
+                if (!slot.recursive_const) try self.collectStrBackings(slot.plan, .zst, Value.zst);
+            }
         } else if (layout_value.tag == .struct_) {
             for (slots) |slot| {
+                if (slot.recursive_const) continue;
                 const field_layout = self.program.layouts.getStructFieldLayoutByOriginalIndex(layout_value.getStruct().idx, slot.slot);
                 const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(layout_value.getStruct().idx, slot.slot);
                 try self.collectStrBackings(slot.plan, field_layout, payload_value.offset(offset));
             }
         } else if (slots.len == 1) {
-            try self.collectStrBackings(slots[0].plan, payload_layout, payload_value);
+            if (!slots[0].recursive_const) try self.collectStrBackings(slots[0].plan, payload_layout, payload_value);
         } else {
             writerInvariant("multi-capture function did not use a struct capture layout");
         }

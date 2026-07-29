@@ -178,10 +178,18 @@ pub const ConstType = union(enum) {
 };
 
 /// Captured checked value inside a compile-time function value.
+pub const ConstCaptureValue = union(enum(u8)) {
+    node: ConstNodeId,
+    /// The runtime capture is the enclosing recursive constant's reserved
+    /// local. Its checked capture identity resolves that local when restored;
+    /// no cyclic value edge is stored in ConstStore.
+    recursive_const,
+};
+
 pub const ConstCapture = struct {
     id: CaptureId,
     ty: ConstTypeId,
-    value: ConstNodeId,
+    value: ConstCaptureValue,
 };
 
 /// Durable source of a stored target's own evidence vector.
@@ -978,7 +986,10 @@ pub const ConstStore = struct {
             if (@intFromEnum(capture.ty) >= self.type_store.types.items.len) {
                 constStoreInvariant("completed store contains an out-of-range capture type id");
             }
-            self.verifyAcyclic(capture.value, value_state, fn_state);
+            switch (capture.value) {
+                .node => |node| self.verifyAcyclic(node, value_state, fn_state),
+                .recursive_const => {},
+            }
         }
         fn_state[index] = .done;
     }
@@ -1032,7 +1043,10 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
             .authority = .generated_private,
         },
     } });
-    const caps = try gpa.dupe(ConstCapture, &.{.{ .id = CaptureId.fromBinder(@enumFromInt(1)), .ty = capture_ty, .value = a }});
+    const caps = try gpa.dupe(ConstCapture, &.{
+        .{ .id = CaptureId.fromBinder(@enumFromInt(1)), .ty = capture_ty, .value = .{ .node = a } },
+        .{ .id = CaptureId.fromBinder(@enumFromInt(2)), .ty = capture_ty, .value = .recursive_const },
+    });
     defer gpa.free(caps);
     var target_view: names.CheckedModuleDigest = .{};
     target_view.bytes[0] = 0xA1;
@@ -1102,11 +1116,19 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     try std.testing.expectEqualStrings("hello", loaded.strBytes(loaded.get(str).str));
     // Function captures
     const loaded_fn = loaded.getFn(fn_id);
-    try std.testing.expectEqual(@as(usize, 1), loaded_fn.captures.len);
+    try std.testing.expectEqual(@as(usize, 2), loaded_fn.captures.len);
     try std.testing.expectEqual(capture_ty, loaded_fn.captures[0].ty);
     try std.testing.expectEqual(ConstType{ .primitive = .u64 }, loaded.type_store.get(loaded_fn.captures[0].ty));
     try std.testing.expectEqual(TypeBackingAuthority.generated_private, loaded.type_store.get(private_named_ty).named.backing.?.authority);
-    try std.testing.expectEqual(a, loaded_fn.captures[0].value);
+    switch (loaded_fn.captures[0].value) {
+        .node => |node| try std.testing.expectEqual(a, node),
+        .recursive_const => try std.testing.expect(false),
+    }
+    switch (loaded_fn.captures[1].value) {
+        .node => try std.testing.expect(false),
+        .recursive_const => {},
+    }
+    try loaded.verifyComplete();
     try std.testing.expectEqual(evidence.len, loaded_fn.evidence.len);
     const loaded_target = loaded_fn.evidence[0].target;
     try std.testing.expectEqualSlices(u8, &target_view.bytes, &loaded_target.view.bytes);
@@ -1178,8 +1200,8 @@ test "ConstStore.appendFn: no leak or double-free under allocation failure" {
             const a = try store.append(.{ .scalar = .{ .u64 = 7 } });
             const capture_ty = try store.type_store.append(.{ .primitive = .u64 });
             const caps = try allocator.dupe(ConstCapture, &.{
-                .{ .id = CaptureId.fromBinder(@enumFromInt(1)), .ty = capture_ty, .value = a },
-                .{ .id = CaptureId.fromBinder(@enumFromInt(2)), .ty = capture_ty, .value = a },
+                .{ .id = CaptureId.fromBinder(@enumFromInt(1)), .ty = capture_ty, .value = .{ .node = a } },
+                .{ .id = CaptureId.fromBinder(@enumFromInt(2)), .ty = capture_ty, .value = .{ .node = a } },
             });
             defer allocator.free(caps);
             const evidence_frames = [_]ConstFnEvidenceFrame{
