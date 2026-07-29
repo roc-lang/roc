@@ -14328,7 +14328,12 @@ const EvidencePass = struct {
         }
 
         switch (resolved.desc.content) {
-            .err => checkedArtifactInvariant("erroneous dispatch receiver reached publication without an explicit rejection", .{}),
+            // A different checker diagnostic can poison the value that owns
+            // this receiver after the dispatch itself checked successfully.
+            // The explicit rejection map above remains the sole authority for
+            // dispatch-specific failures; `.err` is the separate value-error
+            // fence and must never be inferred from the callable or its return.
+            .err => return .checked_error,
             .flex => |flex| return self.resolveVarObligation(resolved.var_, flex.constraints, method, structural_kind, constraint_fn_var, chain, commit_unpinned),
             .rigid => |rigid| return self.resolveVarObligation(resolved.var_, rigid.constraints, method, structural_kind, constraint_fn_var, chain, commit_unpinned),
             .alias, .structure => {

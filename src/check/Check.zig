@@ -19207,6 +19207,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     // Re-fetch by index each iteration because nested unification can append
                     // constraints and reallocate the backing array.
                     const constraint = self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i];
+                    if (self.rejected_static_dispatches.contains(constraint.fn_var)) continue;
                     const constraint_fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
                     if (constraint_fn_resolved == .err) {
                         // If this constraint is already an error, the skip this pass
@@ -19499,6 +19500,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                 var constraint_i: usize = 0;
                 while (constraint_i < constraints_len) : (constraint_i += 1) {
                     const constraint = self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i];
+                    if (self.rejected_static_dispatches.contains(constraint.fn_var)) continue;
                     const constraint_fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
                     if (constraint_fn_resolved == .err) continue;
 
@@ -24095,6 +24097,11 @@ fn reportRecursiveStaticDispatchIfNeeded(
             try self.poisonConstraintSourceExpr(dispatcher_var, new_constraint);
             try self.markStaticDispatchRejected(constraint);
             try self.markStaticDispatchRejected(new_constraint);
+            // Every deferred constraint appended since this dispatch began was
+            // derived while instantiating the rejected method target. None can
+            // survive independently, and retaining the recursive child would
+            // derive the same obligation again until the iteration limit.
+            env.deferred_static_dispatch_constraints.items.shrinkRetainingCapacity(deferred_len_before);
             return true;
         }
     }

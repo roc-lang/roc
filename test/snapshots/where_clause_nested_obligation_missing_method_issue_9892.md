@@ -186,16 +186,16 @@ main = run(Wrap.W(42.U8))
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Wrap(a) -> Error where [a.frobnicate : a -> Error]"))
-		(patt (type "b -> Error where [b.unwrap : b -> Error]"))
-		(patt (type "Error")))
+		(patt (type "Wrap(a) -> Str where [a.frobnicate : a -> Str]"))
+		(patt (type "b -> Str where [b.unwrap : b -> Str]"))
+		(patt (type "Str")))
 	(type_decls
 		(nominal (type "Wrap(a)")
 			(ty-header (name "Wrap")
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "Wrap(a) -> Error where [a.frobnicate : a -> Error]"))
-		(expr (type "b -> Error where [b.unwrap : b -> Error]"))
-		(expr (type "Error"))))
+		(expr (type "Wrap(a) -> Str where [a.frobnicate : a -> Str]"))
+		(expr (type "b -> Str where [b.unwrap : b -> Str]"))
+		(expr (type "Str"))))
 ~~~
