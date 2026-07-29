@@ -2399,16 +2399,24 @@ is zero as well, and even the specialization frames report
 captured binders are effectively absent from this corpus. The change was
 run and reverted.
 
-What "another scheme" means is therefore still open. For the 1015 under an
-unresolved binding it is trivially true — the binding was declined, so the
-operand's owner node is the requesting frame's and the binder is the
-callee's. For the 435 under a resolved binding it is the real question:
-the operand's owner node IS the bound callee scheme's, the callee captures
-nothing, and the position still reaches a binder some other scheme
-generalizes. The reading to test next is that the position is a
-CALLER-side type being translated under the callee's environment, which
-would make it an operand attribution error at the `callee_checked` seam
-rather than a missing binding.
+**Which scheme owns the unnamed binder.** The classification is
+well-defined before it is read: exactly one scheme in the view generalizes
+each unnamed binder, 1485 of 1485, and none is generalized by two, so the
+owner the walk names is a property of the variable rather than its
+iteration order. Splitting that owner three ways gives **0** owned by the
+scheme the operand was translated under, **0** owned by the scheme the
+requesting frame specializes, **1408** owned by a third scheme, and **77**
+where no frame is open at all.
+
+So the binder belongs to neither end of the call. It is not the callee's,
+which rules out a binding that failed to state its own binders; it is not
+the caller's, which rules out a caller-side position described as the
+callee's at the `callee_checked` seam. What remains is a position whose
+checked type is written in terms of a definition neither end of the call
+owns, which no call-site binding between those two ends can ever name. The
+next measurement is which definitions those 1408 binders belong to,
+because "a third scheme" is where this stops being a statement about the
+binding and starts being one about what the position is.
 
 **Why the receiver rule cannot be widened to cover them.** The
 `constraint_dispatch_receiver` rule reads binder values positionally from

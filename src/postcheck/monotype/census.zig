@@ -836,7 +836,13 @@ pub const Census = struct {
     // Whether the unnamed binder belongs to the scheme the operand was
     // translated under, or to another scheme it reaches from outside.
     rehearsal_unbound_binder_of_translating_scheme: Counter = Counter.init(0),
-    rehearsal_unbound_binder_of_other_scheme: Counter = Counter.init(0),
+    rehearsal_unbound_binder_of_caller_frame_scheme: Counter = Counter.init(0),
+    rehearsal_unbound_binder_of_third_scheme: Counter = Counter.init(0),
+    rehearsal_unbound_binder_no_frame: Counter = Counter.init(0),
+    // Whether the variable is generalized by exactly one scheme in the view.
+    rehearsal_unbound_binder_owned_by_one_scheme: Counter = Counter.init(0),
+    rehearsal_unbound_binder_owned_by_many_schemes: Counter = Counter.init(0),
+
     rehearsal_binder_unbound_under_unready_callee: Counter = Counter.init(0),
     rehearsal_binder_unbound_callee_ready: Counter = Counter.init(0),
     rehearsal_binder_unbound_no_callee_open: Counter = Counter.init(0),

@@ -3440,6 +3440,23 @@ pub const Rehearsal = struct {
         const source = operand.source orelse return .unbound_residual;
         const free = self.firstFreeVariable(source.view, source.checked_ty, source.env) orelse
             return .unbound_residual;
+        // How many schemes in this view generalize the same variable. The walk
+        // below reports the first, so more than one would make the owner it
+        // names iteration order rather than a property of the variable.
+        var owners: usize = 0;
+        for (source.view.schemes) |scheme| {
+            for (scheme.generalizedVars(source.view)) |binder| {
+                if (binder == free) {
+                    owners += 1;
+                    break;
+                }
+            }
+        }
+        if (owners > 1) {
+            census.bump("rehearsal_unbound_binder_owned_by_many_schemes");
+        } else if (owners == 1) {
+            census.bump("rehearsal_unbound_binder_owned_by_one_scheme");
+        }
         for (source.view.schemes) |scheme| {
             for (scheme.generalizedVars(source.view)) |binder| {
                 if (binder != free) continue;
@@ -3450,8 +3467,18 @@ pub const Rehearsal = struct {
                 // which a call-site binding never states (reunify.md 7.3).
                 if (scheme.owner_node == source.owner_node) {
                     census.bump("rehearsal_unbound_binder_of_translating_scheme");
+                } else if (self.frameForModule(source.module_bytes)) |frame| {
+                    // Whether the unnamed binder is generalized by the scheme
+                    // the REQUESTING frame specializes. A callee-attributed
+                    // operand reaching one is a caller-side position described
+                    // as the callee's, not a binding the callee lacks.
+                    if (scheme.owner_node == frame.owner_node) {
+                        census.bump("rehearsal_unbound_binder_of_caller_frame_scheme");
+                    } else {
+                        census.bump("rehearsal_unbound_binder_of_third_scheme");
+                    }
                 } else {
-                    census.bump("rehearsal_unbound_binder_of_other_scheme");
+                    census.bump("rehearsal_unbound_binder_no_frame");
                 }
                 return .scheme_binder_unbound;
             }
