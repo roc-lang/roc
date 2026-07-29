@@ -2209,19 +2209,38 @@ census was re-sited onto it before the argument could be redone.
    again. `solve.zig`'s 19 `.unify(` calls are not replay sites: 11 are unit
    tests and 8 are steps inside the unifier, reached only while executing a
    relation a `lower.zig` site already named.
-2. **Close the remaining binder-naming gap.** The re-measured census
-   (§13.3) puts this at 1673 informative executions on snapshots — 1485
-   `scheme_binder_unbound` and 188 `unbound_residual` — out of 892475 with
-   a directed answer on both sides. 1450 of them are dispatch targets
-   whose callee binding is never opened because the target is a
-   `.local_proc`, a `.structural`, or a procedure template carrying no
-   scheme id, so §9.6's declared generated-edge rules are what close them;
-   the rest are `constrain_checked_to_cell` positions. The separate 1077
-   `representation` executions at
-   `checked_mono_request_call_ret_to_expected` are §10's, not this step's.
-   The instrument's own remaining debt is the 314573 `operand_undescribed`
-   executions, which must be described before the precondition can be
-   claimed over the whole surface rather than over the measured part of it.
+2. **Close the remaining binder-naming gap.** 2754 informative executions
+   on snapshots out of 892475 with a directed answer on both sides. 1077
+   are §10 representation content and 4 are unclassified, so the logical
+   part is 1485 `scheme_binder_unbound` plus 188 `unbound_residual`.
+   §13.3 carries the full attribution; the short form is that nine
+   readings of the 1485 were tested and eight were refuted by their own
+   measurement — the targets' kind, the recorded edge identity, missing
+   sites, the fan-out of the unresolved bindings, captured binders, the
+   operand's callee attribution, the third scheme's owner kind, and an
+   outer frame holding its value. What survives is that 1383 of these
+   positions want a value the checked data already records under a key the
+   operand cannot express, and that the 1383 are never recorded at the use
+   expression being bound, so no key available at the position selects
+   them. The rehearsal measures positions in isolation and these positions
+   are not isolated; the measurement moves to the seam (step 2b) rather
+   than the operand descriptor growing further.
+2b. **Re-measure the logical residual at the production seam.**
+   `BodyContext.typeForChecked` compares directed translation against the
+   graph at every read, holds the body-walk context the isolated operands
+   lack, and is the seam the flip actually depends on — what the flip
+   deletes is the constraint sites, what it keeps is this. It already
+   reports `seam_direct_absent` 0 and `seam_direct_diverged` 0 on
+   snapshots and 8 on eval. Its limit is coverage: 629 reads on snapshots
+   against the constraint census's 116118 comparisons, because only 13
+   call sites route through it and the rest of body lowering reads types
+   from nodes rather than from checked ids. Widening it is the work, and
+   it is known to be delicate — an earlier repointing produced 27 eval
+   crashes — so each newly routed site is landed and verified on its own.
+   The precondition is properly a statement about this seam: that every
+   position production lowering reads, directed translation already
+   computes. Stating it over constraint executions measures the machinery
+   being removed instead.
 3. **Re-land Slice 4 against graph-aware inputs.** *Done.* The closure
    engine takes the provenance `InstGraph.iteratorRelation` read, as the
    minting identity and component-agreement inputs of §10.3, and the graph
