@@ -794,9 +794,11 @@ test "Monotype runtime demands snapshot pass-local compositional impossibility p
     try expectContains(lower_source, "if (std.meta.eql(frame.address, address)) return self.runtime_demand_guard_frames");
     try expectContains(lower_source, "const proof_reservation = try self.addImpossibilityProof(.pending)");
     try expectContains(lower_source, ".{ .forward = proof }");
-    try expectContains(lower_source, "resolveDraftConstUseReservations(body_draft)");
-    try expectContains(lower_source, "body_draft.expr_locs.items[reservation_index] = body_draft.expr_locs.items[@intFromEnum(restored)]");
-    try expectContains(lower_source, "body_draft.expr_regions.items[reservation_index] = body_draft.expr_regions.items[@intFromEnum(restored)]");
+    try expectContains(lower_source, "try self.resolveDraftConstUseReservations(body_draft)");
+    try expectContains(lower_source, "sources[reservation_index] = restored");
+    try expectContains(lower_source, "deferred const reservation dependencies formed a cycle");
+    try expectContains(lower_source, "body_draft.expr_locs.items[reservation_index] = body_draft.expr_locs.items[restored_index]");
+    try expectContains(lower_source, "body_draft.expr_regions.items[reservation_index] = body_draft.expr_regions.items[restored_index]");
     try expectContains(lower_source, "const DraftConstUseProvenance = union(enum)");
     try expectContains(lower_source, "hoisted: checked.HoistedConstEntry");
     try expectContains(lower_source, "hoisted const use reached a declared deferred boundary");
