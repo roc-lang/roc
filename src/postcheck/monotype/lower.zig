@@ -3022,6 +3022,15 @@ const Builder = struct {
         };
         const spec_index = source_ctx.draft.template_specs.items.len;
         const demand_boundary: u32 = @intCast(source_ctx.draft.runtime_value_demands.items.len);
+        // Debug/probe-only: a deferred specialization is reserved only after this
+        // body's graph freezes, by which time the requesting scope has closed, so
+        // the scope travels on the record (reunify.md sections 7.2, 11.3).
+        const request_hold = if (local_context_dependent)
+            spec_rehearsal.HeldRequest.none
+        else if (self.rehearsal) |rehearsal|
+            rehearsal.holdRequest()
+        else
+            spec_rehearsal.HeldRequest.none;
         try source_ctx.draft.template_specs.append(self.allocator, .{
             .state = if (local_context_dependent) .lowering else .deferred,
             .template_ref = template_ref,
@@ -3041,6 +3050,7 @@ const Builder = struct {
             .lexical = lexical,
             .lexical_context_key = lexical_context_key,
             .fn_id = fn_id,
+            .request_hold = request_hold,
         });
         lexical_needs_cleanup = false;
         var indexed_nodes = std.AutoHashMap(NodeId, void).init(self.allocator);
@@ -4336,6 +4346,12 @@ const Builder = struct {
             const cursor = directTranslateCursor(view);
             const checked_ty: checked.CheckedTypeId = @enumFromInt(source.type_id);
 
+            // reunify.md section 10: whether this root's content includes
+            // representation the layer EMITTED, rather than content read out of
+            // the checked module. The comparison below then also states its
+            // outcome for exactly that population, so a sealed slot's stored type
+            // is compared against the graph's sealed type at the same position.
+            const opened_before = translator.representationPositionsOpened();
             var reason: direct_translate.SkipReason = undefined;
             const translated = translator.translateGroundRoot(cursor, checked_ty, &reason) catch |err| switch (err) {
                 error.Skip => {
@@ -4354,10 +4370,14 @@ const Builder = struct {
                 else => |other| return other,
             };
 
+            const emitted_representation = translator.representationPositionsOpened() != opened_before;
+            if (emitted_representation) census.bump("emission_root_compared");
+
             const translated_digest = snapshot.typeDigest(&self.program.names, translated);
             const graph_digest = self.program.types.typeDigest(&self.program.names, mono_ty);
             if (std.mem.eql(u8, &translated_digest.bytes, &graph_digest.bytes)) {
                 census.bump("direct_stored_match");
+                if (emitted_representation) census.bump("emission_root_match");
                 continue;
             }
 
@@ -4375,10 +4395,12 @@ const Builder = struct {
             const graph_unfolded = self.program.types.unfoldedDigest(&self.program.names, mono_ty);
             if (std.mem.eql(u8, &translated_unfolded.bytes, &graph_unfolded.bytes)) {
                 census.bump("direct_stored_equal_under_rerooting");
+                if (emitted_representation) census.bump("emission_root_equal_under_rerooting");
                 continue;
             }
 
             census.bump("direct_stored_mismatch");
+            if (emitted_representation) census.bump("emission_root_mismatch");
             if (try self.monoTypeCarriesRepresentation(mono_ty)) {
                 census.bump("direct_stored_mismatch_representation");
             } else if (source.from_type_cache) {
@@ -6203,6 +6225,15 @@ const Builder = struct {
                 }
             else
                 null;
+
+            // Debug/probe-only: put the requesting scope this record carries back
+            // around the reservation it belongs to (reunify.md sections 7.2,
+            // 11.3), so the reserved id ties to the edge the requesting body
+            // named rather than to whatever scope is open here. A request served
+            // by an already-lowered specialization reserves nothing, and its
+            // scope closes unclaimed exactly like any other that bound none.
+            if (self.rehearsal) |rehearsal| rehearsal.reopenHeldRequest(spec.request_hold);
+            defer if (self.rehearsal) |rehearsal| rehearsal.closeRequest();
 
             spec.resolved_slot = loaded_slot orelse blk: {
                 const def = try self.lowerTemplateWithMono(
@@ -9561,6 +9592,10 @@ const DraftTemplateSpec = struct {
     lexical_context_key: ?names.TypeDigest = null,
     fn_id: DraftFnId,
     resolved_slot: ?Ast.FnSlot = null,
+    /// Debug/probe-only: the request scope the rehearsal kept for this record,
+    /// put back around the deferred reservation below so the reservation ties to
+    /// the edge the requesting body made it at (reunify.md sections 7.2, 11.3).
+    request_hold: spec_rehearsal.HeldRequest = spec_rehearsal.HeldRequest.none,
 };
 
 const DraftConstUseProvenance = union(enum) {

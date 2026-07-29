@@ -778,6 +778,15 @@ pub const Census = struct {
     rehearsal_request_edge_claim_without_scope: Counter = Counter.init(0),
     rehearsal_request_edge_claim_without_edge: Counter = Counter.init(0),
     rehearsal_request_edge_claim_repeated: Counter = Counter.init(0),
+    // A specialization recorded while its requesting body lowered and reserved
+    // only after that body's graph froze carries its request scope on the
+    // record. `held_checked` and `held_generated` are the scopes that named an
+    // edge, `held_without_edge` a recording request whose use named none, and
+    // `hold_without_scope` a record made under no request scope at all.
+    rehearsal_request_held_checked: Counter = Counter.init(0),
+    rehearsal_request_held_generated: Counter = Counter.init(0),
+    rehearsal_request_held_without_edge: Counter = Counter.init(0),
+    rehearsal_request_hold_without_scope: Counter = Counter.init(0),
     rehearsal_skip_root_edge: Counter = Counter.init(0),
     rehearsal_skip_generated_edge: Counter = Counter.init(0),
     rehearsal_skip_no_site: Counter = Counter.init(0),
@@ -874,6 +883,41 @@ pub const Census = struct {
     rehearsal_seal_positions: Counter = Counter.init(0),
     rehearsal_relations_applied: Counter = Counter.init(0),
     rehearsal_seal_descriptor_moved: Counter = Counter.init(0),
+    // reunify.md section 10: directed translation EMITTING representation rather
+    // than reading it. `emission_drafts_built` counts roots rerun as a draft
+    // because the eager walk reached a position whose runtime encoding the
+    // checked data does not dictate (or a recursive cycle);
+    // `emission_positions_opened` counts those positions, and
+    // `emission_slots_sealed` the ones whose slot sealed with its
+    // representation-erased identity intact. `emission_seal_identity_lost` is the
+    // required-zero counter: a relation that moved a position's identity rather
+    // than only its runtime encoding. `emission_seal_moved` counts a position
+    // whose sealed encoding is not the declared one, which is exactly the
+    // content a producer supplied. The `emission_input_*` counters cover the
+    // declared producer inputs: how many were stated, and the refusals — a tier
+    // the declared order will not move back down to, an operand the engine holds
+    // to be a different identity, and a position whose shape carries no
+    // descriptor to adopt one into.
+    emission_drafts_built: Counter = Counter.init(0),
+    emission_positions_opened: Counter = Counter.init(0),
+    emission_slots_sealed: Counter = Counter.init(0),
+    emission_seal_identity_lost: Counter = Counter.init(0),
+    emission_seal_moved: Counter = Counter.init(0),
+    emission_input_declared: Counter = Counter.init(0),
+    emission_input_refused_tier: Counter = Counter.init(0),
+    emission_input_refused_identity: Counter = Counter.init(0),
+    emission_input_not_modelled: Counter = Counter.init(0),
+    // The emitted population inside the directed stored-form probe: the roots
+    // whose content includes representation the section 10 layer emitted rather
+    // than read out of the checked module. Each is classified by the same
+    // comparison against the graph's sealed type as every other root, so
+    // `emission_root_match` plus `emission_root_equal_under_rerooting` against
+    // `emission_root_mismatch` says whether a sealed slot's stored type is the
+    // type the graph seals at that position.
+    emission_root_compared: Counter = Counter.init(0),
+    emission_root_match: Counter = Counter.init(0),
+    emission_root_equal_under_rerooting: Counter = Counter.init(0),
+    emission_root_mismatch: Counter = Counter.init(0),
     // reunify.md sections 9 and 13 Slice 7: the constraint-replay totals over
     // every `UnifySite`. `unify_site_informative` is the number that decides how
     // much of body lowering's unification the flip must replace rather than

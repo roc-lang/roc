@@ -283,8 +283,13 @@ my @categories = (
             # policy through, and $SOLVE the graph's own call for the
             # representations it is still minting; both stay past the flip
             # because the tier relation is section 10's, not logical solving's.
+            # $DTRAN (reunify.md section 10): directed translation EMITS the
+            # representation at a position whose runtime encoding the checked data
+            # does not dictate, so it asks the shared policy which section 10.3
+            # rule relates the declared encoding to the one a producer stated
+            # there. It is the flip's own call site and stays past the flip.
             { label => 'iteratorTierRelation', re => qr/\biteratorTierRelation\b/,
-              counts => { $RPOL => 8, $RCLO => 1, $SREH => 1, $MTYPE => 1, $SOLVE => 1 } },
+              counts => { $RPOL => 8, $RCLO => 1, $SREH => 1, $MTYPE => 1, $SOLVE => 1, $DTRAN => 1 } },
             { label => 'iteratorJoin', re => qr/\biteratorJoin\b/,
               counts => { $RPOL => 9, $RCLO => 2 } },
             { label => 'chooseGeneratedEvidenceBacking', re => qr/\bchooseGeneratedEvidenceBacking\b/,
@@ -295,8 +300,12 @@ my @categories = (
             # backing by score before it builds that position's slot. The second
             # line asks the same question of a constraint-replay site's two
             # differing named heads. Both delete with the rehearsal at the flip.
+            # $DTRAN asks the same question twice while emitting: once for the
+            # position it is opening a representation slot at, and once for an
+            # already-emitted child it models as that slot's component. Both stay
+            # past the flip.
             { label => 'evidenceOwnerUsesScoreSelection', re => qr/\bevidenceOwnerUsesScoreSelection\b/,
-              counts => { $RPOL => 7, $SREH => 2 } },
+              counts => { $RPOL => 7, $SREH => 2, $DTRAN => 2 } },
             # $RMIRR (Slice 7 Stage B): the graph-driven representation-closure
             # shadow cites `applyIteratorJoin` (the graph site it mirrors) in a
             # doc comment; it deletes at the flip.
@@ -318,8 +327,14 @@ my @categories = (
             # of a requesting edge to the callee's scheme root emitted under the
             # binding, which is that specialization's representation interface
             # edge (reunify.md 10.3, 11.1). It deletes with the rehearsal.
+            # $DTRAN gained one `relate(` in the section 10 emission layer: a
+            # position whose runtime encoding the checked data does not dictate
+            # relates its declared encoding to the one a producer stated there
+            # under the rule the policy classified, and reads the sealed
+            # representation back out of the resulting class. It is the flip's own
+            # representation closure and stays past the flip.
             { label => 'relate(', re => qr/\brelate\(/,
-              counts => { $RCLO => 18, $RSHAD => 1, $RMIRR => 1, $FSID => 1, $SREH => 1 } },
+              counts => { $RCLO => 18, $RSHAD => 1, $RMIRR => 1, $FSID => 1, $SREH => 1, $DTRAN => 1 } },
             { label => 'relateNominalBacking', re => qr/\brelateNominalBacking\b/,
               counts => { $RCLO => 4 } },
         ],
@@ -375,12 +390,17 @@ my @categories = (
         exempt  => [],
         patterns => [
             # $DTRAN grew 15 -> 21 as Stage A gained recursive-group construction
-            # and the engine_input_needed skip class: the new self-recursive,
+            # and the engine_input_needed skip class: the self-recursive,
             # mutually-recursive, nested-list, and generated-evidence unit tests
-            # each drive `translateGroundRoot`. It stays inert (probe-only) until
-            # Stage E repoints the seam.
+            # each drive `translateGroundRoot`. It grew 21 -> 27 with the section
+            # 10 emission layer, whose unit tests each drive the same entry point
+            # over a position that opens, closes, and seals a representation slot
+            # — including the issue-10170 recursive minted backing and a producer
+            # input that places minted components and a generated backing. It
+            # stays inert
+            # (probe-only) until Stage E repoints the seam.
             { label => 'translateGroundRoot', re => qr/\btranslateGroundRoot\b/,
-              counts => { $DTRAN => 21, $LOWER => 1 } },
+              counts => { $DTRAN => 28, $LOWER => 1 } },
             { label => 'instantiateStoredScheme', re => qr/\binstantiateStoredScheme\b/,
               counts => { $DTRAN => 4 } },
             { label => 'runDirectTranslateProbe', re => qr/\brunDirectTranslateProbe\b/,

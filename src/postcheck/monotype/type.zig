@@ -2880,6 +2880,7 @@ const Reintern = struct {
                 .backing = if (named.backing) |backing| .{
                     .ty = self.resolvedChild(backing.ty),
                     .use = backing.use,
+                    .authority = backing.authority,
                 } else null,
                 .declared_order = try self.resolvedDeclaredOrderSlice(named.declared_order),
             }),
@@ -2955,6 +2956,7 @@ const Reintern = struct {
                     .backing = if (named.backing) |backing| .{
                         .ty = self.recursiveLink(backing.ty, group_index),
                         .use = backing.use,
+                        .authority = backing.authority,
                     } else null,
                     // Declared-order padding types are always leaf representations
                     // outside the cycle, so they resolve as an already-built span.

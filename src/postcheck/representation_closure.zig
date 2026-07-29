@@ -16,7 +16,8 @@
 //! so it cannot join logically unequal inputs. The only things the engine does
 //! are: create a slot, relate two slots under a declared rule, relate a
 //! nominal's backing at a sanctioned edge, adopt a representation the producer
-//! created at a slot's position, and read the equivalence class of a slot.
+//! created at a slot's position, read the equivalence class of a slot, and read
+//! back the representation a slot's class carries once the relation settled.
 //!
 //! Termination (reunify.md section 10.4). Every relate step either:
 //!   - resolves to a pair already in one equivalence class (idempotent, no new
@@ -127,6 +128,11 @@ pub const SlotShape = union(enum) {
     /// A generated evidence owner whose backing is selected by score.
     evidence: struct {
         score: u8,
+        /// The named descriptor this evidence owner carries, when the caller
+        /// models one. A caller that only needs the score rule leaves it null;
+        /// a caller that emits this position's type states it, so a producer
+        /// representation can be adopted here and read back at sealing.
+        descriptor: ?policy.NamedDescriptor = null,
     },
     /// A one-child wrapper; models a box backing that references an iterator,
     /// as in the issue-10170 recursive `rest` shape.
@@ -373,21 +379,50 @@ pub const Engine = struct {
         descriptor: policy.NamedDescriptor,
     ) ProducerRepresentationError!void {
         const root = self.find(slot);
-        const current = switch (self.slotConst(root).shape) {
-            .iterator => |iter| iter,
+        switch (self.slotConst(root).shape) {
+            .iterator => |current| {
+                if (tierRank(descriptor.def.iterator_representation) <
+                    tierRank(current.descriptor.def.iterator_representation))
+                {
+                    return error.TierMovedDown;
+                }
+                self.slotMut(root).shape = .{ .iterator = .{
+                    .descriptor = descriptor,
+                    .item = current.item,
+                    .backing = current.backing,
+                    .components = current.components,
+                } };
+            },
+            // A generated evidence owner that states its descriptor takes the
+            // producer's representation the same way: the declared tier order
+            // still refuses a move back down, and the score the selection rule
+            // reads is unchanged, because adoption is not a selection.
+            .evidence => |current| {
+                const carried = current.descriptor orelse return error.NotAProducerRepresentation;
+                if (tierRank(descriptor.def.iterator_representation) <
+                    tierRank(carried.def.iterator_representation))
+                {
+                    return error.TierMovedDown;
+                }
+                self.slotMut(root).shape = .{ .evidence = .{
+                    .score = current.score,
+                    .descriptor = descriptor,
+                } };
+            },
             else => return error.NotAProducerRepresentation,
-        };
-        if (tierRank(descriptor.def.iterator_representation) <
-            tierRank(current.descriptor.def.iterator_representation))
-        {
-            return error.TierMovedDown;
         }
-        self.slotMut(root).shape = .{ .iterator = .{
-            .descriptor = descriptor,
-            .item = current.item,
-            .backing = current.backing,
-            .components = current.components,
-        } };
+    }
+
+    /// The representation an emitting caller reads back at a slot after the
+    /// relation reached its fixpoint (reunify.md section 10.6). Null when the
+    /// slot's class carries no named descriptor, which is every slot whose
+    /// caller only modelled a structural shape.
+    pub fn sealedDescriptor(self: *Engine, slot: RepresentationSlotId) ?policy.NamedDescriptor {
+        return switch (self.shapeOf(slot)) {
+            .iterator => |iter| iter.descriptor,
+            .evidence => |ev| ev.descriptor,
+            .wrapper, .leaf => null,
+        };
     }
 
     fn step(
@@ -795,6 +830,40 @@ test "a producer-created representation is adopted upward and never downward" {
         error.NotAProducerRepresentation,
         engine.adoptProducerRepresentation(leaf, dynamic),
     );
+}
+
+test "an evidence owner that states its descriptor adopts and seals a producer representation" {
+    var engine = Engine.init(testing.allocator);
+    defer engine.deinit();
+
+    const logical: LogicalToken = @enumFromInt(90);
+    const declared = iterDescriptor(.{ .representation = .none, .type_name = 9 });
+    const owner = try engine.createSlot(logical, @enumFromInt(1), .{ .evidence = .{
+        .score = 0,
+        .descriptor = declared,
+    } });
+
+    // Nothing has been adopted yet, so the class carries what it was opened with.
+    const opened = engine.sealedDescriptor(owner) orelse return error.TestUnexpectedResult;
+    try testing.expect(opened.def.generated == null);
+
+    var produced = declared;
+    produced.def.generated = .{ .bytes = [_]u8{0xC3} ** 32 };
+    try engine.adoptProducerRepresentation(owner, produced);
+
+    const sealed = engine.sealedDescriptor(owner) orelse return error.TestUnexpectedResult;
+    try testing.expect(sealed.def.generated != null);
+    try testing.expectEqual(@as(u8, 0xC3), sealed.def.generated.?.bytes[0]);
+
+    // An evidence slot that states no descriptor has no producer representation
+    // to adopt, and a structural slot never carries one to read back.
+    const scoreless = try engine.createSlot(logical, @enumFromInt(2), .{ .evidence = .{ .score = 1 } });
+    try testing.expectError(
+        error.NotAProducerRepresentation,
+        engine.adoptProducerRepresentation(scoreless, produced),
+    );
+    const leaf = try engine.createSlot(logical, @enumFromInt(3), .{ .leaf = 5 });
+    try testing.expect(engine.sealedDescriptor(leaf) == null);
 }
 
 test "relateNominalBacking relates the backing without requiring equal logical tokens" {

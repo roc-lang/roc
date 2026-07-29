@@ -12,10 +12,17 @@
 //! `instNode` plus sealing produce today for ground inputs. Named types keep
 //! their backing, builtin dispatch owner, and declared field order; a
 //! storage-transparent alias is erased by the store's `internNamed` constructor
-//! exactly as production materializes it. Representation content the graph
-//! mints (iterator tiers, generated owners) is not in checked module data, so a
-//! type carrying it is emitted here without that content and legitimately
-//! differs from the graph until Stage B supplies the interface outputs.
+//! exactly as production materializes it.
+//!
+//! Runtime-encoding content the checked data does not dictate — a generated
+//! iterator chain's tier, a forced-dynamic fixed point, a generated evidence
+//! owner — is not read from the checked module: it is EMITTED here through the
+//! section 10 representation layer. A position carrying such content opens a
+//! representation slot holding the declared identity checking owns plus the
+//! representation the producer stated for that position, the enclosing compound
+//! is built as a draft while a slot is open under it, the declared relation runs
+//! to its fixpoint, and the draft seals bottom-up into immutable ids. See
+//! `Emission` below.
 //!
 //! Names are interned into the PRODUCTION name store the same way `instNode`
 //! resolves them today (module identity rebasing, type/field/tag name
@@ -32,6 +39,9 @@ const check = @import("check");
 const collections = @import("collections");
 
 const MonoType = @import("type.zig");
+const census = @import("census.zig");
+const closure = @import("../representation_closure.zig");
+const policy = @import("../representation_policy.zig");
 
 const names = check.CheckedNames;
 const checked = check.CheckedModule;
@@ -147,13 +157,15 @@ pub const Resolver = struct {
 /// ordinary recursive types are built through the store's recursive-group
 /// builder (reunify.md section 9.2, 10.6).
 ///
-/// `engine_input_needed` marks a position whose representation content the
-/// checked data cannot dictate — a generated opaque-evidence backing that the
-/// section 10 closure engine mints in step (b) (reunify.md section 9.1's
-/// minted/forced-dynamic content). The identity is derivable, but emitting a
-/// backing the checked data does not contain would be wrong output, so the walk
-/// skips instead. Its count, together with `direct_stored_mismatch_representation`,
-/// bounds the representation content step (b) must supply.
+/// `engine_input_needed` is the EAGER walk's signal that the root reaches a
+/// position whose runtime encoding the checked data does not dictate — a
+/// generated opaque-evidence owner or an iterator tier (reunify.md sections
+/// 10.1, 10.3). The eager walk interns each child as it finishes it, which
+/// leaves no draft for such a position's representation to seal into, so it
+/// leaves the walk here and `translateUnderEnvironment` reruns the root as a
+/// draft, where the section 10 layer opens, closes, and seals the position. It
+/// therefore reaches a caller only when the draft rerun ALSO leaves the subset
+/// at the same position, which is a genuinely unemittable position.
 pub const SkipReason = enum {
     recursive_cycle,
     pending_or_err,
@@ -245,6 +257,476 @@ const NominalInstances = struct {
     }
 };
 
+/// Where one checked position lives: the content identity of its module plus
+/// the module-local checked type id. A declared representation input names the
+/// position it applies to by this address.
+pub const PositionAddress = struct {
+    module_bytes: [32]u8,
+    type_id: u32,
+
+    fn eql(self: PositionAddress, other: PositionAddress) bool {
+        return self.type_id == other.type_id and
+            std.mem.eql(u8, &self.module_bytes, &other.module_bytes);
+    }
+};
+
+/// The runtime-encoding content a producer placed at one position (reunify.md
+/// section 10.1). Checking owns the declared identity there; this owns
+/// everything about the runtime encoding checking does not dictate — the
+/// iterator tier, the producer kind that minted it, the minted-chain depth, and
+/// the generated-owner digest a finished representation records.
+pub const ProducerRepresentation = struct {
+    iterator_representation: MonoType.IteratorRepresentation = .none,
+    iterator_kind: MonoType.IteratorKind = .none,
+    iterator_depth: u8 = 0,
+    generated: ?names.TypeDigest = null,
+    /// The record and tag names a generated iterator's runtime encoding uses.
+    topology: ?MonoType.IteratorTopology = null,
+    /// The callable evidence this representation is being minted under while
+    /// the producer has not recorded a generated digest for it yet (reunify.md
+    /// section 10.3).
+    minting: ?policy.MintingIdentity = null,
+    /// The component types the producer minted this representation over, in
+    /// producer order. They sit after the position's public item argument and
+    /// are representation, not identity: two representations of one declaration
+    /// carry different components and still relate.
+    components: []const TypeId = &.{},
+    /// The backing the producer generated for this position. When null, the
+    /// declaration's own backing stands.
+    backing: ?MonoType.NamedBacking = null,
+};
+
+/// What the section 10 layer sealed at one position: the definition the position
+/// emits, plus the producer-placed content that changes the position's own
+/// shape.
+const SealedPosition = struct {
+    def: MonoType.TypeDef,
+    components: []const TypeId = &.{},
+    backing: ?MonoType.NamedBacking = null,
+};
+
+/// One declared representation input: the position it applies to and the
+/// representation the producer placed there. The caller states these before a
+/// translation; emission never derives one from a store it reads.
+pub const RepresentationInput = struct {
+    position: PositionAddress,
+    representation: ProducerRepresentation,
+};
+
+/// The maximum depth the emission layer builds child representation slots to
+/// before modelling a position as an opaque leaf. Representation-bearing spines
+/// (iterators, evidence owners, box/list wrappers) are shallow; this only bounds
+/// a pathological input.
+const max_emission_slot_depth: u32 = 32;
+
+/// The maximum number of producer-minted components emission models on one
+/// iterator slot: an iterator states its public item plus the components its
+/// producer minted it over, and a longer list leaves the components unmodelled
+/// rather than answering the component question from an incomplete list.
+const max_emission_components: usize = 16;
+
+/// The representation layer one directed translation runs (reunify.md sections
+/// 9.1, 10.2, 10.4, 10.6).
+///
+/// A position whose runtime encoding the checked data does not dictate opens a
+/// **representation slot**. The slot carries that position's fixed
+/// representation-erased identity, taken from the declared identity checking
+/// owns plus its already-emitted arguments, and a complete represented type: the
+/// declaration's own encoding, joined with whatever representation the caller
+/// declared the producer placed there. The declared section 10.3 relation then
+/// runs to its fixpoint over that slot, and `seal` reads the class
+/// representative's representation back out. Sealing recomputes the
+/// representation-erased identity of the sealed representation and requires it
+/// to equal the one the slot was opened with, so a relation can move the
+/// encoding and never the identity.
+///
+/// Two properties make sealing safe to do at the position rather than after the
+/// whole walk. First, a relation is created only from the caller's declared
+/// inputs, all of which are stated before the translation starts, so nothing
+/// discovered later can move a slot that already sealed. Second, distinct
+/// positions of one translation are distinct occurrences (reunify.md section
+/// 8.5), so no relation crosses two of them: each slot plus the child relations
+/// its rules generate is its own representation dependency component, and the
+/// walk's child-first order is that component order. Identity assignment for
+/// the enclosing compounds is still deferred — the whole region builds as a
+/// draft through reserve-before-descend and interns bottom-up at the end
+/// (`translateDraftRoot`), which is section 10.6's sealing boundary.
+///
+/// Termination (reunify.md section 10.4) has three parts, and none of them is
+/// assumed:
+///
+///  1. The walk terminates. Reserve-before-descend records every compound's
+///     reserved stored id before its children are translated and every named
+///     position's under its instance identity, so a backing that reaches the
+///     position it is the backing of resolves to the reserved id instead of
+///     descending again. Each open position therefore opens exactly one slot per
+///     reserved id.
+///  2. Slot creation terminates. One position creates its own slot, one child
+///     slot per public item, backing, and modelled component, and at most one
+///     peer slot for the caller's declared input. Child slots are built from
+///     already-emitted immutable ids and stop at `max_emission_slot_depth`, so
+///     the slot count is bounded by the emitted region.
+///  3. The relation terminates. Every relation runs inside the closure engine,
+///     whose contract is stated on `representation_closure`: a join's derived
+///     identity is `(rule, logical token, sorted producer-atom set)`, inserted
+///     into the memo BEFORE descending into backing relations; an active-pair map
+///     closes cycles; and the progress measure is the finite tuple of distinct
+///     union-find roots, unseen derived identities, and in-flight relation edges.
+///     Emission adds no relation outside that engine, and the declared tier order
+///     refuses any move back down, so each position's encoding moves upward at
+///     most twice (public to minted to forced dynamic) before it seals.
+const Emission = struct {
+    allocator: Allocator,
+    engine: closure.Engine,
+    /// The representation inputs the caller declared for this translation.
+    inputs: std.ArrayList(RepresentationInput),
+    /// Representation-erased identity digests -> dense engine token. The engine
+    /// refuses to relate two slots with unequal tokens, so a token is exactly
+    /// the identity a representation relation may not move.
+    tokens: std.AutoHashMapUnmanaged([32]u8, u64),
+    next_token: u64,
+    next_producer: u32,
+    /// How many positions this translation has opened a representation slot at.
+    /// A caller reads it around one root to learn whether emission produced any
+    /// of that root's content.
+    positions_opened: u64,
+    /// The declared inputs in force for the store the current build emits into.
+    /// A draft region is built in an isolated scratch store, so the ids an input
+    /// names are moved there first and the moved list stands for the duration of
+    /// that build. Null means the caller's own list, whose ids name the target.
+    active_inputs: ?[]const RepresentationInput = null,
+
+    fn init(allocator: Allocator) Emission {
+        return .{
+            .allocator = allocator,
+            .engine = closure.Engine.init(allocator),
+            .inputs = .empty,
+            .tokens = .empty,
+            .next_token = 1,
+            .next_producer = 1,
+            .positions_opened = 0,
+        };
+    }
+
+    fn deinit(self: *Emission) void {
+        self.engine.deinit();
+        self.inputs.deinit(self.allocator);
+        self.tokens.deinit(self.allocator);
+    }
+
+    fn inputFor(self: *const Emission, address: PositionAddress) ?ProducerRepresentation {
+        const stated = self.active_inputs orelse self.inputs.items;
+        for (stated) |input| {
+            if (input.position.eql(address)) return input.representation;
+        }
+        return null;
+    }
+
+    fn freshProducer(self: *Emission) closure.ProducerAtom {
+        const atom: closure.ProducerAtom = @enumFromInt(self.next_producer);
+        self.next_producer +%= 1;
+        return atom;
+    }
+
+    fn tokenForDigest(self: *Emission, digest: [32]u8) Allocator.Error!closure.LogicalToken {
+        const gop = try self.tokens.getOrPut(self.allocator, digest);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = self.next_token;
+            self.next_token +%= 1;
+        }
+        return @enumFromInt(gop.value_ptr.*);
+    }
+
+    /// Open a representation slot at one position, run the declared relation to
+    /// its fixpoint, and return the sealed type definition the position emits.
+    ///
+    /// `declared` is the definition the checked declaration states, carrying no
+    /// runtime-encoding content of its own. The returned definition differs from
+    /// it only in the fields section 10.1 owns.
+    fn sealPosition(
+        self: *Emission,
+        store: *const MonoType.Store,
+        name_store: *const names.NameStore,
+        address: PositionAddress,
+        declared: policy.NamedDescriptor,
+        args: []const TypeId,
+        backing: ?TypeId,
+    ) Allocator.Error!SealedPosition {
+        census.bump("emission_positions_opened");
+        self.positions_opened +%= 1;
+        const identity = identityDigest(store, name_store, declared, args);
+        const token = try self.tokenForDigest(identity);
+        const shape = try self.shapeAt(store, name_store, declared, token, args, backing);
+        const slot = try self.engine.createSlot(token, self.freshProducer(), shape);
+
+        const input = self.inputFor(address);
+        var produced_stands = false;
+        if (input) |stated| {
+            census.bump("emission_input_declared");
+            produced_stands = try self.applyInput(store, name_store, slot, token, declared, stated, args, backing);
+        }
+
+        const sealed = self.engine.sealedDescriptor(slot) orelse declared;
+        // Sealing requires the representation-erased identity to survive the
+        // relation: only the section 10.1 fields may have moved. The producer's
+        // minted components and generated backing are representation too, so they
+        // are deliberately outside the identity the slot was opened with.
+        const sealed_identity = identityDigest(store, name_store, sealed, args);
+        if (!std.mem.eql(u8, &sealed_identity, &identity)) {
+            census.bump("emission_seal_identity_lost");
+            return .{ .def = declared.def };
+        }
+        census.bump("emission_slots_sealed");
+        if (!encodingEql(sealed.def, declared.def)) census.bump("emission_seal_moved");
+        // The producer-placed content that changes the position's own shape rides
+        // out with the sealed definition, and only while the class still carries
+        // the producer's own representation after the relation settled.
+        const placed = if (produced_stands) input else null;
+        return .{
+            .def = sealed.def,
+            .components = if (placed) |stated| stated.components else &.{},
+            .backing = if (placed) |stated| stated.backing else null,
+        };
+    }
+
+    /// Relate the representation the producer placed at this position to the one
+    /// the declaration states, under the section 10.3 rule the shared policy
+    /// classifies for the pair. An iterator pair takes the tier relation; every
+    /// other pair takes producer adoption, whose declared tier order refuses a
+    /// move back down. Returns whether the producer's own representation is the
+    /// one the slot's class carries once the relation settled.
+    fn applyInput(
+        self: *Emission,
+        store: *const MonoType.Store,
+        name_store: *const names.NameStore,
+        slot: closure.RepresentationSlotId,
+        token: closure.LogicalToken,
+        declared: policy.NamedDescriptor,
+        input: ProducerRepresentation,
+        args: []const TypeId,
+        backing: ?TypeId,
+    ) Allocator.Error!bool {
+        var produced = declared;
+        produced.def.iterator_representation = input.iterator_representation;
+        produced.def.iterator_kind = input.iterator_kind;
+        produced.def.iterator_depth = input.iterator_depth;
+        produced.def.generated = input.generated;
+        produced.def.iterator_topology = input.topology;
+        produced.minting = input.minting;
+
+        const relation = policy.iteratorTierRelation(
+            declared,
+            produced,
+            componentAgreementOf(declared, produced),
+        );
+        const rule: closure.RepresentationRule = switch (relation) {
+            .public_minted => .iterator_public_minted,
+            .forced_dynamic => .iterator_forced_dynamic,
+            .minted_join => .iterator_minted_join,
+            // The pair states one representation, so there is nothing to
+            // relate: the producer's own content is adopted at the position.
+            .ordinary => {
+                self.engine.adoptProducerRepresentation(slot, produced) catch |err| switch (err) {
+                    error.NotAProducerRepresentation => {
+                        census.bump("emission_input_not_modelled");
+                        return false;
+                    },
+                    error.TierMovedDown => {
+                        census.bump("emission_input_refused_tier");
+                        return false;
+                    },
+                };
+                return true;
+            },
+        };
+
+        const peer_shape = try self.shapeAt(store, name_store, produced, token, args, backing);
+        const peer = try self.engine.createSlot(token, self.freshProducer(), peer_shape);
+        self.engine.relate(slot, peer, rule) catch |err| switch (err) {
+            error.LogicallyUnequal => {
+                census.bump("emission_input_refused_identity");
+                return false;
+            },
+            else => |other| return other,
+        };
+        const settled = self.engine.sealedDescriptor(slot) orelse return false;
+        return encodingEql(settled.def, produced.def);
+    }
+
+    /// The engine shape one emitted position models: an iterator states its
+    /// public item, its backing, and the components its producer minted it over;
+    /// a score-selected evidence owner states its descriptor; anything else with
+    /// a backing is a wrapper, and the rest is an opaque leaf.
+    fn shapeAt(
+        self: *Emission,
+        store: *const MonoType.Store,
+        name_store: *const names.NameStore,
+        descriptor: policy.NamedDescriptor,
+        token: closure.LogicalToken,
+        args: []const TypeId,
+        backing: ?TypeId,
+    ) Allocator.Error!closure.SlotShape {
+        const owner = descriptor.builtin_owner;
+        if (owner != null and static_dispatch.isIteratorOwner(owner.?) and args.len >= 1) {
+            const item = try self.slotForStored(store, name_store, args[0], 0);
+            const backing_slot = if (backing) |backing_ty|
+                try self.slotForStored(store, name_store, backing_ty, 0)
+            else
+                try self.standInBacking();
+            const components = try self.componentSlots(store, name_store, args[1..]);
+            return .{ .iterator = .{
+                .descriptor = descriptor,
+                .item = item,
+                .backing = backing_slot,
+                .components = components,
+            } };
+        }
+        if (policy.evidenceOwnerUsesScoreSelection(owner)) {
+            return .{ .evidence = .{ .score = 0, .descriptor = descriptor } };
+        }
+        if (backing) |backing_ty| {
+            return .{ .wrapper = try self.slotForStored(store, name_store, backing_ty, 0) };
+        }
+        return .{ .leaf = @intFromEnum(token) };
+    }
+
+    fn componentSlots(
+        self: *Emission,
+        store: *const MonoType.Store,
+        name_store: *const names.NameStore,
+        component_types: []const TypeId,
+    ) Allocator.Error!closure.ComponentSpan {
+        if (component_types.len > max_emission_components) return .{};
+        var slots: [max_emission_components]closure.RepresentationSlotId = undefined;
+        for (component_types, 0..) |component, index| {
+            slots[index] = try self.slotForStored(store, name_store, component, 0);
+        }
+        return try self.engine.recordComponents(slots[0..component_types.len]);
+    }
+
+    /// Build a child slot for an already-emitted stored type. Children of an
+    /// emitted position are immutable ids, so their shapes are read straight off
+    /// the store; a fresh slot per occurrence keeps two occurrences of one id
+    /// from being pre-joined (reunify.md section 8.5).
+    fn slotForStored(
+        self: *Emission,
+        store: *const MonoType.Store,
+        name_store: *const names.NameStore,
+        ty: TypeId,
+        depth: u32,
+    ) Allocator.Error!closure.RepresentationSlotId {
+        const token = try self.tokenForDigest(storedIdentityDigest(store, name_store, ty));
+        if (depth >= max_emission_slot_depth) {
+            return try self.engine.createSlot(token, self.freshProducer(), .{ .leaf = @intFromEnum(token) });
+        }
+        const shape: closure.SlotShape = switch (store.get(ty)) {
+            .list, .box => |elem| .{ .wrapper = try self.slotForStored(store, name_store, elem, depth + 1) },
+            .named => |named| blk: {
+                const descriptor: policy.NamedDescriptor = .{
+                    .kind = named.kind,
+                    .def = named.def,
+                    .builtin_owner = named.builtin_owner,
+                };
+                const owner = named.builtin_owner;
+                const named_args = store.span(named.args);
+                const arg_count = collections.GuardedList.borrowLen(named_args);
+                if (owner != null and static_dispatch.isIteratorOwner(owner.?) and arg_count >= 1) {
+                    const item = try self.slotForStored(
+                        store,
+                        name_store,
+                        collections.GuardedList.at(named_args, 0),
+                        depth + 1,
+                    );
+                    const backing_slot = if (named.backing) |backing|
+                        try self.slotForStored(store, name_store, backing.ty, depth + 1)
+                    else
+                        try self.standInBacking();
+                    break :blk .{ .iterator = .{
+                        .descriptor = descriptor,
+                        .item = item,
+                        .backing = backing_slot,
+                    } };
+                }
+                if (policy.evidenceOwnerUsesScoreSelection(owner)) {
+                    break :blk .{ .evidence = .{ .score = 0, .descriptor = descriptor } };
+                }
+                if (named.backing) |backing| {
+                    break :blk .{ .wrapper = try self.slotForStored(store, name_store, backing.ty, depth + 1) };
+                }
+                break :blk .{ .leaf = @intFromEnum(token) };
+            },
+            else => .{ .leaf = @intFromEnum(token) },
+        };
+        return try self.engine.createSlot(token, self.freshProducer(), shape);
+    }
+
+    /// The shared stand-in backing for an iterator that states none. It carries
+    /// the engine's `stand_in` token, which no emitted identity mints, so a rule
+    /// that relates two stand-in backings still relates them while rules that
+    /// keep distinct identities apart still do.
+    fn standInBacking(self: *Emission) Allocator.Error!closure.RepresentationSlotId {
+        return try self.engine.createSlot(.stand_in, self.freshProducer(), .{ .leaf = 0 });
+    }
+};
+
+/// Whether two definitions state the same runtime encoding. Only the section
+/// 10.1 fields are compared: the declared identity is checking's and a
+/// representation relation never moves it.
+fn encodingEql(left: MonoType.TypeDef, right: MonoType.TypeDef) bool {
+    if (left.iterator_representation != right.iterator_representation) return false;
+    if (left.iterator_kind != right.iterator_kind) return false;
+    if (left.iterator_depth != right.iterator_depth) return false;
+    if (left.generated == null or right.generated == null) {
+        return left.generated == null and right.generated == null;
+    }
+    return std.mem.eql(u8, &left.generated.?.bytes, &right.generated.?.bytes);
+}
+
+/// This translation's answer to the policy's component question. Emission opens
+/// one slot per position and states the producer's representation at that same
+/// position, so the two operands are the one position's declared and produced
+/// representations: their components are the same emitted types by construction.
+fn componentAgreementOf(left: policy.NamedDescriptor, right: policy.NamedDescriptor) policy.ComponentAgreement {
+    return if (left.builtin_owner == right.builtin_owner) .agree else .differ;
+}
+
+/// The representation-erased identity of a position: the declared identity
+/// checking owns plus the identities of the already-emitted arguments. Every
+/// field section 10.1 owns is left out, so two representations of one
+/// declaration digest equal here and the engine will relate them.
+fn identityDigest(
+    store: *const MonoType.Store,
+    name_store: *const names.NameStore,
+    descriptor: policy.NamedDescriptor,
+    args: []const TypeId,
+) [32]u8 {
+    var hasher = std.crypto.hash.Blake3.init(.{});
+    hasher.update("roc.emission.position");
+    hasher.update(&.{@intFromEnum(descriptor.kind)});
+    hasher.update(std.mem.asBytes(&@intFromEnum(descriptor.def.module)));
+    hasher.update(std.mem.asBytes(&@intFromEnum(descriptor.def.type_name)));
+    const decl: u32 = descriptor.def.source_decl orelse std.math.maxInt(u32);
+    hasher.update(std.mem.asBytes(&decl));
+    const owner: u8 = if (descriptor.builtin_owner) |value| @intFromEnum(value) + 1 else 0;
+    hasher.update(&.{owner});
+    for (args) |arg| {
+        hasher.update(&storedIdentityDigest(store, name_store, arg));
+    }
+    var out: [32]u8 = undefined;
+    hasher.final(&out);
+    return out;
+}
+
+/// The identity of an already-emitted child. A child of an emitted position is
+/// an immutable id, so its stored digest names it exactly.
+fn storedIdentityDigest(
+    store: *const MonoType.Store,
+    name_store: *const names.NameStore,
+    ty: TypeId,
+) [32]u8 {
+    return store.typeDigest(name_store, ty).bytes;
+}
+
 /// The directed translation context. It owns no type store: it emits into the
 /// caller's target store (the program's types, or a mutable snapshot of them for
 /// the probe) through the `intern*` constructors, and re-interns names into the
@@ -272,6 +754,9 @@ pub const Translator = struct {
     /// so it stays empty here.
     logical_memo: std.AutoHashMap(InstantiationDigest, TypeId),
 
+    /// The section 10 representation layer this translation emits through.
+    emission: Emission,
+
     pub fn init(
         allocator: Allocator,
         store: *MonoType.Store,
@@ -285,12 +770,41 @@ pub const Translator = struct {
             .resolver = resolver,
             .represented_memo = std.AutoHashMap(InstantiationDigest, TypeId).init(allocator),
             .logical_memo = std.AutoHashMap(InstantiationDigest, TypeId).init(allocator),
+            .emission = Emission.init(allocator),
         };
     }
 
     pub fn deinit(self: *Translator) void {
+        self.emission.deinit();
         self.logical_memo.deinit();
         self.represented_memo.deinit();
+    }
+
+    /// State the representation a producer placed at one checked position
+    /// (reunify.md sections 10.1, 11.1). Emission takes these as inputs to the
+    /// positions it opens; it never derives one by reading another stage's
+    /// store. Declaring an input invalidates nothing already emitted, so a
+    /// caller states every input for a translation before running it.
+    pub fn declareRepresentationInput(
+        self: *Translator,
+        input: RepresentationInput,
+    ) Allocator.Error!void {
+        try self.emission.inputs.append(self.allocator, input);
+    }
+
+    /// Drop the declared representation inputs, for a caller that reuses one
+    /// translator across requests whose declared inputs differ.
+    pub fn clearRepresentationInputs(self: *Translator) void {
+        self.emission.inputs.clearRetainingCapacity();
+    }
+
+    /// How many positions this translator has opened a representation slot at.
+    /// A caller comparing one emitted root against another stage's type for the
+    /// same position reads this before and after that root: a growth says the
+    /// root's content includes representation this layer emitted rather than
+    /// read out of the checked module.
+    pub fn representationPositionsOpened(self: *const Translator) u64 {
+        return self.emission.positions_opened;
     }
 
     /// Translate a concrete checked root with no active binder environment into
@@ -309,8 +823,10 @@ pub const Translator = struct {
     /// Translate one checked root under an already-built binder environment
     /// (reunify.md section 9.2). The caller owns `binding_env` and the storage
     /// its bound values name; `scheme_owner_node` selects the residual
-    /// dispositions that apply to this walk. A recursive root reruns through the
-    /// store's recursive-group builder, exactly as the ground entry point does.
+    /// dispositions that apply to this walk. A recursive root, and a root
+    /// carrying a position whose runtime encoding the checked data does not
+    /// dictate, rerun through the draft builder, exactly as the ground entry
+    /// point does.
     pub fn translateUnderEnvironment(
         self: *Translator,
         cursor: ModuleCursor,
@@ -320,11 +836,15 @@ pub const Translator = struct {
         skip_reason: *SkipReason,
     ) WalkError!TypeId {
         return self.eagerWalk(cursor, binding_env, scheme_owner_node, checked_ty, skip_reason) catch |err| switch (err) {
-            error.Skip => {
-                if (skip_reason.* == .recursive_cycle) {
-                    return try self.translateRecursiveRoot(cursor, binding_env, scheme_owner_node, checked_ty, skip_reason);
-                }
-                return err;
+            error.Skip => switch (skip_reason.*) {
+                .recursive_cycle, .engine_input_needed => try self.translateDraftRoot(
+                    cursor,
+                    binding_env,
+                    scheme_owner_node,
+                    checked_ty,
+                    skip_reason,
+                ),
+                else => err,
             },
             else => return err,
         };
@@ -383,32 +903,40 @@ pub const Translator = struct {
         };
 
         const result = self.eagerWalk(cursor, &env, scheme_owner_node, root, skip_reason) catch |err| switch (err) {
-            error.Skip => if (skip_reason.* == .recursive_cycle)
-                try self.translateRecursiveRoot(cursor, &env, scheme_owner_node, root, skip_reason)
-            else
-                return err,
+            error.Skip => switch (skip_reason.*) {
+                .recursive_cycle, .engine_input_needed => try self.translateDraftRoot(
+                    cursor,
+                    &env,
+                    scheme_owner_node,
+                    root,
+                    skip_reason,
+                ),
+                else => return err,
+            },
             else => return err,
         };
         try self.represented_memo.put(key, result);
         return result;
     }
 
-    /// Translate a root the eager walk found recursive, through the store's
-    /// recursive-group builder (reunify.md section 9.2). A cyclic group with no
-    /// representation-bearing position is built reserve-before-descend: every
-    /// compound node reserves its stored slot before its children are translated,
-    /// so a back-reference resolves to the reserved slot. Reserve-before-descend
-    /// closes a cycle on the checked address it reached twice, which is one
-    /// address among the several the checker may hold for one type, so the raw
-    /// group can carry a member that repeats an ancestor's rooted graph. The
-    /// interner is the structural equality authority (reunify.md sections 8.2,
-    /// 8.3): the group is therefore built in an isolated scratch store and
-    /// re-interned into the target, whose recursive-group builder registers each
-    /// member's rooted key and collapses the repeats. An active binder
+    /// Translate a root the eager walk found recursive, or carrying a position
+    /// whose runtime encoding the checked data does not dictate, as a DRAFT
+    /// (reunify.md sections 9.1, 9.2, 10.6). Every compound node reserves its
+    /// stored slot before its children are translated, so identity assignment for
+    /// the whole region waits on its children: a back-reference resolves to the
+    /// reserved slot, and a representation slot under the region seals before the
+    /// region interns. Reserve-before-descend closes a cycle on the checked
+    /// address it reached twice, which is one address among the several the
+    /// checker may hold for one type, so the raw group can carry a member that
+    /// repeats an ancestor's rooted graph. The interner is the structural equality
+    /// authority (reunify.md sections 8.2, 8.3): the region is therefore built in
+    /// an isolated scratch store and re-interned into the target bottom-up,
+    /// children first, through the recursive-group builder, which registers each
+    /// member's rooted identity and collapses the repeats. An active binder
     /// environment names ids in the target store, so its bound values move into
     /// the scratch first. A target store that does not deduplicate has no
-    /// recursive-group builder to hand the component to, so it is built in place.
-    fn translateRecursiveRoot(
+    /// recursive-group builder to hand the region to, so it is built in place.
+    fn translateDraftRoot(
         self: *Translator,
         cursor: ModuleCursor,
         binding_env: ?*const BindingEnvironment,
@@ -425,14 +953,28 @@ pub const Translator = struct {
         var moved = MovedEnvironment.init(self.allocator);
         defer moved.deinit();
         const scratch_env = try moved.move(self.store, self.target_names, &scratch, binding_env);
+        // A declared representation input names ids in the target store, and this
+        // region builds in the scratch, so its ids move there first for exactly
+        // the reason the binding environment's do.
+        var moved_inputs = MovedInputs.init(self.allocator);
+        defer moved_inputs.deinit();
+        self.emission.active_inputs = try moved_inputs.move(
+            self.store,
+            self.target_names,
+            &scratch,
+            self.emission.inputs.items,
+        );
+        defer self.emission.active_inputs = null;
         const scratch_root = try self.reserveFillWalk(&scratch, cursor, scratch_env, scheme_owner_node, root, skip_reason);
         return try MonoType.reintern(self.store, self.target_names, scratch.view(), scratch_root);
     }
 
-    /// Build `root` and its recursive component into `build_store` with
-    /// reserve-before-descend cycle closure. Names always intern into the target
-    /// name store, so a scratch build shares row/tag/name ids with the target and
-    /// re-interns cleanly.
+    /// Build `root` and its draft region into `build_store` with
+    /// reserve-before-descend cycle closure and the representation layer on, so a
+    /// position whose runtime encoding the checked data does not dictate opens and
+    /// seals a slot instead of leaving the subset. Names always intern into the
+    /// target name store, so a scratch build shares row/tag/name ids with the
+    /// target and re-interns cleanly.
     fn reserveFillWalk(
         self: *Translator,
         build_store: *MonoType.Store,
@@ -456,8 +998,10 @@ pub const Translator = struct {
             .recursion_slots = &slots,
             .nominal_instances = &instances,
             .skip_reason = skip_reason,
+            .emitting_representation = true,
         };
         defer walk.active.deinit();
+        census.bump("emission_drafts_built");
         return try walk.node(root);
     }
 
@@ -627,6 +1171,63 @@ const MovedEnvironment = struct {
     }
 };
 
+/// The declared representation inputs relocated into the store one draft region
+/// is built in (reunify.md section 9.2). Every id an input names — its minted
+/// component types and its generated backing — is re-interned into that store,
+/// so the content emitted during the build names ids of the store it is built
+/// in. The buffers are sized exactly once, so the relocated slices stay valid
+/// for the whole build.
+const MovedInputs = struct {
+    allocator: Allocator,
+    inputs: std.ArrayList(RepresentationInput),
+    components: std.ArrayList(TypeId),
+
+    fn init(allocator: Allocator) MovedInputs {
+        return .{ .allocator = allocator, .inputs = .empty, .components = .empty };
+    }
+
+    fn deinit(self: *MovedInputs) void {
+        self.components.deinit(self.allocator);
+        self.inputs.deinit(self.allocator);
+    }
+
+    fn move(
+        self: *MovedInputs,
+        source: *const MonoType.Store,
+        name_store: *const names.NameStore,
+        scratch: *MonoType.Store,
+        inputs: []const RepresentationInput,
+    ) Allocator.Error![]const RepresentationInput {
+        if (inputs.len == 0) return &.{};
+        var component_count: usize = 0;
+        for (inputs) |input| component_count += input.representation.components.len;
+        try self.inputs.ensureTotalCapacityPrecise(self.allocator, inputs.len);
+        try self.components.ensureTotalCapacityPrecise(self.allocator, component_count);
+
+        for (inputs) |input| {
+            const start = self.components.items.len;
+            for (input.representation.components) |component| {
+                const moved = try MonoType.reintern(scratch, name_store, source.view(), component);
+                self.components.appendAssumeCapacity(moved);
+            }
+            var representation = input.representation;
+            representation.components = self.components.items[start..];
+            if (input.representation.backing) |backing| {
+                representation.backing = .{
+                    .ty = try MonoType.reintern(scratch, name_store, source.view(), backing.ty),
+                    .use = backing.use,
+                    .authority = backing.authority,
+                };
+            }
+            self.inputs.appendAssumeCapacity(.{
+                .position = input.position,
+                .representation = representation,
+            });
+        }
+        return self.inputs.items;
+    }
+};
+
 /// One directed translation walk (reunify.md section 9.2). Carries the active
 /// map for cycle detection, the reading cursor (which changes when descending a
 /// backing declaration in another module), the optional binder environment for
@@ -656,6 +1257,12 @@ const Walk = struct {
     /// so the skip is recorded here and re-raised once the reserved slot returns.
     /// `skip_reason` already holds the recorded reason.
     reserve_fill_skipped: bool = false,
+    /// Whether this walk emits through the section 10 representation layer. An
+    /// eager walk does not: it leaves the subset at the first position whose
+    /// runtime encoding the checked data does not dictate, so the caller reruns
+    /// the root as a draft with this set (`translateDraftRoot`), where such a
+    /// position opens a representation slot, seals it, and emits.
+    emitting_representation: bool = false,
 
     fn skip(self: *Walk, reason: SkipReason) WalkError {
         self.skip_reason.* = reason;
@@ -724,7 +1331,11 @@ const Walk = struct {
             // identity rather than its checked address, so the backing closes its
             // knot on the nominal itself (`nominalReserveFill`).
             .nominal => |nominal_ty| switch (builtinDisposition(nominal_ty)) {
-                .named => {
+                // A position whose runtime encoding the checked data does not
+                // dictate reserves under its instance identity too, so a minted
+                // backing that refers back to the position closes on the position
+                // itself (the issue-10170 recursive `rest` shape).
+                .named, .open_representation => {
                     if (self.owner.resolver.nominalBacking(self.cursor, nominal_ty)) |source| {
                         return try self.nominalReserveFill(checked_ty, nominal_ty, source);
                     }
@@ -1155,16 +1766,16 @@ const Walk = struct {
 
     /// How a nominal's builtin runtime encoding lowers before the general named
     /// build (reunify.md section 9.2). A primitive/list/box encoding lowers to that
-    /// structural shape; a generated opaque-evidence encoding needs a backing the
-    /// section 10 closure engine mints (reunify.md section 9.1), which the checked
-    /// data cannot dictate, so it is `engine_input_needed`; every other encoding
-    /// keeps declaration identity as a named node.
+    /// structural shape; a generated opaque-evidence or iterator encoding carries
+    /// runtime-encoding content the checked data does not dictate, so it is
+    /// `open_representation` and emits through the section 10 layer; every other
+    /// encoding keeps declaration identity as a named node.
     const BuiltinDisposition = union(enum) {
         primitive: MonoType.Primitive,
         list,
         box,
         named,
-        engine_input_needed,
+        open_representation,
     };
 
     fn builtinDisposition(n: checked.CheckedNominalType) BuiltinDisposition {
@@ -1173,20 +1784,19 @@ const Walk = struct {
                 .primitive => |value| .{ .primitive = value },
                 .list => .list,
                 .box => .box,
-                // Generated opaque-evidence nominals with no declaration backing:
-                // the identity is derivable, but the backing the graph mints is a
-                // step (b) engine decision, so emitting a named node without it
-                // would be wrong output (reunify.md section 10.3). The crypto
+                // Generated opaque-evidence nominals: checking owns the declared
+                // identity, and the producer owns the generated owner and the
+                // backing it mints (reunify.md sections 10.1, 10.3). The crypto
                 // digest/hasher nominals are excluded: they carry a fixed
-                // declaration backing and are translated like any other nominal.
-                // An iterator nominal is the same shape of case: its tier and
-                // minted backing are chosen by the representation engine, not
-                // recorded in checked module data.
+                // declaration backing and no producer-owned encoding, so they are
+                // translated like any other nominal. An iterator nominal is the
+                // same shape of case as the evidence owners: its tier, producer
+                // kind, and mint depth are producer decisions, not checked data.
                 .parse_tag_union_spec,
                 .fields,
                 .field,
                 .iterator,
-                => .engine_input_needed,
+                => .open_representation,
                 .bool_tag_union,
                 .try_nominal,
                 .dict,
@@ -1204,9 +1814,9 @@ const Walk = struct {
     /// A nominal or opaque. Builtin nominals whose runtime encoding is a
     /// primitive, list, or box lower to that structural shape, matching
     /// production; the rest keep declaration identity as a stored named node with
-    /// its backing, dispatch owner, and declared field order. Iterator tier and
-    /// generated owner are graph-minted, not in checked module data, so they stay
-    /// at their defaults here.
+    /// its backing, dispatch owner, and declared field order. A position whose
+    /// runtime encoding the checked data does not dictate emits its definition
+    /// through the section 10 representation layer (`namedDef`).
     fn nominal(self: *Walk, checked_ty: checked.CheckedTypeId, n: checked.CheckedNominalType) WalkError!TypeId {
         switch (builtinDisposition(n)) {
             .primitive => |value| return try self.build_store.internPrimitive(self.owner.target_names, value),
@@ -1218,7 +1828,7 @@ const Walk = struct {
                 if (n.args.len != 1) return self.skip(.malformed_builtin_arity);
                 return try self.build_store.internBox(self.owner.target_names, try self.node(n.args[0]));
             },
-            .engine_input_needed => return self.skip(.engine_input_needed),
+            .open_representation => if (!self.emitting_representation) return self.skip(.engine_input_needed),
             .named => {},
         }
 
@@ -1232,15 +1842,50 @@ const Walk = struct {
         const declared_order = try self.declaredOrder(n);
         defer self.owner.allocator.free(declared_order);
 
+        const sealed = try self.sealedNamed(checked_ty, n, args.items, backing);
+        try args.appendSlice(self.owner.allocator, sealed.components);
+
         return try self.build_store.internNamed(self.owner.target_names, .{
             .named_type = .{ .module = .{ .bytes = n.owner_module.bytes }, .ty = checked_ty },
-            .def = try self.owner.typeDef(self.cursor, n.origin_module, n.name, n.source_decl),
+            .def = sealed.def,
             .kind = if (n.is_opaque) .@"opaque" else .nominal,
             .builtin_owner = self.owner.resolver.builtinOwner(self.cursor, n),
             .args = args.items,
-            .backing = backing,
+            .backing = sealed.backing orelse backing,
             .declared_order = declared_order,
         });
+    }
+
+    /// What one nominal position emits. An ordinary nominal emits exactly what
+    /// its declaration states. A position whose runtime encoding the checked data
+    /// does not dictate opens a representation slot over that declared
+    /// definition, runs the section 10.3 relation to its fixpoint against
+    /// whatever representation the caller declared the producer placed there, and
+    /// emits the sealed definition together with the producer-placed components
+    /// and backing that go with it (reunify.md sections 10.2, 10.6).
+    fn sealedNamed(
+        self: *Walk,
+        checked_ty: checked.CheckedTypeId,
+        n: checked.CheckedNominalType,
+        args: []const TypeId,
+        backing: ?MonoType.NamedBacking,
+    ) WalkError!SealedPosition {
+        const declared_def = try self.owner.typeDef(self.cursor, n.origin_module, n.name, n.source_decl);
+        if (builtinDisposition(n) != .open_representation) return .{ .def = declared_def };
+
+        const declared: policy.NamedDescriptor = .{
+            .kind = if (n.is_opaque) .@"opaque" else .nominal,
+            .def = declared_def,
+            .builtin_owner = self.owner.resolver.builtinOwner(self.cursor, n),
+        };
+        return try self.owner.emission.sealPosition(
+            self.build_store,
+            self.owner.target_names,
+            .{ .module_bytes = self.cursor.module_bytes, .type_id = @intFromEnum(checked_ty) },
+            declared,
+            args,
+            if (backing) |present| present.ty else null,
+        );
     }
 
     // --- Reserve-fill content assembly (reunify.md section 9.2, 10.6) ---
@@ -1272,7 +1917,8 @@ const Walk = struct {
 
     /// Reserve-fill named/nominal content. A builtin primitive/list/box encoding
     /// still reserved its slot, so it fills that slot with the leaf shape; a
-    /// generated opaque-evidence nominal is an engine step (b) input and skips.
+    /// position whose runtime encoding the checked data does not dictate fills its
+    /// slot with the named content its sealed representation states.
     fn nominalContent(self: *Walk, checked_ty: checked.CheckedTypeId, n: checked.CheckedNominalType) WalkError!MonoType.Content {
         switch (builtinDisposition(n)) {
             .primitive => |value| return .{ .primitive = value },
@@ -1284,7 +1930,7 @@ const Walk = struct {
                 if (n.args.len != 1) return self.skip(.malformed_builtin_arity);
                 return .{ .box = try self.node(n.args[0]) };
             },
-            .engine_input_needed => return self.skip(.engine_input_needed),
+            .open_representation => if (!self.emitting_representation) return self.skip(.engine_input_needed),
             .named => {},
         }
 
@@ -1298,8 +1944,9 @@ const Walk = struct {
 
     /// The stored named content of one nominal whose arguments are already
     /// translated, for a slot reserved before the descent (reunify.md section
-    /// 9.2). Iterator tier and generated owner are graph-minted, not in checked
-    /// module data, so they stay at their defaults here.
+    /// 9.2). Its definition comes from `namedDef`, so a position whose runtime
+    /// encoding the checked data does not dictate fills the reserved slot with its
+    /// sealed representation.
     fn namedContent(
         self: *Walk,
         checked_ty: checked.CheckedTypeId,
@@ -1310,13 +1957,19 @@ const Walk = struct {
         const declared_order = try self.declaredOrder(n);
         defer self.owner.allocator.free(declared_order);
 
+        const sealed = try self.sealedNamed(checked_ty, n, args, backing);
+        var emitted_args = std.ArrayList(TypeId).empty;
+        defer emitted_args.deinit(self.owner.allocator);
+        try emitted_args.appendSlice(self.owner.allocator, args);
+        try emitted_args.appendSlice(self.owner.allocator, sealed.components);
+
         return .{ .named = .{
             .named_type = .{ .module = .{ .bytes = n.owner_module.bytes }, .ty = checked_ty },
-            .def = try self.owner.typeDef(self.cursor, n.origin_module, n.name, n.source_decl),
+            .def = sealed.def,
             .kind = if (n.is_opaque) .@"opaque" else .nominal,
             .builtin_owner = self.owner.resolver.builtinOwner(self.cursor, n),
-            .args = try self.build_store.addSpan(args),
-            .backing = backing,
+            .args = try self.build_store.addSpan(emitted_args.items),
+            .backing = sealed.backing orelse backing,
             .declared_order = try self.build_store.addDeclaredFields(declared_order),
         } };
     }
@@ -1476,6 +2129,28 @@ const TestFixture = struct {
 
     fn addBuiltinNominal(self: *TestFixture, builtin_nominal: checked.CheckedBuiltinNominal, name_text: []const u8) Allocator.Error!checked.CheckedTypeId {
         return try self.addPrimitiveNominal(builtin_nominal, name_text);
+    }
+
+    /// An opaque builtin nominal with type arguments — the shape every position
+    /// whose runtime encoding the checked data does not dictate takes.
+    fn addOpaqueBuiltinNominal(
+        self: *TestFixture,
+        builtin_nominal: checked.CheckedBuiltinNominal,
+        name_text: []const u8,
+        args: []const checked.CheckedTypeId,
+    ) Allocator.Error!checked.CheckedTypeId {
+        const name = try self.source_names.internTypeName(name_text);
+        const module = try self.source_names.internModuleIdentity(&self.module_hash);
+        const start: u32 = @intCast(self.type_id_pool.items.len);
+        try self.type_id_pool.appendSlice(self.allocator, args);
+        return try self.add(.{ .nominal = .{
+            .name = name,
+            .origin_module = module,
+            .owner_module = .{ .bytes = self.module_hash },
+            .is_opaque = true,
+            .representation = .{ .builtin = builtin_nominal },
+            .args = .{ .start = start, .len = @intCast(args.len) },
+        } });
     }
 
     /// A builtin `List elem` nominal, whose runtime encoding lowers to a stored
@@ -2058,7 +2733,7 @@ test "a recursive tag union nested under a list reproduces the graph shape" {
     }
 }
 
-test "a generated opaque-evidence builtin nominal skips as engine_input_needed" {
+test "a generated opaque-evidence position whose backing no module names is unemittable" {
     var fixture = TestFixture.init(testing.allocator);
     defer fixture.deinit();
 
@@ -2074,9 +2749,365 @@ test "a generated opaque-evidence builtin nominal skips as engine_input_needed" 
     var translator = Translator.init(testing.allocator, &store, &target_names, no_backing.resolver());
     defer translator.deinit();
 
+    // The eager walk leaves at the open position and the draft rerun reaches it
+    // again, where no module names the declaration's backing at all — so the
+    // position is unemittable for a reason that is not about representation.
     var reason: SkipReason = undefined;
     try testing.expectError(error.Skip, translator.translateGroundRoot(fixture.cursor(), field_ty, &reason));
-    try testing.expectEqual(SkipReason.engine_input_needed, reason);
+    try testing.expectEqual(SkipReason.missing_backing, reason);
+}
+
+// --- Emission: representation slots, producer inputs, sealing ---
+
+/// A resolver for an iterator-owned builtin nominal: it stamps the `.iter`
+/// dispatch owner and instantiates one declaration backing, which is what an
+/// open representation position needs to emit.
+const IteratorResolver = struct {
+    cursor: ModuleCursor,
+    formal_args: []const checked.CheckedTypeId,
+    backing_root: checked.CheckedTypeId,
+
+    fn builtinOwner(_: *anyopaque, _: ModuleCursor, _: checked.CheckedNominalType) ?static_dispatch.BuiltinOwner {
+        return .iter;
+    }
+    fn nominalBacking(context: *anyopaque, _: ModuleCursor, _: checked.CheckedNominalType) ?Resolver.NominalBacking {
+        const self: *IteratorResolver = @ptrCast(@alignCast(context));
+        return .{
+            .cursor = self.cursor,
+            .declaration = 0,
+            .formal_args = self.formal_args,
+            .root = self.backing_root,
+        };
+    }
+    fn declaredOrder(_: *anyopaque, _: ModuleCursor, _: checked.CheckedNominalType, _: *std.ArrayList(Resolver.DeclaredField)) Allocator.Error!?ModuleCursor {
+        return null;
+    }
+
+    const vtable = Resolver.VTable{
+        .builtin_owner = builtinOwner,
+        .nominal_backing = nominalBacking,
+        .declared_order = declaredOrder,
+    };
+
+    fn resolver(self: *IteratorResolver) Resolver {
+        return .{ .context = self, .vtable = &vtable };
+    }
+};
+
+/// One `Iter(U64)` position plus the pieces a test needs to name it: the
+/// declaration's formal binder, its backing root, and the instance's address.
+const IteratorFixture = struct {
+    fixture: TestFixture,
+    formal: checked.CheckedTypeId,
+    formals: [1]checked.CheckedTypeId,
+    backing_root: checked.CheckedTypeId,
+    instance: checked.CheckedTypeId,
+
+    /// `recursive_backing` builds the declaration backing as `[Done, One(Iter(a))]`
+    /// — the issue-10170 shape, where the backing refers back to the position it
+    /// is the backing of.
+    fn init(recursive_backing: bool) Allocator.Error!IteratorFixture {
+        var fixture = TestFixture.init(testing.allocator);
+        errdefer fixture.deinit();
+
+        const formal = try fixture.add(.{ .rigid = .{} });
+        const u64_ty = try fixture.addPrimitiveNominal(.u64, "U64");
+        // The instance is added after its backing, so a recursive backing names
+        // the id the instance will take.
+        const instance_id = @intFromEnum(fixture.nextId());
+        const backing_root = if (recursive_backing) blk: {
+            const rest: checked.CheckedTypeId = @enumFromInt(instance_id + 2);
+            const empty = try fixture.add(.empty_tag_union);
+            break :blk try fixture.addTagUnion(&.{
+                .{ .name_text = "Done", .payloads = &.{} },
+                .{ .name_text = "One", .payloads = &.{rest} },
+            }, empty);
+        } else blk: {
+            const empty = try fixture.add(.empty_record);
+            const item_label = try fixture.source_names.internRecordFieldLabel("item");
+            const start: u32 = @intCast(fixture.record_fields.items.len);
+            try fixture.record_fields.append(testing.allocator, .{ .name = item_label, .ty = formal });
+            break :blk try fixture.add(.{ .record = .{
+                .fields = .{ .start = start, .len = 1 },
+                .ext = empty,
+            } });
+        };
+        const instance = try fixture.addOpaqueBuiltinNominal(.iter, "Iter", &.{u64_ty});
+        return .{
+            .fixture = fixture,
+            .formal = formal,
+            .formals = .{formal},
+            .backing_root = backing_root,
+            .instance = instance,
+        };
+    }
+
+    fn deinit(self: *IteratorFixture) void {
+        self.fixture.deinit();
+    }
+
+    fn address(self: *IteratorFixture) PositionAddress {
+        return .{
+            .module_bytes = self.fixture.module_hash,
+            .type_id = @intFromEnum(self.instance),
+        };
+    }
+
+    /// Fill `holder` with the declaration source this fixture's position reads
+    /// its backing from, and return the resolver over it.
+    fn resolver(self: *IteratorFixture, holder: *IteratorResolver) Resolver {
+        holder.* = .{
+            .cursor = self.fixture.cursor(),
+            .formal_args = &self.formals,
+            .backing_root = self.backing_root,
+        };
+        return holder.resolver();
+    }
+};
+
+fn emittedDef(store: *const MonoType.Store, ty: TypeId) ?MonoType.TypeDef {
+    return switch (store.get(ty)) {
+        .named => |named| named.def,
+        else => null,
+    };
+}
+
+test "an open representation position emits the declared encoding with no producer input" {
+    var iter = try IteratorFixture.init(false);
+    defer iter.deinit();
+
+    var store = initTargetStore();
+    defer store.deinit();
+    store.enableInterning();
+    var target_names = names.NameStore.init(testing.allocator);
+    defer target_names.deinit();
+
+    var holder: IteratorResolver = undefined;
+    const resolver = iter.resolver(&holder);
+
+    var translator = Translator.init(testing.allocator, &store, &target_names, resolver);
+    defer translator.deinit();
+
+    var reason: SkipReason = undefined;
+    const emitted = try translator.translateGroundRoot(iter.fixture.cursor(), iter.instance, &reason);
+    const def = emittedDef(&store, emitted) orelse return error.TestUnexpectedResult;
+    // No producer stated a representation here, so the position emits the
+    // encoding its own declaration states.
+    try testing.expectEqual(MonoType.IteratorRepresentation.none, def.iterator_representation);
+    try testing.expectEqual(MonoType.IteratorKind.none, def.iterator_kind);
+    try testing.expect(def.generated == null);
+}
+
+test "a declared producer representation raises the emitted position to the minted tier" {
+    var iter = try IteratorFixture.init(false);
+    defer iter.deinit();
+
+    var store = initTargetStore();
+    defer store.deinit();
+    store.enableInterning();
+    var target_names = names.NameStore.init(testing.allocator);
+    defer target_names.deinit();
+
+    var holder: IteratorResolver = undefined;
+    const resolver = iter.resolver(&holder);
+
+    var translator = Translator.init(testing.allocator, &store, &target_names, resolver);
+    defer translator.deinit();
+
+    const owner: names.TypeDigest = .{ .bytes = [_]u8{0x5A} ** 32 };
+    try translator.declareRepresentationInput(.{
+        .position = iter.address(),
+        .representation = .{
+            .iterator_representation = .minted,
+            .iterator_kind = .list,
+            .iterator_depth = 1,
+            .generated = owner,
+        },
+    });
+
+    var reason: SkipReason = undefined;
+    const emitted = try translator.translateGroundRoot(iter.fixture.cursor(), iter.instance, &reason);
+    const def = emittedDef(&store, emitted) orelse return error.TestUnexpectedResult;
+    // Public meets minted: the minted side stands, so the emitted position
+    // carries the producer's whole encoding.
+    try testing.expectEqual(MonoType.IteratorRepresentation.minted, def.iterator_representation);
+    try testing.expectEqual(MonoType.IteratorKind.list, def.iterator_kind);
+    try testing.expectEqual(@as(u8, 1), def.iterator_depth);
+    try testing.expect(def.generated != null);
+    try testing.expect(std.mem.eql(u8, &def.generated.?.bytes, &owner.bytes));
+    // The declared identity survived the relation.
+    try testing.expectEqual(
+        iter.fixture.module_hash[0],
+        target_names.moduleIdentityBytes(def.module)[0],
+    );
+}
+
+test "a declared forced-dynamic representation stands over the declared one" {
+    var iter = try IteratorFixture.init(false);
+    defer iter.deinit();
+
+    var store = initTargetStore();
+    defer store.deinit();
+    store.enableInterning();
+    var target_names = names.NameStore.init(testing.allocator);
+    defer target_names.deinit();
+
+    var holder: IteratorResolver = undefined;
+    const resolver = iter.resolver(&holder);
+
+    var translator = Translator.init(testing.allocator, &store, &target_names, resolver);
+    defer translator.deinit();
+
+    try translator.declareRepresentationInput(.{
+        .position = iter.address(),
+        .representation = .{
+            .iterator_representation = .forced_dynamic,
+            .iterator_kind = .forced_dynamic,
+        },
+    });
+
+    var reason: SkipReason = undefined;
+    const emitted = try translator.translateGroundRoot(iter.fixture.cursor(), iter.instance, &reason);
+    const def = emittedDef(&store, emitted) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(MonoType.IteratorRepresentation.forced_dynamic, def.iterator_representation);
+}
+
+test "a declared producer representation places its minted components and backing" {
+    var iter = try IteratorFixture.init(false);
+    defer iter.deinit();
+
+    var store = initTargetStore();
+    defer store.deinit();
+    store.enableInterning();
+    var target_names = names.NameStore.init(testing.allocator);
+    defer target_names.deinit();
+
+    var holder: IteratorResolver = undefined;
+    const resolver = iter.resolver(&holder);
+
+    var translator = Translator.init(testing.allocator, &store, &target_names, resolver);
+    defer translator.deinit();
+
+    // The producer minted this representation over one component and generated a
+    // backing for it; both are runtime encoding, not identity, so they ride out
+    // with the sealed definition rather than through the checked data.
+    const component = try store.internPrimitive(&target_names, .str);
+    const minted_backing = try store.internRecord(&target_names, &.{});
+    const components = [_]TypeId{component};
+    try translator.declareRepresentationInput(.{
+        .position = iter.address(),
+        .representation = .{
+            .iterator_representation = .minted,
+            .iterator_kind = .list,
+            .iterator_depth = 1,
+            .generated = .{ .bytes = [_]u8{0x11} ** 32 },
+            .components = &components,
+            .backing = .{ .ty = minted_backing, .use = .runtime_layout_only, .authority = .generated_private },
+        },
+    });
+
+    var reason: SkipReason = undefined;
+    const emitted = try translator.translateGroundRoot(iter.fixture.cursor(), iter.instance, &reason);
+    const named = switch (store.get(emitted)) {
+        .named => |named| named,
+        else => return error.TestUnexpectedResult,
+    };
+    const args = store.span(named.args);
+    try testing.expectEqual(@as(usize, 2), collections.GuardedList.borrowLen(args));
+    try testing.expectEqual(component, collections.GuardedList.at(args, 1));
+    const backing = named.backing orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(minted_backing, backing.ty);
+    try testing.expectEqual(MonoType.BackingAuthority.generated_private, backing.authority);
+}
+
+test "issue 10170: a recursive minted backing seals without minting another identity" {
+    var iter = try IteratorFixture.init(true);
+    defer iter.deinit();
+
+    var store = initTargetStore();
+    defer store.deinit();
+    store.enableInterning();
+    var target_names = names.NameStore.init(testing.allocator);
+    defer target_names.deinit();
+
+    var holder: IteratorResolver = undefined;
+    const resolver = iter.resolver(&holder);
+
+    var translator = Translator.init(testing.allocator, &store, &target_names, resolver);
+    defer translator.deinit();
+
+    try translator.declareRepresentationInput(.{
+        .position = iter.address(),
+        .representation = .{
+            .iterator_representation = .minted,
+            .iterator_kind = .list,
+            .iterator_depth = 2,
+            .generated = .{ .bytes = [_]u8{0x6A} ** 32 },
+        },
+    });
+
+    // The backing is `[Done, One(<this position>)]`, so opening and sealing this
+    // position descends into a backing that reaches the position again. The walk
+    // terminates and the sealed root is the rooted recursive graph.
+    var reason: SkipReason = undefined;
+    const emitted = try translator.translateGroundRoot(iter.fixture.cursor(), iter.instance, &reason);
+    const named = switch (store.get(emitted)) {
+        .named => |named| named,
+        else => return error.TestUnexpectedResult,
+    };
+    try testing.expectEqual(MonoType.IteratorRepresentation.minted, named.def.iterator_representation);
+    try testing.expectEqual(@as(u8, 2), named.def.iterator_depth);
+
+    const backing = named.backing orelse return error.TestUnexpectedResult;
+    const tags = switch (store.get(backing.ty)) {
+        .tag_union => |span| store.tagSpan(span),
+        else => return error.TestUnexpectedResult,
+    };
+    try testing.expectEqual(@as(usize, 2), collections.GuardedList.borrowLen(tags));
+    // The `One` payload closed back onto the emitted position rather than
+    // opening a second one.
+    var closed = false;
+    for (0..collections.GuardedList.borrowLen(tags)) |index| {
+        const payloads = store.span(collections.GuardedList.at(tags, index).payloads);
+        for (0..collections.GuardedList.borrowLen(payloads)) |payload_index| {
+            if (collections.GuardedList.at(payloads, payload_index) == emitted) closed = true;
+        }
+    }
+    try testing.expect(closed);
+}
+
+test "emitting one position twice yields one stored id" {
+    var iter = try IteratorFixture.init(false);
+    defer iter.deinit();
+
+    var store = initTargetStore();
+    defer store.deinit();
+    store.enableInterning();
+    var target_names = names.NameStore.init(testing.allocator);
+    defer target_names.deinit();
+
+    var holder: IteratorResolver = undefined;
+    const resolver = iter.resolver(&holder);
+
+    var translator = Translator.init(testing.allocator, &store, &target_names, resolver);
+    defer translator.deinit();
+
+    try translator.declareRepresentationInput(.{
+        .position = iter.address(),
+        .representation = .{
+            .iterator_representation = .minted,
+            .iterator_kind = .list,
+            .iterator_depth = 1,
+            .generated = .{ .bytes = [_]u8{0x77} ** 32 },
+        },
+    });
+
+    var reason: SkipReason = undefined;
+    const first = try translator.translateGroundRoot(iter.fixture.cursor(), iter.instance, &reason);
+    const second = try translator.translateGroundRoot(iter.fixture.cursor(), iter.instance, &reason);
+    // Sealing runs per position and the same declared inputs produce the same
+    // sealed encoding, so the interner collapses the two emissions.
+    try testing.expectEqual(first, second);
 }
 
 test "declarations are referenced" {

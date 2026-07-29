@@ -432,6 +432,17 @@ const RequestScope = union(enum) {
     generated: GeneratedRequest,
 };
 
+/// The token a body-lowering request carries on the specialization record it
+/// will reserve later, naming the request scope the rehearsal kept for it.
+pub const HeldRequest = struct {
+    /// The key the kept scope is stored under, or `none.token` for a record the
+    /// rehearsal kept no scope for.
+    token: u32,
+
+    /// The token of a record made under no request scope at all.
+    pub const none: HeldRequest = .{ .token = 0 };
+};
+
 /// What a reservation claimed from its request scope, held under the reserved
 /// function id until that specialization's body lowers.
 const ClaimedRequest = union(enum) {
@@ -1176,6 +1187,12 @@ pub const Rehearsal = struct {
     /// The requesting edge of each reserved function id: the identity a request
     /// is tied to from reservation until its body lowers (reunify.md 11.3).
     edges_by_fn: std.AutoHashMapUnmanaged(u32, ClaimedRequest),
+    /// Request scopes taken out of the stack at the moment a body-lowering
+    /// request records a specialization it will not reserve until later, keyed
+    /// by the token handed back to that record.
+    held_requests: std.AutoHashMapUnmanaged(u32, RequestScope),
+    /// The next token `holdRequest` hands out. Zero names no held scope.
+    next_held_request: u32,
     /// The open callee bindings, innermost last. A requesting body opens one
     /// around the region where it instantiates a callee's checked positions, so
     /// those positions read under the binding the checker recorded for the
@@ -1228,6 +1245,8 @@ pub const Rehearsal = struct {
             .frames = .empty,
             .requests = .empty,
             .edges_by_fn = .empty,
+            .held_requests = .empty,
+            .next_held_request = 1,
             .callees = .empty,
             .generated_outcomes = [_]GeneratedOutcome{.{}} ** generated_rule_count,
             .site_index = .empty,
@@ -1273,6 +1292,11 @@ pub const Rehearsal = struct {
             self.releaseClaim(claim.*);
         }
         self.edges_by_fn.deinit(self.allocator);
+        var pending = self.held_requests.valueIterator();
+        while (pending.next()) |scope| {
+            self.releaseScope(scope.*);
+        }
+        self.held_requests.deinit(self.allocator);
         for (self.callees.items) |*level| level.chain.release(self.allocator);
         self.callees.deinit(self.allocator);
         self.engine.deinit();
@@ -1642,6 +1666,62 @@ pub const Rehearsal = struct {
             census.bump("rehearsal_request_edge_claim_repeated");
             self.releaseClaim(previous.value);
         }
+    }
+
+    /// Take the innermost open request scope out of the stack and keep it under
+    /// a fresh token, for a body-lowering request whose specialization is
+    /// recorded now and reserved only after the requesting graph freezes
+    /// (reunify.md sections 7.2, 11.3).
+    ///
+    /// A request whose specialization is reserved in the same call reaches
+    /// `claimRequestEdge` with its scope still open and holds nothing. One that
+    /// defers has no scope open by then, so the scope travels with the record
+    /// instead: the token is stored on it and `reopenHeldRequest` puts the scope
+    /// back around the deferred reservation. Taking it here keeps the same
+    /// once-per-edge discipline the claim has — a second record made under one
+    /// scope names no edge, exactly as a second claim would not.
+    pub fn holdRequest(self: *Rehearsal) HeldRequest {
+        if (self.disabled) return HeldRequest.none;
+        if (self.requests.items.len == 0) {
+            census.bump("rehearsal_request_hold_without_scope");
+            return HeldRequest.none;
+        }
+        const slot = &self.requests.items[self.requests.items.len - 1];
+        const taken = slot.*;
+        const token = self.next_held_request;
+        self.held_requests.put(self.allocator, token, taken) catch {
+            self.releaseScope(taken);
+            slot.* = .none;
+            self.fail();
+            return HeldRequest.none;
+        };
+        slot.* = .none;
+        self.next_held_request += 1;
+        switch (taken) {
+            .none => census.bump("rehearsal_request_held_without_edge"),
+            .checked => census.bump("rehearsal_request_held_checked"),
+            .generated => census.bump("rehearsal_request_held_generated"),
+        }
+        return .{ .token = token };
+    }
+
+    /// Push a held request scope back onto the stack around the deferred
+    /// reservation it belongs to. The token names no held scope when the
+    /// recording request had none, and the scope pushed for it names no edge, so
+    /// the reservation made inside cannot reach an unrelated enclosing scope's.
+    /// Paired with `closeRequest` exactly like the open functions.
+    pub fn reopenHeldRequest(self: *Rehearsal, held: HeldRequest) void {
+        if (self.disabled) return;
+        const scope: RequestScope = scope: {
+            const token = held.token;
+            if (token == HeldRequest.none.token) break :scope .none;
+            const found = self.held_requests.fetchRemove(token) orelse break :scope .none;
+            break :scope found.value;
+        };
+        self.requests.append(self.allocator, scope) catch {
+            self.releaseScope(scope);
+            self.fail();
+        };
     }
 
     /// Copy the innermost ready frame's whole environment chain when it binds ids
