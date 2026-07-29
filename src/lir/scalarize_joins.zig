@@ -638,32 +638,44 @@ const Pass = struct {
         next_after: LIR.CFStmtId,
         field_locals: []const LIR.LocalId,
     ) ScalarizeError!void {
+        // Every field read precedes every parameter write, matching how jump
+        // lowering evaluates all arguments before initializing any
+        // parameter. The value may borrow from a parameter's old value (a
+        // rebind on a loop back edge), and ARC releases that old value at
+        // its rebind, so a read interleaved after a write would read through
+        // an already-released owner.
+        var tmps_buffer: [max_fields]LIR.LocalId = undefined;
+        const tmps = tmps_buffer[0..field_locals.len];
+        for (tmps, field_locals) |*tmp, field_local| {
+            tmp.* = try self.store.addLocal(.{ .layout_idx = self.store.getLocal(field_local).layout_idx });
+            try self.new_locals.append(self.allocator, tmp.*);
+        }
+
         var next = next_after;
         var k: usize = field_locals.len;
         while (k > 0) {
             k -= 1;
-            const tmp = try self.store.addLocal(.{ .layout_idx = self.store.getLocal(field_locals[k]).layout_idx });
-            try self.new_locals.append(self.allocator, tmp);
-            const set_stmt = try self.store.addCFStmt(.{ .set_local = .{
+            next = try self.store.addCFStmt(.{ .set_local = .{
                 .target = field_locals[k],
-                .value = tmp,
+                .value = tmps[k],
                 .mode = .initialize_join_param,
                 .next = next,
             } });
-            if (k == 0) {
-                self.store.getCFStmtPtr(write_stmt).* = .{ .assign_ref = .{
-                    .target = tmp,
-                    .op = .{ .field = .{ .source = value, .field_idx = 0 } },
-                    .next = set_stmt,
-                } };
-            } else {
-                next = try self.store.addCFStmt(.{ .assign_ref = .{
-                    .target = tmp,
-                    .op = .{ .field = .{ .source = value, .field_idx = @intCast(k) } },
-                    .next = set_stmt,
-                } });
-            }
         }
+        k = field_locals.len;
+        while (k > 1) {
+            k -= 1;
+            next = try self.store.addCFStmt(.{ .assign_ref = .{
+                .target = tmps[k],
+                .op = .{ .field = .{ .source = value, .field_idx = @intCast(k) } },
+                .next = next,
+            } });
+        }
+        self.store.getCFStmtPtr(write_stmt).* = .{ .assign_ref = .{
+            .target = tmps[0],
+            .op = .{ .field = .{ .source = value, .field_idx = 0 } },
+            .next = next,
+        } };
     }
 
     /// Replaces `stmt` with an `initialize_join_param` write of field 0 and
@@ -1545,18 +1557,21 @@ test "scalarize seeds field parameters from a non-literal initializer" {
     const params = store.getLocalSpan(new_join.params);
     try testing.expectEqual(@as(usize, 2), params.len);
 
-    // The write became: read init.0; set P0; read init.1; set P1; jump.
+    // The write became: read init.0; read init.1; set P0; set P1; jump.
+    // Both reads precede both writes so no read can observe a parameter's
+    // old value after its rebind released it.
     const first_read = store.getCFStmt(set_state).assign_ref;
     try testing.expectEqual(init_value, first_read.op.field.source);
     try testing.expectEqual(@as(u32, 0), first_read.op.field.field_idx);
-    const first_set = store.getCFStmt(first_read.next).set_local;
-    try testing.expectEqual(GuardedList.at(params, 0), first_set.target);
-    try testing.expectEqual(first_read.target, first_set.value);
-    const second_read = store.getCFStmt(first_set.next).assign_ref;
+    const second_read = store.getCFStmt(first_read.next).assign_ref;
     try testing.expectEqual(init_value, second_read.op.field.source);
     try testing.expectEqual(@as(u32, 1), second_read.op.field.field_idx);
-    const second_set = store.getCFStmt(second_read.next).set_local;
+    const first_set = store.getCFStmt(second_read.next).set_local;
+    try testing.expectEqual(GuardedList.at(params, 0), first_set.target);
+    try testing.expectEqual(first_read.target, first_set.value);
+    const second_set = store.getCFStmt(first_set.next).set_local;
     try testing.expectEqual(GuardedList.at(params, 1), second_set.target);
+    try testing.expectEqual(second_read.target, second_set.value);
     try testing.expectEqual(jump, second_set.next);
 
     // The field reads alias the new parameters.
