@@ -29,6 +29,7 @@ fn stderrWriter() *std.Io.Writer {
 /// each object into the current directory. Always committed as false.
 const dump_llvm_artifacts = false;
 
+/// Optimization policy requested for LLVM code generation.
 pub const OptimizationLevel = enum {
     size, // --opt size (optimize for binary size)
     speed, // --opt speed (aggressive performance optimizations)
@@ -640,7 +641,6 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     else
         null;
     defer if (ir_path_z) |p| gpa.free(p);
-
 
     const emit_options = ZigLLVMEmitOptions{
         // App object debug output is controlled by the user's --debug flag.

@@ -436,7 +436,8 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             defer frame.deinit(store.allocator);
             for (0..old_len) |i| frame.appendAssumeCapacity(GuardedList.at(old_frame, i));
             frame.appendSliceAssumeCapacity(dismantle_temps.items);
-            store.getProcSpecPtr(emit_proc).frame_locals = try store.addLocalSpan(frame.items);
+            const frame_locals = try store.addLocalSpan(frame.items);
+            store.getProcSpecPtr(emit_proc).frame_locals = frame_locals;
         }
     }
 
