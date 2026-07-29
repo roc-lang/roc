@@ -3111,24 +3111,23 @@ pub const ReportBuilder = struct {
         return report;
     }
 
-    /// Build a report for direct access (or update) of an optional (`?:`)
-    /// field: the field exists, but its presence is not guaranteed, so
-    /// treating it as always present is the actual error — not a missing
-    /// field or a typo.
+    /// Build a report for direct access of an optional (`?:`) field: the
+    /// field exists, but its presence is not guaranteed, so treating it as
+    /// always present is the actual error — not a missing field or a typo.
+    /// (Record UPDATE no longer routes here: a supplied update field has
+    /// creation semantics, so its kind-flexible probe joins an optional base
+    /// field instead of mismatching — design.md "Field Kinds".)
     fn buildOptionalFieldAccessReport(
         self: *Self,
         field_name: Ident.Idx,
         source_region: SourceHighlightRegion,
-        is_record_update: bool,
     ) Allocator.Error!Report {
         var report = try Report.init(self.gpa, "Type Mismatch", "", .runtime_error);
         errdefer report.deinit();
         try D.renderSliceInto(&.{
             D.bytes("The"),
             D.ident(field_name).withAnnotation(.inline_code),
-            D.bytes("field is optional, but it is being"),
-            D.bytes(if (is_record_update) "updated" else "accessed"),
-            D.bytes("as if it is always present."),
+            D.bytes("field is optional, but it is being accessed as if it is always present."),
         }, self, &report, &report.headline);
 
         switch (source_region) {
@@ -3137,17 +3136,13 @@ pub const ReportBuilder = struct {
         }
 
         try report.document.addLineBreak();
-        if (is_record_update) {
-            try report.document.addReflowingText("An optional field may be missing from the record, so it cannot be updated directly.");
-        } else {
-            try report.document.addReflowingText("An optional field may be missing from the record. Use ");
-            try report.document.addAnnotated(".?", .inline_code);
-            try report.document.addReflowingText(" to access it — that produces a ");
-            try report.document.addAnnotated("Try", .inline_code);
-            try report.document.addReflowingText(" you can match on or default with ");
-            try report.document.addAnnotated("??", .inline_code);
-            try report.document.addText(".");
-        }
+        try report.document.addReflowingText("An optional field may be missing from the record. Use ");
+        try report.document.addAnnotated(".?", .inline_code);
+        try report.document.addReflowingText(" to access it — that produces a ");
+        try report.document.addAnnotated("Try", .inline_code);
+        try report.document.addReflowingText(" you can match on or default with ");
+        try report.document.addAnnotated("??", .inline_code);
+        try report.document.addText(".");
 
         return report;
     }
@@ -3205,7 +3200,6 @@ pub const ReportBuilder = struct {
                         return try self.buildOptionalFieldAccessReport(
                             ctx.field_name,
                             SourceHighlightRegion{ .region = ctx.field_region },
-                            false,
                         );
                     }
                 }
@@ -3307,16 +3301,11 @@ pub const ReportBuilder = struct {
                 };
 
                 if (mb_expected_field) |expected_field| {
-                    // If the field exists but its kind SOLVED `optional`
-                    // (`?:`), the failure is the kind axis: updating demands
-                    // a required field.
-                    if (expected_field.presence == .optional) {
-                        return try self.buildOptionalFieldAccessReport(
-                            ctx.field_name,
-                            SourceHighlightRegion{ .idx = ctx.field_region_idx },
-                            true,
-                        );
-                    }
+                    // A supplied update field has creation semantics: its
+                    // kind-flexible probe joins an optional base field, so a
+                    // mismatch that lands here on an optional field is a
+                    // PAYLOAD-type mismatch, rendered below like any other
+                    // incompatible field type (design.md "Field Kinds").
 
                     // If the expected  field exist, but we're here in a
                     // type mismatch, then it must mean that the fields are

@@ -3293,6 +3293,78 @@ test "check type - record - update - fail 2" {
     );
 }
 
+test "check type - record - update - opt - setting an optional field keeps ?: (creation semantics)" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\r : { name ?: Str, req : U8 }
+        \\r = { req: 1 }
+        \\
+        \\u = { ..r, name: "amy" }
+    ;
+    // A supplied update field has CREATION semantics (design.md "Field
+    // Kinds"): the kind-flexible probe joins the base's `optional` kind and
+    // checks the value against the payload type, so the update is accepted
+    // and the result keeps `name ?: Str`.
+    try checkTypesModule(source, .{ .pass = .{ .def = "u" } },
+        \\{ name ?: Str, req: U8 }
+    );
+}
+
+test "check type - record - update - opt - flex-kind base stays flex then finalize-defaults to required" {
+    // The update probe's kind var is minted flex and recorded in
+    // `literal_field_kinds` exactly like a literal's: joined with the
+    // literal base's flex kind, nothing ever pins it, and the finalize sweep
+    // (`defaultLiteralFieldKinds`) commits it to `required` in the solved
+    // graph.
+    const source =
+        \\x = { hello: 1 }
+        \\
+        \\y = { ..x, hello: 2 }
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const kind = try resolveOnlyFieldKindContent(&test_env, "y");
+    try testing.expectEqual(types.Content{ .field_presence = .required }, kind);
+}
+
+test "check type - record - update - opt - wrong payload type on optional field rejected" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\r : { name ?: Str }
+        \\r = {}
+        \\
+        \\u = { ..r, name: 5.U8 }
+    ;
+    // The kind axis joins (`optional`), so the only failure is the PAYLOAD
+    // type: the report renders the field-type incompatibility, not the old
+    // "cannot update an optional field" kind-axis rejection.
+    try checkTypesModule(source, .fail_with,
+        \\**Type Mismatch**
+        \\The type of the field `name` is incompatible.
+        \\**test:6:18:6:22:**
+        \\```roc
+        \\u = { ..r, name: 5.U8 }
+        \\```
+        \\                 ^^^^
+        \\
+        \\You are trying to update the `name` field to be the type:
+        \\
+        \\    U8
+        \\
+        \\But the `r` record needs it to be
+        \\
+        \\    Str
+        \\
+        \\__Note:__ You cannot change the type of a record field with the record update syntax. You can do that by create a new record, copying over the unchanged fields, then transforming `name` to be the new type.
+        \\
+        \\
+    );
+}
+
 test "check type - record - pattern destructure rest 1" {
     const source =
         \\strip_name = |{ name: _, ..rest}| rest

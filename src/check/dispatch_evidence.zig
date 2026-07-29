@@ -373,12 +373,14 @@ fn pushChildren(gpa: Allocator, scratch: *Scratch, entry: StackEntry) Allocator.
 /// carries zero constraints (and still `recordDeferredConstraint` it), so no
 /// constraint can hide behind a presence var.
 ///
-/// `.unknown` fields occur in `record` rows (literals, `.?` accesses, `?:`
-/// annotations). `record_unbound` rows carry only `.required` fields: their
-/// sole producer is the record-update probe in `Check.zig` (`e_record` with an
-/// ext), and every later appearance is a verbatim copy (`instantiate.zig`,
-/// `copy_import.zig`). Both row kinds still share this walk because the
-/// evidence-bearing axis is identical either way.
+/// `.unknown` fields occur in both row kinds: `record` rows mint them for
+/// literals, `.?` accesses, and `?:` annotations, and `record_unbound` rows —
+/// whose sole producer is the record-update probe in `Check.zig` (`e_record`
+/// with an ext, later appearances being verbatim copies via `instantiate.zig`
+/// and `copy_import.zig`) — carry one kind-flexible `.unknown` field per
+/// mentioned update field (creation semantics: the base's kind decides).
+/// Both row kinds share this walk because the evidence-bearing axis is
+/// identical either way.
 fn collectRecordFieldChildren(
     gpa: Allocator,
     scratch: *Scratch,

@@ -386,6 +386,66 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(12, 27, 13, \"anon\")" },
     },
     .{
+        .name = "optional record field: record update sets a missing optional slot",
+        .source_kind = .module,
+        .source =
+        \\r : { a ?: U8 }
+        \\r = {}
+        \\
+        \\main = {
+        \\    u = { ..r, a: 7 }
+        \\    (u.?a ?? 0) + (r.?a ?? 40)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "47" },
+    },
+    .{
+        .name = "optional record field: record update overwrites a present optional slot",
+        .source_kind = .module,
+        .source =
+        \\r : { a ?: U8 }
+        \\r = { a: 3 }
+        \\
+        \\main = {
+        \\    u = { ..r, a: 9 }
+        \\    (u.?a ?? 0) + (r.?a ?? 40)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "12" },
+    },
+    .{
+        .name = "optional record field: record update sets a missing heap payload",
+        .source_kind = .module,
+        .source =
+        \\Rec : { req : U8, name ?: Str }
+        \\
+        \\base : Rec
+        \\base = { req: 4 }
+        \\
+        \\main = {
+        \\    u = { ..base, name: Str.repeat("cat", 9) }
+        \\    (Str.count_utf8_bytes(u.?name ?? ""), Str.count_utf8_bytes(base.?name ?? ""), u.req)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(27, 0, 4)" },
+    },
+    .{
+        .name = "optional record field: record update replaces a present heap payload",
+        .source_kind = .module,
+        .source =
+        \\Rec : { req : U8, name ?: Str }
+        \\
+        \\base : Rec
+        \\base = { req: 1, name: Str.repeat("amy", 9) }
+        \\
+        \\main = {
+        \\    u = { ..base, name: Str.repeat("bo", 9) }
+        \\    (Str.count_utf8_bytes(u.?name ?? ""), Str.count_utf8_bytes(base.?name ?? ""), u.req)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(18, 27, 1)" },
+    },
+    .{
         .name = "optional record field: records with optional slots compare by presence and payload",
         .source_kind = .module,
         .source =

@@ -13605,21 +13605,39 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     const field_value = try self.checkStoredValueExpr(field.value, env, child_expected);
                     does_fx = field_value.does_fx or does_fx;
 
+                    // A supplied update field has CREATION semantics: like a
+                    // record-literal field, its KIND is undetermined — the
+                    // update can set a required, defaulted, or optional field
+                    // (design.md "Field Kinds (All-Dynamic Optional
+                    // Fields)"). Unifying the kind-flexible probe into the
+                    // base does the rest: a base kind of `optional` pins the
+                    // kind optional and checks the value against the payload
+                    // type (lowering then wraps the value in `Present`,
+                    // exactly as construction does); `required`/`defaulted`
+                    // pin as before; a still-flex base kind joins flex and
+                    // defaults to `required` at finalize, exactly like a
+                    // literal's — which is why the minted kind var is
+                    // recorded in `literal_field_kinds` (see
+                    // `defaultLiteralFieldKinds`).
+                    //
+                    // TODO(optional-fields): `{ x: _ }` UNSET syntax is
+                    // designed in design.md "Deferred: Unsetting an Optional
+                    // Field (`{ ..r, x: _ }`)".
+                    const field_kind_var = try self.fresh(env, expr_region);
+                    try self.literal_field_kinds.append(self.gpa, .{
+                        .presence_var = field_kind_var,
+                        .region = expr_region,
+                    });
+
                     // Create an unbound record with this field
                     const single_field_record = try self.freshFromContent(.{
                         .structure = .{
                             .record_unbound = try self.types.appendRecordFields(&.{types_mod.RecordField{
                                 .name = field.name,
-                                // A supplied update field is definitionally
-                                // present: `?:` is annotation-only syntax, so
-                                // updating a field both demands it on the base
-                                // (present ~ rigid/flex π forces or fails) and
-                                // keeps it present in the result.
-                                //
-                                // TODO(optional-fields): `{ x: _ }` UNSET syntax
-                                // is designed in design.md "Deferred: Unsetting
-                                // an Optional Field (`{ ..r, x: _ }`)".
-                                .presence = .{ .required = field_value.var_ },
+                                .presence = .{ .unknown = .{
+                                    .presence = field_kind_var,
+                                    .var_ = field_value.var_,
+                                } },
                             }}),
                         },
                     }, env, expr_region);

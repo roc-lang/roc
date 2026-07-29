@@ -3363,9 +3363,17 @@ The kind rules:
   the scheme forms, so instantiated copies of a generalized function's
   rows carry the concrete kind and the judgment survives instantiation —
   with a finalize pass as the monomorphic backstop.
-- Record UPDATE (`{ ..r, field: v }`) and record destructure patterns
-  demand `required` for now; updating or destructuring an optional field is
-  rejected (deferred below).
+- Record UPDATE (`{ ..r, field: v }`) has CREATION semantics per supplied
+  field: like a record literal, each mentioned field probes the base with a
+  kind-FLEXIBLE field (a fresh presence var, recorded for the finalize
+  kind-defaulting sweep exactly like a literal's), so the base's kind
+  decides — optional pins optional and the value checks against the payload
+  type (lowering wraps it in `Present`, exactly as construction does),
+  required/defaulted pin as before, and a still-flex base kind stays flex
+  and finalize-defaults to `required`. This realizes the SET side of the
+  typing frame in "Deferred: Unsetting an Optional Field" below. Record
+  destructure patterns still demand `required`; destructuring an optional
+  field is rejected (deferred below).
 
 The tagged representation (IMPLEMENTED — nothing about optional fields is
 deferred at lowering anymore; the CheckedModule output and lowering are both
@@ -3403,8 +3411,10 @@ complete):
   every field of `{}` against an all-optional row) constructs the
   `Missing` tag, exactly where an omitted DEFAULTED field materializes its
   default. Record update copies unmentioned optional slots verbatim
-  (presence state included); updating or destructuring an optional field
-  itself is still rejected at check, so neither reaches lowering.
+  (presence state included); a MENTIONED optional field takes the same
+  supplied-field arm as construction — the value lowers at the Present
+  payload type and wraps in the `Present` tag. Destructuring an optional
+  field is still rejected at check, so it never reaches lowering.
 - `.?` access: the CheckedModule output is complete —
   `CheckedFieldAccessSegment.mode` records required/optional per segment
   (`serialized_layout_version` 35), and the body copier's former
@@ -3446,11 +3456,11 @@ literal-minted kinds reach them already committed.
 
 Deferred (explicitly not yet implemented):
 
-- Optional record update and optional destructure patterns
-  (`{ field ?? fallback }`-style), which need their own typing rules here
-  before implementation. UNSETTING a field in an update (`{ ..r, x: _ }`)
-  has its typing rule sketched in "Deferred: Unsetting an Optional Field"
-  below.
+- Optional destructure patterns (`{ field ?? fallback }`-style), which need
+  their own typing rules here before implementation. (SETTING an optional
+  field in an update is IMPLEMENTED — see the record-update bullet above.)
+  UNSETTING a field in an update (`{ ..r, x: _ }`) has its typing rule
+  sketched in "Deferred: Unsetting an Optional Field" below.
 
 Pinned by tests in src/check/test/type_checking_integration.zig: accepted —
 a value annotated `{ world ?: U8 }` may supply or omit `world`, and its
@@ -3605,9 +3615,13 @@ the row, optional, same value type — so the record-update arm in
 src/check/Check.zig keeps its wholesale `unify(base, expr_var)` unchanged.
 Only the PER-FIELD demand becomes kind-directed:
 
-- A SET field keeps today's probe: a single-field record with presence
-  `.required = value_var` unified into the base (`present ~ defaulted →
-  defaulted` keeps defaulted-field updates working).
+- A SET field keeps today's probe (IMPLEMENTED, see the record-update
+  bullet in Field Kinds): a single-field record with a kind-FLEXIBLE
+  presence — `.unknown` over a fresh presence var, recorded for the
+  finalize kind-defaulting sweep — unified into the base, so the base's
+  kind decides (`present ~ defaulted → defaulted` keeps defaulted-field
+  updates working, and an optional base field checks the value at the
+  payload type).
 - An UNSET field mirrors the `.?`-access probe EXACTLY (the optional arm of
   `e_field_access` checking): unify the base with an OPEN single-field
   record `{ x: unknown(π, τ) }` — fresh presence var π, fresh value var
@@ -3677,9 +3691,11 @@ defaulted, of a missing field, and unset judged through a generalized
 function instantiated at a required row. (4) LOWER — route unset fields to
 `optionalSlotMissingExpr`; an eval test (run-test-eval, all backends)
 proving `.?x` on the updated record yields `Err(MissingField)` while other
-fields survive. Beyond this sketch, optional destructure and SETTING an
-optional field in an update (Present-wrapping `{ ..r, x: v }` on an
-optional `x`) remain deferred — orthogonal, listed in Field Kinds.
+fields survive. Beyond this sketch, optional destructure remains deferred
+(orthogonal, listed in Field Kinds); SETTING an optional field in an update
+(Present-wrapping `{ ..r, x: v }` on an optional `x`) is now IMPLEMENTED —
+the SET side of this section's typing frame, realized by the kind-flexible
+update probe (see the record-update bullet in Field Kinds).
 
 ### Rewrite Inventory
 

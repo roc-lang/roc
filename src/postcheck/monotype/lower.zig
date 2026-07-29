@@ -32336,9 +32336,12 @@ const BodyContext = struct {
             } else if (base_expr) |base_value| blk: {
                 // Record update copies unmentioned slots verbatim — for an
                 // optional field that copies the tagged slot, presence state
-                // included. The read is hoisted into its own local so the
-                // base's last use ends before any updated field's expression
-                // runs (see the spread_reads comment above).
+                // included. (A MENTIONED optional field takes the supplied
+                // branch above: creation semantics, the value wraps in
+                // `Present` exactly as construction does.) The read is
+                // hoisted into its own local so the base's last use ends
+                // before any updated field's expression runs (see the
+                // spread_reads comment above).
                 const read = try self.addFieldAccessExpr(base_value, field.name, field.ty);
                 const read_local = try self.addLocal(self.builder.symbols.fresh(), field.ty);
                 spread_reads[i] = .{ .local = read_local, .value = read };
