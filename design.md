@@ -5975,11 +5975,14 @@ reported.
 
 `ConstStore` uses node ids so stored constants can preserve sharing without
 duplicating large values. Multiple fields may reference the same `ConstNodeId`.
-Stored constants are acyclic. Roc source cannot define recursive non-function
-values; checking reports those definitions as errors and records `Malformed`
-source nodes instead. `Malformed` source nodes are never output as valid
-`ConstStore` values. A cycle in output `ConstStore` node edges is therefore
-a compiler bug, not a supported stored-constant representation.
+Stored constant node edges are acyclic. Roc source cannot define recursive
+non-function values; checking reports those definitions as errors and records
+`Malformed` source nodes instead. A delayed recursive edge through a function
+capture is represented symbolically by its checked capture identity, not by a
+`ConstNodeId` edge back into the enclosing value. `Malformed` source nodes are
+never output as valid `ConstStore` values. A cycle in output `ConstStore` node
+edges is therefore a compiler bug, not a supported stored-constant
+representation.
 
 ```zig
 const ConstStore = struct {
@@ -6073,7 +6076,10 @@ const CaptureId = union(enum) {
 
 const ConstCapture = struct {
     id: CaptureId,
-    value: ConstNodeId,
+    value: union(enum) {
+        node: ConstNodeId,
+        recursive_const,
+    },
 };
 ```
 
@@ -6090,6 +6096,7 @@ such as structural parser runtime functions, use explicit generated capture ids
 assigned by the generator. A stored function does not store a lambda set,
 callable-set descriptor, call specialization id, erased ABI, capture layout,
 runtime tag, or LIR proc id.
+
 During compile-time evaluation, the direct LIR builder also produces temporary
 function result-store data. Storing a function result is scoped by `FnSet`
 identity, not by layout alone. Layouts may
@@ -6135,6 +6142,7 @@ const FnTemplate = struct {
 const CaptureSlot = struct {
     id: CaptureId,
     slot: u32,
+    recursive_const: bool,
 };
 ```
 
