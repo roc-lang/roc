@@ -31639,11 +31639,7 @@ const BodyContext = struct {
     ) bool {
         if (comptime !census.enabled) return false;
         const rehearsal = self.builder.rehearsal orelse return false;
-        const template_ref = switch (lookup.target.kind) {
-            .procedure => |procedure| procedure.template,
-            .local_proc, .structural => return false,
-        };
-        const scheme = lookup.view.templates.get(template_ref.template).schemeId() orelse return false;
+        const scheme = dispatchTargetScheme(lookup) orelse return false;
         rehearsal.openCalleeBinding(.{
             .defining_module_bytes = lookup.view.key.bytes,
             .scheme = scheme,
@@ -31651,6 +31647,51 @@ const BodyContext = struct {
             .rule = rule,
         });
         return true;
+    }
+
+    /// Debug/probe-only: the callee scheme a dispatch target instantiates, as
+    /// the checked data names it, or null with the reason recorded. A procedure
+    /// target names it through its own template. A locally defined target does
+    /// not: its owner template is the ENCLOSING procedure's, so the scheme that
+    /// generalizes its binders is the one its own nested definition owns, which
+    /// the scheme owner index names by that definition's CIR node. A scheme that
+    /// captures enclosing binders is left to the section 7.3 lexical chain,
+    /// because a call-site binding states one scheme's own binders and nothing
+    /// else.
+    fn dispatchTargetScheme(lookup: MethodLookup) ?checked.CheckedTypeSchemeId {
+        switch (lookup.target.kind) {
+            .procedure => |procedure| {
+                const template = lookup.view.templates.get(procedure.template.template);
+                const scheme = template.schemeId() orelse {
+                    census.bump("rehearsal_dispatch_target_procedure_no_scheme");
+                    return null;
+                };
+                census.bump("rehearsal_dispatch_target_procedure_scheme");
+                return scheme;
+            },
+            .local_proc => |local| {
+                const scheme_id = lookup.view.types.schemeIdForOwnerNode(@intFromEnum(local.binder)) orelse
+                    lookup.view.types.schemeIdForOwnerNode(@intFromEnum(local.expr)) orelse
+                    {
+                        census.bump("rehearsal_dispatch_target_local_proc_no_scheme");
+                        return null;
+                    };
+                const scheme = lookup.view.types.schemeById(scheme_id) orelse {
+                    census.bump("rehearsal_dispatch_target_local_proc_no_scheme");
+                    return null;
+                };
+                if (scheme.captured_len != 0) {
+                    census.bump("rehearsal_dispatch_target_local_proc_captures");
+                    return null;
+                }
+                census.bump("rehearsal_dispatch_target_local_proc_scheme");
+                return scheme_id;
+            },
+            .structural => {
+                census.bump("rehearsal_dispatch_target_structural");
+                return null;
+            },
+        }
     }
 
     /// The declared rule that covers a dispatch plan's edge where checking

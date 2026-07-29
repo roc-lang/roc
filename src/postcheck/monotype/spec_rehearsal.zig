@@ -1409,12 +1409,22 @@ pub const Rehearsal = struct {
             .chain = EnvironmentChain.none,
             .ready = false,
         };
-        const defining = self.lookup.cursor(binding.defining_module_bytes) orelse return unresolved;
-        const scheme = defining.view.schemeById(binding.scheme) orelse return unresolved;
+        const defining = self.lookup.cursor(binding.defining_module_bytes) orelse {
+            census.bump("rehearsal_callee_unresolved_defining_module_absent");
+            return unresolved;
+        };
+        const scheme = defining.view.schemeById(binding.scheme) orelse {
+            census.bump("rehearsal_callee_unresolved_scheme_absent");
+            return unresolved;
+        };
         // A callee that captures enclosing binders needs the lexical parents its
         // own specialization frame links (reunify.md section 7.3); a call-site
         // binding states this scheme's own binders and nothing else.
-        if (scheme.captured_len != 0) return unresolved;
+        if (scheme.captured_len != 0) {
+            census.bump("rehearsal_callee_unresolved_captures");
+            return unresolved;
+        }
+        if (scheme.gv_len == 0) census.bump("rehearsal_callee_scheme_without_binders");
 
         var use = binding.request;
         var rule = binding.rule;
@@ -1452,7 +1462,11 @@ pub const Rehearsal = struct {
                     caller_owner_node = frame.owner_node;
                 }
             }
-            const site = self.siteQuietly(caller, named.use_expr, scheme.owner_node) orelse break :resolved_by_site;
+            const site = self.siteQuietly(caller, named.use_expr, scheme.owner_node) orelse {
+                census.bump("rehearsal_callee_site_absent");
+                classifyAbsentCalleeSite(caller, named.use_expr, scheme.owner_node);
+                break :resolved_by_site;
+            };
             const chain = self.bindCalleeFromSite(
                 defining,
                 binding.scheme,
@@ -1461,7 +1475,11 @@ pub const Rehearsal = struct {
                 caller_env,
                 caller_owner_node,
                 site,
-            ) orelse break :resolved_by_site;
+            ) orelse {
+                census.bump("rehearsal_callee_site_bind_failed");
+                break :resolved_by_site;
+            };
+            census.bump("rehearsal_callee_resolved_by_site");
             return .{
                 .module_bytes = defining.module_bytes,
                 .owner_node = scheme.owner_node,
@@ -1470,7 +1488,10 @@ pub const Rehearsal = struct {
             };
         }
 
-        const declared = rule orelse return unresolved;
+        const declared = rule orelse {
+            census.bump("rehearsal_callee_unresolved_no_site_no_rule");
+            return unresolved;
+        };
         const chain = self.bindCalleeFromRule(
             defining,
             binding.scheme,
@@ -1478,7 +1499,11 @@ pub const Rehearsal = struct {
             declared,
             caller_env,
             caller_owner_node,
-        ) orelse return unresolved;
+        ) orelse {
+            census.bump("rehearsal_callee_unresolved_rule_bind_failed");
+            return unresolved;
+        };
+        census.bump("rehearsal_callee_resolved_by_rule");
         return .{
             .module_bytes = defining.module_bytes,
             .owner_node = scheme.owner_node,
@@ -1559,10 +1584,27 @@ pub const Rehearsal = struct {
             }
         }
         const binders = scheme.generalizedVars(defining.view);
-        const receiver_root = self.emitQuietly(caller, caller_env, caller_owner_node, source.receiver.checked_ty) orelse return null;
-        const receiver = followEmittedPath(self.types, receiver_root, &source.receiver.path) orelse return null;
-        const argument_count = receiverArgumentCount(self.types, receiver) orelse return null;
-        if (argument_count != binders.len) return null;
+        const receiver_root = self.emitQuietly(caller, caller_env, caller_owner_node, source.receiver.checked_ty) orelse {
+            census.bump("rehearsal_rule_receiver_untranslatable");
+            return null;
+        };
+        const receiver = followEmittedPath(self.types, receiver_root, &source.receiver.path) orelse {
+            census.bump("rehearsal_rule_receiver_path_absent");
+            return null;
+        };
+        const argument_count = receiverArgumentCount(self.types, receiver) orelse {
+            census.bump("rehearsal_rule_receiver_not_applied");
+            return null;
+        };
+        if (argument_count != binders.len) {
+            if (argument_count == 0) {
+                census.bump("rehearsal_rule_receiver_argument_free");
+                if (binders.len == 1) census.bump("rehearsal_rule_receiver_argument_free_one_binder");
+            } else {
+                census.bump("rehearsal_rule_receiver_arity_differs");
+            }
+            return null;
+        }
 
         const bound = self.allocator.alloc(direct_translate.BoundType, binders.len) catch {
             self.fail();
@@ -1592,6 +1634,7 @@ pub const Rehearsal = struct {
             .receiver_at_argument => receiver,
         };
         if (self.quietWitnessAgrees(left, right)) return chain;
+        census.bump("rehearsal_rule_witness_disagreed");
         chain.release(self.allocator);
         return null;
     }
@@ -1627,6 +1670,34 @@ pub const Rehearsal = struct {
         if (index.ambiguous.contains(key)) return null;
         const site_index = index.by_edge.get(key) orelse return null;
         return caller.view.instantiationSites()[site_index];
+    }
+
+    /// Why one callee edge found no site: whether checking recorded sites at
+    /// that use at all, and whether any site anywhere in the requesting module
+    /// names this callee's scheme owner. A use with sites that all name other
+    /// owners is an edge whose identity disagrees with the recorded one; a use
+    /// with no sites at all is an edge outside the section 7.2 coverage table.
+    fn classifyAbsentCalleeSite(
+        caller: direct_translate.ModuleCursor,
+        use_expr: checked.CheckedExprId,
+        scheme_owner_node: u32,
+    ) void {
+        var use_has_sites = false;
+        var owner_has_sites = false;
+        for (caller.view.instantiationSites()) |site| {
+            const site_use = site.useExpr() orelse continue;
+            if (site_use == use_expr) use_has_sites = true;
+            if (site.scheme_owner_node == scheme_owner_node) owner_has_sites = true;
+        }
+        if (use_has_sites and owner_has_sites) {
+            census.bump("rehearsal_callee_site_absent_both_present_unpaired");
+        } else if (use_has_sites) {
+            census.bump("rehearsal_callee_site_absent_use_owned_elsewhere");
+        } else if (owner_has_sites) {
+            census.bump("rehearsal_callee_site_absent_owner_used_elsewhere");
+        } else {
+            census.bump("rehearsal_callee_site_absent_unrecorded");
+        }
     }
 
     /// Bind the innermost open request's edge to the function id that request

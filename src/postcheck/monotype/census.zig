@@ -787,6 +787,52 @@ pub const Census = struct {
     rehearsal_request_held_generated: Counter = Counter.init(0),
     rehearsal_request_held_without_edge: Counter = Counter.init(0),
     rehearsal_request_hold_without_scope: Counter = Counter.init(0),
+    // A dispatch target the binding step reaches, by whether the checked data
+    // names a callee scheme for it. `procedure_scheme` is a procedure target
+    // whose template carries one; `local_proc_scheme` is a locally defined
+    // target whose own nested definition owns a scheme the owner index names;
+    // `local_proc_no_scheme` is one no such scheme owns;
+    // `local_proc_captures` is one whose scheme captures enclosing binders, so a
+    // call-site binding cannot state it and the section 7.3 lexical chain owns
+    // it; `structural` is a structural target, which names no callee body.
+    rehearsal_dispatch_target_procedure_scheme: Counter = Counter.init(0),
+    rehearsal_dispatch_target_procedure_no_scheme: Counter = Counter.init(0),
+    rehearsal_dispatch_target_local_proc_scheme: Counter = Counter.init(0),
+    rehearsal_dispatch_target_local_proc_no_scheme: Counter = Counter.init(0),
+    rehearsal_dispatch_target_local_proc_captures: Counter = Counter.init(0),
+    rehearsal_dispatch_target_structural: Counter = Counter.init(0),
+    // Why one opened callee binding did or did not resolve to a dense binding
+    // of the callee scheme's own binders. `resolved_by_site` is the recorded
+    // instantiation site the requesting body named; `resolved_by_rule` is a
+    // declared generated-edge rule standing in where checking recorded no site.
+    // The unresolved classes are the ones whose binders are then read under no
+    // binding at all, which is what an informative `scheme_binder_unbound`
+    // execution reports downstream.
+    // Why one declared generated-edge rule failed to state its callee binding.
+    // `receiver_argument_free` is the rule's receiver emitting to a head that
+    // takes no arguments, so no argument of it can supply a binder value.
+    rehearsal_rule_receiver_untranslatable: Counter = Counter.init(0),
+    rehearsal_rule_receiver_path_absent: Counter = Counter.init(0),
+    rehearsal_rule_receiver_not_applied: Counter = Counter.init(0),
+    rehearsal_rule_receiver_argument_free: Counter = Counter.init(0),
+    rehearsal_rule_receiver_argument_free_one_binder: Counter = Counter.init(0),
+    rehearsal_rule_receiver_arity_differs: Counter = Counter.init(0),
+    rehearsal_rule_witness_disagreed: Counter = Counter.init(0),
+    rehearsal_callee_resolved_by_site: Counter = Counter.init(0),
+    rehearsal_callee_resolved_by_rule: Counter = Counter.init(0),
+    rehearsal_callee_scheme_without_binders: Counter = Counter.init(0),
+    rehearsal_callee_site_absent: Counter = Counter.init(0),
+    rehearsal_callee_site_absent_both_present_unpaired: Counter = Counter.init(0),
+    rehearsal_callee_site_absent_use_owned_elsewhere: Counter = Counter.init(0),
+    rehearsal_callee_site_absent_owner_used_elsewhere: Counter = Counter.init(0),
+    rehearsal_callee_site_absent_unrecorded: Counter = Counter.init(0),
+
+    rehearsal_callee_site_bind_failed: Counter = Counter.init(0),
+    rehearsal_callee_unresolved_defining_module_absent: Counter = Counter.init(0),
+    rehearsal_callee_unresolved_scheme_absent: Counter = Counter.init(0),
+    rehearsal_callee_unresolved_captures: Counter = Counter.init(0),
+    rehearsal_callee_unresolved_no_site_no_rule: Counter = Counter.init(0),
+    rehearsal_callee_unresolved_rule_bind_failed: Counter = Counter.init(0),
     rehearsal_skip_root_edge: Counter = Counter.init(0),
     rehearsal_skip_generated_edge: Counter = Counter.init(0),
     rehearsal_skip_no_site: Counter = Counter.init(0),
