@@ -98,8 +98,9 @@ pub const Result = union(enum) {
     ok,
     /// A mismatch that WAS recorded as a diagnostic (the poison_to_err path).
     problem: Problem.Idx,
-    /// A mismatch detected under `write_no_report`: nothing recorded, nothing
-    /// poisoned. The caller decides whether/how to report it.
+    /// A mismatch detected under `write_no_report`: nothing recorded and the
+    /// top-level operands are not poisoned. Successful child unifications that
+    /// completed before the mismatch remain committed.
     mismatch,
 
     pub fn isOk(self: Self) bool {
@@ -136,10 +137,11 @@ pub const MismatchBehavior = enum {
     /// stops the now-erroneous vars from producing cascading downstream errors
     /// (anything unifies OK against `.err`).
     poison_to_err,
-    /// Merge on success exactly like a normal unify, but on a top-level mismatch
-    /// record NOTHING and poison NOTHING — return `Result.mismatch`. The caller
-    /// owns the diagnostic (with correct expected/actual roles) and any
-    /// rollback. Used by the branch-vs-expected check.
+    /// Merge on success exactly like a normal unify. On a top-level mismatch,
+    /// keep successful child unifications, record nothing, and do not poison the
+    /// top-level operands; return `Result.mismatch`. The caller owns the
+    /// diagnostic (with correct expected/actual roles) and may wrap the call in a
+    /// savepoint when it explicitly needs rollback.
     write_no_report,
 };
 
@@ -183,7 +185,8 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
             error.TypeMismatch => {},
         }
 
-        // write_no_report: no record, no poison — the caller owns it.
+        // write_no_report: keep completed child writes, but do not record or
+        // poison the top-level operands. The caller owns the mismatch.
         if (opts.on_mismatch == .write_no_report) return Result.mismatch;
 
         const expected_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, a);

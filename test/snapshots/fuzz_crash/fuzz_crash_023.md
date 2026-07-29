@@ -2241,26 +2241,7 @@ expect {
 							(if-branch
 								(e-dispatch-call (method "is_gt") (constraint-fn-var 2066)
 									(receiver
-										(e-match
-											(match
-												(cond
-													(e-runtime-error (tag "erroneous_value_expr")))
-												(branches
-													(branch
-														(patterns
-															(pattern (degenerate false)
-																(p-nominal-external (builtin)
-																	(p-applied-tag))))
-														(value
-															(e-lookup-local
-																(p-assign (ident "#ok")))))
-													(branch
-														(patterns
-															(pattern (degenerate false)
-																(p-nominal-external (builtin)
-																	(p-applied-tag))))
-														(value
-															(e-num (value "12"))))))))
+										(e-runtime-error (tag "erroneous_value_expr")))
 									(args
 										(e-dispatch-call (method "times") (constraint-fn-var 2063)
 											(receiver
@@ -2329,31 +2310,7 @@ expect {
 																	(cond
 																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 2192)
 																			(receiver
-																				(e-match
-																					(match
-																						(cond
-																							(e-runtime-error (tag "erroneous_value_expr")))
-																						(branches
-																							(branch
-																								(patterns
-																									(pattern (degenerate false)
-																										(p-nominal-external (builtin)
-																											(p-applied-tag))))
-																								(value
-																									(e-runtime-error (tag "erroneous_value_expr"))))
-																							(branch
-																								(patterns
-																									(pattern (degenerate false)
-																										(p-nominal-external (builtin)
-																											(p-applied-tag))))
-																								(value
-																									(e-return
-																										(e-nominal-external
-																											(builtin)
-																											(e-tag (name "Err")
-																												(args
-																													(e-lookup-local
-																														(p-assign (ident "#err")))))))))))))
+																				(e-runtime-error (tag "erroneous_value_expr")))
 																			(args)))
 																	(branches
 																		(branch
@@ -2422,32 +2379,7 @@ expect {
 														(e-lookup-local
 															(p-assign (ident "#err")))))))))))))
 				(s-expr
-					(e-match
-						(match
-							(cond
-								(e-runtime-error (tag "erroneous_value_expr")))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-nominal-external (builtin)
-												(p-applied-tag))))
-									(value
-										(e-lookup-local
-											(p-assign (ident "#ok")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-nominal-external (builtin)
-												(p-applied-tag))))
-									(value
-										(e-return
-											(e-nominal-external
-												(builtin)
-												(e-tag (name "Err")
-													(args
-														(e-lookup-local
-															(p-assign (ident "#err")))))))))))))
+					(e-runtime-error (tag "erroneous_value_expr")))
 				(e-runtime-error (tag "erroneous_value_expr"))))
 		(annotation
 			(ty-fn (effectful false)
@@ -2601,7 +2533,7 @@ expect {
 (inferred-types
 	(defs
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "Error -> U64"))
+		(patt (type "U64 -> U64"))
 		(patt (type "[Blue, Green, Red, ..], _arg -> Error"))
 		(patt (type "Error"))
 		(patt (type "List(Error) -> Try({}, _d)"))
@@ -2648,7 +2580,7 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "Error -> U64"))
+		(expr (type "U64 -> U64"))
 		(expr (type "[Blue, Green, Red, ..], _arg -> Error"))
 		(expr (type "Error"))
 		(expr (type "List(Error) -> Try({}, _d)"))

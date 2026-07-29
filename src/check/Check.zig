@@ -3413,6 +3413,31 @@ fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) 
     return self.runUnify(a, b, env, .{ .context = ctx });
 }
 
+/// Check one relation owned by a call without letting a rejected relation
+/// poison the callee or argument type graphs. Those graphs can be shared with
+/// otherwise valid producer expressions; the call expression is the sole
+/// executable boundary that becomes erroneous.
+fn unifyCallRelation(self: *Self, expected: Var, actual: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
+    const result = try self.runUnify(expected, actual, env, .{
+        .context = ctx,
+        .on_mismatch = .write_no_report,
+    });
+    if (result.isOk()) return .ok;
+
+    const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, expected);
+    const actual_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, actual);
+    const problem_idx = try self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
+        .types = .{
+            .expected_var = expected,
+            .expected_snapshot = expected_snapshot,
+            .actual_var = actual,
+            .actual_snapshot = actual_snapshot,
+        },
+        .context = ctx,
+    } });
+    return .{ .problem = problem_idx };
+}
+
 fn unifyNominalConstructorBacking(
     self: *Self,
     expected_backing: Var,
@@ -13070,7 +13095,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                             const arg_1 = @as(Var, ModuleEnv.varFrom(call_arg_expr_idxs[i]));
                                             const arg_2 = @as(Var, ModuleEnv.varFrom(call_arg_expr_idxs[j]));
 
-                                            const unify_result = try self.unifyInContext(arg_1, arg_2, env, .{
+                                            const unify_result = try self.unifyCallRelation(arg_1, arg_2, env, .{
                                                 .fn_args_bound_var = .{
                                                     .fn_name = func_name,
                                                     .first_arg_var = arg_1,
@@ -13095,7 +13120,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                 // called arguments, unifying each one
                                 for (call_arg_expr_idxs, 0..) |call_expr_idx, arg_index| {
                                     const expected_arg_var = self.types.getVarAt(func_args_range, @intCast(arg_index));
-                                    const unify_result = try self.unifyInContext(expected_arg_var, ModuleEnv.varFrom(call_expr_idx), env, .{ .fn_call_arg = .{
+                                    const unify_result = try self.unifyCallRelation(expected_arg_var, ModuleEnv.varFrom(call_expr_idx), env, .{ .fn_call_arg = .{
                                         .fn_name = func_name,
                                         .call_expr = expr_idx,
                                         .arg_index = @intCast(arg_index),
@@ -13136,7 +13161,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                 const call_func_content = try self.types.mkFuncUnbound(call_arg_vars, call_func_ret);
                                 const call_func_var = try self.freshFromContent(call_func_content, env, expr_region);
 
-                                const arity_result = try self.unifyInContext(func_var, call_func_var, env, .{ .fn_call_arity = .{
+                                const arity_result = try self.unifyCallRelation(func_var, call_func_var, env, .{ .fn_call_arity = .{
                                     .fn_name = func_name,
                                     .expected_args = @intCast(func_args_len),
                                     .actual_args = @intCast(call_arg_expr_idxs.len),
@@ -13168,7 +13193,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             const call_func_content = try self.types.mkFuncUnbound(call_arg_vars, call_func_ret);
                             const call_func_var = try self.freshFromContent(call_func_content, env, expr_region);
 
-                            const call_result = try self.unify(func_var, call_func_var, env);
+                            const call_result = try self.unifyCallRelation(func_var, call_func_var, env, .none);
                             if (call_result.isProblem()) {
                                 try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
                             }
@@ -15048,7 +15073,7 @@ fn enforceRecordBuilderMap2Return(
     const mapper_var = self.types.getVarAt(func.args, 2);
     const mapper_func = self.functionTypeFromVar(mapper_var) orelse return .ok;
 
-    return try self.unifyInContext(return_payload_var, mapper_func.ret, env, .{ .fn_call_arg = .{
+    return try self.unifyCallRelation(return_payload_var, mapper_func.ret, env, .{ .fn_call_arg = .{
         .fn_name = func_name,
         .call_expr = call_expr,
         .arg_index = 2,
@@ -15481,9 +15506,11 @@ fn checkMatchExpr(
     const branch_idxs = self.cir.store.sliceMatchBranches(match.branches);
     const match_hoist_owner = self.currentHoistFrameIndexForExpr(expr_idx);
 
-    // Track whether we encountered any type errors during pattern checking
-    // If so, we'll skip exhaustiveness checking since the types may be invalid
-    var had_type_error = false;
+    // A rejected condition is replaced with a runtime error after solving. The
+    // match must become the same explicit executable boundary; otherwise later
+    // lowering would try to build a decision tree whose scrutinee deliberately
+    // has no checked type.
+    var had_type_error = self.erroneous_value_exprs.contains(match.cond);
 
     // For matches desugared from `?` operator, verify the condition unifies with Try type FIRST.
     // If it doesn't, report the specific error and skip pattern checking to avoid confusing errors.
