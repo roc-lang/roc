@@ -2557,9 +2557,11 @@ only the small dispatching match is copied into the arms, where it folds
 against each arm's known constructor into a direct jump; a join's parameters
 are the decomposed leaves of the values its jump sites supply whenever those
 values agree on one structure skeleton, so specialization inside the shared
-body still sees the shape; and a join with exactly one jump site is not shared
-control at all — its body is cloned directly at that site against the site's
-full symbolic values.
+body still sees the shape; and a join with exactly one jump site is inlined only
+when its body is closed under lexical loop control. A body containing a `break`
+or `continue` for an enclosing loop retains the typed join, because moving that
+body beneath a different loop would retarget the transfer. Otherwise its body
+is cloned directly at the site against the site's full symbolic values.
 
 Call-pattern specialization may also expose a tail-recursive worker whose
 entire specialized ABI is scalar even though its only external call remains in
