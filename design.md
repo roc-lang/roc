@@ -443,6 +443,17 @@ every selected compile-time root that can be evaluated without effectful calls
 or runtime data. It must run `crash`, `dbg`, and `expect` during that
 evaluation and output their diagnostics during `roc check`.
 
+A function-typed top-level binding whose entire checked right-hand side is one
+resolved procedure lookup already has its complete checked callable identity.
+It has no value computation for compile-time evaluation to perform. Checking
+keeps the callable root and binding so ordinary runtime uses can instantiate the
+referenced procedure, but it does not add a compile-time request for that root;
+the root payload remains pending. This decision consumes the checked expression
+kind and its resolved value reference. It must not infer a procedure from source
+names, function type alone, body shape below the root expression, or post-check
+specialization results. Any wrapper, capture, conditional, call, or other
+function-valued computation remains an ordinary compile-time callable root.
+
 Evaluation and static storage are separate checked outputs. Unreachable
 top-level values are still evaluated when eligible so their `crash`, `dbg`, and
 `expect` behavior is reported, but successfully evaluated unreachable data does
