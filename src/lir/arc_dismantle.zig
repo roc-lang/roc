@@ -267,6 +267,135 @@ const Analysis = struct {
     }
 };
 
+/// Whether every branch of a switch (including the default) is a plain
+/// statement chain that reaches the shared continuation without any control
+/// flow of its own. Only then is the continuation guaranteed to run exactly
+/// once on every path through the switch, which is what lets the take spine
+/// cross the diamond. Branches that return, crash, jump, or branch again are
+/// declined; reads past such a switch stay residual.
+fn switchFallsThrough(
+    store: *const LirStore,
+    branches: LIR.CFSwitchBranchSpan,
+    default_branch: LIR.CFStmtId,
+    continuation: LIR.CFStmtId,
+) bool {
+    const limit = store.cfStmtCount() + 1;
+    const heads = store.getCFSwitchBranches(branches);
+    const branch_count = GuardedList.borrowLen(heads);
+    for (0..branch_count + 1) |i| {
+        var cursor = if (i < branch_count) GuardedList.at(heads, i).body else default_branch;
+        var steps: usize = 0;
+        while (cursor != continuation) {
+            steps += 1;
+            if (steps > limit) return false;
+            switch (store.getCFStmt(cursor)) {
+                inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
+                else => return false,
+            }
+        }
+    }
+    return true;
+}
+
+/// Whether a join is a branch diamond rather than a loop: every path through
+/// its remainder ends by jumping to this join (a plain chain, optionally
+/// through one switch whose every branch is a plain chain ending in that
+/// jump), and nothing in its body jumps back to it. Such a join's body runs
+/// exactly once, immediately after the remainder, so the take spine may
+/// continue into it. Branch-result `if` and `match` expressions lower to
+/// exactly this shape; loops fail the body scan through their back-edge.
+fn joinIsDiamond(
+    gpa: Allocator,
+    store: *const LirStore,
+    join_id: LIR.JoinPointId,
+    remainder: LIR.CFStmtId,
+    body: LIR.CFStmtId,
+) Error!bool {
+    if (!remainderRejoins(store, remainder, join_id)) return false;
+    return bodyAvoidsJoin(gpa, store, body, join_id);
+}
+
+fn remainderRejoins(store: *const LirStore, first: LIR.CFStmtId, join_id: LIR.JoinPointId) bool {
+    const limit = store.cfStmtCount() + 1;
+    var cursor = first;
+    var steps: usize = 0;
+    while (true) {
+        steps += 1;
+        if (steps > limit) return false;
+        switch (store.getCFStmt(cursor)) {
+            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
+            .jump => |stmt| return stmt.target == join_id,
+            .switch_stmt => |stmt| {
+                const heads = store.getCFSwitchBranches(stmt.branches);
+                const branch_count = GuardedList.borrowLen(heads);
+                for (0..branch_count + 1) |i| {
+                    var branch_cursor = if (i < branch_count) GuardedList.at(heads, i).body else stmt.default_branch;
+                    var branch_steps: usize = 0;
+                    branch: while (true) {
+                        branch_steps += 1;
+                        if (branch_steps > limit) return false;
+                        switch (store.getCFStmt(branch_cursor)) {
+                            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |branch_stmt| branch_cursor = branch_stmt.next,
+                            .jump => |branch_stmt| {
+                                if (branch_stmt.target != join_id) return false;
+                                break :branch;
+                            },
+                            else => return false,
+                        }
+                    }
+                }
+                return true;
+            },
+            else => return false,
+        }
+    }
+}
+
+fn bodyAvoidsJoin(gpa: Allocator, store: *const LirStore, body: LIR.CFStmtId, join_id: LIR.JoinPointId) Error!bool {
+    var visited = std.AutoHashMapUnmanaged(u32, void).empty;
+    defer visited.deinit(gpa);
+    var stack = std.ArrayList(LIR.CFStmtId).empty;
+    defer stack.deinit(gpa);
+    try stack.append(gpa, body);
+    while (stack.pop()) |current| {
+        const slot = try visited.getOrPut(gpa, @intFromEnum(current));
+        if (slot.found_existing) continue;
+        switch (store.getCFStmt(current)) {
+            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| try stack.append(gpa, stmt.next),
+            .jump => |stmt| if (stmt.target == join_id) return false,
+            .join => |stmt| {
+                try stack.append(gpa, stmt.remainder);
+                try stack.append(gpa, stmt.body);
+            },
+            .switch_stmt => |stmt| {
+                const heads = store.getCFSwitchBranches(stmt.branches);
+                for (0..GuardedList.borrowLen(heads)) |i| {
+                    try stack.append(gpa, GuardedList.at(heads, i).body);
+                }
+                try stack.append(gpa, stmt.default_branch);
+                if (stmt.continuation) |continuation| try stack.append(gpa, continuation);
+            },
+            .switch_initialized_payload => |stmt| {
+                try stack.append(gpa, stmt.initialized_branch);
+                try stack.append(gpa, stmt.uninitialized_branch);
+            },
+            .str_match => |stmt| {
+                try stack.append(gpa, stmt.on_match);
+                try stack.append(gpa, stmt.on_miss);
+            },
+            .str_match_set => |stmt| {
+                const arms = store.getStrMatchArms(stmt.arms);
+                for (0..GuardedList.borrowLen(arms)) |i| {
+                    try stack.append(gpa, GuardedList.at(arms, i).on_match);
+                }
+                try stack.append(gpa, stmt.on_miss);
+            },
+            .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+        }
+    }
+    return true;
+}
+
 /// Solve takes for every reachable statement in the store.
 pub fn compute(
     gpa: Allocator,
@@ -552,6 +681,12 @@ pub fn compute(
 
     var spine_pending = std.AutoHashMapUnmanaged(LIR.CFStmtId, void).empty;
     defer spine_pending.deinit(gpa);
+    var spine_starts = std.ArrayList(LIR.CFStmtId).empty;
+    defer spine_starts.deinit(gpa);
+    // Diamond verdicts are a property of the join alone; one scan serves
+    // every candidate whose spine crosses it.
+    var diamond_joins = std.AutoHashMapUnmanaged(u32, bool).empty;
+    defer diamond_joins.deinit(gpa);
 
     var it = analysis.candidates.iterator();
     candidates: while (it.next()) |entry| {
@@ -623,17 +758,40 @@ pub fn compute(
             try spine_pending.put(gpa, read.stmt, {});
         }
         var remaining = spine_pending.count();
-        var cursor = spine_start;
+        spine_starts.clearRetainingCapacity();
+        try spine_starts.append(gpa, spine_start);
         var steps: usize = 0;
         const step_limit = store.cfStmtCount() + 1;
-        spine: while (remaining > 0) {
-            steps += 1;
-            if (steps > step_limit) continue :candidates;
-            if (spine_pending.contains(cursor)) remaining -= 1;
-            switch (store.getCFStmt(cursor)) {
-                inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
-                .join => |stmt| cursor = stmt.remainder,
-                .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => break :spine,
+        walk: while (remaining > 0) {
+            var cursor = spine_starts.pop() orelse break;
+            chain: while (remaining > 0) {
+                steps += 1;
+                if (steps > step_limit) break :walk;
+                if (spine_pending.contains(cursor)) remaining -= 1;
+                switch (store.getCFStmt(cursor)) {
+                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
+                    // The remainder always runs exactly once. When the join
+                    // is a branch diamond — every remainder path rejoins it
+                    // and its body never loops back — the body runs exactly
+                    // once too, immediately after, so takes past the rejoin
+                    // are as good as takes before the branch.
+                    .join => |stmt| {
+                        const cached = try diamond_joins.getOrPut(gpa, @intFromEnum(cursor));
+                        if (!cached.found_existing) {
+                            cached.value_ptr.* = try joinIsDiamond(gpa, store, stmt.id, stmt.remainder, stmt.body);
+                        }
+                        if (cached.value_ptr.*) try spine_starts.append(gpa, stmt.body);
+                        cursor = stmt.remainder;
+                    },
+                    // Likewise for a switch whose every branch falls straight
+                    // through to its shared continuation.
+                    .switch_stmt => |stmt| {
+                        const continuation = stmt.continuation orelse break :chain;
+                        if (!switchFallsThrough(store, stmt.branches, stmt.default_branch, continuation)) break :chain;
+                        cursor = continuation;
+                    },
+                    .switch_initialized_payload, .str_match, .str_match_set, .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => break :chain,
+                }
             }
         }
         if (remaining > 0) continue;

@@ -5266,7 +5266,11 @@ A field read of a qualifying container becomes a take when its result binding
 is owned, its result never flows into join-carried state, and the read lies
 on the container's spine: the statement chain from its definition following
 `next` edges and join remainders, never entering switch branches or join
-bodies. Spine placement is what makes each take execute exactly once, in a
+bodies. The spine may additionally cross a switch whose every branch —
+default included — is a plain statement chain falling straight through to
+the switch's shared continuation: such a diamond's continuation runs exactly
+once on every path, so a take after the rejoin is as good as one before the
+branch. Spine placement is what makes each take execute exactly once, in a
 known order, before the container dies; residual reads may live in branches,
 because the death point follows the last use on every path. The join-state
 restriction — the read result must not be a `set_local` operand or feed a

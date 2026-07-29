@@ -6657,6 +6657,40 @@ test "field takes drop the field-read retains of dying local records" {
     try std.testing.expectEqual(@as(usize, 0), root_retained.?);
 }
 
+// A field read placed after an if-diamond still takes: every branch of the
+// lowered switch falls straight through to its shared continuation, so the
+// read past the rejoin runs exactly once on every path and may consume the
+// dying record's stored unit for its field.
+test "field takes cross a fall-through branch diamond" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : I64
+        \\main = {
+        \\    m = { flag: 3.I64, rows: List.repeat(2.I64, 8) }
+        \\    bump = if m.flag > 0 { 1.I64 } else { 2 }
+        \\    r = List.set(m.rows, 0, bump) ?? []
+        \\    (List.get(r, 0) ?? 0) + bump
+        \\}
+    ;
+
+    var lowered = try lowerModule(allocator, source, .none);
+    defer lowered.deinit(allocator);
+
+    const store = &lowered.lowered.lir_result.store;
+    var root_retained: ?usize = null;
+    for (0..store.procSpecCount()) |index| {
+        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc = store.getProcSpec(proc_id);
+        const args = store.getLocalSpan(proc.args);
+        if (GuardedList.borrowLen(args) != 0) continue;
+        if (proc.body == null) continue;
+        const retained = try fieldReadRetainCount(allocator, &lowered.lowered, proc_id);
+        root_retained = (root_retained orelse 0) + retained;
+    }
+    try std.testing.expect(root_retained != null);
+    try std.testing.expectEqual(@as(usize, 0), root_retained.?);
+}
+
 // Repro for https://github.com/roc-lang/roc/issues/10435: SpecConstr must
 // preserve the two observed loop results without mutating frozen Monotype type
 // data while removing the unused third result.
