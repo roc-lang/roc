@@ -3494,6 +3494,25 @@ pub const Rehearsal = struct {
                         } else {
                             census.bump("rehearsal_unbound_binder_third_no_frame_anywhere");
                         }
+                        // Whether the checked data names this definition's
+                        // instantiation anywhere in the module the position
+                        // lives in. If it does, the value exists and only the
+                        // key that selects it is missing from the operand; if
+                        // it does not, no recorded edge states it at all.
+                        if (self.lookup.cursor(source.module_bytes)) |cursor| {
+                            var named = false;
+                            for (cursor.view.instantiationSites()) |site| {
+                                if (site.scheme_owner_node == scheme.owner_node) {
+                                    named = true;
+                                    break;
+                                }
+                            }
+                            if (named) {
+                                census.bump("rehearsal_unbound_binder_third_has_recorded_site");
+                            } else {
+                                census.bump("rehearsal_unbound_binder_third_has_no_recorded_site");
+                            }
+                        }
                         // What kind of definition that third scheme is, which
                         // says whether the position names a top-level value, an
                         // inner generalization boundary, a platform requirement,

@@ -848,6 +848,11 @@ pub const Census = struct {
     // binding already holds the value the position needs.
     rehearsal_unbound_binder_third_in_outer_frame: Counter = Counter.init(0),
     rehearsal_unbound_binder_third_no_frame_anywhere: Counter = Counter.init(0),
+    // Whether a recorded instantiation site in the position's own module names
+    // the third definition, which says whether the value exists and only its
+    // selecting key is missing, or no edge states it at all.
+    rehearsal_unbound_binder_third_has_recorded_site: Counter = Counter.init(0),
+    rehearsal_unbound_binder_third_has_no_recorded_site: Counter = Counter.init(0),
 
     rehearsal_unbound_binder_no_frame: Counter = Counter.init(0),
     // Whether the variable is generalized by exactly one scheme in the view.

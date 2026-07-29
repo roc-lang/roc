@@ -2447,12 +2447,26 @@ comparing types outside the expression context that identifies them, not a
 fact the checked data lacks, and the constraint census overstates the
 logical residual by that amount.
 
-That reading is not yet established. It predicts something checkable: an
-operand that also carries the use expression its position was reached
-through should resolve these binders, and the count should fall without
-any change to checking. Until that is run, the honest ledger keeps all
-1485 as unexplained and the flip precondition stays unmet — the six
-repairs already attempted each looked at least this sound.
+That reading makes a checkable claim, and the check supports it. Asking
+whether a recorded instantiation site in the position's own module names
+the third definition at all, **1383 of the 1408 do**, and 25 do not. The
+value these positions want is already in the checked data. What the
+operand lacks is the key that selects it: a `CheckedAddress` is a module
+and a type id, and a site is keyed by the use expression, so nothing in the
+descriptor can pick which of that definition's recorded instantiations
+applies here. Directed translation in production is driven by the body
+walk, which holds that expression.
+
+This is the first of nine readings of the residual that its own test did
+not refute, so it is stated with the limit it has earned: it establishes
+that the value EXISTS, not that consuming it yields a match. Whether the
+site that applies to a given position is selected correctly, and whether
+translating under it agrees with the graph, is the next measurement, and
+the 25 with no recorded site remain a genuine coverage question. But the
+conclusion the earlier text drew — that this residual is a gap in the
+checked data — is not what the corpus says. Most of it is the cost of
+comparing a type outside the expression context that identifies it, and it
+belongs to this instrument rather than to checking.
 
 **Why the receiver rule cannot be widened to cover them.** The
 `constraint_dispatch_receiver` rule reads binder values positionally from
