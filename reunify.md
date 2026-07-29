@@ -2209,18 +2209,19 @@ census was re-sited onto it before the argument could be redone.
    again. `solve.zig`'s 19 `.unify(` calls are not replay sites: 11 are unit
    tests and 8 are steps inside the unifier, reached only while executing a
    relation a `lower.zig` site already named.
-2. **Close the one checked-data gap the census shows.** Every informative
-   execution and every seam divergence on the merged tree is one shape: a
-   rigid binder of a checked scheme that the requesting frame's binding
-   does not name, so directed translation materializes the empty tag union
-   where the graph obtains the value by unifying against the caller. Over
-   the re-sited surface it is 165143 of 165225 informative executions on
-   snapshots and 135672 of 136139 on eval — `scheme_binder_unbound` at
-   every site that carries a callee formal or a checked interface — and it
-   is the same shape as `rehearsal_unbound_binder_scheme_unrelated` and the
-   seam's 8 divergences. §9.6's declared generated-edge rules and §7.1's
-   binder resolution are where it is fixed; nothing else in the census
-   asks for information the checked data lacks.
+2. **Close the remaining binder-naming gap.** The re-measured census
+   (§13.3) puts this at 1673 informative executions on snapshots — 1485
+   `scheme_binder_unbound` and 188 `unbound_residual` — out of 892475 with
+   a directed answer on both sides. 1450 of them are dispatch targets
+   whose callee binding is never opened because the target is a
+   `.local_proc`, a `.structural`, or a procedure template carrying no
+   scheme id, so §9.6's declared generated-edge rules are what close them;
+   the rest are `constrain_checked_to_cell` positions. The separate 1077
+   `representation` executions at
+   `checked_mono_request_call_ret_to_expected` are §10's, not this step's.
+   The instrument's own remaining debt is the 314573 `operand_undescribed`
+   executions, which must be described before the precondition can be
+   claimed over the whole surface rather than over the measured part of it.
 3. **Re-land Slice 4 against graph-aware inputs.** *Done.* The closure
    engine takes the provenance `InstGraph.iteratorRelation` read, as the
    minting identity and component-agreement inputs of §10.3, and the graph
@@ -2255,54 +2256,89 @@ eval runner's fork pool.
 
 **Constraint replay.** The census is re-sited onto the merged tree's
 constraint surface (§13.2 step 1): 55 declared `UnifySite` members over
-every `.unify(` call `lower.zig` still states, 43 of them reached on eval
-and 36 on snapshots.
+every `.unify(` call `lower.zig` still states, 36 of them reached on
+snapshots. Re-measured on the merged tree after §10 emission and the
+deferred-scope hold landed; the figures below supersede the pre-emission
+ones, which were taken when a callee root whose representation content the
+checked data could not dictate did not translate at all.
 
-| corpus | redundant | open_on_import | informative | representation_decision | unmeasurable | construction |
-|---|---|---|---|---|---|---|
-| snapshots | 722181 | 0 | 165225 | 0 | 320193 | 1871546 |
-| eval | 554100 | 0 | 136139 | 0 | 278408 | 2068936 |
+| corpus | redundant | informative | representation_decision | unmeasurable | construction |
+|---|---|---|---|---|---|
+| snapshots | 889406 | 2754 | 315 | 314573 | 1863392 |
 
-Of the executions with a directed answer on both sides, 81% on snapshots
-and 80% on eval are redundant. The informative remainder is one shape:
-165143 of 165225 on snapshots and 135672 of 136139 on eval are
-`scheme_binder_unbound`, and their residual state is `scheme_binder` — the
-checked side reaches a generalized binder of a checked scheme that the
-site's binding does not name, so directed translation emits the empty tag
-union where the graph takes the value from the other operand. They
-concentrate at `constrain_checked_to_cell` (105018 on eval),
-`request_component_dispatch_arg_formal_to_evidence` (15843) and
-`function_request_interface_target_to_plan` (15201). What is left over is
-small and named: 222 `unclassified`, 155 `named_identity` (two nominal
-heads differing only in `kind`), 66 `head_tag`, 17 `row_width`, 4
-`representation`, 3 `unbound_residual` on eval; 82 `unclassified` and
-nothing else on snapshots. No execution on either corpus classifies as a
-`representation_decision`.
+Of the executions with a directed answer on both sides, 99.66% are
+redundant. Emission is what moved this: a callee root that used to skip
+now translates, so its bindings establish and the relations that read them
+become measurable rather than informative.
 
-The unmeasurable executions are two named causes and nothing else.
-`operand_undescribed` (313569 snapshots, 253800 eval) is a side the graph
-built as a bare node with no checked address and no imported immutable
-type behind it, so the directed pipeline has no expression for it at that
-call — the draft template/nested request nodes, the produced-value
-relations, the structural-derivation callable nodes, and the expected-type
-nodes a request supplies. `operand_engine_input_needed` (6624 snapshots,
-24608 eval) is a checked operand whose translation needs representation
-content the checked data cannot dictate, which is the §10 closure-engine
-input bound, not a translation gap. Every other blocker — module absent,
-recursive, open row, pending/erroneous, numeric default, malformed arity,
-missing backing, field receiver not a record, field label absent — is zero
-on both corpora.
+The informative remainder is 2754 executions at four sites, and it splits
+into two populations that different sections own:
 
-The 94 unmeasurable executions at `field_access_to_checked` on eval (4 on
-snapshots) are all `operand_engine_input_needed`, and the operand is the
-field read's **receiver**: its checked type reaches a nominal whose
-builtin runtime encoding is generated opaque evidence, whose backing the
-§10 closure engine mints and the checked data does not carry, so the walk
-skips rather than emit a backing the checked data does not contain. The
-read off the receiver is never the blocker —
-`field_receiver_not_a_record` and `field_label_absent` are zero on both
-corpora — so this is the same representation bound as everywhere else, not
-an instrument limitation to close.
+- **1673 logical.** 1485 `scheme_binder_unbound` plus 188
+  `unbound_residual`, concentrated at
+  `function_request_interface_target_to_plan` (1462, of which 1450 are
+  `scheme_binder_unbound`) and `constrain_checked_to_cell` (209). The
+  checked side reaches a generalized binder no active binding names, so
+  directed translation emits the empty tag union where the graph takes the
+  value from the other operand. §13.2 step 2 owns these.
+- **1077 representation.** All at
+  `checked_mono_request_call_ret_to_expected`, all classified
+  `representation` with origin `graph_sealed`: the relation moves iterator
+  or generated-evidence content that §10's closure engine owns, not a
+  logical value. A further 315 executions at the same site classify as
+  `representation_decision` outright.
+
+4 `unclassified` executions remain, all at
+`function_request_interface_target_to_plan`. `head_tag`, `row_width` and
+`named_identity` are zero — the head and width disagreements the
+pre-emission census reported were themselves consequences of the
+untranslated callee roots.
+
+**Where the 1450 come from.** `methodTargetContext` marks a dispatch
+target's context as a callee context, so its operands read under the
+innermost callee binding. `openDispatchTargetBinding` opens that binding
+only for a `.procedure` target whose template carries a scheme id; a
+`.local_proc` target, a `.structural` one, and a procedure template with
+no scheme return without opening one, and the target's own binders are
+then read under no binding at all. These are the §9.6 declared-rule cases:
+the edge is real and the callee scheme is known, but no published site
+names it because checking chose the callee per specialization edge. This
+is a naming gap in the rehearsal's rule inventory, not missing checked
+data.
+
+**Dispatch-target publication is not the gap it was.** Checking records
+the `dispatch_target` sites: 11 local and 5431 through imported-scheme
+projection on the snapshot corpus, with `site_without_snapshot_dispatch`
+at zero — every dispatch target whose scheme a snapshot or projection owns
+gets a site. On the postcheck side only 392 uses find no recorded site
+(`rehearsal_no_site_use_unrecorded`) and 402 specializations skip for want
+of one. The 4342 siteless edges the pre-merge measurement reported were an
+artifact of that tree, not a standing `src/check` gap.
+
+**The unmeasurable population is one cause.** All 314573 are
+`operand_undescribed`: `nodeUnifyOperand` describes a graph node only when
+the graph imported an immutable type at it, and any other node is one the
+graph built, which the directed pipeline has no expression for at that
+call. They concentrate at `constrain_checked_to_cell` (157726),
+`request_component_dispatch_arg_formal_to_evidence` (61806),
+`request_component_call_arg_formal_to_evidence` (32600),
+`checked_mono_request_call_ret_to_expected` (15241),
+`checked_to_produced_value` (14680), `expr_expected_to_lowered` (13597)
+and `evidence_target_root_to_request` (11288). Every other blocker is
+zero on the snapshot corpus, including `operand_engine_input_needed`,
+which §10 emission drove to zero from 6624.
+
+Describing these requires a node's *position identity* — the checked
+address the node stands for — and not the graph's own solved value for it,
+which would make the comparison a tautology. `instNode` already records
+that provenance, but only for a node created in the specialization's own
+root context with no nested declaration scope open, because a nested
+instantiation scope or a per-call context binds the same checked id under
+a different binding that the rehearsal's environment does not describe.
+Extending the description therefore means recording the binding context
+alongside the address and giving the genuinely context-dependent remainder
+its own blocker name, so the residual is stated rather than pooled with
+the describable majority.
 
 **The lowering seam.** `seam_direct` 629 reads on snapshots and 757 on
 eval, `seam_direct_absent` 0 on both — every checked position the seam
