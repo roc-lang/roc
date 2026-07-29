@@ -15,11 +15,15 @@ pub fn currentBytes() ?u64 {
             return info.ri_phys_footprint;
         },
         .linux => {
+            const linux = std.os.linux;
+            const open_rc = linux.openat(linux.AT.FDCWD, "/proc/self/statm", .{}, 0);
+            if (linux.errno(open_rc) != .SUCCESS) return null;
+            const fd: i32 = @intCast(open_rc);
+            defer _ = linux.close(fd);
             var buf: [128]u8 = undefined;
-            const file = std.fs.cwd().openFile("/proc/self/statm", .{}) catch return null;
-            defer file.close();
-            const len = file.read(&buf) catch return null;
-            var it = std.mem.tokenizeScalar(u8, buf[0..len], ' ');
+            const read_rc = linux.read(fd, &buf, buf.len);
+            if (linux.errno(read_rc) != .SUCCESS) return null;
+            var it = std.mem.tokenizeScalar(u8, buf[0..read_rc], ' ');
             _ = it.next() orelse return null;
             const resident_pages = it.next() orelse return null;
             const pages = std.fmt.parseInt(u64, resident_pages, 10) catch return null;
