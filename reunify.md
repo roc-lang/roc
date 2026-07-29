@@ -2459,7 +2459,27 @@ walk, which holds that expression.
 
 This is the first of nine readings of the residual that its own test did
 not refute, so it is stated with the limit it has earned: it establishes
-that the value EXISTS, not that consuming it yields a match. Whether the
+that the value EXISTS, not that consuming it yields a match.
+
+The cheaper repair it suggests is already ruled out. If one use expression
+carried a site for both the third definition and the scheme the operand
+translates under, a binding built per site at that use would state the
+missing binder from data in hand. **None does: 1383 separate uses and 0
+co-located.** The third definition is instantiated at a different
+expression in the body than the one being bound, so no key available at
+the position — not a use expression, not a scheme owner — selects its
+instantiation. An operand carrying a use expression is not enough; what
+resolves these is the body-walk context that knows which definitions are
+live at that point.
+
+That is a statement about how far this instrument can be taken. The
+rehearsal was built to measure positions in isolation, and positions that
+mention another definition are outside what isolation can answer. The
+route that does not fight that is the production seam,
+`BodyContext.typeForChecked`, which already walks bodies and holds the
+context these positions need; the remaining logical residual should be
+re-measured there rather than by further enriching the operand
+descriptor. Whether the
 site that applies to a given position is selected correctly, and whether
 translating under it agrees with the graph, is the next measurement, and
 the 25 with no recorded site remain a genuine coverage question. But the

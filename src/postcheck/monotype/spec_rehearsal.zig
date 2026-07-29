@@ -3509,6 +3509,31 @@ pub const Rehearsal = struct {
                             }
                             if (named) {
                                 census.bump("rehearsal_unbound_binder_third_has_recorded_site");
+                                // Whether some use expression carries a site for
+                                // BOTH this definition and the scheme the
+                                // operand translates under. Where it does, one
+                                // key selects both levels, and a binding built
+                                // per site at that use states this binder
+                                // without any new checked data.
+                                var co_located = false;
+                                for (cursor.view.instantiationSites()) |third| {
+                                    if (third.scheme_owner_node != scheme.owner_node) continue;
+                                    const third_use = third.useExpr() orelse continue;
+                                    for (cursor.view.instantiationSites()) |own| {
+                                        if (own.scheme_owner_node != source.owner_node) continue;
+                                        const own_use = own.useExpr() orelse continue;
+                                        if (own_use == third_use) {
+                                            co_located = true;
+                                            break;
+                                        }
+                                    }
+                                    if (co_located) break;
+                                }
+                                if (co_located) {
+                                    census.bump("rehearsal_unbound_binder_third_co_located_use");
+                                } else {
+                                    census.bump("rehearsal_unbound_binder_third_separate_use");
+                                }
                             } else {
                                 census.bump("rehearsal_unbound_binder_third_has_no_recorded_site");
                             }

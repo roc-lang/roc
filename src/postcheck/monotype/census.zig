@@ -853,6 +853,10 @@ pub const Census = struct {
     // selecting key is missing, or no edge states it at all.
     rehearsal_unbound_binder_third_has_recorded_site: Counter = Counter.init(0),
     rehearsal_unbound_binder_third_has_no_recorded_site: Counter = Counter.init(0),
+    // Whether one use expression carries a site for both the third definition
+    // and the scheme the operand translates under, so a single key selects both.
+    rehearsal_unbound_binder_third_co_located_use: Counter = Counter.init(0),
+    rehearsal_unbound_binder_third_separate_use: Counter = Counter.init(0),
 
     rehearsal_unbound_binder_no_frame: Counter = Counter.init(0),
     // Whether the variable is generalized by exactly one scheme in the view.
