@@ -3442,7 +3442,18 @@ pub const Rehearsal = struct {
             return .unbound_residual;
         for (source.view.schemes) |scheme| {
             for (scheme.generalizedVars(source.view)) |binder| {
-                if (binder == free) return .scheme_binder_unbound;
+                if (binder != free) continue;
+                // Which scheme owns the unnamed binder. The one this operand
+                // was translated under is a binding that stated its own binders
+                // and still left this position open; any other scheme is a
+                // binder the operand reaches from outside the bound scheme,
+                // which a call-site binding never states (reunify.md 7.3).
+                if (scheme.owner_node == source.owner_node) {
+                    census.bump("rehearsal_unbound_binder_of_translating_scheme");
+                } else {
+                    census.bump("rehearsal_unbound_binder_of_other_scheme");
+                }
+                return .scheme_binder_unbound;
             }
         }
         return .unbound_residual;

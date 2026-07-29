@@ -833,6 +833,10 @@ pub const Census = struct {
     // Where an informative `scheme_binder_unbound` execution came from: under
     // an unresolved callee binding, under a resolved one, or with no callee
     // binding open at all.
+    // Whether the unnamed binder belongs to the scheme the operand was
+    // translated under, or to another scheme it reaches from outside.
+    rehearsal_unbound_binder_of_translating_scheme: Counter = Counter.init(0),
+    rehearsal_unbound_binder_of_other_scheme: Counter = Counter.init(0),
     rehearsal_binder_unbound_under_unready_callee: Counter = Counter.init(0),
     rehearsal_binder_unbound_callee_ready: Counter = Counter.init(0),
     rehearsal_binder_unbound_no_callee_open: Counter = Counter.init(0),

@@ -2376,6 +2376,25 @@ likely reading is a position reaching an enclosing scheme's binder rather
 than the callee's — which is the section 7.3 lexical-parent case. That is
 a distinct investigation from the 97, and neither subsumes the other.
 
+**Every unbound binder belongs to a scheme other than the bound one.**
+Classifying the unnamed binder by which scheme owns it, against the scheme
+the operand was translated under, gives **1485 owned by another scheme and
+0 owned by the translating scheme**. No binding that resolved ever failed
+to state one of its own binders. The binding mechanism is correct where it
+applies, and what the remaining executions want is a binder the bound
+scheme does not contain.
+
+That is the section 7.3 case, and `resolveCalleeBinding` already declines
+it explicitly: a scheme with captured binders returns unresolved, because
+a call-site binding states that scheme's own binders and nothing else,
+while a callee that captures enclosing binders needs the lexical parents
+its own specialization frame links. The 1015 executions under an
+unresolved binding and the 435 under a resolved one are then the same
+shape seen from two sides — in the first the whole binding is declined, in
+the second it is stated and the position reaches past it. Both close by
+linking the lexical parent chain into the callee binding, not by
+recording more sites.
+
 **Why the receiver rule cannot be widened to cover them.** The
 `constraint_dispatch_receiver` rule reads binder values positionally from
 the receiver's own type arguments and accepts only a nominal, list, or box
