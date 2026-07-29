@@ -385,9 +385,9 @@ EndOfFile,
 {
 	if  "conditional"
 	
-	when : 
+	when :
 			
-	expect 
+	expect
 	"test assertion"
 	
 			"mod load"

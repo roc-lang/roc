@@ -24,11 +24,6 @@ pub fn run(
     owned.names = @import("check").CheckedNames.NameStore.init(allocator);
     var types = owned.types;
     owned.types = @import("../monotype/type.zig").Store.init(allocator);
-    // Monotype sealed this store when its lowering finished. The lifted stage
-    // now owns it and still introduces types of its own -- SpecConstr narrows
-    // loop-carried tuples, which mints the narrowed tuple type -- so the seal
-    // is re-applied once the lifted stage is done rather than carried in.
-    types.reopen();
     var imported_fns = owned.imported_fns.takeArrayList();
     var const_fn_evidence = owned.const_fn_evidence.takeArrayList();
     var const_fn_evidence_frames = owned.const_fn_evidence_frames.takeArrayList();
@@ -57,6 +52,13 @@ pub fn run(
     var expr_regions = owned.expr_regions.takeArrayList();
     var stmt_locs = owned.stmt_locs.takeArrayList();
     var stmt_regions = owned.stmt_regions.takeArrayList();
+    var inline_scopes = std.ArrayList(Ast.InlineScope).empty;
+    var expr_inline_scopes = std.ArrayList(Ast.InlineScopeId).empty;
+    try expr_inline_scopes.appendNTimes(allocator, Ast.InlineScopeId.none, exprs.items.len);
+    errdefer expr_inline_scopes.deinit(allocator);
+    var stmt_inline_scopes = std.ArrayList(Ast.InlineScopeId).empty;
+    try stmt_inline_scopes.appendNTimes(allocator, Ast.InlineScopeId.none, stmts.items.len);
+    errdefer stmt_inline_scopes.deinit(allocator);
     var local_names = owned.local_names.takeArrayList();
     var static_data_values = owned.static_data_values.takeArrayList();
 
@@ -89,6 +91,9 @@ pub fn run(
         expr_regions,
         stmt_locs,
         stmt_regions,
+        inline_scopes,
+        expr_inline_scopes,
+        stmt_inline_scopes,
         local_names,
         static_data_values,
         comptime_sites,
@@ -121,6 +126,9 @@ pub fn run(
     expr_regions = undefined;
     stmt_locs = undefined;
     stmt_regions = undefined;
+    inline_scopes = undefined;
+    expr_inline_scopes = undefined;
+    stmt_inline_scopes = undefined;
     local_names = undefined;
     static_data_values = undefined;
     comptime_sites = undefined;
@@ -929,7 +937,7 @@ fn allocateCaptureTable(allocator: Allocator, count: usize) Allocator.Error![]st
     return captures;
 }
 
-/// Find the existing operand value that supplies capture `id`.
+/// Find the existing operand value that supplies capture `slot`.
 ///
 /// An operand carries two identities: the value's own CaptureId (when its value
 /// is a plain local that carries one) and the operand's declared `id` (set when
@@ -950,27 +958,35 @@ fn allocateCaptureTable(allocator: Allocator, count: usize) Allocator.Error![]st
 ///     value-local with no CaptureId, and a genuinely explicit (non-local)
 ///     value, are likewise keyed solely by the declared id.
 ///
+///   - Producer-authored operands may declare the slot's checked capture
+///     identity before a post-lift rewrite gives that slot a fresh runtime
+///     CaptureId. The runtime slot id above is still the final ABI key; the
+///     checked id names the same checked binding at older operand sites.
+///
 /// An exact value-CaptureId match always takes precedence over a declared-id
 /// match; a declared-id match is used only when no exact match exists.
-fn operandValueForSlotId(program: *const Ast.Program, existing: anytype, id: checked.CaptureId) ?Ast.ExprId {
-    var fallback_by_id: ?Ast.ExprId = null;
+fn operandValueForSlot(program: *const Ast.Program, existing: anytype, slot: Ast.TypedLocal) ?Ast.ExprId {
+    const id = slotCaptureId(program, slot);
+    const checked_id = program.getLocal(slot.local).checked_capture_id;
+    var fallback_by_runtime_id: ?Ast.ExprId = null;
+    var fallback_by_checked_id: ?Ast.ExprId = null;
     for (0..existing.len) |index| {
         const operand = GuardedList.at(existing, index);
+        if (operand.id == id and fallback_by_runtime_id == null) {
+            fallback_by_runtime_id = operand.value;
+        } else if (checked_id != null and operand.id == checked_id.? and fallback_by_checked_id == null) {
+            fallback_by_checked_id = operand.value;
+        }
         switch (program.getExpr(operand.value).data) {
             .local => |local| {
                 if (program.getLocal(local).capture_id) |value_id| {
                     if (value_id == id) return operand.value;
-                    if (operand.id == id and fallback_by_id == null) fallback_by_id = operand.value;
-                } else if (operand.id == id and fallback_by_id == null) {
-                    fallback_by_id = operand.value;
                 }
             },
-            else => if (operand.id == id and fallback_by_id == null) {
-                fallback_by_id = operand.value;
-            },
+            else => {},
         }
     }
-    return fallback_by_id;
+    return fallback_by_runtime_id orelse fallback_by_checked_id;
 }
 
 /// Recompute a function reference / direct call's keyed capture operand span so it
@@ -1004,7 +1020,7 @@ fn rebuildCaptureOperandSpan(
     for (0..slots.len) |index| {
         const slot = GuardedList.at(slots, index);
         const id = slotCaptureId(program, slot);
-        const existing_value = operandValueForSlotId(program, existing, id);
+        const existing_value = operandValueForSlot(program, existing, slot);
         const value = if (existing_value) |candidate| blk: {
             const candidate_local = switch (program.getExpr(candidate).data) {
                 .local => |local| local,
@@ -1870,14 +1886,11 @@ const CaptureDependencyGraph = struct {
         const runtime_id = slotCaptureId(self.program, capture);
         if (findSupply(edge.exact_supplies.items, runtime_id)) |supply| return supply;
         if (findSupply(edge.declared_supplies.items, runtime_id)) |supply| return supply;
-        // Producer-authored pre-lift operands declare the slot's checked
-        // capture identity; operands rebuilt after lifting declare the
-        // runtime slot id checked above. Both are exact keys for their
-        // authoring convention.
-        const checked_id = switch (edge.site) {
-            .pre_lift, .call_proc => self.program.getLocal(capture.local).checked_capture_id,
-            .fn_ref => null,
-        };
+        // Producer-authored pre-lift operands and pre-recompute lifted
+        // operands may declare the slot's checked capture identity; operands
+        // rebuilt after lifting declare the runtime slot id checked above.
+        // Both are exact keys for their authoring convention.
+        const checked_id = self.program.getLocal(capture.local).checked_capture_id;
         if (checked_id) |id| {
             if (findSupply(edge.declared_supplies.items, id)) |supply| return supply;
         }
@@ -2450,6 +2463,9 @@ fn initCaptureTestProgram(allocator: Allocator) Ast.Program {
         .empty, // expr_regions
         .empty, // stmt_locs
         .empty, // stmt_regions
+        .empty, // inline_scopes
+        .empty, // expr_inline_scopes
+        .empty, // stmt_inline_scopes
         .empty, // local_names
         .empty, // static_data_values
         .empty, // comptime_sites
@@ -2526,6 +2542,9 @@ test "checkCaptureInvariants accepts a well-formed capture and catches a corrupt
         .empty, // expr_regions
         .empty, // stmt_locs
         .empty, // stmt_regions
+        .empty, // inline_scopes
+        .empty, // expr_inline_scopes
+        .empty, // stmt_inline_scopes
         .empty, // local_names
         .empty, // static_data_values
         .empty, // comptime_sites
@@ -2599,6 +2618,9 @@ test "capture finalization supplies the caller's active binder local" {
         .empty, // expr_regions
         .empty, // stmt_locs
         .empty, // stmt_regions
+        .empty, // inline_scopes
+        .empty, // expr_inline_scopes
+        .empty, // stmt_inline_scopes
         .empty, // local_names
         .empty, // static_data_values
         .empty, // comptime_sites
@@ -2648,6 +2670,64 @@ test "capture finalization supplies the caller's active binder local" {
         else => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqual(active_arg, supplied);
+}
+
+test "function reference supplies rewritten slot by checked capture identity" {
+    const allocator = std.testing.allocator;
+    var program = initCaptureTestProgram(allocator);
+    defer program.deinit();
+
+    const ty = try program.types.add(.zst);
+    const binder: checked.PatternBinderId = @enumFromInt(1);
+    const checked_id = checked.CaptureId.fromBinder(binder);
+    const rewritten_id = program.nextLiftCaptureId();
+    const rewritten_capture = try program.addLocalWithCaptureIdentity(
+        @enumFromInt(1),
+        ty,
+        binder,
+        rewritten_id,
+        checked_id,
+    );
+
+    const callee_body = try program.addExpr(.{ .ty = ty, .data = .{ .local = rewritten_capture } });
+    const callee = try program.addFn(.{
+        .symbol = @enumFromInt(1),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = callee_body },
+        .ret = ty,
+    });
+
+    const supplied_value = try program.addExpr(.{ .ty = ty, .data = .unit });
+    const supplied_span = try program.addCaptureOperandSpan(&.{.{ .id = checked_id, .value = supplied_value }});
+    const reference = try program.addExpr(.{ .ty = ty, .data = .{ .fn_ref = .{
+        .fn_id = callee,
+        .captures = supplied_span,
+    } } });
+    const caller = try program.addFn(.{
+        .symbol = @enumFromInt(2),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = reference },
+        .ret = ty,
+    });
+
+    try recomputeCaptures(allocator, &program);
+
+    const callee_captures = program.typedLocalSpan(program.getFn(callee).captures);
+    try std.testing.expectEqual(@as(usize, 1), callee_captures.len);
+    try std.testing.expectEqual(rewritten_capture, GuardedList.at(callee_captures, 0).local);
+    try std.testing.expectEqual(@as(usize, 0), program.typedLocalSpan(program.getFn(caller).captures).len);
+
+    const finalized = switch (program.getExpr(reference).data) {
+        .fn_ref => |fn_ref| fn_ref,
+        else => return error.TestUnexpectedResult,
+    };
+    const operands = program.captureOperandSpan(finalized.captures);
+    try std.testing.expectEqual(@as(usize, 1), operands.len);
+    const operand = GuardedList.at(operands, 0);
+    try std.testing.expectEqual(rewritten_id, operand.id);
+    try std.testing.expectEqual(supplied_value, operand.value);
 }
 
 test "capture graph does not activate an operand for a removed target slot" {

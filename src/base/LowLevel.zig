@@ -567,8 +567,8 @@ pub const LowLevel = enum(u16) {
     crash,
 
     /// Index into `builtins.simd.Op`. The SIMD entries are intentionally one
-    /// contiguous, order-pinned block so compiler artifacts and dependency-
-    /// light runtime payloads share a compact operation identifier without a
+    /// contiguous, order-pinned block so the interpreter and compile-time
+    /// evaluator share the semantic oracle's operation vocabulary without a
     /// module cycle.
     pub fn simdOpIndex(self: LowLevel) ?u8 {
         return switch (self) {

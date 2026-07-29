@@ -526,9 +526,9 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 {
-	_privateField : 
+	_privateField :
 			
-	field_ : 
+	field_ :
 			
 	PascalCase
 		"pascal"
@@ -537,7 +537,7 @@ EndOfFile,
 	-case
 		"kebab"
 	
-	field$special : 
+	field$special :
 			
 	field
 			"at symbol"
@@ -576,7 +576,7 @@ EndOfFile,
 	(s-expr
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-expr
-		(e-dispatch-call (method "negate") (constraint-fn-var 309)
+		(e-dispatch-call (method "negate") (constraint-fn-var 308)
 			(receiver
 				(e-runtime-error (tag "ident_not_in_scope")))
 			(args)))

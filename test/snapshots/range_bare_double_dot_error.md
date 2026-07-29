@@ -53,7 +53,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-r = 
+r =
 ~~~
 # CANONICALIZE
 ~~~clojure

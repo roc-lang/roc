@@ -322,15 +322,6 @@ pub const Store = struct {
         self.frozen = true;
     }
 
-    /// Reopen a store that a finished stage sealed, for the next stage that
-    /// takes ownership of it. Sealing marks the end of the stage that built the
-    /// types, not the end of the store's life: a later IR may still introduce
-    /// types of its own, and seals again when it is done. Only a stage boundary
-    /// that assumes ownership may call this.
-    pub fn reopen(self: *Store) void {
-        self.frozen = false;
-    }
-
     pub fn isFrozen(self: *const Store) bool {
         return self.frozen;
     }

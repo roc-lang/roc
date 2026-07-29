@@ -356,6 +356,9 @@ fn emptyLiftedProgram(allocator: Allocator) Lifted.Ast.Program {
         .empty,
         .empty,
         .empty,
+        .empty,
+        .empty,
+        .empty,
         0,
     );
 }

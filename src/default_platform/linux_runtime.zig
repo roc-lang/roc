@@ -33,6 +33,15 @@ const BacktraceEntry = extern struct {
     column: u32,
 };
 
+const SourceFrame = extern struct {
+    name_ptr: [*]const u8,
+    name_len: usize,
+    file_ptr: [*]const u8,
+    file_len: usize,
+    line: u32,
+    column: u32,
+};
+
 const roc_default_backtrace_table = @extern(*const [*]const BacktraceEntry, .{
     .name = shim_symbols.roc_default_backtrace_table,
     .linkage = .weak,
@@ -56,6 +65,7 @@ comptime {
     @export(&rocDbg, .{ .name = shim_symbols.roc_dbg });
     @export(&rocExpectFailed, .{ .name = shim_symbols.roc_expect_failed });
     @export(&rocCrashed, .{ .name = shim_symbols.roc_crashed });
+    @export(&rocDefaultCrashedWithFrames, .{ .name = shim_symbols.roc_default_crashed_with_frames });
     @export(&defaultEchoLine, .{ .name = shim_symbols.roc_default_echo_line });
     @export(&defaultExit, .{ .name = shim_symbols.roc_default_exit });
     @export(&rocAlloc, .{ .name = shim_symbols.roc_alloc });
@@ -90,6 +100,19 @@ fn rocCrashed(bytes: [*]const u8, len: usize) callconv(.c) noreturn {
     writeAll(stderr_fd, bytes[0..len]);
     writeLiteral(stderr_fd, "\n\n");
     printBacktrace(@returnAddress(), @frameAddress());
+    exitFailure();
+}
+
+fn rocDefaultCrashedWithFrames(
+    bytes: [*]const u8,
+    len: usize,
+    source_frames: [*]const SourceFrame,
+    source_frame_count: usize,
+) callconv(.c) noreturn {
+    writeLiteral(stderr_fd, "Roc application crashed with this message:\n\n\t");
+    writeAll(stderr_fd, bytes[0..len]);
+    writeLiteral(stderr_fd, "\n\n");
+    printBacktraceWithSourceFrames(source_frames[0..source_frame_count], @returnAddress(), @frameAddress());
     exitFailure();
 }
 
@@ -265,6 +288,41 @@ fn printBacktrace(first_ip: usize, first_frame_addr: usize) void {
     if (!hasMappedBacktraceFrame(first_ip, first_frame_addr)) return;
 
     writeLiteral(stderr_fd, "Backtrace:\n");
+    printMappedBacktraceFrames(first_ip, first_frame_addr);
+}
+
+fn printBacktraceWithSourceFrames(source_frames: []const SourceFrame, first_ip: usize, first_frame_addr: usize) void {
+    if (source_frames.len == 0) {
+        printBacktrace(first_ip, first_frame_addr);
+        return;
+    }
+
+    writeLiteral(stderr_fd, "Backtrace:\n");
+    for (source_frames) |frame| printSourceFrame(frame);
+    printMappedBacktraceFrames(first_ip, first_frame_addr);
+}
+
+fn printSourceFrame(frame: SourceFrame) void {
+    writeLiteral(stderr_fd, "  ");
+    writeLiteral(stderr_fd, ansi_function_name);
+    writeAll(stderr_fd, frame.name_ptr[0..frame.name_len]);
+    writeLiteral(stderr_fd, ansi_reset);
+    if (frame.file_len != 0) {
+        writeLiteral(stderr_fd, " ");
+        writeAll(stderr_fd, frame.file_ptr[0..frame.file_len]);
+        if (frame.line != 0) {
+            writeLiteral(stderr_fd, ":");
+            writeUnsigned(stderr_fd, frame.line);
+            if (frame.column != 0) {
+                writeLiteral(stderr_fd, ":");
+                writeUnsigned(stderr_fd, frame.column);
+            }
+        }
+    }
+    writeLiteral(stderr_fd, "\n");
+}
+
+fn printMappedBacktraceFrames(first_ip: usize, first_frame_addr: usize) void {
     printMappedInstructionPointer(first_ip);
     var frame_addr = firstFrameFromAddress(first_frame_addr);
     var frames: usize = 0;

@@ -264,9 +264,6 @@ pub fn lowerCheckedModulesToLir(
         try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted);
     }
     try postcheck.MonotypeLifted.Lift.recomputeCaptures(allocator, &lifted);
-    // The lifted stage is done introducing types, so seal the store again for
-    // everything downstream.
-    lifted.freeze();
 
     const lifted_input = lifted;
     lifted_owned = false;

@@ -65,6 +65,7 @@ const Allocator = std.mem.Allocator;
 const LirProcSpecId = LIR.LirProcSpecId;
 const LirProcSpec = LIR.LirProcSpec;
 const CFStmtId = LIR.CFStmtId;
+const InlineScopeId = LIR.InlineScopeId;
 const LocalId = LIR.LocalId;
 const LocalSpan = LIR.LocalSpan;
 const Layout = layout_mod.Layout;
@@ -342,10 +343,15 @@ pub const Interpreter = struct {
     active_stmt_loc: base.SourceLoc = base.SourceLoc.none,
     /// Checked source region of the LIR statement currently being interpreted.
     active_stmt_region: base.Region = base.Region.zero(),
+    /// Exact virtual source frame of the LIR statement currently being
+    /// interpreted. This is independent of the physical proc call stack.
+    active_stmt_inline_scope: InlineScopeId = InlineScopeId.none,
     /// Source location captured when the current evaluation first failed.
     failed_stmt_loc: base.SourceLoc = base.SourceLoc.none,
     /// Checked source region captured when the current evaluation first failed.
     failed_stmt_region: base.Region = base.Region.zero(),
+    /// Virtual source frame captured with the failed statement location.
+    failed_stmt_inline_scope: InlineScopeId = InlineScopeId.none,
     comptime_branch_hits: std.ArrayList(ComptimeBranchHit),
     comptime_failed_site: ?LIR.ComptimeSiteId = null,
 
@@ -745,6 +751,14 @@ pub const Interpreter = struct {
         return null;
     }
 
+    /// The innermost virtual source frame of the failed statement. Callers can
+    /// walk `LirStore.inlineScope(id).parent` to expand the complete inlined
+    /// source stack without inferring it from physical procedures.
+    pub fn getFailedInlineScope(self: *const LirInterpreter) ?InlineScopeId {
+        if (self.failed_stmt_inline_scope != InlineScopeId.none) return self.failed_stmt_inline_scope;
+        return null;
+    }
+
     pub fn getComptimeFailedSite(self: *const LirInterpreter) ?LIR.ComptimeSiteId {
         return self.comptime_failed_site;
     }
@@ -763,6 +777,7 @@ pub const Interpreter = struct {
         if (self.active_stmt_loc.hasLocation()) {
             self.failed_stmt_loc = self.active_stmt_loc;
             self.failed_stmt_region = self.active_stmt_region;
+            self.failed_stmt_inline_scope = self.active_stmt_inline_scope;
         }
     }
 
@@ -770,11 +785,13 @@ pub const Interpreter = struct {
         self: *LirInterpreter,
         call_loc: base.SourceLoc,
         call_region: base.Region,
+        call_inline_scope: InlineScopeId,
     ) void {
         if (!call_loc.hasLocation()) return;
         if (!self.failed_stmt_loc.hasLocation()) {
             self.failed_stmt_loc = call_loc;
             self.failed_stmt_region = call_region;
+            self.failed_stmt_inline_scope = call_inline_scope;
         }
     }
 
@@ -782,13 +799,14 @@ pub const Interpreter = struct {
         self: *LirInterpreter,
         call_loc: base.SourceLoc,
         call_region: base.Region,
+        call_inline_scope: InlineScopeId,
         err: Error,
     ) void {
         switch (err) {
             error.Crash,
             error.DivisionByZero,
             error.RuntimeError,
-            => self.recordCallerFailureLocForSourcelessCallee(call_loc, call_region),
+            => self.recordCallerFailureLocForSourcelessCallee(call_loc, call_region, call_inline_scope),
             error.OutOfMemory,
             error.ComptimeExhaustiveness,
             error.ExpectErr,
@@ -990,8 +1008,10 @@ pub const Interpreter = struct {
         self.failed_call_stack.clearRetainingCapacity();
         self.active_stmt_loc = base.SourceLoc.none;
         self.active_stmt_region = base.Region.zero();
+        self.active_stmt_inline_scope = InlineScopeId.none;
         self.failed_stmt_loc = base.SourceLoc.none;
         self.failed_stmt_region = base.Region.zero();
+        self.failed_stmt_inline_scope = InlineScopeId.none;
         self.comptime_branch_hits.clearRetainingCapacity();
         self.comptime_failed_site = null;
         if (builtin.mode == .Debug) self.inflight_zeroed_box_payloads.clearRetainingCapacity();
@@ -1810,6 +1830,7 @@ pub const Interpreter = struct {
             const stmt = self.store.getCFStmt(current);
             self.active_stmt_loc = self.store.stmtLoc(current);
             self.active_stmt_region = self.store.stmtRegion(current);
+            self.active_stmt_inline_scope = self.store.stmtInlineScope(current);
             switch (stmt) {
                 .assign_ref => |assign| {
                     const target_layout = self.store.getLocal(assign.target).layout_idx;
@@ -1834,8 +1855,9 @@ pub const Interpreter = struct {
                     const arg_layouts = try self.localLayouts(arg_locals);
                     const call_loc = self.active_stmt_loc;
                     const call_region = self.active_stmt_region;
+                    const call_inline_scope = self.active_stmt_inline_scope;
                     const result = self.evalProcById(assign.proc, arg_values, arg_layouts) catch |err| {
-                        self.recordCallerFailureLocForCalleeError(call_loc, call_region, err);
+                        self.recordCallerFailureLocForCalleeError(call_loc, call_region, call_inline_scope, err);
                         return err;
                     };
                     try self.setLocalChecked(
@@ -1856,6 +1878,7 @@ pub const Interpreter = struct {
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
                     const call_loc = self.active_stmt_loc;
                     const call_region = self.active_stmt_region;
+                    const call_inline_scope = self.active_stmt_inline_scope;
                     const result = self.evalErasedCall(
                         frame,
                         assign.closure,
@@ -1863,7 +1886,7 @@ pub const Interpreter = struct {
                         try self.localLayouts(arg_locals),
                         self.store.getLocal(assign.target).layout_idx,
                     ) catch |err| {
-                        self.recordCallerFailureLocForCalleeError(call_loc, call_region, err);
+                        self.recordCallerFailureLocForCalleeError(call_loc, call_region, call_inline_scope, err);
                         return err;
                     };
                     try self.setLocalChecked(

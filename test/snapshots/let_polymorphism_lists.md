@@ -323,11 +323,11 @@ str_list = ["hello", "world"]
 float_list = [1.1, 2.2, 3.3]
 
 # Append empty list (polymorphic use)
-all_int_list = int_list + 
+all_int_list = int_list +
 
-all_str_list = str_list + 
+all_str_list = str_list +
 
-all_float_list = float_list + 
+all_float_list = float_list +
 
 
 # Function returning empty list

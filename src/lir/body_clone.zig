@@ -344,6 +344,16 @@ pub fn BodyCloner(comptime Rewriter: type) type {
         pub fn cloneStmt(self: *Self, old_id: CFStmtId) Allocator.Error!CFStmtId {
             if (self.stmt_map.get(old_id)) |existing| return existing;
 
+            const saved_loc = self.store.current_loc;
+            defer self.store.current_loc = saved_loc;
+            const saved_region = self.store.current_region;
+            defer self.store.current_region = saved_region;
+            const saved_inline_scope = self.store.current_inline_scope;
+            defer self.store.current_inline_scope = saved_inline_scope;
+            self.store.current_loc = self.store.stmtLoc(old_id);
+            self.store.current_region = self.store.stmtRegion(old_id);
+            self.store.current_inline_scope = self.store.stmtInlineScope(old_id);
+
             const stmt = self.store.getCFStmt(old_id);
             if (@hasDecl(Rewriter, "interceptStmt")) {
                 if (try self.rewriter.interceptStmt(self, stmt)) |intercepted| {

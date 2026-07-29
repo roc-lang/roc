@@ -135,7 +135,7 @@ EndOfFile,
 ~~~roc
 
 
-foo = 
+foo =
 
 	"on        (string 'onmo %')))"
 ~~~

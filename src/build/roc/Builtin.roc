@@ -1,4 +1,62 @@
 Builtin :: [].{
+	# A format implements the container protocol below to be usable with derived
+	# parsers and encoders. Every method is resolved per encoding type, so a
+	# format only needs the methods the shapes its users parse actually reach:
+	# a format with no tuple syntax simply omits parse_tuple_*, and using a
+	# tuple with it is a compile-time error rather than a runtime one.
+	#
+	# Containers come in two kinds.
+	#
+	# Fixed-arity sequences (tuples, and the payloads of a tag) have an arity
+	# the shape already fixes, so the format never decides when they end. It
+	# receives the count and returns plain states:
+	#
+	#     parse_tuple_start : encoding, state, U64 -> Try(state, err)
+	#     parse_tuple_next  : encoding, state, U64, U64 -> Try(state, err)
+	#     parse_tuple_end   : encoding, state, U64 -> Try(state, err)
+	#
+	# parse_tuple_next runs before every element after the first and receives
+	# that element's zero-based index along with the total. Because the format
+	# knows the expected arity, it is the one that reports an arity mismatch,
+	# at the position where it can say what it actually found.
+	#
+	# Variable-length containers (lists, sets, records, dicts) begin with a
+	# start method that reports whether the format knows the entry count up
+	# front:
+	#
+	#     parse_list_start : encoding, state
+	#         -> Try([Counted({ len : U64, rest : state }), Uncounted(state)], err)
+	#
+	# Counted means the driver reads exactly len entries and preallocates,
+	# calling nothing between one entry and the next. It still calls whatever
+	# reads an entry itself: parse_record_field for a record's name, and
+	# parse_dict_after_key for whatever sits between a key and its value. A
+	# length-prefixed binary format returns Counted and needs no state of its
+	# own to track where it is. A format that is both length-prefixed and
+	# separated must return Uncounted and count in its own state, which keeps
+	# the counted path free of between-entry calls.
+	#
+	# Uncounted drives an event loop instead. For lists:
+	#
+	#     parse_list_next          : encoding, state -> Try([Element(state), Done(state)], err)
+	#     parse_list_after_element : encoding, state -> Try([Continue(state), Done(state)], err)
+	#
+	# Records use parse_record_start, then parse_record_field to read a field
+	# name, then parse_record_after_field. A field event may also be Continue,
+	# which means the format consumed an entry itself and the cursor is already
+	# at the next boundary; that is how a format skips entries it can rule out
+	# without tokenizing them. Dicts use parse_dict_start, parse_dict_next,
+	# parse_dict_after_key between a key and its value, and
+	# parse_dict_after_entry.
+	#
+	# A dict key that the format renders as a key string — a Str, a Bool, a
+	# number, or a tag union whose tags all lack payloads — is read and written
+	# by the parse_key_* and encode_key_* methods. Any other key is read and
+	# written by the key type's own codec, after parse_key_start or
+	# encode_key_start opens the key position. A format whose key position only
+	# holds strings, as JSON's does, implements the key-string methods and not
+	# those two, so a dict keyed by a record is rejected against that format
+	# rather than by a rule every format shares.
 	Encoding :: {}.{
 		# Compiler-generated structural record field-name metadata used by derived
 		# parsers. The phantom _shape ties a FieldName handle to the exact
@@ -89,14 +147,23 @@ Builtin :: [].{
 			parse_null : JsonEncoding, JsonState -> Try(JsonState, [InvalidJson(Str)])
 			parse_null = |encoding, state| JsonEncoding.parse_null(encoding, state)
 
-			parse_array_start : JsonEncoding, JsonState -> Try(JsonState, [InvalidJson(Str)])
-			parse_array_start = |encoding, state| JsonEncoding.parse_array_start(encoding, state)
+			parse_list_start : JsonEncoding, JsonState -> Try([Counted({ len : U64, rest : JsonState }), Uncounted(JsonState)], [InvalidJson(Str)])
+			parse_list_start = |encoding, state| JsonEncoding.parse_list_start(encoding, state)
 
-			parse_array_next : JsonEncoding, JsonState -> Try([Element(JsonState), Done(JsonState)], [InvalidJson(Str)])
-			parse_array_next = |encoding, state| JsonEncoding.parse_array_next(encoding, state)
+			parse_list_next : JsonEncoding, JsonState -> Try([Element(JsonState), Done(JsonState)], [InvalidJson(Str)])
+			parse_list_next = |encoding, state| JsonEncoding.parse_list_next(encoding, state)
 
-			parse_array_after_element : JsonEncoding, JsonState -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str)])
-			parse_array_after_element = |encoding, state| JsonEncoding.parse_array_after_element(encoding, state)
+			parse_list_after_element : JsonEncoding, JsonState -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str)])
+			parse_list_after_element = |encoding, state| JsonEncoding.parse_list_after_element(encoding, state)
+
+			parse_tuple_start : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str)])
+			parse_tuple_start = |encoding, state, len| JsonEncoding.parse_tuple_start(encoding, state, len)
+
+			parse_tuple_next : JsonEncoding, JsonState, U64, U64 -> Try(JsonState, [InvalidJson(Str)])
+			parse_tuple_next = |encoding, state, index, len| JsonEncoding.parse_tuple_next(encoding, state, index, len)
+
+			parse_tuple_end : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str)])
+			parse_tuple_end = |encoding, state, len| JsonEncoding.parse_tuple_end(encoding, state, len)
 
 			encode_str : JsonEncoding, Str, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
 			encode_str = |_, value, state| JsonEncoding.encode_str(value, state)
@@ -158,6 +225,9 @@ Builtin :: [].{
 
 			encode_list : JsonEncoding, JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
 			encode_list = |_, state, count, write_elements| JsonEncoding.encode_list(state, count, write_elements)
+
+			encode_dict : JsonEncoding, JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)), (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
+			encode_dict = |_, state, count, write_entries| JsonEncoding.encode_dict(state, count, write_entries)
 
 			to_str : a -> Str
 				where [
@@ -276,19 +346,21 @@ Builtin :: [].{
 				}
 			}
 
-			parse_array_start_from_json : Str -> Try(JsonState, [InvalidJson(Str), ..])
-			parse_array_start_from_json = |raw| {
+			## A JSON array never declares its element count up front, so list
+			## parsing always runs in Uncounted mode.
+			parse_list_start_from_json : Str -> Try([Counted({ len : U64, rest : JsonState }), Uncounted(JsonState)], [InvalidJson(Str), ..])
+			parse_list_start_from_json = |raw| {
 				trimmed = json_trim_start(raw)
 
 				if Str.starts_with(trimmed, "[") {
-					Ok(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, "["))))
+					Ok(Uncounted(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, "[")))))
 				} else {
 					Err(Json.invalid_json)
 				}
 			}
 
-			parse_array_next_from_json : Str -> Try([Element(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
-			parse_array_next_from_json = |raw| {
+			parse_list_next_from_json : Str -> Try([Element(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
+			parse_list_next_from_json = |raw| {
 				trimmed = json_trim_start(raw)
 
 				if Str.starts_with(trimmed, "]") {
@@ -298,8 +370,8 @@ Builtin :: [].{
 				}
 			}
 
-			parse_array_after_element_from_json : JsonEncoding, Str -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
-			parse_array_after_element_from_json = |encoding, raw| {
+			parse_list_after_element_from_json : JsonEncoding, Str -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
+			parse_list_after_element_from_json = |encoding, raw| {
 				trimmed = json_trim_start(raw)
 
 				if Str.starts_with(trimmed, "]") {
@@ -319,6 +391,66 @@ Builtin :: [].{
 				} else {
 					Err(Json.invalid_json)
 				}
+			}
+
+			## JSON writes tuples as arrays. Because the arity is known, a
+			## mismatch is detected here rather than by the driver, so the error
+			## can point at the element position that actually disagreed.
+			parse_tuple_start_from_json : Str, U64 -> Try(JsonState, [InvalidJson(Str), ..])
+			parse_tuple_start_from_json = |raw, len| {
+				trimmed = json_trim_start(raw)
+
+				if !Str.starts_with(trimmed, "[") {
+					return Err(Json.invalid_json)
+				}
+
+				after_open = json_trim_start(Str.drop_prefix(trimmed, "["))
+
+				if len == 0 {
+					if Str.starts_with(after_open, "]") {
+						Ok(JsonState.Input(json_trim_start(Str.drop_prefix(after_open, "]"))))
+					} else {
+						Err(Json.invalid_json)
+					}
+				} else if Str.starts_with(after_open, "]") {
+					Err(Json.invalid_json)
+				} else {
+					Ok(JsonState.Input(after_open))
+				}
+			}
+
+			parse_tuple_next_from_json : Str -> Try(JsonState, [InvalidJson(Str), ..])
+			parse_tuple_next_from_json = |raw| {
+				trimmed = json_trim_start(raw)
+
+				if !Str.starts_with(trimmed, ",") {
+					return Err(Json.invalid_json)
+				}
+
+				Ok(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, ","))))
+			}
+
+			parse_tuple_end_from_json : JsonEncoding, Str, U64 -> Try(JsonState, [InvalidJson(Str), ..])
+			parse_tuple_end_from_json = |encoding, raw, len| {
+				trimmed = json_trim_start(raw)
+
+				if len == 0 {
+					return Ok(JsonState.Input(trimmed))
+				}
+
+				if Str.starts_with(trimmed, "]") {
+					return Ok(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, "]"))))
+				}
+
+				if Str.starts_with(trimmed, ",") and JsonEncoding.allows_trailing_commas(encoding) {
+					after_comma = json_trim_start(Str.drop_prefix(trimmed, ","))
+
+					if Str.starts_with(after_comma, "]") {
+						return Ok(JsonState.Input(json_trim_start(Str.drop_prefix(after_comma, "]"))))
+					}
+				}
+
+				Err(Json.invalid_json)
 			}
 
 			parse_json_unsigned_int : Str, (Str -> Try(a, [BadNumStr])) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str), ..])
@@ -484,38 +616,62 @@ Builtin :: [].{
 				}
 			}
 
-			parse_json_key_unsigned_int : Str, (Str -> Try(a, [BadNumStr])) -> Try(a, [InvalidJson(Str), ..])
-			parse_json_key_unsigned_int = |key, parse_num|
-				if Json.is_json_unsigned_int_literal(key) {
-					match parse_num(key) {
-						Ok(value) => Ok(value)
-						Err(_) => Err(Json.invalid_json)
-					}
-				} else {
-					Err(Json.invalid_json)
+			## Read one quoted object key at the cursor, leaving the cursor
+			## just past the closing quote.
+			take_json_key : Str -> Try({ value : Str, rest : JsonState }, [InvalidJson(Str), ..])
+			take_json_key = |raw| {
+				trimmed = json_trim_start(raw)
+
+				if !Str.starts_with(trimmed, "\"") {
+					return Err(Json.invalid_json)
 				}
 
-			parse_json_key_signed_int : Str, (Str -> Try(a, [BadNumStr])) -> Try(a, [InvalidJson(Str), ..])
-			parse_json_key_signed_int = |key, parse_num|
-				if Json.is_json_signed_int_literal(key) {
-					match parse_num(key) {
-						Ok(value) => Ok(value)
-						Err(_) => Err(Json.invalid_json)
-					}
-				} else {
-					Err(Json.invalid_json)
-				}
+				parts = Json.split_json_string_tail(Str.drop_prefix(trimmed, "\""))?
 
-			parse_json_key_number : Str, (Str -> Try(a, [BadNumStr])) -> Try(a, [InvalidJson(Str), ..])
-			parse_json_key_number = |key, parse_num|
-				if Json.is_json_number(key) {
-					match parse_num(key) {
-						Ok(value) => Ok(value)
+				Ok({ value: parts.value, rest: JsonState.Input(json_trim_start(parts.after)) })
+			}
+
+			parse_json_key_unsigned_int : Str, (Str -> Try(a, [BadNumStr])) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_json_key_unsigned_int = |raw, parse_num| {
+				parts = Json.take_json_key(raw)?
+
+				if Json.is_json_unsigned_int_literal(parts.value) {
+					match parse_num(parts.value) {
+						Ok(value) => Ok({ value, rest: parts.rest })
 						Err(_) => Err(Json.invalid_json)
 					}
 				} else {
 					Err(Json.invalid_json)
 				}
+			}
+
+			parse_json_key_signed_int : Str, (Str -> Try(a, [BadNumStr])) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_json_key_signed_int = |raw, parse_num| {
+				parts = Json.take_json_key(raw)?
+
+				if Json.is_json_signed_int_literal(parts.value) {
+					match parse_num(parts.value) {
+						Ok(value) => Ok({ value, rest: parts.rest })
+						Err(_) => Err(Json.invalid_json)
+					}
+				} else {
+					Err(Json.invalid_json)
+				}
+			}
+
+			parse_json_key_number : Str, (Str -> Try(a, [BadNumStr])) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_json_key_number = |raw, parse_num| {
+				parts = Json.take_json_key(raw)?
+
+				if Json.is_json_number(parts.value) {
+					match parse_num(parts.value) {
+						Ok(value) => Ok({ value, rest: parts.rest })
+						Err(_) => Err(Json.invalid_json)
+					}
+				} else {
+					Err(Json.invalid_json)
+				}
+			}
 
 			encode_json_number : Str, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
 			encode_json_number = |value, state|
@@ -543,6 +699,24 @@ Builtin :: [].{
 				)
 			}
 
+			write_dict_entry : JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)), (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)
+			write_dict_entry = |state, write_key, write_value| {
+				with_comma = if state.needs_comma {
+					u8_append(state.output, 44)
+				} else {
+					state.output
+				}
+
+				keyed = write_key(JsonEncodeState.{ output: with_comma })?
+				encoded = write_value(JsonEncodeState.{ output: u8_append(keyed.output, 58) })?
+				Ok(
+					JsonContainerEncodeState.{
+						output: encoded.output,
+						needs_comma: True,
+					},
+				)
+			}
+
 			write_sequence_element : JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)
 			write_sequence_element = |state, write_value| {
 				output = if state.needs_comma {
@@ -562,13 +736,12 @@ Builtin :: [].{
 
 			append_json_string_bytes : List(U8), Str -> List(U8)
 			append_json_string_bytes = |out, value| {
-				bytes = Str.to_utf8(value)
-				len = List.len(bytes)
+				len = Str.count_utf8_bytes(value)
 				var $out = u8_list_reserve(out, len)
 				var $index = 0
 
 				while $index < len {
-					$out = u8_append($out, list_get_unsafe(bytes, $index))
+					$out = u8_append($out, str_get_utf8_byte_unsafe(value, $index))
 					$index = $index + 1
 				}
 
@@ -577,15 +750,14 @@ Builtin :: [].{
 
 			append_json_quoted_string : List(U8), Str -> List(U8)
 			append_json_quoted_string = |out, value| {
-				bytes = Str.to_utf8(value)
-				len = List.len(bytes)
+				len = Str.count_utf8_bytes(value)
 				var $out = u8_list_reserve(out, len + 2)
 				var $index = 0
 
 				$out = u8_append($out, 34)
 
 				while $index < len {
-					byte = list_get_unsafe(bytes, $index)
+					byte = str_get_utf8_byte_unsafe(value, $index)
 					$out = Json.append_json_string_byte($out, byte)
 					$index = $index + 1
 				}
@@ -647,65 +819,70 @@ Builtin :: [].{
 					value + 87
 				}
 
-			parse_record_field_from_object : JsonEncoding,
-			Str -> Try(
+			parse_record_start_from_json : Str -> Try([Counted({ len : U64, rest : JsonState }), Uncounted(JsonState)], [InvalidJson(Str), ..])
+			parse_record_start_from_json = |raw| {
+				trimmed = json_trim_start(raw)
+
+				if Str.starts_with(trimmed, "{") {
+					Ok(Uncounted(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, "{")))))
+				} else {
+					Err(Json.invalid_json)
+				}
+			}
+
+			## Called with the input at an entry boundary: either at a field name
+			## or at the closing brace.
+			parse_record_field_from_json : Str -> Try(
 				[
 					Field({ field : FieldName(_shape), rest : JsonState }),
 					TryField({ name : Str, rest : JsonState }),
 					TryFieldCaseless({ name : Str, rest : JsonState }),
-					Continue({ rest : JsonState }),
-					Done({ rest : JsonState }),
+					Continue(JsonState),
+					Done(JsonState),
 				],
 				[InvalidJson(Str), ..],
 			)
-			parse_record_field_from_object = |encoding, raw| {
+			parse_record_field_from_json = |raw| {
 				remaining = json_trim_start(raw)
 
-				if Str.starts_with(remaining, "{") {
-					return Json.parse_record_field_after_object_start(encoding, json_trim_start(Str.drop_prefix(remaining, "{")))
-				}
-
-				Json.parse_record_field_after_value(encoding, remaining)
-			}
-
-			parse_record_field_after_object_start = |encoding, remaining| {
 				if Str.starts_with(remaining, "}") {
 					after_record = json_trim_start(Str.drop_prefix(remaining, "}"))
-					return Ok(Done({ rest: JsonState.Input(after_record) }))
+					return Ok(Done(JsonState.Input(after_record)))
 				}
 
-				if Str.starts_with(remaining, ",") {
+				key_parts = Json.parse_json_object_key(remaining)?
+				Ok(TryField({ name: key_parts.name, rest: key_parts.rest }))
+			}
+
+			parse_record_after_field_from_json : JsonEncoding, Str -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
+			parse_record_after_field_from_json = |encoding, raw| {
+				trimmed = json_trim_start(raw)
+
+				if Str.starts_with(trimmed, "}") {
+					after_record = json_trim_start(Str.drop_prefix(trimmed, "}"))
+					return Ok(Done(JsonState.Input(after_record)))
+				}
+
+				if !Str.starts_with(trimmed, ",") {
 					return Err(Json.invalid_json)
 				}
 
-				Json.parse_record_field_start(encoding, remaining)
-			}
-
-			parse_record_field_after_value = |encoding, remaining| {
-				if Str.starts_with(remaining, "}") {
-					after_record = json_trim_start(Str.drop_prefix(remaining, "}"))
-					return Ok(Done({ rest: JsonState.Input(after_record) }))
-				}
-
-				if !Str.starts_with(remaining, ",") {
-					return Err(Json.invalid_json)
-				}
-
-				after_comma = json_trim_start(Str.drop_prefix(remaining, ","))
+				after_comma = json_trim_start(Str.drop_prefix(trimmed, ","))
 
 				if Str.starts_with(after_comma, "}") {
 					if JsonEncoding.allows_trailing_commas(encoding) {
 						after_record = json_trim_start(Str.drop_prefix(after_comma, "}"))
-						return Ok(Done({ rest: JsonState.Input(after_record) }))
+						return Ok(Done(JsonState.Input(after_record)))
 					} else {
 						return Err(Json.invalid_json)
 					}
 				}
 
-				Json.parse_record_field_start(encoding, after_comma)
+				Ok(Continue(JsonState.Input(after_comma)))
 			}
 
-			parse_record_field_start = |_, remaining| {
+			parse_json_object_key : Str -> Try({ name : Str, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_json_object_key = |remaining| {
 				if !Str.starts_with(remaining, "\"") {
 					return Err(Json.invalid_json)
 				}
@@ -719,9 +896,8 @@ Builtin :: [].{
 				}
 
 				after_colon = json_trim_start(Str.drop_prefix(after_key, ":"))
-				rest = JsonState.Input(after_colon)
 
-				Ok(TryField({ name: key, rest }))
+				Ok({ name: key, rest: JsonState.Input(after_colon) })
 			}
 
 			snake_to_camel : Str -> Str
@@ -969,6 +1145,10 @@ Builtin :: [].{
 			finish_string_tag_payloads = |state, count|
 				if count == 0 Ok(state) else Err(Json.invalid_json)
 
+			## A multi-payload tag writes its payloads as a JSON array, which is
+			## a fixed-arity sequence, so it reads back through the tuple
+			## methods. A single payload is written bare, and a payload-free tag
+			## is written as an empty object.
 			start_object_tag_payloads : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str), ..])
 			start_object_tag_payloads = |encoding, state, count|
 				if count == 0 {
@@ -981,26 +1161,15 @@ Builtin :: [].{
 				} else if count == 1 {
 					Ok(state)
 				} else {
-					started = JsonEncoding.parse_array_start(encoding, state)?
-					match JsonEncoding.parse_array_next(encoding, started)? {
-						Element(payload_state) => Ok(payload_state)
-						Done(_) => Err(Json.invalid_json)
-					}
+					JsonEncoding.parse_tuple_start(encoding, state, count)
 				}
 
 			next_object_tag_payload : JsonEncoding, JsonState, U64, U64 -> Try(JsonState, [InvalidJson(Str), ..])
-			next_object_tag_payload = |encoding, state, _, count|
+			next_object_tag_payload = |encoding, state, index, count|
 				if count <= 1 {
 					Err(Json.invalid_json)
 				} else {
-					match JsonEncoding.parse_array_after_element(encoding, state)? {
-						Continue(next_state) =>
-							match JsonEncoding.parse_array_next(encoding, next_state)? {
-								Element(payload_state) => Ok(payload_state)
-								Done(_) => Err(Json.invalid_json)
-							}
-						Done(_) => Err(Json.invalid_json)
-					}
+					JsonEncoding.parse_tuple_next(encoding, state, index, count)
 				}
 
 			finish_object_tag_payloads : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str), ..])
@@ -1008,10 +1177,7 @@ Builtin :: [].{
 				if count <= 1 {
 					Ok(state)
 				} else {
-					match JsonEncoding.parse_array_after_element(encoding, state)? {
-						Done(done_state) => Ok(done_state)
-						Continue(_) => Err(Json.invalid_json)
-					}
+					JsonEncoding.parse_tuple_end(encoding, state, count)
 				}
 
 			finish_tag_payload : JsonEncoding, a, Str -> Try({ value : a, rest : JsonState }, [InvalidJson(Str), ..])
@@ -1431,22 +1597,49 @@ Builtin :: [].{
 					Input(raw) => Json.parse_json_null(raw)
 				}
 
-			parse_array_start : JsonEncoding, JsonState -> Try(JsonState, [InvalidJson(Str), ..])
-			parse_array_start = |_, state|
+			parse_list_start : JsonEncoding, JsonState -> Try([Counted({ len : U64, rest : JsonState }), Uncounted(JsonState)], [InvalidJson(Str), ..])
+			parse_list_start = |_, state|
 				match state {
-					Input(raw) => Json.parse_array_start_from_json(raw)
+					Input(raw) => Json.parse_list_start_from_json(raw)
 				}
 
-			parse_array_next : JsonEncoding, JsonState -> Try([Element(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
-			parse_array_next = |_, state|
+			parse_list_next : JsonEncoding, JsonState -> Try([Element(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
+			parse_list_next = |_, state|
 				match state {
-					Input(raw) => Json.parse_array_next_from_json(raw)
+					Input(raw) => Json.parse_list_next_from_json(raw)
 				}
 
-			parse_array_after_element : JsonEncoding, JsonState -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
-			parse_array_after_element = |encoding, state|
+			parse_list_after_element : JsonEncoding, JsonState -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
+			parse_list_after_element = |encoding, state|
 				match state {
-					Input(raw) => Json.parse_array_after_element_from_json(encoding, raw)
+					Input(raw) => Json.parse_list_after_element_from_json(encoding, raw)
+				}
+
+			parse_tuple_start : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str), ..])
+			parse_tuple_start = |_, state, len|
+				match state {
+					Input(raw) => Json.parse_tuple_start_from_json(raw, len)
+				}
+
+			parse_tuple_next : JsonEncoding, JsonState, U64, U64 -> Try(JsonState, [InvalidJson(Str), ..])
+			parse_tuple_next = |_, state, _, _|
+				match state {
+					Input(raw) => Json.parse_tuple_next_from_json(raw)
+				}
+
+			parse_tuple_end : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str), ..])
+			parse_tuple_end = |encoding, state, len|
+				match state {
+					Input(raw) => Json.parse_tuple_end_from_json(encoding, raw, len)
+				}
+
+			## A JSON object never declares its entry count up front, so record
+			## parsing always runs in Uncounted mode: the driver learns the end
+			## of the record from parse_record_field or parse_record_after_field.
+			parse_record_start : JsonEncoding, JsonState -> Try([Counted({ len : U64, rest : JsonState }), Uncounted(JsonState)], [InvalidJson(Str), ..])
+			parse_record_start = |_, state|
+				match state {
+					Input(raw) => Json.parse_record_start_from_json(raw)
 				}
 
 			parse_record_field : JsonEncoding,
@@ -1456,29 +1649,63 @@ Builtin :: [].{
 					Field({ field : FieldName(_shape), rest : JsonState }),
 					TryField({ name : Str, rest : JsonState }),
 					TryFieldCaseless({ name : Str, rest : JsonState }),
-					Continue({ rest : JsonState }),
-					Done({ rest : JsonState }),
+					Continue(JsonState),
+					Done(JsonState),
 				],
 				[InvalidJson(Str), ..],
 			)
-			parse_record_field = |encoding, _, state|
+			parse_record_field = |_, _, state|
 				match state {
-					Input(raw) => Json.parse_record_field_from_object(encoding, raw)
+					Input(raw) => Json.parse_record_field_from_json(raw)
 				}
 
-			parse_object_next : JsonEncoding, JsonState -> Try([Entry({ key : Str, rest : JsonState }), Done({ rest : JsonState })], [InvalidJson(Str), ..])
-			parse_object_next = |encoding, state|
+			parse_record_after_field : JsonEncoding, JsonState -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
+			parse_record_after_field = |encoding, state|
 				match state {
-					Input(raw) =>
-						match Json.parse_record_field_from_object(encoding, raw) {
-							Ok(Field({ field, rest })) => Ok(Entry({ key: FieldName.name(field), rest }))
-							Ok(TryField({ name, rest })) => Ok(Entry({ key: name, rest }))
-							Ok(TryFieldCaseless({ name, rest })) => Ok(Entry({ key: name, rest }))
-							Ok(Continue(_)) => Err(Json.invalid_json)
-							Ok(Done({ rest })) => Ok(Done({ rest: rest }))
-							Err(err) => Err(err)
+					Input(raw) => Json.parse_record_after_field_from_json(encoding, raw)
+				}
+
+			## A JSON object never declares its entry count up front, so dict
+			## parsing always runs in Uncounted mode.
+			parse_dict_start : JsonEncoding, JsonState -> Try([Counted({ len : U64, rest : JsonState }), Uncounted(JsonState)], [InvalidJson(Str), ..])
+			parse_dict_start = |_, state|
+				match state {
+					Input(raw) => Json.parse_record_start_from_json(raw)
+				}
+
+			parse_dict_next : JsonEncoding, JsonState -> Try([Entry(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
+			parse_dict_next = |_, state|
+				match state {
+					Input(raw) => {
+						trimmed = json_trim_start(raw)
+
+						if Str.starts_with(trimmed, "}") {
+							Ok(Done(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, "}")))))
+						} else {
+							Ok(Entry(JsonState.Input(trimmed)))
 						}
 					}
+				}
+
+			parse_dict_after_key : JsonEncoding, JsonState -> Try(JsonState, [InvalidJson(Str), ..])
+			parse_dict_after_key = |_, state|
+				match state {
+					Input(raw) => {
+						trimmed = json_trim_start(raw)
+
+						if !Str.starts_with(trimmed, ":") {
+							return Err(Json.invalid_json)
+						}
+
+						Ok(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, ":"))))
+					}
+				}
+
+			parse_dict_after_entry : JsonEncoding, JsonState -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
+			parse_dict_after_entry = |encoding, state|
+				match state {
+					Input(raw) => Json.parse_record_after_field_from_json(encoding, raw)
+				}
 
 			skip_record_field : JsonEncoding, JsonState -> Try(JsonState, [InvalidJson(Str), ..])
 			skip_record_field = |encoding, state| Json.skip_json_value(encoding, state)
@@ -1537,6 +1764,15 @@ Builtin :: [].{
 
 			encode_list : JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
 			encode_list = |state, count, write_elements| JsonEncoding.encode_tuple(state, count, write_elements)
+
+			## A dict writes as a JSON object. The key is written by its own
+			## thunk, which the key encoders always render as a quoted string.
+			encode_dict : JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)), (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
+			encode_dict = |state, _, write_entries| {
+				started = JsonContainerEncodeState.{ output: u8_append(state.output, 123), needs_comma: False }
+				finished = write_entries(started, Json.write_dict_entry)?
+				Ok(JsonEncodeState.{ output: u8_append(finished.output, 125) })
+			}
 
 			encode_str : Str, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
 			encode_str = |value, state|
@@ -1630,99 +1866,151 @@ Builtin :: [].{
 					},
 				)
 
-			parse_key_str : JsonEncoding, Str -> Try(Str, [InvalidJson(Str), ..])
-			parse_key_str = |_, key| Ok(key)
-
-			parse_key_bool : JsonEncoding, Str -> Try(Bool, [InvalidJson(Str), ..])
-			parse_key_bool = |_, key|
-				if Str.is_eq(key, "true") {
-					Ok(True)
-				} else if Str.is_eq(key, "false") {
-					Ok(False)
-				} else {
-					Err(Json.invalid_json)
+			## Dict keys arrive as JSON strings, so each key parser reads the
+			## quoted text at the cursor and converts it to the key type.
+			parse_key_str : JsonEncoding, JsonState -> Try({ value : Str, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_str = |_, state|
+				match state {
+					Input(raw) => Json.take_json_key(raw)
 				}
 
-			parse_key_u8 : JsonEncoding, Str -> Try(U8, [InvalidJson(Str), ..])
-			parse_key_u8 = |_, key| Json.parse_json_key_unsigned_int(key, u8_from_str)
+			parse_key_bool : JsonEncoding, JsonState -> Try({ value : Bool, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_bool = |_, state|
+				match state {
+					Input(raw) => {
+						parts = Json.take_json_key(raw)?
 
-			parse_key_i8 : JsonEncoding, Str -> Try(I8, [InvalidJson(Str), ..])
-			parse_key_i8 = |_, key| Json.parse_json_key_signed_int(key, i8_from_str)
+						if Str.is_eq(parts.value, "true") {
+							Ok({ value: True, rest: parts.rest })
+						} else if Str.is_eq(parts.value, "false") {
+							Ok({ value: False, rest: parts.rest })
+						} else {
+							Err(Json.invalid_json)
+						}
+					}
+				}
 
-			parse_key_u16 : JsonEncoding, Str -> Try(U16, [InvalidJson(Str), ..])
-			parse_key_u16 = |_, key| Json.parse_json_key_unsigned_int(key, u16_from_str)
+			parse_key_u8 : JsonEncoding, JsonState -> Try({ value : U8, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_u8 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_unsigned_int(raw, u8_from_str)
+				}
 
-			parse_key_i16 : JsonEncoding, Str -> Try(I16, [InvalidJson(Str), ..])
-			parse_key_i16 = |_, key| Json.parse_json_key_signed_int(key, i16_from_str)
+			parse_key_i8 : JsonEncoding, JsonState -> Try({ value : I8, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_i8 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_signed_int(raw, i8_from_str)
+				}
 
-			parse_key_u32 : JsonEncoding, Str -> Try(U32, [InvalidJson(Str), ..])
-			parse_key_u32 = |_, key| Json.parse_json_key_unsigned_int(key, u32_from_str)
+			parse_key_u16 : JsonEncoding, JsonState -> Try({ value : U16, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_u16 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_unsigned_int(raw, u16_from_str)
+				}
 
-			parse_key_i32 : JsonEncoding, Str -> Try(I32, [InvalidJson(Str), ..])
-			parse_key_i32 = |_, key| Json.parse_json_key_signed_int(key, i32_from_str)
+			parse_key_i16 : JsonEncoding, JsonState -> Try({ value : I16, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_i16 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_signed_int(raw, i16_from_str)
+				}
 
-			parse_key_u64 : JsonEncoding, Str -> Try(U64, [InvalidJson(Str), ..])
-			parse_key_u64 = |_, key| Json.parse_json_key_unsigned_int(key, u64_from_str)
+			parse_key_u32 : JsonEncoding, JsonState -> Try({ value : U32, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_u32 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_unsigned_int(raw, u32_from_str)
+				}
 
-			parse_key_i64 : JsonEncoding, Str -> Try(I64, [InvalidJson(Str), ..])
-			parse_key_i64 = |_, key| Json.parse_json_key_signed_int(key, i64_from_str)
+			parse_key_i32 : JsonEncoding, JsonState -> Try({ value : I32, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_i32 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_signed_int(raw, i32_from_str)
+				}
 
-			parse_key_u128 : JsonEncoding, Str -> Try(U128, [InvalidJson(Str), ..])
-			parse_key_u128 = |_, key| Json.parse_json_key_unsigned_int(key, u128_from_str)
+			parse_key_u64 : JsonEncoding, JsonState -> Try({ value : U64, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_u64 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_unsigned_int(raw, u64_from_str)
+				}
 
-			parse_key_i128 : JsonEncoding, Str -> Try(I128, [InvalidJson(Str), ..])
-			parse_key_i128 = |_, key| Json.parse_json_key_signed_int(key, i128_from_str)
+			parse_key_i64 : JsonEncoding, JsonState -> Try({ value : I64, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_i64 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_signed_int(raw, i64_from_str)
+				}
 
-			parse_key_dec : JsonEncoding, Str -> Try(Dec, [InvalidJson(Str), ..])
-			parse_key_dec = |_, key| Json.parse_json_key_number(key, Json.dec_from_json_number)
+			parse_key_u128 : JsonEncoding, JsonState -> Try({ value : U128, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_u128 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_unsigned_int(raw, u128_from_str)
+				}
 
-			parse_key_f32 : JsonEncoding, Str -> Try(F32, [InvalidJson(Str), ..])
-			parse_key_f32 = |_, key| Json.parse_json_key_number(key, f32_from_str)
+			parse_key_i128 : JsonEncoding, JsonState -> Try({ value : I128, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_i128 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_signed_int(raw, i128_from_str)
+				}
 
-			parse_key_f64 : JsonEncoding, Str -> Try(F64, [InvalidJson(Str), ..])
-			parse_key_f64 = |_, key| Json.parse_json_key_number(key, f64_from_str)
+			parse_key_dec : JsonEncoding, JsonState -> Try({ value : Dec, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_dec = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_number(raw, Json.dec_from_json_number)
+				}
 
-			encode_key_str : JsonEncoding, Str -> Try(Str, _never_fails)
-			encode_key_str = |_, key| Ok(key)
+			parse_key_f32 : JsonEncoding, JsonState -> Try({ value : F32, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_f32 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_number(raw, f32_from_str)
+				}
 
-			encode_key_bool : JsonEncoding, Bool -> Try(Str, _never_fails)
-			encode_key_bool = |_, key| Ok(if key "true" else "false")
+			parse_key_f64 : JsonEncoding, JsonState -> Try({ value : F64, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_f64 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_number(raw, f64_from_str)
+				}
 
-			encode_key_u8 : JsonEncoding, U8 -> Try(Str, _never_fails)
-			encode_key_u8 = |_, key| Ok(json_u8_to_str(key))
+			## A JSON object key is always quoted text, so each key encoder
+			## renders its value and writes it as a JSON string.
+			encode_key_str : JsonEncoding, Str, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_str = |_, key, state| JsonEncoding.encode_str(key, state)
 
-			encode_key_i8 : JsonEncoding, I8 -> Try(Str, _never_fails)
-			encode_key_i8 = |_, key| Ok(json_i8_to_str(key))
+			encode_key_bool : JsonEncoding, Bool, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_bool = |_, key, state| JsonEncoding.encode_str(if key "true" else "false", state)
 
-			encode_key_u16 : JsonEncoding, U16 -> Try(Str, _never_fails)
-			encode_key_u16 = |_, key| Ok(json_u16_to_str(key))
+			encode_key_u8 : JsonEncoding, U8, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_u8 = |_, key, state| JsonEncoding.encode_str(json_u8_to_str(key), state)
 
-			encode_key_i16 : JsonEncoding, I16 -> Try(Str, _never_fails)
-			encode_key_i16 = |_, key| Ok(json_i16_to_str(key))
+			encode_key_i8 : JsonEncoding, I8, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_i8 = |_, key, state| JsonEncoding.encode_str(json_i8_to_str(key), state)
 
-			encode_key_u32 : JsonEncoding, U32 -> Try(Str, _never_fails)
-			encode_key_u32 = |_, key| Ok(json_u32_to_str(key))
+			encode_key_u16 : JsonEncoding, U16, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_u16 = |_, key, state| JsonEncoding.encode_str(json_u16_to_str(key), state)
 
-			encode_key_i32 : JsonEncoding, I32 -> Try(Str, _never_fails)
-			encode_key_i32 = |_, key| Ok(json_i32_to_str(key))
+			encode_key_i16 : JsonEncoding, I16, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_i16 = |_, key, state| JsonEncoding.encode_str(json_i16_to_str(key), state)
 
-			encode_key_u64 : JsonEncoding, U64 -> Try(Str, _never_fails)
-			encode_key_u64 = |_, key| Ok(json_u64_to_str(key))
+			encode_key_u32 : JsonEncoding, U32, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_u32 = |_, key, state| JsonEncoding.encode_str(json_u32_to_str(key), state)
 
-			encode_key_i64 : JsonEncoding, I64 -> Try(Str, _never_fails)
-			encode_key_i64 = |_, key| Ok(json_i64_to_str(key))
+			encode_key_i32 : JsonEncoding, I32, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_i32 = |_, key, state| JsonEncoding.encode_str(json_i32_to_str(key), state)
 
-			encode_key_u128 : JsonEncoding, U128 -> Try(Str, _never_fails)
-			encode_key_u128 = |_, key| Ok(json_u128_to_str(key))
+			encode_key_u64 : JsonEncoding, U64, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_u64 = |_, key, state| JsonEncoding.encode_str(json_u64_to_str(key), state)
 
-			encode_key_i128 : JsonEncoding, I128 -> Try(Str, _never_fails)
-			encode_key_i128 = |_, key| Ok(json_i128_to_str(key))
+			encode_key_i64 : JsonEncoding, I64, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_i64 = |_, key, state| JsonEncoding.encode_str(json_i64_to_str(key), state)
 
-			encode_key_dec : JsonEncoding, Dec -> Try(Str, _never_fails)
-			encode_key_dec = |_, key| Ok(json_dec_to_str(key))
+			encode_key_u128 : JsonEncoding, U128, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_u128 = |_, key, state| JsonEncoding.encode_str(json_u128_to_str(key), state)
 
-			encode_key_f32 : JsonEncoding, F32 -> Try(Str, [Infinity, NaN, NegativeInfinity])
-			encode_key_f32 = |_, key| {
+			encode_key_i128 : JsonEncoding, I128, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_i128 = |_, key, state| JsonEncoding.encode_str(json_i128_to_str(key), state)
+
+			encode_key_dec : JsonEncoding, Dec, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_dec = |_, key, state| JsonEncoding.encode_str(json_dec_to_str(key), state)
+
+			encode_key_f32 : JsonEncoding, F32, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity])
+			encode_key_f32 = |_, key, state| {
 				if json_f32_is_nan(key) {
 					Err(NaN)
 				} else if json_f32_is_infinite(key) {
@@ -1732,12 +2020,12 @@ Builtin :: [].{
 						Err(Infinity)
 					}
 				} else {
-					Ok(json_f32_to_str(key))
+					JsonEncoding.encode_str(json_f32_to_str(key), state)
 				}
 			}
 
-			encode_key_f64 : JsonEncoding, F64 -> Try(Str, [Infinity, NaN, NegativeInfinity])
-			encode_key_f64 = |_, key| {
+			encode_key_f64 : JsonEncoding, F64, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity])
+			encode_key_f64 = |_, key, state| {
 				if json_f64_is_nan(key) {
 					Err(NaN)
 				} else if json_f64_is_infinite(key) {
@@ -1747,9 +2035,10 @@ Builtin :: [].{
 						Err(Infinity)
 					}
 				} else {
-					Ok(json_f64_to_str(key))
+					JsonEncoding.encode_str(json_f64_to_str(key), state)
 				}
 			}
+
 		}
 
 		HttpHeaderState :: { raw : Str }
@@ -1774,6 +2063,12 @@ Builtin :: [].{
 				}
 			}
 
+			## Header sequences have no opening delimiter and no way to declare a
+			## header count up front, so parsing always starts in Uncounted mode
+			## on the unchanged input.
+			parse_record_start : HttpHeaderEncoding, HttpHeaderState -> Try([Counted({ len : U64, rest : HttpHeaderState }), Uncounted(HttpHeaderState)], [BadHeader, ..])
+			parse_record_start = |_, state| Ok(Uncounted(state))
+
 			parse_record_field : HttpHeaderEncoding,
 			FieldName.FieldNames(_shape),
 			HttpHeaderState -> Try(
@@ -1781,13 +2076,18 @@ Builtin :: [].{
 					Field({ field : FieldName(_shape), rest : HttpHeaderState }),
 					TryField({ name : Str, rest : HttpHeaderState }),
 					TryFieldCaseless({ name : Str, rest : HttpHeaderState }),
-					Continue({ rest : HttpHeaderState }),
-					Done({ rest : HttpHeaderState }),
+					Continue(HttpHeaderState),
+					Done(HttpHeaderState),
 				],
 				[BadHeader, ..],
 			)
 			parse_record_field = |_, fields, state|
 				HttpHeader.parse_record_field_from_headers(fields, state.raw)
+
+			## Each header value consumes its own CRLF terminator, so the cursor
+			## is already at the next entry boundary after every field.
+			parse_record_after_field : HttpHeaderEncoding, HttpHeaderState -> Try([Continue(HttpHeaderState), Done(HttpHeaderState)], [BadHeader, ..])
+			parse_record_after_field = |_, state| Ok(Continue(state))
 
 			skip_record_field : HttpHeaderEncoding, HttpHeaderState -> Try(HttpHeaderState, [BadHeader, ..])
 			skip_record_field = |_, state| {
@@ -1837,14 +2137,14 @@ Builtin :: [].{
 					Field({ field : FieldName(_shape), rest : HttpHeaderState }),
 					TryField({ name : Str, rest : HttpHeaderState }),
 					TryFieldCaseless({ name : Str, rest : HttpHeaderState }),
-					Continue({ rest : HttpHeaderState }),
-					Done({ rest : HttpHeaderState }),
+					Continue(HttpHeaderState),
+					Done(HttpHeaderState),
 				],
 				[BadHeader, ..],
 			)
 			parse_record_field_from_headers = |fields, headers|
 				if Str.is_empty(headers) {
-					Ok(Done({ rest: HttpHeaderState.{ raw: "" } }))
+					Ok(Done(HttpHeaderState.{ raw: "" }))
 				} else {
 					line_parts = match Str.split_first(headers, "\r\n") {
 						Ok(parts) => parts
@@ -1852,7 +2152,7 @@ Builtin :: [].{
 					}
 
 					if Str.is_empty(line_parts.before) {
-						Ok(Done({ rest: HttpHeaderState.{ raw: line_parts.after } }))
+						Ok(Done(HttpHeaderState.{ raw: line_parts.after }))
 					} else {
 						match Str.split_first(headers, ":") {
 							Ok({ before: name, after: value_start }) => {
@@ -1863,10 +2163,10 @@ Builtin :: [].{
 									Err(BadHeader)
 								} else {
 									if name_len < FieldName.FieldNames.shortest_name(fields) {
-										Ok(Continue({ rest: HttpHeaderState.{ raw: line_parts.after } }))
+										Ok(Continue(HttpHeaderState.{ raw: line_parts.after }))
 									} else {
 										if name_len > FieldName.FieldNames.longest_name(fields) {
-											Ok(Continue({ rest: HttpHeaderState.{ raw: line_parts.after } }))
+											Ok(Continue(HttpHeaderState.{ raw: line_parts.after }))
 										} else {
 											Ok(
 												TryFieldCaseless({
@@ -3474,7 +3774,7 @@ Builtin :: [].{
 				match List.first(list) {
 					Ok(pivot) => {
 						rest = List.drop_first(list, 1)
-						less_or_equal = 
+						less_or_equal =
 							List.keep_if(
 								rest,
 								|item|
@@ -3484,7 +3784,7 @@ Builtin :: [].{
 										GT => False
 									},
 							)
-						greater = 
+						greater =
 							List.keep_if(
 								rest,
 								|item|
@@ -6405,27 +6705,21 @@ Builtin :: [].{
 			## ```
 			until : U8, U8 -> Iter(U8)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					if start >= end {
 						Known(0)
 					} else {
 						Known(U8.to_u64(end) - U8.to_u64(start))
 					},
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match U8.plus_try(start, 1) {
-									Ok(next) => if next < end {
-										U8.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match U8.plus_try(current, 1) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
@@ -7114,27 +7408,21 @@ Builtin :: [].{
 			## ```
 			until : I8, I8 -> Iter(I8)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					if start >= end {
 						Known(0)
 					} else {
 						Known(I64.to_u64_wrap(I8.to_i64(end) - I8.to_i64(start)))
 					},
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match I8.plus_try(start, 1) {
-									Ok(next) => if next < end {
-										I8.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match I8.plus_try(current, 1) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
@@ -7857,27 +8145,21 @@ Builtin :: [].{
 			## ```
 			until : U16, U16 -> Iter(U16)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					if start >= end {
 						Known(0)
 					} else {
 						Known(U16.to_u64(end) - U16.to_u64(start))
 					},
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match U16.plus_try(start, 1) {
-									Ok(next) => if next < end {
-										U16.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match U16.plus_try(current, 1) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
@@ -8651,27 +8933,21 @@ Builtin :: [].{
 			## ```
 			until : I16, I16 -> Iter(I16)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					if start >= end {
 						Known(0)
 					} else {
 						Known(I64.to_u64_wrap(I16.to_i64(end) - I16.to_i64(start)))
 					},
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match I16.plus_try(start, 1) {
-									Ok(next) => if next < end {
-										I16.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match I16.plus_try(current, 1) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
@@ -9409,27 +9685,21 @@ Builtin :: [].{
 			## ```
 			until : U32, U32 -> Iter(U32)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					if start >= end {
 						Known(0)
 					} else {
 						Known(U32.to_u64(end) - U32.to_u64(start))
 					},
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match U32.plus_try(start, 1) {
-									Ok(next) => if next < end {
-										U32.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match U32.plus_try(current, 1) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
@@ -10235,27 +10505,21 @@ Builtin :: [].{
 			## ```
 			until : I32, I32 -> Iter(I32)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					if start >= end {
 						Known(0)
 					} else {
 						Known(I64.to_u64_wrap(I32.to_i64(end) - I32.to_i64(start)))
 					},
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match I32.plus_try(start, 1) {
-									Ok(next) => if next < end {
-										I32.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match I32.plus_try(current, 1) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
@@ -11016,27 +11280,21 @@ Builtin :: [].{
 			## ```
 			until : U64, U64 -> Iter(U64)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					if start >= end {
 						Known(0)
 					} else {
 						Known(end - start)
 					},
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match U64.plus_try(start, 1) {
-									Ok(next) => if next < end {
-										U64.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match U64.plus_try(current, 1) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
@@ -11887,7 +12145,8 @@ Builtin :: [].{
 			## ```
 			until : I64, I64 -> Iter(I64)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					if start >= end {
 						Known(0)
 					} else {
@@ -11896,21 +12155,14 @@ Builtin :: [].{
 							Err(Overflow) => Unknown
 						}
 					},
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match I64.plus_try(start, 1) {
-									Ok(next) => if next < end {
-										I64.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match I64.plus_try(current, 1) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
@@ -12693,7 +12945,8 @@ Builtin :: [].{
 			## ```
 			until : U128, U128 -> Iter(U128)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					if start >= end {
 						Known(0)
 					} else {
@@ -12702,21 +12955,14 @@ Builtin :: [].{
 							Err(OutOfRange) => Unknown
 						}
 					},
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match U128.plus_try(start, 1) {
-									Ok(next) => if next < end {
-										U128.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match U128.plus_try(current, 1) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
@@ -13609,7 +13855,8 @@ Builtin :: [].{
 			## ```
 			until : I128, I128 -> Iter(I128)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					if start >= end {
 						Known(0)
 					} else {
@@ -13621,21 +13868,14 @@ Builtin :: [].{
 							Err(Overflow) => Unknown
 						}
 					},
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match I128.plus_try(start, 1) {
-									Ok(next) => if next < end {
-										I128.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match I128.plus_try(current, 1) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
@@ -14819,23 +15059,17 @@ Builtin :: [].{
 			## ```
 			until : Dec, Dec -> Iter(Dec)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					Unknown,
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match Dec.plus_try(start, 1.0) {
-									Ok(next) => if next < end {
-										Dec.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match Dec.plus_try(current, 1.0) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
@@ -21843,11 +22077,10 @@ range_done = || iter_from_step(
 	|| Done,
 )
 
-# Shared step loop behind the numeric types' `range_exclusive` methods. Each
-# caller supplies `len_if_known` computed from its own representation; when it
-# is `Known`, it must be the exact yield count (`Iter.take_last`/`drop_last`
-# rely on that). The construction is `Iter.exclusive_range`, whose flat
-# self-recursive shape keeps a range's state unboxed when an adapter wraps it.
+# Shared state machine behind the numeric types' `range_exclusive` methods.
+# Each caller supplies `len_if_known` computed from its own representation;
+# when it is `Known`, it must be the exact yield count
+# (`Iter.take_last`/`drop_last` rely on that).
 range_exclusive_with_len : num, num, [Known(U64), Unknown] -> Iter(num)
 	where [
 		num.is_lt : num, num -> Bool,
@@ -21855,7 +22088,19 @@ range_exclusive_with_len : num, num, [Known(U64), Unknown] -> Iter(num)
 		num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
 	]
 range_exclusive_with_len = |start, end, len_if_known|
-	Iter.exclusive_range(start, end, len_if_known)
+	Iter.custom(
+		start,
+		len_if_known,
+		|current|
+			if current < end {
+				match current.plus_try(1) {
+					Ok(next) => Ok((current, next))
+					Err(Overflow) => Ok((current, end))
+				}
+			} else {
+				Err(NoMore)
+			},
+	)
 
 # Shared step loop behind the numeric types' `range_inclusive` methods; same
 # `len_if_known` contract as `range_exclusive_with_len`. The construction is

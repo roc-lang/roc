@@ -155,7 +155,7 @@ EndOfFile,
 
 
 # el
-t = 
+t =
 ~~~
 # CANONICALIZE
 ~~~clojure

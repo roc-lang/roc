@@ -399,7 +399,7 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 # pen
-pkg : 
+pkg :
 # Cose
 # Cd
 # pen

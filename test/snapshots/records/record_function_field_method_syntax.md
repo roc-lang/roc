@@ -78,8 +78,8 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "{ f: a -> a }"))
-		(patt (type "Error")))
+		(patt (type "_a")))
 	(expressions
 		(expr (type "{ f: a -> a }"))
-		(expr (type "Error"))))
+		(expr (type "_a"))))
 ~~~

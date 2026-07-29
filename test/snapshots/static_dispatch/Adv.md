@@ -416,14 +416,27 @@ main = {
 				(p-assign (ident "next_val")))))
 	(d-let
 		(p-assign (ident "mismatch2"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-block
+			(s-let
+				(p-assign (ident "val"))
+				(e-nominal (nominal "Adv")
+					(e-tag (name "Val")
+						(args
+							(e-num (value "10"))
+							(e-string
+								(e-literal (string "hello")))))))
+			(s-let
+				(p-assign (ident "next_val"))
+				(e-runtime-error (tag "erroneous_value_expr")))
+			(e-runtime-error (tag "erroneous_value_use"))))
 	(d-let
 		(p-assign (ident "mismatch3"))
 		(e-block
 			(s-let
 				(p-assign (ident "next_val"))
 				(e-runtime-error (tag "erroneous_value_expr")))
-			(e-runtime-error (tag "erroneous_value_use"))))
+			(e-lookup-local
+				(p-assign (ident "next_val")))))
 	(d-let
 		(p-assign (ident "main"))
 		(e-block
@@ -437,9 +450,9 @@ main = {
 								(e-literal (string "hello")))))))
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-dispatch-call (method "update_u64") (constraint-fn-var 646)
+				(e-dispatch-call (method "update_u64") (constraint-fn-var 644)
 					(receiver
-						(e-dispatch-call (method "update_str") (constraint-fn-var 625)
+						(e-dispatch-call (method "update_str") (constraint-fn-var 623)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "val"))))
@@ -450,12 +463,12 @@ main = {
 						(e-num (value "20")))))
 			(e-tuple
 				(elems
-					(e-dispatch-call (method "to_str") (constraint-fn-var 666)
+					(e-dispatch-call (method "to_str") (constraint-fn-var 664)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "next_val"))))
 						(args))
-					(e-dispatch-call (method "to_u64") (constraint-fn-var 668)
+					(e-dispatch-call (method "to_u64") (constraint-fn-var 666)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "next_val"))))
@@ -480,8 +493,8 @@ main = {
 		(patt (type "Adv, Str -> Adv"))
 		(patt (type "Adv, U64 -> Adv"))
 		(patt (type "Adv"))
-		(patt (type "Error"))
-		(patt (type "Error"))
+		(patt (type "_a"))
+		(patt (type "_a"))
 		(patt (type "(Str, U64)")))
 	(type_decls
 		(nominal (type "Adv")
@@ -492,7 +505,7 @@ main = {
 		(expr (type "Adv, Str -> Adv"))
 		(expr (type "Adv, U64 -> Adv"))
 		(expr (type "Adv"))
-		(expr (type "Error"))
-		(expr (type "Error"))
+		(expr (type "_a"))
+		(expr (type "_a"))
 		(expr (type "(Str, U64)"))))
 ~~~

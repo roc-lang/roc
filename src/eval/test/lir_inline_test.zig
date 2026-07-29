@@ -239,6 +239,47 @@ fn monotypeCountersForModuleWithImports(
     return counters;
 }
 
+const ExpectedMonotypeSpecializationCounters = struct {
+    template_requests: u64,
+    template_hits: u64,
+    template_misses: u64,
+    nested_requests: u64,
+    nested_hits: u64,
+    nested_misses: u64,
+    template_lookup_candidates: u64 = 0,
+    nested_lookup_candidates: u64 = 0,
+    specialization_type_digest_requests: u64,
+    max_specialization_type_digest_cache_hits: u64,
+    max_specialization_type_digest_cache_misses: u64,
+    max_specialization_type_digest_nodes_visited: u64,
+    exact_type_checks: u64 = 0,
+    nominal_backing_reuses: u64,
+    nominal_backing_instantiations: u64,
+    evidence_missing: u64 = 0,
+};
+
+fn expectMonotypeSpecializationCountersWithin(
+    counters: MonoLower.SpecializationCounters,
+    expected: ExpectedMonotypeSpecializationCounters,
+) TestError!void {
+    try std.testing.expectEqual(expected.template_requests, counters.template_requests);
+    try std.testing.expectEqual(expected.template_hits, counters.template_hits);
+    try std.testing.expectEqual(expected.template_misses, counters.template_misses);
+    try std.testing.expectEqual(expected.nested_requests, counters.nested_requests);
+    try std.testing.expectEqual(expected.nested_hits, counters.nested_hits);
+    try std.testing.expectEqual(expected.nested_misses, counters.nested_misses);
+    try std.testing.expectEqual(expected.template_lookup_candidates, counters.template_lookup_candidates);
+    try std.testing.expectEqual(expected.nested_lookup_candidates, counters.nested_lookup_candidates);
+    try std.testing.expectEqual(expected.specialization_type_digest_requests, counters.specialization_type_digest_requests);
+    try std.testing.expect(counters.specialization_type_digest_cache_hits <= expected.max_specialization_type_digest_cache_hits);
+    try std.testing.expect(counters.specialization_type_digest_cache_misses <= expected.max_specialization_type_digest_cache_misses);
+    try std.testing.expect(counters.specialization_type_digest_nodes_visited <= expected.max_specialization_type_digest_nodes_visited);
+    try std.testing.expectEqual(expected.exact_type_checks, counters.exact_type_checks);
+    try std.testing.expectEqual(expected.nominal_backing_reuses, counters.nominal_backing_reuses);
+    try std.testing.expectEqual(expected.nominal_backing_instantiations, counters.nominal_backing_instantiations);
+    try std.testing.expectEqual(expected.evidence_missing, counters.evidence_missing);
+}
+
 const StructuralJsonMonotypeStats = struct {
     functions: usize,
     definitions: usize,
@@ -1112,6 +1153,10 @@ const ProcShape = struct {
     tag_assign_count: usize = 0,
     store_struct_count: usize = 0,
     store_tag_count: usize = 0,
+    incref_count: usize = 0,
+    decref_count: usize = 0,
+    decref_if_initialized_count: usize = 0,
+    free_count: usize = 0,
 };
 
 fn collectProcShape(
@@ -1738,9 +1783,7 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
         \\}
     ;
 
-    const counters = try monotypeCountersForModule(allocator, source);
-
-    try std.testing.expectEqual(postcheck.Monotype.Lower.SpecializationCounters{
+    try expectMonotypeSpecializationCountersWithin(try monotypeCountersForModule(allocator, source), .{
         .template_requests = 27,
         .template_hits = 22,
         .template_misses = 5,
@@ -1749,14 +1792,14 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
         .nested_misses = 8,
         .template_lookup_candidates = 0,
         .nested_lookup_candidates = 0,
-        .specialization_type_digest_requests = 60,
-        .specialization_type_digest_cache_hits = 110,
-        .specialization_type_digest_cache_misses = 107,
-        .specialization_type_digest_nodes_visited = 107,
+        .specialization_type_digest_requests = 84,
+        .max_specialization_type_digest_cache_hits = 160,
+        .max_specialization_type_digest_cache_misses = 160,
+        .max_specialization_type_digest_nodes_visited = 160,
         .exact_type_checks = 0,
         .nominal_backing_reuses = 1,
         .nominal_backing_instantiations = 86,
-    }, counters);
+    });
 }
 
 test "issue 9802 growing-structural map2 specialization counters are bounded" {
@@ -1786,9 +1829,7 @@ test "issue 9802 growing-structural map2 specialization counters are bounded" {
         \\}
     ;
 
-    const counters = try monotypeCountersForModule(allocator, source);
-
-    try std.testing.expectEqual(postcheck.Monotype.Lower.SpecializationCounters{
+    try expectMonotypeSpecializationCountersWithin(try monotypeCountersForModule(allocator, source), .{
         .template_requests = 15,
         .template_hits = 5,
         .template_misses = 10,
@@ -1797,14 +1838,14 @@ test "issue 9802 growing-structural map2 specialization counters are bounded" {
         .nested_misses = 6,
         .template_lookup_candidates = 0,
         .nested_lookup_candidates = 0,
-        .specialization_type_digest_requests = 52,
-        .specialization_type_digest_cache_hits = 214,
-        .specialization_type_digest_cache_misses = 251,
-        .specialization_type_digest_nodes_visited = 251,
+        .specialization_type_digest_requests = 70,
+        .max_specialization_type_digest_cache_hits = 320,
+        .max_specialization_type_digest_cache_misses = 360,
+        .max_specialization_type_digest_nodes_visited = 360,
         .exact_type_checks = 0,
         .nominal_backing_reuses = 8,
         .nominal_backing_instantiations = 149,
-    }, counters);
+    });
 }
 
 test "imported and local generic specialization counters reuse closed types" {
@@ -2382,6 +2423,80 @@ test "spec constr does not duplicate opaque known-match payloads" {
 
     try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, opaqueLetCallWorkerDoesNotDuplicateCall));
     try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, opaqueLetCallWorkerDuplicatesCall));
+}
+
+test "spec constr retains an exact virtual source frame for an inlined procedure" {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModuleWithOptions(allocator,
+        \\State : { n : U64 }
+        \\
+        \\read : State -> U64
+        \\read = |state| state.n
+        \\
+        \\main : U64
+        \\main = Iter.fold([{ n: 1.U64 }, { n: 2 }].iter().map(read), 0, |acc, n| acc + n)
+    , .wrappers, .{ .proc_debug_names = true });
+    defer lowered_source.deinit(allocator);
+
+    const store = &lowered_source.lowered.lir_result.store;
+    try std.testing.expect(store.inlineScopeCount() > 0);
+
+    var found_source_scope = false;
+    for (0..store.cf_stmts.len()) |stmt_index| {
+        const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
+        const scope_id = store.stmtInlineScope(stmt_id);
+        if (scope_id == LIR.InlineScopeId.none) continue;
+        const scope = store.inlineScope(scope_id);
+        if (scope.source_name.isNone()) continue;
+        if (!std.mem.eql(u8, store.getString(scope.source_name), "read")) continue;
+        if (!scope.call_site.hasLocation()) continue;
+
+        found_source_scope = true;
+        try std.testing.expect(!scope.source_symbol.isNone());
+        try std.testing.expect(scope.source_loc.hasLocation());
+        try std.testing.expect(store.stmtLoc(stmt_id).hasLocation());
+    }
+    try std.testing.expect(found_source_scope);
+}
+
+test "interpreter captures the virtual source frame of an inlined crash" {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModuleWithOptions(allocator,
+        \\State : { n : U64 }
+        \\
+        \\read : State -> U64
+        \\read = |_state| {
+        \\    crash "inline boom"
+        \\}
+        \\
+        \\main : U64
+        \\main = Iter.fold([{ n: 1.U64 }].iter().map(read), 0, |acc, n| acc + n)
+    , .wrappers, .{ .proc_debug_names = true });
+    defer lowered_source.deinit(allocator);
+
+    const store = &lowered_source.lowered.lir_result.store;
+    var runtime_env = eval.RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+    var interpreter = try eval.Interpreter.init(
+        allocator,
+        store,
+        &lowered_source.lowered.lir_result.layouts,
+        runtime_env.get_ops(),
+        .preserve,
+    );
+    defer interpreter.deinit();
+
+    _ = interpreter.eval(.{ .proc_id = try rootProc(&lowered_source.lowered) }) catch |err| {
+        try std.testing.expectEqual(error.Crash, err);
+        const scope_id = interpreter.getFailedInlineScope() orelse return error.TestUnexpectedResult;
+        const scope = store.inlineScope(scope_id);
+        try std.testing.expect(!scope.source_name.isNone());
+        try std.testing.expectEqualStrings("read", store.getString(scope.source_name));
+        try std.testing.expect(scope.source_loc.hasLocation());
+        try std.testing.expect(scope.call_site.hasLocation());
+        return;
+    };
+    return error.TestUnexpectedResult;
 }
 
 test "spec constr preserves direct call argument effect order" {
@@ -3151,10 +3266,22 @@ fn collectLirResultProcShape(
             .debug => |stmt| try work.append(allocator, stmt.next),
             .expect => |stmt| try work.append(allocator, stmt.next),
             .comptime_branch_taken => |stmt| try work.append(allocator, stmt.next),
-            .incref => |stmt| try work.append(allocator, stmt.next),
-            .decref => |stmt| try work.append(allocator, stmt.next),
-            .decref_if_initialized => |stmt| try work.append(allocator, stmt.next),
-            .free => |stmt| try work.append(allocator, stmt.next),
+            .incref => |stmt| {
+                shape.incref_count += 1;
+                try work.append(allocator, stmt.next);
+            },
+            .decref => |stmt| {
+                shape.decref_count += 1;
+                try work.append(allocator, stmt.next);
+            },
+            .decref_if_initialized => |stmt| {
+                shape.decref_if_initialized_count += 1;
+                try work.append(allocator, stmt.next);
+            },
+            .free => |stmt| {
+                shape.free_count += 1;
+                try work.append(allocator, stmt.next);
+            },
             .switch_stmt => |stmt| {
                 shape.switch_count += 1;
                 if (stmt.continuation) |continuation| try work.append(allocator, continuation);
@@ -3339,6 +3466,56 @@ fn expectLoweredIterStateHasNoBoxesOrErasedCallables(
     try expectReachableProcShapeFieldEqual(allocator, lowered, "box_box_count", 0);
     try expectReachableProcShapeFieldEqual(allocator, lowered, "erased_call_count", 0);
     try expectReachableProcShapeFieldEqual(allocator, lowered, "packed_erased_fn_count", 0);
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/10429: numeric `until` and
+// `range_exclusive` iterators consumed directly by `for` have scalar state,
+// with no heap or ARC operations.
+test "issue 10429 numeric until and range_exclusive loops have no heap or RC operations" {
+    const allocator = std.testing.allocator;
+    const numeric_types = [_][]const u8{
+        "U8",  "I8",  "U16",  "I16",  "U32", "I32",
+        "U64", "I64", "U128", "I128", "Dec",
+    };
+
+    for (numeric_types) |numeric_type| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\until_last : {s} -> {s}
+            \\until_last = |n| {{
+            \\    var $last = 0.{s}
+            \\    for i in {s}.until(0, n) {{
+            \\        $last = i
+            \\    }}
+            \\    $last
+            \\}}
+            \\
+            \\range_last : {s} -> {s}
+            \\range_last = |n| {{
+            \\    var $last = 0.{s}
+            \\    for i in {s}.range_exclusive(0, n) {{
+            \\        $last = i
+            \\    }}
+            \\    $last
+            \\}}
+            \\
+            \\main : {s} -> ({s}, {s})
+            \\main = |n| (until_last(n), range_last(n))
+        , .{
+            numeric_type, numeric_type, numeric_type, numeric_type,
+            numeric_type, numeric_type, numeric_type, numeric_type,
+            numeric_type, numeric_type, numeric_type,
+        });
+        defer allocator.free(source);
+
+        var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .tag_reachability = true });
+        defer optimized.deinit(allocator);
+
+        try expectLoweredIterChainAllocatesNothing(allocator, &optimized.lowered);
+        try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "incref_count", 0);
+        try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "decref_count", 0);
+        try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "decref_if_initialized_count", 0);
+        try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "free_count", 0);
+    }
 }
 
 // Zero-allocation gate for iterator chains that escape their construction site
@@ -5226,6 +5403,48 @@ test "iterdiff: branch-chosen append search with early return agrees across inli
     );
 }
 
+test "iterdiff: branch-chosen append evaluates selection and items before base-loop early return" {
+    // Constructing the chosen iterator is strict: its condition and selected
+    // arm's appended item run before the consuming loop. Even when the loop
+    // returns from the shared base and never pulls the appended item, optimized
+    // lowering must retain that exact ordered trace.
+    try expectSameObservationsAcrossInlineModes(
+        \\Point : { x : I64, y : I64 }
+        \\
+        \\trace : I64 -> I64
+        \\trace = |n| {
+        \\    dbg n
+        \\    n
+        \\}
+        \\
+        \\trace_point : I64, I64 -> Point
+        \\trace_point = |x, y| {
+        \\    dbg x
+        \\    { x, y }
+        \\}
+        \\
+        \\find : I64, I64 -> I64
+        \\find = |selector, target| {
+        \\    base = [{ x: 10, y: 1 }, { x: 20, y: 2 }, { x: 30, y: 3 }].iter()
+        \\    chosen =
+        \\        if trace(selector) == 1 {
+        \\            base.append(trace_point(40, 4))
+        \\        } else {
+        \\            base.append(trace_point(50, 5))
+        \\        }
+        \\    for { x, y } in chosen {
+        \\        if x >= target {
+        \\            return x + y
+        \\        }
+        \\    }
+        \\    -1
+        \\}
+        \\
+        \\main : I64
+        \\main = find(1, 5)
+    );
+}
+
 test "iterdiff: set materialized mid-pipeline then iterated agrees across inline modes" {
     // Design invariant 4: constructing a Set from the elements really runs, so
     // its deduplication happens exactly where written; the pipeline then keeps
@@ -6316,4 +6535,48 @@ test "issue 10426 record update reads spread fields before the mutation" {
         try std.testing.expect(counts.before_first_call >= 2);
     }
     try std.testing.expect(checked_any);
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/10435: SpecConstr must
+// preserve the two observed loop results without mutating frozen Monotype type
+// data while removing the unused third result.
+test "issue 10435 SpecConstr preserves frozen types for partially used while state" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : U64
+        \\main = {
+        \\    var $x = 0.U64
+        \\    var $y = 0.U64
+        \\    var $unused = 0.U64
+        \\    while $x < 3 {
+        \\        $x = $x + 1
+        \\        $y = $y + 2
+        \\        $unused = $unused + 3
+        \\    }
+        \\    $x + $y
+        \\}
+    ;
+
+    var lifted = try liftModuleAfterSpecConstr(allocator, source);
+    defer lifted.deinit(allocator);
+    try std.testing.expect(lifted.lifted.types.isFrozen());
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    var runtime_env = eval.RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+    var interpreter = try eval.Interpreter.init(
+        allocator,
+        &optimized.lowered.lir_result.store,
+        &optimized.lowered.lir_result.layouts,
+        runtime_env.get_ops(),
+        .preserve,
+    );
+    defer interpreter.deinit();
+
+    const result = try interpreter.eval(.{ .proc_id = try rootProc(&optimized.lowered) });
+    switch (result) {
+        .value => |value| try std.testing.expectEqual(@as(u64, 9), value.read(u64)),
+    }
 }

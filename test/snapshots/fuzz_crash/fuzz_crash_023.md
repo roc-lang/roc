@@ -2072,8 +2072,8 @@ main! = |_| { # Yeah I can leave a comment here
 		Stdout.line!("Adding ${n} to ${number}")
 		number = number + n
 	}
-	record = 
-		qux : 
+	record =
+		qux :
 	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
 	multiline_tuple = (
 		123,
@@ -2196,7 +2196,7 @@ expect {
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 1863) (dispatcher-var 374)
+						(e-interpolation (constraint-fn-var 1860) (dispatcher-var 374)
 							(first
 								(e-literal (string "Hello, ")))
 							(parts
@@ -2214,7 +2214,7 @@ expect {
 							(e-runtime-error (tag "erroneous_value_expr")))
 						(s-reassign
 							(p-assign (ident "number"))
-							(e-dispatch-call (method "plus") (constraint-fn-var 1945)
+							(e-dispatch-call (method "plus") (constraint-fn-var 1942)
 								(receiver
 									(e-runtime-error (tag "erroneous_value_use")))
 								(args
@@ -2239,7 +2239,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 2069)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 2066)
 									(receiver
 										(e-match
 											(match
@@ -2262,7 +2262,7 @@ expect {
 														(value
 															(e-num (value "12"))))))))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 2066)
+										(e-dispatch-call (method "times") (constraint-fn-var 2063)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -2277,18 +2277,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 2102)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 2099)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 2092)
+															(e-dispatch-call (method "plus") (constraint-fn-var 2089)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 2129)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 2126)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 2119)
+															(e-dispatch-call (method "minus") (constraint-fn-var 2116)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2303,11 +2303,11 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 2166)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 2163)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 2163)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 2160)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -2322,12 +2322,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 2224)
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 2221)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 2195)
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 2192)
 																			(receiver
 																				(e-match
 																					(match

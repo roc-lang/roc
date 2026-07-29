@@ -144,6 +144,21 @@ pub const ImportedFn = Mono.ImportedFn;
 /// Identifier for an imported function table entry.
 pub const ImportedFnId = Mono.ImportedFnId;
 
+/// A virtual source frame introduced by post-check inlining.
+pub const InlineScopeId = enum(u32) {
+    _,
+
+    pub const none: InlineScopeId = @enumFromInt(std.math.maxInt(u32));
+};
+
+/// One source-level procedure frame retained across post-check inlining.
+pub const InlineScope = struct {
+    source_symbol: Common.Symbol,
+    source_loc: base.SourceLoc,
+    call_site: base.SourceLoc,
+    parent: InlineScopeId = InlineScopeId.none,
+};
+
 /// Read-only Monotype Lifted program view.
 ///
 /// Today this view borrows `Program` arrays. Lambda Solved consumes this shape
@@ -184,6 +199,9 @@ pub const ProgramView = struct {
     expr_regions: []const base.Region,
     stmt_locs: []const base.SourceLoc,
     stmt_regions: []const base.Region,
+    inline_scopes: []const InlineScope,
+    expr_inline_scopes: []const InlineScopeId,
+    stmt_inline_scopes: []const InlineScopeId,
     local_names: []const []const u8,
 
     pub fn procDebugName(self: ProgramView, symbol: Common.Symbol) ?names.ExportNameId {
@@ -204,6 +222,18 @@ pub const ProgramView = struct {
 
     pub fn stmtRegion(self: ProgramView, id: StmtId) base.Region {
         return self.stmt_regions[@intFromEnum(id)];
+    }
+
+    pub fn exprInlineScope(self: ProgramView, id: ExprId) InlineScopeId {
+        return self.expr_inline_scopes[@intFromEnum(id)];
+    }
+
+    pub fn stmtInlineScope(self: ProgramView, id: StmtId) InlineScopeId {
+        return self.stmt_inline_scopes[@intFromEnum(id)];
+    }
+
+    pub fn inlineScope(self: ProgramView, id: InlineScopeId) InlineScope {
+        return self.inline_scopes[@intFromEnum(id)];
     }
 
     pub fn comptimeSite(self: ProgramView, id: ComptimeSiteId) ComptimeSite {
@@ -420,6 +450,12 @@ pub const Program = struct {
     stmt_locs: ProgramList(base.SourceLoc, "stmt_locs"),
     /// Checked source region per statement, parallel to `stmts`.
     stmt_regions: ProgramList(base.Region, "stmt_regions"),
+    /// Interned virtual source frames introduced by inlining.
+    inline_scopes: ProgramList(InlineScope, "inline_scopes"),
+    /// Virtual inline scope per expression, parallel to `exprs`.
+    expr_inline_scopes: ProgramList(InlineScopeId, "expr_inline_scopes"),
+    /// Virtual inline scope per statement, parallel to `stmts`.
+    stmt_inline_scopes: ProgramList(InlineScopeId, "stmt_inline_scopes"),
     /// Source-level name per local, parallel to `locals` (empty for
     /// compiler-generated temporaries; moved from Monotype).
     local_names: ProgramList([]const u8, "local_names"),
@@ -428,6 +464,8 @@ pub const Program = struct {
     current_loc: base.SourceLoc,
     /// Ambient checked source region recorded by `addExpr`/`addStmt`.
     current_region: base.Region,
+    /// Ambient virtual source frame recorded by `addExpr`/`addStmt`.
+    current_inline_scope: InlineScopeId,
 
     /// Append-only section lengths at the start of a SpecConstr analysis walk.
     ///
@@ -455,6 +493,9 @@ pub const Program = struct {
         expr_regions: usize,
         stmt_locs: usize,
         stmt_regions: usize,
+        inline_scopes: usize,
+        expr_inline_scopes: usize,
+        stmt_inline_scopes: usize,
         local_names: usize,
     };
 
@@ -487,6 +528,9 @@ pub const Program = struct {
         expr_regions: std.ArrayList(base.Region),
         stmt_locs: std.ArrayList(base.SourceLoc),
         stmt_regions: std.ArrayList(base.Region),
+        inline_scopes: std.ArrayList(InlineScope),
+        expr_inline_scopes: std.ArrayList(InlineScopeId),
+        stmt_inline_scopes: std.ArrayList(InlineScopeId),
         local_names: std.ArrayList([]const u8),
         static_data_values: std.ArrayList(StaticDataValue),
         comptime_sites: std.ArrayList(ComptimeSite),
@@ -532,9 +576,13 @@ pub const Program = struct {
             .expr_regions = ProgramList(base.Region, "expr_regions").fromArrayList(expr_regions),
             .stmt_locs = ProgramList(base.SourceLoc, "stmt_locs").fromArrayList(stmt_locs),
             .stmt_regions = ProgramList(base.Region, "stmt_regions").fromArrayList(stmt_regions),
+            .inline_scopes = ProgramList(InlineScope, "inline_scopes").fromArrayList(inline_scopes),
+            .expr_inline_scopes = ProgramList(InlineScopeId, "expr_inline_scopes").fromArrayList(expr_inline_scopes),
+            .stmt_inline_scopes = ProgramList(InlineScopeId, "stmt_inline_scopes").fromArrayList(stmt_inline_scopes),
             .local_names = ProgramList([]const u8, "local_names").fromArrayList(local_names),
             .current_loc = base.SourceLoc.none,
             .current_region = base.Region.zero(),
+            .current_inline_scope = InlineScopeId.none,
         };
     }
 
@@ -543,6 +591,9 @@ pub const Program = struct {
             if (name.len > 0) self.allocator.free(name);
         }
         self.local_names.deinit(self.allocator);
+        self.stmt_inline_scopes.deinit(self.allocator);
+        self.expr_inline_scopes.deinit(self.allocator);
+        self.inline_scopes.deinit(self.allocator);
         self.stmt_regions.deinit(self.allocator);
         self.stmt_locs.deinit(self.allocator);
         self.expr_regions.deinit(self.allocator);
@@ -583,13 +634,6 @@ pub const Program = struct {
         self.names.deinit();
     }
 
-    /// Seal the type store once the lifted stage is done introducing types.
-    /// Monotype seals its own store when its lowering ends; this stage takes
-    /// ownership of that store, reopens it, and seals it again here.
-    pub fn freeze(self: *Program) void {
-        self.types.freeze();
-    }
-
     pub fn view(self: *const Program) ProgramView {
         return .{
             .names = &self.names,
@@ -626,6 +670,9 @@ pub const Program = struct {
             .expr_regions = self.expr_regions.unsafeRawItemsForView(),
             .stmt_locs = self.stmt_locs.unsafeRawItemsForView(),
             .stmt_regions = self.stmt_regions.unsafeRawItemsForView(),
+            .inline_scopes = self.inline_scopes.unsafeRawItemsForView(),
+            .expr_inline_scopes = self.expr_inline_scopes.unsafeRawItemsForView(),
+            .stmt_inline_scopes = self.stmt_inline_scopes.unsafeRawItemsForView(),
             .local_names = self.local_names.unsafeRawItemsForView(),
         };
     }
@@ -651,6 +698,9 @@ pub const Program = struct {
             .expr_regions = self.expr_regions.len(),
             .stmt_locs = self.stmt_locs.len(),
             .stmt_regions = self.stmt_regions.len(),
+            .inline_scopes = self.inline_scopes.len(),
+            .expr_inline_scopes = self.expr_inline_scopes.len(),
+            .stmt_inline_scopes = self.stmt_inline_scopes.len(),
             .local_names = self.local_names.len(),
         };
     }
@@ -678,6 +728,9 @@ pub const Program = struct {
         self.expr_regions.restoreLen(mark.expr_regions);
         self.stmt_locs.restoreLen(mark.stmt_locs);
         self.stmt_regions.restoreLen(mark.stmt_regions);
+        self.inline_scopes.restoreLen(mark.inline_scopes);
+        self.expr_inline_scopes.restoreLen(mark.expr_inline_scopes);
+        self.stmt_inline_scopes.restoreLen(mark.stmt_inline_scopes);
         self.local_names.restoreLen(mark.local_names);
     }
 
@@ -704,6 +757,9 @@ pub const Program = struct {
         self.expr_regions.shrinkAndFree(self.allocator, mark.expr_regions);
         self.stmt_locs.shrinkAndFree(self.allocator, mark.stmt_locs);
         self.stmt_regions.shrinkAndFree(self.allocator, mark.stmt_regions);
+        self.inline_scopes.shrinkAndFree(self.allocator, mark.inline_scopes);
+        self.expr_inline_scopes.shrinkAndFree(self.allocator, mark.expr_inline_scopes);
+        self.stmt_inline_scopes.shrinkAndFree(self.allocator, mark.stmt_inline_scopes);
         self.local_names.shrinkAndFree(self.allocator, mark.local_names);
     }
 
@@ -756,6 +812,7 @@ pub const Program = struct {
         try self.exprs.append(self.allocator, expr);
         try self.expr_locs.append(self.allocator, self.current_loc);
         try self.expr_regions.append(self.allocator, self.current_region);
+        try self.expr_inline_scopes.append(self.allocator, self.current_inline_scope);
         return id;
     }
 
@@ -779,6 +836,24 @@ pub const Program = struct {
         return self.stmt_regions.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
+    pub fn exprInlineScope(self: *const Program, id: ExprId) InlineScopeId {
+        return self.expr_inline_scopes.unsafeRawItemsForView()[@intFromEnum(id)];
+    }
+
+    pub fn stmtInlineScope(self: *const Program, id: StmtId) InlineScopeId {
+        return self.stmt_inline_scopes.unsafeRawItemsForView()[@intFromEnum(id)];
+    }
+
+    pub fn inlineScope(self: *const Program, id: InlineScopeId) InlineScope {
+        return self.inline_scopes.unsafeRawItemsForView()[@intFromEnum(id)];
+    }
+
+    pub fn addInlineScope(self: *Program, scope: InlineScope) std.mem.Allocator.Error!InlineScopeId {
+        const id: InlineScopeId = @enumFromInt(@as(u32, @intCast(self.inline_scopes.len())));
+        try self.inline_scopes.append(self.allocator, scope);
+        return id;
+    }
+
     pub fn addPat(self: *Program, pat_: Pat) std.mem.Allocator.Error!PatId {
         const id: PatId = @enumFromInt(@as(u32, @intCast(self.pats.len())));
         try self.pats.append(self.allocator, pat_);
@@ -790,6 +865,7 @@ pub const Program = struct {
         try self.stmts.append(self.allocator, stmt_);
         try self.stmt_locs.append(self.allocator, self.current_loc);
         try self.stmt_regions.append(self.allocator, self.current_region);
+        try self.stmt_inline_scopes.append(self.allocator, self.current_inline_scope);
         return id;
     }
 
