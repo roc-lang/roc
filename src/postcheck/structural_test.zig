@@ -685,7 +685,7 @@ test "Monotype match lowering relates patterns before specialization and project
     const lower_source = @embedFile("monotype/lower.zig");
     const match_source = sourceSliceBetween(
         lower_source,
-        "fn lowerMatch(self:",
+        "fn lowerMatch(",
         "fn savePatternBinders(",
     );
     try expectContains(match_source, "const scrutinee_cell = DraftTypeCell.fromGraphNode(scrutinee_node)");

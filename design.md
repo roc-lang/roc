@@ -2455,6 +2455,19 @@ compile-time wrapper carries the private result cell as its exact output
 witness. ConstStore preserves that witness beside the stored value, and restore
 relates the checked public interface to it without ordinary unification.
 
+A value-producing `if` or `match` likewise owns one explicit result selection
+for all of its inhabited branches. A finished expected Monotype remains an
+immutable outer interface, so selection begins on a fresh checked-public graph
+cell unless the caller already supplied exact generated-private evidence. Each
+branch settles that selection before the next branch is lowered, and every
+later branch consumes the selected cell as its explicit request. A live private
+producer selects the graph cell; an already-finished private producer remains
+immutable and its exact cell becomes the carried selection instead. Only after
+all branches have been lowered does the control-flow expression relate its
+selected result to the outer interface and seal. Representation selection
+therefore never reconstructs branch evidence from finished output IR or
+reopens a durable Monotype.
+
 Record constructors preserve that distinction structurally. If a field is a
 finished generated-private witness, the constructor emits a distinct record
 witness that references the field directly and relates that record to the

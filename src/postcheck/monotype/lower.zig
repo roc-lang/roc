@@ -37341,7 +37341,20 @@ const BodyContext = struct {
         const merge_binders = try self.stateMergeBinders(expr_id);
         defer self.allocator.free(merge_binders);
         if (merge_binders.len == 0) {
-            return try self.lowerMatchExprWithOutput(match, .{ .value = result_cell }, comptime_site);
+            var selection = try self.initControlFlowResultSelection(
+                self.view.bodies.expr(expr_id).ty,
+                result_cell,
+            );
+            const data = try self.lowerMatch(
+                match,
+                .{ .value = selection.selected },
+                comptime_site,
+                &selection,
+            );
+            return try self.addExprWithTypeCell(
+                try self.finishControlFlowResultSelection(selection),
+                data,
+            );
         }
 
         const state_cell = try self.stateResultTypeCell(merge_binders, result_cell);
@@ -37359,12 +37372,10 @@ const BodyContext = struct {
         output: MatchOutput,
         comptime_site: ?DraftComptimeSiteId,
     ) Allocator.Error!DraftExprId {
-        const data = try self.lowerMatch(match, output, comptime_site);
-        const output_cell = switch (output) {
-            .value => |declared| try self.joinMatchValueResultCell(declared, data.match_),
-            .state_result, .state_only => self.matchOutputCell(output),
-        };
-        return try self.addExprWithTypeCell(output_cell, data);
+        return try self.addExprWithTypeCell(
+            self.matchOutputCell(output),
+            try self.lowerMatch(match, output, comptime_site, null),
+        );
     }
 
     fn patternNeedsExplicitBinding(self: *BodyContext, pattern_id: checked.CheckedPatternId) bool {
@@ -38692,7 +38703,13 @@ const BodyContext = struct {
         return regions;
     }
 
-    fn lowerMatch(self: *BodyContext, match: anytype, output: MatchOutput, comptime_site: ?DraftComptimeSiteId) Allocator.Error!BodyExprData {
+    fn lowerMatch(
+        self: *BodyContext,
+        match: anytype,
+        output: MatchOutput,
+        comptime_site: ?DraftComptimeSiteId,
+        value_selection: ?*ControlFlowResultSelection,
+    ) Allocator.Error!BodyExprData {
         const PendingBranch = struct {
             ctx: BodyContext,
             pattern: checked.CheckedMatchBranchPattern,
@@ -38745,11 +38762,18 @@ const BodyContext = struct {
             );
             try entry.ctx.rebindPreRegisteredPatternBindersAtNode(entry.pattern.pattern, scrutinee_node);
             entry.user_guard = if (entry.checked_guard) |guard_expr| try entry.ctx.lowerExpr(guard_expr) else null;
+            const branch_output: MatchOutput = if (value_selection) |selection|
+                .{ .value = selection.selected }
+            else
+                output;
             entry.body = try entry.ctx.wrapComptimeBranch(
                 comptime_site,
                 entry.source_index,
-                try entry.ctx.lowerMatchBranchBody(entry.checked_body, output),
+                try entry.ctx.lowerMatchBranchBody(entry.checked_body, branch_output),
             );
+            if (value_selection) |selection| {
+                try self.includeControlFlowResult(selection, entry.body);
+            }
         }
 
         const scrutinee = if (try self.nodeIsProvenUninhabited(scrutinee_node))
@@ -39123,11 +39147,21 @@ const BodyContext = struct {
         const comptime_site = try self.ifComptimeSite(expr_id, if_);
         const merge_binders = try self.stateMergeBinders(expr_id);
         defer self.allocator.free(merge_binders);
-
         if (merge_binders.len == 0) {
-            const data = try self.lowerIfAtTypeCells(if_, result_cell, result_cell, &.{}, comptime_site);
+            var selection = try self.initControlFlowResultSelection(
+                self.view.bodies.expr(expr_id).ty,
+                result_cell,
+            );
+            const data = try self.lowerIfAtTypeCells(
+                if_,
+                result_cell,
+                result_cell,
+                &.{},
+                comptime_site,
+                &selection,
+            );
             return try self.addExprWithTypeCell(
-                try self.joinIfValueResultCell(result_cell, data.if_),
+                try self.finishControlFlowResultSelection(selection),
                 data,
             );
         }
@@ -39135,9 +39169,74 @@ const BodyContext = struct {
         const state_cell = try self.stateResultTypeCell(merge_binders, result_cell);
         const state_expr = try self.addExprWithTypeCell(
             state_cell,
-            try self.lowerIfAtTypeCells(if_, result_cell, state_cell, merge_binders, comptime_site),
+            try self.lowerIfAtTypeCells(if_, result_cell, state_cell, merge_binders, comptime_site, null),
         );
         return try self.unwrapStateResultAtTypeCells(state_expr, state_cell, result_cell, merge_binders);
+    }
+
+    const ControlFlowResultSelection = struct {
+        declared: DraftTypeCell,
+        selected: DraftTypeCell,
+        has_value: bool = false,
+    };
+
+    /// A value-producing control-flow expression owns one result selection
+    /// while its inhabited branches are lowered. A finished expected Monotype
+    /// remains an immutable outer interface, so selection begins on a fresh
+    /// checked-public graph cell unless the caller already supplied exact
+    /// generated-private evidence.
+    fn initControlFlowResultSelection(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        declared: DraftTypeCell,
+    ) Allocator.Error!ControlFlowResultSelection {
+        const declared_node = try declared.toGraphNode(self.graph);
+        const selected = if (try self.graph.containsGeneratedPrivate(declared_node) or
+            !try self.graph.containsFinishedMono(declared_node))
+            DraftTypeCell.fromGraphNode(declared_node)
+        else
+            DraftTypeCell.fromGraphNode(try self.freshInstNode(checked_ty));
+        return .{ .declared = declared, .selected = selected };
+    }
+
+    fn includeControlFlowResult(
+        self: *BodyContext,
+        selection: *ControlFlowResultSelection,
+        value: DraftExprId,
+    ) Allocator.Error!void {
+        if (self.exprImpossibilityProof(value) != null) return;
+        const selected_node = try selection.selected.toGraphNode(self.graph);
+        const value_cell = self.exprTypeCell(value);
+        const value_node = try value_cell.toGraphNode(self.graph);
+        try selectRequestRepresentation(self.graph, selected_node, value_node);
+
+        const selected_private = try self.graph.containsGeneratedPrivate(selected_node);
+        const value_private = try self.graph.containsGeneratedPrivate(value_node);
+        if (selected_private != value_private) {
+            if (!selection.has_value and !selected_private and value_private) {
+                // A finished private producer remains immutable and therefore
+                // cannot merge into the live public accumulator. Carry its
+                // exact cell forward as the request for every later branch.
+                selection.selected = value_cell;
+            } else {
+                Common.invariant("control-flow branch could not use its selected runtime representation");
+            }
+        }
+        selection.has_value = true;
+        self.draft.exprs.items[@intFromEnum(value)].ty = selection.selected;
+    }
+
+    fn finishControlFlowResultSelection(
+        self: *BodyContext,
+        selection: ControlFlowResultSelection,
+    ) Allocator.Error!DraftTypeCell {
+        const declared_node = try selection.declared.toGraphNode(self.graph);
+        const selected_node = try selection.selected.toGraphNode(self.graph);
+        try relateRequestComponent(self.graph, declared_node, selected_node);
+        return if (try self.graph.containsGeneratedPrivate(selected_node))
+            selection.selected
+        else
+            selection.declared;
     }
 
     fn stateMergeBinders(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error![]MergeBinder {
@@ -39217,6 +39316,7 @@ const BodyContext = struct {
         branch_cell: DraftTypeCell,
         merge_binders: []const MergeBinder,
         comptime_site: ?DraftComptimeSiteId,
+        value_selection: ?*ControlFlowResultSelection,
     ) Allocator.Error!BodyExprData {
         const branches = try self.allocator.alloc(DraftIfBranch, if_.branches.len);
         defer self.allocator.free(branches);
@@ -39224,89 +39324,46 @@ const BodyContext = struct {
             const cond = try self.lowerExpr(branch.cond);
             var branch_ctx = try self.childContext(self.current_fn_key);
             defer branch_ctx.deinit();
+            const requested_result_cell = if (value_selection) |selection| selection.selected else result_cell;
+            const requested_branch_cell = if (value_selection != null) requested_result_cell else branch_cell;
             branches[index] = .{
                 .cond = cond,
                 .body = try branch_ctx.wrapComptimeBranch(
                     comptime_site,
                     index,
-                    try branch_ctx.lowerIfBranchBodyAtTypeCells(branch.body, result_cell, branch_cell, merge_binders),
+                    try branch_ctx.lowerIfBranchBodyAtTypeCells(
+                        branch.body,
+                        requested_result_cell,
+                        requested_branch_cell,
+                        merge_binders,
+                    ),
                 ),
             };
+            if (value_selection) |selection| {
+                try self.includeControlFlowResult(selection, branches[index].body);
+            }
         }
         var else_ctx = try self.childContext(self.current_fn_key);
         defer else_ctx.deinit();
+        const requested_result_cell = if (value_selection) |selection| selection.selected else result_cell;
+        const requested_branch_cell = if (value_selection != null) requested_result_cell else branch_cell;
+        const final_else = try else_ctx.wrapComptimeBranch(
+            comptime_site,
+            if_.branches.len,
+            try else_ctx.lowerIfBranchBodyAtTypeCells(
+                if_.final_else,
+                requested_result_cell,
+                requested_branch_cell,
+                merge_binders,
+            ),
+        );
+        if (value_selection) |selection| {
+            try self.includeControlFlowResult(selection, final_else);
+        }
         return .{ .if_ = .{
             .branches = try self.addIfBranchSpan(branches),
-            .final_else = try else_ctx.wrapComptimeBranch(
-                comptime_site,
-                if_.branches.len,
-                try else_ctx.lowerIfBranchBodyAtTypeCells(if_.final_else, result_cell, branch_cell, merge_binders),
-            ),
+            .final_else = final_else,
         } };
-    }
-
-    const ControlFlowResultJoin = struct {
-        private_node: ?NodeId = null,
-        saw_public_value: bool = false,
-    };
-
-    fn includeControlFlowResult(
-        self: *BodyContext,
-        join: *ControlFlowResultJoin,
-        body: DraftExprId,
-    ) Allocator.Error!void {
-        if (self.exprImpossibilityProof(body) != null) return;
-        const node = try self.exprTypeCell(body).toGraphNode(self.graph);
-        if (try self.graph.containsGeneratedPrivate(node)) {
-            if (join.saw_public_value) {
-                Common.invariant("control-flow result mixed explicit generated-private and checked-public runtime representations");
-            }
-            if (join.private_node) |existing| {
-                try self.graph.unify(existing, node);
-            } else {
-                join.private_node = node;
-            }
-        } else {
-            if (join.private_node != null) {
-                Common.invariant("control-flow result mixed explicit generated-private and checked-public runtime representations");
-            }
-            join.saw_public_value = true;
-        }
-    }
-
-    fn finishControlFlowResultJoin(
-        self: *BodyContext,
-        declared: DraftTypeCell,
-        join: ControlFlowResultJoin,
-    ) Allocator.Error!DraftTypeCell {
-        const private_node = join.private_node orelse return declared;
-        try relateRequestComponent(self.graph, try declared.toGraphNode(self.graph), private_node);
-        return DraftTypeCell.fromGraphNode(private_node);
-    }
-
-    fn joinIfValueResultCell(
-        self: *BodyContext,
-        declared: DraftTypeCell,
-        if_: DraftIfExpr,
-    ) Allocator.Error!DraftTypeCell {
-        var join = ControlFlowResultJoin{};
-        for (self.ifBranchSpan(if_.branches)) |branch| {
-            try self.includeControlFlowResult(&join, branch.body);
-        }
-        try self.includeControlFlowResult(&join, if_.final_else);
-        return try self.finishControlFlowResultJoin(declared, join);
-    }
-
-    fn joinMatchValueResultCell(
-        self: *BodyContext,
-        declared: DraftTypeCell,
-        match: DraftMatchExpr,
-    ) Allocator.Error!DraftTypeCell {
-        var join = ControlFlowResultJoin{};
-        for (self.branchSpan(match.branches)) |branch| {
-            try self.includeControlFlowResult(&join, branch.body);
-        }
-        return try self.finishControlFlowResultJoin(declared, join);
     }
 
     fn lowerIfBranchBodyAtTypeCells(
@@ -39469,6 +39526,7 @@ const BodyContext = struct {
                     result_cell,
                     &.{},
                     try self.ifComptimeSite(expr_id, if_),
+                    null,
                 ),
             );
             return try self.stateResultAfterValueAtTypeCells(
@@ -39488,6 +39546,7 @@ const BodyContext = struct {
                 nested_state_cell,
                 nested_merge_binders,
                 try self.ifComptimeSite(expr_id, if_),
+                null,
             ),
         );
         return try self.composeNestedStateResultAtTypeCells(
@@ -40013,6 +40072,7 @@ const BodyContext = struct {
                     state_cell,
                     merge_binders,
                     try self.ifComptimeSite(expr_id, if_),
+                    null,
                 ),
             ),
             .match_ => |match| try self.lowerMatchExprWithOutput(
