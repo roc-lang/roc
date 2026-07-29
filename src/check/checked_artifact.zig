@@ -13379,7 +13379,7 @@ pub const DispatchScopeId = checked_ids.DispatchScopeId;
 
 /// Scope owning a checked dispatch reference. The template root is a real
 /// variant, never an integer value that can be mistaken for a local scope id.
-pub const DispatchScopeRef = union(enum) {
+pub const DispatchScope = union(enum) {
     root,
     generalized: DispatchScopeId,
 };
@@ -13413,18 +13413,18 @@ const TemplateIteratorRefs = struct {
     scopes: []DispatchRefScope = &.{},
     /// Scope of each collected dispatch plan ref (parallel to
     /// `StaticDispatchPlanTable.template_refs`).
-    plan_scopes: []DispatchScopeRef = &.{},
+    plan_scopes: []DispatchScope = &.{},
     /// Scope of each collected value ref (parallel to
     /// `ResolvedValueRefTable.template_refs`).
-    value_ref_scopes: []DispatchScopeRef = &.{},
+    value_ref_scopes: []DispatchScope = &.{},
     /// Scope of each collected iterator plan ref (parallel to `pool`).
-    iterator_scopes: []DispatchScopeRef = &.{},
+    iterator_scopes: []DispatchScope = &.{},
     /// Expression-position function instantiation sites, grouped per template.
     scheme_use_spans: []artifact_serialize.Span = &.{},
     scheme_use_sites: []CollectedSchemeUseSite = &.{},
     /// Scope of each collected scheme-use site (parallel to
     /// `scheme_use_sites`).
-    scheme_use_scopes: []DispatchScopeRef = &.{},
+    scheme_use_scopes: []DispatchScope = &.{},
     /// Generalized nested-procedure construction sites, grouped per template.
     scope_site_spans: []artifact_serialize.Span = &.{},
     scope_sites: []CollectedScopeConstructionSite = &.{},
@@ -13506,17 +13506,17 @@ fn sealCheckedProcedureTemplateRefs(
     errdefer dispatch_ref_pool.deinit(allocator);
     var iterator_ref_pool = std.ArrayList(static_dispatch.IteratorForPlanId).empty;
     errdefer iterator_ref_pool.deinit(allocator);
-    var value_ref_scope_pool = std.ArrayList(DispatchScopeRef).empty;
+    var value_ref_scope_pool = std.ArrayList(DispatchScope).empty;
     errdefer value_ref_scope_pool.deinit(allocator);
-    var dispatch_ref_scope_pool = std.ArrayList(DispatchScopeRef).empty;
+    var dispatch_ref_scope_pool = std.ArrayList(DispatchScope).empty;
     errdefer dispatch_ref_scope_pool.deinit(allocator);
     var dispatch_relation_kind_pool = std.ArrayList(DispatchRelationKind).empty;
     errdefer dispatch_relation_kind_pool.deinit(allocator);
-    var iterator_scope_pool = std.ArrayList(DispatchScopeRef).empty;
+    var iterator_scope_pool = std.ArrayList(DispatchScope).empty;
     errdefer iterator_scope_pool.deinit(allocator);
     var scheme_use_pool = std.ArrayList(CollectedSchemeUseSite).empty;
     errdefer scheme_use_pool.deinit(allocator);
-    var scheme_use_scope_pool = std.ArrayList(DispatchScopeRef).empty;
+    var scheme_use_scope_pool = std.ArrayList(DispatchScope).empty;
     errdefer scheme_use_scope_pool.deinit(allocator);
     var scope_site_pool = std.ArrayList(CollectedScopeConstructionSite).empty;
     errdefer scope_site_pool.deinit(allocator);
@@ -13564,7 +13564,7 @@ fn sealCheckedProcedureTemplateRefs(
 
     resolved_value_refs.template_refs = try value_ref_pool.toOwnedSlice(allocator);
     static_dispatch_plans.template_refs = try dispatch_ref_pool.toOwnedSlice(allocator);
-    templates.dispatch_ref_scopes = try allocator.dupe(DispatchScopeRef, dispatch_ref_scope_pool.items);
+    templates.dispatch_ref_scopes = try allocator.dupe(DispatchScope, dispatch_ref_scope_pool.items);
     templates.dispatch_relation_kinds = try dispatch_relation_kind_pool.toOwnedSlice(allocator);
     templates.dispatch_scopes = try allocator.dupe(DispatchRefScope, collector.scopes.items);
     publishLocalProcedureDispatchScopes(resolved_value_refs, &collector.scope_by_checked_expr);
@@ -14068,7 +14068,7 @@ const EvidencePass = struct {
     /// The param chain at `scope_id`: the scope's own params first (depth 0),
     /// each enclosing local scope outward, then the template's params. The
     /// returned slice aliases `chain_scratch` and is valid until the next call.
-    fn chainFor(self: *EvidencePass, scope_ref: DispatchScopeRef, template_params: []const EvidenceParam) Allocator.Error![]const []const EvidenceParam {
+    fn chainFor(self: *EvidencePass, scope_ref: DispatchScope, template_params: []const EvidenceParam) Allocator.Error![]const []const EvidenceParam {
         self.chain_scratch.clearRetainingCapacity();
         var current: ?DispatchScopeId = switch (scope_ref) {
             .root => null,
@@ -14857,7 +14857,7 @@ const EvidencePass = struct {
             checkedArtifactInvariant("nested procedure construction scope belonged to a different checked expression", .{});
         }
 
-        const parent_scope: DispatchScopeRef = if (scope.parent) |parent|
+        const parent_scope: DispatchScope = if (scope.parent) |parent|
             .{ .generalized = parent }
         else
             .root;
@@ -15057,11 +15057,11 @@ const CheckedTemplateRefCollector = struct {
     dispatch_refs: std.ArrayList(static_dispatch.StaticDispatchPlanId),
     iterator_refs: std.ArrayList(static_dispatch.IteratorForPlanId),
     /// Scope of each collected ref, parallel to the three ref lists.
-    value_ref_scopes: std.ArrayList(DispatchScopeRef),
-    dispatch_ref_scopes: std.ArrayList(DispatchScopeRef),
-    iterator_ref_scopes: std.ArrayList(DispatchScopeRef),
+    value_ref_scopes: std.ArrayList(DispatchScope),
+    dispatch_ref_scopes: std.ArrayList(DispatchScope),
+    iterator_ref_scopes: std.ArrayList(DispatchScope),
     scheme_use_sites: std.ArrayList(CollectedSchemeUseSite),
-    scheme_use_scopes: std.ArrayList(DispatchScopeRef),
+    scheme_use_scopes: std.ArrayList(DispatchScope),
     scope_sites: std.ArrayList(CollectedScopeConstructionSite),
     /// Pooled across templates (ids are global); the stack resets per template.
     scopes: std.ArrayList(DispatchRefScope),
@@ -15142,7 +15142,7 @@ const CheckedTemplateRefCollector = struct {
         return self.scope_stack.items[self.scope_stack.items.len - 1];
     }
 
-    fn currentScope(self: *const CheckedTemplateRefCollector) DispatchScopeRef {
+    fn currentScope(self: *const CheckedTemplateRefCollector) DispatchScope {
         return if (self.currentScopeId()) |id| .{ .generalized = id } else .root;
     }
 
@@ -15533,7 +15533,7 @@ pub const NestedProcSite = struct {
     owner_template: canonical.ProcedureTemplateRef,
     /// Exact generalized-local scope lexically owning this site, or the
     /// template root when the site is outside every generalized local.
-    lexical_scope: DispatchScopeRef,
+    lexical_scope: DispatchScope,
     evidence_source: NestedProcEvidenceSource,
     /// Exact range in `StaticDispatchPlanTable.evidence_refs` when
     /// `evidence_source == .checked_site`; empty otherwise.
@@ -15719,7 +15719,7 @@ pub const CheckedProcedureTemplateTable = struct {
     /// Flat pool backing each evidence param's `path` span.
     evidence_param_paths: []static_dispatch.EvidencePathStep = &.{},
     /// Scope of each `StaticDispatchPlanTable.template_refs` entry.
-    dispatch_ref_scopes: []DispatchScopeRef = &.{},
+    dispatch_ref_scopes: []DispatchScope = &.{},
     /// Relation semantics of each `StaticDispatchPlanTable.template_refs` entry.
     dispatch_relation_kinds: []DispatchRelationKind = &.{},
     /// Generalized-local scopes referenced by `dispatch_ref_scopes`.
@@ -15730,7 +15730,7 @@ pub const CheckedProcedureTemplateTable = struct {
         by_def: SerializedSlice(static_dispatch.ProcedureTemplateLookupEntry) = .{},
         evidence_params_pool: SerializedSlice(static_dispatch.EvidenceParamRecord) = .{},
         evidence_param_paths: SerializedSlice(static_dispatch.EvidencePathStep) = .{},
-        dispatch_ref_scopes: SerializedSlice(DispatchScopeRef) = .{},
+        dispatch_ref_scopes: SerializedSlice(DispatchScope) = .{},
         dispatch_relation_kinds: SerializedSlice(DispatchRelationKind) = .{},
         dispatch_scopes: SerializedSlice(DispatchRefScope) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(CheckedProcedureTemplateTable, @This());
@@ -16005,17 +16005,17 @@ fn nestedProcScopeMap(
 }
 
 fn nestedProcLexicalScope(
-    current: DispatchScopeRef,
+    current: DispatchScope,
     expr: CheckedExprId,
     by_checked_expr: *const std.AutoHashMap(CheckedExprId, DispatchScopeId),
     scopes: []const DispatchRefScope,
-) DispatchScopeRef {
+) DispatchScope {
     const scope_id = by_checked_expr.get(expr) orelse return current;
     const raw_scope = @intFromEnum(scope_id);
     if (raw_scope >= scopes.len or scopes[raw_scope].checked_expr != expr) {
         checkedArtifactInvariant("nested procedure lexical scope map disagreed with the checked scope table", .{});
     }
-    const expected_parent: DispatchScopeRef = if (scopes[raw_scope].parent) |parent|
+    const expected_parent: DispatchScope = if (scopes[raw_scope].parent) |parent|
         .{ .generalized = parent }
     else
         .root;
@@ -16032,7 +16032,7 @@ const NestedProcSiteBuilder = struct {
     method_registry: *const static_dispatch.MethodRegistry,
     dispatch_scopes: []const DispatchRefScope,
     scope_by_checked_expr: *const std.AutoHashMap(CheckedExprId, DispatchScopeId),
-    current_scope: DispatchScopeRef,
+    current_scope: DispatchScope,
     sites: std.ArrayList(NestedProcSite),
     template_refs: std.ArrayList(canonical.NestedProcSiteId),
     path: std.ArrayList(NestedProcPathComponent),
@@ -28570,13 +28570,13 @@ test "nested procedure sites inherit exact producer-recorded lexical scopes" {
     defer by_checked_expr.deinit();
 
     const outer = nestedProcLexicalScope(.root, @enumFromInt(30), &by_checked_expr, &scopes);
-    try std.testing.expect(std.meta.eql(DispatchScopeRef{ .generalized = testIndexId(DispatchScopeId, 0) }, outer));
+    try std.testing.expect(std.meta.eql(DispatchScope{ .generalized = testIndexId(DispatchScopeId, 0) }, outer));
 
     const inherited = nestedProcLexicalScope(outer, @enumFromInt(99), &by_checked_expr, &scopes);
     try std.testing.expect(std.meta.eql(outer, inherited));
 
     const inner = nestedProcLexicalScope(inherited, @enumFromInt(31), &by_checked_expr, &scopes);
-    try std.testing.expect(std.meta.eql(DispatchScopeRef{ .generalized = @enumFromInt(1) }, inner));
+    try std.testing.expect(std.meta.eql(DispatchScope{ .generalized = @enumFromInt(1) }, inner));
     try std.testing.expect(@hasField(NestedProcSite, "lexical_scope"));
 }
 
