@@ -844,6 +844,10 @@ pub const Census = struct {
     rehearsal_unbound_binder_third_required: Counter = Counter.init(0),
     rehearsal_unbound_binder_third_synthetic: Counter = Counter.init(0),
     rehearsal_unbound_binder_third_multi_binder: Counter = Counter.init(0),
+    // Whether the third definition is specializing in an outer frame whose
+    // binding already holds the value the position needs.
+    rehearsal_unbound_binder_third_in_outer_frame: Counter = Counter.init(0),
+    rehearsal_unbound_binder_third_no_frame_anywhere: Counter = Counter.init(0),
 
     rehearsal_unbound_binder_no_frame: Counter = Counter.init(0),
     // Whether the variable is generalized by exactly one scheme in the view.

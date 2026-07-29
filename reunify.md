@@ -2429,11 +2429,30 @@ values. The 761 multi-binder owners make the same point from the other
 side, since no receiver projection or single positional mapping could
 state them.
 
-The environment a position translates under therefore needs a level per
-scheme it references, each bound from that scheme's own published edge,
-rather than the single callee level the rehearsal opens today. That is a
-statement about §9.1's binding environment, not about §7.2's coverage or
-§9.6's rules, and it is where the remaining logical residual is.
+A level per referenced scheme is the obvious answer and it does not
+survive contact either: a level needs a source for its values, and
+**1404 of the 1408** name a definition that is specializing nowhere in the
+active frame stack, with only **4** found in an outer frame. There is no
+binding to read those values from, so there is nothing to add a level from.
+
+What that leaves is a statement about this instrument rather than about
+checking. The census resolves an operand from a checked type id alone,
+while directed translation in production resolves a position in a body,
+where the referencing expression is known — and §7.2 keys a recorded site
+by exactly that use expression. A position mentioning another generalized
+definition needs that definition's instantiation AT THAT USE, which the
+production walk can name and an operand descriptor carrying only a type id
+structurally cannot. On that reading some part of the 1404 is the cost of
+comparing types outside the expression context that identifies them, not a
+fact the checked data lacks, and the constraint census overstates the
+logical residual by that amount.
+
+That reading is not yet established. It predicts something checkable: an
+operand that also carries the use expression its position was reached
+through should resolve these binders, and the count should fall without
+any change to checking. Until that is run, the honest ledger keeps all
+1485 as unexplained and the flip precondition stays unmet — the six
+repairs already attempted each looked at least this sound.
 
 **Why the receiver rule cannot be widened to cover them.** The
 `constraint_dispatch_receiver` rule reads binder values positionally from

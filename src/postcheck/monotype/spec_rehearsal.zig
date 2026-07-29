@@ -3476,6 +3476,24 @@ pub const Rehearsal = struct {
                         census.bump("rehearsal_unbound_binder_of_caller_frame_scheme");
                     } else {
                         census.bump("rehearsal_unbound_binder_of_third_scheme");
+                        // Whether the definition owning this binder is itself
+                        // specializing somewhere in the active frame stack.
+                        // `frameForModule` consults only the innermost frame,
+                        // so a value an outer frame already holds is invisible
+                        // to the position that needs it.
+                        var found_outer = false;
+                        for (self.frames.items) |*outer| {
+                            if (!outer.env_ready) continue;
+                            if (!std.mem.eql(u8, &outer.env_module_bytes, &source.module_bytes)) continue;
+                            if (outer.owner_node != scheme.owner_node) continue;
+                            found_outer = true;
+                            break;
+                        }
+                        if (found_outer) {
+                            census.bump("rehearsal_unbound_binder_third_in_outer_frame");
+                        } else {
+                            census.bump("rehearsal_unbound_binder_third_no_frame_anywhere");
+                        }
                         // What kind of definition that third scheme is, which
                         // says whether the position names a top-level value, an
                         // inner generalization boundary, a platform requirement,
