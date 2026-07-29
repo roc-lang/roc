@@ -2326,34 +2326,36 @@ scheme owner no site in the requesting module names, 1778 whose scheme
 owner other sites do name but not at this use, 36 present on both halves
 but unpaired, and 4 whose use carries only sites owning other schemes.
 
-**The recorded use identity is not what blocks them.** Checking records a
-static-dispatch edge's use identity as the constraint's introducing
-expression, or node 0 when the constraint names none, and 4554 of 6014
-edges on the snapshot corpus name none. That looked like the cause, and it
-is not. `constraintSourceExpr` already recovers a real source expression
-for a literal conversion through its literal dispatch plan; routing the
-recorded identity through it raises the edges carrying a source expression
-from 1460 to 4690, and changes **nothing** downstream — the snapshot corpus
-is byte-identical, `rehearsal_callee_site_absent` stays at exactly 4202,
-`rehearsal_callee_unresolved_rule_bind_failed` at exactly 3325, and the
-informative total at exactly 2754. The experiment was run and reverted;
-what it establishes is that relabelling these edges cannot help, because
-no site is filed for them under any identity.
+**Almost none of the absent sites matter.** A callee scheme that
+generalizes nothing cannot leave a binder unbound, so an edge naming one
+needs no binding at all. Splitting the failures on that line collapses
+them: of the 4202 bindings that find no site, **4126 name a scheme with no
+binders and 76 name a scheme with binders**; of the 3325 declared-rule
+failures, **21** name a scheme with binders, and no binder-bearing edge
+reaches the no-rule case at all. The whole missing-site population is 97
+bindings that can affect a binder value. Publishing sites for the other
+4000-odd edges would be recording data nothing reads.
 
-The counts say the same thing directly: 11 local dispatch sites are
-recorded across the whole corpus, against 6014 dispatch edges, with the
-remaining coverage coming from 5431 imported-scheme projections. That is
-consistent with the earlier decomposition, where 2384 of the absent
-lookups find neither their use nor their callee scheme owner named by any
-site in the requesting module. `recordDenseInstantiationSite` fires only
-from the ordinary instantiation entry point and only when the instantiator
-is `fresh_flex`, so a dispatch target reached by any other route records
-nothing. Publishing these edges — not renaming them — is the work.
+**The recorded use identity is not what blocks even those.** Checking
+records a static-dispatch edge's use identity as the constraint's
+introducing expression, or node 0 when the constraint names none, and 4554
+of 6014 edges name none. That looked like the cause and is not.
+`constraintSourceExpr` already recovers a real source expression for a
+literal conversion through its literal dispatch plan; routing the recorded
+identity through it raises the edges carrying a source expression from
+1460 to 4690 and changes **nothing** downstream — the snapshot corpus stays
+byte-identical and the site-absent, rule-failure and informative counts
+stay at exactly 4202, 3325 and 2754. The experiment was run and reverted.
 
-The 3325 correspondence still holds and still identifies the population:
-the literal-conversion dispatch edges are exactly the ones falling through
-to the receiver rule. It identifies which edges need sites; it does not
-mean their use identity was the defect.
+The counts say why directly: 11 local dispatch sites are recorded across
+the whole corpus against 6014 dispatch edges, the remaining coverage being
+5431 imported-scheme projections. `recordDenseInstantiationSite` fires
+only from the ordinary instantiation entry point and only under
+`fresh_flex`, and `dispatchTargetMethodVar` instantiates only when the
+method var is generalized, so a dispatch target reached any other way
+records nothing. For a callee with no binders that is correct and costs
+nothing. For the 97 that have binders it is the gap, and it is small
+enough to characterize edge by edge rather than by a coverage sweep.
 
 **Why the receiver rule cannot be widened to cover them.** The
 `constraint_dispatch_receiver` rule reads binder values positionally from

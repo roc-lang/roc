@@ -826,6 +826,14 @@ pub const Census = struct {
     rehearsal_callee_site_absent_use_owned_elsewhere: Counter = Counter.init(0),
     rehearsal_callee_site_absent_owner_used_elsewhere: Counter = Counter.init(0),
     rehearsal_callee_site_absent_unrecorded: Counter = Counter.init(0),
+    // The unresolved classes split by whether the callee scheme generalizes
+    // anything. Only a scheme with binders can leave one unbound, so the
+    // with-binders counts are the population that reaches the informative
+    // constraint executions; the rest need no binding at all.
+    rehearsal_callee_site_absent_scheme_with_binders: Counter = Counter.init(0),
+    rehearsal_callee_site_absent_scheme_without_binders: Counter = Counter.init(0),
+    rehearsal_callee_unresolved_no_rule_with_binders: Counter = Counter.init(0),
+    rehearsal_callee_unresolved_rule_failed_with_binders: Counter = Counter.init(0),
 
     rehearsal_callee_site_bind_failed: Counter = Counter.init(0),
     rehearsal_callee_unresolved_defining_module_absent: Counter = Counter.init(0),

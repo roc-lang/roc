@@ -1464,6 +1464,13 @@ pub const Rehearsal = struct {
             }
             const site = self.siteQuietly(caller, named.use_expr, scheme.owner_node) orelse {
                 census.bump("rehearsal_callee_site_absent");
+                // Only a callee whose scheme actually generalizes something can
+                // strand a binder; one with none needs no binding at all.
+                if (scheme.gv_len == 0) {
+                    census.bump("rehearsal_callee_site_absent_scheme_without_binders");
+                } else {
+                    census.bump("rehearsal_callee_site_absent_scheme_with_binders");
+                }
                 classifyAbsentCalleeSite(caller, named.use_expr, scheme.owner_node);
                 break :resolved_by_site;
             };
@@ -1490,6 +1497,7 @@ pub const Rehearsal = struct {
 
         const declared = rule orelse {
             census.bump("rehearsal_callee_unresolved_no_site_no_rule");
+            if (scheme.gv_len != 0) census.bump("rehearsal_callee_unresolved_no_rule_with_binders");
             return unresolved;
         };
         const chain = self.bindCalleeFromRule(
@@ -1501,6 +1509,7 @@ pub const Rehearsal = struct {
             caller_owner_node,
         ) orelse {
             census.bump("rehearsal_callee_unresolved_rule_bind_failed");
+            if (scheme.gv_len != 0) census.bump("rehearsal_callee_unresolved_rule_failed_with_binders");
             return unresolved;
         };
         census.bump("rehearsal_callee_resolved_by_rule");
