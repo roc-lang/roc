@@ -1180,7 +1180,7 @@ test "check type - record - opt - scheme interior kind stays flex and joins opti
 
 /// Resolve the named top-level def to a record with exactly one field and
 /// return that field's kind (presence) var's resolved content.
-fn resolveOnlyFieldKindContent(test_env: *TestEnv, def_name: []const u8) !types.Content {
+fn resolveOnlyFieldKindContent(test_env: *TestEnv, def_name: []const u8) error{ TestUnexpectedResult, TestExpectedEqual }!types.Content {
     const idents = test_env.module_env.getIdentStoreConst();
     const defs_slice = test_env.module_env.store.sliceDefs(test_env.module_env.all_defs);
     for (defs_slice) |def_idx| {

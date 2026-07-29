@@ -32336,7 +32336,7 @@ const BodyContext = struct {
                 // Record update copies unmentioned slots verbatim — for an
                 // optional field that copies the tagged slot, presence state
                 // included. (A MENTIONED optional field takes the supplied
-                // branch above: creation semantics, the value wraps in
+                // branch above: the construction rule applies, the value wraps in
                 // `Present` exactly as construction does.) The read is
                 // hoisted into its own local so the base's last use ends
                 // before any updated field's expression runs (see the

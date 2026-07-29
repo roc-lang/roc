@@ -1,6 +1,6 @@
 //! Resolves checked-artifact types into committed ordinary-data layouts.
 //!
-//! This is the glue/cache-path sibling of `type_layout_resolver.zig`: it consumes
+//! This is the glue/cache-path layout resolver: it consumes
 //! serialized checked artifacts instead of live checker vars, then finalizes
 //! through the shared layout graph/store.
 

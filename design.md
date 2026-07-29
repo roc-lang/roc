@@ -3363,7 +3363,7 @@ The kind rules:
   the scheme forms, so instantiated copies of a generalized function's
   rows carry the concrete kind and the judgment survives instantiation —
   with a finalize pass as the monomorphic backstop.
-- Record UPDATE (`{ ..r, field: v }`) has CREATION semantics per supplied
+- Record UPDATE (`{ ..r, field: v }`) follows the CONSTRUCTION rule per supplied
   field: like a record literal, each mentioned field probes the base with a
   kind-FLEXIBLE field (a fresh presence var, recorded for the finalize
   kind-defaulting sweep exactly like a literal's), so the base's kind
@@ -3390,7 +3390,7 @@ The kind rules:
   unified through the row) and again after `judgeOptionalFieldAccesses` —
   at finalize as the backstop, and at every exhaustiveness-analysis site
   (match expressions and refutable destructure statements — the analysis
-  and its union-closing see sub-pattern facts through the row only once
+  and its union-closing see sub-pattern tag data through the row only once
   the binder is bound). A judgment pass only commits a still-flex kind
   whose presence var the current boundary OWNS (rank at or above the
   boundary's); lower-ranked entries stay pending for the scope that owns
@@ -3492,13 +3492,13 @@ fresh-content + unify shape `judgeOptionalFieldAccesses` uses for its
 explicitly at creation; the sweep runs LAST at module (and REPL-expression)
 finalize, after `judgeOptionalFieldAccesses` and every other
 acceptance/rejection judgment, so it is a pure commitment of already-final
-facts. A GENERALIZED kind var is skipped BY DESIGN: it is a scheme interior
+states. A GENERALIZED kind var is skipped BY DESIGN: it is a scheme interior
 (e.g. `mk = |v| { a: v }`), and instantiations of the scheme may
 legitimately join a `?:` annotation later — which is also why the sweep
 never runs at per-def generalization boundaries. Consequently the read
 boundaries' still-flex arms (TypeWriter rendering, `copyCheckedRecordFields`
-publication, `writeFieldPresenceForKey` canonical keys) now cover scheme
-interiors, which they read/publish/key required-equivalent; monomorphic
+CheckedModule output, the `writeFieldPresenceForKey` type-digest writer) now cover scheme
+interiors, which every reader treats required-equivalent; monomorphic
 literal-minted kinds reach them already committed.
 
 Deferred (explicitly not yet implemented):

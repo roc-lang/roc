@@ -1253,6 +1253,24 @@ fn sourceTypeLayout(module_env: *const ModuleEnv, anno_idx: CIR.TypeAnno.Idx) Do
     return sourceCollectionLayout(module_env, module_env.store.getTypeAnnoRegion(anno_idx));
 }
 
+/// The trimmed source snippet of a defaulted field's default expression
+/// (`?? <here>`), duped into an owned slice, or null when the region yields no
+/// text — in which case docs render `?? …` (mirroring TypeWriter's fallback).
+fn defaultSourceSnippet(
+    gpa: Allocator,
+    module_env: *const ModuleEnv,
+    default_idx: CIR.Expr.Idx,
+) Allocator.Error!?[]const u8 {
+    const source = module_env.getSourceAll();
+    const region = module_env.store.getExprRegion(default_idx);
+    const start: usize = @min(region.start.offset, source.len);
+    const end: usize = @min(region.end.offset, source.len);
+    if (start >= end) return null;
+    const snippet = std.mem.trim(u8, source[start..end], &std.ascii.whitespace);
+    if (snippet.len == 0) return null;
+    return try gpa.dupe(u8, snippet);
+}
+
 /// Extract a CIR TypeAnno as a structured DocType.
 fn extractTypeAnnoAsDocType(
     gpa: Allocator,
@@ -1321,6 +1339,9 @@ fn extractTypeAnnoAsDocType(
         fn cleanupFields(allocator: Allocator, fields: []const DocType.Field) void {
             for (fields) |field| {
                 allocator.free(field.name);
+                if (field.kind == .defaulted) {
+                    if (field.kind.defaulted) |snippet| allocator.free(snippet);
+                }
                 field.type.deinit(allocator);
                 allocator.destroy(field.type);
             }
@@ -1466,9 +1487,11 @@ fn extractTypeAnnoAsDocType(
                         while (i > 0) {
                             i -= 1;
                             const field = module_env.store.getAnnoRecordField(fields_slice[i]);
-                            if (field.is_optional) {
-                                std.debug.panic("optional record field documentation is not implemented", .{});
-                            }
+                            // Optional (`name ?: Type`) and defaulted
+                            // (`name : Type ?? default`) fields both carry a
+                            // value type; the declared kind is threaded through
+                            // `finish_record` below. Every field contributes
+                            // exactly one type visit so results stay aligned.
                             try frames.append(gpa, .{ .visit = field.ty });
                         }
                     },
@@ -1683,16 +1706,35 @@ fn extractTypeAnnoAsDocType(
                 const start = results.items.len - finish.fields.len;
                 var field_names = try gpa.alloc([]const u8, finish.fields.len);
                 defer gpa.free(field_names);
+                var field_kinds = try gpa.alloc(DocType.Field.Kind, finish.fields.len);
+                defer gpa.free(field_kinds);
                 var field_names_len: usize = 0;
                 var field_names_moved = false;
                 errdefer if (!field_names_moved) {
                     for (field_names[0..field_names_len]) |name| {
                         gpa.free(name);
                     }
+                    for (field_kinds[0..field_names_len]) |kind| {
+                        if (kind == .defaulted) {
+                            if (kind.defaulted) |snippet| gpa.free(snippet);
+                        }
+                    }
                 };
                 for (finish.fields) |field_idx| {
                     const field = module_env.store.getAnnoRecordField(field_idx);
+                    // A field is optional (`?:`), defaulted (`?? default`), or a
+                    // plain required field (mutually exclusive at can time).
+                    const kind: DocType.Field.Kind = if (field.is_optional)
+                        .optional
+                    else if (field.default_value) |default_idx|
+                        .{ .defaulted = try defaultSourceSnippet(gpa, module_env, default_idx) }
+                    else
+                        .required;
+                    errdefer if (kind == .defaulted) {
+                        if (kind.defaulted) |snippet| gpa.free(snippet);
+                    };
                     field_names[field_names_len] = try gpa.dupe(u8, module_env.getIdentText(field.name));
+                    field_kinds[field_names_len] = kind;
                     field_names_len += 1;
                 }
 
@@ -1704,10 +1746,11 @@ fn extractTypeAnnoAsDocType(
                     gpa.free(fields);
                 };
 
-                for (field_names, 0..) |field_name, i| {
+                for (field_names, field_kinds, 0..) |field_name, field_kind, i| {
                     fields[i] = .{
                         .name = field_name,
                         .type = results.items[start + i],
+                        .kind = field_kind,
                     };
                     fields_len += 1;
                 }
@@ -2191,26 +2234,25 @@ fn extractNominalType(
     }
 }
 
-/// Normalize a field's presence for documentation: a required field (concrete
-/// `present`, or an undetermined kind that solved `present` or stayed flex —
-/// flex defaults to required, design.md "Field Kinds (All-Dynamic Optional
-/// Fields)") documents as `.present` with its value type. A kind that solved
-/// `optional` has no doc rendering yet.
-fn docFieldPresence(
+/// The documentation kind of a solved record field. A field whose kind solved
+/// `optional` documents as `name ?: Type`. A required field, a defaulted field
+/// (a required slot at runtime — rendering its default value from the solved
+/// type is deferred, design.md "Defaulted Fields"), or a still-flex kind (flex
+/// defaults to required, design.md "Field Kinds (All-Dynamic Optional Fields)")
+/// all document as plain required fields. Mirrors TypeWriter's
+/// `writeRecordFieldSeparator`.
+fn docFieldKind(
     types: *const TypeStore,
     presence: types_mod.RecordField.Presence,
-) types_mod.RecordField.Presence {
+) DocType.Field.Kind {
     return switch (presence) {
-        .required => presence,
+        .required => .required,
         .unknown => |unknown| switch (types.resolveVar(unknown.presence).desc.content) {
             .field_presence => |fp| switch (fp) {
-                // A defaulted field is a required slot at runtime; it
-                // documents as a plain required field (rendering the default
-                // value in docs is deferred — design.md "Defaulted Fields").
-                .required, .defaulted => .{ .required = unknown.var_ },
-                .optional => std.debug.panic("optional record field documentation is not implemented", .{}),
+                .required, .defaulted => .required,
+                .optional => .optional,
             },
-            .flex, .rigid, .alias, .structure, .err => .{ .required = unknown.var_ },
+            .flex, .rigid, .alias, .structure, .err => .required,
         },
     };
 }
@@ -2230,7 +2272,7 @@ fn extractRecord(
     // Get fields from the initial record
     const initial_slice = types.getRecordFieldsSlice(record.fields);
     for (initial_slice.items(.name), initial_slice.items(.presence)) |name, presence| {
-        try all_fields.append(gpa, .{ .name = name, .presence = docFieldPresence(types, presence) });
+        try all_fields.append(gpa, .{ .name = name, .presence = presence });
     }
 
     // Follow the extension chain
@@ -2300,14 +2342,14 @@ fn extractRecord(
                     .record => |ext_record| {
                         const ext_slice = types.getRecordFieldsSlice(ext_record.fields);
                         for (ext_slice.items(.name), ext_slice.items(.presence)) |name, presence| {
-                            try all_fields.append(gpa, .{ .name = name, .presence = docFieldPresence(types, presence) });
+                            try all_fields.append(gpa, .{ .name = name, .presence = presence });
                         }
                         ext = ext_record.ext;
                     },
                     .record_unbound => |ext_fields| {
                         const ext_slice = types.getRecordFieldsSlice(ext_fields);
                         for (ext_slice.items(.name), ext_slice.items(.presence)) |name, presence| {
-                            try all_fields.append(gpa, .{ .name = name, .presence = docFieldPresence(types, presence) });
+                            try all_fields.append(gpa, .{ .name = name, .presence = presence });
                         }
                         break;
                     },
@@ -2336,10 +2378,12 @@ fn extractRecord(
     for (all_fields.items, 0..) |field, i| {
         doc_fields[i] = .{
             .name = try gpa.dupe(u8, idents.getText(field.name)),
-            .type = try extractDocTypeInner(ctx, field.typeVar() orelse {
-                std.debug.panic("optional record field documentation is not implemented", .{});
-            }) orelse
+            // Every field carries a value type on the type axis, independent of
+            // the solved kind (design.md "Field Kinds"); the kind only selects
+            // the `:` / `?:` separator.
+            .type = try extractDocTypeInner(ctx, field.presence.typeVar()) orelse
                 try allocDocType(gpa, .@"error"),
+            .kind = docFieldKind(types, field.presence),
         };
     }
 
@@ -2371,13 +2415,14 @@ fn extractRecordUnbound(
     const presences = slice.items(.presence);
     var fields = try gpa.alloc(DocType.Field, names.len);
     for (names, presences, 0..) |name, presence, i| {
-        if (presence != .required) {
-            std.debug.panic("optional record field documentation is not implemented", .{});
-        }
         fields[i] = .{
             .name = try gpa.dupe(u8, ctx.idents.getText(name)),
-            .type = try extractDocTypeInner(ctx, presence.required) orelse
+            // Every field carries a value type on the type axis; the solved
+            // kind only selects the `:` / `?:` separator (design.md
+            // "Field Kinds").
+            .type = try extractDocTypeInner(ctx, presence.typeVar()) orelse
                 try allocDocType(gpa, .@"error"),
+            .kind = docFieldKind(ctx.types, presence),
         };
     }
 
