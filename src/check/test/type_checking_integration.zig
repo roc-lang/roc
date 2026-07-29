@@ -446,7 +446,7 @@ test "check type - record - opt - field" {
     const source =
         \\main! = |_| {}
         \\
-        \\MyRecord : { hello: Str, world :? U8 }
+        \\MyRecord : { hello: Str, world ?: U8 }
         \\
         \\my_record : MyRecord
         \\my_record = { hello : "world" }
@@ -460,12 +460,12 @@ test "check type - record - opt - field supplied" {
     const source =
         \\main! = |_| {}
         \\
-        \\MyRecord : { hello: Str, world :? U8 }
+        \\MyRecord : { hello: Str, world ?: U8 }
         \\
         \\my_record : MyRecord
         \\my_record = { hello : "world", world : 5 }
     ;
-    // Supplying an optional field is allowed — `:?` is an upper bound, so the
+    // Supplying an optional field is allowed — `?:` is an upper bound, so the
     // (use-site, flex) presence binds to present.
     try checkTypesModule(source, .{ .pass = .{ .def = "my_record" } },
         \\MyRecord
@@ -476,7 +476,7 @@ test "check type - record - opt - field supplied with wrong type" {
     const source =
         \\main! = |_| {}
         \\
-        \\MyRecord : { hello: Str, world :? U8 }
+        \\MyRecord : { hello: Str, world ?: U8 }
         \\
         \\my_record : MyRecord
         \\my_record = { hello : "world", world : "nope" }
@@ -503,7 +503,7 @@ test "check type - record - opt - direct access rejected" {
     const source =
         \\main! = |_| {}
         \\
-        \\get_world : { world :? U8 } -> U8
+        \\get_world : { world ?: U8 } -> U8
         \\get_world = |r| r.world
     ;
     // Direct access demands the field be present, but the signature's presence
@@ -528,20 +528,20 @@ test "check type - record - opt - optional access allowed" {
     const source =
         \\main! = |_| {}
         \\
-        \\get_world : { world :? U8 } -> U8
+        \\get_world : { world ?: U8 } -> U8
         \\get_world = |r| r.?world ?? 0
     ;
     // The optional accessor introduces a fresh flex presence, which unifies
     // with the rigid presence, so the body type-checks and defaults on absence.
     try checkTypesModule(source, .{ .pass = .{ .def = "get_world" } },
-        \\{ world :? U8 } -> U8
+        \\{ world ?: U8 } -> U8
     );
 }
 
 test "check type - record - opt - local annotation is a use site" {
     const source =
         \\main! = |_| {
-        \\    r : { world :? U8 }
+        \\    r : { world ?: U8 }
         \\    r = { world : 5 }
         \\    r
         \\}
@@ -549,9 +549,9 @@ test "check type - record - opt - local annotation is a use site" {
     // Existential sealing (design.md "Existential Presence"): the body freely
     // supplies the optional field (flex while checking), but the annotation
     // wins in the exported type — the presence is sealed, so the row still
-    // renders `world :? U8` rather than the body-solved `world: U8`.
+    // renders `world ?: U8` rather than the body-solved `world: U8`.
     try checkTypesModule(source, .{ .pass = .{ .def = "main!" } },
-        \\_arg -> { world :? U8 }
+        \\_arg -> { world ?: U8 }
     );
 }
 
@@ -560,7 +560,7 @@ test "check type - record - opt - sealed field direct access rejected" {
     const source =
         \\main! = |_| {}
         \\
-        \\my_record : { hello: Str, world :? U8 }
+        \\my_record : { hello: Str, world ?: U8 }
         \\my_record = { hello : "hi", world : 5 }
         \\
         \\use_it : U8
@@ -589,7 +589,7 @@ test "check type - record - opt - sealed field optional access allowed" {
     const source =
         \\main! = |_| {}
         \\
-        \\my_record : { hello: Str, world :? U8 }
+        \\my_record : { hello: Str, world ?: U8 }
         \\my_record = { hello : "hi", world : 5 }
         \\
         \\use_it = my_record.?world
@@ -606,7 +606,7 @@ test "check type - record - opt - chained optional accesses collapse to one Try"
     const source =
         \\main! = |_| {}
         \\
-        \\Outer : { b :? { c :? U8 } }
+        \\Outer : { b ?: { c ?: U8 } }
         \\
         \\get : Outer -> Try(U8, [MissingField])
         \\get = |o| o.?b.?c
@@ -624,7 +624,7 @@ test "check type - record - opt - required segment after optional rides the Ok p
     const source =
         \\main! = |_| {}
         \\
-        \\Outer : { b :? { c : U8 } }
+        \\Outer : { b ?: { c : U8 } }
         \\
         \\get : Outer -> Try(U8, [MissingField])
         \\get = |o| o.?b.c
@@ -641,7 +641,7 @@ test "check type - record - opt - chain then default unwraps to the field type" 
     const source =
         \\main! = |_| {}
         \\
-        \\Outer : { b :? { c :? U8 } }
+        \\Outer : { b ?: { c ?: U8 } }
         \\
         \\get : Outer -> U8
         \\get = |o| o.?b.?c ?? 0
@@ -657,7 +657,7 @@ test "check type - record - opt - parenthesized receiver ends the chain (nested 
     const source =
         \\main! = |_| {}
         \\
-        \\outer : { b :? { c :? U8 } }
+        \\outer : { b ?: { c ?: U8 } }
         \\outer = {}
         \\
         \\bad = (outer.?b).?c
@@ -676,20 +676,20 @@ test "check type - record - opt - conditional presence accepted (annotated)" {
         \\with_y = { x: 1, y: 2, z: 7 }
         \\without_y = { x: 1, z: 7 }
         \\
-        \\y_optional : { x : U32, y :? U32, z : U32 }
+        \\y_optional : { x : U32, y ?: U32, z : U32 }
         \\y_optional = if True with_y else without_y
     ;
     // Pins the accepted side of design.md "Field Kinds (All-Dynamic Optional
-    // Fields)": under a `:?` annotation, one definition may supply the
+    // Fields)": under a `?:` annotation, one definition may supply the
     // optional field on one control-flow branch and omit it on the other.
     // The annotation's concrete `optional` kind seeds the branch
     // accumulator, so the supplying branch's undetermined kind pins to
     // `optional` and the omitting branch absorbs the field as an optional
     // (tagged, constructed-missing) slot. Width absorption is OPT-IN: the
-    // same program without the `:?` annotation stays rejected (see
+    // same program without the `?:` annotation stays rejected (see
     // "conditional presence rejected (unannotated)").
     try checkTypesModule(source, .{ .pass = .{ .def = "y_optional" } },
-        \\{ x: U32, y :? U32, z: U32 }
+        \\{ x: U32, y ?: U32, z: U32 }
     );
 }
 
@@ -702,7 +702,7 @@ test "check type - record - opt - conditional presence rejected (unannotated)" {
         \\
         \\y_maybe = if True with_y else without_y
     ;
-    // The rejected side of opt-in width absorption: with no `:?` annotation
+    // The rejected side of opt-in width absorption: with no `?:` annotation
     // in scope, an undetermined field kind does NOT absorb into the closed
     // sibling row — optionality must be declared, so the unannotated
     // conditional stays a branch mismatch.
@@ -742,7 +742,7 @@ test "check type - record - opt - list literal absorbs omitted optional field (a
     const source =
         \\main! = |_| {}
         \\
-        \\xs : List({ a :? U8 })
+        \\xs : List({ a ?: U8 })
         \\xs = [{ a: 1 }, {}]
     ;
     // The list analog of "conditional presence accepted (annotated)": the
@@ -754,7 +754,7 @@ test "check type - record - opt - list literal absorbs omitted optional field (a
     // (tagged, constructed-missing) slot (design.md "Field Kinds
     // (All-Dynamic Optional Fields)").
     try checkTypesModule(source, .{ .pass = .{ .def = "xs" } },
-        \\List({ a :? U8 })
+        \\List({ a ?: U8 })
     );
 }
 
@@ -1241,7 +1241,7 @@ test "check type - record - opt - optional access on missing field" {
         \\use_it = my_record.?world ?? 7
     ;
     // `.?` on a field a closed record does not declare AT ALL is a
-    // missing-field error: optionality is opt-in via `:?`, so an undeclared
+    // missing-field error: optionality is opt-in via `?:`, so an undeclared
     // field cannot be absorbed as optional and probing for it is almost
     // certainly a bug (design.md "Field Kinds (All-Dynamic Optional
     // Fields)", width absorption).
@@ -1269,16 +1269,16 @@ test "check type - record - opt - sealed omitted field keeps row" {
     const source =
         \\main! = |_| {}
         \\
-        \\my_record : { world :? U8 }
+        \\my_record : { world ?: U8 }
         \\my_record = {}
     ;
     // The omit side of design.md "Existential Presence": the body may omit the
-    // optional field, and the exported type still keeps `world :? U8` — the
+    // optional field, and the exported type still keeps `world ?: U8` — the
     // row survives unification with the empty record (each undetermined
     // presence binds absent, then the seal hides that fact), rather than the
     // def's type collapsing to `{}`.
     try checkTypesModule(source, .{ .pass = .{ .def = "my_record" } },
-        \\{ world :? U8 }
+        \\{ world ?: U8 }
     );
 }
 
@@ -1287,7 +1287,7 @@ test "check type - record - opt - sealed omitted field optional access defaults"
     const source =
         \\main! = |_| {}
         \\
-        \\my_record : { world :? U8 }
+        \\my_record : { world ?: U8 }
         \\my_record = {}
         \\
         \\use_it : U8
@@ -1306,7 +1306,7 @@ test "check type - record - opt - function arg caller may omit or supply" {
     const source =
         \\main! = |_| {}
         \\
-        \\get_world : { world :? U8 } -> U8
+        \\get_world : { world ?: U8 } -> U8
         \\get_world = |r| r.?world ?? 0
         \\
         \\use_a : U8
@@ -1328,7 +1328,7 @@ test "check type - record - opt - sealed optional passed where required expected
     const source =
         \\main! = |_| {}
         \\
-        \\my_record : { world :? U8 }
+        \\my_record : { world ?: U8 }
         \\my_record = { world : 5 }
         \\
         \\needs_world : { world : U8 } -> U8
@@ -1351,7 +1351,7 @@ test "check type - record - opt - sealed optional passed where required expected
         \\
         \\This argument has the type:
         \\
-        \\    { world :? U8 }
+        \\    { world ?: U8 }
         \\
         \\But `needs_world` needs the first argument to be:
         \\

@@ -2217,7 +2217,7 @@ test "Repl - issue 9258 opaque type param field access" {
 
 test "Repl - optional record field renders <missing> and plain present values" {
     const missing_steps = &[_][]const u8{
-        "r : { a :? U8, b : U8 }",
+        "r : { a ?: U8, b : U8 }",
         "r = { b: 2 }",
         "r",
     };
@@ -2225,7 +2225,7 @@ test "Repl - optional record field renders <missing> and plain present values" {
     try expectStepsFinal(.dev, missing_steps, "{ a: <missing>, b: 2 }");
 
     const present_steps = &[_][]const u8{
-        "s : { a :? U8, b : U8 }",
+        "s : { a ?: U8, b : U8 }",
         "s = { a: 5, b: 2 }",
         "s",
     };

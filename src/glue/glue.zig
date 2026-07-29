@@ -2137,9 +2137,9 @@ const TypeTable = struct {
             if (i > 0) try buf.appendSlice(self.gpa, ", ");
             const field = all_fields.items[src_idx];
             try buf.appendSlice(self.gpa, field.artifact.canonical_names.recordFieldLabelText(field.field.name));
-            // An optional field renders its kind (`name :? T`), mirroring the
+            // An optional field renders its kind (`name ?: T`), mirroring the
             // solver-side TypeWriter (design.md "Field Kinds").
-            try buf.appendSlice(self.gpa, if (field.field.kind.tag == .optional) " :? " else " : ");
+            try buf.appendSlice(self.gpa, if (field.field.kind.tag == .optional) " ?: " else " : ");
             try self.writeTypeStringBound(field.artifact, field.field.ty, buf, active);
         }
         try buf.appendSlice(self.gpa, " }");
@@ -4504,9 +4504,9 @@ fn writeRecordTypeString(
         if (i > 0) try buf.appendSlice(gpa, ", ");
         const field = all_fields.items[src_idx];
         try buf.appendSlice(gpa, artifact.canonical_names.recordFieldLabelText(field.name));
-        // An optional field renders its kind (`name :? T`), mirroring the
+        // An optional field renders its kind (`name ?: T`), mirroring the
         // solver-side TypeWriter (design.md "Field Kinds").
-        try buf.appendSlice(gpa, if (field.kind.tag == .optional) " :? " else " : ");
+        try buf.appendSlice(gpa, if (field.kind.tag == .optional) " ?: " else " : ");
         try writeTypeString(gpa, artifact, field.ty, buf, active);
     }
     try buf.appendSlice(gpa, " }");

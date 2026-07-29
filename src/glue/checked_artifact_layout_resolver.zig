@@ -496,7 +496,7 @@ pub const Resolver = struct {
     /// slot — a two-variant union laid out exactly like the Monotype slot
     /// union `[Missing, Present(value)]` (variants in sorted tag-name order:
     /// 0 = Missing with no payload, 1 = Present carrying the value), so the
-    /// glue/host view of a `:?` field agrees byte-for-byte with the
+    /// glue/host view of a `?:` field agrees byte-for-byte with the
     /// compiler's.
     fn buildFieldSlotRef(
         self: *Resolver,

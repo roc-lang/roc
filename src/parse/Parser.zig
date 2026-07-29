@@ -5360,15 +5360,11 @@ fn runExprStatementKernel(
                 const name = self.pos;
                 self.advance();
                 var optional_mark: ?Token.Idx = null;
-                // Legacy `?:` (question BEFORE the colon): recover as an
-                // optional field and point at the `:?` spelling.
+                // `name ?: Type` — a `?` before the colon marks the field
+                // optional (design.md "Field Kinds").
                 if ((self.peek() == .OpQuestion or self.peek() == .NoSpaceOpQuestion) and
                     self.peekNext() == .OpColon)
                 {
-                    try self.pushDiagnostic(.optional_field_mark_before_colon, .{
-                        .start = self.pos,
-                        .end = self.pos + 1,
-                    });
                     if (name_tag == .LowerIdent) {
                         optional_mark = self.pos;
                     } else {
@@ -5387,10 +5383,13 @@ fn runExprStatementKernel(
                     continue :expr_kernel .type_complete;
                 }
                 self.advance();
-                // `name :? Type` — a trailing `?` after the colon marks the
-                // field optional, matching `.?` access (a trailing `?` makes
-                // it optional; design.md "Field Kinds").
+                // Legacy `:?` (question AFTER the colon): recover as an
+                // optional field and point at the `?:` spelling.
                 if (self.peek() == .OpQuestion or self.peek() == .NoSpaceOpQuestion) {
+                    try self.pushDiagnostic(.optional_field_mark_after_colon, .{
+                        .start = self.pos,
+                        .end = self.pos + 1,
+                    });
                     if (name_tag == .LowerIdent) {
                         if (optional_mark == null) optional_mark = self.pos;
                     } else {

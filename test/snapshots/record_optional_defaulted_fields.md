@@ -1,11 +1,11 @@
 # META
 ~~~ini
-description=Optional (:?) and defaulted (??) record fields through the full pipeline
+description=Optional (?:) and defaulted (??) record fields through the full pipeline
 type=snippet
 ~~~
 # SOURCE
 ~~~roc
-Config : { host : Str, port :? U16, retries : U8 ?? 3 }
+Config : { host : Str, port ?: U16, retries : U8 ?? 3 }
 
 get_port : Config -> Try(U16, [MissingField])
 get_port = |c| c.?port
@@ -33,7 +33,7 @@ TYPE MISMATCH - record_optional_defaulted_fields.md:10:26:10:31
 
 # TOKENS
 ~~~zig
-UpperIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,NoSpaceOpQuestion,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,OpDoubleQuestion,Int,CloseCurly,
+UpperIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpQuestion,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,OpDoubleQuestion,Int,CloseCurly,
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,NoSpaceOpenRound,UpperIdent,Comma,OpenSquare,UpperIdent,CloseSquare,CloseRound,
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,NoSpaceDotQuestionLowerIdent,
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,

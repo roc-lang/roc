@@ -121,7 +121,7 @@ test "ModuleEnv.Serialized roundtrip" {
     // Plus 6 from_utf8 identifiers: byte_index, string, is_ok, problem_code, problem, index
     // Plus 2 synthetic identifiers for ? operator desugaring: #ok, #err
     // Plus 1 synthetic identifier for .. implicit rigids in open tag unions or records
-    // Plus 1 synthetic identifier for rigid presence vars of :? optional fields
+    // Plus 1 synthetic identifier for rigid presence vars of ?: optional fields
     // Plus 1 error tag for optional field access on an absent field: MissingField
     // Plus 2 numeric method identifiers: abs, abs_diff
     // Plus 1 inspect method identifier: to_inspect

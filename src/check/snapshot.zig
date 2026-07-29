@@ -94,15 +94,15 @@ pub const SnapshotRecord = struct {
 };
 
 /// Whether a snapshotted record field is known present, known absent, or of
-/// undetermined presence (an optional `:?` field whose presence variable has
+/// undetermined presence (an optional `?:` field whose presence variable has
 /// not been resolved). Mirrors the presence axis of `types.RecordField.Presence`
 /// without carrying type variables (the field's type lives in `content`).
 ///
 /// TODO(optional-fields): polish optional field rendering — consumers that
 /// format snapshotted records (src/check/report.zig, src/check/snapshot/diff.zig)
-/// should print a `:?` marker for `.unknown` (and decide on `.absent`) fields.
+/// should print a `?:` marker for `.unknown` (and decide on `.absent`) fields.
 /// A field's kind as snapshotted for error reporting, with the presence var
-/// RESOLVED: `optional` is a kind the solve committed to (a `:?` annotation
+/// RESOLVED: `optional` is a kind the solve committed to (a `?:` annotation
 /// reached this field), while `unknown` is a kind still undetermined at
 /// snapshot time (design.md "Field Kinds (All-Dynamic Optional Fields)").
 pub const SnapshotFieldPresence = union(enum) {

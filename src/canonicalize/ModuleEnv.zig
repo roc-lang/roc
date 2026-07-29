@@ -227,7 +227,7 @@ pub const CommonIdents = extern struct {
     // Synthetic identifier for .. implicit rigids in open tag unions or records
     open_ext: Ident.Idx,
     // Synthetic identifier naming the rigid presence variable minted when
-    // checking a definition's body against its own `:?` optional-field signature.
+    // checking a definition's body against its own `?:` optional-field signature.
     optional_presence: Ident.Idx,
     // Error tag produced by optional field access (`r.?x`) when the field is
     // absent: the Err side of `Try(field_type, [MissingField])`.
@@ -358,7 +358,7 @@ pub const CommonIdents = extern struct {
             .question_err = try common.insertIdent(gpa, Ident.for_text("#err")),
             // Synthetic identifier for .. implicit rigids in open tag unions or records
             .open_ext = try common.insertIdent(gpa, Ident.for_text("#others")),
-            // Synthetic identifier naming rigid presence vars for `:?` fields
+            // Synthetic identifier naming rigid presence vars for `?:` fields
             .optional_presence = try common.insertIdent(gpa, Ident.for_text("#optional")),
             // Error tag for optional field access on an absent field
             .missing_field = try common.insertIdent(gpa, Ident.for_text("MissingField")),
@@ -491,7 +491,7 @@ pub const CommonIdents = extern struct {
             .question_err = common.findIdent("#err") orelse unreachable,
             // Synthetic identifier for .. implicit rigids in open tag unions or records
             .open_ext = common.findIdent("#others") orelse unreachable,
-            // Synthetic identifier naming rigid presence vars for `:?` fields
+            // Synthetic identifier naming rigid presence vars for `?:` fields
             .optional_presence = common.findIdent("#optional") orelse unreachable,
             // Error tag for optional field access on an absent field
             .missing_field = common.findIdent("MissingField") orelse unreachable,
@@ -2850,7 +2850,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             var report = try Report.init(allocator, "Optional Field Cannot Have A Default", "", .runtime_error);
             try report.headline.addReflowingText("A field cannot be both optional (");
-            try report.headline.addInlineCode(":?");
+            try report.headline.addInlineCode("?:");
             try report.headline.addReflowingText(") and defaulted (");
             try report.headline.addInlineCode("??");
             try report.headline.addReflowingText("): a default fills the field whenever construction omits it, so the field can never be missing. Use ");

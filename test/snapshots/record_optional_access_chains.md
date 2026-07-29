@@ -5,13 +5,13 @@ type=snippet
 ~~~
 # SOURCE
 ~~~roc
-Inner : { c :? U8 }
-Outer : { b :? Inner }
+Inner : { c ?: U8 }
+Outer : { b ?: Inner }
 
 chain : Outer -> Try(U8, [MissingField])
 chain = |o| o.?b.?c
 
-mixed : { b :? { c : U8 } } -> Try(U8, [MissingField])
+mixed : { b ?: { c : U8 } } -> Try(U8, [MissingField])
 mixed = |o| o.?b.c
 
 with_default : Outer -> U8
@@ -23,11 +23,11 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-UpperIdent,OpColon,OpenCurly,LowerIdent,OpColon,NoSpaceOpQuestion,UpperIdent,CloseCurly,
-UpperIdent,OpColon,OpenCurly,LowerIdent,OpColon,NoSpaceOpQuestion,UpperIdent,CloseCurly,
+UpperIdent,OpColon,OpenCurly,LowerIdent,OpQuestion,OpColon,UpperIdent,CloseCurly,
+UpperIdent,OpColon,OpenCurly,LowerIdent,OpQuestion,OpColon,UpperIdent,CloseCurly,
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,NoSpaceOpenRound,UpperIdent,Comma,OpenSquare,UpperIdent,CloseSquare,CloseRound,
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,NoSpaceDotQuestionLowerIdent,NoSpaceDotQuestionLowerIdent,
-LowerIdent,OpColon,OpenCurly,LowerIdent,OpColon,NoSpaceOpQuestion,OpenCurly,LowerIdent,OpColon,UpperIdent,CloseCurly,CloseCurly,OpArrow,UpperIdent,NoSpaceOpenRound,UpperIdent,Comma,OpenSquare,UpperIdent,CloseSquare,CloseRound,
+LowerIdent,OpColon,OpenCurly,LowerIdent,OpQuestion,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,CloseCurly,CloseCurly,OpArrow,UpperIdent,NoSpaceOpenRound,UpperIdent,Comma,OpenSquare,UpperIdent,CloseSquare,CloseRound,
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,NoSpaceDotQuestionLowerIdent,NoSpaceDotLowerIdent,
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,NoSpaceDotQuestionLowerIdent,NoSpaceDotQuestionLowerIdent,OpDoubleQuestion,Int,
@@ -111,14 +111,14 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-Inner : { c :? U8 }
+Inner : { c ?: U8 }
 
-Outer : { b :? Inner }
+Outer : { b ?: Inner }
 
 chain : Outer -> Try(U8, [MissingField])
 chain = |o| o.?b.?c
 
-mixed : { b :? { c : U8 } } -> Try(U8, [MissingField])
+mixed : { b ?: { c : U8 } } -> Try(U8, [MissingField])
 mixed = |o| o.?b.c
 
 with_default : Outer -> U8
@@ -220,7 +220,7 @@ with_default = |o| o.?b.?c ?? 0
 (inferred-types
 	(defs
 		(patt (type "Outer -> Try(U8, [MissingField])"))
-		(patt (type "{ b :? { c: U8 } } -> Try(U8, [MissingField])"))
+		(patt (type "{ b ?: { c: U8 } } -> Try(U8, [MissingField])"))
 		(patt (type "Outer -> U8")))
 	(type_decls
 		(alias (type "Inner")
@@ -229,6 +229,6 @@ with_default = |o| o.?b.?c ?? 0
 			(ty-header (name "Outer"))))
 	(expressions
 		(expr (type "Outer -> Try(U8, [MissingField])"))
-		(expr (type "{ b :? { c: U8 } } -> Try(U8, [MissingField])"))
+		(expr (type "{ b ?: { c: U8 } } -> Try(U8, [MissingField])"))
 		(expr (type "Outer -> U8"))))
 ~~~

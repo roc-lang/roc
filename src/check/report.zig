@@ -3111,7 +3111,7 @@ pub const ReportBuilder = struct {
         return report;
     }
 
-    /// Build a report for direct access (or update) of an optional (`:?`)
+    /// Build a report for direct access (or update) of an optional (`?:`)
     /// field: the field exists, but its presence is not guaranteed, so
     /// treating it as always present is the actual error — not a missing
     /// field or a typo.
@@ -3196,7 +3196,7 @@ pub const ReportBuilder = struct {
                 const actual_slice = self.diff_fields.sliceRange(actual_fields_range);
 
                 // If the record HAS the field but its kind SOLVED `optional`
-                // (`:?`), the failure is the kind axis: direct access demands
+                // (`?:`), the failure is the kind axis: direct access demands
                 // a required field. Without this check the error reads as a
                 // baffling "missing field" — with a typo suggestion of the
                 // field's own name.
@@ -3308,7 +3308,7 @@ pub const ReportBuilder = struct {
 
                 if (mb_expected_field) |expected_field| {
                     // If the field exists but its kind SOLVED `optional`
-                    // (`:?`), the failure is the kind axis: updating demands
+                    // (`?:`), the failure is the kind axis: updating demands
                     // a required field.
                     if (expected_field.presence == .optional) {
                         return try self.buildOptionalFieldAccessReport(

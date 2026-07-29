@@ -3135,14 +3135,14 @@ const Formatter = struct {
         } else {
             try fmt.push(' ');
         }
-        try fmt.push(':');
-        // `name :? Type` — the trailing `?` marks the field optional,
-        // matching `.?` access. Legacy `?:` sources format to `:?`. Trivia
-        // between the mark and the type is flushed exactly once, by the
-        // before-type flush below.
+        // `name ?: Type` — the `?` before the colon marks the field
+        // optional. Legacy `:?` sources format to `?:`. Trivia between the
+        // mark and the type is flushed exactly once, by the before-type
+        // flush below.
         if (field.optional_mark != null) {
             try fmt.push('?');
         }
+        try fmt.push(':');
         const anno_region = fmt.nodeRegion(@intFromEnum(field.ty));
         if (multiline and try fmt.flushCommentsBefore(anno_region.start)) {
             fmt.curr_indent += 1;
@@ -4398,16 +4398,16 @@ test "issue 10140: nested record function type formatting is idempotent" {
     defer std.testing.allocator.free(result);
 }
 
-test "optional record type fields format as a trailing marker" {
+test "optional record type fields format as a leading marker" {
     const result = try moduleFmtsStable(
         std.testing.allocator,
-        "value:{x:U32,y:?U32,z : ? U32}",
+        "value:{x:U32,y?:U32,z ? : U32}",
         false,
     );
     defer std.testing.allocator.free(result);
 
     try std.testing.expectEqualStrings(
-        "value : { x : U32, y :? U32, z :? U32 }\n",
+        "value : { x : U32, y ?: U32, z ?: U32 }\n",
         result,
     );
 }
@@ -4429,30 +4429,30 @@ test "defaulted record type fields keep their default through formatting" {
 }
 
 test "optional mark with a trailing comment formats idempotently" {
-    // Review H2: trivia between `:?` and the type is flushed exactly once,
+    // Review H2: trivia between `?:` and the type is flushed exactly once,
     // so format(format(x)) == format(x). moduleFmtsStable asserts stability.
     const result = try moduleFmtsStable(
         std.testing.allocator,
-        "i : { a :? # after mark\n\tU8 }",
+        "i : { a ?: # after mark\n\tU8 }",
         false,
     );
     defer std.testing.allocator.free(result);
     try std.testing.expect(std.mem.count(u8, result, "# after mark") == 1);
 }
 
-test "legacy optional marker before the colon formats to the trailing form" {
-    // `?:` (and spaced `? :`) recover as optional fields with a parse
-    // diagnostic pointing at `:?`; the formatter canonicalizes them.
+test "legacy optional marker after the colon formats to the leading form" {
+    // `:?` (and spaced `: ?`) recover as optional fields with a parse
+    // diagnostic pointing at `?:`; the formatter canonicalizes them.
     const result = try moduleFmtsStableWithDiags(
         std.testing.allocator,
-        "value:{x:U32,y?:U32,z ? : U32}",
+        "value:{x:U32,y:?U32,z : ? U32}",
         false,
         2,
     );
     defer std.testing.allocator.free(result);
 
     try std.testing.expectEqualStrings(
-        "value : { x : U32, y :? U32, z :? U32 }\n",
+        "value : { x : U32, y ?: U32, z ?: U32 }\n",
         result,
     );
 }

@@ -2794,7 +2794,7 @@ fn getDefaultedTypeStringWithSeen(
                         try result.appendSlice(field_name);
                         // Resolve the kind var like TypeWriter does: a
                         // wrapper whose kind solved required/defaulted is a
-                        // plain field; only a solved `optional` renders `:?`
+                        // plain field; only a solved `optional` renders `?:`
                         // (a still-flex kind defaults to required at read
                         // boundaries — design.md "Field Kinds").
                         try result.appendSlice(switch (field_presence) {
@@ -2802,7 +2802,7 @@ fn getDefaultedTypeStringWithSeen(
                             .unknown => |unknown| switch (can_ir.types.resolveVar(unknown.presence).desc.content) {
                                 .field_presence => |fp| switch (fp) {
                                     .required, .defaulted => " : ",
-                                    .optional => " :? ",
+                                    .optional => " ?: ",
                                 },
                                 .flex, .rigid, .alias, .structure, .err => " : ",
                             },
@@ -5979,7 +5979,7 @@ test "snapshot tool formats optional record fields" {
 
     const formatted = try getDefaultedTypeString(allocator, &module_env, record_var);
     defer allocator.free(formatted);
-    try std.testing.expectEqualStrings("{ required : {}, optional :? {} }", formatted);
+    try std.testing.expectEqualStrings("{ required : {}, optional ?: {} }", formatted);
 }
 
 test "no Builtin module leaks in snapshots" {

@@ -105,7 +105,7 @@ const core_tests = [_]TestCase{
         .name = "optional record field: supplied at construction and .? hits",
         .source_kind = .module,
         .source =
-        \\my_record : { name : Str, age :? U8 }
+        \\my_record : { name : Str, age ?: U8 }
         \\my_record = { name: "a", age: 30 }
         \\
         \\main = my_record.?age ?? 5
@@ -116,7 +116,7 @@ const core_tests = [_]TestCase{
         .name = "optional record field: omitted at construction and .? misses to the fallback",
         .source_kind = .module,
         .source =
-        \\my_record : { name : Str, age :? U8 }
+        \\my_record : { name : Str, age ?: U8 }
         \\my_record = { name: "a" }
         \\
         \\main = my_record.?age ?? 5
@@ -127,7 +127,7 @@ const core_tests = [_]TestCase{
         .name = "optional record field: .? produces a real Try to match on",
         .source_kind = .module,
         .source =
-        \\my_record : { age :? U8 }
+        \\my_record : { age ?: U8 }
         \\my_record = { age: 2 }
         \\
         \\main = match my_record.?age {
@@ -141,7 +141,7 @@ const core_tests = [_]TestCase{
         .name = "optional record field: empty literal against an all-optional row is all missing",
         .source_kind = .module,
         .source =
-        \\x : { a :? U8, b :? U8 }
+        \\x : { a ?: U8, b ?: U8 }
         \\x = {}
         \\
         \\main = (x.?a ?? 7) + (x.?b ?? 8)
@@ -152,7 +152,7 @@ const core_tests = [_]TestCase{
         .name = "optional record field: required segment after .? rides the Ok path",
         .source_kind = .module,
         .source =
-        \\o : { b :? { c : U8 } }
+        \\o : { b ?: { c : U8 } }
         \\o = { b: { c: 42 } }
         \\
         \\main = o.?b.c ?? 0
@@ -163,7 +163,7 @@ const core_tests = [_]TestCase{
         .name = "optional record field: required segment after a missing .? falls back",
         .source_kind = .module,
         .source =
-        \\o : { b :? { c : U8 } }
+        \\o : { b ?: { c : U8 } }
         \\o = {}
         \\
         \\main = o.?b.c ?? 9
@@ -174,7 +174,7 @@ const core_tests = [_]TestCase{
         .name = "optional record field: two-optional chain hit",
         .source_kind = .module,
         .source =
-        \\o : { b :? { c :? U8 } }
+        \\o : { b ?: { c ?: U8 } }
         \\o = { b: { c: 4 } }
         \\
         \\main = o.?b.?c ?? 11
@@ -185,7 +185,7 @@ const core_tests = [_]TestCase{
         .name = "optional record field: two-optional chain short-circuits on the inner missing slot",
         .source_kind = .module,
         .source =
-        \\o : { b :? { c :? U8 } }
+        \\o : { b ?: { c ?: U8 } }
         \\o = { b: {} }
         \\
         \\main = o.?b.?c ?? 11
@@ -196,7 +196,7 @@ const core_tests = [_]TestCase{
         .name = "optional record field: required, defaulted, and optional slots in one record (omitting sides)",
         .source_kind = .module,
         .source =
-        \\r : { req : U8, def : U8 ?? 10, opt :? U8 }
+        \\r : { req : U8, def : U8 ?? 10, opt ?: U8 }
         \\r = { req: 1 }
         \\
         \\main = r.req + r.def + (r.?opt ?? 100)
@@ -207,7 +207,7 @@ const core_tests = [_]TestCase{
         .name = "optional record field: required, defaulted, and optional slots in one record (all supplied)",
         .source_kind = .module,
         .source =
-        \\r : { req : U8, def : U8 ?? 10, opt :? U8 }
+        \\r : { req : U8, def : U8 ?? 10, opt ?: U8 }
         \\r = { req: 1, def: 2, opt: 3 }
         \\
         \\main = r.req + r.def + (r.?opt ?? 100)
@@ -218,7 +218,7 @@ const core_tests = [_]TestCase{
         .name = "optional record field: conditional presence executes both branches",
         .source_kind = .module,
         .source =
-        \\make : Bool -> { a :? U8 }
+        \\make : Bool -> { a ?: U8 }
         \\make = |cond| if cond { a: 5 } else {}
         \\
         \\main = (make(True).?a ?? 0) + (make(False).?a ?? 30)
@@ -229,7 +229,7 @@ const core_tests = [_]TestCase{
         .name = "optional record field: heap Str payload supplied and .? hits",
         .source_kind = .module,
         .source =
-        \\my_record : { name :? Str }
+        \\my_record : { name ?: Str }
         \\my_record = { name: Str.repeat("ab", 15) }
         \\
         \\main = my_record.?name ?? "anon"
@@ -240,7 +240,7 @@ const core_tests = [_]TestCase{
         .name = "optional record field: omitted heap Str payload misses to a heap fallback",
         .source_kind = .module,
         .source =
-        \\my_record : { name :? Str }
+        \\my_record : { name ?: Str }
         \\my_record = {}
         \\
         \\main = my_record.?name ?? Str.repeat("no", 14)
@@ -251,7 +251,7 @@ const core_tests = [_]TestCase{
         .name = "optional record field: present heap Str payload dropped without being read",
         .source_kind = .module,
         .source =
-        \\make : U8 -> { keep : U8, name :? Str }
+        \\make : U8 -> { keep : U8, name ?: Str }
         \\make = |n| { keep: n, name: Str.repeat("xy", 20) }
         \\
         \\main = make(7).keep
@@ -262,10 +262,10 @@ const core_tests = [_]TestCase{
         .name = "optional record field: List(U8) payload supplied and omitted",
         .source_kind = .module,
         .source =
-        \\r : { xs :? List(U8) }
+        \\r : { xs ?: List(U8) }
         \\r = { xs: [1, 2, 3] }
         \\
-        \\s : { xs :? List(U8) }
+        \\s : { xs ?: List(U8) }
         \\s = {}
         \\
         \\main = List.len(r.?xs ?? []) + List.len(s.?xs ?? [9])
@@ -276,10 +276,10 @@ const core_tests = [_]TestCase{
         .name = "optional record field: nested record's optional reached through a required segment",
         .source_kind = .module,
         .source =
-        \\o : { inner : { a :? U8 } }
+        \\o : { inner : { a ?: U8 } }
         \\o = { inner: { a: 6 } }
         \\
-        \\p : { inner : { a :? U8 } }
+        \\p : { inner : { a ?: U8 } }
         \\p = { inner: {} }
         \\
         \\main = (o.inner.?a ?? 1) + (p.inner.?a ?? 20)
@@ -290,7 +290,7 @@ const core_tests = [_]TestCase{
         .name = "optional record field: function taking an optional-field record serves supplying and omitting callers",
         .source_kind = .module,
         .source =
-        \\get : { name :? Str } -> Str
+        \\get : { name ?: Str } -> Str
         \\get = |r| r.?name ?? "anon"
         \\
         \\main = Str.concat(Str.concat(get({ name: "amy" }), "/"), get({}))
@@ -304,10 +304,10 @@ const core_tests = [_]TestCase{
         \\id : a -> a
         \\id = |x| x
         \\
-        \\r : { tag :? U8 }
+        \\r : { tag ?: U8 }
         \\r = { tag: 9 }
         \\
-        \\s : { tag :? U8 }
+        \\s : { tag ?: U8 }
         \\s = {}
         \\
         \\main = (id(r).?tag ?? 1) + (id(s).?tag ?? 20)
@@ -318,7 +318,7 @@ const core_tests = [_]TestCase{
         .name = "optional record field: runtime miss takes the Err(MissingField) match branch",
         .source_kind = .module,
         .source =
-        \\my_record : { age :? U8 }
+        \\my_record : { age ?: U8 }
         \\my_record = {}
         \\
         \\main = match my_record.?age {
@@ -338,10 +338,10 @@ const core_tests = [_]TestCase{
         \\    Err(MissingField) => 50
         \\}
         \\
-        \\r : { a :? U8 }
+        \\r : { a ?: U8 }
         \\r = { a: 4 }
         \\
-        \\s : { a :? U8 }
+        \\s : { a ?: U8 }
         \\s = {}
         \\
         \\main = handle(r.?a) + handle(s.?a)
@@ -352,7 +352,7 @@ const core_tests = [_]TestCase{
         .name = "optional record field: chain result propagates with the ? suffix",
         .source_kind = .module,
         .source =
-        \\bump : { a :? U8 } -> Try(U8, [MissingField])
+        \\bump : { a ?: U8 } -> Try(U8, [MissingField])
         \\bump = |r| Ok(r.?a? + 1)
         \\
         \\unwrap : Try(U8, [MissingField]), U8 -> U8
@@ -369,7 +369,7 @@ const core_tests = [_]TestCase{
         .name = "optional record field: record update copies unmentioned optional and defaulted slots verbatim",
         .source_kind = .module,
         .source =
-        \\Rec : { req : U8, def : U8 ?? 10, name :? Str }
+        \\Rec : { req : U8, def : U8 ?? 10, name ?: Str }
         \\
         \\base1 : Rec
         \\base1 = { req: 1, name: Str.repeat("amy", 9) }
@@ -389,7 +389,7 @@ const core_tests = [_]TestCase{
         .name = "optional record field: records with optional slots compare by presence and payload",
         .source_kind = .module,
         .source =
-        \\Rec : { a :? U8 }
+        \\Rec : { a ?: U8 }
         \\
         \\x : Rec
         \\x = { a: 1 }
@@ -411,7 +411,7 @@ const core_tests = [_]TestCase{
         .name = "optional record field: list of records with mixed presence",
         .source_kind = .module,
         .source =
-        \\make : Bool -> { a :? U8 }
+        \\make : Bool -> { a ?: U8 }
         \\make = |cond| if cond { a: 5 } else {}
         \\
         \\main = List.map([make(True), make(False), make(True)], |r| r.?a ?? 10)
@@ -427,7 +427,7 @@ const core_tests = [_]TestCase{
         .name = "optional record field: annotated list literal with mixed presence elements",
         .source_kind = .module,
         .source =
-        \\xs : List({ a :? U8 })
+        \\xs : List({ a ?: U8 })
         \\xs = [{ a: 1 }, {}]
         \\
         \\main = List.map(xs, |r| r.?a ?? 10)
@@ -451,7 +451,7 @@ const core_tests = [_]TestCase{
         .name = "optional record field: inspect renders a present slot as the plain value",
         .source_kind = .module,
         .source =
-        \\r : { a :? U8, b : U8 }
+        \\r : { a ?: U8, b : U8 }
         \\r = { a: 5, b: 2 }
         \\
         \\main = r
@@ -462,7 +462,7 @@ const core_tests = [_]TestCase{
         .name = "optional record field: inspect renders a missing slot as <missing>",
         .source_kind = .module,
         .source =
-        \\r : { a :? U8, b : U8 }
+        \\r : { a ?: U8, b : U8 }
         \\r = { b: 2 }
         \\
         \\main = r
@@ -473,7 +473,7 @@ const core_tests = [_]TestCase{
         .name = "optional record field: inspect quotes a present Str payload like a required Str field",
         .source_kind = .module,
         .source =
-        \\r : { name :? Str, tag : Str }
+        \\r : { name ?: Str, tag : Str }
         \\r = { name: "hi", tag: "ok" }
         \\
         \\main = r
@@ -484,7 +484,7 @@ const core_tests = [_]TestCase{
         .name = "optional record field: inspect of required+defaulted+optional record (omitting sides)",
         .source_kind = .module,
         .source =
-        \\r : { req : U8, def : U8 ?? 10, opt :? U8 }
+        \\r : { req : U8, def : U8 ?? 10, opt ?: U8 }
         \\r = { req: 1 }
         \\
         \\main = r
@@ -495,7 +495,7 @@ const core_tests = [_]TestCase{
         .name = "optional record field: inspect of required+defaulted+optional record (all supplied)",
         .source_kind = .module,
         .source =
-        \\r : { req : U8, def : U8 ?? 10, opt :? U8 }
+        \\r : { req : U8, def : U8 ?? 10, opt ?: U8 }
         \\r = { req: 1, def: 2, opt: 3 }
         \\
         \\main = r
@@ -506,7 +506,7 @@ const core_tests = [_]TestCase{
         .name = "optional record field: inspect reaches a nested optional through a present outer slot",
         .source_kind = .module,
         .source =
-        \\o : { b :? { c :? U8 } }
+        \\o : { b ?: { c ?: U8 } }
         \\o = { b: {} }
         \\
         \\main = o

@@ -99,14 +99,14 @@ test "cross-module - optional record - one optional value shared by two exports 
     // structural `optional` field kind, so their imported copies unify
     // (design.md "Field Kinds (All-Dynamic Optional Fields)").
     const source_a =
-        \\orig! : { world :? U8 }
+        \\orig! : { world ?: U8 }
         \\orig! = { world: 5 }
         \\
         \\other! = orig!
     ;
     var test_env_a = try TestEnv.init("A", source_a);
     defer test_env_a.deinit();
-    try test_env_a.assertLastDefType("{ world :? U8 }");
+    try test_env_a.assertLastDefType("{ world ?: U8 }");
 
     const source_b =
         \\import A
@@ -115,19 +115,19 @@ test "cross-module - optional record - one optional value shared by two exports 
     ;
     var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
-    try test_env_b.assertLastDefType("List({ world :? U8 })");
+    try test_env_b.assertLastDefType("List({ world ?: U8 })");
 }
 
 test "cross-module - optional record - two same-shape optional annotations are one type" {
     // A field kind is structural, not a hidden per-definition witness: two
-    // `:?` annotations of the same shape are the same type, so separately
+    // `?:` annotations of the same shape are the same type, so separately
     // annotated values mix freely (design.md "Field Kinds (All-Dynamic
     // Optional Fields)").
     const source_a =
-        \\orig! : { world :? U8 }
+        \\orig! : { world ?: U8 }
         \\orig! = { world: 5 }
         \\
-        \\separate! : { world :? U8 }
+        \\separate! : { world ?: U8 }
         \\separate! = { world: 5 }
     ;
     var test_env_a = try TestEnv.init("A", source_a);
@@ -140,14 +140,14 @@ test "cross-module - optional record - two same-shape optional annotations are o
     ;
     var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
-    try test_env_b.assertLastDefType("List({ world :? U8 })");
+    try test_env_b.assertLastDefType("List({ world ?: U8 })");
 }
 
 test "cross-module - optional record - imported optional value still requires optional access" {
     // The `optional` kind crosses the module boundary: a direct `.world`
     // read of the imported value is rejected, `.?world` binds.
     const source_a =
-        \\orig! : { world :? U8 }
+        \\orig! : { world ?: U8 }
         \\orig! = { world: 5 }
     ;
     var test_env_a = try TestEnv.init("A", source_a);
@@ -178,7 +178,7 @@ test "cross-module - optional record - imported type declaration keeps the optio
     // omitting the optional field (opt-in width absorption), and reading it
     // demands `.?` (design.md "Field Kinds (All-Dynamic Optional Fields)").
     const source_a =
-        \\Thing : { world :? U8 }
+        \\Thing : { world ?: U8 }
         \\
         \\mk! : Thing
         \\mk! = {}

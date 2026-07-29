@@ -253,7 +253,7 @@ test "whitespace-separated postfix after pipe applies to pipe result" {
 
 test "optional record type fields preserve their source marker" {
     const gpa = std.testing.allocator;
-    const source = "value : { x : U32, y : ? U32, z:? U32 }";
+    const source = "value : { x : U32, y ? : U32, z?: U32 }";
 
     var env = try CommonEnv.init(gpa, source);
     defer env.deinit(gpa);
@@ -288,8 +288,8 @@ test "unnamed record type fields cannot be optional" {
     const gpa = std.testing.allocator;
 
     for ([_][]const u8{
-        "value : { _ :? U32 }",
-        "value : { _padding :? U32 }",
+        "value : { _ ?: U32 }",
+        "value : { _padding ?: U32 }",
     }) |source| {
         var env = try CommonEnv.init(gpa, source);
         defer env.deinit(gpa);

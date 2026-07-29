@@ -5776,10 +5776,10 @@ fn checkedRecordFieldsFromDeclarationAnnoSpan(
             .name = try names.internRecordFieldIdent(module.identStoreConst(), field.name),
             .ty = try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, imports, store, active, local_type_declarations, declaration_formals, field.ty),
             // The annotation pins the kind concretely (design.md "Field
-            // Kinds"): `:?` publishes `optional`, `??` publishes `defaulted`
+            // Kinds"): `?:` publishes `optional`, `??` publishes `defaulted`
             // with this module's canonical identity (design.md "Defaulted
-            // Fields"), plain `:` publishes `required`. `:?` and `??` never
-            // combine — canonicalization rejects `a :? T ?? d` outright.
+            // Fields"), plain `:` publishes `required`. `?:` and `??` never
+            // combine — canonicalization rejects `a ?: T ?? d` outright.
             .kind = if (field.is_optional)
                 .optional
             else if (field.default_value) |default_expr_idx|
@@ -8460,7 +8460,7 @@ test "optional record fields publish through solver-side record copy" {
     const allocator = testing.allocator;
 
     var test_env = try TestEnv.init("Main",
-        \\orig! : { world :? {} }
+        \\orig! : { world ?: {} }
         \\orig! = { world: {} }
     );
     defer test_env.deinit();
@@ -8508,7 +8508,7 @@ test "optional record fields publish through the declaration annotation path" {
     const allocator = testing.allocator;
 
     var test_env = try TestEnv.init("Main",
-        \\Thing : { world :? {}, req : {} }
+        \\Thing : { world ?: {}, req : {} }
         \\
         \\mk! : Thing
         \\mk! = { req: {} }

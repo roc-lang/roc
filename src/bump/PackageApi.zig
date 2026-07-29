@@ -108,7 +108,7 @@ pub const Record = struct {
 
 /// One record field. `optional` carries the field's published kind axis
 /// (design.md "Field Kinds (All-Dynamic Optional Fields)"): an `optional`
-/// (`name :? T`) field is a different type from a required one, so a kind
+/// (`name ?: T`) field is a different type from a required one, so a kind
 /// change must surface as an API change.
 pub const Field = struct {
     name: []const u8,
@@ -568,7 +568,7 @@ fn renderType(self: *const PackageApi, id: TypeId, writer: *std.Io.Writer, state
             try writer.writeAll("{ ");
             for (record.fields, 0..) |field, i| {
                 if (i > 0) try writer.writeAll(", ");
-                try writer.print("{s}{s}", .{ field.name, if (field.optional) " :? " else " : " });
+                try writer.print("{s}{s}", .{ field.name, if (field.optional) " ?: " else " : " });
                 try self.renderType(field.ty, writer, state);
             }
             if (record.ext) |ext| {
@@ -771,11 +771,11 @@ test "optional field kind is part of the canonical form" {
     defer gpa.free(str_b);
     try std.testing.expect(!std.mem.eql(u8, str_a, str_b));
 
-    // And the human rendering shows the kind (`world :? Str`).
+    // And the human rendering shows the kind (`world ?: Str`).
     var rendered = std.Io.Writer.Allocating.init(gpa);
     defer rendered.deinit();
     try api_b.renderItemSignature(gpa, api_b.modules.items[0].items.items[0], &rendered.writer);
-    try std.testing.expect(std.mem.find(u8, rendered.written(), "world :? Str") != null);
+    try std.testing.expect(std.mem.find(u8, rendered.written(), "world ?: Str") != null);
 }
 
 test "self-referential constraint does not loop" {

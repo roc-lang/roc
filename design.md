@@ -2181,7 +2181,7 @@ REJECTED BY PARSING; A CALL MAY NOT ERASE THE QUERY OPERATION SELECTED BY `.?`.
 IF A QUERIED VALUE IS CALLABLE, SOURCE MUST FIRST HANDLE THE QUERY RESULT AND
 THEN CALL THE EXTRACTED FUNCTION VALUE.
 
-AN OPTIONAL RECORD TYPE FIELD IS WRITTEN `{ required : A, optional :? B }`.
+AN OPTIONAL RECORD TYPE FIELD IS WRITTEN `{ required : A, optional ?: B }`.
 THE `?` IS PART OF THE FIELD DECLARATION, NOT PART OF `B`: AT RUN TIME THE FIELD
 MAY BE PRESENT WITH A `B` VALUE OR ABSENT. THE PARSER AND EVERY LATER STAGE MUST
 PRESERVE THIS PRESENCE CLASSIFICATION EXPLICITLY. IT MUST NOT BE RECOVERED FROM
@@ -3308,7 +3308,7 @@ type mismatch without `CheckedModule` construction panicking).
 ### Field Kinds (All-Dynamic Optional Fields)
 
 This section supersedes the earlier "Existential Presence (Sealed Optional
-Annotations)" design: `:?` is a static field KIND with one uniform tagged
+Annotations)" design: `?:` is a static field KIND with one uniform tagged
 representation, not solved presence DATA with witness-directed layout. The
 quantifier machinery that design needed (universal/existential presence
 rigids, the post-body seal rewrite, witness identity across modules) is
@@ -3323,7 +3323,7 @@ states, solved by ordinary unification:
   access demands this kind.
 - `optional` (the `optional` state): the field may or may not be there AT
   RUNTIME; its slot is tagged (an is-present bit plus payload). Written
-  `field :? T` in annotations. `.?field` yields
+  `field ?: T` in annotations. `.?field` yields
   `Try(field_type, [MissingField])`, compiled as a runtime test on the tag.
 - undetermined (a flex presence var): minted by record LITERALS for every
   field (a literal can serve as either kind; construction wraps the tag
@@ -3334,9 +3334,9 @@ The kind rules:
 
 - Annotations pin kinds CONCRETELY, in every syntactic position — argument,
   return, the annotated value's own type, and type-declaration bodies all
-  mean the same thing. There is no polarity split: `:?` is `optional`
+  mean the same thing. There is no polarity split: `?:` is `optional`
   everywhere, `:` is `required` everywhere. Layout is therefore a function
-  of the annotation alone, which is what makes `:?` legal across the Host
+  of the annotation alone, which is what makes `?:` legal across the Host
   Symbol ABI (glue generated from the annotation agrees with every app).
 - `required ~ optional` is a TYPE MISMATCH. One value has one layout; a
   record annotated with a required field cannot flow where an optional
@@ -3350,7 +3350,7 @@ The kind rules:
   is a missing-field mismatch, same as `required`): absorbing undetermined
   fields would silently accept typo'd extra fields and merge any two
   record literals. Consequence: a definition may supply an optional field
-  on one control-flow branch and omit it on another exactly when a `:?`
+  on one control-flow branch and omit it on another exactly when a `?:`
   annotation is in scope to pin the kind before the branches merge; the
   unannotated conditional stays rejected, and `.?` on a field a closed
   record does not declare at all is a missing-field error. The old
@@ -3422,9 +3422,9 @@ complete):
   data (`buildFieldSlotRef`, in src/glue)
   builds the identical two-variant union layout (variant 0 = zero-sized
   Missing, variant 1 = the value) directly from the checked field kind,
-  so the host's view of a `:?` field agrees byte-for-byte with the
+  so the host's view of a `?:` field agrees byte-for-byte with the
   compiler's — layout stays a function of the annotation alone, which is
-  what keeps `:?` legal across the Host Symbol ABI.
+  what keeps `?:` legal across the Host Symbol ABI.
 
 Deferred (explicitly not yet implemented):
 
@@ -3442,12 +3442,12 @@ Deferred (explicitly not yet implemented):
   below.
 
 Pinned by tests in src/check/test/type_checking_integration.zig: accepted —
-a value annotated `{ world :? U8 }` may supply or omit `world`, and its
-exported type keeps `world :? U8`; `.?world` on it typechecks as
+a value annotated `{ world ?: U8 }` may supply or omit `world`, and its
+exported type keeps `world ?: U8`; `.?world` on it typechecks as
 `Try(U8, [MissingField])`; one definition MAY supply an optional field on
 one `if` branch and omit it on the other ("conditional presence accepted").
 Rejected — a direct `.world` read of an optional field is a type error
-(both on a value's own annotation and on a `:?`-signature argument), and
+(both on a value's own annotation and on a `?:`-signature argument), and
 `.?` on a required field is rejected at finalize.
 
 ### Defaulted Fields (Construction-Optional Required Fields)
@@ -3496,8 +3496,8 @@ of the value.
 
 Restrictions:
 
-- `:?` and `??` do not combine: a default makes the field never missing,
-  which makes the tagged slot and `.?` pointless — `a :? U8 ?? 10` is
+- `?:` and `??` do not combine: a default makes the field never missing,
+  which makes the tagged slot and `.?` pointless — `a ?: U8 ?? 10` is
   rejected at canonicalization with exactly that explanation.
 - The default must be a module-level constant expression, enforced on
   three axes: PURE (an effectful default is rejected at finalize — the
@@ -3644,7 +3644,7 @@ region, no value expression; a new span, not a sentinel `Expr.Idx`, per
 AGENTS.md explicitness), plus the outside-update rejection. (3) CHECK — the
 probe, the queue's use marker, and the judgment split; pinned in
 src/check/test/type_checking_integration.zig: accepted — unset of a
-`:?`-annotated field (result keeps `x :? τ`), unset pinning an undetermined
+`?:`-annotated field (result keeps `x ?: τ`), unset pinning an undetermined
 kind to optional, mixed set-and-unset; rejected — unset of required, of
 defaulted, of a missing field, and unset judged through a generalized
 function instantiated at a required row. (4) LOWER — route unset fields to

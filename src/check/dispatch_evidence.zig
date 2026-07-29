@@ -373,7 +373,7 @@ fn pushChildren(gpa: Allocator, scratch: *Scratch, entry: StackEntry) Allocator.
 /// carries zero constraints (and still `recordDeferredConstraint` it), so no
 /// constraint can hide behind a presence var.
 ///
-/// `.unknown` fields occur in `record` rows (literals, `.?` accesses, `:?`
+/// `.unknown` fields occur in `record` rows (literals, `.?` accesses, `?:`
 /// annotations). `record_unbound` rows carry only `.required` fields: their
 /// sole producer is the record-update probe in `Check.zig` (`e_record` with an
 /// ext), and every later appearance is a verbatim copy (`instantiate.zig`,

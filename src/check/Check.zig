@@ -11669,7 +11669,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 // Add the processed field to scratch.
                 //
                 // Annotations pin field kinds CONCRETELY, in every syntactic
-                // position and context: `:?` is the `optional` kind (tagged
+                // position and context: `?:` is the `optional` kind (tagged
                 // slot, read with `.?`) and `:` is the `required` kind
                 // (`present`), with no polarity split — layout is a function
                 // of the annotation alone (design.md "Field Kinds
@@ -13586,7 +13586,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             .record_unbound = try self.types.appendRecordFields(&.{types_mod.RecordField{
                                 .name = field.name,
                                 // A supplied update field is definitionally
-                                // present: `:?` is annotation-only syntax, so
+                                // present: `?:` is annotation-only syntax, so
                                 // updating a field both demands it on the base
                                 // (present ~ rigid/flex π forces or fails) and
                                 // keeps it present in the result.
@@ -14588,7 +14588,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             .required => break :blk .{ .required = access_var },
                             .optional => {
                                 // The row constrains the FIELD's value type
-                                // (`name :? τ` with a fresh flex kind — a
+                                // (`name ?: τ` with a fresh flex kind — a
                                 // concrete `optional` demand would let
                                 // absorption admit the field into a closed
                                 // receiver, accepting `.?` on undeclared

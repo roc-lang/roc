@@ -17800,7 +17800,7 @@ const TypeAnnoKernelRecordAfterFieldWork = struct {
     /// True when this field is unnamed padding (kept in the canonical record
     /// annotation but excluded from the backing record row).
     is_unnamed: bool,
-    /// True when the field is declared runtime-optional (`name:? Type`).
+    /// True when the field is declared runtime-optional (`name?: Type`).
     is_optional: bool,
     /// The AST default value expression for a DEFAULTED field
     /// (`a : U8 ?? 10`), canonicalized when the field is built.
@@ -18538,7 +18538,7 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                         .region = field_name_region,
                     });
                 }
-                // A default combines with neither `:?` (a default makes the
+                // A default combines with neither `?:` (a default makes the
                 // field never missing, so the tagged slot and `.?` would be
                 // pointless) nor unnamed padding; the default is dropped and
                 // the error reported (design.md "Defaulted Fields").

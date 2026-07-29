@@ -720,7 +720,7 @@ fn writeFieldDefaultSuffix(self: *TypeWriter, writer: *ByteWrite, presence: Reco
 
 /// Write the separator between a field's name and its type, resolving the
 /// presence variable: a field whose kind solved to `present` (required)
-/// renders as a plain field, an `optional` kind renders `:?`, and a still
+/// renders as a plain field, an `optional` kind renders `?:`, and a still
 /// undetermined kind renders as a plain field (it defaults to required —
 /// design.md "Field Kinds (All-Dynamic Optional Fields)").
 fn writeRecordFieldSeparator(self: *TypeWriter, writer: *ByteWrite, presence: RecordField.Presence) error{WriteFailed}!void {
@@ -733,7 +733,7 @@ fn writeRecordFieldSeparator(self: *TypeWriter, writer: *ByteWrite, presence: Re
                 // (design.md "Defaulted Fields" — the `??` suffix is written
                 // by writeFieldDefaultSuffix).
                 .required, .defaulted => ": ",
-                .optional => " :? ",
+                .optional => " ?: ",
             },
             .flex, .rigid, .alias, .structure, .err => ": ",
         },
@@ -1360,7 +1360,7 @@ test "TypeWriter renders required and optional fields in closed records" {
     defer type_writer.deinit();
 
     try std.testing.expectEqualStrings(
-        "{ a_required: {}, b_optional :? {} }",
+        "{ a_required: {}, b_optional ?: {} }",
         try type_writer.writeGet(record_var, .one_line),
     );
 }
@@ -1379,7 +1379,7 @@ test "TypeWriter renders required and optional fields in unbound records" {
     defer type_writer.deinit();
 
     try std.testing.expectEqualStrings(
-        "{ a_required: {}, b_optional :? {}, .. }",
+        "{ a_required: {}, b_optional ?: {}, .. }",
         try type_writer.writeGet(record_var, .one_line),
     );
 }

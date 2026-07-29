@@ -61,7 +61,7 @@ pub const EffectMismatch = struct {
 };
 
 /// Hint about a field that both sides have, but one side treats as optional
-/// (`:?`) while the other requires it to always be present.
+/// (`?:`) while the other requires it to always be present.
 pub const FieldPresenceMismatch = struct {
     field: Ident.Idx,
     /// Which side of the comparison treats the field as optional.
@@ -556,7 +556,7 @@ fn compareFields(
                 found = true;
 
                 // Both sides have the field: check the kind axis. A field
-                // whose kind SOLVED `optional` (`:?`) on one side but
+                // whose kind SOLVED `optional` (`?:`) on one side but
                 // required on the other is a kind mismatch, and without this
                 // hint it reads as a baffling "missing field" for a field
                 // that plainly exists. A still-undetermined kind produces no

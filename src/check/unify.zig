@@ -1907,7 +1907,7 @@ const Unifier = struct {
     /// is acceptable exactly when its kind RESOLVED `optional` — an
     /// annotation declared it, so the merged row keeps the field with a
     /// tagged slot constructed as missing. An undetermined kind does NOT
-    /// absorb: optionality is opt-in via `:?`, and silently absorbing
+    /// absorb: optionality is opt-in via `?:`, and silently absorbing
     /// undetermined fields would accept typo'd extras and merge any two
     /// literal records. The ROW is the surviving content of the merge —
     /// collapsing to `.empty_record` would discard the fields' existence,

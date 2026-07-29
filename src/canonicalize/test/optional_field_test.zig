@@ -300,7 +300,7 @@ test "optional field paths preserve receiver free variables" {
 
 test "optional record annotation fields retain their presence mode" {
     const allocator = std.testing.allocator;
-    const source = "Example : { x : U32, y :? U32, z : U32 }";
+    const source = "Example : { x : U32, y ?: U32, z : U32 }";
 
     var builtin_ctx = try BuiltinTestContext.init(allocator);
     defer builtin_ctx.deinit();
@@ -441,7 +441,7 @@ test "defaulted record annotation field canonicalizes its default expression" {
 
 test "optional field with default is rejected at canonicalization" {
     const allocator = std.testing.allocator;
-    const source = "Example : { y :? U32 ?? 10 }";
+    const source = "Example : { y ?: U32 ?? 10 }";
 
     var builtin_ctx = try BuiltinTestContext.init(allocator);
     defer builtin_ctx.deinit();
@@ -460,7 +460,7 @@ test "optional field with default is rejected at canonicalization" {
 
     try can.canonicalizeFile();
 
-    // The `:?` + `??` combination is rejected and the default dropped
+    // The `?:` + `??` combination is rejected and the default dropped
     // (design.md "Defaulted Fields").
     const diagnostics = try env.getDiagnostics();
     defer allocator.free(diagnostics);
