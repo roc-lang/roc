@@ -3324,6 +3324,32 @@ Builtin :: [].{
 				One({ item, rest }) => Iter.fold(rest, step(acc, item), step)
 			}
 
+		## Sum the elements of an iterator, without collecting them into a list first.
+		## Works for any type that implements `plus` and `default` methods, such as the
+		## numeric types.
+		##
+		## `default` is called only when the iterator is empty; otherwise it is never
+		## called at all. Summing begins at the first element and uses `plus` to combine
+		## the rest, so a single-element iterator returns that element without calling
+		## either method, and `default` does not need to be an identity value for `plus`.
+		## ```roc
+		## expect (1..=4).sum() == 10
+		##
+		## expect [42.I64].iter().sum() == 42
+		##
+		## expect [].iter().sum() == 0.I64
+		## ```
+		sum : Iter(item) -> item
+			where [item.plus : item, item -> item, item.default : item]
+		sum = |iterator| {
+			Item : item
+			match Iter.next(iterator) {
+				Done => Item.default()
+				Skip({ rest }) => Iter.sum(rest)
+				One({ item, rest }) => Iter.fold(rest, item, |acc, elem| acc + elem)
+			}
+		}
+
 		## Returns the iterator's length if it is known up front, so collections
 		## can pre-size their allocation.
 		size_hint : Iter(item) -> [Known(U64), Unknown]
@@ -4882,17 +4908,21 @@ Builtin :: [].{
 
 		## Sum the elements of a list. Works for any type that implements `plus` and
 		## `default` methods, such as the numeric types.
+		##
+		## `default` is called only when the list is empty; otherwise it is never called
+		## at all. Summing begins at the first element and uses `plus` to combine the
+		## rest, so a single-element list returns that element without calling either
+		## method, and `default` does not need to be an identity value for `plus`.
 		## ```roc
 		## expect List.sum([1.I64, 2, 3, 4]) == 10
+		##
+		## expect List.sum([42.I64]) == 42
 		##
 		## expect List.sum([]) == 0.I64
 		## ```
 		sum : List(item) -> item
 			where [item.plus : item, item -> item, item.default : item]
-		sum = |list| {
-			Item : item
-			List.fold(list, Item.default(), |acc, elem| acc + elem)
-		}
+		sum = |list| list.iter().sum()
 
 		## Find the minimum element in a list, or `Err(ListWasEmpty)` if the list is empty.
 		## Works for any type that implements `min`.
