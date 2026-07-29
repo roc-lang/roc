@@ -191,7 +191,7 @@ processData = |data|
 	"processed"
 
 # In a nested mod scope, redeclare Try
-InnerMod : 
+InnerMod :
 
 ~~~
 # CANONICALIZE

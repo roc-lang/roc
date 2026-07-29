@@ -138,7 +138,7 @@ EndOfFile,
 ~~~roc
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
-curry : (_a, _b -> _c) -> 
+curry : (_a, _b -> _c) ->
 
 curry = |fn| |x| |y| fn(x, y)
 
