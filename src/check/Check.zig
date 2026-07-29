@@ -4087,7 +4087,7 @@ const BuiltinParseSpecDecl = enum {
     null,
     list_start,
     list_next,
-    list_after_element,
+    list_after_item,
     tuple_start,
     tuple_next,
     tuple_end,
@@ -4258,7 +4258,7 @@ fn sourceDeclForBuiltinParseSpec(self: *const Self, decl: BuiltinParseSpecDecl) 
         const indices = self.builtin_ctx.builtin_indices.?;
         const stmt_idx = switch (decl) {
             .tag_union => indices.parse_tag_union_spec_type,
-            .bool, .str, .null, .list_start, .list_next, .list_after_element, .tuple_start, .tuple_next, .tuple_end, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_field, .record_after_field => {
+            .bool, .str, .null, .list_start, .list_next, .list_after_item, .tuple_start, .tuple_next, .tuple_end, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_field, .record_after_field => {
                 if (builtin.mode == .Debug) {
                     std.debug.panic("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
                 }
@@ -4279,7 +4279,7 @@ fn sourceDeclForBuiltinParseSpec(self: *const Self, decl: BuiltinParseSpecDecl) 
 
     const ident = switch (decl) {
         .tag_union => self.cir.idents.builtin_encoding_parse_tag_union_spec,
-        .bool, .str, .null, .list_start, .list_next, .list_after_element, .tuple_start, .tuple_next, .tuple_end, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_field, .record_after_field => {
+        .bool, .str, .null, .list_start, .list_next, .list_after_item, .tuple_start, .tuple_next, .tuple_end, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_field, .record_after_field => {
             if (builtin.mode == .Debug) {
                 std.debug.panic("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
             }
@@ -4944,7 +4944,7 @@ fn mkParseSpecVar(
 ) Allocator.Error!Var {
     const ident_idx = switch (decl) {
         .tag_union => self.cir.idents.builtin_encoding_parse_tag_union_spec,
-        .bool, .str, .null, .list_start, .list_next, .list_after_element, .tuple_start, .tuple_next, .tuple_end, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_field, .record_after_field => {
+        .bool, .str, .null, .list_start, .list_next, .list_after_item, .tuple_start, .tuple_next, .tuple_end, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_field, .record_after_field => {
             if (builtin.mode == .Debug) {
                 std.debug.panic("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
             }
@@ -22404,7 +22404,7 @@ fn parseFormatMethodName(self: *Self, decl: BuiltinParseSpecDecl) Allocator.Erro
         .null => "parse_null",
         .list_start => "parse_list_start",
         .list_next => "parse_list_next",
-        .list_after_element => "parse_list_after_element",
+        .list_after_item => "parse_list_after_item",
         .tuple_start => "parse_tuple_start",
         .tuple_next => "parse_tuple_next",
         .tuple_end => "parse_tuple_end",
@@ -22676,14 +22676,14 @@ fn validateParseFormatMethod(
     const expected_ret = switch (spec_decl) {
         .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .tag_union => try self.freshParseResultTryVar(shape_var, state_var, err_var, env, region),
         .null, .tuple_start, .tuple_next, .tuple_end => try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region),
-        .list_next => try self.freshParseArrayEventTryVar(state_var, err_var, "Element", "Done", env, region),
-        .list_after_element => try self.freshParseArrayEventTryVar(state_var, err_var, "Continue", "Done", env, region),
+        .list_next => try self.freshParseArrayEventTryVar(state_var, err_var, "Item", "Done", env, region),
+        .list_after_item => try self.freshParseArrayEventTryVar(state_var, err_var, "Continue", "Done", env, region),
         .list_start, .record_start => try self.freshParseCountedStartTryVar(state_var, err_var, env, region),
         .record_field => try self.freshParseRecordFieldTryVar(shape_var, state_var, err_var, env, region),
         .record_after_field => try self.freshParseArrayEventTryVar(state_var, err_var, "Continue", "Done", env, region),
     };
     const expected_fn = switch (spec_decl) {
-        .bool, .str, .null, .list_start, .list_next, .list_after_element, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_after_field => try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, expected_ret), env, region),
+        .bool, .str, .null, .list_start, .list_next, .list_after_item, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_after_field => try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, expected_ret), env, region),
         // A tuple's arity is static, so the format is told the element count
         // and (for `parse_tuple_next`) which element is about to be read.
         .tuple_start, .tuple_end => blk: {
@@ -23629,7 +23629,7 @@ fn validateDerivedParseListMethods(
         .ok => {},
         .unsupported, .reported_error => |result| return result,
     }
-    switch (try self.validateParseFormatMethod(encoding_var, state_var, list_var, .list_after_element, err_var, constraint, env, region)) {
+    switch (try self.validateParseFormatMethod(encoding_var, state_var, list_var, .list_after_item, err_var, constraint, env, region)) {
         .ok => {},
         .unsupported, .reported_error => |result| return result,
     }

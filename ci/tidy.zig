@@ -287,6 +287,14 @@ const Errors = struct {
         );
     }
 
+    pub fn addBuiltinElementTerminology(errors: *Errors, file: SourceFile, offset: usize, word: []const u8) void {
+        errors.emit(
+            "{s}:{d}: error: '{s}' is banned in Builtin.roc; the things in a collection are " ++
+                "consistently called items, so use 'item' (or 'items') in both prose and identifiers.\n",
+            .{ file.path, file.lineNumber(offset), word },
+        );
+    }
+
     pub fn addDisallowedBuiltinType(errors: *Errors, file: SourceFile, offset: usize, name: []const u8) void {
         errors.emit(
             "{s}:{d}: error: '{s}' is exposed as a top-level Builtin type. The only types allowed " ++
@@ -352,6 +360,7 @@ fn tidyFile(
         tidyBannedGitDependency(file, errors);
     }
     tidyBuiltinExposedTypes(file, errors);
+    tidyBuiltinItemTerminology(file, errors);
 }
 
 /// The only types allowed to be exposed directly under `Builtin` (i.e. declared at
@@ -408,6 +417,46 @@ fn tidyBuiltinExposedTypes(file: SourceFile, errors: *Errors) void {
         if (line_end == file.text.len) break;
         line_start = line_end + 1;
     }
+}
+
+/// Ban "element"/"elem" in Builtin.roc. The things inside a collection are called
+/// items throughout the builtins — `Iter(item)`, `encode_item`, `from_iter` — and a
+/// second word for the same concept makes the API read as though it had two of them.
+/// This covers doc prose and identifiers alike, including compound identifiers such
+/// as `write_elements` and `parse_list_after_element`, since a banned word buried in
+/// a name is exactly how the inconsistency crept in before.
+///
+/// Matching is word-aware rather than a plain substring search: a hit must not have
+/// an identifier character on either side, so unrelated words that merely contain
+/// the letters (there are none today, but `telemetry` is the shape to worry about)
+/// stay legal. `_` counts as an identifier character, so `write_elements` is found
+/// by scanning its `elements` segment between two underscores.
+fn tidyBuiltinItemTerminology(file: SourceFile, errors: *Errors) void {
+    if (!std.mem.endsWith(u8, file.path, "src/build/roc/Builtin.roc")) return;
+
+    // Longest first, so a hit reports the whole word rather than a prefix of it.
+    const banned_words: []const []const u8 = &.{ "Elements", "elements", "Element", "element", "Elem", "elem" };
+
+    for (banned_words) |word| {
+        var offset: usize = 0;
+        while (std.mem.findPos(u8, file.text, offset, word)) |index| {
+            offset = index + word.len;
+
+            const before_ok = index == 0 or !isIdentifierChar(file.text[index - 1]);
+            const after_index = index + word.len;
+            const after_ok = after_index >= file.text.len or !isIdentifierChar(file.text[after_index]);
+            if (before_ok and after_ok) {
+                errors.addBuiltinElementTerminology(file, index, word);
+            }
+        }
+    }
+}
+
+/// Whether this byte can appear inside a Roc identifier, for the word-boundary test
+/// in `tidyBuiltinItemTerminology`. `_` is included so compound identifiers are
+/// scanned segment by segment.
+fn isIdentifierChar(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_';
 }
 
 /// Ban `git+https://` dependency URLs in build.zig.zon. They make Zig fetch over

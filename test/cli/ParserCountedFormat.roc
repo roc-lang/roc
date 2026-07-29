@@ -25,11 +25,11 @@ Counted := [Default].{
 	parse_list_start = |_, state| take_count(state, "L")
 
 	## Never reached: this format always reports a count up front.
-	parse_list_next : Counted, State -> Try([Element(State), Done(State)], [Bad, ..])
+	parse_list_next : Counted, State -> Try([Item(State), Done(State)], [Bad, ..])
 	parse_list_next = |_, _| Err(Bad)
 
-	parse_list_after_element : Counted, State -> Try([Continue(State), Done(State)], [Bad, ..])
-	parse_list_after_element = |_, _| Err(Bad)
+	parse_list_after_item : Counted, State -> Try([Continue(State), Done(State)], [Bad, ..])
+	parse_list_after_item = |_, _| Err(Bad)
 
 	parse_tuple_start : Counted, State, U64 -> Try(State, [Bad, ..])
 	parse_tuple_start = |_, state, len| {
