@@ -4731,15 +4731,21 @@ mechanically. The ARC algorithm is specified in ARC Borrow Inference below.
 
 Between direct LIR lowering and ARC insertion, one normalization splits
 struct-typed join parameters into per-field parameters when the parameter is
-only ever read field-by-field and only ever initialized from single-use
-struct literals. Each jump then passes the literal's operands directly and
-the literal's build is deleted; field reads become local aliases. This is
-required for refcounted loop state: without it, every jump pays a retain on
-each refcounted field read whose wrapper dies at the jump, and ARC cannot
-turn that into a move because the wrapper's release covers all fields at
-once. After scalarization the state flows through pure alias chains that
-borrow inference resolves to moves. Parameters with any whole-value use keep
-their shape, and the pass iterates so nested wrappers dissolve.
+only ever read field-by-field and every entry can explicitly supply all of its
+fields. Each entry snapshots every replacement field before changing any
+parameter, then performs the per-field writes. This preserves the original
+whole-struct assignment's parallel-transfer semantics: a replacement field may
+borrow through an old parameter value, so releasing that parameter before all
+replacement fields have been materialized would leave a later read dangling.
+Single-use literal wrappers disappear after their operands are snapshotted;
+non-literal initializers and the initial procedure-argument value are projected
+into snapshot locals. Field reads become local aliases. This is required for
+refcounted loop state: without it, every jump pays a retain on each refcounted
+field read whose wrapper dies at the jump, and ARC cannot turn that into a move
+because the wrapper's release covers all fields at once. After scalarization
+the state flows through pure alias chains that borrow inference resolves to
+moves. Parameters with any whole-value use keep their shape, and the pass
+iterates so nested wrappers dissolve.
 
 ## ARC Borrow Inference
 
