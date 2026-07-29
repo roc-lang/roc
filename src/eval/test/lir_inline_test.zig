@@ -1153,6 +1153,10 @@ const ProcShape = struct {
     tag_assign_count: usize = 0,
     store_struct_count: usize = 0,
     store_tag_count: usize = 0,
+    incref_count: usize = 0,
+    decref_count: usize = 0,
+    decref_if_initialized_count: usize = 0,
+    free_count: usize = 0,
 };
 
 fn collectProcShape(
@@ -3230,10 +3234,22 @@ fn collectLirResultProcShape(
             .debug => |stmt| try work.append(allocator, stmt.next),
             .expect => |stmt| try work.append(allocator, stmt.next),
             .comptime_branch_taken => |stmt| try work.append(allocator, stmt.next),
-            .incref => |stmt| try work.append(allocator, stmt.next),
-            .decref => |stmt| try work.append(allocator, stmt.next),
-            .decref_if_initialized => |stmt| try work.append(allocator, stmt.next),
-            .free => |stmt| try work.append(allocator, stmt.next),
+            .incref => |stmt| {
+                shape.incref_count += 1;
+                try work.append(allocator, stmt.next);
+            },
+            .decref => |stmt| {
+                shape.decref_count += 1;
+                try work.append(allocator, stmt.next);
+            },
+            .decref_if_initialized => |stmt| {
+                shape.decref_if_initialized_count += 1;
+                try work.append(allocator, stmt.next);
+            },
+            .free => |stmt| {
+                shape.free_count += 1;
+                try work.append(allocator, stmt.next);
+            },
             .switch_stmt => |stmt| {
                 shape.switch_count += 1;
                 if (stmt.continuation) |continuation| try work.append(allocator, continuation);
@@ -3418,6 +3434,56 @@ fn expectLoweredIterStateHasNoBoxesOrErasedCallables(
     try expectReachableProcShapeFieldEqual(allocator, lowered, "box_box_count", 0);
     try expectReachableProcShapeFieldEqual(allocator, lowered, "erased_call_count", 0);
     try expectReachableProcShapeFieldEqual(allocator, lowered, "packed_erased_fn_count", 0);
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/10429: numeric `until` and
+// `range_exclusive` iterators consumed directly by `for` have scalar state,
+// with no heap or ARC operations.
+test "issue 10429 numeric until and range_exclusive loops have no heap or RC operations" {
+    const allocator = std.testing.allocator;
+    const numeric_types = [_][]const u8{
+        "U8",  "I8",  "U16",  "I16",  "U32", "I32",
+        "U64", "I64", "U128", "I128", "Dec",
+    };
+
+    for (numeric_types) |numeric_type| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\until_last : {s} -> {s}
+            \\until_last = |n| {{
+            \\    var $last = 0.{s}
+            \\    for i in {s}.until(0, n) {{
+            \\        $last = i
+            \\    }}
+            \\    $last
+            \\}}
+            \\
+            \\range_last : {s} -> {s}
+            \\range_last = |n| {{
+            \\    var $last = 0.{s}
+            \\    for i in {s}.range_exclusive(0, n) {{
+            \\        $last = i
+            \\    }}
+            \\    $last
+            \\}}
+            \\
+            \\main : {s} -> ({s}, {s})
+            \\main = |n| (until_last(n), range_last(n))
+        , .{
+            numeric_type, numeric_type, numeric_type, numeric_type,
+            numeric_type, numeric_type, numeric_type, numeric_type,
+            numeric_type, numeric_type, numeric_type,
+        });
+        defer allocator.free(source);
+
+        var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .tag_reachability = true });
+        defer optimized.deinit(allocator);
+
+        try expectLoweredIterChainAllocatesNothing(allocator, &optimized.lowered);
+        try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "incref_count", 0);
+        try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "decref_count", 0);
+        try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "decref_if_initialized_count", 0);
+        try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "free_count", 0);
+    }
 }
 
 // Zero-allocation gate for iterator chains that escape their construction site

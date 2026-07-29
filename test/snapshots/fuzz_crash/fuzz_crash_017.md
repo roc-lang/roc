@@ -63,7 +63,7 @@ EndOfFile,
 ~~~roc
 me = "luc"
 
-foo = 
+foo =
 ~~~
 # CANONICALIZE
 ~~~clojure

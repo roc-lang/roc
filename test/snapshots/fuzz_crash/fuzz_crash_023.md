@@ -2072,8 +2072,8 @@ main! = |_| { # Yeah I can leave a comment here
 		Stdout.line!("Adding ${n} to ${number}")
 		number = number + n
 	}
-	record = 
-		qux : 
+	record =
+		qux :
 	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
 	multiline_tuple = (
 		123,

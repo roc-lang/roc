@@ -79,7 +79,7 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 {
-	age : 
+	age :
 		name = "Alice"
 }
 ~~~

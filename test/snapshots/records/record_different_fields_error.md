@@ -526,9 +526,9 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 {
-	_privateField : 
+	_privateField :
 			
-	field_ : 
+	field_ :
 			
 	PascalCase
 		"pascal"
@@ -537,7 +537,7 @@ EndOfFile,
 	-case
 		"kebab"
 	
-	field$special : 
+	field$special :
 			
 	field
 			"at symbol"

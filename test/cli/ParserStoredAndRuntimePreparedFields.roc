@@ -16,6 +16,9 @@ Format := [Identity, Kebab].{
 			KebabFooName | KebabDone | IdentityFooName | IdentityDone | Done => Err(FormatError)
 		}
 
+	parse_record_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [FormatError, ..])
+	parse_record_start = |_, state| Ok(Uncounted(state))
+
 	parse_record_field : Format,
 	Encoding.FieldName.FieldNames(_shape),
 	State -> Try(
@@ -23,19 +26,22 @@ Format := [Identity, Kebab].{
 			Field({ field : Encoding.FieldName(_shape), rest : State }),
 			TryField({ name : Str, rest : State }),
 			TryFieldCaseless({ name : Str, rest : State }),
-			Continue({ rest : State }),
-			Done({ rest : State }),
+			Continue(State),
+			Done(State),
 		],
 		[FormatError, ..],
 	)
 	parse_record_field = |_, fields, state|
 		match state {
 			KebabFooName => emit_field(fields, "foo-bar", KebabFooValue, KebabDone)
-			KebabDone => Ok(Done({ rest: Done }))
+			KebabDone => Ok(Done(Done))
 			IdentityFooName => emit_field(fields, "foo_bar", IdentityFooValue, IdentityDone)
-			IdentityDone => Ok(Done({ rest: Done }))
-			KebabFooValue | IdentityFooValue | Done => Ok(Done({ rest: Done }))
+			IdentityDone => Ok(Done(Done))
+			KebabFooValue | IdentityFooValue | Done => Ok(Done(Done))
 		}
+
+	parse_record_after_field : Format, State -> Try([Continue(State), Done(State)], [FormatError, ..])
+	parse_record_after_field = |_, state| Ok(Continue(state))
 
 	skip_record_field : Format, State -> Try(State, [FormatError, ..])
 	skip_record_field = |_, state|
@@ -64,8 +70,8 @@ State -> Try(
 		Field({ field : Encoding.FieldName(_shape), rest : State }),
 		TryField({ name : Str, rest : State }),
 		TryFieldCaseless({ name : Str, rest : State }),
-		Continue({ rest : State }),
-		Done({ rest : State }),
+		Continue(State),
+		Done(State),
 	],
 	[FormatError, ..],
 )
@@ -73,13 +79,13 @@ emit_field = |fields, name, value_state, next_state| {
 	name_len = Str.count_utf8_bytes(name)
 
 	if name_len < Encoding.FieldName.FieldNames.shortest_name(fields) {
-		Ok(Continue({ rest: next_state }))
+		Ok(Continue(next_state))
 	} else if name_len > Encoding.FieldName.FieldNames.longest_name(fields) {
-		Ok(Continue({ rest: next_state }))
+		Ok(Continue(next_state))
 	} else {
 		match find_field(fields, name) {
 			Ok(field) => Ok(Field({ field, rest: value_state }))
-			Err(NotFound) => Ok(Continue({ rest: next_state }))
+			Err(NotFound) => Ok(Continue(next_state))
 		}
 	}
 }

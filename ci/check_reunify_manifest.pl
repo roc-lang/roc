@@ -193,7 +193,7 @@ my @categories = (
             { label => 'method_registry.lookup(', re => qr/method_registry\.lookup\(/,
               counts => { $LOWER => 1 } },
             { label => 'lookupMethodTargetByName', re => qr/\blookupMethodTargetByName\b/,
-              counts => { $LOWER => 27 } },
+              counts => { $LOWER => 29 } },
             { label => 'findMethodTargetByName', re => qr/\bfindMethodTargetByName\b/,
               counts => { $LOWER => 2 } },
             { label => 'methodTargetInView', re => qr/\bmethodTargetInView\b/,

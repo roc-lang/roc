@@ -87,7 +87,9 @@ pub const Constants = struct {
     /// 53: a specialized static-dispatch plan callable keeps the identity every
     ///     variable the target's signature does not substitute already had,
     ///     instead of reserving a fresh root the artifact names nowhere.
-    pub const CACHE_VERSION = 53;
+    /// 54: the encoding protocol names containers by Roc shape: list, tuple,
+    ///     record, dict.
+    pub const CACHE_VERSION = 54;
 };
 
 /// Configuration for the Roc cache system.

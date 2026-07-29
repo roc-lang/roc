@@ -491,7 +491,7 @@ EndOfFile,
 ~~~roc
 x = ('a', 'é', '🚀', , , , , '\u(1F680)', , , '\\', '\'', , , )
 
-y = 
+y =
 
 # Test backslash before EOF
 ~~~
