@@ -2326,18 +2326,34 @@ scheme owner no site in the requesting module names, 1778 whose scheme
 owner other sites do name but not at this use, 36 present on both halves
 but unpaired, and 4 whose use carries only sites owning other schemes.
 
-**The identity defect behind them.** Checking records a static-dispatch
-edge's use identity as the constraint's introducing expression, or node 0
-when the constraint names none. On the snapshot corpus 4554 of 6014 edges
-name none, so they record node 0 — an identity no consumer keying on a
-real use expression can select. 3325 of those 4554 are literal
-conversions, and 3325 is exactly the number of declared-rule bindings that
-fail downstream, which fixes the correspondence: the literal-conversion
-dispatch edges are precisely the population that falls through to the
-receiver rule. `constraintSourceExpr` already recovers a real source
-expression for a literal conversion through its literal dispatch plan, so
-the identity those edges need exists and is simply not the one recorded.
-The remaining 1229 name no source expression by either route.
+**The recorded use identity is not what blocks them.** Checking records a
+static-dispatch edge's use identity as the constraint's introducing
+expression, or node 0 when the constraint names none, and 4554 of 6014
+edges on the snapshot corpus name none. That looked like the cause, and it
+is not. `constraintSourceExpr` already recovers a real source expression
+for a literal conversion through its literal dispatch plan; routing the
+recorded identity through it raises the edges carrying a source expression
+from 1460 to 4690, and changes **nothing** downstream — the snapshot corpus
+is byte-identical, `rehearsal_callee_site_absent` stays at exactly 4202,
+`rehearsal_callee_unresolved_rule_bind_failed` at exactly 3325, and the
+informative total at exactly 2754. The experiment was run and reverted;
+what it establishes is that relabelling these edges cannot help, because
+no site is filed for them under any identity.
+
+The counts say the same thing directly: 11 local dispatch sites are
+recorded across the whole corpus, against 6014 dispatch edges, with the
+remaining coverage coming from 5431 imported-scheme projections. That is
+consistent with the earlier decomposition, where 2384 of the absent
+lookups find neither their use nor their callee scheme owner named by any
+site in the requesting module. `recordDenseInstantiationSite` fires only
+from the ordinary instantiation entry point and only when the instantiator
+is `fresh_flex`, so a dispatch target reached by any other route records
+nothing. Publishing these edges — not renaming them — is the work.
+
+The 3325 correspondence still holds and still identifies the population:
+the literal-conversion dispatch edges are exactly the ones falling through
+to the receiver rule. It identifies which edges need sites; it does not
+mean their use identity was the defect.
 
 **Why the receiver rule cannot be widened to cover them.** The
 `constraint_dispatch_receiver` rule reads binder values positionally from
