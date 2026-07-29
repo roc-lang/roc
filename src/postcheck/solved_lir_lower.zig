@@ -1276,6 +1276,7 @@ const Lowerer = struct {
         return switch (content) {
             .link => Common.invariant("direct Lambda Mono type lowering saw an unresolved Lambda Solved link"),
             .unbound, .forall => Common.invariant("direct Lambda Mono type lowering saw an unresolved Lambda Solved type"),
+            .mono => Common.invariant("direct Lambda Mono type lowering saw an unfinalized lazy Monotype leaf"),
             .primitive => |primitive| .{ .primitive = primitive },
             .zst => .zst,
             .erased => |erased| .{ .erased_fn = .{
@@ -7984,6 +7985,7 @@ const Lowerer = struct {
 
         return switch (self.solved.types.get(root)) {
             .func, .lambda_set, .erased => true,
+            .mono => Common.invariant("callable scan saw an unfinalized lazy Monotype leaf"),
             .link, .unbound, .forall => Common.invariant("callable scan saw unresolved Lambda Solved type"),
             .primitive, .zst => false,
             .list => |elem| try self.solvedTypeContainsCallableInner(elem, visited),
