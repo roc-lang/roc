@@ -706,16 +706,20 @@ const DispatchTargetInstantiation = struct {
     method_var: Var,
 };
 
-fn isLiteralStaticDispatchOrigin(origin: StaticDispatchConstraint.Origin) bool {
-    return switch (origin) {
-        // This internal origin tag covers every literal conversion kind.
-        .from_literal => true,
-        .desugared_binop,
-        .desugared_unaryop,
-        .method_call,
-        .where_clause,
-        => false,
+fn literalMethodIdents(self: *const Self) literal_defaulting.LiteralMethodIdents {
+    return .{
+        .from_numeral = self.cir.idents.from_numeral,
+        .from_quote = self.cir.idents.from_quote,
+        .from_interpolation = self.cir.idents.from_interpolation,
     };
+}
+
+/// Whether this constraint carries literal-conversion provenance — a
+/// `from_literal` origin or a `where`-clause contract naming a
+/// literal-conversion hook. The kind decision lives in the defaulting oracle
+/// (src/types/literal_defaulting.zig).
+fn constraintIsLiteralConversion(self: *const Self, constraint: StaticDispatchConstraint) bool {
+    return literal_defaulting.constraintLiteralKind(self.literalMethodIdents(), constraint) != null;
 }
 
 const StaticDispatchUse = struct {
@@ -3864,7 +3868,7 @@ fn instantiateVarHelp(
                     var has_literal_constraint = false;
                     var has_other_constraint = false;
                     for (constraints) |c| {
-                        if (isLiteralStaticDispatchOrigin(c.origin)) {
+                        if (self.constraintIsLiteralConversion(c)) {
                             has_literal_constraint = true;
                         } else {
                             has_other_constraint = true;
@@ -4638,17 +4642,20 @@ fn recordOpenLiteralVar(
 ) Allocator.Error!void {
     var has_literal = false;
     for (constraints) |constraint| {
+        if (self.constraintIsLiteralConversion(constraint)) {
+            has_literal = true;
+        }
+        // Exact-value range validation needs the numeral payload, which only a
+        // `from_literal` origin carries — a `where`-clause hook has no literal
+        // value to validate.
         switch (constraint.origin) {
-            .from_literal => |lit| {
-                has_literal = true;
-                switch (lit) {
-                    .numeral => try self.open_numeral_literals.append(self.gpa, .{
-                        .var_ = literal_var,
-                        .constraint = constraint,
-                        .source_node = source_node,
-                    }),
-                    .quote, .interpolation => {},
-                }
+            .from_literal => |lit| switch (lit) {
+                .numeral => try self.open_numeral_literals.append(self.gpa, .{
+                    .var_ = literal_var,
+                    .constraint = constraint,
+                    .source_node = source_node,
+                }),
+                .quote, .interpolation => {},
             },
             else => {},
         }
@@ -6783,11 +6790,12 @@ const AmbiguitySelection = struct {
 ///   (issue 9657). A generalized all-`where` receiver from a discarded
 ///   `_ = ...` binding with a body-forced contract is also reported: the value
 ///   was thrown away, so no caller can ever supply the owner (issue 9819).
-/// - A receiver carrying any literal-conversion constraint is skipped:
-///   defaulting owns it (at finalize and at generalization boundaries), and a
-///   generalized literal resolves per instantiation. Essential for numeric
-///   helpers like `|x| x + y` whose receiver carries `desugared_binop` plus
-///   `from_numeral`.
+/// - A receiver carrying any literal-conversion constraint (a `from_literal`
+///   origin or a `where`-clause contract naming a literal-conversion hook) is
+///   skipped: defaulting owns it (at finalize and at generalization
+///   boundaries), and a generalized literal resolves per instantiation.
+///   Essential for numeric helpers like `|x| x + y` whose receiver carries
+///   `desugared_binop` plus `from_numeral`.
 /// - `is_eq` constraints are skipped: lowering compares structurally with no
 ///   owner needed, so a flex `is_eq` placeholder left by valid code
 ///   (`[1] == [1]`) is not a dead end. A genuinely ambiguous equality on a
@@ -6840,7 +6848,7 @@ fn selectAmbiguityConstraint(
             var has_literal_constraint = false;
             for (constraints) |c| {
                 if (self.rejected_static_dispatches.contains(c.fn_var)) continue;
-                if (isLiteralStaticDispatchOrigin(c.origin)) {
+                if (self.constraintIsLiteralConversion(c)) {
                     has_literal_constraint = true;
                 } else if (c.fn_name.eql(self.cir.idents.is_eq)) {
                     continue;
@@ -16975,7 +16983,7 @@ fn postProcessCopiedVars(self: *Self, region: Region) std.mem.Allocator.Error!vo
             if (fresh_content == .flex) {
                 const constraints = self.types.sliceStaticDispatchConstraints(fresh_content.flex.constraints);
                 for (constraints) |c| {
-                    if (c.origin == .from_literal) {
+                    if (self.constraintIsLiteralConversion(c)) {
                         try self.recordOpenLiteralVar(fresh_var, constraints, null);
                         break;
                     }
@@ -18511,7 +18519,7 @@ fn varLiteralKind(self: *Self, var_: Var) ?StaticDispatchConstraint.LiteralKind 
     const resolved = self.types.resolveVar(var_);
     if (resolved.desc.content != .flex) return null;
     const constraints = self.types.sliceStaticDispatchConstraints(resolved.desc.content.flex.constraints);
-    return literal_defaulting.dominantKind(constraints);
+    return literal_defaulting.dominantKind(self.literalMethodIdents(), constraints);
 }
 
 // --- Per-kind literal facts, each an exhaustive `switch (LiteralKind)` ---------
@@ -23879,7 +23887,7 @@ fn checkFlexVarConstraintCompatibility(
             .div_trunc_by = self.cir.idents.div_trunc_by,
             .rem_by = self.cir.idents.rem_by,
             .negate = self.cir.idents.negate,
-        }, constraints) orelse return false;
+        }, self.literalMethodIdents(), constraints) orelse return false;
         break :blk literal_defaulting.defaultTargetForPhase(default_phase) orelse {
             std.debug.panic("checker flex compatibility received a checking-finalized default phase", .{});
         };
@@ -23887,7 +23895,7 @@ fn checkFlexVarConstraintCompatibility(
         // Ordinary flex compatibility is only for variables carrying literal
         // provenance. Arithmetic-only flexes remain polymorphic until a later
         // specialization explicitly materializes them.
-        const kind = literal_defaulting.dominantKind(constraints) orelse return false;
+        const kind = literal_defaulting.dominantKind(self.literalMethodIdents(), constraints) orelse return false;
         break :blk literal_defaulting.defaultTargetForKind(kind);
     };
 

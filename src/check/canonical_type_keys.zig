@@ -300,7 +300,11 @@ const Builder = struct {
     /// checker's defaulting.
     fn flexLiteralDefaultKind(self: *Builder, flex: types.Flex) ?LiteralKind {
         const constraints = self.store.sliceStaticDispatchConstraints(flex.constraints);
-        const kind = types.literal_defaulting.dominantKind(constraints);
+        const kind = types.literal_defaulting.dominantKind(.{
+            .from_numeral = self.env.idents.from_numeral,
+            .from_quote = self.env.idents.from_quote,
+            .from_interpolation = self.env.idents.from_interpolation,
+        }, constraints);
         var has_other = false;
         for (constraints) |constraint| {
             switch (constraint.origin) {
