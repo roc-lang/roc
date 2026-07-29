@@ -81,6 +81,10 @@ const fx_open_tests = [_]SimpleTestSpec{
         .roc_file = "test/fx-open/issue_9963_hosted_try_question_mark.roc",
         .description = "Regression test: hosted Try unwrapped with ? widens the closed error row at the use site (issue 9963)",
     },
+    .{
+        .roc_file = "test/fx-open/issue_10270_named_map_err_closure.roc",
+        .description = "Regression test: named closure using map_err compiles when its result is propagated with ? (issue 10270)",
+    },
 };
 
 /// Str platform test apps - test cross-module function calls
