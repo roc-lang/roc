@@ -204,53 +204,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-package
-	[]
-	{
-		x: \\Multiline
-		,
-	}
-
-value1 = \\This is a "string" with just one line
-
-value2 = 
-	\\This is a "string" with just one line
-
-value3 = \\This is a string
-	\\With multiple lines
-	\\${value1}
-
-value4 = 
-	\\This is a string
-	# A comment in between
-	\\With multiple lines
-	\\${value2}
-
-value5 = {
-	a: \\Multiline
-	,
-	b: (
-		\\Multiline
-		,
-		\\Multiline
-		,
-	),
-	c: [
-		\\multiline
-		,
-	],
-	d: (
-		0 - \\
-		,
-	),
-	e: !\\
-	,
-}
-
-x = {
-	\\
-	\\
-}
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -315,11 +269,7 @@ With multiple lines
 							(e-string
 								(e-literal (string "multiline"))))))
 				(field (name "d")
-					(e-dispatch-call (method "minus") (constraint-fn-var 344)
-						(receiver
-							(e-num (value "0")))
-						(args
-							(e-string))))
+					(e-runtime-error (tag "erroneous_value_expr")))
 				(field (name "e")
 					(e-runtime-error (tag "erroneous_value_expr"))))))
 	(d-let
@@ -337,13 +287,13 @@ With multiple lines
 		(patt (type "Str"))
 		(patt (type "Str"))
 		(patt (type "Str"))
-		(patt (type "{ a: Str, b: (Str, Str), c: List(Str), d: Error, e: Error }"))
+		(patt (type "{ a: Str, b: (Str, Str), c: List(Str), d: Dec, e: Str }"))
 		(patt (type "Str")))
 	(expressions
 		(expr (type "Str"))
 		(expr (type "Str"))
 		(expr (type "Str"))
 		(expr (type "Str"))
-		(expr (type "{ a: Str, b: (Str, Str), c: List(Str), d: Error, e: Error }"))
+		(expr (type "{ a: Str, b: (Str, Str), c: List(Str), d: Dec, e: Str }"))
 		(expr (type "Str"))))
 ~~~

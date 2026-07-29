@@ -82,7 +82,7 @@ import Data exposing [Person]
 expectsPerson : Person -> Str
 expectsPerson = |p| "Got a person"
 
-main = 
+main =
 # This will cause a type mismatch
 	expectsPerson("not a person")
 ~~~

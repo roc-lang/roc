@@ -130,7 +130,7 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 # el
-t = 
+t =
 
 # el
 t = 0

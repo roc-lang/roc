@@ -3897,16 +3897,38 @@ its plan:
   specialization edge can ever supply and no default applies: the dispatch is
   statically unreachable and lowers to an explicit crash.
 
-`checked_error` and `unreachable_dispatch` are bottom at the dispatch expression.
+Checking records `checked_error` by the raw static-dispatch constraint function
+variable that owns the rejected edge. Rejection is not encoded by changing the
+constraint callable, its return, the dispatcher, or any operand to an erroneous
+type: those solver variables can be shared with independently valid producers.
+`EvidencePass.buildIndexes` loads `ModuleEnv.rejected_static_dispatches`; each
+static-dispatch plan lookup checks this map before resolving its receiver and
+must not infer rejection by inspecting a callable result type.
+
+An independently reported checking error may make a plan's receiver itself
+erroneous even when checking accepted that plan's dispatch (for example, a
+later type mismatch can poison a monomorphic value shared with an earlier
+literal conversion). That explicit receiver-error state also resolves to
+`checked_error`, but it does not add a rejected-dispatch identity: the receiver
+error fences the containing value, while `rejected_static_dispatches` records
+only failures of the dispatch check itself. `EvidencePass` never infers either
+case from the constraint callable or its return type.
+
+`checked_error` and `unreachable_dispatch` are rejected, non-returning
+dispatches. Monotype lowers both to an ordinary Roc runtime crash instead of a
+call, so neither can return a dispatch result value. For `checked_error`, this is
+the crash observed if `roc run` continues after reporting the missing method and
+execution reaches the rejected dispatch. For `unreachable_dispatch`, the crash
+represents the path that checking proved cannot receive a dispatcher value.
 After total plan resolution, `CheckedBodyStore` computes and stores expression
 and statement divergence through its exact operand and body dependencies. When
 a `constraint(depth, k)` becomes `checked_error` or `unreachable_value` only for
 one specialization, Monotype supplies those exact dispatch expression ids to
 the same checked-body divergence computation before it replays type relations
 or lowers the body. Callable, dispatcher, operand, and result types may be
-instantiated only after this callable-or-crash gate; a rejected dispatch lowers
-directly to a crash with its contextual result cell and never contributes a type
-relation.
+instantiated only after this callable-or-crash gate. The crash branch uses the
+contextual result cell solely to represent the non-returning expression; it
+never instantiates the rejected callable's type or contributes a type relation.
 
 Stored generated parser and encoder runtime functions are the one distinct
 producer proof: ConstStore emits their explicit generated-runtime function kind
@@ -4765,9 +4787,12 @@ exactly as all-owned insertion would emit it.
 - `RcSig`: the solved ownership signature of one proc — a mode for every
   refcounted param and return position, plus the lifetime relation between
   borrowed returns and the params they may borrow from.
-- emission: the final walk that writes RC statements into statement chains.
-  Emission consumes the solved modes and precise lifetimes; it makes no
-  decisions of its own.
+- `ArcPlan`: one stage-local slot for a structured path in one ownership
+  context. Dependency-solver visits update the slot with concrete moves,
+  retains, releases, call demand, and uniqueness bits. It contains no
+  ownership set, liveness row, or solver context.
+- materialization: consumes an `ArcPlan` and writes RC statements into LIR
+  statement chains. Materialization makes no ownership or liveness decisions.
 
 The paper's `dup` corresponds to LIR `incref`, its `drop` to `decref`/`free`,
 and its moves to the absence of both at a final owned occurrence.
@@ -4940,19 +4965,73 @@ before solving and never weakened:
 
 ### Interprocedural Solving
 
-The proc call graph is derived from `assign_call` statements over
-`LirStore.getProcSpecs()`. Signatures solve in two phases:
+The solver performs one exact structural walk of every ownership-neutral proc
+body and records its reachable statements as a per-proc inventory. A neutral
+body may back several proc specs: direct calls, returns, join bodies, and
+parameter uses are recorded once per proc, while definitions, local
+occurrences, visibility links, and uniqueness operations are recorded once per
+structurally distinct statement. Pinned-proc escapes, call-graph SCCs,
+bindings, signatures, visibility, uniqueness, returns, and join summaries all
+consume these typed tables; none independently rediscovers CFG reachability or
+decodes the same statements again. The inventory is
+stage-local and exact: it records every reachable statement and no unreachable
+statement, with no cap or approximation.
 
-1. Parameter modes iterate globally to a fixpoint with returns treated as
-   owned: non-pinned refcounted parameter positions start borrowed and flip
-   to owned when any occurrence demands a unit under the current signatures.
-   The borrowed set only shrinks, so iteration terminates.
+The caller-indexed tables also record direct-call tailness and, for each proc,
+the parameter positions that can reach consuming low-level runtime uniqueness
+checks. Variant planning consumes those solved masks directly; it does not
+rescan a proc body or allocate a module-sized visited table. After binding
+reaches its fixed point, `Solution.borrowed_call_result` stores the exact set
+used by per-proc liveness domains, so ARC insertion performs no second
+module-wide statement scan to reconstruct call-result kinds.
+
+The module solver constructs one dense domain containing exactly locals whose
+committed layouts participate in ARC. Binding tables, dependency edges,
+visibility sets, uniqueness sets, and their worklists use those dense indices;
+scalar and otherwise ARC-irrelevant locals allocate no solver rows. Once the
+fixed point settles, the result is expanded exactly once into LocalId-indexed
+lookup tables for ARC emission.
+
+The proc call graph is derived from the lifted `assign_call` statements. The
+parameter/return solver projects local definitions and static demands,
+pure-alias edges, direct-call argument dependencies, reachable return locals,
+and join bodies from the same lift. No signature round rescans a proc body.
+Signatures solve in two phases:
+
+1. Parameter modes reach a fixpoint with returns treated as owned: non-pinned
+   refcounted parameter positions start borrowed and flip to owned when any
+   occurrence demands a unit under the current signatures. One work item is
+   one exact `(callee, parameter position)` bit that just flipped. Its reverse
+   adjacency contains precisely the caller argument locals newly demanded by
+   that flip; those demands propagate through explicit pure-alias edges and
+   may enqueue their owning parameter bits. Every bit flips at most once, so
+   the borrowed set only shrinks and the worklist terminates.
 2. With parameter modes final, a return becomes borrowed when every `ret`
    in the proc returns a borrow anchored on a borrowed parameter of that
    proc, with the parameter positions recorded as the return's lenders. A
    final binding solve then lets callers borrow such results: a call result
    whose lender mask names exactly one refcounted argument is borrow-capable
    in the caller, anchored on that argument.
+
+Unique-return bits use a separate monotone worklist over typed uniqueness
+entries collected by the same structural walk. A proc bit feeds only its
+direct-call result locals;
+a newly born-unique local feeds only its explicit pure-alias dependents; and a
+newly unique local feeds only the procs whose recorded `ret` statements return
+it. Holder-destroy entries are signature-independent and fixed before this
+worklist starts. Proc bits and local birth bits only turn on, each at most once,
+so unique-return solving never reruns whole-store uniqueness analysis.
+
+Visibility sharing is an undirected equivalence relation over the typed lift,
+so it is solved by union-find and then seeded per component. Pure-alias
+uniqueness uses the exact reverse source-to-alias relation: only dependents of a
+newly changed origin enter its worklist. After return modes settle, the second
+binding phase likewise revisits only changed borrowed-return call results and
+their transitive reverse borrow dependents.
+
+The reachable `JoinBody` entries collected during solving are also the sole
+input for emission's jump resolution. Emission must not rediscover join
+definitions by traversing the ownership-neutral graph again.
 
 Borrowed parameters anchor borrow groups of their own: they are live for the
 whole call by ABI, so payload reads from them borrow without the callee
@@ -4967,10 +5046,22 @@ emission never places a release after the call on that path. Calls that
 leave the SCC keep borrowed positions, since the caller's drops precede the
 tail call there only when the values genuinely die earlier.
 
-### RC Statement Emission
+### RC Planning and Materialization
 
-Emission walks each proc once, consuming solved modes and precise lifetimes,
-and rebuilds statement chains with the same insertion machinery used today:
+The ownership-summary dependency solver also owns planning. Every structured
+root, control arm, join body, join remainder, and switch continuation has a
+stable `ArcPlan` slot. The key is the producer-authored structured path plus
+its ownership context, never statement id alone: the same neutral statement
+may be validly reached under several different states. When an entry summary
+shrinks, the solver revisits and replaces exactly that slot; a monotonically
+increasing slot version prevents an older queued visit from overwriting a
+newer decision. Join and switch dependencies patch their registered terminal
+plans when keep/common states change. Once the fixed point converges, direct
+call demands are mapped to final variants and every reachable plan is complete.
+
+Each plan records every concrete move/retain/release decision and call-variant
+or uniqueness choice. Materialization receives neither ownership state nor
+liveness and only follows completed plans to rebuild statement chains:
 
 - borrowed occurrence: no statements.
 - owned occurrence that is not the final occurrence on its path: `incref`
@@ -5002,23 +5093,85 @@ deallocation with nested decrefs through the RC helper plan.
 RC helper selection is unchanged: each emitted statement carries the helper
 derived from the local's layout, and helper choice stays in this stage.
 
-Emission decisions consume one precomputed per-statement liveness table over
-the ownership-neutral statement graph. Its bit domain contains only locals
-whose committed layouts contain refcounted data, their explicit
-ownership-unit and borrow-group representatives from the solved ownership
-graph, and the explicit group and borrowed-call-result bits required by the
-equations above. Unrelated scalar locals are not ARC resources and never
+Planning decisions consume one precomputed per-statement liveness table over
+the ownership-neutral statement graph. Each proc has its own dense ARC domain,
+constructed directly from that proc's complete, unique, sorted `frame_locals`
+inventory. The domain contains only locals whose committed layouts contain
+refcounted data, their explicit ownership-unit and borrow-group representatives
+from the solved ownership graph, and the explicit group and
+borrowed-call-result bits required by the equations above. Every ownership-unit
+and group-leader representative must belong to the same producer-authored proc
+inventory; a missing representative is an invariant violation, never something
+ARC reconstructs from the statement graph. A module-wide borrow group may also
+contain members from other proc specs that share ownership-neutral locals. The
+proc liveness domain counts exactly the members in its own frame, since an
+outside member cannot occur on one of that proc's paths. It derives those
+counts in one linear frame scan from the solved leader relation, so the module
+solution retains no redundant flat group-member table.
+Join ownership sets use the resource prefix of this same per-proc domain.
+Consequently neither ownership nor liveness rows are widened by locals from
+other procedures. Unrelated scalar locals are not ARC resources and never
 receive raw liveness bits. This distinction is load-bearing for wide static
 initializers: a list of a million scalar elements may require a million scalar
 LIR locals, but it contributes only the list allocation and its explicit
 ownership representatives to ARC's resource-bit width. Widening every row with
-non-resource locals would make ARC memory quadratic in an input that needs only
-linear ownership work.
+non-resource or other-proc locals would make ARC memory quadratic in an input
+that needs only linear ownership work.
 
-The table carries exactly the same read-before-rebind decisions as the earlier
-on-demand forward scans. Compile-time performance work may change its storage
-or construction, but must not weaken the liveness questions, omit resource
-bits, or approximate the least fixed point.
+The table carries exact read-before-rebind decisions. Compile-time performance
+work may change its storage or construction, but must not weaken the liveness
+questions, omit resource bits, or approximate the least fixed point.
+
+Ownership sets and liveness rows whose explicit domain width fits in one
+machine word are stored inline; wider sets use exact allocated words. This is a
+representation choice made solely from the producer-authored domain width, not
+a heuristic. The ownership-neutral liveness graph is immutable and built once
+per source proc, then shared by every ownership variant emitted from that
+source. It uses a reusable dense statement-to-node table, so successors,
+predecessors, and worklist edges are direct node indices rather than statement
+hash lookups. Its strongly-connected-component condensation is solved in
+reverse dependency order: an acyclic singleton is evaluated once, and
+iteration occurs only inside genuinely cyclic components. Keep-free rows live
+at their compact graph nodes and the active source graph supplies their direct
+dense statement-to-node lookup.
+
+Each join receives a compact loop identity whose direct cache covers the
+forward closure of its explicit body and remainder roots. The join keep-set
+adds a boundary row to each reachable loop-edge node. When that keep-set
+shrinks, ARC computes the exact new boundary row, seeds only loop edges whose
+rows actually changed, and propagates the delta through changed predecessors;
+it neither rebuilds the graph nor discards unaffected rows. Every loop-keyed
+query is therefore a direct `(loop identity, node index)` lookup with no map or
+statement scan.
+
+Join ownership is a must-property. Each reachable jump site contributes a
+state that can only shrink; a join summary maintains their running
+intersection incrementally, and recomputes the body keep-set from that exact
+meet plus the join parameters. A site contribution that shrinks without
+changing the global meet cannot schedule downstream work. Each loop identity
+records whether its solved rows consumed any keep bits. A keep change that
+supplied no boundary bits schedules no liveness work.
+
+Join, jump-site, and continuation-switch identities are compact indices
+assigned by the structural lift. Summary tables and plan registrations use
+direct slices over those indices. Planning reuses per-emission death,
+transfer-position, and call-argument scratch buffers; only converged decisions
+are retained in stable `ArcPlan` storage.
+
+All solver-summary, planning, and materialization state for one proc emission
+has the same lifetime and is allocated from one proc-scoped arena. Emitted LIR
+remains in the `LirStore`; arena-backed plans, ownership snapshots, branch
+results, and decision slices are discarded together only after the proc body
+and metadata have been committed. `ArcPlan` is the phase boundary: dependency
+solving may query ownership and liveness while filling a slot; its materializer
+accepts neither and only follows the explicit decisions.
+
+Immediate `incref`/matching-`decref` cancellation is part of retain
+construction: count one cancels the pair and larger counts are reduced by one.
+The completed graph is never rewritten by a later RC-elision traversal. Final
+join metadata is likewise recorded when each final join is materialized,
+checked for consistent duplicate ids, sorted once, and committed with
+the proc body; it is not recollected from the finished graph.
 
 The debug borrow certifier deliberately spends more: it re-certifies join
 bodies per distinct entry state and summarizes per statement for walk
@@ -5424,12 +5577,23 @@ parallel insertion paths at any point:
 ## Dev Backend Register Lifetimes
 
 `LirCodeGen` is the sole authority for LIR local locations. Every assigned
-LIR local is materialized into a stable location—a stack slot for represented
-runtime data—before statement generation continues. Architecture-specific code
-generators own only architecture register masks for short-lived
-instruction-selection temporaries; they do not
-own a second local-location map, move live values between registers and stack,
-or reload LIR local values independently.
+LIR local has one authoritative stable location. Ordinary represented values
+use stack slots. A first-class 128-bit integer vector may instead occupy a
+`vector_reg` location for its straight-line live range. `LirCodeGen` owns the
+live range, register assignment, spill slot, and every transition between the
+two; architecture-specific code generators own only the one
+floating-point/vector register-allocation mask and instruction encoding. They
+do not own a second local-location map or independently move LIR local values.
+
+Floating-point and vector locations draw from the same register-allocation mask:
+XMM registers alias on x86-64 and V registers alias on AArch64. Vector locals
+remain in registers across chained operations and spill only under actual
+register pressure, at control-flow environment boundaries, or before a call
+whose ABI may clobber them. SysV x86-64 treats every XMM register as volatile.
+Windows x64 allocates only its volatile XMM subset unless full-width save and
+restore is emitted. AArch64 does not treat V8-V15 as a persistent 128-bit
+vector resource because its ABI preserves only their low 64 bits; a live Q
+value is spilled before a call.
 
 The number of simultaneously live instruction-selection temporaries must be
 bounded by the emitted operation, never by source or layout nesting depth.
@@ -6709,17 +6873,22 @@ dev backends, wasm, the interpreter, and the Lambda Mono evaluator. Compile-time
 evaluation uses the same vector layouts and dev lowering as runtime dev code,
 and `ConstStore` preserves all 16 vector bytes under the checked vector type.
 
-The correctness-oriented native consumers use the exhaustive bit-level SIMD
-evaluator in `src/builtins/simd.zig`. Dev code passes the operation descriptor,
-explicit source/destination lane kinds, and operand bits through its ordinary
-internal call ABI; x86-64 and AArch64 wrappers preserve the corresponding
-two-register vector values and AArch64 has native Q-register movement. The
-interpreter and Lambda Mono evaluator invoke the same operation contract from
-their explicit layouts. A Lambda Mono value that does not have an integer bit
-representation is rejected explicitly rather than being replaced with zero.
-Wasm instead emits `v128` operations and exact helper
-sequences, including software carryless multiplication where simd128 has no
-instruction.
+The exhaustive bit-level SIMD evaluator in `src/builtins/simd.zig` is the
+correctness oracle for the interpreter, Lambda Mono evaluator, and differential
+tests. Both native dev backends instead dispatch exhaustively on the static LIR
+operation and its explicit source/destination lane kinds and emit native
+packed-integer instruction sequences. There is no compiled scalar evaluator,
+runtime operation descriptor, or fallback call. Missing native coverage is a
+compile-time exhaustiveness failure. A Lambda Mono value that does not have an
+integer bit representation is rejected explicitly rather than being replaced
+with zero. Wasm emits `v128` operations and exact helper sequences, including
+software carryless multiplication where simd128 has no instruction.
+
+Unchecked 16-byte loads are native vector loads. Stores use the explicit LIR
+uniqueness decision: the in-place path emits a native vector store, while the
+non-unique path may call the allocation-aware list-clone primitive before that
+store. This is mechanical consumption of earlier ARC output, never backend
+reference-count inference.
 
 Structural equality treats vectors as ordinary value leaves. Solved-to-LIR
 lowering converts each vector operand to its complete 128-bit bit image and
@@ -6763,9 +6932,12 @@ it twice, but MiniCI runs the dedicated no-skip gate explicitly.
 The full Lambda Mono body-lowering differential sweep over the ordinary eval
 corpus runs once per day on Ubuntu through `nightly_gate.yml`; it is not part of
 PR MiniCI. This does not remove the dedicated SIMD gate's Lambda Mono lane.
-`zig build run-check-simd-codegen` separately requires optimized
+`zig build run-check-simd-codegen` separately requires both optimized and dev
 x86-64 output to contain representative byte-add, pairwise-dot, table-shuffle,
-and carryless-multiply instructions. `zig build run-check-glue-abi` compiles
+and carryless-multiply instructions, rejects deleted scalar-evaluator and load
+helpers from dev binaries, and cross-builds the exhaustive corpus through the
+AArch64 dev backend so every supported operation/type lowering is instantiated.
+`zig build run-check-glue-abi` compiles
 generated Zig and C declarations for x86-64 and AArch64 Linux/macOS/Windows plus
 wasm, compiles Rust for native and wasm, and the native/wasm glue runtime matrix
 calls the generated contracts in both directions.

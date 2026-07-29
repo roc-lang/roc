@@ -668,7 +668,7 @@ process_with_method = |container, value| {
 main = {
 	# Let-polymorphism layer 1
 	# TODO INLINE ANNOS
-	# id : a -> a 
+	# id : a -> a
 	id = |x| x
 
 	# Let-polymorphism layer 2 with nested lambdas
