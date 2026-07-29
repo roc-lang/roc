@@ -2315,6 +2315,43 @@ gets a site. On the postcheck side only 392 uses find no recorded site
 of one. The 4342 siteless edges the pre-merge measurement reported were an
 artifact of that tree, not a standing `src/check` gap.
 
+**The callee binding, and why it does not resolve.** 62786 dispatch
+targets reach the binding step on the snapshot corpus and every one of
+them is a procedure target carrying a scheme id, so the binding is always
+opened; local, structural, and scheme-less targets do not occur. Of those
+bindings 58230 resolve from a recorded site and 1063 from a declared rule.
+52038 name a scheme with no binders at all, which cannot leave a binder
+unbound. The 4202 that find no site are 2384 whose use and whose callee
+scheme owner no site in the requesting module names, 1778 whose scheme
+owner other sites do name but not at this use, 36 present on both halves
+but unpaired, and 4 whose use carries only sites owning other schemes.
+
+**The identity defect behind them.** Checking records a static-dispatch
+edge's use identity as the constraint's introducing expression, or node 0
+when the constraint names none. On the snapshot corpus 4554 of 6014 edges
+name none, so they record node 0 — an identity no consumer keying on a
+real use expression can select. 3325 of those 4554 are literal
+conversions, and 3325 is exactly the number of declared-rule bindings that
+fail downstream, which fixes the correspondence: the literal-conversion
+dispatch edges are precisely the population that falls through to the
+receiver rule. `constraintSourceExpr` already recovers a real source
+expression for a literal conversion through its literal dispatch plan, so
+the identity those edges need exists and is simply not the one recorded.
+The remaining 1229 name no source expression by either route.
+
+**Why the receiver rule cannot be widened to cover them.** The
+`constraint_dispatch_receiver` rule reads binder values positionally from
+the receiver's own type arguments and accepts only a nominal, list, or box
+receiver; every one of its 3325 failures is a receiver that emits to a
+head taking no arguments. Widening the accepted shapes would not make the
+rule total, because the rule also requires the receiver's argument count to
+equal the callee's binder count, and a method like `List.map : List(a),
+(a -> b) -> List(b)` has a binder the receiver does not determine at all.
+A rule whose binder mapping is neither exact nor total does not satisfy
+§9.6, and recovering the missing binders by matching the call against the
+signature is what §9.5 forbids. The edge identity is the fix; the rule is
+not.
+
 **The unmeasurable population is one cause.** All 314573 are
 `operand_undescribed`: `nodeUnifyOperand` describes a graph node only when
 the graph imported an immutable type at it, and any other node is one the

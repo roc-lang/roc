@@ -19451,6 +19451,7 @@ fn dispatchTargetMethodVar(
     try self.dispatch_target_instantiation_by_fn_var.ensureUnusedCapacity(self.gpa, 1);
 
     const previous_evidence_target_site = self.evidence_target_site;
+    reunify_census.recordDispatchEdgeIntroExpr(constraintIntroExpr(constraint) != null, constraint.origin.literalKind() != null);
     self.evidence_target_site = .{
         .node_idx = if (constraintIntroExpr(constraint)) |expr| @intFromEnum(expr) else 0,
         .constraint_fn_var = constraint.fn_var,
@@ -24334,6 +24335,7 @@ fn checkFlexVarConstraintCompatibility(
         const scheme_uses_len = self.cir.scheme_uses.items.items.len;
         const scheme_use_pairs_len = self.cir.scheme_use_pairs.items.items.len;
         const method_var = method_var: {
+            reunify_census.recordDispatchEdgeIntroExpr(constraintIntroExpr(constraint) != null, constraint.origin.literalKind() != null);
             self.evidence_target_site = .{
                 .node_idx = if (constraintIntroExpr(constraint)) |expr| @intFromEnum(expr) else 0,
                 .constraint_fn_var = constraint.fn_var,

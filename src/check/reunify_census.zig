@@ -102,6 +102,16 @@ var site_binder_unreached = std.atomic.Value(u64).init(0);
 var site_without_snapshot_value_use = std.atomic.Value(u64).init(0);
 var site_without_snapshot_nested = std.atomic.Value(u64).init(0);
 var site_without_snapshot_dispatch = std.atomic.Value(u64).init(0);
+/// A static-dispatch edge whose constraint names no introducing expression, so
+/// the site it records carries node 0 as its use identity and no consumer
+/// keying on a real use expression can select it (reunify.md 7.2).
+var dispatch_edge_without_intro_expr = std.atomic.Value(u64).init(0);
+var dispatch_edge_with_intro_expr = std.atomic.Value(u64).init(0);
+/// Of the edges naming no introducing expression, the ones whose constraint is
+/// a literal conversion, whose source expression the literal dispatch plan
+/// still names, against the ones no source expression covers at all.
+var dispatch_edge_no_intro_literal = std.atomic.Value(u64).init(0);
+var dispatch_edge_no_intro_opaque = std.atomic.Value(u64).init(0);
 var site_duplicate_equivalent = std.atomic.Value(u64).init(0);
 var site_duplicate_divergent = std.atomic.Value(u64).init(0);
 var shared_edges_dense = std.atomic.Value(u64).init(0);
@@ -336,6 +346,25 @@ pub fn recordSchemeUseSite(slot_kind: u32, unreached: u32) void {
         else => {},
     }
     if (unreached > 0) _ = site_binder_unreached.fetchAdd(unreached, .monotonic);
+}
+
+/// Record whether one static-dispatch edge's constraint named an introducing
+/// expression, which is the use half of the edge identity a consumer selects a
+/// recorded site by (reunify.md 7.2). When it names none, `literal_when_absent`
+/// separates the literal conversions, whose source expression the literal
+/// dispatch plan still names, from the edges no source expression covers.
+pub fn recordDispatchEdgeIntroExpr(present: bool, literal_when_absent: bool) void {
+    if (comptime !enabled) return;
+    if (present) {
+        _ = dispatch_edge_with_intro_expr.fetchAdd(1, .monotonic);
+        return;
+    }
+    _ = dispatch_edge_without_intro_expr.fetchAdd(1, .monotonic);
+    if (literal_when_absent) {
+        _ = dispatch_edge_no_intro_literal.fetchAdd(1, .monotonic);
+    } else {
+        _ = dispatch_edge_no_intro_opaque.fetchAdd(1, .monotonic);
+    }
 }
 
 /// Record one dense shared in-group instantiation site (reunify.md 7.2, Slice 2b),
@@ -715,6 +744,10 @@ pub fn dumpAppend() void {
     sink.print("site_without_snapshot_value_use={d}\n", .{site_without_snapshot_value_use.load(.monotonic)});
     sink.print("site_without_snapshot_nested={d}\n", .{site_without_snapshot_nested.load(.monotonic)});
     sink.print("site_without_snapshot_dispatch={d}\n", .{site_without_snapshot_dispatch.load(.monotonic)});
+    sink.print("dispatch_edge_with_intro_expr={d}\n", .{dispatch_edge_with_intro_expr.load(.monotonic)});
+    sink.print("dispatch_edge_without_intro_expr={d}\n", .{dispatch_edge_without_intro_expr.load(.monotonic)});
+    sink.print("dispatch_edge_no_intro_literal={d}\n", .{dispatch_edge_no_intro_literal.load(.monotonic)});
+    sink.print("dispatch_edge_no_intro_opaque={d}\n", .{dispatch_edge_no_intro_opaque.load(.monotonic)});
     sink.print("site_duplicate_equivalent={d}\n", .{site_duplicate_equivalent.load(.monotonic)});
     sink.print("site_duplicate_divergent={d}\n", .{site_duplicate_divergent.load(.monotonic)});
     sink.print("shared_edges_dense={d}\n", .{shared_edges_dense.load(.monotonic)});
