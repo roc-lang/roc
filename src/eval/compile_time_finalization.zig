@@ -130,6 +130,7 @@ const TimingCounter = if (base.parallel.is_freestanding or builtin.target.cpu.ar
     }
 };
 
+/// Immutable compile-time finalization timings for progress reporting.
 pub const TimingSnapshot = struct {
     total_ns: u64 = 0,
     monotype_ns: u64 = 0,

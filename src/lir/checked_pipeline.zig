@@ -143,6 +143,7 @@ const TimingCounter = if (base.parallel.is_freestanding or builtin.target.cpu.ar
     }
 };
 
+/// Immutable checked-to-LIR timings for progress reporting.
 pub const TimingSnapshot = struct {
     monotype_ns: u64 = 0,
     postcheck_to_lir_ns: u64 = 0,

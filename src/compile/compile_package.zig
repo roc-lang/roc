@@ -254,6 +254,7 @@ pub const KnownModule = struct {
     import_name: []const u8,
 };
 
+/// Whether snapshot-tool canonicalization performs checking validation.
 pub const SnapshotValidationMode = enum {
     none,
     checking,
@@ -583,6 +584,7 @@ pub fn typeCheckModule(
     };
 }
 
+/// Publish a checked artifact whose module environment is owned by checked source.
 pub fn publishCheckedArtifactFromCheckedModule(
     gpa: Allocator,
     env: *ModuleEnv,
@@ -600,6 +602,7 @@ pub fn publishCheckedArtifactFromCheckedModule(
     );
 }
 
+/// Publish a checked artifact with an explicit module-environment storage owner.
 pub fn publishCheckedArtifactFromCheckedModuleWithStorage(
     gpa: Allocator,
     env: *ModuleEnv,
