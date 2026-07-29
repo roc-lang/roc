@@ -4872,7 +4872,7 @@ const Builder = struct {
             if (const_index < body_draft.deferred_const_uses.items.len) continue;
             if (!added_method_call and !added_inspect_method and !added_codec_call and !added_intrinsic_call) break;
         }
-        resolveDraftConstUseReservations(body_draft);
+        try self.resolveDraftConstUseReservations(body_draft);
 
         for (body_draft.deferred_const_uses.items) |boundary| {
             if (body_draft.exprs.items[@intFromEnum(boundary.expr)].data == .pending_deferred) {
@@ -4954,27 +4954,36 @@ const Builder = struct {
         body_draft.deferred_const_uses.items[boundary_index].restored_source = restored;
     }
 
-    /// Const restoration can explicitly produce another deferred const use.
-    /// Expansion appends that dependency after its consumer, so resolving the
-    /// completed dependency graph in reverse dependency order fills every
-    /// source before the reservation that copies it. Expression source
-    /// metadata travels with the restored payload so hoisted diagnostics keep
-    /// the original checked expression provenance rather than the const use
-    /// site's location. The proof reservation is stable from the original
-    /// producer and was filled during expansion.
+    const DraftReservationState = enum { unseen, visiting, resolved };
+
+    /// Const restoration can explicitly produce another deferred const use or
+    /// a stable active-binding reservation. Record those exact dependencies,
+    /// then resolve every one-edge chain in linear time. A recursive backedge
+    /// is not a dependency edge here: materializing the active binding replaces
+    /// its reservation with an explicit recursive let before this pass.
+    /// Expression source metadata travels with the restored payload so hoisted
+    /// diagnostics keep the original checked expression provenance rather than
+    /// the const use site's location. The proof reservation is stable from the
+    /// original producer and was filled during expansion.
     fn resolveDraftConstUseReservations(
+        self: *Builder,
         body_draft: *BodyDraftStore,
-    ) void {
-        var index = body_draft.deferred_const_uses.items.len;
-        while (index > 0) {
-            index -= 1;
-            const boundary = body_draft.deferred_const_uses.items[index];
+    ) Allocator.Error!void {
+        const expr_count = body_draft.exprs.items.len;
+        const sources = try self.allocator.alloc(?DraftExprId, expr_count);
+        defer self.allocator.free(sources);
+        @memset(sources, null);
+
+        const states = try self.allocator.alloc(DraftReservationState, expr_count);
+        defer self.allocator.free(states);
+        @memset(states, .unseen);
+
+        const stack = try self.allocator.alloc(DraftExprId, expr_count);
+        defer self.allocator.free(stack);
+
+        for (body_draft.deferred_const_uses.items) |boundary| {
             const restored = boundary.restored_source orelse
                 Common.invariant("deferred const reservation had no explicit restored source");
-            const restored_expr = body_draft.exprs.items[@intFromEnum(restored)];
-            if (restored_expr.data == .pending_deferred) {
-                Common.invariant("deferred const dependency was not resolved before its consumer");
-            }
             const reservation_index = @intFromEnum(boundary.expr);
             if (body_draft.exprs.items[reservation_index].data != .pending_deferred) {
                 Common.invariant("deferred const reservation was filled more than once");
@@ -4982,9 +4991,70 @@ const Builder = struct {
             if (body_draft.expr_impossibility_proofs.items[reservation_index] != boundary.proof_reservation) {
                 Common.invariant("deferred const reservation lost its stable impossibility proof");
             }
+            if (sources[reservation_index] != null) {
+                Common.invariant("deferred const reservation had more than one dependency");
+            }
+            sources[reservation_index] = restored;
+        }
+
+        for (body_draft.active_const_bindings.items) |active| {
+            const reservation_index = @intFromEnum(active.reservation);
+            if (body_draft.exprs.items[reservation_index].data != .pending_deferred) continue;
+            const restored = active.restored_source orelse
+                Common.invariant("active const reservation had no explicit restored source");
+            if (sources[reservation_index] != null) {
+                Common.invariant("active const reservation had more than one dependency");
+            }
+            sources[reservation_index] = restored;
+        }
+
+        for (body_draft.deferred_const_uses.items) |boundary| {
+            try resolveDraftReservationChain(body_draft, sources, states, stack, boundary.expr);
+        }
+        for (body_draft.active_const_bindings.items) |active| {
+            try resolveDraftReservationChain(body_draft, sources, states, stack, active.reservation);
+        }
+    }
+
+    fn resolveDraftReservationChain(
+        body_draft: *BodyDraftStore,
+        sources: []const ?DraftExprId,
+        states: []DraftReservationState,
+        stack: []DraftExprId,
+        start: DraftExprId,
+    ) Allocator.Error!void {
+        var depth: usize = 0;
+        var cursor = start;
+        while (body_draft.exprs.items[@intFromEnum(cursor)].data == .pending_deferred) {
+            const cursor_index = @intFromEnum(cursor);
+            switch (states[cursor_index]) {
+                .unseen => {
+                    states[cursor_index] = .visiting;
+                    stack[depth] = cursor;
+                    depth += 1;
+                    cursor = sources[cursor_index] orelse
+                        Common.invariant("pending const reservation had no explicit dependency");
+                },
+                .visiting => Common.invariant("deferred const reservation dependencies formed a cycle"),
+                .resolved => Common.invariant("resolved const reservation remained pending"),
+            }
+        }
+
+        while (depth > 0) {
+            depth -= 1;
+            const reservation = stack[depth];
+            const reservation_index = @intFromEnum(reservation);
+            const restored = sources[reservation_index] orelse
+                Common.invariant("pending const reservation lost its explicit dependency");
+            const restored_index = @intFromEnum(restored);
+            const restored_expr = body_draft.exprs.items[restored_index];
+            if (restored_expr.data == .pending_deferred) {
+                Common.invariant("deferred const dependency was not resolved before its consumer");
+            }
             body_draft.exprs.items[reservation_index] = restored_expr;
-            body_draft.expr_locs.items[reservation_index] = body_draft.expr_locs.items[@intFromEnum(restored)];
-            body_draft.expr_regions.items[reservation_index] = body_draft.expr_regions.items[@intFromEnum(restored)];
+            body_draft.expr_locs.items[reservation_index] = body_draft.expr_locs.items[restored_index];
+            body_draft.expr_regions.items[reservation_index] = body_draft.expr_regions.items[restored_index];
+            states[reservation_index] = .resolved;
         }
     }
 

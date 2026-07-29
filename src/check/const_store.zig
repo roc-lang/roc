@@ -186,6 +186,8 @@ pub const ConstCaptureValue = union(enum(u8)) {
     recursive_const,
 };
 
+/// Checked capture identity, type, and stored value for a compile-time
+/// function value.
 pub const ConstCapture = struct {
     id: CaptureId,
     ty: ConstTypeId,
