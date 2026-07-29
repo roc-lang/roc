@@ -4748,7 +4748,7 @@ struct-typed join parameters into per-field parameters when the parameter is
 only ever read field-by-field and every entry can explicitly supply all of its
 fields. Each entry snapshots every replacement field before changing any
 parameter, then performs the per-field writes. This preserves the original
-whole-struct assignment's parallel-transfer semantics: a replacement field may
+whole-struct assignment's materialize-before-rebind ordering: a replacement field may
 borrow through an old parameter value, so releasing that parameter before all
 replacement fields have been materialized would leave a later read dangling.
 Single-use literal wrappers disappear after their operands are snapshotted;
