@@ -5428,11 +5428,11 @@ LIR local has one authoritative stable location. Ordinary represented values
 use stack slots. A first-class 128-bit integer vector may instead occupy a
 `vector_reg` location for its straight-line live range. `LirCodeGen` owns the
 live range, register assignment, spill slot, and every transition between the
-two; architecture-specific code generators own only the one physical
-floating-point/vector register mask and instruction encoding. They do not own
-a second local-location map or independently move semantic values.
+two; architecture-specific code generators own only the one
+floating-point/vector register-allocation mask and instruction encoding. They
+do not own a second local-location map or independently move LIR local values.
 
-Floating-point and vector locations draw from the same physical register mask:
+Floating-point and vector locations draw from the same register-allocation mask:
 XMM registers alias on x86-64 and V registers alias on AArch64. Vector locals
 remain in registers across chained operations and spill only under actual
 register pressure, at control-flow environment boundaries, or before a call
