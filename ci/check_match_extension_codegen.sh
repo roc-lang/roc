@@ -23,6 +23,10 @@ if ! command -v objdump >/dev/null 2>&1; then
     echo "objdump is required for the match extension codegen check" >&2
     exit 1
 fi
+if ! command -v readelf >/dev/null 2>&1; then
+    echo "readelf is required for the match extension codegen check" >&2
+    exit 1
+fi
 
 roc_bin="$1"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -34,7 +38,7 @@ cd "$repo_root"
 
 # target:expected-instruction-count
 expectations=(
-    "x64musl:99"
+    "x64musl:95"
     "arm64musl:91"
 )
 
@@ -46,12 +50,32 @@ for entry in "${expectations[@]}"; do
     "$roc_bin" build --opt=speed --no-cache --target="$target" \
         --output="$tmp_dir/match-$target" "$fixture" >/dev/null
 
-    actual="$(objdump -d --no-show-raw-insn "$tmp_dir/match-$target" | awk '
-        /^[0-9a-f]+ <_?roc__proc/ { in_proc = 1; next }
-        /^[0-9a-f]+ </           { in_proc = 0 }
-        in_proc && /^[[:space:]]+[0-9a-f]+:/ { count++ }
-        END { print count + 0 }
-    ')"
+    case "$target" in
+        arm64musl)
+            # Every AArch64 instruction is exactly four bytes. Reading the
+            # exact procedure symbol sizes avoids depending on a host objdump
+            # configured with the AArch64 disassembler.
+            actual="$(readelf -sW "$tmp_dir/match-$target" | awk '
+                $8 ~ /^_?roc__proc/ { bytes += $3 }
+                END {
+                    if (bytes % 4 != 0) exit 1
+                    print bytes / 4
+                }
+            ')"
+            ;;
+        x64musl)
+            actual="$(objdump -d --no-show-raw-insn "$tmp_dir/match-$target" | awk '
+                /^[0-9a-f]+ <_?roc__proc/ { in_proc = 1; next }
+                /^[0-9a-f]+ </           { in_proc = 0 }
+                in_proc && /^[[:space:]]+[0-9a-f]+:/ { count++ }
+                END { print count + 0 }
+            ')"
+            ;;
+        *)
+            echo "match extension codegen has no instruction counter for $target" >&2
+            exit 1
+            ;;
+    esac
 
     if [ "$actual" = "$expected" ]; then
         echo "match extension codegen: $target has $actual instructions"
@@ -72,6 +96,9 @@ To see what changed, build the fixture and disassemble the roc__proc symbols:
     roc build --opt=speed --no-cache --target=<target> \
         --output=/tmp/match test/cli/match_extension_codegen.roc
     objdump -d --no-show-raw-insn /tmp/match
+
+For arm64musl, `readelf -sW /tmp/match` reports procedure byte sizes;
+AArch64 instructions are four bytes each.
 
 For why a given instruction is there, set `dump_llvm_artifacts` to true in
 src/cli/builder.zig to also get the optimized LLVM IR: that distinguishes a
