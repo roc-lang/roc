@@ -23,6 +23,7 @@ const layout_mod = @import("layout");
 const arc_sig = @import("arc_sig.zig");
 const arc_solve = @import("arc_solve.zig");
 const arc_certify = @import("arc_certify.zig");
+const arc_dismantle = @import("arc_dismantle.zig");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
@@ -251,6 +252,10 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     defer solution.deinit();
     inserter.solution = &solution;
 
+    var dismantles = try arc_dismantle.compute(store.allocator, store, layouts, &solution);
+    defer dismantles.deinit();
+    inserter.dismantles = &dismantles;
+
     // Domains are active one proc at a time. This reusable exact map makes
     // global LocalId -> proc-dense index lookup O(1) without allocating and
     // clearing a module-wide table for every proc.
@@ -350,9 +355,11 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         var death_scratch = std.ArrayList(LIR.LocalId).empty;
         var transfer_position_scratch = std.ArrayList(u32).empty;
         var retain_arg_scratch = std.ArrayList(LIR.LocalId).empty;
+        var dismantle_temps = std.ArrayList(LIR.LocalId).empty;
         inserter.death_scratch = &death_scratch;
         inserter.transfer_position_scratch = &transfer_position_scratch;
         inserter.retain_arg_scratch = &retain_arg_scratch;
+        inserter.dismantle_temps = &dismantle_temps;
         var arc_plans = ArcPlans{};
         inserter.arc_plans = &arc_plans;
         inserter.next_loop_keep_id = 1;
@@ -416,6 +423,21 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         const rewritten_body = try inserter.materializeArcPlans();
         const join_points = try inserter.finishFinalJoinPoints();
         store.setProcSpecBodyAndJoinPoints(emit_proc, rewritten_body, join_points);
+
+        // Dismantle temporaries are fresh locals referenced by the emitted
+        // body; the frame must own them. They were appended to the store in
+        // ascending id order above every existing local, so concatenating
+        // keeps the frame span sorted.
+        if (dismantle_temps.items.len > 0) {
+            const emit_spec = store.getProcSpec(emit_proc);
+            const old_frame = store.getLocalSpan(emit_spec.frame_locals);
+            const old_len = GuardedList.borrowLen(old_frame);
+            var frame = try std.ArrayList(LIR.LocalId).initCapacity(store.allocator, old_len + dismantle_temps.items.len);
+            defer frame.deinit(store.allocator);
+            for (0..old_len) |i| frame.appendAssumeCapacity(GuardedList.at(old_frame, i));
+            frame.appendSliceAssumeCapacity(dismantle_temps.items);
+            store.getProcSpecPtr(emit_proc).frame_locals = try store.addLocalSpan(frame.items);
+        }
     }
 
     if (builtin.mode == .Debug) {
@@ -917,6 +939,12 @@ const Inserter = struct {
     layouts: *const layout_mod.Store,
     local_contains_refcounted: []const bool = &.{},
     solution: *const arc_solve.Solution = undefined,
+    /// Field takes solved against the ownership-neutral bodies; consulted by
+    /// statement id, so base and variant emissions share one solve.
+    dismantles: *const arc_dismantle.Dismantles = undefined,
+    /// Temporaries synthesized while dismantling containers in the proc
+    /// currently being emitted; appended to its frame locals afterward.
+    dismantle_temps: *std.ArrayList(LIR.LocalId) = undefined,
     /// Mode-specialized variant table (shared across the emission worklist).
     variants: *VariantTable = undefined,
     /// Parameter locals whose borrowed solved binding is overridden to owned
@@ -1565,6 +1593,10 @@ const Inserter = struct {
                             else => transfer.release_old_target = self.transferForFreshBind(&segment.owned, assign.target),
                         }
                     }
+                    // A take read consumes the container's stored unit for
+                    // this field: the target still binds owned, but no
+                    // retain is paid.
+                    if (self.takeApplies(segment.cursor)) transfer.retain_target = false;
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     step.retain_assign_ref_target = transfer.retain_target;
                     const singles = [_]LIR.LocalId{ refOpSource(assign.op), assign.target };
@@ -4542,8 +4574,32 @@ const Inserter = struct {
         return count;
     }
 
+    /// Whether this statement's field read is a take in the current
+    /// emission. Takes on containers solved borrowed apply only when the
+    /// variant demand vector overrides the parameter to owned.
+    fn takeApplies(self: *const Inserter, stmt: LIR.CFStmtId) bool {
+        if (self.dismantles.isTake(stmt)) return true;
+        if (self.dismantles.ownedOnlyTakeParam(stmt)) |param| {
+            return self.owned_param_override.contains(param);
+        }
+        return false;
+    }
+
+    /// The dismantle plan for this local's release in the current emission,
+    /// if it has one.
+    fn dismantleFor(self: *const Inserter, local: LIR.LocalId) ?arc_dismantle.Container {
+        if (self.dismantles.containerOf(local)) |container| return container;
+        if (self.dismantles.ownedOnlyContainerOf(local)) |container| {
+            if (self.owned_param_override.contains(local)) return container;
+        }
+        return null;
+    }
+
     fn releaseLocalIfRc(self: *Inserter, local: LIR.LocalId, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         if (!self.localContainsRefcounted(local)) return next;
+        if (self.dismantleFor(local)) |container| {
+            return try self.dismantleContainer(local, container, next);
+        }
         const rc = self.rcHelperForLocal(.decref, local);
         return try self.store.addCFStmt(.{ .decref = .{
             .value = local,
@@ -4551,6 +4607,43 @@ const Inserter = struct {
             .atomicity = self.rcAtomicity(local),
             .next = next,
         } });
+    }
+
+    /// Release a dismantled container: its taken fields' units were consumed
+    /// by their take reads, so only the residual refcounted fields are read
+    /// into temporaries and released. The temporaries and the container's
+    /// solved arrays never meet: field layouts drive the helpers directly,
+    /// and the container's atomicity covers its stored payloads exactly as
+    /// the whole-struct helper would have.
+    fn dismantleContainer(self: *Inserter, local: LIR.LocalId, container: arc_dismantle.Container, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
+        const atomicity = self.rcAtomicity(local);
+        var tail = next;
+        var index = container.residual.len;
+        while (index > 0) {
+            index -= 1;
+            const field = container.residual[index];
+            const rc = self.rcHelperForLayout(.decref, field.layout_idx);
+            if (self.layouts.rcHelperPlan(rc) == .noop) {
+                arcInvariant("ARC dismantle selected a noop RC helper for a refcounted residual field");
+            }
+            const temp = try self.store.addLocal(.{ .layout_idx = field.layout_idx });
+            try self.dismantle_temps.append(self.emission_allocator, temp);
+            tail = try self.store.addCFStmt(.{ .decref = .{
+                .value = temp,
+                .rc = rc,
+                .atomicity = atomicity,
+                .next = tail,
+            } });
+            tail = try self.store.addCFStmt(.{ .assign_ref = .{
+                .target = temp,
+                .op = .{ .field = .{
+                    .source = local,
+                    .field_idx = @intCast(field.field_idx),
+                } },
+                .next = tail,
+            } });
+        }
+        return tail;
     }
 
     fn releaseMaybeInitializedLocal(self: *Inserter, condition: LIR.LocalId, condition_mask: u64, local: LIR.LocalId, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
@@ -6329,7 +6422,11 @@ test "RC join remainder starts from join entry ownership" {
 
     _ = try f.addProc(&.{}, body, f.list_i64);
     try f.run();
-    try f.expectRc(pair, 0, 1, 0);
+    // The extraction is a field take of the dying pair: the read consumes
+    // the pair's stored unit for its only refcounted field, so no whole
+    // release of the pair remains.
+    try f.expectRc(pair, 0, 0, 0);
+    try f.expectRc(extracted, 0, 0, 0);
 }
 
 test "RC join body keeps local born in remainder" {
@@ -6516,10 +6613,14 @@ test "RC borrow group member used in a join body keeps the lender across the jum
 
     _ = try f.addProc(&.{}, start, .i64);
     try f.run();
-    // The field borrow is used only inside the join body, so the pair's
+    // The field read is used only inside the join body, so the pair's
     // liveness group must carry its unit through the jump: the jump releases
-    // nothing and the pair dies after the borrow's last use in the body.
-    try f.expectRc(pair, 0, 1, 0);
+    // nothing and the pair dies after the read's last use in the body. The
+    // read is a field take, so the pair's death dismantles it — one residual
+    // release of the untaken field on a fresh temporary — instead of
+    // releasing the pair whole.
+    try f.expectRc(pair, 0, 0, 0);
+    try testing.expectEqual(@as(usize, 1), f.countAllRc());
 }
 
 test "RC switch continuation merge releases branch-divergent owner at the boundary" {
@@ -7508,10 +7609,12 @@ test "RC borrow: payload read consumed by a call stays owned" {
     const body = try f.assignStr(a, "a", assign_b);
     _ = try f.addProc(&.{}, body, .i64);
     try f.run();
-    // The consumed read pays one retain at the read and is then moved into
-    // the call.
-    try f.expectRc(field, 1, 0, 0);
-    try f.expectRc(pair, 0, 1, 0);
+    // The consumed read is a field take of the dying pair: it moves the
+    // pair's stored unit into the call with no retain, and the pair's death
+    // releases only the untaken field through a fresh temporary.
+    try f.expectRc(field, 0, 0, 0);
+    try f.expectRc(pair, 0, 0, 0);
+    try testing.expectEqual(@as(usize, 1), f.countAllRc());
 }
 
 test "RC borrow: alias of an owned local emits no RC statements" {
