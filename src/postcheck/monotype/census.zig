@@ -838,6 +838,13 @@ pub const Census = struct {
     rehearsal_unbound_binder_of_translating_scheme: Counter = Counter.init(0),
     rehearsal_unbound_binder_of_caller_frame_scheme: Counter = Counter.init(0),
     rehearsal_unbound_binder_of_third_scheme: Counter = Counter.init(0),
+    // The third scheme by the kind of definition that owns it.
+    rehearsal_unbound_binder_third_top_level: Counter = Counter.init(0),
+    rehearsal_unbound_binder_third_nested: Counter = Counter.init(0),
+    rehearsal_unbound_binder_third_required: Counter = Counter.init(0),
+    rehearsal_unbound_binder_third_synthetic: Counter = Counter.init(0),
+    rehearsal_unbound_binder_third_multi_binder: Counter = Counter.init(0),
+
     rehearsal_unbound_binder_no_frame: Counter = Counter.init(0),
     // Whether the variable is generalized by exactly one scheme in the view.
     rehearsal_unbound_binder_owned_by_one_scheme: Counter = Counter.init(0),

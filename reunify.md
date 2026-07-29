@@ -2413,10 +2413,27 @@ which rules out a binding that failed to state its own binders; it is not
 the caller's, which rules out a caller-side position described as the
 callee's at the `callee_checked` seam. What remains is a position whose
 checked type is written in terms of a definition neither end of the call
-owns, which no call-site binding between those two ends can ever name. The
-next measurement is which definitions those 1408 binders belong to,
-because "a third scheme" is where this stops being a statement about the
-binding and starts being one about what the position is.
+owns, which no call-site binding between those two ends can ever name. Classifying that third scheme by the kind
+of definition owning it answers what the position is: **all 1408 are
+`top_level_def`**, ordinary generalized top-level values, with none
+synthetic, none a platform requirement, and none an inner generalization
+boundary. **761** of them generalize more than one binder.
+
+So the position mentions ANOTHER generalized definition, whose binders
+take their values from that definition's own instantiation edge and not
+from the dispatch edge being bound. That is why every repair aimed at the
+call itself failed: one callee binding names one scheme's binders, a
+position may reference several schemes, and no amount of identifying,
+recording, or ruling the dispatch edge can supply a third definition's
+values. The 761 multi-binder owners make the same point from the other
+side, since no receiver projection or single positional mapping could
+state them.
+
+The environment a position translates under therefore needs a level per
+scheme it references, each bound from that scheme's own published edge,
+rather than the single callee level the rehearsal opens today. That is a
+statement about §9.1's binding environment, not about §7.2's coverage or
+§9.6's rules, and it is where the remaining logical residual is.
 
 **Why the receiver rule cannot be widened to cover them.** The
 `constraint_dispatch_receiver` rule reads binder values positionally from

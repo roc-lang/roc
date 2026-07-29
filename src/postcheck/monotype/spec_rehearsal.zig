@@ -3476,6 +3476,17 @@ pub const Rehearsal = struct {
                         census.bump("rehearsal_unbound_binder_of_caller_frame_scheme");
                     } else {
                         census.bump("rehearsal_unbound_binder_of_third_scheme");
+                        // What kind of definition that third scheme is, which
+                        // says whether the position names a top-level value, an
+                        // inner generalization boundary, a platform requirement,
+                        // or a template scheme with no source owner.
+                        switch (scheme.owner_kind) {
+                            .top_level_def => census.bump("rehearsal_unbound_binder_third_top_level"),
+                            .nested_def => census.bump("rehearsal_unbound_binder_third_nested"),
+                            .required_type => census.bump("rehearsal_unbound_binder_third_required"),
+                            .synthetic => census.bump("rehearsal_unbound_binder_third_synthetic"),
+                        }
+                        if (scheme.gv_len > 1) census.bump("rehearsal_unbound_binder_third_multi_binder");
                     }
                 } else {
                     census.bump("rehearsal_unbound_binder_no_frame");
