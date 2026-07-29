@@ -20947,8 +20947,7 @@ fn varSupportsDerivedParseTagExt(
             else => .unsupported,
         },
         .alias => |alias| try self.varSupportsDerivedParseTagExt(self.types.getAliasBackingVar(alias), env, region),
-        .err => .supported,
-        .flex => .unresolved,
+        .err, .flex => .supported,
         .rigid => .unsupported,
     };
 }
@@ -23268,7 +23267,12 @@ fn validateDerivedParseTagExt(
         },
         .alias => |alias| try self.validateDerivedParseTagExt(self.types.getAliasBackingVar(alias), encoding_var, state_var, err_var, constraint, env, region, visited),
         .err => .ok,
-        .flex, .rigid => .unsupported,
+        .flex => blk: {
+            const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
+            const result = try self.unify(ext_var, empty_tu_var, env);
+            break :blk if (result.isOk()) .ok else .reported_error;
+        },
+        .rigid => .unsupported,
     };
 }
 

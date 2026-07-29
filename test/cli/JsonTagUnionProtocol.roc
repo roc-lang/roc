@@ -6,6 +6,10 @@ Parsed(a) : Try(a, [InvalidJson(Str), MissingRequiredField(Str)])
 ## derived parser instead of deriving one shape apiece.
 Tagged : [Nought, One(U64), Pair(U64, Str), Triple(U64, Str, Bool)]
 
+## An unannotated parsed tag union stays open until equality constrains and
+## identifies its known tag. Derived parser dispatch closes that inferred row.
+expect Ok(Friendly) == Json.parse("\"Friendly\"")
+
 ## Multi-payload tags are a fixed-arity sequence, so they round-trip through
 ## the same tuple methods, while payload-free and single-payload tags keep
 ## their own shapes.

@@ -2768,6 +2768,29 @@ error), and the issue #9798 regression test in
 src/check/test/type_checking_integration.zig (a non-hosted `?` into an open
 annotated row is a type error even when the visible errors are included).
 
+### Derived Parser Tag-Row Closure
+
+A compiler-derived structural parser owns the exact set of tags it can
+construct. When parser dispatch reaches a tag union with at least one known tag,
+an unconstrained flexible extension is therefore closed to the empty tag union
+while validating that derived parser. The closure uses ordinary unification and
+applies recursively to tag unions in payloads and container components. It does
+not close a bare flexible shape before a tag union exists, and it does not close
+a rigid extension: a polymorphic open row may contain tags for which no parser
+was checked, so that parser dispatch is rejected.
+
+This is the parser counterpart of derived encoder validation, which already
+closes an unconstrained flexible tag extension once the encoder's exact
+structural shape is selected. Parser eligibility recognizes a flexible
+variable only in the explicit tag-extension position; a bare flexible shape or
+payload remains unsupported until earlier constraints resolve it.
+
+Both sides are pinned by tests: accepted —
+test/cli/JsonTagUnionProtocol.roc (issue #10418's unannotated
+`Ok(Friendly) == Json.parse(...)` comparison closes the inferred parser row);
+rejected — test/cli/ParserOpenTagUnion.roc (a parser whose result annotation
+has a named rigid extension remains a missing-method error).
+
 ### Derived Parser Required-Field Error Composition
 
 A compiler-derived structural record parser, rather than its input-format
@@ -2853,6 +2876,10 @@ Other solved-graph mutations:
   ignorable payload vars for tags the expression provably never constructs
   close to the empty tag union, so matches on constructed values are
   exhaustive without wildcard arms.
+- `validateDerivedParseTagExt` — policy: Derived Parser Tag-Row Closure
+  (above). Once structural parser eligibility has selected a known tag union,
+  its unconstrained flexible extension closes to the empty tag union through
+  ordinary unification; rigid extensions remain rejected.
 - `constrainDerivedParserRequiredFieldError` — policy: Derived Parser
   Required-Field Error Composition (above). A structural probe of derived
   record fields gates ordinary unification of the parser's shared error row
