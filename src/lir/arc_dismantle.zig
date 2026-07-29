@@ -29,6 +29,7 @@ const LirStore = core.LirStore;
 const GuardedList = collections.GuardedList;
 const Allocator = std.mem.Allocator;
 
+/// Allocation errors returned while solving field takes.
 pub const Error = std.mem.Allocator.Error;
 
 const no_index: u32 = std.math.maxInt(u32);
@@ -41,10 +42,12 @@ pub const ResidualField = struct {
     layout_idx: layout_mod.Idx,
 };
 
+/// A dismantled container and the fields it still owns at its death point.
 pub const Container = struct {
     residual: []const ResidualField,
 };
 
+/// Field-take analysis results consumed during ARC emission.
 pub const Dismantles = struct {
     arena: std.heap.ArenaAllocator,
     /// `assign_ref .field` statements whose reads consume the container's
