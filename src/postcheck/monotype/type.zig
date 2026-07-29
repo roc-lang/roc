@@ -748,7 +748,7 @@ pub const Store = struct {
     const CachedDigestContext = struct {
         items: [digest_visiting_max]TypeId = undefined,
         len: usize = 0,
-        saw_cycle: bool = false,
+        cycle_count: u32 = 0,
     };
 
     const NamedDigestMode = enum {
@@ -836,7 +836,7 @@ pub const Store = struct {
     ) names.TypeDigest {
         for (ctx.items[0..ctx.len], 0..) |open_ty, position| {
             if (open_ty == ty) {
-                ctx.saw_cycle = true;
+                ctx.cycle_count += 1;
                 return cycleDigest(@intCast(position));
             }
         }
@@ -867,19 +867,19 @@ pub const Store = struct {
         }
 
         if (ctx.len == digest_visiting_max) {
-            ctx.saw_cycle = true;
+            ctx.cycle_count += 1;
             return deepDigest(ty);
         }
 
         ctx.items[ctx.len] = ty;
         ctx.len += 1;
-        const saw_cycle_before = ctx.saw_cycle;
+        const cycle_count_before = ctx.cycle_count;
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
         self.writeCachedTypeDigest(name_store, &hasher, ty, named_mode, ctx, stats);
         ctx.len -= 1;
 
         const digest: names.TypeDigest = .{ .bytes = hasher.finalResult() };
-        if (ctx.saw_cycle == saw_cycle_before) {
+        if (ctx.cycle_count == cycle_count_before) {
             switch (named_mode) {
                 .full => {
                     self.type_digests.set(index, digest);
@@ -2734,6 +2734,33 @@ test "monotype cached digest reuses acyclic child digests and invalidates on res
     try std.testing.expectEqual(@as(u64, 0), after_refill_stats.cache_hits);
     try std.testing.expectEqual(@as(u64, 1), after_refill_stats.cache_misses);
     try std.testing.expectEqual(@as(u64, 1), after_refill_stats.nodes_visited);
+}
+
+test "monotype cached digest stays stable across multiple edges into one recursive group" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const first_field = try name_store.internRecordFieldLabel("first");
+    const second_field = try name_store.internRecordFieldLabel("second");
+    const recursive = try store.reserveSlot();
+    const first_fn = try store.add(.{ .func = .{ .args = Span.empty(), .ret = recursive } });
+    const second_fn = try store.add(.{ .func = .{ .args = Span.empty(), .ret = recursive } });
+    const fields = try store.addFields(&.{
+        .{ .name = first_field, .ty = first_fn },
+        .{ .name = second_field, .ty = second_fn },
+    });
+    store.fillReservedSlot(recursive, .{ .record = fields });
+
+    const first_full = store.typeDigestCached(&name_store, recursive, null);
+    const second_full = store.typeDigestCached(&name_store, recursive, null);
+    try std.testing.expect(std.mem.eql(u8, first_full.bytes[0..], second_full.bytes[0..]));
+
+    const first_specialization = store.specializationDigestCached(&name_store, recursive, null);
+    const second_specialization = store.specializationDigestCached(&name_store, recursive, null);
+    try std.testing.expect(std.mem.eql(u8, first_specialization.bytes[0..], second_specialization.bytes[0..]));
 }
 
 test "monotype type equality accepts isomorphic recursive structural types" {
