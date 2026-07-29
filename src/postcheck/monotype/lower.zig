@@ -473,6 +473,22 @@ fn constrainDeferredTemplateTypeArguments(
     try constrainDeferredTemplateTypeArgumentsAt(graph, checked_fn_node, request_fn_node, &seen);
 }
 
+/// Backing node of a transparent alias wrapper. Nominal wrappers,
+/// runtime-layout-only backings, and generated-private backings are
+/// boundaries this traversal must not cross.
+fn transparentAliasBacking(graph: *InstGraph, content: anytype) ?NodeId {
+    switch (content) {
+        .named => |named| {
+            if (named.kind != .alias) return null;
+            const backing = named.backing orelse return null;
+            if (backing.use != .inspectable) return null;
+            if (backing.authority == .generated_private) return null;
+            return graph.rootNode(backing.node);
+        },
+        else => return null,
+    }
+}
+
 fn constrainDeferredTemplateTypeArgumentsAt(
     graph: *InstGraph,
     checked_node: NodeId,
@@ -490,6 +506,22 @@ fn constrainDeferredTemplateTypeArgumentsAt(
 
     const checked_content = graph.content(checked_root);
     const request_content = graph.content(request_root);
+
+    // A transparent alias names its backing without adding structure, and
+    // aliases cannot introduce phantom parameters, so every alias argument
+    // occurs in the backing: descending to the backing when only one side is
+    // alias-wrapped loses nothing and restores the congruent constructor pair.
+    // Same-definition named pairs keep the direct argument relation below;
+    // for nominal pairs that relation is also what pins phantom arguments,
+    // which never occur in the backing.
+    if (std.meta.activeTag(checked_content) != std.meta.activeTag(request_content)) {
+        if (transparentAliasBacking(graph, checked_content)) |backing| {
+            return constrainDeferredTemplateTypeArgumentsAt(graph, backing, request_root, seen);
+        }
+        if (transparentAliasBacking(graph, request_content)) |backing| {
+            return constrainDeferredTemplateTypeArgumentsAt(graph, checked_root, backing, seen);
+        }
+    }
     switch (checked_content) {
         .unresolved => return,
         .list => |checked_elem| switch (request_content) {
@@ -505,6 +537,12 @@ fn constrainDeferredTemplateTypeArgumentsAt(
                 if (!sameTypeDef(checked_named.def, request_named.def) or
                     checked_named.args.len != request_named.args.len)
                 {
+                    if (transparentAliasBacking(graph, checked_content)) |backing| {
+                        return constrainDeferredTemplateTypeArgumentsAt(graph, backing, request_root, seen);
+                    }
+                    if (transparentAliasBacking(graph, request_content)) |backing| {
+                        return constrainDeferredTemplateTypeArgumentsAt(graph, checked_root, backing, seen);
+                    }
                     return;
                 }
                 for (checked_named.args, request_named.args) |checked_arg, request_arg| {
@@ -2637,12 +2675,13 @@ const Builder = struct {
         template_ref: names.ProcTemplate,
         source_fn_ty: checked.CheckedTypeId,
         source_fn_key: names.TypeDigest,
-        request_fn_node: NodeId,
+        raw_request_fn_node: NodeId,
         partial_evidence: []const SpecEvidence,
         evidence_mode: DraftRequestEvidenceMode,
         signature_relation: Ast.SignatureRelation,
     ) Allocator.Error!DraftFnSlot {
         self.count("template_requests");
+        const request_fn_node = try source_ctx.graph.functionRequestRoot(raw_request_fn_node);
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
         if (partial_evidence.len > template.evidence_params.len) {
@@ -4362,13 +4401,14 @@ const Builder = struct {
         nested: Ast.NestedFn,
         source_fn_ty: checked.CheckedTypeId,
         source_fn_key: names.TypeDigest,
-        request_fn_node: NodeId,
+        raw_request_fn_node: NodeId,
         capture_entry_guards: []const NodeId,
         requested_evidence: EvidenceChain,
         owned_scope: ?checked.DispatchScopeId,
         signature_relation: Ast.SignatureRelation,
     ) Allocator.Error!DraftFnTarget {
         self.count("nested_requests");
+        const request_fn_node = try source_ctx.graph.functionRequestRoot(raw_request_fn_node);
         const family = DraftNestedFamilyAddress.init(nested, source_ctx.method_scope.key, source_fn_key);
         const stored_evidence = try self.constFnEvidence(requested_evidence);
         const evidence_digest = Ast.fnEvidenceDigest(stored_evidence.nodes, stored_evidence.frames, stored_evidence.head);
@@ -27295,9 +27335,7 @@ const BodyContext = struct {
             .platform_required_proc,
             .promoted_top_level_proc,
             => {
-                if (self.graph.content(expected_node) != .func) {
-                    Common.invariant("checked callable relation received a non-function request node");
-                }
+                _ = try self.graph.functionNodes(expected_node);
                 try constrainDeferredTemplateTypeArguments(
                     self.graph,
                     try self.instNode(expr.ty),
@@ -27344,11 +27382,7 @@ const BodyContext = struct {
             // Relating their shared checked result node here would collapse
             // distinct generated-private representations across branches.
             .block, .match_, .if_, .runtime_error => {},
-            .lambda, .closure => {
-                if (self.graph.content(expected_node) != .func) {
-                    Common.invariant("checked callable relation received a non-function request node");
-                }
-            },
+            .lambda, .closure => _ = try self.graph.functionNodes(expected_node),
             else => try self.graph.unify(expected_node, try self.lowerExprTypeNode(checked_expr)),
         }
     }
