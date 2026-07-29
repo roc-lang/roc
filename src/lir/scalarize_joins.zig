@@ -1383,7 +1383,7 @@ test "scalarize sees through pure aliases to field reads" {
         .body = make_view,
         .remainder = num_assign,
     } });
-    const proc = try store.addProcSpec(.{
+    _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .args = LIR.LocalSpan.empty(),
         .body = join,
@@ -1403,7 +1403,6 @@ test "scalarize sees through pure aliases to field reads" {
     const new_read_s = store.getCFStmt(read_s).assign_ref;
     try testing.expectEqual(GuardedList.at(params, 1), new_read_s.op.local);
     try testing.expectEqual(read_n, store.getCFStmt(join).join.body);
-    _ = proc;
 }
 
 test "scalarize keeps parameters whose alias escapes whole" {
