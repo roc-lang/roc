@@ -31,6 +31,7 @@ test "ModuleEnv.Serialized roundtrip" {
     original.ensureExposedSorted(gpa);
 
     try original.common.calcLineStarts(gpa);
+    try original.recordRejectedStaticDispatch(@enumFromInt(1234));
 
     const import_json = try original.imports.getOrPut(gpa, &original.common, "json.Json");
     try std.testing.expectEqual(@as(u32, 1), @intFromEnum(try original.imports.getOrPut(gpa, &original.common, "core.List")));
@@ -93,6 +94,8 @@ test "ModuleEnv.Serialized roundtrip" {
     try std.testing.expectEqualStrings("json.Json", env.common.strings.get(env.imports.imports.items.items[0]));
     try std.testing.expectEqualStrings("core.List", env.common.strings.get(env.imports.imports.items.items[1]));
     try std.testing.expectEqual(@as(usize, 2), env.imports.map.count());
+    try std.testing.expectEqual(@as(usize, 1), env.rejectedStaticDispatches().len);
+    try std.testing.expectEqual(@as(types.Var, @enumFromInt(1234)), env.rejectedStaticDispatches()[0].fnVar());
 
     // Verify original data before serialization was correct
     // initCIRFields inserts the module name ("TestModule") into the interner, so we have 3 total: hello, world, TestModule

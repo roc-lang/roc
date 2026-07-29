@@ -105,7 +105,7 @@ main = 123.Foo
 				(ty-lookup (name "Foo") (local)))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-typed-int (value "123") (type "Foo")))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(s-nominal-decl
 		(ty-header (name "Foo"))
 		(ty-tag-union
@@ -117,11 +117,11 @@ main = 123.Foo
 (inferred-types
 	(defs
 		(patt (type "Error"))
-		(patt (type "Error")))
+		(patt (type "Foo")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo"))))
 	(expressions
 		(expr (type "I64, U8 -> Foo"))
-		(expr (type "Error"))))
+		(expr (type "Foo"))))
 ~~~
