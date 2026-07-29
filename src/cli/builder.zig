@@ -25,6 +25,10 @@ fn stderrWriter() *std.Io.Writer {
 }
 
 /// Optimization levels for compilation
+/// Set to true locally to have the LLVM backend also write the optimized IR for
+/// each object into the current directory. Always committed as false.
+const dump_llvm_artifacts = false;
+
 pub const OptimizationLevel = enum {
     size, // --opt size (optimize for binary size)
     speed, // --opt speed (aggressive performance optimizations)
@@ -613,6 +617,31 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     var coverage_options = std.mem.zeroes(ZigLLVMCoverageOptions);
     coverage_options.CoverageType = .ZigLLVMCoverageType_None;
 
+    // Flip `dump_llvm_artifacts` to true while working on the compiler to get
+    // the optimized LLVM IR for each object written into the current directory
+    // as `<object name>.ll`. Reading it is the only way to tell whether a given
+    // instruction sequence was decided in the middle end or during instruction
+    // selection -- final disassembly alone leaves you guessing which stage is
+    // responsible.
+    //
+    // It lands in the current directory rather than beside the object because
+    // objects are built inside a temporary directory that is deleted when the
+    // build finishes, which would take the dump with it.
+    //
+    // Only the IR is emitted, not assembly: asking this entry point for both an
+    // object file and a .s runs code generation over the module twice, which
+    // fails with duplicate symbol definitions.
+    //
+    // This is deliberately a constant rather than a CLI flag: it is a tool for
+    // people changing code generation, not a supported output format, and
+    // wiring it to a flag would mean committing to its behavior.
+    const ir_path_z: ?[:0]u8 = if (dump_llvm_artifacts)
+        try std.fmt.allocPrintSentinel(gpa, "{s}.ll", .{std.fs.path.basename(config.output_path)}, 0)
+    else
+        null;
+    defer if (ir_path_z) |p| gpa.free(p);
+
+
     const emit_options = ZigLLVMEmitOptions{
         // App object debug output is controlled by the user's --debug flag.
         .is_debug = config.debug,
@@ -625,7 +654,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
         .allow_machine_outliner = true,
         .asm_filename = null,
         .bin_filename = object_path_z.ptr,
-        .llvm_ir_filename = null,
+        .llvm_ir_filename = if (ir_path_z) |p| p.ptr else null,
         .bitcode_filename = null,
         .coverage = coverage_options,
         .no_target_libcalls = config.no_target_libcalls,

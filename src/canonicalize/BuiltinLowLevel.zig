@@ -632,6 +632,14 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.count_trailing_zero_bits", .{num_type}, .num_count_trailing_zero_bits);
     }
 
+    // Little-endian byte-list loads (multi-byte integer types only; a one-byte
+    // load is List.get). The result's layout carries the width, so a single
+    // low-level op serves every one of them.
+    const multibyte_integer_types = [_][]const u8{ "u16", "i16", "u32", "i32", "u64", "i64", "u128", "i128" };
+    for (multibyte_integer_types) |num_type| {
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "{s}_from_le_bytes_unchecked", .{num_type}, .num_from_le_bytes_unchecked);
+    }
+
     // Bitwise logical operations (integer types only)
     for (integer_types) |num_type| {
         var buf: [256]u8 = undefined;
