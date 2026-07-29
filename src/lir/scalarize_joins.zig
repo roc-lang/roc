@@ -473,6 +473,7 @@ const Pass = struct {
             const build = self.struct_builds.get(write.value) orelse continue;
             if (build.builds.items.len != 1 or build.uses != 0 or build.init_uses != 1) continue;
             if (self.write_other.contains(write.value)) continue;
+            if (self.join_params.contains(write.value)) continue;
             if (self.store.getLocalSpan(build.builds.items[0].fields).len != field_count) return false;
         }
         for (direct_reads) |read_stmt| {
@@ -544,6 +545,13 @@ const Pass = struct {
                 const build = self.struct_builds.get(write.value) orelse break :qualifying null;
                 if (build.builds.items.len != 1 or build.uses != 0 or build.init_uses != 1) break :qualifying null;
                 if (self.write_other.contains(write.value)) break :qualifying null;
+                // A join parameter's literal build is that join's edge
+                // initialization, not a site-local wrapper temporary:
+                // deleting it would leave the parameter uninitialized, and
+                // its operands live at the other join's jump site, not
+                // here. Seeding by field reads keeps the parameter intact
+                // (and lets a later round scalarize it on its own).
+                if (self.join_params.contains(write.value)) break :qualifying null;
                 break :qualifying build;
             };
             if (qualifying) |build| {
