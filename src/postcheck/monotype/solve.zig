@@ -276,9 +276,9 @@ pub const InstGraph = struct {
     class_member_head: std.ArrayList(NodeId),
     class_member_tail: std.ArrayList(NodeId),
     processed_relations: std.AutoHashMap(RelationStamp, void),
-    /// Immutable Type-shaped snapshots per node root. Old snapshots retain a
-    /// direct association with their live graph node, but their content is
-    /// never rewritten.
+    /// Immutable Type-shaped snapshots by permanent node id. Old snapshots
+    /// retain their original provenance while `find` resolves that node to its
+    /// current class root; unions therefore never move or reindex snapshots.
     node_snapshots: std.AutoHashMap(NodeId, std.ArrayList(Type.TypeId)),
     /// Latest immutable snapshot for a root. Any relation mutation clears this
     /// cache; a subsequent inspection materializes a fresh snapshot.
@@ -2381,8 +2381,9 @@ pub const InstGraph = struct {
         self.current_snapshots.clearRetainingCapacity();
     }
 
-    /// Redirect `loser` into `winner`, moving immutable snapshot provenance and
-    /// row back references across, then invalidating the current snapshot cache.
+    /// Redirect `loser` into `winner`, moving row back references and
+    /// invalidating the current snapshot cache. Immutable snapshot provenance
+    /// remains attached to permanent node ids and resolves through `find`.
     fn union_(self: *InstGraph, raw_winner: NodeId, raw_loser: NodeId) Allocator.Error!void {
         const winner = self.find(raw_winner);
         const loser = self.find(raw_loser);
@@ -2394,16 +2395,6 @@ pub const InstGraph = struct {
         self.class_member_tail.items[@intFromEnum(winner)] = self.class_member_tail.items[@intFromEnum(loser)];
         self.nodes.items[@intFromEnum(loser)] = .{ .redirect = winner };
         self.versions.items[@intFromEnum(winner)] +%= 1;
-        if (self.node_snapshots.fetchRemove(loser)) |moved| {
-            var moved_list = moved.value;
-            const entry = try self.node_snapshots.getOrPut(winner);
-            if (!entry.found_existing) entry.value_ptr.* = .empty;
-            try entry.value_ptr.appendSlice(self.allocator, moved_list.items);
-            for (moved_list.items) |ty| {
-                try self.linked_type_nodes.put(ty, winner);
-            }
-            moved_list.deinit(self.allocator);
-        }
         if (self.row_parents.fetchRemove(loser)) |moved| {
             var moved_list = moved.value;
             for (moved_list.items) |parent| {
@@ -3435,7 +3426,7 @@ pub const InstGraph = struct {
     /// mutation of another specialization's final type.
     pub fn importMono(self: *InstGraph, ty: Type.TypeId) Allocator.Error!NodeId {
         self.requireRelationProduction();
-        if (self.linked_type_nodes.get(ty)) |existing| return existing;
+        if (self.linked_type_nodes.get(ty)) |existing| return self.find(existing);
         const node = try self.newNode(.{ .unresolved = InstVariable.placeholder() });
         // One-way memo: every import is a finished Monotype from outside this
         // graph (ids materialized here hit the memo above), so it enters as a
@@ -3689,8 +3680,7 @@ pub const InstGraph = struct {
 
     fn isActiveSnapshotType(self: *InstGraph, ty: Type.TypeId) bool {
         const raw_node = self.linked_type_nodes.get(ty) orelse return false;
-        const node = self.find(raw_node);
-        const views = self.node_snapshots.get(node) orelse return false;
+        const views = self.node_snapshots.get(raw_node) orelse return false;
         for (views.items) |view| {
             if (view == ty) return true;
         }
@@ -3701,10 +3691,9 @@ pub const InstGraph = struct {
     /// immutable active snapshots. Closed imported TypeIds return null.
     pub fn activeSnapshotNode(self: *InstGraph, ty: Type.TypeId) ?NodeId {
         const raw_node = self.linked_type_nodes.get(ty) orelse return null;
-        const node = self.find(raw_node);
-        const views = self.node_snapshots.get(node) orelse return null;
+        const views = self.node_snapshots.get(raw_node) orelse return null;
         for (views.items) |view| {
-            if (view == ty) return node;
+            if (view == ty) return self.find(raw_node);
         }
         return null;
     }
@@ -3742,10 +3731,9 @@ pub const GraphTypeFinals = struct {
 
     pub fn sealType(self: *GraphTypeFinals, ty: Type.TypeId) Allocator.Error!Type.TypeId {
         if (self.graph.linked_type_nodes.get(ty)) |raw_node| {
-            const node = self.graph.find(raw_node);
-            if (self.graph.node_snapshots.get(node)) |views| {
+            if (self.graph.node_snapshots.get(raw_node)) |views| {
                 for (views.items) |view| {
-                    if (view == ty) return try self.sealNode(node);
+                    if (view == ty) return try self.sealNode(raw_node);
                 }
             }
         }
@@ -4498,6 +4486,38 @@ test "active Monotype snapshots keep different roots distinct" {
     try std.testing.expect(old_view != new_view);
     try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, type_store.get(old_view));
     try std.testing.expectEqual(Type.Content{ .primitive = .str }, type_store.get(new_view));
+}
+
+test "union resolves immutable snapshot provenance without reindexing" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const winner = try graph.newNode(.{ .primitive = .u64 });
+    const snapshot_count = 128;
+    var snapshots: [snapshot_count]Type.TypeId = undefined;
+    var owners: [snapshot_count]NodeId = undefined;
+
+    for (&snapshots, &owners) |*snapshot, *owner| {
+        const node = try graph.newNode(.{ .primitive = .u64 });
+        snapshot.* = try graph.activeTypeViewForNode(node);
+        owner.* = graph.linked_type_nodes.get(snapshot.*).?;
+        try graph.union_(winner, node);
+    }
+
+    for (snapshots, owners) |snapshot, owner| {
+        // The reverse index remains stable instead of rewriting every prior
+        // snapshot on each union. Root resolution happens only when queried.
+        try std.testing.expectEqual(owner, graph.linked_type_nodes.get(snapshot).?);
+        try std.testing.expectEqual(winner, graph.activeSnapshotNode(snapshot).?);
+    }
 }
 
 test "alias unification does not make the alias its own backing" {

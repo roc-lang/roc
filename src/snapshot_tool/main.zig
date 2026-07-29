@@ -1134,7 +1134,7 @@ fn processSnapshotContent(
             module_envs_for_file = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
 
             const roc_ctx_for_check = CoreCtx.default(allocator, allocator, app_io);
-            const checker = try compile.PackageEnv.canonicalizeAndTypeCheckModule(
+            const checker = try compile.package.canonicalizeAndTypeCheckModule(
                 roc_ctx_for_check,
                 allocator,
                 can_ir,
