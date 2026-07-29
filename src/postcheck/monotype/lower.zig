@@ -28578,8 +28578,7 @@ const BodyContext = struct {
                 const read_local = try self.addLocal(self.builder.symbols.fresh(), field.ty);
                 spread_reads[i] = .{ .local = read_local, .value = read };
                 break :blk try self.localExpr(read_local, field.ty);
-            } else
-                Common.invariant("closed record literal was missing a checked field value");
+            } else Common.invariant("closed record literal was missing a checked field value");
             lowered[i] = .{
                 .name = field.name,
                 .value = value,

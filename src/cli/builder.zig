@@ -641,7 +641,6 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
         null;
     defer if (ir_path_z) |p| gpa.free(p);
 
-
     const emit_options = ZigLLVMEmitOptions{
         // App object debug output is controlled by the user's --debug flag.
         .is_debug = config.debug,
