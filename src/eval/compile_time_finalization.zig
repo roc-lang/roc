@@ -76,7 +76,7 @@ pub const Timing = struct {
         return .{
             .total_ns = self.total_ns.load(),
             .monotype_ns = lowering.monotype_ns,
-            .postcheck_to_lir_ns = lowering.postcheck_to_lir_ns,
+            .postcheck_to_lir_ns = lowering.lift_ns + lowering.spec_constr_ns + lowering.lambda_solve_ns + lowering.lir_gen_ns,
             .lir_passes_arc_ns = lowering.lir_passes_arc_ns,
             .static_data_ns = self.static_data_ns.load(),
             .code_generation_ns = self.code_generation_ns.load(),
@@ -90,7 +90,9 @@ pub const Timing = struct {
     pub fn addSnapshot(self: *Timing, snapshot_value: TimingSnapshot) void {
         self.lowering.addSnapshot(.{
             .monotype_ns = snapshot_value.monotype_ns,
-            .postcheck_to_lir_ns = snapshot_value.postcheck_to_lir_ns,
+            // The compile-time evaluation report shows lowering as one
+            // category; re-attribute the merged span to its first stage.
+            .lift_ns = snapshot_value.postcheck_to_lir_ns,
             .lir_passes_arc_ns = snapshot_value.lir_passes_arc_ns,
         });
         self.total_ns.add(snapshot_value.total_ns);

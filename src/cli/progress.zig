@@ -69,6 +69,9 @@ const Phase = struct {
     /// failed), and the row prints without a memory column.
     mem_min: u64 = std.math.maxInt(u64),
     mem_max: u64 = 0,
+    /// Per-sub memory ranges, filled only for sequential breakdowns by
+    /// slicing the sample buffer over each sub's reconstructed window.
+    sub_mem: [8]Reporter.MemRange = @splat(.{}),
 };
 
 /// Configuration for a `Reporter`.
@@ -96,6 +99,13 @@ pub const Reporter = struct {
     start_ts: std.Io.Timestamp,
 
     mutex: std.Io.Mutex = .init,
+    /// Timestamped footprint samples for slicing sequential breakdowns.
+    /// When full, every other sample is dropped and the stride doubles, so
+    /// resolution degrades gracefully on long operations.
+    samples: [4096]MemSample = undefined,
+    sample_len: u16 = 0,
+    sample_stride_ns: u64 = mem_tick_ns,
+    last_sample_ns: u64 = 0,
     phases: [max_phases]Phase = undefined,
     phase_count: usize = 0,
     active: ?usize = null,
@@ -155,9 +165,31 @@ pub const Reporter = struct {
 
     /// End the active phase and record a sub-timing breakdown to display in its
     /// place (e.g. splitting "Type Checking" into its constituent phases).
+    /// The sub durations are per-category aggregates over interleaved work,
+    /// so no per-sub memory range can be attributed.
     pub fn endWithBreakdown(self: *Reporter, subs: []const SubTiming) void {
         self.mutex.lockUncancelable(self.std_io);
         defer self.mutex.unlock(self.std_io);
+        self.endActiveLocked(subs);
+    }
+
+    /// End the active phase with a breakdown whose subs ran once each, in
+    /// order. Each sub's window is reconstructed from the cumulative
+    /// durations and sliced from the sample buffer for a per-sub memory
+    /// range.
+    pub fn endWithBreakdownSequential(self: *Reporter, subs: []const SubTiming) void {
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
+        const idx = self.active orelse return;
+        self.sampleMemoryLocked();
+        if (self.always) {
+            var cursor = self.phases[idx].start_ns;
+            const n = @min(subs.len, self.phases[idx].sub_mem.len);
+            for (subs[0..n], 0..) |sub, i| {
+                self.phases[idx].sub_mem[i] = self.sampleRangeInWindow(cursor, cursor + sub.ns);
+                cursor += sub.ns;
+            }
+        }
         self.endActiveLocked(subs);
     }
 
@@ -167,6 +199,11 @@ pub const Reporter = struct {
     pub const MemRange = struct {
         min: u64 = std.math.maxInt(u64),
         max: u64 = 0,
+    };
+
+    const MemSample = struct {
+        at_ns: u64,
+        bytes: u64,
     };
 
     /// Append a phase that completed inside another synchronous operation.
@@ -276,8 +313,9 @@ pub const Reporter = struct {
         }
     }
 
-    /// Fold the current process footprint into the active phase's range.
-    /// Caller holds the mutex. Only `--timings` runs pay for the read.
+    /// Fold the current process footprint into the active phase's range and
+    /// the sample buffer. Caller holds the mutex. Only `--timings` runs pay
+    /// for the read.
     fn sampleMemoryLocked(self: *Reporter) void {
         if (!self.always) return;
         const idx = self.active orelse return;
@@ -285,6 +323,33 @@ pub const Reporter = struct {
         const p = &self.phases[idx];
         if (bytes < p.mem_min) p.mem_min = bytes;
         if (bytes > p.mem_max) p.mem_max = bytes;
+
+        const now = self.elapsedNs();
+        if (self.sample_len > 0 and now - self.last_sample_ns < self.sample_stride_ns) return;
+        if (self.sample_len == self.samples.len) {
+            var write: u16 = 0;
+            var read: u16 = 0;
+            while (read < self.sample_len) : (read += 2) {
+                self.samples[write] = self.samples[read];
+                write += 1;
+            }
+            self.sample_len = write;
+            self.sample_stride_ns *= 2;
+        }
+        self.samples[self.sample_len] = .{ .at_ns = now, .bytes = bytes };
+        self.sample_len += 1;
+        self.last_sample_ns = now;
+    }
+
+    /// Smallest and largest buffered sample in `[from_ns, to_ns]`.
+    fn sampleRangeInWindow(self: *const Reporter, from_ns: u64, to_ns: u64) MemRange {
+        var range = MemRange{};
+        for (self.samples[0..self.sample_len]) |sample| {
+            if (sample.at_ns < from_ns or sample.at_ns > to_ns) continue;
+            if (sample.bytes < range.min) range.min = sample.bytes;
+            if (sample.bytes > range.max) range.max = sample.bytes;
+        }
+        return range;
     }
 
     /// One animation frame. Caller holds the mutex.
@@ -367,13 +432,16 @@ pub const Reporter = struct {
                 const parent_dur = formatDuration(&parent_buf, total, .final);
                 self.writer.print("  {s} {f}{s}{s}\n", .{ check, padName(p.name), parent_dur, mem }) catch {};
             }
-            for (p.sub[0..p.sub_len]) |s| {
+            for (p.sub[0..p.sub_len], 0..) |s, sub_index| {
                 var buf: [32]u8 = undefined;
                 const dur = formatDuration(&buf, s.ns, .final);
+                var sub_mem_buf: [48]u8 = undefined;
+                const sub_range = p.sub_mem[sub_index];
+                const sub_mem = formatMemRange(&sub_mem_buf, sub_range.min, sub_range.max);
                 if (show_parent) {
-                    self.writer.print("      {f}{s}\n", .{ padChildName(s.name), dur }) catch {};
+                    self.writer.print("      {f}{s}{s}\n", .{ padChildName(s.name), dur, sub_mem }) catch {};
                 } else {
-                    self.writer.print("  {s} {f}{s}\n", .{ check, padName(s.name), dur }) catch {};
+                    self.writer.print("  {s} {f}{s}{s}\n", .{ check, padName(s.name), dur, sub_mem }) catch {};
                 }
             }
             return;
