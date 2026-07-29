@@ -241,13 +241,6 @@ fn availableArtifactByKey(
     return null;
 }
 
-fn checkedModuleArtifactKeyEql(
-    a: CheckedArtifact.CheckedModuleArtifactKey,
-    b: CheckedArtifact.CheckedModuleArtifactKey,
-) bool {
-    return std.mem.eql(u8, &a.bytes, &b.bytes);
-}
-
 /// One explicitly resolved module made available during canonicalization.
 pub const KnownModule = struct {
     qualified_name: []const u8,
