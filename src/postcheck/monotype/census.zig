@@ -830,6 +830,12 @@ pub const Census = struct {
     // anything. Only a scheme with binders can leave one unbound, so the
     // with-binders counts are the population that reaches the informative
     // constraint executions; the rest need no binding at all.
+    // Where an informative `scheme_binder_unbound` execution came from: under
+    // an unresolved callee binding, under a resolved one, or with no callee
+    // binding open at all.
+    rehearsal_binder_unbound_under_unready_callee: Counter = Counter.init(0),
+    rehearsal_binder_unbound_callee_ready: Counter = Counter.init(0),
+    rehearsal_binder_unbound_no_callee_open: Counter = Counter.init(0),
     rehearsal_callee_site_absent_scheme_with_binders: Counter = Counter.init(0),
     rehearsal_callee_site_absent_scheme_without_binders: Counter = Counter.init(0),
     rehearsal_callee_unresolved_no_rule_with_binders: Counter = Counter.init(0),

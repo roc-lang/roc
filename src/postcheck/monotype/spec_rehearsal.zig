@@ -3236,6 +3236,20 @@ pub const Rehearsal = struct {
             }
             break :information .unclassified;
         };
+        if (information == .scheme_binder_unbound) {
+            // Attribute the unbound binder: an unready callee level makes
+            // `innermostCallee` decline, so the callee's own positions
+            // translate under the requesting frame instead, which names none
+            // of its binders. Anything counted without one came from a path
+            // that opened no callee binding at all.
+            if (self.hasUnreadyCallee()) {
+                census.bump("rehearsal_binder_unbound_under_unready_callee");
+            } else if (self.callees.items.len == 0) {
+                census.bump("rehearsal_binder_unbound_no_callee_open");
+            } else {
+                census.bump("rehearsal_binder_unbound_callee_ready");
+            }
+        }
         census.bumpUnifySiteInformation(site, information);
         const residual = traceResidual(difference, path, left, right);
         census.bumpUnifySiteResidual(site, residual.origin, residual.state);
@@ -3609,6 +3623,14 @@ pub const Rehearsal = struct {
 
     /// The innermost resolved callee binding whose binders name ids in
     /// `module_bytes`, or null when the innermost binding named none.
+    /// Whether the innermost open callee binding failed to resolve, which is
+    /// what makes `innermostCallee` decline and sends a callee's own checked
+    /// positions through the requesting frame's environment instead.
+    fn hasUnreadyCallee(self: *const Rehearsal) bool {
+        if (self.callees.items.len == 0) return false;
+        return !self.callees.items[self.callees.items.len - 1].ready;
+    }
+
     fn innermostCallee(self: *Rehearsal, module_bytes: [32]u8) ?*const CalleeLevel {
         if (self.callees.items.len == 0) return null;
         const level = &self.callees.items[self.callees.items.len - 1];

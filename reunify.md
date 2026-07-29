@@ -2357,6 +2357,25 @@ records nothing. For a callee with no binders that is correct and costs
 nothing. For the 97 that have binders it is the gap, and it is small
 enough to characterize edge by edge rather than by a coverage sweep.
 
+**What the 97 actually account for.** An unresolved callee level makes
+`innermostCallee` decline, so the callee's own checked positions translate
+under the requesting frame's environment, which names none of its binders.
+Attributing every informative `scheme_binder_unbound` execution by the
+state of the innermost callee level splits the 1485 three ways: **1015**
+under an unresolved binding, **435 under one that resolved**, and **35**
+with no callee binding open at all — the last matching
+`constrain_checked_to_cell`'s own 35 exactly.
+
+So the 97 bindings fan out to roughly ten executions each and account for
+1015 of the 1485, not all of it. The 435 are a separate defect: the
+binding resolved and stated the callee scheme's binders, and a position
+still reached a generalized binder no environment names.
+`residualClass` reports `scheme_binder_unbound` when the free variable is
+a binder of ANY scheme the view carries, not only the bound one, so the
+likely reading is a position reaching an enclosing scheme's binder rather
+than the callee's — which is the section 7.3 lexical-parent case. That is
+a distinct investigation from the 97, and neither subsumes the other.
+
 **Why the receiver rule cannot be widened to cover them.** The
 `constraint_dispatch_receiver` rule reads binder values positionally from
 the receiver's own type arguments and accepts only a nominal, list, or box
