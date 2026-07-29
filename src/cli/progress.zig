@@ -33,7 +33,7 @@ const tick_ns: u64 = 125 * std.time.ns_per_ms;
 const default_threshold_ns: u64 = std.time.ns_per_s;
 
 /// Column the phase durations are aligned to (phase names are padded to this).
-const name_width: usize = 24;
+const name_width: usize = 26;
 
 /// Maximum number of top-level phases a single operation reports.
 const max_phases: usize = 16;
@@ -55,8 +55,9 @@ const Phase = struct {
     start_ns: u64,
     end_ns: ?u64 = null,
     /// When set, the phase renders as these rows instead of a single line.
-    sub: [4]SubTiming = undefined,
+    sub: [8]SubTiming = undefined,
     sub_len: u8 = 0,
+    show_parent_with_subs: bool = false,
 };
 
 /// Configuration for a `Reporter`.
@@ -144,6 +145,32 @@ pub const Reporter = struct {
         self.mutex.lockUncancelable(self.std_io);
         defer self.mutex.unlock(self.std_io);
         self.endActiveLocked(subs);
+    }
+
+    /// Append a phase that completed inside another synchronous operation.
+    /// The parent row shows `duration_ns`, followed by indented sub-timings.
+    pub fn recordCompletedWithBreakdown(
+        self: *Reporter,
+        name: []const u8,
+        duration_ns: u64,
+        subs: []const SubTiming,
+    ) void {
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
+        if (self.finished or self.phase_count >= max_phases) return;
+
+        const idx = self.phase_count;
+        self.phases[idx] = .{
+            .name = name,
+            .start_ns = 0,
+            .end_ns = duration_ns,
+            .show_parent_with_subs = true,
+        };
+        const n = @min(subs.len, self.phases[idx].sub.len);
+        for (subs[0..n], 0..) |sub, i| self.phases[idx].sub[i] = sub;
+        self.phases[idx].sub_len = @intCast(n);
+        self.phase_count += 1;
+        if (self.displaying) self.writeCommittedPhase(idx);
     }
 
     fn endActiveLocked(self: *Reporter, subs: []const SubTiming) void {
@@ -286,10 +313,20 @@ pub const Reporter = struct {
         const p = self.phases[idx];
         const check = if (self.is_tty) ansi.green ++ "\u{2713}" ++ ansi.reset else "\u{2713}";
         if (p.sub_len > 0) {
+            if (p.show_parent_with_subs) {
+                var parent_buf: [32]u8 = undefined;
+                const total = (p.end_ns orelse self.elapsedNs()) - p.start_ns;
+                const parent_dur = formatDuration(&parent_buf, total, .final);
+                self.writer.print("  {s} {f}{s}\n", .{ check, padName(p.name), parent_dur }) catch {};
+            }
             for (p.sub[0..p.sub_len]) |s| {
                 var buf: [32]u8 = undefined;
                 const dur = formatDuration(&buf, s.ns, .final);
-                self.writer.print("  {s} {f}{s}\n", .{ check, padName(s.name), dur }) catch {};
+                if (p.show_parent_with_subs) {
+                    self.writer.print("      {f}{s}\n", .{ padChildName(s.name), dur }) catch {};
+                } else {
+                    self.writer.print("  {s} {f}{s}\n", .{ check, padName(s.name), dur }) catch {};
+                }
             }
             return;
         }
@@ -314,16 +351,21 @@ pub const Reporter = struct {
 
 /// Pad a phase name (ASCII) to the duration-alignment column.
 fn padName(name: []const u8) PaddedName {
-    return .{ .name = name };
+    return .{ .name = name, .width = name_width };
+}
+
+fn padChildName(name: []const u8) PaddedName {
+    return .{ .name = name, .width = name_width - 2 };
 }
 
 const PaddedName = struct {
     name: []const u8,
+    width: usize,
 
     pub fn format(self: PaddedName, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.writeAll(self.name);
-        if (self.name.len < name_width) {
-            try writer.splatByteAll(' ', name_width - self.name.len);
+        if (self.name.len < self.width) {
+            try writer.splatByteAll(' ', self.width - self.name.len);
         }
     }
 };
@@ -404,7 +446,7 @@ test "padName pads short names and leaves long names" {
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
     try aw.writer.print("[{f}]", .{padName("Parsing")});
-    try testing.expectEqualStrings("[Parsing                 ]", aw.written());
+    try testing.expectEqualStrings("[Parsing                   ]", aw.written());
 }
 
 fn collectStatic(buf: *std.Io.Writer.Allocating, timings_flag: bool) void {
@@ -426,6 +468,15 @@ fn collectStatic(buf: *std.Io.Writer.Allocating, timings_flag: bool) void {
         .{ .name = "Name Resolution", .ns = 20 * std.time.ns_per_ms },
         .{ .name = "Type Inference", .ns = 30 * std.time.ns_per_ms },
     });
+    reporter.recordCompletedWithBreakdown("Compile-Time Evaluation", 70 * std.time.ns_per_ms, &.{
+        .{ .name = "Monotype Specialization", .ns = 40 * std.time.ns_per_ms },
+        .{ .name = "Post-Check to LIR", .ns = 10 * std.time.ns_per_ms },
+        .{ .name = "LIR Passes + ARC", .ns = 5 * std.time.ns_per_ms },
+        .{ .name = "Static Data", .ns = 5 * std.time.ns_per_ms },
+        .{ .name = "Code Generation", .ns = 5 * std.time.ns_per_ms },
+        .{ .name = "Execution", .ns = 3 * std.time.ns_per_ms },
+        .{ .name = "Store Results", .ns = 2 * std.time.ns_per_ms },
+    });
     reporter.begin("Code Generation");
     reporter.end();
     reporter.begin("LLVM Optimize + Emit");
@@ -446,6 +497,11 @@ test "static breakdown lists every phase with the timings flag" {
     try testing.expect(std.mem.find(u8, out, "Parsing") != null);
     try testing.expect(std.mem.find(u8, out, "Name Resolution") != null);
     try testing.expect(std.mem.find(u8, out, "Type Inference") != null);
+    try testing.expect(std.mem.find(u8, out, "Compile-Time Evaluation") != null);
+    try testing.expect(std.mem.find(u8, out, "Monotype Specialization") != null);
+    try testing.expect(std.mem.find(u8, out, "Monotype Specialization 40ms") != null);
+    try testing.expect(std.mem.find(u8, out, "LIR Passes + ARC") != null);
+    try testing.expect(std.mem.find(u8, out, "Store Results") != null);
     try testing.expect(std.mem.find(u8, out, "Code Generation") != null);
     // The post-codegen backend phases each get their own aligned row.
     try testing.expect(std.mem.find(u8, out, "LLVM Optimize + Emit") != null);

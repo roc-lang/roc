@@ -462,7 +462,7 @@ pub const ModuleState = struct {
     source_dir_override: ?[]const u8 = null,
     /// Raw source file state observed by the parse worker before normalization.
     source_file_state: ?watch_inputs.State = null,
-    /// Compiler role assigned by the scheduler for this module.
+    /// Compiler role assigned during package discovery for this module.
     module_role: ModuleEnv.ModuleRole = .user,
     /// Top-level names that package metadata requires as compile-time roots.
     explicit_root_ident_names: []const []const u8 = &.{},
@@ -528,7 +528,7 @@ pub const ModuleState = struct {
         };
     }
 
-    fn moduleEnv(self: *ModuleState) ?*ModuleEnv {
+    pub fn moduleEnv(self: *ModuleState) ?*ModuleEnv {
         if (self.semantic) |*semantic| {
             if (semantic.checked_artifact) |artifact| return artifact.moduleEnv();
             return semantic.module_env;
@@ -544,14 +544,14 @@ pub const ModuleState = struct {
         return null;
     }
 
-    fn checkedArtifact(self: *ModuleState) ?*check.CheckedArtifact.CheckedModuleArtifact {
+    pub fn checkedArtifact(self: *ModuleState) ?*check.CheckedArtifact.CheckedModuleArtifact {
         if (self.semantic) |*semantic| {
             if (semantic.checked_artifact) |artifact| return artifact;
         }
         return null;
     }
 
-    fn semanticData(self: *ModuleState) ?compile_package.SemanticModuleData {
+    pub fn semanticData(self: *ModuleState) ?compile_package.SemanticModuleData {
         const env = self.moduleEnv() orelse return null;
         return .{
             .env = env,
@@ -559,7 +559,7 @@ pub const ModuleState = struct {
         };
     }
 
-    fn completedSuccessfully(self: *const ModuleState) bool {
+    pub fn completedSuccessfully(self: *const ModuleState) bool {
         return self.phase == .Done and self.completion == .succeeded;
     }
 
@@ -578,7 +578,7 @@ pub const ModuleState = struct {
         }
     }
 
-    fn canonicalSourceDir(self: *const ModuleState) []const u8 {
+    pub fn canonicalSourceDir(self: *const ModuleState) []const u8 {
         return self.source_dir_override orelse (std.fs.path.dirname(self.path) orelse "");
     }
 
@@ -985,6 +985,7 @@ pub const Coordinator = struct {
     total_canonicalize_diag_ns: u64,
     total_typecheck_ns: u64,
     total_typecheck_diag_ns: u64,
+    ctfe_timing: eval.CompileTimeFinalization.Timing,
 
     /// Build statistics
     cache_hits: u32,
@@ -1066,6 +1067,7 @@ pub const Coordinator = struct {
             .total_canonicalize_diag_ns = 0,
             .total_typecheck_ns = 0,
             .total_typecheck_diag_ns = 0,
+            .ctfe_timing = eval.CompileTimeFinalization.Timing.init(roc_ctx.std_io),
             .cache_hits = 0,
             .cache_misses = 0,
             .modules_compiled = 0,
@@ -1966,6 +1968,19 @@ pub const Coordinator = struct {
         return false;
     }
 
+    /// Return the timing totals accumulated by coordinator workers and
+    /// compile-time finalization.
+    pub fn getTimingInfo(self: *const Coordinator) compile_package.TimingInfo {
+        return .{
+            .tokenize_parse_ns = self.total_parse_ns,
+            .canonicalize_ns = self.total_canonicalize_ns,
+            .canonicalize_diagnostics_ns = self.total_canonicalize_diag_ns,
+            .type_checking_ns = self.total_typecheck_ns,
+            .check_diagnostics_ns = self.total_typecheck_diag_ns,
+            .compile_time_evaluation = self.ctfe_timing.snapshot(),
+        };
+    }
+
     /// One entry yielded by `ReportIter` — a single diagnostic with the package
     /// and module it came from. Pointers borrow from the Coordinator's storage.
     /// The report may be appended to in place (e.g. to attach notes), but
@@ -2166,7 +2181,7 @@ pub const Coordinator = struct {
             publication_with_availability.available_artifacts = base_available_artifacts;
         }
 
-        var artifact = compile_package.PackageEnv.publishFromPrebuiltModules(
+        var artifact = compile_package.publishFromPrebuiltModules(
             self.gpa,
             &typed.modules,
             typed.module_idx,
@@ -2334,7 +2349,7 @@ pub const Coordinator = struct {
         };
     }
 
-    fn checkedArtifactByKey(
+    pub fn checkedArtifactByKey(
         self: *Coordinator,
         key: check.CheckedArtifact.CheckedModuleArtifactKey,
     ) ?*const check.CheckedArtifact.CheckedModuleArtifact {
@@ -2373,17 +2388,6 @@ pub const Coordinator = struct {
             unreachable;
         }
         return artifact;
-    }
-
-    /// Move exact older checked outputs still referenced by published module
-    /// ids into the build owner that will outlive this coordinator.
-    pub fn transferRetiredCheckedArtifacts(
-        self: *Coordinator,
-        destination: *std.ArrayList(RetiredCheckedArtifact),
-        allocator: Allocator,
-    ) Allocator.Error!void {
-        try destination.appendSlice(allocator, self.retired_checked_artifacts.items);
-        self.retired_checked_artifacts.clearRetainingCapacity();
     }
 
     fn unregisterCheckedArtifact(self: *Coordinator, mod: *ModuleState) void {
@@ -4532,7 +4536,7 @@ pub const Coordinator = struct {
             for (qualified_imports) |qi| task_allocs.scratch.free(qi);
             task_allocs.scratch.free(qualified_imports);
         }
-        var known_modules = std.ArrayList(compile_package.PackageEnv.KnownModule).empty;
+        var known_modules = std.ArrayList(compile_package.KnownModule).empty;
         defer known_modules.deinit(task_allocs.scratch);
         for (qualified_imports) |qi| {
             try known_modules.append(task_allocs.scratch, .{
@@ -4541,15 +4545,13 @@ pub const Coordinator = struct {
             });
         }
 
-        try compile_package.PackageEnv.canonicalizeModuleWithSiblings(
+        try compile_package.canonicalizeModuleWithSiblings(
             self.roc_ctx,
             env,
             ast,
             self.builtin_modules.builtin_module.env,
             self.builtin_modules.builtin_indices,
             task.source_dir,
-            task.package_name,
-            null, // Coordinator handles import resolution separately
             known_modules.items,
             task.imported_modules,
             task.validate_as_explicit_roots,
@@ -4618,8 +4620,10 @@ pub const Coordinator = struct {
         // Keep those allocations with the published result instead of the
         // task-local scratch arena, which is reset after the worker task.
         const check_alloc = result_alloc;
-        const ctfe_options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx);
-        var typecheck_output = try compile_package.PackageEnv.typeCheckModule(
+        var local_ctfe_timing = eval.CompileTimeFinalization.Timing.init(self.roc_ctx.std_io);
+        const ctfe_timing = if (task.defer_publication) &self.ctfe_timing else &local_ctfe_timing;
+        const ctfe_options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, ctfe_timing);
+        var typecheck_output = try compile_package.typeCheckModule(
             check_alloc,
             result_alloc,
             env,
@@ -4635,7 +4639,10 @@ pub const Coordinator = struct {
         );
         defer typecheck_output.deinit();
 
-        const type_check_ns = readStageTimer(self.roc_ctx.std_io, &check_timer);
+        const check_and_publish_ns = readStageTimer(self.roc_ctx.std_io, &check_timer);
+        const local_ctfe = if (task.defer_publication) eval.CompileTimeFinalization.TimingSnapshot{} else local_ctfe_timing.snapshot();
+        if (!task.defer_publication) self.ctfe_timing.addSnapshot(local_ctfe);
+        const type_check_ns = check_and_publish_ns -| local_ctfe.total_ns;
 
         var diagnostics_timer = startStageTimer(self.roc_ctx.std_io);
         const worker_alloc = result_alloc;

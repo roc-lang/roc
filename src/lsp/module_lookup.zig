@@ -237,7 +237,7 @@ pub fn findDefinitionsWithPrefix(
 
 // Module Lookup Functions
 
-/// Find a module by name in the build environment's schedulers.
+/// Find a module by name in the build environment's Coordinator state.
 /// Returns null if the module is not found or the build environment is null.
 pub fn findModuleByName(build_env: *BuildEnv, module_name: []const u8) ?ModuleInfo {
     // Extract the base module name (e.g., "Stdout" from "pf.Stdout")
@@ -246,17 +246,12 @@ pub fn findModuleByName(build_env: *BuildEnv, module_name: []const u8) ?ModuleIn
     else
         module_name;
 
-    // Search all schedulers for a module matching this name
-    var sched_it = build_env.schedulers.iterator();
-    while (sched_it.next()) |entry| {
-        const sched = entry.value_ptr.*;
-        if (sched.getModuleState(base_name)) |mod_state| {
-            if (mod_state.moduleEnv()) |module_env_ptr| {
-                return ModuleInfo{
-                    .module_env = module_env_ptr,
-                    .path = mod_state.path,
-                };
-            }
+    if (build_env.findModuleByName(base_name)) |mod_state| {
+        if (mod_state.moduleEnv()) |module_env_ptr| {
+            return ModuleInfo{
+                .module_env = module_env_ptr,
+                .path = mod_state.path,
+            };
         }
     }
     return null;
