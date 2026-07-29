@@ -1138,7 +1138,7 @@ pub fn stripBuiltinQualification(name: []const u8) []const u8 {
 fn generateContextualName(self: *TypeWriter, writer: *ByteWrite, context: TypeContext) error{ OutOfMemory, WriteFailed }!void {
     const base_name = switch (context) {
         .NumContent => "size",
-        .ListContent => "elem",
+        .ListContent => "item",
         .RecordExtension => "others",
         .TagUnionExtension => "others",
         .RecordFieldContent => "field",

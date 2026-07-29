@@ -426,37 +426,69 @@ fn tidyBuiltinExposedTypes(file: SourceFile, errors: *Errors) void {
 /// as `write_elements` and `parse_list_after_element`, since a banned word buried in
 /// a name is exactly how the inconsistency crept in before.
 ///
-/// Matching is word-aware rather than a plain substring search: a hit must not have
-/// an identifier character on either side, so unrelated words that merely contain
-/// the letters (there are none today, but `telemetry` is the shape to worry about)
-/// stay legal. `_` counts as an identifier character, so `write_elements` is found
-/// by scanning its `elements` segment between two underscores.
+/// Matching is word-aware rather than a plain substring search: a hit must be
+/// delimited by non-alphanumeric bytes on both sides, so a longer word that merely
+/// contains the letters (there are none today, but `telemetry` is the shape to worry
+/// about) stays legal. `_` is a DELIMITER rather than a word byte, which is what
+/// makes compound identifiers work: `write_elements` is caught because its `elements`
+/// segment sits between an underscore and the end of the name. Treating `_` as part
+/// of the word instead would silently miss every compound name — the exact case this
+/// check exists to catch.
 fn tidyBuiltinItemTerminology(file: SourceFile, errors: *Errors) void {
     if (!std.mem.endsWith(u8, file.path, "src/build/roc/Builtin.roc")) return;
 
-    // Longest first, so a hit reports the whole word rather than a prefix of it.
-    const banned_words: []const []const u8 = &.{ "Elements", "elements", "Element", "element", "Elem", "elem" };
-
-    for (banned_words) |word| {
+    for (banned_item_words) |word| {
         var offset: usize = 0;
         while (std.mem.findPos(u8, file.text, offset, word)) |index| {
             offset = index + word.len;
-
-            const before_ok = index == 0 or !isIdentifierChar(file.text[index - 1]);
-            const after_index = index + word.len;
-            const after_ok = after_index >= file.text.len or !isIdentifierChar(file.text[after_index]);
-            if (before_ok and after_ok) {
+            if (isStandaloneWordAt(file.text, index, word)) {
                 errors.addBuiltinElementTerminology(file, index, word);
             }
         }
     }
 }
 
-/// Whether this byte can appear inside a Roc identifier, for the word-boundary test
-/// in `tidyBuiltinItemTerminology`. `_` is included so compound identifiers are
-/// scanned segment by segment.
-fn isIdentifierChar(c: u8) bool {
-    return std.ascii.isAlphanumeric(c) or c == '_';
+/// Longer words first so a hit is attributed to the whole word. The boundary test
+/// already prevents a shorter word from matching inside a longer one, so the order
+/// only affects which word the message names.
+const banned_item_words: []const []const u8 = &.{ "Elements", "elements", "Element", "element", "Elem", "elem" };
+
+/// Whether `word`, found at `index` in `text`, stands alone rather than being part
+/// of a longer word.
+fn isStandaloneWordAt(text: []const u8, index: usize, word: []const u8) bool {
+    const before_ok = index == 0 or !isWordByte(text[index - 1]);
+    const after_index = index + word.len;
+    const after_ok = after_index >= text.len or !isWordByte(text[after_index]);
+    return before_ok and after_ok;
+}
+
+/// Whether this byte continues a word for the boundary test in
+/// `tidyBuiltinItemTerminology`. Deliberately excludes `_` so that each
+/// underscore-separated segment of a compound identifier is tested on its own.
+fn isWordByte(c: u8) bool {
+    return std.ascii.isAlphanumeric(c);
+}
+
+test "banned item words are matched per underscore-separated segment" {
+    // The case this check exists for: a banned word buried in a compound identifier.
+    // Treating `_` as part of the word would silently miss every one of these.
+    try std.testing.expect(isStandaloneWordAt("write_elements", 6, "elements"));
+    try std.testing.expect(isStandaloneWordAt("new_elem", 4, "elem"));
+    try std.testing.expect(isStandaloneWordAt("parse_list_after_element", 17, "element"));
+    try std.testing.expect(isStandaloneWordAt("element_state", 0, "element"));
+
+    // Standalone in prose, at both the start and the end of the text.
+    try std.testing.expect(isStandaloneWordAt("the elements of a list", 4, "elements"));
+    try std.testing.expect(isStandaloneWordAt("elem", 0, "elem"));
+
+    // A longer word that merely contains the letters stays legal.
+    try std.testing.expect(!isStandaloneWordAt("telemetry", 2, "elem"));
+    try std.testing.expect(!isStandaloneWordAt("supplemental", 5, "element"));
+
+    // A shorter banned word never fires inside a longer banned word, so each
+    // occurrence is reported once, under its longest matching spelling.
+    try std.testing.expect(!isStandaloneWordAt("elements", 0, "element"));
+    try std.testing.expect(!isStandaloneWordAt("elements", 0, "elem"));
 }
 
 /// Ban `git+https://` dependency URLs in build.zig.zon. They make Zig fetch over

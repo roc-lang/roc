@@ -22758,12 +22758,12 @@ fn validateEncodeFormatMethod(
             const container_state_var = try self.fresh(env, region);
             const container_ret = try self.freshFromContent(try self.mkTryContent(container_state_var, err_var), env, region);
             const value_writer_var = try self.freshFromContent(try self.types.mkFuncUnbound(&.{state_var}, expected_ret), env, region);
-            const element_writer_var = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ container_state_var, value_writer_var }, container_ret), env, region);
-            const write_elements_var = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ container_state_var, element_writer_var }, container_ret), env, region);
+            const item_writer_var = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ container_state_var, value_writer_var }, container_ret), env, region);
+            const write_items_var = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ container_state_var, item_writer_var }, container_ret), env, region);
             const args: []const Var = if (spec_decl == .tag) blk_args: {
                 const str_var = try self.freshStr(env, region);
-                break :blk_args &[_]Var{ state_var, str_var, count_var, write_elements_var };
-            } else &[_]Var{ state_var, count_var, write_elements_var };
+                break :blk_args &[_]Var{ state_var, str_var, count_var, write_items_var };
+            } else &[_]Var{ state_var, count_var, write_items_var };
             break :blk try self.freshFromContent(try self.types.mkFuncUnbound(args, expected_ret), env, region);
         },
     };

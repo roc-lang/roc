@@ -38,7 +38,7 @@ Builtin :: [].{
 	#
 	# Uncounted drives an event loop instead. For lists:
 	#
-	#     parse_list_next          : encoding, state -> Try([Item(state), Done(state)], err)
+	#     parse_list_next       : encoding, state -> Try([Item(state), Done(state)], err)
 	#     parse_list_after_item : encoding, state -> Try([Continue(state), Done(state)], err)
 	#
 	# Records use parse_record_start, then parse_record_field to read a field
@@ -6205,11 +6205,11 @@ Builtin :: [].{
 						list,
 						[],
 						|acc, item| {
-							new_elem = transform(item)
-							if List.contains(acc, new_elem) {
+							new_item = transform(item)
+							if List.contains(acc, new_item) {
 								acc
 							} else {
-								List.append(acc, new_elem)
+								List.append(acc, new_item)
 							}
 						},
 					),
