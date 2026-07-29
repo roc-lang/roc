@@ -472,6 +472,14 @@ fn writeFailureContext(
         if (!reachable.contains(@enumFromInt(@as(u32, @intCast(index))))) continue;
         const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(index))));
         var mentions = if (local) |l| stmtMentionsLocal(store, stmt, l) else false;
+        if (local) |l| {
+            if (stmt == .join) {
+                const jp = store.getLocalSpan(stmt.join.params);
+                for (0..GuardedList.borrowLen(jp)) |jpi| {
+                    if (GuardedList.at(jp, jpi) == l) mentions = true;
+                }
+            }
+        }
         for (extra_locals) |extra| {
             mentions = mentions or stmtMentionsLocal(store, stmt, extra);
         }
@@ -486,9 +494,16 @@ fn writeFailureContext(
         if (!mentions and !structural and !nearby) continue;
         context.append("  stmt {d}: {s}", .{ index, @tagName(stmt) });
         switch (stmt) {
-            .join => |j| context.append(" id={d} body={d} remainder={d}", .{
-                @intFromEnum(j.id), @intFromEnum(j.body), @intFromEnum(j.remainder),
-            }),
+            .join => |j| {
+                context.append(" id={d} body={d} remainder={d} params=[", .{
+                    @intFromEnum(j.id), @intFromEnum(j.body), @intFromEnum(j.remainder),
+                });
+                const jp = store.getLocalSpan(j.params);
+                for (0..GuardedList.borrowLen(jp)) |jpi| {
+                    context.append(" {d}", .{@intFromEnum(GuardedList.at(jp, jpi))});
+                }
+                context.append(" ]", .{});
+            },
             .jump => |j| context.append(" target={d}", .{@intFromEnum(j.target)}),
             .assign_ref => |a| {
                 context.append(" target={d} op=", .{@intFromEnum(a.target)});
