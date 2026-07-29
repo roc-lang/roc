@@ -19389,6 +19389,12 @@ fn defaultLiteralFieldKinds(self: *Self, env: *Env) std.mem.Allocator.Error!void
 fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     for (self.pending_default_checks.items) |pending| {
         const default_does_fx = try self.checkExpr(pending.default_expr, env, .{});
+        // BACKSTOP invariant: canonicalization restricts defaults to closed
+        // literals (design.md "Defaulted Fields"), and a literal is never
+        // effectful, so this branch is unreachable from source. It stays as
+        // a cheap guard because a default that somehow carried effects would
+        // be materialized at construction sites where running them is
+        // unpredictable.
         if (default_does_fx) {
             _ = try self.problems.appendProblem(self.gpa, .{ .effectful_default_value = .{
                 .region = self.getRegionAt(ModuleEnv.varFrom(pending.default_expr)),
@@ -19414,10 +19420,10 @@ fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
 /// the default's type must be CONCRETE (it is evaluated once at compile
 /// time and materialized at construction sites, so it must have exactly one
 /// runtime representation — judged after the defaulting rounds so numeral
-/// defaults have committed). The scope restrictions are judged earlier, at
-/// canonicalization, where name resolution is explicit: a local-binding
-/// reference and a reference to the very def the annotation defaults are
-/// both rejected there.
+/// defaults have committed). A literal can still be non-concrete (`?? []`
+/// with a parametric element type), which is why this judgment survives the
+/// canonicalization-time literal-only restriction: the default's SHAPE is
+/// judged there, its type only settles here.
 fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
     for (self.pending_default_checks.items) |pending| {
         // An erroring default already reported (effectful poisoning above, or

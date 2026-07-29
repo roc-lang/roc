@@ -919,13 +919,7 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
-        .record_default_captures_local = .{
-            .region = rand_region(),
-        },
-    });
-
-    try diagnostics.append(gpa, CIR.Diagnostic{
-        .record_default_self_reference = .{
+        .record_default_not_literal = .{
             .field_name = rand_ident_idx(),
             .region = rand_region(),
         },

@@ -232,8 +232,7 @@ const DiagnosticNodeTag = enum {
     diag_open_ext_not_allowed_in_type_decl,
     diag_unnamed_field_not_allowed_in_structural_record,
     diag_optional_field_cannot_have_default,
-    diag_record_default_captures_local,
-    diag_record_default_self_reference,
+    diag_record_default_not_literal,
     diag_type_module_missing_matching_type,
     diag_type_module_has_alias_not_nominal,
     diag_default_app_missing_main,
@@ -740,7 +739,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 91;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 90;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 59;
 /// Count of the statement nodes in the ModuleEnv
@@ -5174,12 +5173,8 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             node.tag = .diag_optional_field_cannot_have_default;
             region = r.region;
         },
-        .record_default_captures_local => |r| {
-            node.tag = .diag_record_default_captures_local;
-            region = r.region;
-        },
-        .record_default_self_reference => |r| {
-            node.tag = .diag_record_default_self_reference;
+        .record_default_not_literal => |r| {
+            node.tag = .diag_record_default_not_literal;
             region = r.region;
             node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.field_name) } });
         },
@@ -5762,10 +5757,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_optional_field_cannot_have_default => return CIR.Diagnostic{ .optional_field_cannot_have_default = .{
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_record_default_captures_local => return CIR.Diagnostic{ .record_default_captures_local = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_record_default_self_reference => return CIR.Diagnostic{ .record_default_self_reference = .{
+        .diag_record_default_not_literal => return CIR.Diagnostic{ .record_default_not_literal = .{
             .field_name = @bitCast(payload.diag_single_ident.ident),
             .region = store.getRegionAt(node_idx),
         } },

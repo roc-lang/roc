@@ -557,29 +557,30 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "7" },
     },
     .{
-        .name = "defaulted record field: default referencing a module constant materializes",
+        // Defaults are restricted to closed literals at canonicalization, so
+        // the reference/computed shapes that used to live here are Can
+        // rejections now (type_checking_integration.zig); a tag-application
+        // literal keeps the non-scalar materialization coverage.
+        .name = "defaulted record field: tag-literal default materializes",
         .source_kind = .module,
         .source =
-        \\ten : U8
-        \\ten = 10
-        \\
-        \\x : { a : U8 ?? ten }
+        \\x : { a : [None, Some(U8)] ?? Some(9) }
         \\x = {}
         \\
         \\main = x.a
         ,
-        .expected = .{ .inspect_str = "10" },
+        .expected = .{ .inspect_str = "Some(9)" },
     },
     .{
-        .name = "defaulted record field: computed default materializes",
+        .name = "defaulted record field: negated-numeral default materializes",
         .source_kind = .module,
         .source =
-        \\x : { a : U8 ?? (5.U8 + 5.U8) }
+        \\x : { a : I8 ?? -10 }
         \\x = {}
         \\
         \\main = x.a + 1
         ,
-        .expected = .{ .inspect_str = "11" },
+        .expected = .{ .inspect_str = "-9" },
     },
     // Frontend problems
     .{ .name = "problem: name not in scope", .source = "undefinedVar", .expected = .{ .problem = {} } },

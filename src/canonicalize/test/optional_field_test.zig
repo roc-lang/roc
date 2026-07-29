@@ -489,7 +489,7 @@ test "optional field with default is rejected at canonicalization" {
     try std.testing.expectEqual(@as(?CIR.Expr.Idx, null), y.default_value);
 }
 
-test "local-binding default is rejected at canonicalization (review M1)" {
+test "local-binding default is rejected as non-literal at canonicalization" {
     const allocator = std.testing.allocator;
     const source =
         \\f = |n| {
@@ -516,18 +516,19 @@ test "local-binding default is rejected at canonicalization (review M1)" {
 
     try can.canonicalizeFile();
 
-    // A default is a module-level constant: referencing the lambda parameter
-    // is rejected and the default dropped (design.md "Defaulted Fields").
+    // A default must be a closed literal; a reference to the lambda
+    // parameter is a name reference and is rejected, dropping the default
+    // (design.md "Defaulted Fields").
     const diagnostics = try env.getDiagnostics();
     defer allocator.free(diagnostics);
     var found = false;
     for (diagnostics) |diag| {
-        if (diag == .record_default_captures_local) found = true;
+        if (diag == .record_default_not_literal) found = true;
     }
     try std.testing.expect(found);
 }
 
-test "self-referential default is rejected at canonicalization (review R9)" {
+test "self-referential default is rejected as non-literal at canonicalization" {
     const allocator = std.testing.allocator;
     const source =
         \\x : { a : U8 ?? x.a }
@@ -551,20 +552,19 @@ test "self-referential default is rejected at canonicalization (review R9)" {
 
     try can.canonicalizeFile();
 
-    // A default may not reference the very value its annotation defaults:
-    // construction would need the default, and the default the constructed
-    // value (design.md "Defaulted Fields"). Can resolves the default's
-    // lookups itself, so the judgment is made here and the default dropped.
+    // A self-referential default is a name reference, so the literal-only
+    // judgment rejects it without needing any self-reference tracking
+    // (design.md "Defaulted Fields"). The default is dropped.
     const diagnostics = try env.getDiagnostics();
     defer allocator.free(diagnostics);
     var found = false;
     for (diagnostics) |diag| {
-        if (diag == .record_default_self_reference) found = true;
+        if (diag == .record_default_not_literal) found = true;
     }
     try std.testing.expect(found);
 }
 
-test "type-declaration default referencing a def is not a self-reference (review R9)" {
+test "type-declaration default referencing a def is rejected as non-literal" {
     const allocator = std.testing.allocator;
     const source =
         \\Cfg : { a : U8 ?? foo }
@@ -590,13 +590,71 @@ test "type-declaration default referencing a def is not a self-reference (review
 
     try can.canonicalizeFile();
 
-    // A type declaration's default is structurally exempt from the
-    // self-reference judgment: there is no annotated value to cycle with
-    // (design.md "Defaulted Fields").
+    // THIS is the alias-mediated gap the literal-only rule closes: a value
+    // annotated `x : Cfg` could cycle through `Cfg`'s default (`foo` reads
+    // `x`), a shape neither the old self-reference judgment (type decls had
+    // no annotated value) nor the def-dependency walk (it never followed
+    // alias lookups) could see. Banning references outright closes the gap
+    // by construction (design.md "Defaulted Fields").
     const diagnostics = try env.getDiagnostics();
     defer allocator.free(diagnostics);
+    var found = false;
     for (diagnostics) |diag| {
-        try std.testing.expect(diag != .record_default_self_reference);
-        try std.testing.expect(diag != .record_default_captures_local);
+        if (diag == .record_default_not_literal) found = true;
+    }
+    try std.testing.expect(found);
+}
+
+test "literal defaults of every accepted shape canonicalize with their defaults kept" {
+    const allocator = std.testing.allocator;
+    // The full accepted literal set (design.md "Defaulted Fields"): numeral,
+    // negated numeral, interpolation-free string, empty list, tag application
+    // of literals, and a record literal of literals.
+    const source =
+        \\Example : {
+        \\    a : U8 ?? 10,
+        \\    b : Str ?? "hi",
+        \\    c : I8 ?? -1,
+        \\    d : List(U8) ?? [],
+        \\    e : [None, Some(U8)] ?? Some(1),
+        \\    f : { x : U8 } ?? { x: 1 },
+        \\}
+    ;
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+    var can = try Can.initModule(
+        CoreCtx.testing(allocator, allocator),
+        &env,
+        ast,
+        builtin_ctx.canInitContext(),
+    );
+    defer can.deinit();
+
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    try std.testing.expectEqual(@as(usize, 0), diagnostics.len);
+
+    const statement_idx = env.store.statementAt(env.type_decls, 0);
+    const anno_idx = switch (env.store.getStatement(statement_idx)) {
+        .s_alias_decl => |alias| alias.anno,
+        else => return error.ExpectedAliasDeclaration,
+    };
+    const record = switch (env.store.getTypeAnno(anno_idx)) {
+        .record => |record| record,
+        else => return error.ExpectedRecordAnnotation,
+    };
+    const fields = env.store.sliceAnnoRecordFields(record.fields);
+    try std.testing.expectEqual(@as(usize, 6), fields.len);
+    for (fields) |field_idx| {
+        const field = env.store.getAnnoRecordField(field_idx);
+        try std.testing.expect(field.default_value != null);
     }
 }

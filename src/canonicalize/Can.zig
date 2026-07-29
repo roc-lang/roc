@@ -119,19 +119,6 @@ const ActiveDeclImportAliasEntry = struct {
     previous: ?usize,
 };
 
-/// The value declaration a type annotation currently being canonicalized
-/// belongs to, in the representation its lookups resolve through: module-level
-/// names resolve via `value_forward_references` (keyed by parser declaration),
-/// associated items via `assoc_value_patterns` (keyed by owner path + item).
-const AnnotatedValueTarget = union(enum) {
-    /// A `name : anno` statement's own parser declaration; its paired value
-    /// declaration (when the parser paired one) is the def the annotation
-    /// belongs to.
-    anno_decl: AST.DeclIndex.DeclIdx,
-    /// An associated-block member annotation.
-    assoc: AST.DeclIndex.AssocValue,
-};
-
 /// Identifies the associated-block type alias declaration whose annotation is
 /// currently being canonicalized, in both lookup representations: canonical
 /// scope bindings carry the CIR statement, parser declaration inventory
@@ -317,19 +304,6 @@ type_decl_statements: std.ArrayListUnmanaged(Statement.Idx) = .empty,
 alias_cycle_references: std.AutoHashMapUnmanaged(AST.Statement.Idx, AST.Statement.Idx) = .{},
 /// Parser scopes whose alias-cycle graph has already been indexed.
 alias_cycle_scopes: std.AutoHashMapUnmanaged(AST.DeclIndex.ScopeIdx, void) = .{},
-/// The value declaration whose type annotation is currently being
-/// canonicalized, set only around the annotation's own `canonicalizeTypeAnno`
-/// call. A record-field default inside that annotation may not reference the
-/// very value the annotation belongs to (the construction would need the
-/// default, and the default the construction), so the default's resolved
-/// lookups are judged against this target at the moment Can resolves them
-/// (design.md "Defaulted Fields"). Type-declaration annotations never set a
-/// target: there is no annotated value to cycle with.
-annotated_value_target: ?AnnotatedValueTarget = null,
-/// Whether the record-field default currently being canonicalized resolved a
-/// lookup to the annotated value itself; reset around each default and
-/// consumed by the default's rejection diagnostic.
-default_self_reference: bool = false,
 /// Associated value patterns keyed by parser structural owner path and item name.
 assoc_value_patterns: std.AutoHashMapUnmanaged(AST.DeclIndex.AssocValue, Pattern.Idx) = .{},
 /// Qualified associated value references created before their definitions.
@@ -3727,16 +3701,7 @@ fn canonicalizeAssociatedItems(
                 defer if (!keep_type_var_scope_for_body) self.scopeExitTypeVar(type_var_scope);
 
                 // Now canonicalize the annotation with type variables in scope.
-                // The associated member being annotated is the self-reference
-                // target for any record-field defaults inside the annotation
-                // (design.md "Defaulted Fields").
-                const saved_annotated_target = self.annotated_value_target;
-                self.annotated_value_target = if (owner_type_path) |owner|
-                    .{ .assoc = .{ .owner = owner, .item = name_ident } }
-                else
-                    null;
                 const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .local_anno);
-                self.annotated_value_target = saved_annotated_target;
 
                 // Canonicalize where clauses if present
                 const where_clauses = if (ta.where) |where_coll| blk: {
@@ -4298,16 +4263,7 @@ pub fn canonicalizeFile(
                 std.debug.assert(type_var_scope.depth == 0);
 
                 // Now canonicalize the annotation with type variables in scope.
-                // The annotation's own parser declaration is the self-reference
-                // target for any record-field defaults inside it (design.md
-                // "Defaulted Fields").
-                const saved_annotated_target = self.annotated_value_target;
-                self.annotated_value_target = if (self.parse_ir.decl_index.declForStatement(@intFromEnum(stmt_id))) |anno_decl|
-                    .{ .anno_decl = anno_decl }
-                else
-                    null;
                 const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .local_anno);
-                self.annotated_value_target = saved_annotated_target;
 
                 // Canonicalize where clauses if present
                 const where_clauses = if (ta.where) |where_coll| blk: {
@@ -7238,33 +7194,102 @@ fn canonicalizedRuntimeErrorExpr(self: *Self, diagnostic: Diagnostic) std.mem.Al
     };
 }
 
-/// The pattern of the value whose annotation is currently being canonicalized,
-/// resolved live through the same tables the annotation's lookups resolve
-/// through (a module-level forward reference registers its pattern before the
-/// lookup lands here, so a self-reference is visible on the very lookup that
-/// created it). Null when no value annotation is active or the annotated value
-/// has no resolvable pattern.
-fn annotatedValuePattern(self: *Self) ?Pattern.Idx {
-    const target = self.annotated_value_target orelse return null;
-    switch (target) {
-        .anno_decl => |anno_decl| {
-            if (self.value_forward_references.get(anno_decl)) |fr| return fr.pattern_idx;
-            const paired_decl = self.parse_ir.decl_index.decls.items[@intFromEnum(anno_decl)].paired_decl orelse return null;
-            if (self.value_forward_references.get(paired_decl)) |fr| return fr.pattern_idx;
-            return null;
-        },
-        .assoc => |key| return self.assoc_value_patterns.get(key),
+/// Judge whether a canonicalized record-field default expression is a closed
+/// literal: a numeric literal (including a negated numeral), an
+/// interpolation-free string literal, a tag literal (bare or applied, plain or
+/// nominal-qualified), or a list / record / tuple literal whose components are
+/// all literals. Nothing else — in particular no name reference of any kind —
+/// so a default can never participate in an evaluation cycle: it is
+/// materialized by the compiler at construction sites, and the literal set is
+/// closed by construction (design.md "Defaulted Fields").
+///
+/// Returns the first non-literal node found (for the diagnostic to point at),
+/// or null when the whole expression is a literal. The walk is an explicit
+/// worklist over the CIR (zero-recursion policy) reusing `scratch_expr_ids`.
+fn defaultNonLiteralNode(self: *Self, root: Expr.Idx) std.mem.Allocator.Error!?Expr.Idx {
+    const walk_top = self.scratch_expr_ids.top();
+    defer self.scratch_expr_ids.clearFrom(walk_top);
+    try self.scratch_expr_ids.append(root);
+    while (self.scratch_expr_ids.top() > walk_top) {
+        const expr_idx = self.scratch_expr_ids.pop() orelse unreachable;
+        switch (self.env.store.getExpr(expr_idx)) {
+            // Numeric literals (the numeral table variants store their exact
+            // value in ModuleEnv; they are still literals).
+            .e_num,
+            .e_frac_f32,
+            .e_frac_f64,
+            .e_dec,
+            .e_dec_small,
+            .e_num_from_numeral,
+            .e_typed_int,
+            .e_typed_frac,
+            .e_typed_num_from_numeral,
+            => {},
+            // A negated numeral. When the minus is not folded into the token,
+            // it canonicalizes as `e_unary_minus` over the numeric literal;
+            // exactly that shape counts. Negation of anything else (including
+            // a nested negation) is an operation, not a literal.
+            .e_unary_minus => |unary| switch (self.env.store.getExpr(unary.expr)) {
+                .e_num,
+                .e_frac_f32,
+                .e_frac_f64,
+                .e_dec,
+                .e_dec_small,
+                .e_num_from_numeral,
+                .e_typed_int,
+                .e_typed_frac,
+                .e_typed_num_from_numeral,
+                => {},
+                else => return expr_idx,
+            },
+            // String literals. An interpolated string canonicalizes to
+            // `e_interpolation` (which references bindings and dispatches),
+            // so it falls to the rejecting arm below; a plain string is a
+            // span of `e_str_segment`s.
+            .e_str_segment => {},
+            .e_str => |str| {
+                for (self.env.store.sliceExpr(str.span)) |segment| {
+                    try self.scratch_expr_ids.append(segment);
+                }
+            },
+            // Tag literals, including the nominal wrapper Can itself puts
+            // around a tag/record/tuple literal that resolves to a nominal
+            // type (e.g. a bare `True`): the wrapper names a type
+            // declaration, not a value, so it cannot form a value cycle.
+            .e_zero_argument_tag => {},
+            .e_tag => |tag| {
+                for (self.env.store.sliceExpr(tag.args)) |arg| {
+                    try self.scratch_expr_ids.append(arg);
+                }
+            },
+            .e_nominal => |nominal| try self.scratch_expr_ids.append(nominal.backing_expr),
+            .e_nominal_external => |nominal| try self.scratch_expr_ids.append(nominal.backing_expr),
+            // Aggregate literals whose components must all be literals. A
+            // record UPDATE (`{ ..base, .. }`) is not a record literal.
+            .e_empty_list, .e_empty_record => {},
+            .e_list => |list| {
+                for (self.env.store.sliceExpr(list.elems)) |elem| {
+                    try self.scratch_expr_ids.append(elem);
+                }
+            },
+            .e_tuple => |tuple| {
+                for (self.env.store.sliceExpr(tuple.elems)) |elem| {
+                    try self.scratch_expr_ids.append(elem);
+                }
+            },
+            .e_record => |record| {
+                if (record.ext != null) return expr_idx;
+                for (self.env.store.sliceRecordFields(record.fields)) |field_idx| {
+                    const field = self.env.store.getRecordField(field_idx);
+                    try self.scratch_expr_ids.append(field.value);
+                }
+            },
+            // Everything else — name references, calls, operators, lambdas,
+            // control flow, blocks — is not a literal.
+            else => return expr_idx,
+        }
     }
-}
-
-/// Record that a lookup resolved to the very value whose annotation is being
-/// canonicalized. Lookups only occur inside an annotation via record-field
-/// defaults, so the flag is consumed (and reset) by the default's
-/// canonicalization, which rejects the default (design.md "Defaulted Fields").
-fn noteDefaultSelfReference(self: *Self, pattern_idx: Pattern.Idx) void {
-    if (self.default_self_reference) return;
-    const annotated_pattern = self.annotatedValuePattern() orelse return;
-    if (annotated_pattern == pattern_idx) self.default_self_reference = true;
+    return null;
 }
 
 fn canonicalizedLocalLookup(
@@ -7273,7 +7298,6 @@ fn canonicalizedLocalLookup(
     region: Region,
 ) std.mem.Allocator.Error!CanonicalizedExpr {
     try self.used_patterns.put(self.env.gpa, pattern_idx, {});
-    self.noteDefaultSelfReference(pattern_idx);
 
     const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
         .pattern_idx = pattern_idx,
@@ -7308,7 +7332,6 @@ fn canonicalizedAssociatedForwardLookup(
     pattern_idx: Pattern.Idx,
     region: Region,
 ) std.mem.Allocator.Error!CanonicalizedExpr {
-    self.noteDefaultSelfReference(pattern_idx);
     const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
         .pattern_idx = pattern_idx,
     } }, region);
@@ -12622,7 +12645,6 @@ fn runExprKernel(
                         try self.appendPropagatedFreeVar(state.captures_top, fv);
                     }
                 } else if (self.scopeContains(.ident, field.name)) |pattern_idx| {
-                    self.noteDefaultSelfReference(pattern_idx);
                     const lookup_idx = try self.env.addExpr(CIR.Expr{
                         .e_lookup_local = .{ .pattern_idx = pattern_idx },
                     }, state.region);
@@ -12649,7 +12671,6 @@ fn runExprKernel(
 
             if (map2_callee.localPattern()) |pattern_idx| {
                 try self.used_patterns.put(self.env.gpa, pattern_idx, {});
-                self.noteDefaultSelfReference(pattern_idx);
             }
 
             const field_names = self.scratch_idents.slice(field_names_top, self.scratch_idents.top());
@@ -18574,33 +18595,16 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
             // expression in the enclosing scope); the checker types it
             // against the field's type (design.md "Defaulted Fields").
             const default_value: ?CIR.Expr.Idx = if (state.ast_default_value) |ast_default| blk: {
-                const saved_self_reference = self.default_self_reference;
-                self.default_self_reference = false;
-                const can_default_opt = try self.canonicalizeExpr(ast_default);
-                const default_self_reference = self.default_self_reference;
-                self.default_self_reference = saved_self_reference;
-                const can_default = can_default_opt orelse break :blk null;
-                // A default may not reference the very value its annotation
-                // defaults: constructing the value may need the default, and
-                // the default needs the constructed value (design.md
-                // "Defaulted Fields"). The default is dropped and the error
-                // reported.
-                if (default_self_reference) {
-                    try self.env.pushDiagnostic(Diagnostic{ .record_default_self_reference = .{
+                const can_default = (try self.canonicalizeExpr(ast_default)) orelse break :blk null;
+                // A default must be a closed literal: it is materialized by
+                // the compiler at construction sites, and anything that
+                // refers to another value could form an evaluation cycle the
+                // compiler will not chase (design.md "Defaulted Fields").
+                // The default is dropped and the error reported.
+                if (try self.defaultNonLiteralNode(can_default.idx)) |non_literal_idx| {
+                    try self.env.pushDiagnostic(Diagnostic{ .record_default_not_literal = .{
                         .field_name = state.field_name,
-                        .region = self.env.store.getExprRegion(can_default.idx),
-                    } });
-                    break :blk null;
-                }
-                // A default is a module-level constant: a reference to a
-                // local binding (e.g. a lambda parameter) has no value at
-                // materialization time. Free vars exclude globally
-                // resolvable names, so non-empty means a local is captured
-                // (design.md "Defaulted Fields"). The default is dropped and
-                // the error reported.
-                if (can_default.free_vars.len > 0) {
-                    try self.env.pushDiagnostic(Diagnostic{ .record_default_captures_local = .{
-                        .region = self.env.store.getExprRegion(can_default.idx),
+                        .region = self.env.store.getExprRegion(non_literal_idx),
                     } });
                     break :blk null;
                 }

@@ -3510,19 +3510,35 @@ Restrictions:
 - `?:` and `??` do not combine: a default makes the field never missing,
   which makes the tagged slot and `.?` pointless — `a ?: U8 ?? 10` is
   rejected at canonicalization with exactly that explanation.
-- The default must be a module-level constant expression, enforced on
-  three axes: PURE (an effectful default is rejected at finalize — the
-  compiler materializes it at construction sites where effects would run
-  unpredictably), CONCRETE (a default with type variables has no single
-  runtime representation; judged after the defaulting rounds so numeral
-  defaults commit first), and CLOSED over module scope (a reference to a
-  local binding is rejected at canonicalization via free variables, and a
-  default may not reference the very def its annotation defaults — a
-  scope-resolution judgment, made at canonicalization at the moment the
-  default's lookups resolve; type-declaration defaults are structurally
-  exempt, having no annotated value to cycle with. Canonicalization only
-  ever sees the direct shape; an indirect cycle through another def is the
-  def-dependency machinery's to catch).
+- The default must be a LITERAL, defined recursively: a numeric literal
+  (including a negated numeral), an interpolation-free string literal (an
+  interpolated string references bindings), a tag literal — bare or
+  applied, plain or nominal-qualified (the nominal wrapper names a type
+  declaration, not a value) — or a list / record / tuple literal whose
+  components are all literals. Nothing else: no operators, no calls, no
+  lambdas, no control flow, and no name reference of any kind (local,
+  module-level, or imported). Judged at canonicalization
+  (`Can.defaultNonLiteralNode`, diagnostic `record_default_not_literal`)
+  by walking the canonicalized default; on rejection the default is
+  dropped. The rule exists because defaults are compiler-materialized at
+  construction sites: a reference could form an evaluation cycle the
+  compiler will not chase. Banning references bans every cycle BY
+  CONSTRUCTION — the direct self-reference judgment, the local-capture
+  (free-variables) judgment, and the def-dependency demand edges from
+  annotation defaults were all subsumed and deleted, including the
+  alias-mediated gap none of them covered (a type declaration's default
+  referencing a def, cycling through a value annotated with the alias —
+  the demand walk never followed alias lookups). Supporting references
+  later is future work that needs declaration-aware cycle edges: demand
+  edges that follow a value annotation's alias/apply lookups into the
+  referenced declarations' defaults.
+- The default's type must be CONCRETE: a default with type variables has
+  no single runtime representation. Judged at finalize, after the
+  defaulting rounds so numeral defaults commit first — a literal (`?? []`)
+  can still be non-concrete, which is why this axis survives the literal
+  restriction. (Purity needs no axis of its own anymore: a literal is
+  never effectful, so the finalize-time `effectful_default_value`
+  judgment remains only as a backstop invariant.)
 
 The CheckedModule preserves the kind: a defaulted field serializes as a
 required field CARRYING its default identity (`CheckedFieldDefault`), with
@@ -3541,10 +3557,10 @@ is a serialized index over it, surviving the discard of the build-time
 source-node map). Monotype lowering of a record construction that omits a
 defaulted field resolves the field's default on the checked row and
 lowers the archived expression INLINE at the field's monotype — defaults
-are pure, so inlining is their evaluation. Purity is enforced at
-checking: a default whose expression is effectful (`does_fx`) is
-rejected (`effectful_default_value`), because the compiler materializes
-it at construction sites where running effects would be unpredictable.
+are literals (see Restrictions above), so inlining is their evaluation.
+Checking keeps the `does_fx` → `effectful_default_value` rejection as a
+backstop invariant only: canonicalization's literal restriction already
+makes an effectful default unreachable from source.
 
 Deferred (explicitly not yet implemented): CROSS-MODULE construction-site
 lowering — a construction omitting a field whose default was declared in
