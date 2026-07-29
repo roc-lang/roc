@@ -5970,13 +5970,13 @@ explicitly.
 `captures` bind the exact capture identities required by that function to
 stored const nodes. A capture of an enclosing explicit recursive constant uses
 `recursive_const`; restoration resolves that identity to the already-reserved
-recursive local, so the store never serializes or traverses a cyclic runtime
-value graph. Source lambdas use checked pattern binders. Compiler-generated
-functions whose captures have no source pattern, such as structural parser
-runtime functions, use explicit generated capture ids assigned by the
-generator. A stored function does not store a lambda set, callable-set
-descriptor, call specialization id, erased ABI, capture layout, runtime tag, or
-LIR proc id.
+recursive local, so `ConstStore` never serializes a cyclic capture edge or
+traverses the recursive runtime capture. Source lambdas use checked pattern
+binders. Compiler-generated functions whose captures have no source pattern,
+such as structural parser runtime functions, use explicit generated capture ids
+assigned by the generator. A stored function does not store a lambda set,
+callable-set descriptor, call specialization id, erased ABI, capture layout,
+runtime tag, or LIR proc id.
 
 During compile-time evaluation, the direct LIR builder also produces temporary
 function result-store data. Storing a function result is scoped by `FnSet`
