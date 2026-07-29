@@ -6207,3 +6207,113 @@ test "issue 10253 optimized tail recursion preserves the previous scalar argumen
         &.{"1"},
     );
 }
+
+/// How many distinct fields of `record` are read before the first call in the
+/// proc, and how many are read overall. A record update evaluates its own
+/// field expressions as calls; spread-carried fields are read out of the base
+/// before those run, so an update that carries any spread field reads more
+/// than one field ahead of its first call. Leaving a spread read after a call
+/// keeps the base live across whatever that call does to a collection read out
+/// of it, which is what forces the copy path in issue 10426.
+fn recordFieldReadCounts(
+    allocator: Allocator,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    proc_id: LIR.LirProcSpecId,
+    record: LIR.LocalId,
+) TestError!struct { before_first_call: usize, total: usize } {
+    const store = &lowered.lir_result.store;
+    const proc = store.getProcSpec(proc_id);
+    const body = proc.body orelse return .{ .before_first_call = 0, .total = 0 };
+
+    var aliases = std.AutoHashMap(LIR.LocalId, void).init(allocator);
+    defer aliases.deinit();
+    try aliases.put(record, {});
+
+    var before = std.AutoHashMap(u32, void).init(allocator);
+    defer before.deinit();
+    var total = std.AutoHashMap(u32, void).init(allocator);
+    defer total.deinit();
+
+    // Straight-line walk from the entry: the reads in question are all in the
+    // proc's entry chain, and stopping at the first branch keeps the count
+    // unambiguous.
+    var cursor = body;
+    var seen_call = false;
+    var steps: usize = 0;
+    while (steps < 4096) : (steps += 1) {
+        switch (store.getCFStmt(cursor)) {
+            .assign_ref => |stmt| {
+                switch (stmt.op) {
+                    .local => |src| if (aliases.contains(src)) try aliases.put(stmt.target, {}),
+                    .field => |ref| if (aliases.contains(ref.source)) {
+                        try total.put(ref.field_idx, {});
+                        if (!seen_call) try before.put(ref.field_idx, {});
+                    },
+                    else => {},
+                }
+                cursor = stmt.next;
+            },
+            .assign_call => |stmt| {
+                seen_call = true;
+                cursor = stmt.next;
+            },
+            .assign_low_level => |stmt| {
+                seen_call = true;
+                cursor = stmt.next;
+            },
+            inline .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
+                cursor = stmt.next;
+            },
+            else => break,
+        }
+    }
+    return .{ .before_first_call = before.count(), .total = total.count() };
+}
+
+// Issue 10426: with several refcounted fields, a record update wrote in place
+// only for the field whose read happened to come last -- canonical field
+// order, so whichever sorted last, and nothing at all when a non-refcounted
+// field sorted after them. Every other field copied its whole collection.
+// Spread-carried reads now bind before the update's own field expressions, so
+// the base's last use precedes the mutation for every field.
+test "issue 10426 record update reads spread fields before the mutation" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Model : { count : I64, other : List(I64), rows : List(I64) }
+        \\
+        \\bump_other : Model -> Model
+        \\bump_other = |m| { ..m, count: m.count + 1, other: List.set(m.other, 0, 7) ?? [] }
+        \\
+        \\bump_rows : Model -> Model
+        \\bump_rows = |m| { ..m, count: m.count + 1, rows: List.set(m.rows, 0, 7) ?? [] }
+        \\
+        \\main : I64
+        \\main = {
+        \\    m0 = { count: 0, other: List.repeat(1, 8), rows: List.repeat(2, 8) }
+        \\    a = bump_rows(bump_other(m0))
+        \\    a.count + (List.get(a.other, 0) ?? 0) + (List.get(a.rows, 0) ?? 0)
+        \\}
+    ;
+
+    var lowered = try lowerModule(allocator, source, .none);
+    defer lowered.deinit(allocator);
+
+    const store = &lowered.lowered.lir_result.store;
+    var checked_any = false;
+    for (0..store.procSpecCount()) |index| {
+        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc = store.getProcSpec(proc_id);
+        const args = store.getLocalSpan(proc.args);
+        if (GuardedList.borrowLen(args) != 1) continue;
+        const counts = try recordFieldReadCounts(allocator, &lowered.lowered, proc_id, GuardedList.at(args, 0));
+        // The update procs read the spread field and `count` in their entry
+        // chain, before the branch the mutated field's expression builds;
+        // anything reading fewer than two fields is unrelated.
+        if (counts.total < 2) continue;
+        checked_any = true;
+        // Both the spread field and the explicit `count` read precede the
+        // first call; only the mutated field's read may follow it.
+        try std.testing.expect(counts.before_first_call >= 2);
+    }
+    try std.testing.expect(checked_any);
+}

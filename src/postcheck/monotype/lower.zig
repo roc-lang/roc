@@ -26526,6 +26526,14 @@ const BodyContext = struct {
         const target_field_list = try GuardedList.dupe(self.allocator, Type.Field, self.builder.program.types.fieldSpan(target_fields));
         defer self.allocator.free(target_field_list);
 
+        // See lowerRecordExprAtNode: spread-carried reads bind before the
+        // update's own field expressions run, so the base's last use precedes
+        // any mutation they perform.
+        const SpreadRead = struct { local: DraftLocalId, value: DraftExprId };
+        const spread_reads = try self.allocator.alloc(?SpreadRead, target_field_count);
+        defer self.allocator.free(spread_reads);
+        @memset(spread_reads, null);
+
         for (0..target_field_count) |i| {
             const field = target_field_list[i];
             const value = if (try self.recordUpdateFieldValue(record.fields, field.name)) |field_value|
@@ -26538,22 +26546,35 @@ const BodyContext = struct {
                     try self.lowerExplicitUninhabitedInvocation(field_value, field.ty)
                 else
                     try self.lowerExprAtType(field_value, field.ty)
-            else if (base_expr) |base_value|
-                try self.addExpr(.{
+            else if (base_expr) |base_value| blk: {
+                const read = try self.addExpr(.{
                     .ty = field.ty,
                     .data = .{ .field_access = .{
                         .receiver = base_value,
                         .field = field.name,
                     } },
-                })
-            else
+                });
+                const read_local = try self.addLocal(self.builder.symbols.fresh(), field.ty);
+                spread_reads[i] = .{ .local = read_local, .value = read };
+                break :blk try self.localExpr(read_local, field.ty);
+            } else
                 Common.invariant("closed record literal was missing a checked field value");
             lowered[i] = .{
                 .name = field.name,
                 .value = value,
             };
         }
-        const record_expr = try self.addConstructorExpr(ty, .{ .record = try self.addFieldExprSpan(lowered) });
+        var record_expr = try self.addConstructorExpr(ty, .{ .record = try self.addFieldExprSpan(lowered) });
+        var spread_index: usize = target_field_count;
+        while (spread_index > 0) {
+            spread_index -= 1;
+            const read = spread_reads[spread_index] orelse continue;
+            record_expr = try self.addExpr(.{ .ty = ty, .data = .{ .let_ = .{
+                .bind = try self.bindPat(read.local, target_field_list[spread_index].ty),
+                .value = read.value,
+                .rest = record_expr,
+            } } });
+        }
         if (base_record) |base_value| {
             return try self.addExpr(.{ .ty = ty, .data = .{ .let_ = .{
                 .bind = try self.bindPat(base_local orelse Common.invariant("record update lowered base without a base local"), base_ty),
@@ -26594,6 +26615,19 @@ const BodyContext = struct {
         else
             null;
 
+        // Spread-carried fields are read out of the base before the update's
+        // own field expressions run, each bound to its own local. The reads
+        // are pure projections of an already-evaluated value, so hoisting them
+        // is unobservable, and it ends the base's last use ahead of any
+        // mutation an updated field performs. Without it, the base stays live
+        // across those mutations and only the field read last -- canonical
+        // field order, so whichever sorts last -- finds its collection
+        // uniquely referenced; every other field copies its whole value.
+        const SpreadRead = struct { local: DraftLocalId, cell: DraftTypeCell, value: DraftExprId };
+        const spread_reads = try self.allocator.alloc(?SpreadRead, target_fields.len);
+        defer self.allocator.free(spread_reads);
+        @memset(spread_reads, null);
+
         for (0..target_fields.len) |index| {
             const field = target_fields[index];
             const value = if (try self.recordUpdateFieldValue(record.fields, field.name)) |field_value| blk: {
@@ -26619,10 +26653,14 @@ const BodyContext = struct {
                 break :blk pre;
             } else if (base_expr) |base_value| blk: {
                 produced_fields[index] = field;
-                break :blk try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(field.ty), .{ .field_access = .{
+                const read_cell = DraftTypeCell.fromGraphNode(field.ty);
+                const read = try self.addExprWithTypeCell(read_cell, .{ .field_access = .{
                     .receiver = base_value,
                     .field = field.name,
                 } });
+                const read_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), read_cell, null);
+                spread_reads[index] = .{ .local = read_local, .cell = read_cell, .value = read };
+                break :blk try self.addExprWithTypeCell(read_cell, .{ .local = read_local });
             } else Common.invariant("closed record graph constructor was missing a checked field value");
             lowered[index] = .{ .name = field.name, .value = value };
         }
@@ -26636,7 +26674,17 @@ const BodyContext = struct {
             try relateRequestComponent(self.graph, record_node, node);
             break :blk node;
         } else record_node;
-        const record_expr = try self.addConstructorExprAtNode(produced_node, .{ .record = try self.addFieldExprSpan(lowered) });
+        var record_expr = try self.addConstructorExprAtNode(produced_node, .{ .record = try self.addFieldExprSpan(lowered) });
+        var spread_index: usize = target_fields.len;
+        while (spread_index > 0) {
+            spread_index -= 1;
+            const read = spread_reads[spread_index] orelse continue;
+            record_expr = try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(produced_node), .{ .let_ = .{
+                .bind = try self.addPatWithTypeCell(read.cell, .{ .bind = read.local }),
+                .value = read.value,
+                .rest = record_expr,
+            } });
+        }
         if (base_record) |base_value| {
             const local = base_local orelse Common.invariant("record graph update lowered base without a base local");
             return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(produced_node), .{ .let_ = .{
