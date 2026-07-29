@@ -6705,27 +6705,21 @@ Builtin :: [].{
 			## ```
 			until : U8, U8 -> Iter(U8)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					if start >= end {
 						Known(0)
 					} else {
 						Known(U8.to_u64(end) - U8.to_u64(start))
 					},
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match U8.plus_try(start, 1) {
-									Ok(next) => if next < end {
-										U8.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match U8.plus_try(current, 1) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
@@ -7414,27 +7408,21 @@ Builtin :: [].{
 			## ```
 			until : I8, I8 -> Iter(I8)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					if start >= end {
 						Known(0)
 					} else {
 						Known(I64.to_u64_wrap(I8.to_i64(end) - I8.to_i64(start)))
 					},
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match I8.plus_try(start, 1) {
-									Ok(next) => if next < end {
-										I8.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match I8.plus_try(current, 1) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
@@ -8131,27 +8119,21 @@ Builtin :: [].{
 			## ```
 			until : U16, U16 -> Iter(U16)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					if start >= end {
 						Known(0)
 					} else {
 						Known(U16.to_u64(end) - U16.to_u64(start))
 					},
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match U16.plus_try(start, 1) {
-									Ok(next) => if next < end {
-										U16.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match U16.plus_try(current, 1) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
@@ -8899,27 +8881,21 @@ Builtin :: [].{
 			## ```
 			until : I16, I16 -> Iter(I16)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					if start >= end {
 						Known(0)
 					} else {
 						Known(I64.to_u64_wrap(I16.to_i64(end) - I16.to_i64(start)))
 					},
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match I16.plus_try(start, 1) {
-									Ok(next) => if next < end {
-										I16.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match I16.plus_try(current, 1) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
@@ -9631,27 +9607,21 @@ Builtin :: [].{
 			## ```
 			until : U32, U32 -> Iter(U32)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					if start >= end {
 						Known(0)
 					} else {
 						Known(U32.to_u64(end) - U32.to_u64(start))
 					},
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match U32.plus_try(start, 1) {
-									Ok(next) => if next < end {
-										U32.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match U32.plus_try(current, 1) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
@@ -10431,27 +10401,21 @@ Builtin :: [].{
 			## ```
 			until : I32, I32 -> Iter(I32)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					if start >= end {
 						Known(0)
 					} else {
 						Known(I64.to_u64_wrap(I32.to_i64(end) - I32.to_i64(start)))
 					},
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match I32.plus_try(start, 1) {
-									Ok(next) => if next < end {
-										I32.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match I32.plus_try(current, 1) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
@@ -11186,27 +11150,21 @@ Builtin :: [].{
 			## ```
 			until : U64, U64 -> Iter(U64)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					if start >= end {
 						Known(0)
 					} else {
 						Known(end - start)
 					},
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match U64.plus_try(start, 1) {
-									Ok(next) => if next < end {
-										U64.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match U64.plus_try(current, 1) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
@@ -12031,7 +11989,8 @@ Builtin :: [].{
 			## ```
 			until : I64, I64 -> Iter(I64)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					if start >= end {
 						Known(0)
 					} else {
@@ -12040,21 +11999,14 @@ Builtin :: [].{
 							Err(Overflow) => Unknown
 						}
 					},
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match I64.plus_try(start, 1) {
-									Ok(next) => if next < end {
-										I64.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match I64.plus_try(current, 1) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
@@ -12811,7 +12763,8 @@ Builtin :: [].{
 			## ```
 			until : U128, U128 -> Iter(U128)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					if start >= end {
 						Known(0)
 					} else {
@@ -12820,21 +12773,14 @@ Builtin :: [].{
 							Err(OutOfRange) => Unknown
 						}
 					},
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match U128.plus_try(start, 1) {
-									Ok(next) => if next < end {
-										U128.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match U128.plus_try(current, 1) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
@@ -13701,7 +13647,8 @@ Builtin :: [].{
 			## ```
 			until : I128, I128 -> Iter(I128)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					if start >= end {
 						Known(0)
 					} else {
@@ -13713,21 +13660,14 @@ Builtin :: [].{
 							Err(Overflow) => Unknown
 						}
 					},
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match I128.plus_try(start, 1) {
-									Ok(next) => if next < end {
-										I128.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match I128.plus_try(current, 1) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
@@ -14911,23 +14851,17 @@ Builtin :: [].{
 			## ```
 			until : Dec, Dec -> Iter(Dec)
 			until = |start, end|
-				iter_from_step(
+				Iter.custom(
+					start,
 					Unknown,
-					||
-						if start < end {
-							One({
-								item: start,
-								rest: match Dec.plus_try(start, 1.0) {
-									Ok(next) => if next < end {
-										Dec.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							})
+					|current|
+						if current < end {
+							match Dec.plus_try(current, 1.0) {
+								Ok(next) => Ok((current, next))
+								Err(Overflow) => Ok((current, end))
+							}
 						} else {
-							Done
+							Err(NoMore)
 						},
 				)
 
@@ -21811,11 +21745,10 @@ range_done = || iter_from_step(
 	|| Done,
 )
 
-# Shared step loop behind the numeric types' `range_exclusive` methods. Each
-# caller supplies `len_if_known` computed from its own representation; when it
-# is `Known`, it must be the exact yield count (`Iter.take_last`/`drop_last`
-# rely on that). The construction is `Iter.exclusive_range`, whose flat
-# self-recursive shape keeps a range's state unboxed when an adapter wraps it.
+# Shared state machine behind the numeric types' `range_exclusive` methods.
+# Each caller supplies `len_if_known` computed from its own representation;
+# when it is `Known`, it must be the exact yield count
+# (`Iter.take_last`/`drop_last` rely on that).
 range_exclusive_with_len : num, num, [Known(U64), Unknown] -> Iter(num)
 	where [
 		num.is_lt : num, num -> Bool,
@@ -21823,7 +21756,19 @@ range_exclusive_with_len : num, num, [Known(U64), Unknown] -> Iter(num)
 		num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
 	]
 range_exclusive_with_len = |start, end, len_if_known|
-	Iter.exclusive_range(start, end, len_if_known)
+	Iter.custom(
+		start,
+		len_if_known,
+		|current|
+			if current < end {
+				match current.plus_try(1) {
+					Ok(next) => Ok((current, next))
+					Err(Overflow) => Ok((current, end))
+				}
+			} else {
+				Err(NoMore)
+			},
+	)
 
 # Shared step loop behind the numeric types' `range_inclusive` methods; same
 # `len_if_known` contract as `range_exclusive_with_len`. The construction is
