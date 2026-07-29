@@ -14238,27 +14238,34 @@ const BodyContext = struct {
         const scopes = self.view.templates.dispatch_ref_scopes[span.start .. span.start + span.len];
         const kinds = self.view.templates.dispatch_relation_kinds[span.start .. span.start + span.len];
         if (refs.len != scopes.len or refs.len != kinds.len) Common.invariant("checked template dispatch refs and relation metadata differed in length");
+
+        // Resolve every plan in this scope before instantiating any of its type
+        // relations. A rejected inner dispatch makes every enclosing expression
+        // that evaluates it divergent, so relation replay must consume the
+        // complete specialization-specific divergence column, not only the
+        // entries discovered earlier in source order.
         var added_crash = false;
-        for (refs, scopes, kinds) |plan_id, scope_ref, relation_kind| {
-            if (scope_id) |wanted_scope| {
-                const ref_scope = switch (scope_ref) {
-                    .root => continue,
-                    .generalized => |id| id,
-                };
-                if (ref_scope != wanted_scope) continue;
-            } else switch (scope_ref) {
-                .root => {},
-                .generalized => continue,
-            }
+        for (refs, scopes) |plan_id, dispatch_scope| {
+            if (!dispatchRefBelongsToScope(dispatch_scope, scope_id)) continue;
             const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
-            const callable_plan = switch (self.dispatchRuntimePlan(plan)) {
-                .callable => |value| value,
+            switch (self.dispatchRuntimePlan(plan)) {
+                .callable => {},
                 .crash => {
                     added_crash = (try self.recordSpecializationDispatchCrash(plan.expr)) or added_crash;
-                    continue;
                 },
-            };
+            }
+        }
+        if (added_crash) try self.refreshSpecializationDispatchDivergence();
+
+        for (refs, scopes, kinds) |plan_id, dispatch_scope, relation_kind| {
+            if (!dispatchRefBelongsToScope(dispatch_scope, scope_id)) continue;
+            const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+            if (self.checkedExprDivergesInLoweredRuntime(plan.expr)) continue;
             if (relation_kind == .conversion) continue;
+            const callable_plan = switch (self.dispatchRuntimePlan(plan)) {
+                .callable => |value| value,
+                .crash => Common.invariant("non-divergent dispatch relation resolved to a crash"),
+            };
             const expr_ty = self.view.bodies.expr(plan.expr).ty;
             _ = try self.callableDispatchResultTypeNodeInPhase(
                 expr_ty,
@@ -14267,7 +14274,21 @@ const BodyContext = struct {
                 .template_relation_replay,
             );
         }
-        if (added_crash) try self.refreshSpecializationDispatchDivergence();
+    }
+
+    fn dispatchRefBelongsToScope(
+        dispatch_scope: checked.DispatchScope,
+        scope_id: ?checked.DispatchScopeId,
+    ) bool {
+        return if (scope_id) |wanted_scope|
+            switch (dispatch_scope) {
+                .root => false,
+                .generalized => |id| id == wanted_scope,
+            }
+        else switch (dispatch_scope) {
+            .root => true,
+            .generalized => false,
+        };
     }
 
     fn recordSpecializationDispatchCrash(
@@ -15247,6 +15268,42 @@ const BodyContext = struct {
         return self.source_region_override orelse expr.source_region;
     }
 
+    const DivergentExprContext = union(enum) {
+        uncontextual,
+        mono_type: Type.TypeId,
+        type_cell: DraftTypeCell,
+    };
+
+    /// Lower a producer-marked divergent expression before any value
+    /// representation or type relation is requested for it. The continuation's
+    /// context is the result cell for a value that can never materialize.
+    fn lowerDivergentExprInContext(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        context: DivergentExprContext,
+    ) Allocator.Error!?DraftExprId {
+        if (!self.checkedExprDivergesInLoweredRuntime(expr_id)) return null;
+
+        return switch (context) {
+            .uncontextual => blk: {
+                const expr = self.view.bodies.expr(expr_id);
+                // A root runtime error has no checked result type. Every other
+                // divergent expression retains its checked result variable as
+                // an unobservable continuation cell; asking for expression
+                // value evidence here would instantiate a rejected dispatch.
+                if (self.view.types.payload(expr.ty) == .err) {
+                    break :blk try self.lowerDivergentExprAtType(expr_id, try self.unitType());
+                }
+                break :blk try self.lowerDivergentExprAtTypeCell(
+                    expr_id,
+                    DraftTypeCell.fromGraphNode(try self.instNode(expr.ty)),
+                );
+            },
+            .mono_type => |ty| try self.lowerDivergentExprAtType(expr_id, ty),
+            .type_cell => |cell| try self.lowerDivergentExprAtTypeCell(expr_id, cell),
+        };
+    }
+
     fn lowerExpr(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!DraftExprId {
         const expr = self.view.bodies.expr(expr_id);
         const lowered = try self.lowerExprInner(expr_id);
@@ -15267,20 +15324,7 @@ const BodyContext = struct {
         const region = self.sourceRegionForExpr(expr);
         self.builder.program.current_loc = try self.sourceLocFor(region);
         self.builder.program.current_region = region;
-        if (self.checkedExprDivergesInLoweredRuntime(expr_id)) {
-            // An uncontextual use still has to preserve an explicitly checked
-            // non-returning path. A root runtime error emits a crash and can use
-            // unit; any other divergent value keeps its own graph node as the
-            // cell — the value never materializes, and sealing defaults the node
-            // if nothing else constrains it (e.g. a bare `break` statement).
-            if (self.view.types.payload(expr.ty) == .err) {
-                return try self.lowerDivergentExprAtType(expr_id, try self.unitType());
-            }
-            return try self.lowerDivergentExprAtTypeCell(
-                expr_id,
-                DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(expr_id)),
-            );
-        }
+        if (try self.lowerDivergentExprInContext(expr_id, .uncontextual)) |lowered| return lowered;
         switch (expr.data) {
             .call => |call| if (try self.lowerInspectOnlyCall(
                 expr.ty,
@@ -23782,6 +23826,7 @@ const BodyContext = struct {
         checked_arg: checked.CheckedExprId,
         expected_ty: ?Type.TypeId,
     ) Allocator.Error!?NodeId {
+        if (self.checkedExprDivergesInLoweredRuntime(checked_arg)) return null;
         const expr = self.view.bodies.expr(checked_arg);
         switch (expr.data) {
             .call => |call| {
@@ -28130,7 +28175,10 @@ const BodyContext = struct {
         self.builder.program.current_loc = try self.sourceLocFor(region);
         self.builder.program.current_region = region;
         const expected_node = try cell.toGraphNode(self.graph);
-        const lowered = try self.lowerExprAtTypeCellInner(checked_expr, cell, expected_node);
+        const lowered = if (try self.lowerDivergentExprInContext(checked_expr, .{ .type_cell = cell })) |divergent|
+            divergent
+        else
+            try self.lowerExprAtTypeCellInner(checked_expr, cell, expected_node);
         return try self.requireLoweredExpr(expr, expected_node, demand, lowered);
     }
 
@@ -28370,9 +28418,7 @@ const BodyContext = struct {
         const region = self.sourceRegionForExpr(expr);
         self.builder.program.current_loc = try self.sourceLocFor(region);
         self.builder.program.current_region = region;
-        if (self.checkedExprDivergesInLoweredRuntime(checked_expr)) {
-            return try self.lowerDivergentExprAtType(checked_expr, ty);
-        }
+        if (try self.lowerDivergentExprInContext(checked_expr, .{ .mono_type = ty })) |lowered| return lowered;
         switch (expr.data) {
             .call => |call| if (try self.lowerInspectOnlyCall(
                 expr.ty,
@@ -29220,7 +29266,7 @@ const BodyContext = struct {
         self: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
-        expected_ret_cell: ?DraftTypeCell,
+        expected_ret_cell: DraftTypeCell,
     ) Allocator.Error!DraftExprId {
         const plan_id = maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
@@ -29228,16 +29274,15 @@ const BodyContext = struct {
             .callable => |value| value,
             .crash => |reason| {
                 const message = dispatchCrashMessage(reason);
-                const crash_cell = expected_ret_cell orelse DraftTypeCell{ .sealed = try self.unitType() };
-                return try self.addExprWithTypeCell(crash_cell, .{ .crash = try self.addStringLiteral(message) });
+                return try self.addExprWithTypeCell(expected_ret_cell, .{ .crash = try self.addStringLiteral(message) });
             },
         };
         const plan_args = callable_plan.operands;
-        const expected_ret_ty: ?Type.TypeId = if (expected_ret_cell) |cell| switch (cell) {
+        const expected_ret_ty: ?Type.TypeId = switch (expected_ret_cell) {
             .sealed => |ty| ty,
             .graph_node => null,
-        } else null;
-        const expected_ret_node = if (expected_ret_cell) |cell| try cell.toGraphNode(self.graph) else null;
+        };
+        const expected_ret_node = try expected_ret_cell.toGraphNode(self.graph);
 
         var call_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
         call_ctx.evidence = self.evidence;
@@ -29296,7 +29341,7 @@ const BodyContext = struct {
         if (try self.lowerDispatchWithUninhabitedArgument(
             plan_args,
             callable_graph.args,
-            expected_ret_cell orelse DraftTypeCell.fromGraphNode(callable_graph.ret),
+            expected_ret_cell,
         )) |uninhabited| return uninhabited;
         for (plan_args, 0..) |operand, index| switch (operand) {
             .checked_expr => |expr| {
@@ -29351,7 +29396,7 @@ const BodyContext = struct {
         const call_ret_cell = if (try self.graph.containsGeneratedPrivate(plan_ret_node))
             DraftTypeCell.fromGraphNode(plan_ret_node)
         else
-            expected_ret_cell orelse DraftTypeCell.fromGraphNode(plan_ret_node);
+            expected_ret_cell;
         const call_expr = try self.addExprWithTypeCell(
             call_ret_cell,
             call_data,
@@ -30135,7 +30180,8 @@ const BodyContext = struct {
                 expected_ret_node,
                 phase,
             ),
-            .crash => expected_ret_node orelse try self.activeNodeFromType(try self.unitType()),
+            .crash => expected_ret_node orelse
+                Common.invariant("rejected dispatch reached result type lookup without a contextual result cell"),
         };
     }
 
@@ -36647,6 +36693,7 @@ const BodyContext = struct {
         self: *BodyContext,
         expr_id: checked.CheckedExprId,
     ) Allocator.Error!?NodeId {
+        if (self.checkedExprDivergesInLoweredRuntime(expr_id)) return null;
         const expr = self.view.bodies.expr(expr_id);
         return switch (expr.data) {
             .call => |call| try self.callResultTypeNode(expr.ty, call, null),
@@ -39767,11 +39814,14 @@ const BodyContext = struct {
         for (checked_statements) |statement| {
             try self.registerLocalAssociatedProcedures(statement);
             if (!self.checkedStatementHasRuntimeEffect(statement)) continue;
-            if (try self.lowerUninhabitedStatementScrutinee(statement)) |scrutinee| {
-                lowered.termination = .{ .uninhabited = scrutinee };
-                break;
+            const statement_diverges = self.checkedStatementDivergesInLoweredRuntime(statement);
+            if (!statement_diverges) {
+                if (try self.lowerUninhabitedStatementScrutinee(statement)) |scrutinee| {
+                    lowered.termination = .{ .uninhabited = scrutinee };
+                    break;
+                }
             }
-            var termination: StatementTermination = if (self.checkedStatementDivergesInLoweredRuntime(statement))
+            var termination: StatementTermination = if (statement_diverges)
                 .checked_control_transfer
             else
                 .none;

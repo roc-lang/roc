@@ -110,7 +110,11 @@ main = {
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-block
+			(s-let
+				(p-assign (ident "x"))
+				(e-empty_record))
+			(e-runtime-error (tag "erroneous_value_expr"))))
 	(s-nominal-decl
 		(ty-header (name "Person"))
 		(ty-record)))
@@ -120,11 +124,11 @@ main = {
 (inferred-types
 	(defs
 		(patt (type "Person -> Str"))
-		(patt (type "Error")))
+		(patt (type "_a")))
 	(type_decls
 		(nominal (type "Person")
 			(ty-header (name "Person"))))
 	(expressions
 		(expr (type "Person -> Str"))
-		(expr (type "Error"))))
+		(expr (type "_a"))))
 ~~~

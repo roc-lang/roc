@@ -473,6 +473,18 @@ pub fn CodeGen(comptime target: RocTarget) type {
             try self.emit.strQRegMemSoff(src, .FP, offset);
         }
 
+        pub fn emitMoveV128(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
+            if (dst != src) try self.emit.movVectorRegReg(dst, src);
+        }
+
+        pub fn emitLoadV128(self: *Self, dst: FloatReg, base: GeneralReg, offset: i32) Allocator.Error!void {
+            try self.emit.ldrQRegMemSoff(dst, base, offset);
+        }
+
+        pub fn emitStoreV128(self: *Self, base: GeneralReg, offset: i32, src: FloatReg) Allocator.Error!void {
+            try self.emit.strQRegMemSoff(src, base, offset);
+        }
+
         // Immediate loading
 
         /// Load immediate value into register
@@ -716,6 +728,19 @@ test "float allocation never relocates an allocated register" {
     try std.testing.expectEqual(code_len, cg.getCode().len);
 
     for (regs[0..count]) |reg| cg.freeFloat(reg);
+}
+
+test "vector allocation excludes AAPCS64 partial-width callee-saved registers" {
+    var cg = LinuxCodeGen.init(std.testing.allocator);
+    defer cg.deinit();
+
+    const count: usize = @popCount(LinuxCodeGen.INITIAL_FREE_FLOAT);
+    for (0..count) |_| {
+        const reg = cg.allocFloat().?;
+        const index = @intFromEnum(reg);
+        try std.testing.expect(index <= 7 or index >= 16);
+    }
+    try std.testing.expectEqual(@as(?FloatReg, null), cg.allocFloat());
 }
 
 test "general allocation reports exhaustion after all allocatable registers" {

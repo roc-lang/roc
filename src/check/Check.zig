@@ -187,6 +187,9 @@ checked_interpolation_part_constraints: std.AutoHashMap(Var, void),
 /// constraint failing in multiple passes (or reachable through several aliased
 /// type variables) is reported once.
 reported_constraint_errors: std.AutoHashMap(ReportedConstraintError, void),
+/// Raw constraint function vars whose dispatch obligations checking rejected.
+/// The map deduplicates the durable records published through `ModuleEnv`.
+rejected_static_dispatches: std.AutoHashMap(Var, void),
 /// Constraint fn vars already reported as effectful dispatches in an expect
 /// body, so a constraint revisited across passes is reported once (replaces the
 /// old expect_region side table's fetchRemove dedup).
@@ -1438,6 +1441,13 @@ fn initAssumePrepared(
 
     const node_count: usize = @intCast(cir.store.nodes.len());
 
+    var rejected_static_dispatches = std.AutoHashMap(Var, void).init(gpa);
+    errdefer rejected_static_dispatches.deinit();
+    try rejected_static_dispatches.ensureTotalCapacity(@intCast(cir.rejectedStaticDispatches().len));
+    for (cir.rejectedStaticDispatches()) |rejected| {
+        rejected_static_dispatches.putAssumeCapacity(rejected.fnVar(), {});
+    }
+
     const self: Self = .{
         .gpa = gpa,
         .types = types,
@@ -1481,6 +1491,7 @@ fn initAssumePrepared(
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
         .checked_interpolation_part_constraints = std.AutoHashMap(Var, void).init(gpa),
         .reported_constraint_errors = std.AutoHashMap(ReportedConstraintError, void).init(gpa),
+        .rejected_static_dispatches = rejected_static_dispatches,
         .reported_effectful_expect = std.AutoHashMap(Var, void).init(gpa),
         .current_expect_region = null,
         .top_level_ptrns = try initNodeSlots(?DefProcessed, gpa, node_count, null),
@@ -1619,6 +1630,7 @@ pub fn deinit(self: *Self) void {
     self.ident_to_var_map.deinit();
     self.checked_interpolation_part_constraints.deinit();
     self.reported_constraint_errors.deinit();
+    self.rejected_static_dispatches.deinit();
     self.reported_effectful_expect.deinit();
     self.top_level_ptrns.deinit(self.gpa);
     self.platform_required_defs.deinit(self.gpa);
@@ -6827,7 +6839,7 @@ fn selectAmbiguityConstraint(
             var first_nonliteral_constraint: ?StaticDispatchConstraint = null;
             var has_literal_constraint = false;
             for (constraints) |c| {
-                if (self.types.resolveVar(c.fn_var).desc.content == .err) continue;
+                if (self.rejected_static_dispatches.contains(c.fn_var)) continue;
                 if (isLiteralStaticDispatchOrigin(c.origin)) {
                     has_literal_constraint = true;
                 } else if (c.fn_name.eql(self.cir.idents.is_eq)) {
@@ -9906,7 +9918,7 @@ fn completeOwnedStaticDispatchConstraint(
     const entry = self.scratch_static_dispatch_constraints.items.items[constraint_index];
     if (entry.state != .declared or entry.where_clause != where_idx or entry.var_ != owner_var) {
         try self.unifyWith(entry.var_, .err, env);
-        try self.unifyWith(entry.constraint.fn_var, .err, env);
+        try self.markStaticDispatchRejected(entry.constraint);
         self.scratch_static_dispatch_constraints.items.items[constraint_index].state = .completed;
         return;
     }
@@ -17243,6 +17255,7 @@ const Probe = struct {
     pending_tuple_accesses_len: usize,
     scheme_uses_len: usize,
     scheme_use_pairs_len: usize,
+    rejected_static_dispatches_len: usize,
     dispatch_target_instantiations_len: usize,
 
     fn rollback(self: *Probe) void {
@@ -17260,6 +17273,11 @@ const Probe = struct {
         // vars the savepoint rollback just discarded.
         self.check.cir.scheme_uses.items.shrinkRetainingCapacity(self.scheme_uses_len);
         self.check.cir.scheme_use_pairs.items.shrinkRetainingCapacity(self.scheme_use_pairs_len);
+        while (self.check.cir.rejected_static_dispatches.items.items.len > self.rejected_static_dispatches_len) {
+            const rejected = self.check.cir.rejected_static_dispatches.items.pop().?;
+            const did_remove = self.check.rejected_static_dispatches.remove(rejected.fnVar());
+            std.debug.assert(did_remove);
+        }
         while (self.check.dispatch_target_instantiations.items.len > self.dispatch_target_instantiations_len) {
             const removed = self.check.dispatch_target_instantiations.pop().?;
             const did_remove = self.check.dispatch_target_instantiation_by_fn_var.remove(removed.constraint_fn_var);
@@ -17284,6 +17302,7 @@ fn beginProbe(self: *Self) std.mem.Allocator.Error!Probe {
     const pending_tuple_accesses_len = self.pending_tuple_accesses.items.len;
     const scheme_uses_len = self.cir.scheme_uses.items.items.len;
     const scheme_use_pairs_len = self.cir.scheme_use_pairs.items.items.len;
+    const rejected_static_dispatches_len = self.cir.rejected_static_dispatches.items.items.len;
     const dispatch_target_instantiations_len = self.dispatch_target_instantiations.items.len;
     return .{
         .check = self,
@@ -17294,6 +17313,7 @@ fn beginProbe(self: *Self) std.mem.Allocator.Error!Probe {
         .pending_tuple_accesses_len = pending_tuple_accesses_len,
         .scheme_uses_len = scheme_uses_len,
         .scheme_use_pairs_len = scheme_use_pairs_len,
+        .rejected_static_dispatches_len = rejected_static_dispatches_len,
         .dispatch_target_instantiations_len = dispatch_target_instantiations_len,
         .savepoint = try self.types.createSavepoint(),
     };
@@ -19193,6 +19213,10 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     .def_name = null,
                 } });
             }
+            for (constraints) |constraint| {
+                try self.poisonConstraintSourceExpr(deferred_constraint.var_, constraint);
+                try self.markStaticDispatchRejected(constraint);
+            }
             try self.unifyWith(deferred_constraint.var_, .err, env);
             break;
         }
@@ -19204,7 +19228,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                 // If the root type is an error, then skip constraint checking
                 const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
                 for (constraints) |constraint| {
-                    try self.markConstraintFunctionAsError(constraint, env);
+                    try self.markStaticDispatchRejected(constraint);
                 }
                 try self.unifyWith(deferred_constraint.var_, .err, env);
                 break :dispatch_resolution;
@@ -19241,12 +19265,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         try self.ensureCustomInterpolationPartsChecked(constraint, env);
                     }
 
-                    // Extract the function and return type from the constraint
-                    const resolved_constraint = self.types.resolveVar(constraint.fn_var);
-                    const mb_resolved_func = resolved_constraint.desc.content.unwrapFunc();
-                    std.debug.assert(mb_resolved_func != null);
-                    const resolved_func = mb_resolved_func.?;
-
                     // Then, lookup the inferred constraint in the actual list of rigid constraints
                     if (self.ident_to_var_map.get(constraint.fn_name)) |rigid_var| {
                         // Unify the actual function var against the inferred var
@@ -19256,8 +19274,8 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         // similar to e_call
                         const result = try self.unify(rigid_var, constraint.fn_var, env);
                         if (result.isProblem()) {
-                            try self.unifyWith(deferred_constraint.var_, .err, env);
-                            try self.unifyWith(resolved_func.ret, .err, env);
+                            try self.poisonConstraintSourceExpr(deferred_constraint.var_, constraint);
+                            try self.markStaticDispatchRejected(constraint);
                         } else {
                             try self.reportEffectfulDispatchInExpect(constraint);
 
@@ -19326,6 +19344,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     // Re-fetch by index each iteration because nested unification can append
                     // constraints and reallocate the backing array.
                     const constraint = self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i];
+                    if (self.rejected_static_dispatches.contains(constraint.fn_var)) continue;
                     const constraint_fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
                     if (constraint_fn_resolved == .err) {
                         // If this constraint is already an error, the skip this pass
@@ -19536,6 +19555,8 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr))) {
                                         if (self.delayed_dependency_depth == 0) {
                                             try self.poisonRecursiveNonFunctionProcessingDef(processing_def, null, env);
+                                            try self.poisonConstraintSourceExpr(deferred_constraint.var_, constraint);
+                                            try self.markStaticDispatchRejected(constraint);
                                             try self.unifyWith(deferred_constraint.var_, .err, env);
                                             continue;
                                         } else {
@@ -19566,7 +19587,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     );
 
                     // Unwrap the constraint type
-                    const constraint_fn = constraint_fn_resolved.unwrapFunc() orelse {
+                    if (constraint_fn_resolved.unwrapFunc() == null) {
                         _ = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                             .method_type = .{
                                 .constraint_var = constraint.fn_var,
@@ -19574,9 +19595,10 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 .method_name = constraint.fn_name,
                             },
                         });
-                        try self.unifyWith(deferred_constraint.var_, .err, env);
+                        try self.poisonConstraintSourceExpr(deferred_constraint.var_, constraint);
+                        try self.markStaticDispatchRejected(constraint);
                         continue;
-                    };
+                    }
 
                     const deferred_len_before = env.deferred_static_dispatch_constraints.items.items.len;
                     const fn_result = try self.unifyInContext(method_var, constraint.fn_var, env, .{
@@ -19586,27 +19608,15 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             .method_name = constraint.fn_name,
                         },
                     });
-                    // If there was a problem, then ensure the error gets propagated
-                    // to all args and return types.
                     if (fn_result.isProblem()) {
-                        // Use iterator instead of slice because unifyWith may trigger reallocations
-                        var args_iter = self.types.iterVars(constraint_fn.args);
-                        while (args_iter.next()) |arg| {
-                            // Propagate the error to args — necessary because constraint fn args
-                            // are shared with actual expression vars (e.g., binop lhs/rhs), and
-                            // leaving them non-err after a dispatch failure causes type confusion.
-                            try self.unifyWith(arg, .err, env);
-                        }
-                        try self.unifyWith(deferred_constraint.var_, .err, env);
-                        try self.unifyWith(constraint_fn.ret, .err, env);
-                    } else if (try self.reportRecursiveStaticDispatchIfNeeded(
+                        try self.poisonConstraintSourceExpr(deferred_constraint.var_, constraint);
+                        try self.markStaticDispatchRejected(constraint);
+                    } else if (!try self.reportRecursiveStaticDispatchIfNeeded(
                         deferred_constraint.var_,
                         constraint,
                         deferred_len_before,
                         env,
                     )) {
-                        try self.unifyWith(constraint_fn.ret, .err, env);
-                    } else {
                         try self.reportEffectfulDispatchInExpect(constraint);
                     }
                 }
@@ -19630,6 +19640,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                 var constraint_i: usize = 0;
                 while (constraint_i < constraints_len) : (constraint_i += 1) {
                     const constraint = self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i];
+                    if (self.rejected_static_dispatches.contains(constraint.fn_var)) continue;
                     const constraint_fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
                     if (constraint_fn_resolved == .err) continue;
 
@@ -19854,6 +19865,8 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr))) {
                                         if (self.delayed_dependency_depth == 0) {
                                             try self.poisonRecursiveNonFunctionProcessingDef(processing_def, null, env);
+                                            try self.poisonConstraintSourceExpr(deferred_constraint.var_, constraint);
+                                            try self.markStaticDispatchRejected(constraint);
                                             try self.unifyWith(deferred_constraint.var_, .err, env);
                                             continue;
                                         } else {
@@ -19877,7 +19890,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         region,
                     );
 
-                    const constraint_fn = constraint_fn_resolved.unwrapFunc() orelse {
+                    if (constraint_fn_resolved.unwrapFunc() == null) {
                         _ = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                             .method_type = .{
                                 .constraint_var = constraint.fn_var,
@@ -19885,9 +19898,10 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 .method_name = constraint.fn_name,
                             },
                         });
-                        try self.unifyWith(deferred_constraint.var_, .err, env);
+                        try self.poisonConstraintSourceExpr(deferred_constraint.var_, constraint);
+                        try self.markStaticDispatchRejected(constraint);
                         continue;
-                    };
+                    }
 
                     const deferred_len_before = env.deferred_static_dispatch_constraints.items.items.len;
                     const fn_result = try self.unifyInContext(method_var, constraint.fn_var, env, .{
@@ -19898,20 +19912,14 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         },
                     });
                     if (fn_result.isProblem()) {
-                        var args_iter = self.types.iterVars(constraint_fn.args);
-                        while (args_iter.next()) |arg| {
-                            try self.unifyWith(arg, .err, env);
-                        }
-                        try self.unifyWith(deferred_constraint.var_, .err, env);
-                        try self.unifyWith(constraint_fn.ret, .err, env);
-                    } else if (try self.reportRecursiveStaticDispatchIfNeeded(
+                        try self.poisonConstraintSourceExpr(deferred_constraint.var_, constraint);
+                        try self.markStaticDispatchRejected(constraint);
+                    } else if (!try self.reportRecursiveStaticDispatchIfNeeded(
                         deferred_constraint.var_,
                         constraint,
                         deferred_len_before,
                         env,
                     )) {
-                        try self.unifyWith(constraint_fn.ret, .err, env);
-                    } else {
                         try self.reportEffectfulDispatchInExpect(constraint);
                     }
                 }
@@ -20202,7 +20210,7 @@ fn satisfyBuiltinStrInterpolation(
 
     if (did_err) {
         try self.unifyWith(dispatcher_var, .err, env);
-        try self.markConstraintFunctionAsError(constraint, env);
+        try self.markStaticDispatchRejected(constraint);
         try self.poisonConstraintSourceExpr(dispatcher_var, constraint);
     }
     return true;
@@ -20238,7 +20246,7 @@ fn ensureCustomInterpolationPartsChecked(
     }
 
     if (did_err) {
-        try self.markConstraintFunctionAsError(constraint, env);
+        try self.markStaticDispatchRejected(constraint);
         // Interpolation constraints always retain their introducing expression
         // in provenance, so the function var is only a placeholder for the
         // dispatcher parameter that constraintSourceExpr does not consult.
@@ -21425,7 +21433,7 @@ fn reportInvalidBuiltinFromNumeralLiteral(
     if (!try self.reportInvalidBuiltinFromNumeralInfo(dispatcher_var, num_kind, num_literal, env)) return false;
 
     try self.poisonConstraintSourceExpr(dispatcher_var, constraint);
-    try self.markConstraintFunctionAsError(constraint, env);
+    try self.markStaticDispatchRejected(constraint);
     return true;
 }
 
@@ -21470,7 +21478,7 @@ fn reportUnmaterializableNumeralLiteral(
 
     try self.poisonConstraintSourceExpr(dispatcher_var, constraint);
     try self.unifyWith(dispatcher_var, .err, env);
-    try self.markConstraintFunctionAsError(constraint, env);
+    try self.markStaticDispatchRejected(constraint);
     return true;
 }
 
@@ -21938,7 +21946,7 @@ fn satisfyDerivedIsEqConstraint(
 ) Allocator.Error!void {
     const resolved_constraint = self.types.resolveVar(constraint_fn_var);
     const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
-        try self.unifyWith(constraint_fn_var, .err, env);
+        try self.markStaticDispatchRejected(constraint);
         return;
     };
 
@@ -21953,7 +21961,7 @@ fn satisfyDerivedIsEqConstraint(
             .expected_args = 2,
             .actual_args = @intCast(args.len),
         } });
-        try self.markConstraintFunctionAsError(constraint, env);
+        try self.markStaticDispatchRejected(constraint);
         return;
     }
 
@@ -21965,7 +21973,7 @@ fn satisfyDerivedIsEqConstraint(
     _ = try self.unify(dispatcher_var, arg1, env);
     _ = try self.unify(try self.freshBool(env, region), resolved_func.ret, env);
     if (!self.rewriteDerivedIsEqMethodCallAsStructuralEq(constraint)) {
-        try self.markConstraintFunctionAsError(constraint, env);
+        try self.markStaticDispatchRejected(constraint);
     }
 }
 
@@ -21984,7 +21992,7 @@ fn satisfyDerivedToHashConstraint(
 ) Allocator.Error!void {
     const resolved_constraint = self.types.resolveVar(constraint_fn_var);
     const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
-        try self.unifyWith(constraint_fn_var, .err, env);
+        try self.markStaticDispatchRejected(constraint);
         return;
     };
 
@@ -21999,7 +22007,7 @@ fn satisfyDerivedToHashConstraint(
             .expected_args = 2,
             .actual_args = @intCast(args.len),
         } });
-        try self.markConstraintFunctionAsError(constraint, env);
+        try self.markStaticDispatchRejected(constraint);
         return;
     }
 
@@ -22012,7 +22020,7 @@ fn satisfyDerivedToHashConstraint(
     // The Hasher argument is threaded through unchanged to the return type.
     _ = try self.unify(hasher_arg, ret, env);
     if (!self.rewriteDerivedMethodCallAsStructuralHash(constraint)) {
-        try self.markConstraintFunctionAsError(constraint, env);
+        try self.markStaticDispatchRejected(constraint);
     }
 }
 
@@ -22055,7 +22063,7 @@ fn satisfyImplicitParserConstraint(
     const parse_result_var = try self.freshParseResultTryVar(dispatcher_var, state_var, err_var, env, region);
     const ret_result = try self.unifyInContext(parse_result_var, runtime_func.ret, env, .none);
     if (ret_result.isProblem()) {
-        try self.markConstraintFunctionAsError(constraint, env);
+        try self.markStaticDispatchRejected(constraint);
         return;
     }
 
@@ -22068,7 +22076,7 @@ fn satisfyImplicitParserConstraint(
             // independent expressions remain valid lowering input; the source
             // dispatch itself is the explicit runtime failure.
             try self.poisonConstraintSourceExpr(dispatcher_var, constraint);
-            try self.markConstraintFunctionAsError(constraint, env);
+            try self.markStaticDispatchRejected(constraint);
         },
         .unsupported => try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false),
     }
@@ -22111,7 +22119,7 @@ fn satisfyImplicitEncoderForConstraint(
     const state_var = runtime_args[1];
     const value_result = try self.unifyInContext(dispatcher_var, value_var, env, .none);
     if (value_result.isProblem()) {
-        try self.markConstraintFunctionAsError(constraint, env);
+        try self.markStaticDispatchRejected(constraint);
         return;
     }
 
@@ -22119,7 +22127,7 @@ fn satisfyImplicitEncoderForConstraint(
     const encode_result_var = try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region);
     const ret_result = try self.unifyInContext(encode_result_var, runtime_func.ret, env, .none);
     if (ret_result.isProblem()) {
-        try self.markConstraintFunctionAsError(constraint, env);
+        try self.markStaticDispatchRejected(constraint);
         return;
     }
 
@@ -22131,7 +22139,7 @@ fn satisfyImplicitEncoderForConstraint(
             // obligation belongs to the dispatch expression and is represented
             // there as an explicit runtime error.
             try self.poisonConstraintSourceExpr(dispatcher_var, constraint);
-            try self.markConstraintFunctionAsError(constraint, env);
+            try self.markStaticDispatchRejected(constraint);
         },
         .unsupported => try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false),
     }
@@ -23975,10 +23983,10 @@ fn checkFlexVarConstraintCompatibility(
             self.cir.scheme_use_pairs.items.shrinkRetainingCapacity(scheme_use_pairs_len);
 
             // Checking owns both the diagnostic and the executable failure.
-            // Marking the constraint result as erroneous also makes published
-            // dispatch evidence explicitly resolve to `checked_error`.
+            // The source expression becomes a runtime error, while the exact
+            // rejected obligation tells publication to emit `checked_error`.
             try self.poisonConstraintFailureSource(var_, constraint, options.error_expr);
-            try self.markConstraintFunctionAsError(constraint, env);
+            try self.markStaticDispatchRejected(constraint);
             had_error = true;
         }
     }
@@ -24211,18 +24219,13 @@ fn varsContainError(self: *Self, vars: []const Var, visited: *std.AutoHashMap(Va
     return false;
 }
 
-/// Mark a constraint function's return type as error
-fn markConstraintFunctionAsError(self: *Self, constraint: StaticDispatchConstraint, env: *Env) Allocator.Error!void {
-    const resolved_constraint = self.types.resolveVar(constraint.fn_var);
-    const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
-        try self.unifyWith(constraint.fn_var, .err, env);
-        return;
-    };
-    // Use unify instead of unifyWith because the constraint's return type may be at a
-    // different rank than the current env (e.g., from a local declaration that wasn't
-    // generalized due to the value restriction).
-    const err_var = try self.freshFromContent(.err, env, self.getRegionAt(resolved_func.ret));
-    _ = try self.unify(resolved_func.ret, err_var, env);
+/// Record that checking rejected this exact static-dispatch obligation. Rejection
+/// is evidence metadata, not a type fact: mutating the callable return can poison
+/// a valid receiver when the method contract shares its argument and result.
+fn markStaticDispatchRejected(self: *Self, constraint: StaticDispatchConstraint) Allocator.Error!void {
+    const entry = try self.rejected_static_dispatches.getOrPut(constraint.fn_var);
+    if (entry.found_existing) return;
+    try self.cir.recordRejectedStaticDispatch(constraint.fn_var);
 }
 
 /// Find the source region of the string literal whose from_quote constraint
@@ -24285,9 +24288,15 @@ fn reportRecursiveStaticDispatchIfNeeded(
                 },
             } });
 
-            try self.unifyWith(dispatcher_var, .err, env);
-            try self.markConstraintFunctionAsError(constraint, env);
-            try self.markConstraintFunctionAsError(new_constraint, env);
+            try self.poisonConstraintSourceExpr(dispatcher_var, constraint);
+            try self.poisonConstraintSourceExpr(dispatcher_var, new_constraint);
+            try self.markStaticDispatchRejected(constraint);
+            try self.markStaticDispatchRejected(new_constraint);
+            // Every deferred constraint appended since this dispatch began was
+            // derived while instantiating the rejected method target. None can
+            // survive independently, and retaining the recursive child would
+            // derive the same obligation again until the iteration limit.
+            env.deferred_static_dispatch_constraints.items.shrinkRetainingCapacity(deferred_len_before);
             return true;
         }
     }
@@ -24333,7 +24342,7 @@ fn reportConstraintErrorAt(
     dispatcher_var: Var,
     constraint: StaticDispatchConstraint,
     kind: ConstraintErrorKind,
-    env: *Env,
+    _: *Env,
     is_numeric_default_pass: bool,
     explicit_error_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
@@ -24344,7 +24353,7 @@ fn reportConstraintErrorAt(
     const dedup_entry = try self.reported_constraint_errors.getOrPut(dedup_key);
     if (dedup_entry.found_existing) {
         try self.poisonConstraintFailureSource(dispatcher_var, constraint, explicit_error_expr);
-        try self.markConstraintFunctionAsError(constraint, env);
+        try self.markStaticDispatchRejected(constraint);
         return;
     }
 
@@ -24381,7 +24390,7 @@ fn reportConstraintErrorAt(
     _ = try self.problems.appendProblem(self.cir.gpa, constraint_problem);
 
     try self.poisonConstraintFailureSource(dispatcher_var, constraint, explicit_error_expr);
-    try self.markConstraintFunctionAsError(constraint, env);
+    try self.markStaticDispatchRejected(constraint);
 }
 
 /// Report an error when an anonymous type doesn't support equality
@@ -24389,7 +24398,7 @@ fn reportEqualityError(
     self: *Self,
     dispatcher_var: Var,
     constraint: StaticDispatchConstraint,
-    env: *Env,
+    _: *Env,
 ) Allocator.Error!void {
     const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
     const equality_problem = problem.Problem{ .static_dispatch = .{
@@ -24402,14 +24411,14 @@ fn reportEqualityError(
     _ = try self.problems.appendProblem(self.cir.gpa, equality_problem);
 
     try self.poisonConstraintSourceExpr(dispatcher_var, constraint);
-    try self.markConstraintFunctionAsError(constraint, env);
+    try self.markStaticDispatchRejected(constraint);
 }
 
 fn reportDerivedMapError(
     self: *Self,
     dispatcher_var: Var,
     constraint: StaticDispatchConstraint,
-    env: *Env,
+    _: *Env,
 ) Allocator.Error!void {
     const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
     _ = try self.problems.appendProblem(self.cir.gpa, .{ .static_dispatch = .{
@@ -24421,7 +24430,7 @@ fn reportDerivedMapError(
     } });
 
     try self.poisonConstraintSourceExpr(dispatcher_var, constraint);
-    try self.markConstraintFunctionAsError(constraint, env);
+    try self.markStaticDispatchRejected(constraint);
 }
 
 /// Pool for reusing Env instances to avoid repeated allocations

@@ -495,10 +495,26 @@ test "Monotype gates divergent relations and crash dispatches before type instan
         "fn lowerDispatchExprAtType(",
         "const expected_ret_ty:",
     );
+    try expectContains(crash_dispatch, "expected_ret_cell: DraftTypeCell");
     try expectContains(crash_dispatch, ".crash => |reason|");
-    try expectContains(crash_dispatch, "expected_ret_cell orelse DraftTypeCell{ .sealed = try self.unitType() }");
-    try expectContains(crash_dispatch, "addExprWithTypeCell(crash_cell");
+    try expectContains(crash_dispatch, "addExprWithTypeCell(expected_ret_cell");
+    try expectNotContains(crash_dispatch, "unitType()");
     try expectNotContains(crash_dispatch, "plan.callable_ty");
+
+    const contextual_gate = sourceSliceBetween(
+        lower_source,
+        "fn lowerExprAtTypeCellWithDemand(",
+        "fn lowerExprAtTypeCellInner(",
+    );
+    try expectContains(contextual_gate, "lowerDivergentExprInContext(checked_expr, .{ .type_cell = cell })");
+
+    const result_lookup = sourceSliceBetween(
+        lower_source,
+        "fn dispatchResultTypeNodeInPhase(",
+        "fn callableDispatchResultTypeNodeInPhase(",
+    );
+    try expectContains(result_lookup, "rejected dispatch reached result type lookup without a contextual result cell");
+    try expectNotContains(result_lookup, "unitType()");
 
     const relation_gate = sourceSliceBetween(
         lower_source,

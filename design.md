@@ -3897,6 +3897,23 @@ its plan:
   specialization edge can ever supply and no default applies: the dispatch is
   statically unreachable and lowers to an explicit crash.
 
+Checking records `checked_error` by the raw static-dispatch constraint function
+variable that owns the rejected edge. Rejection is not encoded by changing the
+constraint callable, its return, the dispatcher, or any operand to an erroneous
+type: those solver variables can be shared with independently valid producers.
+`EvidencePass.buildIndexes` loads `ModuleEnv.rejected_static_dispatches`; each
+static-dispatch plan lookup checks this map before resolving its receiver and
+must not infer rejection by inspecting a callable result type.
+
+An independently reported checking error may make a plan's receiver itself
+erroneous even when checking accepted that plan's dispatch (for example, a
+later type mismatch can poison a monomorphic value shared with an earlier
+literal conversion). That explicit receiver-error state also resolves to
+`checked_error`, but it does not add a rejected-dispatch identity: the receiver
+error fences the containing value, while `rejected_static_dispatches` records
+only failures of the dispatch check itself. `EvidencePass` never infers either
+case from the constraint callable or its return type.
+
 `checked_error` and `unreachable_dispatch` are rejected, non-returning
 dispatches. Monotype lowers both to an ordinary Roc runtime crash instead of a
 call, so neither can return a dispatch result value. For `checked_error`, this is
@@ -5560,12 +5577,23 @@ parallel insertion paths at any point:
 ## Dev Backend Register Lifetimes
 
 `LirCodeGen` is the sole authority for LIR local locations. Every assigned
-LIR local is materialized into a stable location—a stack slot for represented
-runtime data—before statement generation continues. Architecture-specific code
-generators own only architecture register masks for short-lived
-instruction-selection temporaries; they do not
-own a second local-location map, move live values between registers and stack,
-or reload LIR local values independently.
+LIR local has one authoritative stable location. Ordinary represented values
+use stack slots. A first-class 128-bit integer vector may instead occupy a
+`vector_reg` location for its straight-line live range. `LirCodeGen` owns the
+live range, register assignment, spill slot, and every transition between the
+two; architecture-specific code generators own only the one
+floating-point/vector register-allocation mask and instruction encoding. They
+do not own a second local-location map or independently move LIR local values.
+
+Floating-point and vector locations draw from the same register-allocation mask:
+XMM registers alias on x86-64 and V registers alias on AArch64. Vector locals
+remain in registers across chained operations and spill only under actual
+register pressure, at control-flow environment boundaries, or before a call
+whose ABI may clobber them. SysV x86-64 treats every XMM register as volatile.
+Windows x64 allocates only its volatile XMM subset unless full-width save and
+restore is emitted. AArch64 does not treat V8-V15 as a persistent 128-bit
+vector resource because its ABI preserves only their low 64 bits; a live Q
+value is spilled before a call.
 
 The number of simultaneously live instruction-selection temporaries must be
 bounded by the emitted operation, never by source or layout nesting depth.
@@ -6855,17 +6883,22 @@ dev backends, wasm, the interpreter, and the Lambda Mono evaluator. Compile-time
 evaluation uses the same vector layouts and dev lowering as runtime dev code,
 and `ConstStore` preserves all 16 vector bytes under the checked vector type.
 
-The correctness-oriented native consumers use the exhaustive bit-level SIMD
-evaluator in `src/builtins/simd.zig`. Dev code passes the operation descriptor,
-explicit source/destination lane kinds, and operand bits through its ordinary
-internal call ABI; x86-64 and AArch64 wrappers preserve the corresponding
-two-register vector values and AArch64 has native Q-register movement. The
-interpreter and Lambda Mono evaluator invoke the same operation contract from
-their explicit layouts. A Lambda Mono value that does not have an integer bit
-representation is rejected explicitly rather than being replaced with zero.
-Wasm instead emits `v128` operations and exact helper
-sequences, including software carryless multiplication where simd128 has no
-instruction.
+The exhaustive bit-level SIMD evaluator in `src/builtins/simd.zig` is the
+correctness oracle for the interpreter, Lambda Mono evaluator, and differential
+tests. Both native dev backends instead dispatch exhaustively on the static LIR
+operation and its explicit source/destination lane kinds and emit native
+packed-integer instruction sequences. There is no compiled scalar evaluator,
+runtime operation descriptor, or fallback call. Missing native coverage is a
+compile-time exhaustiveness failure. A Lambda Mono value that does not have an
+integer bit representation is rejected explicitly rather than being replaced
+with zero. Wasm emits `v128` operations and exact helper sequences, including
+software carryless multiplication where simd128 has no instruction.
+
+Unchecked 16-byte loads are native vector loads. Stores use the explicit LIR
+uniqueness decision: the in-place path emits a native vector store, while the
+non-unique path may call the allocation-aware list-clone primitive before that
+store. This is mechanical consumption of earlier ARC output, never backend
+reference-count inference.
 
 Structural equality treats vectors as ordinary value leaves. Solved-to-LIR
 lowering converts each vector operand to its complete 128-bit bit image and
@@ -6909,9 +6942,12 @@ it twice, but MiniCI runs the dedicated no-skip gate explicitly.
 The full Lambda Mono body-lowering differential sweep over the ordinary eval
 corpus runs once per day on Ubuntu through `nightly_gate.yml`; it is not part of
 PR MiniCI. This does not remove the dedicated SIMD gate's Lambda Mono lane.
-`zig build run-check-simd-codegen` separately requires optimized
+`zig build run-check-simd-codegen` separately requires both optimized and dev
 x86-64 output to contain representative byte-add, pairwise-dot, table-shuffle,
-and carryless-multiply instructions. `zig build run-check-glue-abi` compiles
+and carryless-multiply instructions, rejects deleted scalar-evaluator and load
+helpers from dev binaries, and cross-builds the exhaustive corpus through the
+AArch64 dev backend so every supported operation/type lowering is instantiated.
+`zig build run-check-glue-abi` compiles
 generated Zig and C declarations for x86-64 and AArch64 Linux/macOS/Windows plus
 wasm, compiles Rust for native and wasm, and the native/wasm glue runtime matrix
 calls the generated contracts in both directions.
