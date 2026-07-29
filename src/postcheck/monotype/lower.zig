@@ -39637,11 +39637,14 @@ const BodyContext = struct {
         for (checked_statements) |statement| {
             try self.registerLocalAssociatedProcedures(statement);
             if (!self.checkedStatementHasRuntimeEffect(statement)) continue;
-            if (try self.lowerUninhabitedStatementScrutinee(statement)) |scrutinee| {
-                lowered.termination = .{ .uninhabited = scrutinee };
-                break;
+            const statement_diverges = self.checkedStatementDivergesInLoweredRuntime(statement);
+            if (!statement_diverges) {
+                if (try self.lowerUninhabitedStatementScrutinee(statement)) |scrutinee| {
+                    lowered.termination = .{ .uninhabited = scrutinee };
+                    break;
+                }
             }
-            var termination: StatementTermination = if (self.checkedStatementDivergesInLoweredRuntime(statement))
+            var termination: StatementTermination = if (statement_diverges)
                 .checked_control_transfer
             else
                 .none;
