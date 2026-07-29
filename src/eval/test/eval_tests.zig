@@ -446,6 +446,133 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(18, 27, 1)" },
     },
     .{
+        .name = "optional record field: destructure of a present slot binds Ok",
+        .source_kind = .module,
+        .source =
+        \\my_record : { age ?: U8 }
+        \\my_record = { age: 2 }
+        \\
+        \\main = {
+        \\    { age } = my_record
+        \\    match age {
+        \\        Ok(v) => v
+        \\        Err(MissingField) => 0
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        .name = "optional record field: destructure of a missing slot binds Err(MissingField)",
+        .source_kind = .module,
+        .source =
+        \\my_record : { age ?: U8 }
+        \\my_record = {}
+        \\
+        \\main = {
+        \\    { age } = my_record
+        \\    match age {
+        \\        Ok(v) => v
+        \\        Err(MissingField) => 33
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "33" },
+    },
+    .{
+        .name = "optional record field: destructured binder defaults with ??",
+        .source_kind = .module,
+        .source =
+        \\r : { a ?: U8 }
+        \\r = { a: 4 }
+        \\
+        \\s : { a ?: U8 }
+        \\s = {}
+        \\
+        \\get : { a ?: U8 } -> U8
+        \\get = |rec| {
+        \\    { a } = rec
+        \\    a ?? 40
+        \\}
+        \\
+        \\main = get(r) + get(s)
+        ,
+        .expected = .{ .inspect_str = "44" },
+    },
+    .{
+        .name = "optional record field: nested Ok pattern in a match exercises both branches",
+        .source_kind = .module,
+        .source =
+        \\check : { age ?: U8 } -> U8
+        \\check = |r| match r {
+        \\    { age: Ok(v) } => v
+        \\    { age: Err(_) } => 7
+        \\}
+        \\
+        \\main = check({ age: 3 }) + check({})
+        ,
+        .expected = .{ .inspect_str = "10" },
+    },
+    .{
+        .name = "optional record field: destructure in a function parameter pattern",
+        .source_kind = .module,
+        .source =
+        \\get : { age ?: U8 } -> U8
+        \\get = |{ age }| age ?? 40
+        \\
+        \\main = get({ age: 2 }) + get({})
+        ,
+        .expected = .{ .inspect_str = "42" },
+    },
+    .{
+        .name = "optional record field: destructure of a present heap Str payload",
+        .source_kind = .module,
+        .source =
+        \\my_record : { name ?: Str }
+        \\my_record = { name: Str.repeat("ab", 15) }
+        \\
+        \\main = {
+        \\    { name } = my_record
+        \\    name ?? "anon"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"ababababababababababababababab\"" },
+    },
+    .{
+        .name = "optional record field: destructure of a missing heap Str payload takes the heap fallback",
+        .source_kind = .module,
+        .source =
+        \\my_record : { name ?: Str }
+        \\my_record = {}
+        \\
+        \\main = {
+        \\    { name } = my_record
+        \\    name ?? Str.repeat("no", 14)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"nononononononononononononono\"" },
+    },
+    .{
+        .name = "optional record field: destructure mixes required and optional siblings",
+        .source_kind = .module,
+        .source =
+        \\r : { req : U8, opt ?: U8 }
+        \\r = { req: 1, opt: 2 }
+        \\
+        \\s : { req : U8, opt ?: U8 }
+        \\s = { req: 4 }
+        \\
+        \\get : { req : U8, opt ?: U8 } -> U8
+        \\get = |rec| {
+        \\    { req, opt } = rec
+        \\    req + (opt ?? 10)
+        \\}
+        \\
+        \\main = get(r) + get(s)
+        ,
+        .expected = .{ .inspect_str = "17" },
+    },
+    .{
         .name = "optional record field: records with optional slots compare by presence and payload",
         .source_kind = .module,
         .source =

@@ -3371,9 +3371,39 @@ The kind rules:
   type (lowering wraps it in `Present`, exactly as construction does),
   required/defaulted pin as before, and a still-flex base kind stays flex
   and finalize-defaults to `required`. This realizes the SET side of the
-  typing frame in "Deferred: Unsetting an Optional Field" below. Record
-  destructure patterns still demand `required`; destructuring an optional
-  field is rejected (deferred below).
+  typing frame in "Deferred: Unsetting an Optional Field" below.
+- Record DESTRUCTURE (IMPLEMENTED) is kind-flexible the same way: each
+  destructured field probes the record with a fresh presence var and a
+  FRESH payload var, and the binder stays unbound until the deferred
+  kind-directed judgment (`Check.judgeRecordDestructBinds`, the
+  `pending_record_destructs` queue) binds it — plainly to the payload for
+  `required`/`defaulted`, or to the nominal `Try(payload, [MissingField])`
+  (constructed exactly as a `.?` access's chain result) for `optional`, so
+  destructuring an optional field surfaces its runtime presence. A kind
+  still flex at the judgment pins `required` first — a destructure alone
+  must not silently make a field optional — and the probe's mint is
+  deliberately NOT in `literal_field_kinds` (the judgment owns the kind
+  decision; double-committing with the finalize sweep would be
+  order-dependent). The judgment runs at every generalization boundary —
+  BEFORE the boundary's literal defaulting (a numeral flowing through a
+  destructured field is signature-reachable only once the binder is
+  unified through the row) and again after `judgeOptionalFieldAccesses` —
+  at finalize as the backstop, and at every exhaustiveness-analysis site
+  (match expressions and refutable destructure statements — the analysis
+  and its union-closing see sub-pattern facts through the row only once
+  the binder is bound). A judgment pass only commits a still-flex kind
+  whose presence var the current boundary OWNS (rank at or above the
+  boundary's); lower-ranked entries stay pending for the scope that owns
+  them, so nested boundaries fired mid-statement never pin an enclosing
+  destructure prematurely.
+  Nested sub-patterns (`{ x: Ok(y) }`) check against the binder, so on an
+  optional field they see the Try. The exhaustiveness ANALYSIS itself
+  skips a record pattern position whose field kind resolved `optional`
+  (exhaustive.zig's field-type resolution returns no type for it): the
+  sub-pattern space is the judged binder's Try, which the
+  scrutinee-row-driven analysis cannot see — a known diagnostic gap (a
+  non-exhaustive nested pattern over such a field is caught at runtime by
+  the lowered miss, not statically).
 
 The tagged representation (IMPLEMENTED — nothing about optional fields is
 deferred at lowering anymore; the CheckedModule output and lowering are both
@@ -3413,8 +3443,25 @@ complete):
   default. Record update copies unmentioned optional slots verbatim
   (presence state included); a MENTIONED optional field takes the same
   supplied-field arm as construction — the value lowers at the Present
-  payload type and wraps in the `Present` tag. Destructuring an optional
-  field is still rejected at check, so it never reaches lowering.
+  payload type and wraps in the `Present` tag. DESTRUCTURING an optional
+  field lowers as exactly a one-segment `.?` chain result per field: the
+  bound value is the slot read materialized as Try — `Present(v)` yields
+  `Ok(v)`, `Missing` yields `Err(MissingField)`
+  (`optionalDestructTryExprAtNode`, sharing the slot-test shape of
+  `lowerOptionalFieldAccessChain`) — constructed at the binder's own
+  checked Try node, with the row's `CheckedRecordField.kind` directing
+  required-vs-optional (explicit upstream data; destructs themselves
+  serialize no kind). Statement and parameter positions route such
+  patterns through the materialized-pattern machinery
+  (`patternNeedsExplicitBinding` → `lowerRecordRestPatternBindingThen` /
+  `appendRecordRestPatternStatements`: field slot read, Try
+  materialization, sub-pattern matched against it); a MATCH branch keeps a
+  flat pattern by TRANSLATING the Try-space sub-pattern into slot space
+  (`lowerOptionalDestructChildAtSlotNode`: `Ok(p)` ↦ `Present(p)` — the
+  payload types are identical — `Err(p)` ↦ `Missing`, and a plain binder
+  becomes a compiler-local slot bind whose Try value is a `let` prelude
+  around the branch body and guard, `OptionalDestructBind`), preserving
+  fall-through refutability natively.
 - `.?` access: the CheckedModule output is complete —
   `CheckedFieldAccessSegment.mode` records required/optional per segment
   (`serialized_layout_version` 35), and the body copier's former
@@ -3456,9 +3503,12 @@ literal-minted kinds reach them already committed.
 
 Deferred (explicitly not yet implemented):
 
-- Optional destructure patterns (`{ field ?? fallback }`-style), which need
-  their own typing rules here before implementation. (SETTING an optional
-  field in an update is IMPLEMENTED — see the record-update bullet above.)
+- Fallback destructure patterns (`{ field ?? fallback }`-style), which need
+  their own typing rules here before implementation. (Plain DESTRUCTURE of
+  an optional field is IMPLEMENTED — it binds `Try(payload, [MissingField])`
+  via the deferred kind-directed judgment; see the record-destructure
+  bullet above. SETTING an optional field in an update is IMPLEMENTED —
+  see the record-update bullet above.)
   UNSETTING a field in an update (`{ ..r, x: _ }`) has its typing rule
   sketched in "Deferred: Unsetting an Optional Field" below.
 
@@ -3466,10 +3516,15 @@ Pinned by tests in src/check/test/type_checking_integration.zig: accepted —
 a value annotated `{ world ?: U8 }` may supply or omit `world`, and its
 exported type keeps `world ?: U8`; `.?world` on it typechecks as
 `Try(U8, [MissingField])`; one definition MAY supply an optional field on
-one `if` branch and omit it on the other ("conditional presence accepted").
-Rejected — a direct `.world` read of an optional field is a type error
-(both on a value's own annotation and on a `?:`-signature argument), and
-`.?` on a required field is rejected at finalize.
+one `if` branch and omit it on the other ("conditional presence accepted");
+DESTRUCTURING an optional field binds `Try(U8, [MissingField])` (statement
+and parameter positions, nested `Ok(v)` patterns bind the payload), a
+required sibling's destructure binds plainly, and a destructure of a
+still-flex literal row pins the field `required` (the literal's row renders
+`a:`, not `a ?:`). Rejected — a direct `.world` read of an optional field
+is a type error (both on a value's own annotation and on a `?:`-signature
+argument), `.?` on a required field is rejected at finalize, and
+destructuring a field the record lacks stays a mismatch.
 
 ### Defaulted Fields (Construction-Optional Required Fields)
 
@@ -3664,10 +3719,11 @@ Interactions:
 - `{ x: _ }` WITHOUT `..base` is rejected at canonicalization — unset is
   meaningless in construction, where omission already builds Missing.
 - Patterns: `{ x: _ }` in a destructure already means "match `x`, ignore
-  the value" (wildcard sub-pattern, demands `required`) and KEEPS that
-  meaning — expression `_` (unset) and pattern `_` (wildcard) deliberately
-  diverge. Optional DESTRUCTURE (`{ x ?? fallback }`) stays its own
-  deferred item (Field Kinds above).
+  the value" (wildcard sub-pattern over the kind-flexible destructure
+  probe) and KEEPS that meaning — expression `_` (unset) and pattern `_`
+  (wildcard) deliberately diverge. FALLBACK destructure (`{ x ?? fallback }`)
+  stays its own deferred item (Field Kinds above); plain destructure of an
+  optional field binds the Try (Field Kinds above).
 - Glue / Host Symbol ABI: no impact. The slot union and its layout are
   unchanged; unset only selects variant 0 at runtime.
 
@@ -3691,8 +3747,9 @@ defaulted, of a missing field, and unset judged through a generalized
 function instantiated at a required row. (4) LOWER — route unset fields to
 `optionalSlotMissingExpr`; an eval test (run-test-eval, all backends)
 proving `.?x` on the updated record yields `Err(MissingField)` while other
-fields survive. Beyond this sketch, optional destructure remains deferred
-(orthogonal, listed in Field Kinds); SETTING an optional field in an update
+fields survive. Beyond this sketch, FALLBACK destructure (`{ x ?? d }`)
+remains deferred (orthogonal, listed in Field Kinds; plain optional
+destructure is IMPLEMENTED); SETTING an optional field in an update
 (Present-wrapping `{ ..r, x: v }` on an optional `x`) is now IMPLEMENTED —
 the SET side of this section's typing frame, realized by the kind-flexible
 update probe (see the record-update bullet in Field Kinds).

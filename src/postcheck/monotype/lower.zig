@@ -12868,6 +12868,36 @@ const BodyContext = struct {
         },
     };
 
+    /// One user binder inside a destructured OPTIONAL field's translated
+    /// (slot-space) match pattern, queued during `lowerPatternAtNode` and
+    /// applied by the enclosing match branch as a `let` prelude around the
+    /// branch body (and guard): the flat slot-space pattern binds the raw
+    /// tagged slot, and the user binder's `Try(payload, [MissingField])`
+    /// value is computed from it after the pattern matches (design.md
+    /// "Field Kinds (All-Dynamic Optional Fields)"). Mirrors
+    /// `pattern_literal_guards`' collect/drain discipline.
+    const OptionalDestructBind = struct {
+        /// The user binder's local (registered at the Try / error node).
+        binder_local: DraftLocalId,
+        value: union(enum) {
+            /// The binder is the slot local's tagged value materialized as
+            /// Try — a one-segment `.?` chain result
+            /// (`optionalDestructTryExprAtNode`).
+            slot_to_try: struct {
+                slot_local: DraftLocalId,
+                slot_node: NodeId,
+                try_node: NodeId,
+            },
+            /// The binder is the constant `MissingField` error value: an
+            /// `Err(binder)` sub-pattern translated to the slot's `Missing`
+            /// tag has no runtime payload to read, but the error a `.?`
+            /// access would produce is a pure constant.
+            missing_err: struct {
+                err_node: NodeId,
+            },
+        },
+    };
+
     const ParserPrecomputedRecord = struct {
         renamed_field_locals: []DraftLocalId,
         renamed_field_values: []DraftExprId,
@@ -13153,36 +13183,6 @@ const BodyContext = struct {
         pattern: checked.CheckedPatternId,
         local: DraftLocalId,
         cell: DraftTypeCell,
-    };
-
-    /// One user binder inside a destructured OPTIONAL field's translated
-    /// (slot-space) match pattern, queued during `lowerPatternAtNode` and
-    /// applied by the enclosing match branch as a `let` prelude around the
-    /// branch body (and guard): the flat slot-space pattern binds the raw
-    /// tagged slot, and the user binder's `Try(payload, [MissingField])`
-    /// value is computed from it after the pattern matches (design.md
-    /// "Field Kinds (All-Dynamic Optional Fields)"). Mirrors
-    /// `pattern_literal_guards`' collect/drain discipline.
-    const OptionalDestructBind = struct {
-        /// The user binder's local (registered at the Try / error node).
-        binder_local: DraftLocalId,
-        value: union(enum) {
-            /// The binder is the slot local's tagged value materialized as
-            /// Try — a one-segment `.?` chain result
-            /// (`optionalDestructTryExprAtNode`).
-            slot_to_try: struct {
-                slot_local: DraftLocalId,
-                slot_node: NodeId,
-                try_node: NodeId,
-            },
-            /// The binder is the constant `MissingField` error value: an
-            /// `Err(binder)` sub-pattern translated to the slot's `Missing`
-            /// tag has no runtime payload to read, but the error a `.?`
-            /// access would produce is a pure constant.
-            missing_err: struct {
-                err_node: NodeId,
-            },
-        },
     };
 
     const PendingMatchRecordRestBinding = struct {
@@ -32121,8 +32121,7 @@ const BodyContext = struct {
         } });
     }
 
-    /// Construct an optional field's tagged slot holding a present value:
-    /// `Present(value)` at the slot's union type.
+
     fn optionalSlotPresentExpr(
         self: *BodyContext,
         slot_ty: Type.TypeId,

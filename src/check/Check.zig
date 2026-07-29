@@ -188,6 +188,23 @@ optional_access_watermark: usize = 0,
 /// finalize repeatedly on one Check).
 literal_field_kinds: std.ArrayList(LiteralFieldKind),
 literal_field_kind_watermark: usize = 0,
+/// Record-destructure fields pending the kind-directed binder judgment
+/// (design.md "Field Kinds"): each destructured field probes the record with
+/// a kind-FLEXIBLE fresh presence var (the same mint as a record update's
+/// probe), and the field's value type in the row is a FRESH payload var the
+/// binder is deliberately NOT unified with at pattern-check time. Judged by
+/// `judgeRecordDestructBinds` at every generalization boundary (immediately
+/// after `judgeOptionalFieldAccesses`, so `.?`-driven optional pins land
+/// first) and at finalize: a kind resolved `required`/`defaulted` binds the
+/// binder to the payload plainly; `optional` binds it to
+/// `Try(payload, [MissingField])`; a still-flex kind pins `required` first
+/// (destructuring must not silently make a field optional) and binds
+/// plainly. Deliberately NOT recorded in `literal_field_kinds`: the kind
+/// decision belongs to this judgment, not the finalize defaulting sweep
+/// (double-commit ordering hazard). Judged entries are removed; an entry
+/// whose kind is still flex at a boundary that does not own its rank is
+/// retained for the scope that does (see `judgeRecordDestructBinds`).
+pending_record_destructs: std.ArrayList(PendingRecordDestruct),
 pending_default_seen: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{},
 /// True while `predeclareAnnotationScheme` materializes an annotation ahead
 /// of all body checking: a defaulted field's kind (identity) is minted as
@@ -1609,6 +1626,7 @@ fn initAssumePrepared(
         .pending_default_checks = .empty,
         .optional_field_accesses = .empty,
         .literal_field_kinds = .empty,
+        .pending_record_destructs = .empty,
         .type_decl_generation_states = try initNodeSlots(TypeDeclGenerationState, gpa, node_count, .not_generated),
         .type_decl_dense_indices = try initNodeSlots(u32, gpa, node_count, no_type_decl_dense_index),
         .type_decl_statements = .empty,
@@ -1763,6 +1781,7 @@ pub fn deinit(self: *Self) void {
     self.pending_default_checks.deinit(self.gpa);
     self.optional_field_accesses.deinit(self.gpa);
     self.literal_field_kinds.deinit(self.gpa);
+    self.pending_record_destructs.deinit(self.gpa);
     self.pending_default_seen.deinit(self.gpa);
     self.type_decl_generation_states.deinit(self.gpa);
     self.type_decl_dense_indices.deinit(self.gpa);
@@ -5649,6 +5668,20 @@ const PendingDefaultCheck = struct {
     field_name: Ident.Idx,
 };
 
+/// One record-destructure field awaiting the kind-directed binder judgment
+/// (see `pending_record_destructs` and `judgeRecordDestructBinds`).
+const PendingRecordDestruct = struct {
+    /// The field's kind-flexible presence var (the destructure's probe).
+    presence_var: Var,
+    /// The field's value type in the probed row — a FRESH var, so the binder
+    /// stays independent until the judgment decides plain-vs-Try binding.
+    payload_var: Var,
+    /// The destructure binder (the sub-pattern's var).
+    binder_var: Var,
+    field_name: Ident.Idx,
+    region: Region,
+};
+
 /// Type-check every def in the module, including the numeric-literal
 /// defaulting rounds at finalize (see `checkFileInternal`).
 pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
@@ -9503,6 +9536,9 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
     try self.resolvePendingTupleAccesses(&env, false);
     try self.checkAllConstraints(&env);
     try self.resolveNumericLiteralsFromContext(&env);
+    // Destructure binders bind before the defaulting rounds so defaulting
+    // sees them through the row (see `judgeRecordDestructBinds`).
+    try self.judgeRecordDestructBinds(&env);
     try self.finalizeLiteralDefaults(&env);
 
     // After finalizing literal defaults, resolve any remaining deferred static
@@ -9525,6 +9561,7 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
     const expr_var = ModuleEnv.varFrom(expr_idx);
     try self.checkPendingDefaults(&env);
     try self.judgeOptionalFieldAccesses(&env);
+    try self.judgeRecordDestructBinds(&env);
     _ = try self.checkFlexVarConstraintCompatibility(expr_var, &env, true, .{});
     try self.validateResolvedOpenNumeralLiterals(&env);
     try self.resolvePendingTupleAccesses(&env, true);
@@ -9770,6 +9807,7 @@ fn predeclareAnnotationScheme(self: *Self, annotation_idx: CIR.Annotation.Idx, e
         .use_last_var,
     );
     try self.judgeOptionalFieldAccesses(env);
+    try self.judgeRecordDestructBinds(env);
     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
     env.var_pool.popRank();
 
@@ -10022,6 +10060,10 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
             member_roots[i] = ModuleEnv.varFrom(member_def.expr);
         }
 
+        // Destructure binders bind before the boundary's literal defaulting
+        // (inside `runGroupBoundary`) so defaulting sees them through the
+        // row (see `judgeRecordDestructBinds`).
+        try self.judgeRecordDestructBinds(env);
         try self.runGroupBoundary(member_roots, env);
         for (scc.defs) |member_def_idx| {
             const member_def = self.cir.store.getDef(member_def_idx);
@@ -10030,6 +10072,7 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
             }
         }
         try self.judgeOptionalFieldAccesses(env);
+        try self.judgeRecordDestructBinds(env);
         try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
         try self.judgeAmbiguityCandidatesAtGeneralizationMultiRoot(member_roots);
         env.var_pool.popRank();
@@ -12598,10 +12641,37 @@ fn checkPatternHelp(
                 // Set the destruct var to redirect to the field pattern var
                 _ = try self.unify(destruct_var, field_pattern_var, env);
 
+                // The destructured field probes the record with a
+                // kind-FLEXIBLE presence var (the same mint as a record
+                // update's probe): the record's kind decides what the binder
+                // sees. The row's value type is a FRESH payload var — the
+                // binder is deliberately NOT the field's value type here,
+                // because an `optional` kind binds it to
+                // `Try(payload, [MissingField])` instead of the payload
+                // itself. `judgeRecordDestructBinds` performs that
+                // kind-directed binding at every generalization boundary
+                // (and finalize); a still-flex kind pins `required` there —
+                // destructuring must not silently make a field optional —
+                // which is also why this mint is NOT recorded in
+                // `literal_field_kinds` (design.md "Field Kinds").
+                const destruct_region = self.getRegionAt(destruct_var);
+                const presence_var = try self.fresh(env, destruct_region);
+                const payload_var = try self.fresh(env, destruct_region);
+                try self.pending_record_destructs.append(self.gpa, .{
+                    .presence_var = presence_var,
+                    .payload_var = payload_var,
+                    .binder_var = destruct_var,
+                    .field_name = destruct.label,
+                    .region = destruct_region,
+                });
+
                 // Append it to the scratch records array
                 try self.scratch_record_fields.append(types_mod.RecordField{
                     .name = destruct.label,
-                    .presence = .{ .required = ModuleEnv.varFrom(destruct_var) },
+                    .presence = .{ .unknown = .{
+                        .presence = presence_var,
+                        .var_ = payload_var,
+                    } },
                 });
             }
 
@@ -15144,6 +15214,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
     // If this type of expr should be generalized, generalize it!
     if (should_generalize) {
+        // Bind pending record-destructure binders BEFORE boundary literal
+        // defaulting: a numeral flowing through a destructured field only
+        // becomes signature-reachable once the binder is unified through
+        // the row, and defaulting's reachability classification must see
+        // that link (see `judgeRecordDestructBinds`).
+        try self.judgeRecordDestructBinds(env);
         if (env.rank() == self.currentGroupBoundaryRank()) {
             // This frame is the enclosing group's generalization boundary (a
             // singleton group's def RHS). Resolve dispatch obligations into
@@ -15158,6 +15234,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             try self.defaultLiteralsAtGeneralizationBoundary(expr_var, env);
         }
         try self.judgeOptionalFieldAccesses(env);
+        try self.judgeRecordDestructBinds(env);
         try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
         // The scheme's vars froze at generalized rank: judge this def's
         // dispatch-constrained receivers now, while the judgment is a
@@ -15982,6 +16059,11 @@ fn checkPatternExhaustiveness(
 ) std.mem.Allocator.Error!void {
     if (!self.patternNeedsExhaustiveness(pattern_idx)) return;
 
+    // Same reasoning as the match-expression analysis site: the analysis and
+    // its union-closing see sub-patterns through the scrutinee row, so the
+    // pending record-destructure binds must be judged first.
+    try self.judgeRecordDestructBinds(env);
+
     var open_cache = exhaustive.NominalOpenCache.init(self.gpa);
     defer open_cache.deinit();
     const result_or_err = exhaustive.checkDestructure(
@@ -16214,9 +16296,13 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     // This statement's binding-group boundary: the pattern and
                     // any recursive links generalize together, then the frame
                     // pops so the statement's own var unifies with the
-                    // finished scheme below.
+                    // finished scheme below. Destructure binders bind first
+                    // so boundary defaulting sees them through the row (see
+                    // `judgeRecordDestructBinds`).
+                    try self.judgeRecordDestructBinds(env);
                     try self.defaultLiteralsAtGeneralizationBoundary(decl_pattern_var, env);
                     try self.judgeOptionalFieldAccesses(env);
+                    try self.judgeRecordDestructBinds(env);
                     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
                     env.var_pool.popRank();
                 }
@@ -17249,6 +17335,15 @@ fn checkMatchExpr(
 
     if (!match.skip_exhaustiveness and !had_type_error and !cond_is_error and !has_invalid_try and !cond_always_crashes) {
         const match_region = self.getRegionAt(@enumFromInt(@intFromEnum(expr_idx)));
+
+        // Exhaustiveness analysis (and its union-closing) walks the SCRUTINEE
+        // type, so every record-destructure binder in the branch patterns must
+        // already be bound through its row (the closure of a tag union inside
+        // a destructured field is discovered via the field's value type).
+        // Judge the pending destructure binds now — an analysis site is a
+        // commitment point exactly like a generalization boundary (a
+        // still-flex kind pins `required` here; see `judgeRecordDestructBinds`).
+        try self.judgeRecordDestructBinds(env);
 
         self.known_empty_payload_vars_match.clearRetainingCapacity();
         const cond_constructors_known = try self.collectKnownEmptyPayloadVarsForExpr(match.cond, cond_var, &self.known_empty_payload_vars_match);
@@ -19363,6 +19458,101 @@ fn judgeOptionalFieldAccesses(self: *Self, env: *Env) std.mem.Allocator.Error!vo
     }
 }
 
+/// Judge every not-yet-judged record-destructure field bind (design.md
+/// "Field Kinds"): the destructure probed the record with a kind-flexible
+/// presence var and left the binder unbound, so the record's OWN kind
+/// directs what the binder sees:
+///
+/// - `required`/`defaulted`: the binder is the field's value (plain bind,
+///   the pre-optional-fields semantics).
+/// - `optional`: the binder is `Try(payload, [MissingField])`, constructed
+///   exactly as a `.?` access's chain result (`mkTryContent` over
+///   `makeFieldMissingTag`) — destructuring an optional field surfaces its
+///   runtime presence, it never invents the value.
+/// - still-flex: pinned to `required` FIRST (the mirror of
+///   `judgeOptionalFieldAccesses`' optional pin — a destructure alone must
+///   not silently make a field optional), then bound plainly.
+/// - `.err` (or any poisoned content): bound plainly to the payload — the
+///   kind mismatch was already reported and err absorbs; no cascade.
+///
+/// Called at every generalization boundary — BEFORE the boundary's literal
+/// defaulting (a numeral flowing through a destructured field is only
+/// signature-reachable once the binder is unified through the row, and
+/// defaulting's reachability classification must see that link) and again
+/// after `judgeOptionalFieldAccesses` — and at finalize as the monomorphic
+/// backstop; pinning before the scheme forms is what makes the judgment
+/// survive instantiation, exactly like the access judgment. Consequence of
+/// the pre-defaulting pass: a field that is BOTH destructured and
+/// `.?`-accessed in one def with no annotation ever pinning its kind
+/// resolves destructure-first (required) at that boundary, and the `.?` is
+/// then rejected as an access of an always-present field.
+///
+/// ALSO called at every exhaustiveness-analysis site (match expressions and
+/// refutable destructure statements): the analysis and its union-closing
+/// walk the SCRUTINEE type, so a destructured field's sub-pattern facts are
+/// only visible to them through the row once the binder is bound. An
+/// analysis site is therefore a commitment point too — a destructure whose
+/// field kind is still flex there commits to `required` at the site (in
+/// checking order), which is also what the pre-optional-fields `.required`
+/// row demand did at pattern-check time.
+fn judgeRecordDestructBinds(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    var retained: usize = 0;
+    var index: usize = 0;
+    while (index < self.pending_record_destructs.items.len) : (index += 1) {
+        const pending = self.pending_record_destructs.items[index];
+        const resolved = self.types.resolveVar(pending.presence_var);
+        switch (resolved.desc.content) {
+            .field_presence => |field_presence| switch (field_presence) {
+                .required, .defaulted => {
+                    _ = try self.unify(pending.binder_var, pending.payload_var, env);
+                },
+                .optional => {
+                    const missing_err_var = try self.makeFieldMissingTag(env, pending.region);
+                    const try_var = try self.freshFromContent(
+                        try self.mkTryContent(pending.payload_var, missing_err_var),
+                        env,
+                        pending.region,
+                    );
+                    _ = try self.unify(pending.binder_var, try_var, env);
+                },
+            },
+            .flex => {
+                // A still-flex kind commits to `required` only at a
+                // commitment point that OWNS the var: the boundary's
+                // generalize call is about to promote exactly the vars at
+                // (or above) the current rank. A lower-ranked presence var
+                // belongs to an enclosing scope still mid-inference — a
+                // nested boundary (an annotation predeclare or inner
+                // lambda fired while checking the destructure's own RHS)
+                // must not pin it before the destructure statement's own
+                // unification has run. The entry stays pending for the
+                // scope that owns it (finalize as the monomorphic
+                // backstop, where every remaining non-generalized var is
+                // at rank).
+                if (@intFromEnum(resolved.desc.rank) < @intFromEnum(env.rank())) {
+                    self.pending_record_destructs.items[retained] = pending;
+                    retained += 1;
+                    continue;
+                }
+                const required_var = try self.freshFromContent(
+                    .{ .field_presence = .required },
+                    env,
+                    pending.region,
+                );
+                _ = try self.unify(pending.presence_var, required_var, env);
+                _ = try self.unify(pending.binder_var, pending.payload_var, env);
+            },
+            else => {
+                // `.err` and other poisoned contents: the kind mismatch was
+                // already reported; bind the binder to the payload so its
+                // uses don't cascade (err absorbs).
+                _ = try self.unify(pending.binder_var, pending.payload_var, env);
+            },
+        }
+    }
+    self.pending_record_destructs.shrinkRetainingCapacity(retained);
+}
+
 /// Kind defaulting as a checker pass (design.md "Field Kinds"): commit every
 /// literal-minted field kind that is still undetermined at finalize — nothing
 /// ever pinned it to either kind — to `required`, the zero-cost kind, by
@@ -19481,6 +19671,7 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     // "Defaulted Fields").
     try self.checkPendingDefaults(env);
     try self.judgeOptionalFieldAccesses(env);
+    try self.judgeRecordDestructBinds(env);
 
     try self.checkAllConstraints(env);
     try self.resolvePendingTupleAccesses(env, false);

@@ -653,6 +653,134 @@ test "check type - record - opt - chain then default unwraps to the field type" 
     );
 }
 
+test "check type - record - opt - destructure of optional field binds Try" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_record : { hello: Str, world ?: U8 }
+        \\my_record = { hello : "hi" }
+        \\
+        \\use_it = {
+        \\    { world, .. } = my_record
+        \\    world
+        \\}
+    ;
+    // Destructuring an optional field surfaces its runtime presence: the
+    // binder is `Try(U8, [MissingField])`, constructed by the deferred
+    // kind-directed judgment (`judgeRecordDestructBinds`) exactly as a `.?`
+    // access's chain result (design.md "Field Kinds").
+    try checkTypesModule(source, .{ .pass = .{ .def = "use_it" } },
+        \\Try(U8, [MissingField])
+    );
+}
+
+test "check type - record - opt - destructure of required sibling unchanged" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_record : { hello: Str, world ?: U8 }
+        \\my_record = { hello : "hi" }
+        \\
+        \\use_it = {
+        \\    { hello, .. } = my_record
+        \\    hello
+        \\}
+    ;
+    // A required field's destructure binds the value plainly, exactly as
+    // before optional fields existed.
+    try checkTypesModule(source, .{ .pass = .{ .def = "use_it" } },
+        \\Str
+    );
+}
+
+test "check type - record - opt - destructure of still-flex base pins required" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_record = { a: "hi" }
+        \\
+        \\use_it = {
+        \\    { a } = my_record
+        \\    a
+        \\}
+    ;
+    // Nothing ever declared `a` optional, so the destructure judgment pins
+    // the still-flex kind to `required` and binds plainly — a destructure
+    // alone must not silently make a field optional. The binder is the plain
+    // field value...
+    try checkTypesModule(source, .{ .pass = .{ .def = "use_it" } },
+        \\Str
+    );
+}
+
+test "check type - record - opt - destructure of still-flex base commits the row kind required" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_record = { a: "hi" }
+        \\
+        \\use_it = {
+        \\    { a } = my_record
+        \\    a
+        \\}
+    ;
+    // ...and the literal's row renders the committed `required` kind (`a:`,
+    // not `a ?:`) — the destructure judgment made the kind decision; the
+    // finalize defaulting sweep never saw an undetermined kind here.
+    try checkTypesModule(source, .{ .pass = .{ .def = "my_record" } },
+        \\{ a: Str }
+    );
+}
+
+test "check type - record - opt - destructure with nested Ok pattern binds the payload" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\check : { age ?: U8 } -> U8
+        \\check = |r| match(r) {
+        \\    { age: Ok(v) } => v
+        \\    { age: Err(_) } => 7
+        \\}
+    ;
+    // The nested sub-pattern checks against the binder's judged type — the
+    // nominal `Try(U8, [MissingField])` — so `Ok(v)` binds `v : U8` and the
+    // `Err` branch covers the missing slot.
+    try checkTypesModule(source, .{ .pass = .{ .def = "check" } },
+        \\{ age ?: U8 } -> U8
+    );
+}
+
+test "check type - record - opt - destructure in a parameter pattern binds Try" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\get : { age ?: U8 } -> Try(U8, [MissingField])
+        \\get = |{ age }| age
+    ;
+    // Parameter destructure positions run the same judgment: the binder is
+    // the field's Try, which the annotation's return type pins exactly.
+    try checkTypesModule(source, .{ .pass = .{ .def = "get" } },
+        \\{ age ?: U8 } -> Try(U8, [MissingField])
+    );
+}
+
+test "check type - record - opt - destructure of a missing field still rejected" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_record = { a: 1 }
+        \\
+        \\use_it = {
+        \\    { nope } = my_record
+        \\    nope
+        \\}
+    ;
+    // The kind-flexible destructure probe changes what a binder SEES, not
+    // which fields exist: destructuring a field the record does not have is
+    // the same mismatch as before.
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
 test "check type - record - opt - parenthesized receiver ends the chain (nested stays error)" {
     const source =
         \\main! = |_| {}

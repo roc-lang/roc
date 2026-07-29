@@ -1153,6 +1153,7 @@ test "Monotype recursive materialization predicate stays paired with graph shell
     try expectContains(predicate, ".nominal => |nominal| try self.patternNeedsExplicitBinding(nominal.backing_pattern)");
     try expectContains(predicate, ".tuple => |items|");
     try expectContains(predicate, "patternRequiresOwnMaterialization");
+    try expectContains(predicate, "recordDestructsHaveOptionalField");
 
     const prepass = sourceSliceBetween(
         lower_source,

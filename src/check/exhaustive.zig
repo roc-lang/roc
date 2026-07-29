@@ -2536,6 +2536,7 @@ fn getRecordFieldTypeByName(type_store: *TypeStore, record_type: Var, field_name
 
                     for (field_names, field_presences) |name, presence| {
                         if (name.eql(field_name)) {
+                            if (fieldKindIsOptional(type_store, presence)) return null;
                             return presence.typeVar();
                         }
                     }
@@ -2550,6 +2551,7 @@ fn getRecordFieldTypeByName(type_store: *TypeStore, record_type: Var, field_name
 
                     for (field_names, field_presences) |name, presence| {
                         if (name.eql(field_name)) {
+                            if (fieldKindIsOptional(type_store, presence)) return null;
                             return presence.typeVar();
                         }
                     }
@@ -2572,6 +2574,23 @@ fn getRecordFieldTypeByName(type_store: *TypeStore, record_type: Var, field_name
             .flex, .rigid, .field_presence, .err => return null,
         }
     }
+}
+
+/// Whether a record field's kind resolved `optional` (design.md "Field
+/// Kinds"). A destructured OPTIONAL field's sub-pattern space is the nominal
+/// `Try(payload, [MissingField])` the checker's destructure judgment bound
+/// the binder to — NOT the field's value type on the row. This analysis
+/// works from the scrutinee row alone and has no access to that judged
+/// binder type, so record specialization treats an optional field like a
+/// field it cannot resolve (`error.TypeError` upstream): the analysis is
+/// skipped rather than run against the wrong space. Type checking still
+/// fully validates the sub-patterns against the binder's Try type.
+fn fieldKindIsOptional(type_store: *TypeStore, presence: types.RecordField.Presence) bool {
+    const presence_var = presence.presenceVar() orelse return false;
+    return switch (type_store.resolveVar(presence_var).desc.content) {
+        .field_presence => |field_presence| field_presence == .optional,
+        else => false,
+    };
 }
 
 /// Get the element type from a List type.
