@@ -5670,6 +5670,7 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
                 // util.buildIsolatedTestEnvMap touches std.c (Zig 0.16 requires explicit link_libc).
                 .link_libc = true,
+                .imports = &.{.{ .name = "test_harness", .module = createTestHarnessModule(b, roc_modules) }},
             }),
             .filters = test_filters,
         });
@@ -5760,6 +5761,7 @@ pub fn build(b: *std.Build) void {
                     .target = target,
                     .optimize = optimize,
                     .link_libc = true,
+                    .imports = &.{.{ .name = "test_harness", .module = createTestHarnessModule(b, roc_modules) }},
                 }),
                 .filters = test_filters,
             });
@@ -5865,6 +5867,7 @@ pub fn build(b: *std.Build) void {
                     .target = target,
                     .optimize = optimize,
                     .link_libc = true,
+                    .imports = &.{.{ .name = "test_harness", .module = createTestHarnessModule(b, roc_modules) }},
                 }),
                 .filters = test_filters,
             });

@@ -13,6 +13,7 @@ platform ""
         inputs_dir: "targets/",
         x64glibc: { inputs: [app], output: Archive },
         arm64mac: { inputs: [app], output: Archive },
+        x64win: { inputs: [app], output: Archive },
     }
 
 run_for_host : Str -> Str
