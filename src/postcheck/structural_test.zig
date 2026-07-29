@@ -739,6 +739,10 @@ test "Monotype runtime demands snapshot pass-local compositional impossibility p
     try expectContains(proof_data, "forward: RuntimeImpossibilityProofId");
     try expectContains(proof_data, "impossibility_proof: ?RuntimeImpossibilityProofId");
     try expectContains(proof_data, "statement_success");
+    try expectContains(proof_data, "const RuntimeDemandGuardFrameStack = struct");
+    try expectContains(proof_data, "parent: ?RuntimeDemandGuardFrameId");
+    try expectContains(proof_data, "try draft.runtime_demand_guard_frames.append");
+    try expectNotContains(proof_data, "alloc(RuntimeDemandGuardFrame, existing.len + 1)");
     try expectContains(proof_data, "runtime impossibility proof graph contained a cycle");
 
     const composition = sourceSliceBetween(
@@ -759,8 +763,10 @@ test "Monotype runtime demands snapshot pass-local compositional impossibility p
         "fn cellImpossibilityProof(",
         "fn patDataImpossibilityProof(",
     );
-    try expectContains(cell_proof, ".graph_node => |node| try self.nodeImpossibilityProof(node)");
+    try expectContains(cell_proof, ".graph_node => |node| try self.maybeNodeImpossibilityProof(node)");
     try expectContains(cell_proof, ".sealed => |ty| if (try self.typeIsProvenUninhabited(ty))");
+    try expectContains(cell_proof, "else\n                null");
+    try expectNotContains(cell_proof, ".never");
     try expectNotContains(cell_proof, "toGraphNode");
 
     const cell_boundary = sourceSliceBetween(
@@ -790,8 +796,9 @@ test "Monotype runtime demands snapshot pass-local compositional impossibility p
         "fn runtimeDemandGuardFrameAddresses(",
     );
     try expectContains(statement_frames, "runtimeDemandGuardFrameAddressRaw(@intFromEnum(statement_id), .statement_success)");
+    try expectContains(statement_frames, "try pushRuntimeDemandGuardFrame(");
     try expectContains(lower_source, "body_ctx.runtime_demand_guard_frames = source_ctx.runtime_demand_guard_frames");
-    try expectContains(lower_source, "if (std.meta.eql(frame.address, address)) return self.runtime_demand_guard_frames");
+    try expectContains(lower_source, "runtimeDemandGuardFrameStackContains(self.draft, self.runtime_demand_guard_frames, address)");
     try expectContains(lower_source, "const proof_reservation = try self.addImpossibilityProof(.pending)");
     try expectContains(lower_source, ".{ .forward = proof }");
     try expectContains(lower_source, "resolveDraftConstUseReservations(body_draft)");
