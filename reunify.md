@@ -2384,16 +2384,31 @@ to state one of its own binders. The binding mechanism is correct where it
 applies, and what the remaining executions want is a binder the bound
 scheme does not contain.
 
-That is the section 7.3 case, and `resolveCalleeBinding` already declines
-it explicitly: a scheme with captured binders returns unresolved, because
-a call-site binding states that scheme's own binders and nothing else,
-while a callee that captures enclosing binders needs the lexical parents
-its own specialization frame links. The 1015 executions under an
-unresolved binding and the 435 under a resolved one are then the same
-shape seen from two sides — in the first the whole binding is declined, in
-the second it is stated and the position reaches past it. Both close by
-linking the lexical parent chain into the callee binding, not by
-recording more sites.
+`resolveCalleeBinding` declines a scheme with captured binders outright,
+citing exactly that case, so linking the caller's chain as the callee's
+lexical parents was the obvious reading. It is wrong. Lifting the refusal
+and projecting the caller's environment onto the captured binders in both
+binding paths — the same `bindCaptured` the specialization frame uses —
+changes nothing at all: informative stays 2754, `scheme_binder_unbound`
+stays 1485, and the 1015/435/35 attribution is unchanged to the unit. The
+reason is that the refusal never fires. `rehearsal_callee_captures_linked`
+is zero in all 3139 blocks: **no callee scheme reaching the binding has
+captured binders**, so there is nothing to link. `rehearsal_captured_binder`
+is zero as well, and even the specialization frames report
+`rehearsal_env_parent_absent` 22210 times with no linked parent, so
+captured binders are effectively absent from this corpus. The change was
+run and reverted.
+
+What "another scheme" means is therefore still open. For the 1015 under an
+unresolved binding it is trivially true — the binding was declined, so the
+operand's owner node is the requesting frame's and the binder is the
+callee's. For the 435 under a resolved binding it is the real question:
+the operand's owner node IS the bound callee scheme's, the callee captures
+nothing, and the position still reaches a binder some other scheme
+generalizes. The reading to test next is that the position is a
+CALLER-side type being translated under the callee's environment, which
+would make it an operand attribution error at the `callee_checked` seam
+rather than a missing binding.
 
 **Why the receiver rule cannot be widened to cover them.** The
 `constraint_dispatch_receiver` rule reads binder values positionally from
