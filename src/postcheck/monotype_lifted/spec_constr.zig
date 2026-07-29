@@ -559,11 +559,6 @@ const LoopPattern = struct {
     /// attempt's owner reads this after cloning the body, discards the clone,
     /// and retries with the demoted leaves carried as runtime scalars.
     any_demoted: bool,
-    /// When the surrounding continuation consumes only part of the loop's
-    /// compiler-generated result tuple, every break cloned for this loop uses
-    /// the same exact result-tuple item subset. This includes breaks nested in a
-    /// value-producing expression off the loop body's final control spine.
-    result_tuple_subset: ?LoopResultTupleSubset,
 };
 
 /// The result of supplying one loop slot's leaves from a back edge: the
@@ -573,15 +568,21 @@ const SuppliedSlot = struct {
     demoted: bool,
 };
 
-/// Exact item subset of a loop's compiler-generated state-result tuple. Monotype
-/// keeps every reassigned binder in the loop result so later source statements
-/// can observe it. Once the surrounding `let` exposes the complete tail,
-/// SpecConstr can remove result fields whose binders have no use in that tail.
-/// Back-edge state is deliberately unaffected: only exit values use this map.
-const LoopResultTupleSubset = struct {
+/// Exact live items passed from a loop's compiler-generated state result to the
+/// continuation that consumes it. Back-edge state is deliberately unaffected:
+/// a one-item exit breaks with that existing item type, while a multi-item exit
+/// jumps to a typed shared continuation.
+const LoopExitSelection = struct {
     source_arity: usize,
     kept_indices: []const u32,
-    ty: Type.TypeId,
+    result_ty: Type.TypeId,
+    transfer: union(enum) {
+        break_value,
+        jump: struct {
+            target: Ast.JoinPointId,
+            sites: *std.ArrayList(Ast.ExprId),
+        },
+    },
 };
 
 /// A function currently being inlined, with the number of known-constructor
@@ -1785,7 +1786,7 @@ const Pass = struct {
 
     /// Whether cloning only a loop would lose the enclosing tail's exact
     /// demand for its compiler-generated state result. Such a function is
-    /// cloned as a whole so `projectedLoopLetExpr` can project unused
+    /// cloned as a whole so `loopWithSelectedExitValues` can omit unused
     /// exit fields while leaving the complete back-edge state intact.
     fn bodyHasProjectableLoopResult(self: *Pass, expr_id: Ast.ExprId) bool {
         const expr = self.program.getExpr(expr_id);
@@ -4114,7 +4115,6 @@ const Cloner = struct {
     subst: Subst,
     inline_stack: std.ArrayList(InlineFrame),
     loop_stack: std.ArrayList(LoopPattern),
-    loop_result_tuple_subsets: std.AutoHashMap(Ast.ExprId, LoopResultTupleSubset),
     join_stack: std.ArrayList(ActiveJoinClone),
     /// Remaining arms the shape-preserving let-of-case rewrite may still
     /// process. That rewrite re-clones each arm's body against the small
@@ -4175,7 +4175,6 @@ const Cloner = struct {
             .subst = Subst.init(pass.allocator),
             .inline_stack = .empty,
             .loop_stack = .empty,
-            .loop_result_tuple_subsets = std.AutoHashMap(Ast.ExprId, LoopResultTupleSubset).init(pass.allocator),
             .join_stack = .empty,
             .let_case_shape_growth = .init(let_case_shape_arm_budget),
             .let_case_builds = .empty,
@@ -4204,7 +4203,6 @@ const Cloner = struct {
             .subst = Subst.init(pass.allocator),
             .inline_stack = .empty,
             .loop_stack = .empty,
-            .loop_result_tuple_subsets = std.AutoHashMap(Ast.ExprId, LoopResultTupleSubset).init(pass.allocator),
             .join_stack = .empty,
             .let_case_shape_growth = .init(let_case_shape_arm_budget),
             .let_case_builds = .empty,
@@ -4227,7 +4225,6 @@ const Cloner = struct {
     fn deinit(self: *Cloner) void {
         self.inline_stack.deinit(self.pass.allocator);
         self.loop_stack.deinit(self.pass.allocator);
-        self.loop_result_tuple_subsets.deinit();
         self.join_stack.deinit(self.pass.allocator);
         self.let_case_builds.deinit(self.pass.allocator);
         self.active_recursive_value_locals.deinit();
@@ -5074,16 +5071,7 @@ const Cloner = struct {
                 const value = try self.cloneLoopValue(expr.ty, loop, &bindings);
                 return try self.wrapBindings(bindings, try self.materialize(value));
             },
-            .break_ => |maybe| .{ .break_ = if (maybe) |value| blk: {
-                const projected = if (self.loop_stack.getLastOrNull()) |loop|
-                    if (loop.result_tuple_subset) |subset| projected: {
-                        const result = (try self.trimLoopResultTuple(value, subset)) orelse value;
-                        break :projected result;
-                    } else value
-                else
-                    value;
-                break :blk try self.cloneExpr(projected);
-            } else null },
+            .break_ => |maybe| .{ .break_ = if (maybe) |value| try self.cloneExpr(value) else null },
             .continue_ => |continue_| return try self.cloneContinue(expr.ty, continue_),
             .join_point => |join_point| return try self.cloneJoinPoint(expr.ty, join_point),
             .jump => |jump| blk: {
@@ -5203,7 +5191,7 @@ const Cloner = struct {
     }
 
     fn cloneLetValue(self: *Cloner, let_: anytype, bindings: *BindingChain) Common.LowerError!Value {
-        if (try self.projectedLoopLetExpr(let_)) |projected| return try self.cloneExprValueInto(projected, bindings);
+        if (try self.loopWithSelectedExitValues(let_)) |selected| return try self.cloneExprValueInto(selected, bindings);
 
         var value_bindings: BindingChain = .{};
         const value = try self.cloneExprValueInto(let_.value, &value_bindings);
@@ -5250,13 +5238,12 @@ const Cloner = struct {
         } } }) };
     }
 
-    /// Project dead fields from a loop's result ABI using the exact binding
-    /// pattern and continuation that consume it. This is a result-boundary
-    /// transformation only: the loop still carries its complete state through
-    /// every `continue`, while each `break` returns only fields used after the
-    /// loop. Returns null when the binding is not a compiler-generated tuple
-    /// state or when every field remains live.
-    fn projectedLoopLetExpr(self: *Cloner, let_: anytype) Common.LowerError!?Ast.ExprId {
+    /// Remove dead values from a loop's exit ABI using the exact binding pattern
+    /// and continuation that consume it. The loop still carries its complete
+    /// state through every `continue`; exits transfer only the live values to the
+    /// unchanged continuation. Returns null when the binding is not a
+    /// compiler-generated tuple state or when every value remains live.
+    fn loopWithSelectedExitValues(self: *Cloner, let_: anytype) Common.LowerError!?Ast.ExprId {
         const loop_expr = self.pass.program.getExpr(let_.value);
         const loop = switch (loop_expr.data) {
             .loop_ => |loop| loop,
@@ -5265,16 +5252,14 @@ const Cloner = struct {
 
         var kept_indices = std.ArrayList(u32).empty;
         defer kept_indices.deinit(self.pass.allocator);
-        var kept_pats = std.ArrayList(Ast.PatId).empty;
-        defer kept_pats.deinit(self.pass.allocator);
-        var kept_tys = std.ArrayList(Type.TypeId).empty;
-        defer kept_tys.deinit(self.pass.allocator);
+        var kept_params = std.ArrayList(Ast.TypedLocal).empty;
+        defer kept_params.deinit(self.pass.allocator);
         var source_arity: usize = 0;
         var aggregate_local: ?Ast.LocalId = null;
         var aggregate_tys: ?[]Type.TypeId = null;
         defer if (aggregate_tys) |tys| self.pass.allocator.free(tys);
-        var projected_locals: ?[]?Ast.LocalId = null;
-        defer if (projected_locals) |locals| self.pass.allocator.free(locals);
+        var selected_locals: ?[]?Ast.LocalId = null;
+        defer if (selected_locals) |locals| self.pass.allocator.free(locals);
 
         switch (self.pass.program.getPat(let_.bind).data) {
             .tuple => |items_span| {
@@ -5290,8 +5275,7 @@ const Cloner = struct {
                     };
                     if (localUseCountInExpr(self.pass.program, local, let_.rest) == 0) continue;
                     try kept_indices.append(self.pass.allocator, @intCast(index));
-                    try kept_pats.append(self.pass.allocator, pat_id);
-                    try kept_tys.append(self.pass.allocator, pat.ty);
+                    try kept_params.append(self.pass.allocator, .{ .local = local, .ty = pat.ty });
                 }
             },
             .bind => |local| {
@@ -5310,58 +5294,29 @@ const Cloner = struct {
                 if (!collectTupleLocalDemandInExpr(self.pass.program, local, let_.rest, used)) return null;
 
                 const locals = try self.pass.allocator.alloc(?Ast.LocalId, source_arity);
-                projected_locals = locals;
+                selected_locals = locals;
                 @memset(locals, null);
                 aggregate_local = local;
                 for (source_tys, used, 0..) |ty, is_used, index| {
                     if (!is_used) continue;
-                    const projected_local = try self.pass.program.addLocal(self.pass.symbols.fresh(), ty);
-                    locals[index] = projected_local;
+                    const selected_local = try self.pass.program.addLocal(self.pass.symbols.fresh(), ty);
+                    locals[index] = selected_local;
                     try kept_indices.append(self.pass.allocator, @intCast(index));
-                    try kept_pats.append(self.pass.allocator, try self.pass.program.addPat(.{
-                        .ty = ty,
-                        .data = .{ .bind = projected_local },
-                    }));
-                    try kept_tys.append(self.pass.allocator, ty);
+                    try kept_params.append(self.pass.allocator, .{ .local = selected_local, .ty = ty });
                 }
             },
             else => return null,
         }
         if (kept_indices.items.len == 0 or kept_indices.items.len == source_arity) return null;
 
-        const projected_ty = if (kept_tys.items.len == 1)
-            kept_tys.items[0]
-        else
-            try self.pass.program.types.add(.{ .tuple = try self.pass.program.types.addSpan(kept_tys.items) });
-        const projected_pat = if (kept_pats.items.len == 1)
-            kept_pats.items[0]
-        else
-            try self.pass.program.addPat(.{
-                .ty = projected_ty,
-                .data = .{ .tuple = try self.pass.program.addPatSpan(kept_pats.items) },
-            });
-        const kept = try self.arena.allocator().dupe(u32, kept_indices.items);
-        const subset = LoopResultTupleSubset{
-            .source_arity = source_arity,
-            .kept_indices = kept,
-            .ty = projected_ty,
-        };
-        const projected_body = (try self.cloneLoopControlExprWithResultTupleSubset(loop.body, subset)) orelse return null;
-        try self.loop_result_tuple_subsets.put(projected_body, subset);
-        const projected_loop = try self.addExpr(.{ .ty = projected_ty, .data = .{ .loop_ = .{
-            .params = loop.params,
-            .initial_values = loop.initial_values,
-            .body = projected_body,
-        } } });
-
-        var projected_rest = let_.rest;
+        var selected_rest = let_.rest;
         if (aggregate_local) |local| {
-            const source_tys = aggregate_tys orelse Common.invariant("loop result-tuple subset had no source tuple types");
-            const locals = projected_locals orelse Common.invariant("loop result-tuple subset had no selected locals");
+            const source_tys = aggregate_tys orelse Common.invariant("loop exit selection had no source tuple types");
+            const locals = selected_locals orelse Common.invariant("loop exit selection had no selected locals");
             const items = try self.arena.allocator().alloc(Value, source_arity);
             for (source_tys, locals, 0..) |ty, maybe_local, index| {
-                const item_expr = if (maybe_local) |projected_local|
-                    try self.addExpr(.{ .ty = ty, .data = .{ .local = projected_local } })
+                const item_expr = if (maybe_local) |selected_local|
+                    try self.addExpr(.{ .ty = ty, .data = .{ .local = selected_local } })
                 else
                     try self.addExpr(.{ .ty = ty, .data = .@"unreachable" });
                 items[index] = .{ .expr = item_expr };
@@ -5373,23 +5328,73 @@ const Cloner = struct {
                 .ty = loop_expr.ty,
                 .items = items,
             } });
-            projected_rest = try self.cloneExpr(let_.rest);
+            selected_rest = try self.cloneExpr(let_.rest);
             self.subst.restore(change_start);
         }
 
-        return try self.addExpr(.{ .ty = self.pass.program.getExpr(projected_rest).ty, .data = .{ .let_ = .{
-            .bind = projected_pat,
-            .value = projected_loop,
-            .rest = projected_rest,
-            .comptime_site = let_.comptime_site,
+        const kept = try self.arena.allocator().dupe(u32, kept_indices.items);
+        if (kept_params.items.len == 1) {
+            const selected = kept_params.items[0];
+            const selection = LoopExitSelection{
+                .source_arity = source_arity,
+                .kept_indices = kept,
+                .result_ty = selected.ty,
+                .transfer = .break_value,
+            };
+            const exit_body = (try self.cloneLoopControlExprWithSelectedExit(loop.body, selection)) orelse return null;
+            const selected_loop = try self.addExpr(.{ .ty = selected.ty, .data = .{ .loop_ = .{
+                .params = loop.params,
+                .initial_values = loop.initial_values,
+                .body = exit_body,
+            } } });
+            const bind = try self.pass.program.addPat(.{ .ty = selected.ty, .data = .{ .bind = selected.local } });
+            return try self.addExpr(.{ .ty = self.pass.program.getExpr(selected_rest).ty, .data = .{ .let_ = .{
+                .bind = bind,
+                .value = selected_loop,
+                .rest = selected_rest,
+                .comptime_site = let_.comptime_site,
+            } } });
+        }
+
+        const result_ty = self.pass.program.getExpr(selected_rest).ty;
+        const target = self.pass.freshJoinPoint();
+        var exit_sites = std.ArrayList(Ast.ExprId).empty;
+        defer exit_sites.deinit(self.pass.allocator);
+        const selection = LoopExitSelection{
+            .source_arity = source_arity,
+            .kept_indices = kept,
+            .result_ty = result_ty,
+            .transfer = .{ .jump = .{
+                .target = target,
+                .sites = &exit_sites,
+            } },
+        };
+        const exit_body = (try self.cloneLoopControlExprWithSelectedExit(loop.body, selection)) orelse return null;
+        const remainder = try self.addExpr(.{ .ty = result_ty, .data = .{ .loop_ = .{
+            .params = loop.params,
+            .initial_values = loop.initial_values,
+            .body = exit_body,
+        } } });
+
+        if (exit_sites.items.len == 0) return null;
+        if (exit_sites.items.len == 1) {
+            try self.inlineLoopExitAtSite(exit_sites.items[0], kept_params.items, selected_rest, target);
+            return remainder;
+        }
+
+        return try self.addExpr(.{ .ty = result_ty, .data = .{ .join_point = .{
+            .id = target,
+            .params = try self.pass.program.addTypedLocalSpan(kept_params.items),
+            .body = selected_rest,
+            .remainder = remainder,
         } } });
     }
 
-    /// Copy the result-control spine of one loop body at a narrowed result-tuple
-    /// type. A null result means the expression can complete normally and the
-    /// requested item subset therefore does not apply. Nested loops own their own breaks
-    /// and are never traversed here.
-    fn cloneLoopControlExprWithResultTupleSubset(self: *Cloner, expr_id: Ast.ExprId, subset: LoopResultTupleSubset) Common.LowerError!?Ast.ExprId {
+    /// Copy the result-control spine of one loop body, replacing every exit with
+    /// a transfer that supplies the selected live values. A null result means the
+    /// expression can complete normally and the exit selection does not apply.
+    /// Nested loops own their own breaks and are never traversed here.
+    fn cloneLoopControlExprWithSelectedExit(self: *Cloner, expr_id: Ast.ExprId, selection: LoopExitSelection) Common.LowerError!?Ast.ExprId {
         const saved_loc = self.current_loc;
         defer self.current_loc = saved_loc;
         const saved_region = self.current_region;
@@ -5409,14 +5414,14 @@ const Cloner = struct {
             .comptime_exhaustiveness_failed => |site| .{ .comptime_exhaustiveness_failed = site },
             .return_ => |ret| .{ .return_ = ret },
             .continue_ => |continue_| .{ .continue_ = continue_ },
-            .break_ => |maybe| .{ .break_ = if (maybe) |value|
-                (try self.trimLoopResultTuple(value, subset)) orelse return null
+            .break_ => |maybe| return if (maybe) |value|
+                try self.loopExitExpr(value, selection)
             else
-                return null },
+                null,
             .let_ => |let_| .{ .let_ = .{
                 .bind = let_.bind,
                 .value = let_.value,
-                .rest = (try self.cloneLoopControlExprWithResultTupleSubset(let_.rest, subset)) orelse return null,
+                .rest = (try self.cloneLoopControlExprWithSelectedExit(let_.rest, selection)) orelse return null,
                 .comptime_site = let_.comptime_site,
             } },
             .block => |block| blk: {
@@ -5425,13 +5430,13 @@ const Cloner = struct {
                 const statements = try self.pass.allocator.alloc(Ast.StmtId, source.len);
                 defer self.pass.allocator.free(statements);
                 for (source, statements) |stmt, *out| {
-                    if (try self.cloneLoopControlStmtWithResultTupleSubset(stmt, subset)) |projected| {
-                        out.* = projected;
+                    if (try self.cloneLoopControlStmtWithSelectedExit(stmt, selection)) |selected| {
+                        out.* = selected;
                     } else {
                         out.* = stmt;
                     }
                 }
-                const final_expr = (try self.cloneLoopControlExprWithResultTupleSubset(block.final_expr, subset)) orelse return null;
+                const final_expr = (try self.cloneLoopControlExprWithSelectedExit(block.final_expr, selection)) orelse return null;
                 break :blk .{ .block = .{
                     .statements = try self.pass.program.addStmtSpan(statements),
                     .final_expr = final_expr,
@@ -5440,91 +5445,129 @@ const Cloner = struct {
             .if_ => |if_| blk: {
                 const branches = try GuardedList.dupe(self.pass.allocator, Ast.IfBranch, self.pass.program.ifBranchSpan(if_.branches));
                 defer self.pass.allocator.free(branches);
-                const projected = try self.pass.allocator.alloc(Ast.IfBranch, branches.len);
-                defer self.pass.allocator.free(projected);
-                for (branches, projected) |branch, *out| out.* = .{
+                const selected = try self.pass.allocator.alloc(Ast.IfBranch, branches.len);
+                defer self.pass.allocator.free(selected);
+                for (branches, selected) |branch, *out| out.* = .{
                     .cond = branch.cond,
-                    .body = (try self.cloneLoopControlExprWithResultTupleSubset(branch.body, subset)) orelse return null,
+                    .body = (try self.cloneLoopControlExprWithSelectedExit(branch.body, selection)) orelse return null,
                 };
                 break :blk .{ .if_ = .{
-                    .branches = try self.pass.program.addIfBranchSpan(projected),
-                    .final_else = (try self.cloneLoopControlExprWithResultTupleSubset(if_.final_else, subset)) orelse return null,
+                    .branches = try self.pass.program.addIfBranchSpan(selected),
+                    .final_else = (try self.cloneLoopControlExprWithSelectedExit(if_.final_else, selection)) orelse return null,
                 } };
             },
             .match_ => |match| blk: {
                 const branches = try GuardedList.dupe(self.pass.allocator, Ast.Branch, self.pass.program.branchSpan(match.branches));
                 defer self.pass.allocator.free(branches);
-                const projected = try self.pass.allocator.alloc(Ast.Branch, branches.len);
-                defer self.pass.allocator.free(projected);
-                for (branches, projected) |branch, *out| out.* = .{
+                const selected = try self.pass.allocator.alloc(Ast.Branch, branches.len);
+                defer self.pass.allocator.free(selected);
+                for (branches, selected) |branch, *out| out.* = .{
                     .pat = branch.pat,
                     .guard = branch.guard,
-                    .body = (try self.cloneLoopControlExprWithResultTupleSubset(branch.body, subset)) orelse return null,
+                    .body = (try self.cloneLoopControlExprWithSelectedExit(branch.body, selection)) orelse return null,
                 };
                 break :blk .{ .match_ = .{
                     .scrutinee = match.scrutinee,
-                    .branches = try self.pass.program.addBranchSpan(projected),
+                    .branches = try self.pass.program.addBranchSpan(selected),
                     .comptime_site = match.comptime_site,
                 } };
             },
             .comptime_branch_taken => |taken| .{ .comptime_branch_taken = .{
                 .site = taken.site,
                 .branch_index = taken.branch_index,
-                .body = (try self.cloneLoopControlExprWithResultTupleSubset(taken.body, subset)) orelse return null,
+                .body = (try self.cloneLoopControlExprWithSelectedExit(taken.body, selection)) orelse return null,
             } },
             .join_point => |join_point| .{ .join_point = .{
                 .id = join_point.id,
                 .params = join_point.params,
-                .body = (try self.cloneLoopControlExprWithResultTupleSubset(join_point.body, subset)) orelse return null,
-                .remainder = (try self.cloneLoopControlExprWithResultTupleSubset(join_point.remainder, subset)) orelse return null,
+                .body = (try self.cloneLoopControlExprWithSelectedExit(join_point.body, selection)) orelse return null,
+                .remainder = (try self.cloneLoopControlExprWithSelectedExit(join_point.remainder, selection)) orelse return null,
             } },
             .if_initialized_payload => |payload| .{ .if_initialized_payload = .{
                 .cond = payload.cond,
                 .cond_mask = payload.cond_mask,
                 .payload = payload.payload,
                 .uninitialized_is_cold = payload.uninitialized_is_cold,
-                .initialized = (try self.cloneLoopControlExprWithResultTupleSubset(payload.initialized, subset)) orelse return null,
-                .uninitialized = (try self.cloneLoopControlExprWithResultTupleSubset(payload.uninitialized, subset)) orelse return null,
+                .initialized = (try self.cloneLoopControlExprWithSelectedExit(payload.initialized, selection)) orelse return null,
+                .uninitialized = (try self.cloneLoopControlExprWithSelectedExit(payload.uninitialized, selection)) orelse return null,
             } },
             .loop_ => return null,
             else => return null,
         };
-        return try self.addExpr(.{ .ty = subset.ty, .data = data });
+        return try self.addExpr(.{ .ty = selection.result_ty, .data = data });
     }
 
-    fn cloneLoopControlStmtWithResultTupleSubset(self: *Cloner, stmt_id: Ast.StmtId, subset: LoopResultTupleSubset) Common.LowerError!?Ast.StmtId {
+    fn cloneLoopControlStmtWithSelectedExit(self: *Cloner, stmt_id: Ast.StmtId, selection: LoopExitSelection) Common.LowerError!?Ast.StmtId {
         const stmt = self.pass.program.getStmt(stmt_id);
-        const projected: Ast.Stmt = switch (stmt) {
+        const selected: Ast.Stmt = switch (stmt) {
             .let_ => |let_| .{ .let_ = .{
                 .pat = let_.pat,
-                .value = (try self.cloneLoopControlExprWithResultTupleSubset(let_.value, subset)) orelse return null,
+                .value = (try self.cloneLoopControlExprWithSelectedExit(let_.value, selection)) orelse return null,
                 .recursive = let_.recursive,
                 .comptime_site = let_.comptime_site,
             } },
-            .expr => |value| .{ .expr = (try self.cloneLoopControlExprWithResultTupleSubset(value, subset)) orelse return null },
-            .expect => |value| .{ .expect = (try self.cloneLoopControlExprWithResultTupleSubset(value, subset)) orelse return null },
-            .dbg => |value| .{ .dbg = (try self.cloneLoopControlExprWithResultTupleSubset(value, subset)) orelse return null },
+            .expr => |value| .{ .expr = (try self.cloneLoopControlExprWithSelectedExit(value, selection)) orelse return null },
+            .expect => |value| .{ .expect = (try self.cloneLoopControlExprWithSelectedExit(value, selection)) orelse return null },
+            .dbg => |value| .{ .dbg = (try self.cloneLoopControlExprWithSelectedExit(value, selection)) orelse return null },
             else => return null,
         };
-        return try self.pass.program.addStmt(projected);
+        return try self.pass.program.addStmt(selected);
     }
 
-    fn trimLoopResultTuple(self: *Cloner, value_expr: Ast.ExprId, subset: LoopResultTupleSubset) Common.LowerError!?Ast.ExprId {
+    fn loopExitExpr(self: *Cloner, value_expr: Ast.ExprId, selection: LoopExitSelection) Common.LowerError!?Ast.ExprId {
         const tuple = switch (self.pass.program.getExpr(value_expr).data) {
             .tuple => |items| try GuardedList.dupe(self.pass.allocator, Ast.ExprId, self.pass.program.exprSpan(items)),
             else => return null,
         };
         defer self.pass.allocator.free(tuple);
-        if (tuple.len != subset.source_arity) return null;
-        if (subset.kept_indices.len == 1) return tuple[subset.kept_indices[0]];
+        if (tuple.len != selection.source_arity) return null;
 
-        const items = try self.pass.allocator.alloc(Ast.ExprId, subset.kept_indices.len);
-        defer self.pass.allocator.free(items);
-        for (subset.kept_indices, items) |index, *out| out.* = tuple[index];
-        return try self.addExpr(.{
-            .ty = subset.ty,
-            .data = .{ .tuple = try self.pass.program.addExprSpan(items) },
-        });
+        return switch (selection.transfer) {
+            .break_value => blk: {
+                if (selection.kept_indices.len != 1) Common.invariant("direct loop exit selection did not contain one value");
+                break :blk try self.addExpr(.{
+                    .ty = selection.result_ty,
+                    .data = .{ .break_ = tuple[selection.kept_indices[0]] },
+                });
+            },
+            .jump => |jump_transfer| blk: {
+                const args = try self.pass.allocator.alloc(Ast.ExprId, selection.kept_indices.len);
+                defer self.pass.allocator.free(args);
+                for (selection.kept_indices, args) |index, *out| out.* = tuple[index];
+                const jump = try self.addExpr(.{
+                    .ty = selection.result_ty,
+                    .data = .{ .jump = .{
+                        .target = jump_transfer.target,
+                        .args = try self.pass.program.addExprSpan(args),
+                    } },
+                });
+                try jump_transfer.sites.append(self.pass.allocator, jump);
+                break :blk jump;
+            },
+        };
+    }
+
+    fn inlineLoopExitAtSite(
+        self: *Cloner,
+        site: Ast.ExprId,
+        params: []const Ast.TypedLocal,
+        continuation: Ast.ExprId,
+        target: Ast.JoinPointId,
+    ) Common.LowerError!void {
+        const jump = switch (self.pass.program.getExpr(site).data) {
+            .jump => |jump| jump,
+            else => Common.invariant("loop exit site was not a jump"),
+        };
+        if (jump.target != target) Common.invariant("loop exit site targeted a different continuation");
+        const args = try GuardedList.dupe(self.pass.allocator, Ast.ExprId, self.pass.program.exprSpan(jump.args));
+        defer self.pass.allocator.free(args);
+        if (args.len != params.len) Common.invariant("loop exit argument count differed from continuation parameter count");
+
+        const change_start = self.subst.watermark();
+        defer self.subst.restore(change_start);
+        for (params, args) |param, arg| try self.subst.put(self.pass.program, param.local, .{ .expr = arg });
+        const body = try self.cloneExpr(continuation);
+        self.pass.program.setExprData(site, self.pass.program.getExpr(body).data);
     }
 
     /// Dissolve a binding while retaining every opaque leaf in the strict
@@ -6314,7 +6357,6 @@ const Cloner = struct {
         loop: anytype,
         bindings: *BindingChain,
     ) Common.LowerError!Value {
-        const result_tuple_subset = self.loop_result_tuple_subsets.get(loop.body);
         const params = try GuardedList.dupe(self.pass.allocator, Ast.TypedLocal, self.pass.program.typedLocalSpan(loop.params));
         defer self.pass.allocator.free(params);
         const initial_values = try GuardedList.dupe(self.pass.allocator, Ast.ExprId, self.pass.program.exprSpan(loop.initial_values));
@@ -6424,7 +6466,6 @@ const Cloner = struct {
             try self.loop_stack.append(self.pass.allocator, .{
                 .values = shapes,
                 .any_demoted = false,
-                .result_tuple_subset = result_tuple_subset,
             });
             const body = try self.cloneExpr(loop.body);
             const frame = self.loop_stack.pop() orelse Common.invariant("loop stack underflow after split attempt");
@@ -6480,7 +6521,6 @@ const Cloner = struct {
         try self.loop_stack.append(self.pass.allocator, .{
             .values = whole_shapes,
             .any_demoted = false,
-            .result_tuple_subset = result_tuple_subset,
         });
         const body = try self.cloneExpr(loop.body);
         if (self.loop_stack.pop() == null) Common.invariant("loop stack underflow after whole-state body clone");
