@@ -686,7 +686,7 @@ This mirrors simdjson stage 2 more closely than a generic labeled-state switch.
 simdjson's stage-2 parser walks a precomputed structural stream with concrete
 JSON grammar labels such as object-begin, object-continue, array-value, and
 scope-end. Its depth stack stores only open JSON scope fields (`is_array`,
-tape index, element count); it does not store "run this parser state next"
+tape index, item count); it does not store "run this parser state next"
 instructions. Roc parser kernels must follow the same split:
 tokenization performs linear input discovery, parser kernels inspect the
 current token directly, and parser-owned syntax state describes currently open
@@ -2077,7 +2077,7 @@ opaque representation, and an exact `to_inspect` method may override it.
 Derived container encoders carry two explicit state types. The outer state is
 accepted and returned by `encode_tag`, `encode_record`, `encode_tuple`, and
 `encode_list`, and by each value-writer callback. The container callback and
-its field or element writer instead thread a format-owned cursor type, which
+its field or item writer instead thread a format-owned cursor type, which
 may differ from the outer state. Checking validates that associated cursor type
 through the format method's complete callback protocol;
 Monotype consumes the same checked method shape when generating callbacks. It
@@ -2557,9 +2557,11 @@ only the small dispatching match is copied into the arms, where it folds
 against each arm's known constructor into a direct jump; a join's parameters
 are the decomposed leaves of the values its jump sites supply whenever those
 values agree on one structure skeleton, so specialization inside the shared
-body still sees the shape; and a join with exactly one jump site is not shared
-control at all — its body is cloned directly at that site against the site's
-full symbolic values.
+body still sees the shape; and a join with exactly one jump site is inlined only
+when its body is closed under lexical loop control. A body containing a `break`
+or `continue` for an enclosing loop retains the typed join, because moving that
+body beneath a different loop would retarget the transfer. Otherwise its body
+is cloned directly at the site against the site's full symbolic values.
 
 Call-pattern specialization may also expose a tail-recursive worker whose
 entire specialized ABI is scalar even though its only external call remains in
@@ -3089,10 +3091,10 @@ that constrained graph.
 The long-term invariant is:
 
 ```text
-one reachable specialization
-  -> one Monotype instantiation context
+one connected open specialization solve group
+  -> one Monotype instantiation graph
   -> one cloned/constrained checked type graph
-  -> one closed Monotype body
+  -> one or more independently identified closed Monotype bodies
 ```
 
 This is deliberately different from treating a checked expression id as a
@@ -3102,14 +3104,22 @@ that checked module. The same checked function template may therefore produce
 many Monotype bodies, and the same checked nested lambda site may produce many
 nested Monotype functions, each with a different monomorphic function type.
 
-Each specialization owns an instantiation graph: union-find nodes with
+Each connected solve group owns an instantiation graph: union-find nodes with
 explicit row-extension links, created by instantiating checked types on first
-touch. Instantiation contexts cache nodes by `(checked module id, checked type
-id)`. The address is the checked identity of the type variable/content in the
-current specialization. It is not a structural digest, source name, runtime
-layout, object symbol, or generated procedure id. Nodes begin unresolved. As
-the specialization is lowered, explicit evidence from checked data unifies
-those nodes:
+touch. A group begins with one specialization. A procedure request whose
+complete interface is already resolved remains a separate specialization and
+receives its own graph after the caller seals. A request whose interface is
+still open joins the requester's live group, because the callee body can own
+checked constraints needed to finish that interface. This grouping is the
+explicit dependency relation between specializations, not a structural guess;
+it also keeps recursive open dependencies in one fixed-point solve.
+
+Within the group, each body instantiation context caches nodes by `(checked
+module id, checked type id)`. The address is the checked identity of the type
+variable/content in that body specialization. It is not a structural digest,
+source name, runtime layout, object symbol, or generated procedure id. Nodes
+begin unresolved. As the group is lowered, explicit evidence from checked data
+unifies those nodes:
 
 - the requested root function/value type constrains the checked root type;
 - lambda and closure expected function types constrain the nested function
@@ -3192,11 +3202,12 @@ This distinction matters most for lambdas and closures. Expression-position
 functions are checked templates. Lowering a lambda or closure at an expected
 function type creates or reuses a nested Monotype function specialization keyed
 by the checked nested site, the current function digest, the checked source
-function type digest, and the monomorphic function type digest. The expected
-function type is the root constraint for that nested specialization. It is not a
-constraint on the parent expression id. This allows the same checked lambda site
-to be specialized at multiple function types without corrupting the parent body
-or depending on traversal order.
+function type digest, and the monomorphic function type digest. The complete
+checked function root is related to the expected function interface before the
+nested body lowers, and the body lowers against that exact request interface.
+The request is not a constraint on the parent expression id. This allows the
+same checked lambda site to be specialized at multiple function types without
+corrupting the parent body or depending on traversal order.
 
 Structural equality follows the same rule. The checker has already established
 that the operands are equality-compatible and has either emitted a dispatch plan
@@ -3247,9 +3258,9 @@ The only time an unresolved checked variable with an empty-tag-union row
 default may become durable `tag_union []` is final graph sealing, after every
 checked relation and specialization demand for that body has been applied.
 After sealing, `tag_union []` is closed and uninhabited. Values such as `[]` can
-still be represented as `List(tag_union [])` because they contain no elements,
-and code that would need an actual element value must have constrained the
-element type earlier or must be unreachable at runtime.
+still be represented as `List(tag_union [])` because they contain no items,
+and code that would need an actual item value must have constrained the
+item type earlier or must be unreachable at runtime.
 
 Expression lowering is demand-aware. A runtime-value demand requires a
 constructible monomorphic value. If a checked generic value remains
@@ -3286,15 +3297,16 @@ no type id that is visible in Monotype IR is later refilled or changed. This is
 ordinary type solving inside one stage. Once Monotype IR is output, no
 unresolved node remains reachable and no later stage may change a type.
 
-A Monotype imported into another specialization's graph is a finished
-snapshot, never a refreshable view: a specialization that needs more than its
-requested type is a unification conflict, not a silent rewrite of another
-specialization's final type. Procedure template body requests therefore defer
-to the end of the requesting specialization, when its types are final and the
-specialization key is stable. Nested functions are the exception: they share
-the requester's graph, and an inferred local procedure's body pins signature
-variables the requester's remaining body relies on, so nested bodies lower at
-their request site.
+A Monotype imported into another solve group's graph is a finished snapshot,
+never a refreshable view: a specialization that needs more than its requested
+type is a unification conflict, not a silent rewrite of another group's final
+type. A procedure-template request with a fully resolved interface therefore
+defers until the requesting group is final, when its specialization key is
+stable. A request with an unresolved interface cannot be deferred across that
+seal: the callee body may own constraints required to close the request. That
+callee joins the current live solve group and lowers at the request site, as do
+nested functions whose bodies pin signature variables used by the remaining
+group.
 
 A deferred procedure-template request has two distinct sources of type
 evidence. Caller value flow owns the request's function arguments and return;
@@ -3302,18 +3314,20 @@ the requested checked template owns explicit type-constructor arguments that
 may have no value-level occurrence, including phantom nominal arguments. Before
 the requester seals, Monotype traverses matching request and checked structure
 without relating ordinary value positions, and constrains only named type
-arguments and the explicit element arguments of builtin container types.
+arguments and the explicit item arguments of builtin container types.
 Unifying the two complete function roots here is forbidden: two sibling
 requests can legitimately carry different concrete value arguments, and a
 callee checked root must not make those caller-owned cells aliases. The callee
 later creates its own fresh instantiation graph and constrains its complete
 checked root against the sealed request in that graph.
 
-The deferred request stores only that live caller-owned interface and a draft
-call target. Once the caller graph is frozen, the interface is sealed exactly
-once and the target maps directly to an existing specialization or to a body
-lowered in a fresh specialization-owned graph. The caller never owns a copy of
-the context-free callee body. Generated structural work may retain explicit
+A resolved deferred request stores only the caller-owned interface and a draft
+call target. Once the solve-group graph is frozen, the interface is sealed
+exactly once and the target maps directly to an existing specialization or to a
+body lowered in a fresh graph. An unresolved request instead adds the callee's
+body and definition to the current group draft; all bodies in that group seal
+together, but each procedure retains its own specialization identity, function,
+definition, and cache record. Generated structural work may retain explicit
 lexical context when that context is one of its inputs, but it follows the same
 procedure-body ownership rule; encoding and decoding do not define a separate
 specialization path.
@@ -3554,13 +3568,14 @@ lower arguments and body through that context
 emit a closed Monotype definition
 ```
 
-Calls do not mutate the callee's checked module. A call creates or reuses a
-callee specialization by constraining a fresh callee instantiation from the
-caller's instantiated argument and result types. The caller and callee contexts
-communicate only through explicit checked type relations and Monotype types.
-This is why generic functions specialize predictably across module boundaries:
-the checked body remains immutable, and every monomorphic specialization records
-its own closed instantiation.
+Calls do not mutate the callee's checked module. A closed call creates or reuses
+a callee specialization by constraining a fresh callee instantiation from the
+caller's instantiated argument and result types. An open call joins the live
+solve group described above, and its caller and callee contexts communicate
+through their shared explicit graph relations. This is why generic functions
+specialize predictably across module boundaries: the checked body remains
+immutable, and every monomorphic specialization records its own closed
+instantiation even when several bodies solve in one open group.
 
 The specialization store must make this lookup direct. It must not scan all
 specializations for a callable family and recompute recursive type digests while
@@ -3569,7 +3584,9 @@ lowering a body. A specialization request is identified by:
 ```zig
 const SpecIdentity = struct {
     callable: CallableIdentity,
+    method_scope: CheckedModuleDigest,
     source_fn_ty_digest: TypeDigest,
+    evidence_digest: EvidenceDigest,
     request_fn_ty_digest: TypeDigest,
     request_fn_ty: TypeId,
 };
@@ -3606,13 +3623,17 @@ const SpecRecord = struct {
 };
 ```
 
-`source_fn_ty_digest` records the checked source function type after
-instantiation into the requesting graph. `request_fn_ty_digest` records the
-closed function type REQUESTED by the call site that reserved the record. The
-digests make lookup fast, but they are not the only correctness check. When a
-digest match is found, the store must also verify the checked callable identity
-and exact structural equality of the closed Monotype function type. Digest
-collisions are therefore harmless.
+`method_scope` records the exact checked registry scope that selected static
+dispatch inside the body; it participates in both draft and durable lookup
+keys. `source_fn_ty_digest` records the checked source function type after
+instantiation into the requesting graph. `evidence_digest` accelerates lookup
+of the exact retained dispatch-evidence topology. `request_fn_ty_digest`
+records the closed function type REQUESTED by the call site that reserved the
+record. The digests make lookup fast, but they are not the only correctness
+check. When a digest match is found, the store must also verify the checked
+callable identity, method scope, exact evidence topology, and exact structural
+equality of the closed Monotype function type. Digest collisions are therefore
+harmless.
 
 The identity is immutable: it is written once when the record is reserved and
 never rewritten, so no structure that indexes by identity ever needs a rekey or
@@ -3658,12 +3679,19 @@ const MonoTypeNode = extern struct {
 ```
 
 The mutable instantiation graph may use union-find, row-extension links, and
-work queues while solving one specialization. Its final output is an immutable
-`TypeId` in `MonoTypeStore`. After that point, the type node is never refilled.
+work queues while solving one open specialization group. Its final output is
+an immutable `TypeId` in `MonoTypeStore`. After that point, the type node is never refilled.
 Rows are normalized once, with field and tag names in explicit sorted order,
 and the type digest is stored beside the node when the node is interned. Parent
 digests are computed from child digests, so structurally growing records and
 function types do not repeatedly walk their whole prefix.
+
+A child digest is cached only when that child's traversal introduced no cycle
+edge. The traversal tracks a monotonically increasing cycle count rather than a
+boolean "saw a cycle": after one branch reaches a recursive ancestor, a second
+branch that also reaches it must not be mistaken for a context-independent
+subtree and cached with that ancestor-relative backreference. This keeps cached
+digests stable across repeated walks of multiply connected recursive groups.
 
 The type interner enforces exact equality:
 
@@ -3681,8 +3709,8 @@ after the first request, and growing structural accumulator types add only the
 new record/function nodes instead of redigesting every previous layer.
 
 Open instantiation graphs do not write directly into final Monotype body
-sections. While a specialization is being solved, lowering writes to a
-`BodyDraft` owned by that specialization graph. A draft mirrors the final
+sections. While a solve group is active, lowering writes to a `BodyDraft` owned
+by that graph. A draft mirrors the final
 Monotype sections enough for lowering to refer to expressions, patterns, locals,
 definitions, nested definitions, side-pool spans, and function signatures, but
 all type-bearing fields use a draft type cell:
@@ -3708,7 +3736,7 @@ A `BodyDraft` may contain ordinary lowering ids, spans, and side pools while it
 is active, but those ids are draft-local. They are not cache ids and no later
 post-check stage consumes them. The draft is sealed only after:
 
-1. all checked type evidence for the specialization has been applied;
+1. all checked type evidence for every specialization in the group has been applied;
 2. deferred procedure-template requests created by this graph have been drained
    or reserved with stable closed request types;
 3. nested function bodies that share this graph have finished lowering;
@@ -4681,7 +4709,7 @@ multiple positions is re-lowered at each reference, so downstream control
 sharing must go through typed lifted join points or LIR join points, never
 through re-lowering a Monotype id twice. Direct lowering preserves lifted
 `join_point`/`jump` as LIR `join`/`jump`. PR 9707 removed the one known violator,
-the list-pattern desugarer, after measuring ~(elements+1)^branches statement
+the list-pattern desugarer, after measuring ~(items+1)^branches statement
 blowup. The match
 compiler holds the invariant by construction: rows (branches) are never
 duplicated during specialization — a row that does not test the selected
@@ -4805,7 +4833,7 @@ rc node reachable in its committed layout:
 
 - the top-level value itself, when its layout is `str`, `list`, `list_of_zst`,
   `box`, `box_of_zst`, or `erased_callable`
-- the element resource of a `list`
+- the item resource of a `list`
 - the payload resource of a `box`
 - one resource per refcounted field of a `struct_`
 - one resource per refcounted payload position of each `tag_union` variant
@@ -5112,7 +5140,7 @@ Join ownership sets use the resource prefix of this same per-proc domain.
 Consequently neither ownership nor liveness rows are widened by locals from
 other procedures. Unrelated scalar locals are not ARC resources and never
 receive raw liveness bits. This distinction is load-bearing for wide static
-initializers: a list of a million scalar elements may require a million scalar
+initializers: a list of a million scalar items may require a million scalar
 LIR locals, but it contributes only the list allocation and its explicit
 ownership representatives to ARC's resource-bit width. Widening every row with
 non-resource or other-proc locals would make ARC memory quadratic in an input
@@ -5239,6 +5267,97 @@ the flow analysis to account for `may_runtime_uniqueness_check_args`
 positions when choosing between a borrow and an owned move is future design
 work and must be added to the equations, not patched in emission.
 
+### Field Takes From Dying Aggregates
+
+A payload read pays a retain whenever its result must be owned, because the
+container keeps its stored unit. When the container itself is about to die,
+that retain is the difference between mutating in place and copying: the read
+result carries count 2 into the mutation's runtime uniqueness check. Field
+takes remove the retain by letting the read consume the dying container's
+stored unit for that field, dismantling the container instead of releasing it
+whole.
+
+A container qualifies for dismantling when all of the following hold:
+
+- its committed layout is a struct containing at least one refcounted field
+- its binding is owned, bound exactly once, and is not a join parameter
+- every occurrence of it is a field read, either directly or through a
+  borrowed pure same-value alias whose own occurrences are all field reads
+
+A proc parameter solved borrowed qualifies conditionally: its takes are
+solved once against the shared ownership-neutral body but recorded as
+owned-only, applying exactly in emissions whose demand vector overrides that
+parameter to owned — the mode-specialized variants callers with dying
+arguments select. The base emission keeps the borrowed schedule untouched.
+
+A field read of a qualifying container becomes a take when its result binding
+is owned, its result never flows into join-carried state, and the read lies
+on the container's spine: the statement chain from its definition following
+`next` edges and join remainders, never entering switch branches or join
+bodies. The spine may additionally cross a switch whose every branch —
+default included — is a plain statement chain falling straight through to
+the switch's shared continuation: such a diamond's continuation runs exactly
+once on every path, so a take after the rejoin is as good as one before the
+branch. Spine placement is what makes each take execute exactly once, in a
+known order, before the container dies; residual reads may live in branches,
+because the death point follows the last use on every path. The join-state
+restriction — the read result must not be a `set_local` operand or feed a
+join parameter through pure aliases, closed backward over aliasing — keeps
+each take's deferred claim inside one certifier walk segment, where its value
+identity is exact rather than quotiented. A taken field must additionally be
+refcounted and read exactly once in the whole procedure: allowing earlier
+borrows of the same field would be sound, but a borrow after the take could
+observe stale bytes once the taker mutates, and restricting to one read makes
+the rule checkable without order reasoning. A field that fails any per-field
+rule simply stays residual — its read keeps its retain and its stored unit is
+released at the death point — and a container whose take set comes out empty
+keeps today's whole release exactly.
+
+Emission changes in exactly two places. A take's read emits no retain: the
+result's unit is the container's stored unit for that field, moved rather
+than duplicated. The container's release becomes its dismantling: at the
+point its whole-value `decref` would have been placed, emission instead reads
+each refcounted field that was not taken into a fresh temporary and releases
+that temporary, using the field layout's helper and the container's
+atomicity. Fields that were taken need nothing: their units continue in the
+take targets, which are ordinary owned locals. Liveness, death placement, and
+path balancing are untouched.
+
+Like precise lifetimes, take solving is order-sensitive and therefore runs in
+the ARC stage against the solved modes rather than inside the mode fixpoint.
+It allocates per-candidate tables only: a container that cannot benefit --
+wrong layout shape, borrowed, escaping, or off-spine uses -- contributes
+nothing beyond its visit in one linear statement scan, preserving the rule
+that ARC memory scales with ownership work actually demanded.
+
+The certifier verifies takes from the emitted LIR alone, with no side tables,
+by deferred claims. A field read still binds its result at balance zero, but
+the result value remembers which container value and field it came from. When
+such a value is consumed or released without a unit — where the certifier
+previously failed outright — the consumption instead claims that field's
+stored unit from the container, provided the container still holds its own
+unit unconditionally and the field is unclaimed; a second claim of the same
+field fails as before. Aggregate moves keep their transient-negative
+discipline: negative balances attempt their claims when the path's outcome is
+fixed, at a terminal's leak check or a jump's quotient. The container's
+balance stays at one throughout — borrowed reads of its unclaimed bytes
+remain legitimate after any claim — and a claim set covering every refcounted
+field marks the unit spent: a terminal treats it as balanced and a jump's
+carry check exempts it, while anything less fails as an unspent stored unit.
+A claimed container can be neither consumed, moved into an aggregate, nor
+released whole.
+Claims and claim targets cross join quotients on the summary: owned entries
+carry their container's claim set, and borrowed field-read entries carry
+their container's representative and field so a claim deferred past a join
+still lands.
+
+Partial dismantling across diverging paths -- a field consumed in one switch
+arm and not another -- is future work: it needs per-path residual masks, and
+the spine rule above is precisely what makes the residual global. Until then,
+the record-update lowering's spread-read hoisting is what keeps conditional
+consumers in-place, by ending the container's liveness before the mutation
+rather than dismantling it.
+
 ### Debug Borrow Certifier
 
 Inference is implemented as a solver plus an independent certifier, because
@@ -5320,7 +5439,7 @@ may contain handles into these arguments' allocations. Unit-accounting
 masks already imply sharing for many ops (`result_aliases_consumed_args`,
 `result_borrows_args`, `retain_args` all contribute edges directly), but
 unit accounting does not describe handle sharing in general: `str_split_on`
-allocates a fresh owned list whose string elements are seamless slices into
+allocates a fresh owned list whose string items are seamless slices into
 the argument's allocation, and the byte/string conversions and
 prefix/suffix slicing ops are the same. Those ops set `result_shares_args`
 explicitly. A refcounted result of an op whose masks say nothing receives a
@@ -5380,7 +5499,7 @@ query against liveness state emission already maintains.
 outermost allocation has count 1 on return. Mutating ops qualify on both of
 their paths — in place keeps an allocation whose count was already 1, and
 the copy path returns a fresh one — and so do the ops that always allocate
-their outermost result, including the slicing ops whose inner elements
+their outermost result, including the slicing ops whose inner items
 share (`result_shares_args` describes the inner sharing; uniqueness is a
 property of the outermost allocation alone). As with the other masks, an op
 without the mask contributes nothing and its results stay conservatively
@@ -5413,11 +5532,11 @@ outcome of emission order.
 ### In-Place List.map
 
 `List.map` may overwrite a uniquely owned input list's buffer instead of
-allocating an output list when the input and output element layouts are
+allocating an output list when the input and output item layouts are
 interchangeable in one allocation: same stride, same allocation alignment
-class, and the same refcounted-elements header shape. The hidden header in
+class, and the same refcounted-items header shape. The hidden header in
 front of a list's data and the alignment handed to the allocator both
-derive from the element layout, so reusing an allocation across layouts
+derive from the item layout, so reusing an allocation across layouts
 that disagree on either would make a later free reconstruct the wrong
 allocation pointer.
 
@@ -5431,7 +5550,7 @@ layouts are not interchangeable (or the optimization is off), so the
 runtime check never runs for a pair it could corrupt.
 
 The in-place branch itself is dropped before it reaches LIR whenever the
-element layouts are not interchangeable or the optimization is disabled
+item layouts are not interchangeable or the optimization is disabled
 (`TargetConfig.list_in_place_map`, on for `--opt=size`/`--opt=speed`, off
 for dev, interpreter, and compile-time evaluation), so ineligible map
 specializations never carry dead in-place machinery and dev builds lower
@@ -5447,14 +5566,14 @@ runtime check — the primitive's own lowering independently gates the
 runtime path — and a fold regression surfaces as a Debug stride assertion
 in the backends rather than as silent dead code.
 
-Inside the in-place loop, `list_map_extract_unsafe` moves one element's
+Inside the in-place loop, `list_map_extract_unsafe` moves one item's
 ownership out of the buffer and `list_map_write_unsafe` moves the
 transform's result into the vacated slot. Neither performs RC work: the
-extracted element is an ordinary owned local, so ARC places its release
+extracted item is an ordinary owned local, so ARC places its release
 according to the transform's solved convention, and the certifier checks
 the loop like any other code. Between the two ops the slot holds stale
-bytes and the buffer is typed by the output element while later slots still
-hold input elements; this window is unobservable because no cleanup path
+bytes and the buffer is typed by the output item while later slots still
+hold input items; this window is unobservable because no cleanup path
 walks live values — `crash` is fatal and leaks by design — and the loop
 itself is the only holder of the buffer (the runtime count of 1 proved
 there were no other counted handles, and a live borrow of the list would
@@ -5553,7 +5672,7 @@ the supplied unique string accumulator. Any expression that cannot append
 directly is first lowered to an ordinary result and then appended as an
 explicit step. `append_into(List(T))` follows the same rule for list builders.
 These variants are created only for realized demands and are keyed by result
-kind and element layout, so specialization is bounded by the distinct demands
+kind and item layout, so specialization is bounded by the distinct demands
 the program actually uses.
 
 Each stage fully replaces the previous behavior when it lands; there are no
@@ -5600,7 +5719,7 @@ bounded by the emitted operation, never by source or layout nesting depth.
 Explicit emission worklists carry stack offsets and reuse their
 caller-provided result register across child continuations. They must not retain
 one newly allocated architecture register per recursive layout, control-flow node,
-list element layer, or tag payload layer. Register-pool exhaustion is therefore
+list item layer, or tag payload layer. Register-pool exhaustion is therefore
 an internal lifetime-invariant failure, not a source-program condition and not
 an invitation for an architecture-specific best-effort spill.
 
@@ -5962,13 +6081,15 @@ const ConstCapture = struct {
 generated procedure template that the checked module owns or references
 explicitly.
 `captures` bind the exact capture identities required by that function to
-stored const nodes. Source lambdas use checked pattern binders. Compiler-
-generated functions whose captures have no source pattern, such as structural
-parser runtime functions, use explicit generated capture ids assigned by the
-generator. A stored function does not store a lambda set, callable-set
-descriptor, call specialization id, erased ABI, capture layout, runtime tag, or
-LIR proc id.
-
+stored const nodes. A capture of an enclosing explicit recursive constant uses
+`recursive_const`; restoration resolves that identity to the already-reserved
+recursive local, so `ConstStore` never serializes a cyclic capture edge or
+traverses the recursive runtime capture. Source lambdas use checked pattern
+binders. Compiler-generated functions whose captures have no source pattern,
+such as structural parser runtime functions, use explicit generated capture ids
+assigned by the generator. A stored function does not store a lambda set,
+callable-set descriptor, call specialization id, erased ABI, capture layout,
+runtime tag, or LIR proc id.
 During compile-time evaluation, the direct LIR builder also produces temporary
 function result-store data. Storing a function result is scoped by `FnSet`
 identity, not by layout alone. Layouts may
@@ -6710,7 +6831,7 @@ byte-swap tax.
 The vector types are full participants in the Host Symbol ABI. There is no
 internal-only restriction, wrapper-call convention, byte-array boundary type,
 or source-level adapter. A Roc programmer may use a vector directly, place one
-inside a record, tuple, tag payload, list element, box payload, or another
+inside a record, tuple, tag payload, list item, box payload, or another
 ordinary type, and use that type in either direction across a hosted or
 `provides` symbol.
 
@@ -6975,7 +7096,7 @@ known gaps, deliberately excluded from the SIMD effort, are:
 - wrapping scalar arithmetic does not exist, and plain `+`/`-`/`*` are
   checked (crash-on-overflow) even at `--opt=speed`, which also blocks
   auto-vectorization of reductions — #10300;
-- `for`/`Iter` loops carry per-element step calls and refcount traffic
+- `for`/`Iter` loops carry per-item step calls and refcount traffic
   that the equivalent `while` loop does not — #10301;
 - no scalar rotate, byte-swap, or unaligned multi-byte loads from
   `List(U8)` (bit-reader fuel for entropy decoders).
@@ -6997,7 +7118,7 @@ the pass/fail bar while the language is 128-bit-only.
 - Whether a 32/48/64-byte `table_lookup` tier (NEON `tbl2`–`tbl4`) earns
   its place once real kernels are measured (expressible today as multiple
   16-byte lookups plus selects).
-- Typed-element loads (`List(U16)` → `U16x8`, etc.) — deferred until a
+- Typed-item loads (`List(U16)` → `U16x8`, etc.) — deferred until a
   kernel wants them; byte buffers are the codec substrate.
 - Saturating arithmetic on 32/64-bit lanes, `abs` on `I64x2`, and unsigned
   ordering compares on `U64x2` are omitted because no cataloged kernel

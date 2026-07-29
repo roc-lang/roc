@@ -113,7 +113,7 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
     try expectContains(lower_expr_at_type, ".lookup_required => |resolved| return try self.lowerLookupExprAtType(expr.ty, resolved, ty)");
     try expectContains(lower_lookup_at_type, ".platform_required_const => |required| return try self.restoreConstUseAtType(");
     try expectContains(lower_lookup_at_type, "required.const_use,\n                ty,\n                try self.evidenceForUseSite(record.expr),");
-    try expectContains(lower_lookup_at_type, ".platform_required_proc => |proc| try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr))");
+    try expectContains(lower_lookup_at_type, ".platform_required_proc => |proc| try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), proc.root_evidence)");
     try expectContains(lower_source, "fn lowerCallableEvalBindingValueAtNode(");
     try expectContains(lower_source, "try self.restoreConstFnAtNode(view, fn_id, request_fn_node)");
     try expectContains(lower_source, "try body_ctx.graphFunctionNode(&.{}, request_fn_node)");
@@ -794,9 +794,11 @@ test "Monotype runtime demands snapshot pass-local compositional impossibility p
     try expectContains(lower_source, "if (std.meta.eql(frame.address, address)) return self.runtime_demand_guard_frames");
     try expectContains(lower_source, "const proof_reservation = try self.addImpossibilityProof(.pending)");
     try expectContains(lower_source, ".{ .forward = proof }");
-    try expectContains(lower_source, "resolveDraftConstUseReservations(body_draft)");
-    try expectContains(lower_source, "body_draft.expr_locs.items[reservation_index] = body_draft.expr_locs.items[@intFromEnum(restored)]");
-    try expectContains(lower_source, "body_draft.expr_regions.items[reservation_index] = body_draft.expr_regions.items[@intFromEnum(restored)]");
+    try expectContains(lower_source, "try self.resolveDraftConstUseReservations(body_draft)");
+    try expectContains(lower_source, "sources[reservation_index] = restored");
+    try expectContains(lower_source, "deferred const reservation dependencies formed a cycle");
+    try expectContains(lower_source, "body_draft.expr_locs.items[reservation_index] = body_draft.expr_locs.items[restored_index]");
+    try expectContains(lower_source, "body_draft.expr_regions.items[reservation_index] = body_draft.expr_regions.items[restored_index]");
     try expectContains(lower_source, "const DraftConstUseProvenance = union(enum)");
     try expectContains(lower_source, "hoisted: checked.HoistedConstEntry");
     try expectContains(lower_source, "hoisted const use reached a declared deferred boundary");

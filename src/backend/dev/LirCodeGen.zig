@@ -1613,6 +1613,64 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         },
                     };
                 },
+                .num_from_le_bytes_unchecked => {
+                    // Read a little-endian integer out of a byte list. The result
+                    // layout supplies the width, and the Roc wrapper has already
+                    // bounds-checked, so this is address arithmetic plus one
+                    // sized load.
+                    if (comptime arch.endian() == .big) {
+                        // A plain load would read the bytes in the wrong order, and
+                        // neither emitter has a byte-swap yet. Fail loudly rather
+                        // than silently disagreeing with every other backend.
+                        @compileError("num_from_le_bytes_unchecked needs a byte-swap on big-endian targets");
+                    }
+                    std.debug.assert(args.len >= 2);
+                    const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
+                    const index_loc = try self.emitValueLocal(GuardedList.at(args, 1));
+
+                    const list_base: i32 = switch (list_loc) {
+                        .stack => |s| s.offset,
+                        .list_stack => |ls_info| ls_info.struct_offset,
+                        else => unreachable,
+                    };
+
+                    const width: u32 = self.layout_store.layoutSize(self.layout_store.getLayout(ll.ret_layout));
+
+                    const addr_reg = try self.allocTempGeneral();
+                    switch (index_loc) {
+                        .immediate_i64 => |val| try self.codegen.emitLoadImm(addr_reg, val),
+                        .general_reg => |reg| {
+                            try self.emitMovRegReg(addr_reg, reg);
+                            self.codegen.freeGeneral(reg);
+                        },
+                        .stack => |s| try self.codegen.emitLoadStack(.w64, addr_reg, s.offset),
+                        else => unreachable,
+                    }
+
+                    // Byte index, so the list pointer is added without scaling.
+                    const ptr_reg = try self.allocTempGeneral();
+                    try self.codegen.emitLoadStack(.w64, ptr_reg, list_base);
+                    try self.emitAddRegs(.w64, addr_reg, addr_reg, ptr_reg);
+                    self.codegen.freeGeneral(ptr_reg);
+
+                    const result_slot = self.codegen.allocStackSlot(@intCast(width));
+                    const temp_reg = try self.allocTempGeneral();
+                    if (width <= 8) {
+                        const vs = ValueSize.fromByteCount(@intCast(width));
+                        try self.emitSizedLoadMem(temp_reg, addr_reg, 0, vs);
+                        try self.emitSizedStoreMem(frame_ptr, result_slot, temp_reg, vs);
+                    } else {
+                        try self.copyChunked(temp_reg, addr_reg, 0, frame_ptr, result_slot, width);
+                    }
+                    self.codegen.freeGeneral(temp_reg);
+                    self.codegen.freeGeneral(addr_reg);
+
+                    const result_loc: ValueLocation = if (width == 16)
+                        .{ .stack_i128 = result_slot }
+                    else
+                        .{ .stack = .{ .offset = result_slot, .layout_idx = ll.ret_layout } };
+                    return try self.stabilize(result_loc);
+                },
                 .list_get_unsafe => {
                     // list_get_unsafe(list, index) -> element
                     std.debug.assert(args.len >= 2);
@@ -11757,17 +11815,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn emitInternalCodeAddress(self: *Self, target_offset: usize, dst_reg: GeneralReg) Allocator.Error!void {
-            const current = self.codegen.currentOffset();
             if (comptime target.toCpuArch() == .aarch64) {
-                // ADR alone has only ±1 MB range, which is exceeded by larger programs.
-                // ADRP+ADD would extend that, but its page-relative form requires the
-                // emit buffer's runtime base to be 4 KB-aligned — and the buffer here is
-                // appended into the host's __TEXT at an unaligned offset. Stay purely
-                // PC-relative by emitting ADR (anchor at this instruction) plus two
-                // ADD/SUB imm12 instructions (hi shifted by LSL #12, then lo). This
-                // supports offsets up to ±16 MB without any base-alignment assumption.
-                try self.emitAarch64PcRelAddress(dst_reg, current, target_offset);
-            } else {
+                // The scratch register must be allocated before the anchor offset
+                // is read: allocation may emit spill code, and the anchor must be
+                // the ADR instruction itself.
+                const scratch = try self.allocTempGeneral();
+                defer self.codegen.freeGeneral(scratch);
+                const current = self.codegen.currentOffset();
+                try self.emitAarch64PcRelAddress(dst_reg, scratch, current, target_offset);
+                try self.internal_addr_patches.append(self.allocator, .{
+                    .instr_offset = current,
+                    .target_offset = target_offset,
+                });
+                return;
+            }
+            const current = self.codegen.currentOffset();
+            {
                 const rel: i32 = @intCast(@as(i64, @intCast(target_offset)) - @as(i64, @intCast(current)) - 7);
                 try self.codegen.emit.leaRegRipRel(dst_reg, rel);
             }
@@ -11778,39 +11841,55 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             });
         }
 
-        /// Emit a 3-instruction PC-relative address calculation on aarch64.
-        /// Layout (12 bytes): ADR Xd, anchor (offset 0) — ADD/SUB Xd, Xd, #hi12, LSL #12 — ADD/SUB Xd, Xd, #lo12.
-        /// `anchor` is the address of the ADR instruction. The final value of Xd equals
-        /// `anchor + (target_off - anchor)`. Caller must ensure |target_off - anchor| ≤ 0xFFFFFF.
-        fn emitAarch64PcRelAddress(self: *Self, dst: GeneralReg, anchor: usize, target_off: usize) Allocator.Error!void {
-            const rel: i64 = @as(i64, @intCast(target_off)) - @as(i64, @intCast(anchor));
-            const negative = rel < 0;
-            const abs_rel: u64 = if (negative) @intCast(-rel) else @intCast(rel);
-            const hi12: u12 = @truncate(abs_rel >> 12);
-            const lo12: u12 = @truncate(abs_rel);
+        /// Emit the 4-instruction PC-relative address sequence on aarch64 (see
+        /// `Emit.pcRelAddrSequence`): ADR Xd anchors the current address, MOVZ +
+        /// MOVK build the 32-bit byte delta in the scratch register, and ADD/SUB
+        /// applies it. The delta is between two offsets in the same emit buffer,
+        /// so the sequence is correct wherever that buffer's bytes end up: unlike
+        /// a page-based ADRP form, nothing depends on the runtime base being
+        /// page-aligned, which linked output does not provide.
+        fn emitAarch64PcRelAddress(self: *Self, dst: GeneralReg, scratch: GeneralReg, anchor: usize, target_off: usize) Allocator.Error!void {
+            const parts = aarch64PcRelParts(anchor, target_off);
+            try self.codegen.emit.pcRelAddrSequence(dst, scratch, parts.lo16, parts.hi16, parts.subtract);
+        }
 
-            try self.codegen.emit.adr(dst, 0);
-            if (negative) {
-                try self.codegen.emit.subRegRegImm12Shifted(.w64, dst, dst, hi12, true);
-                try self.codegen.emit.subRegRegImm12(.w64, dst, dst, lo12);
-            } else {
-                try self.codegen.emit.addRegRegImm12Shifted(.w64, dst, dst, hi12, true);
-                try self.codegen.emit.addRegRegImm12(.w64, dst, dst, lo12);
-            }
+        /// How to reach `target_off` from an anchor at `anchor`, as the
+        /// immediates of the PC-relative address sequence. Shared by the emitter
+        /// and the patcher so a rewritten sequence is encoded exactly as a
+        /// freshly emitted one.
+        fn aarch64PcRelParts(anchor: usize, target_off: usize) struct { lo16: u16, hi16: u16, subtract: bool } {
+            const rel: i64 = @as(i64, @intCast(target_off)) - @as(i64, @intCast(anchor));
+            const subtract = rel < 0;
+            const abs_rel: u64 = if (subtract) @intCast(-rel) else @intCast(rel);
+            // The sequence carries a 32-bit delta; a single emit buffer past 4 GiB
+            // is far beyond any real image, so trap rather than silently encoding
+            // the wrong address.
+            std.debug.assert(abs_rel < (1 << 32));
+            return .{
+                .lo16 = @truncate(abs_rel),
+                .hi16 = @truncate(abs_rel >> 16),
+                .subtract = subtract,
+            };
         }
 
         fn emitPendingProcAddress(self: *Self, target_proc: lir.LIR.LirProcSpecId, dst_reg: GeneralReg) Allocator.Error!void {
-            const current = self.codegen.currentOffset();
             if (comptime target.toCpuArch() == .aarch64) {
-                // Reserve a 3-instruction (12-byte) PC-relative address sequence so the
-                // patcher can rewrite ADR + ADD/SUB(hi) + ADD/SUB(lo) once the target
-                // proc's code offset is known. See emitAarch64PcRelAddress.
-                try self.codegen.emit.adr(dst_reg, 0);
-                try self.codegen.emit.addRegRegImm12Shifted(.w64, dst_reg, dst_reg, 0, true);
-                try self.codegen.emit.addRegRegImm12(.w64, dst_reg, dst_reg, 0);
-            } else {
-                try self.codegen.emit.leaRegRipRel(dst_reg, 0);
+                // Reserve the 4-instruction PC-relative address sequence so the
+                // patcher can rewrite it once the target proc's code offset is
+                // known. The scratch register is allocated before the anchor
+                // offset is read because allocation may emit spill code.
+                const scratch = try self.allocTempGeneral();
+                defer self.codegen.freeGeneral(scratch);
+                const current = self.codegen.currentOffset();
+                try self.codegen.emit.pcRelAddrSequence(dst_reg, scratch, 0, 0, false);
+                try self.pending_proc_addrs.append(self.allocator, .{
+                    .instr_offset = current,
+                    .target_proc = target_proc,
+                });
+                return;
             }
+            const current = self.codegen.currentOffset();
+            try self.codegen.emit.leaRegRipRel(dst_reg, 0);
             try self.pending_proc_addrs.append(self.allocator, .{
                 .instr_offset = current,
                 .target_proc = target_proc,
@@ -11841,14 +11920,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Emit a placeholder PC-relative address literal for an RC helper.
         fn emitPendingRcAddr(self: *Self, helper: RcHelperVariant, dst_reg: GeneralReg) Allocator.Error!void {
-            const current = self.codegen.currentOffset();
             if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.adr(dst_reg, 0);
-                try self.codegen.emit.addRegRegImm12Shifted(.w64, dst_reg, dst_reg, 0, true);
-                try self.codegen.emit.addRegRegImm12(.w64, dst_reg, dst_reg, 0);
-            } else {
-                try self.codegen.emit.leaRegRipRel(dst_reg, 0);
+                // Same 4-instruction sequence the patcher rewrites; the scratch
+                // register is allocated before the anchor offset is read because
+                // allocation may emit spill code.
+                const scratch = try self.allocTempGeneral();
+                defer self.codegen.freeGeneral(scratch);
+                const current = self.codegen.currentOffset();
+                try self.codegen.emit.pcRelAddrSequence(dst_reg, scratch, 0, 0, false);
+                try self.pending_rc_addrs.append(self.allocator, .{ .instr_offset = current, .target_key = helper.encode() });
+                return;
             }
+            const current = self.codegen.currentOffset();
+            try self.codegen.emit.leaRegRipRel(dst_reg, 0);
             try self.pending_rc_addrs.append(self.allocator, .{ .instr_offset = current, .target_key = helper.encode() });
         }
 
@@ -15995,43 +16079,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn patchInternalCodeAddress(self: *Self, instr_offset: usize, target_offset: usize) void {
             const buf = self.codegen.emit.buf.items;
             if (comptime target.toCpuArch() == .aarch64) {
-                // The emit reserves a 3-instruction PC-relative sequence (ADR + two
-                // ADD/SUB imm12) starting at instr_offset. Re-derive the relative offset
-                // from the new instr_offset and rewrite all three instructions. The
-                // existing ADR's Rd is preserved so the patched sequence targets the
-                // same register the caller originally chose.
-                const rel: i64 = @as(i64, @intCast(target_offset)) - @as(i64, @intCast(instr_offset));
-                const negative = rel < 0;
-                const abs_rel: u64 = if (negative) @intCast(-rel) else @intCast(rel);
-                const hi12: u32 = @as(u32, @as(u12, @truncate(abs_rel >> 12)));
-                const lo12: u32 = @as(u32, @as(u12, @truncate(abs_rel)));
-
+                // The emit reserves the 4-instruction PC-relative sequence (see
+                // Emit.pcRelAddrSequence) starting at instr_offset. The registers
+                // the emitter chose are read back out of the existing ADR and MOVZ
+                // words so the rewritten sequence targets the same ones.
+                const EmitT = aarch64.Emit(target);
                 const adr_existing: u32 = @bitCast(buf[instr_offset..][0..4].*);
-                const rd_bits: u32 = adr_existing & 0x1F;
-
-                // Rewrite the ADR with offset 0 so Xd holds the anchor PC.
-                const adr_inst: u32 = (0 << 31) |
-                    (0b10000 << 24) |
-                    rd_bits;
-                @memcpy(buf[instr_offset..][0..4], &@as([4]u8, @bitCast(adr_inst)));
-
-                // ADD/SUB Xd, Xd, #hi12, LSL #12
-                const op_bits: u32 = if (negative) 0b1010001 else 0b0010001;
-                const rn_rd_bits: u32 = (rd_bits << 5) | rd_bits;
-                const hi_inst: u32 = (1 << 31) |
-                    (op_bits << 24) |
-                    (1 << 22) |
-                    (hi12 << 10) |
-                    rn_rd_bits;
-                @memcpy(buf[instr_offset + 4 ..][0..4], &@as([4]u8, @bitCast(hi_inst)));
-
-                // ADD/SUB Xd, Xd, #lo12
-                const lo_inst: u32 = (1 << 31) |
-                    (op_bits << 24) |
-                    (0 << 22) |
-                    (lo12 << 10) |
-                    rn_rd_bits;
-                @memcpy(buf[instr_offset + 8 ..][0..4], &@as([4]u8, @bitCast(lo_inst)));
+                const movz_existing: u32 = @bitCast(buf[instr_offset + 4 ..][0..4].*);
+                const dst: GeneralReg = @enumFromInt(@as(u5, @truncate(adr_existing & 0x1F)));
+                const scratch: GeneralReg = @enumFromInt(@as(u5, @truncate(movz_existing & 0x1F)));
+                const parts = aarch64PcRelParts(instr_offset, target_offset);
+                const words = [4]u32{
+                    EmitT.encodeAdrZero(dst),
+                    EmitT.encodeMovz64(scratch, parts.lo16, 0),
+                    EmitT.encodeMovk64(scratch, parts.hi16, 1),
+                    EmitT.encodeAddSubRegRegReg64(dst, dst, scratch, parts.subtract),
+                };
+                for (words, 0..) |word, i| {
+                    @memcpy(buf[instr_offset + i * 4 ..][0..4], &@as([4]u8, @bitCast(word)));
+                }
             } else {
                 const new_rel: i64 = @as(i64, @intCast(target_offset)) - @as(i64, @intCast(instr_offset));
                 const lea_size: i64 = 7;

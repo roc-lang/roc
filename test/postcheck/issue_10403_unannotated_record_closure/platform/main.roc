@@ -11,6 +11,7 @@ platform ""
     }
     targets: {
         inputs_dir: "targets/",
+        x64musl: { inputs: [app], output: Archive },
         x64glibc: { inputs: [app], output: Archive },
         arm64mac: { inputs: [app], output: Archive },
         x64win: { inputs: [app], output: Archive },
