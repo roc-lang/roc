@@ -25,8 +25,48 @@ pub const DefaultTarget = enum {
     str,
 };
 
-/// The literal kind a flex var defaults as when it carries `from_literal`
-/// constraints, by fixed precedence: numeral > quote > interpolation.
+/// The method-name idents of the literal-conversion hooks. Callers resolve
+/// these once from their ident store; the decision of what they mean lives
+/// here.
+pub const LiteralMethodIdents = struct {
+    from_numeral: Ident.Idx,
+    from_quote: Ident.Idx,
+    from_interpolation: Ident.Idx,
+};
+
+/// The literal kind one constraint carries: a `from_literal` origin carries
+/// its kind directly, and a `where_clause` contract naming a literal-conversion
+/// hook carries that hook's kind. The two must be interchangeable here: a
+/// `where` clause like `b.from_numeral : Numeral -> ...` asserts exactly what a
+/// literal's own conversion constraint asserts (b is creatable from a numeral
+/// literal), and it is the only way an annotation can express that constraint —
+/// so if it were not defaulting-eligible, annotating a def with its own
+/// inferred type would strip callers of defaulting and change whether their
+/// programs check.
+pub fn constraintLiteralKind(
+    idents: LiteralMethodIdents,
+    constraint: StaticDispatchConstraint,
+) ?LiteralKind {
+    return switch (constraint.origin) {
+        .from_literal => |lit| lit,
+        .where_clause => if (constraint.fn_name.eql(idents.from_numeral))
+            .numeral
+        else if (constraint.fn_name.eql(idents.from_quote))
+            .quote
+        else if (constraint.fn_name.eql(idents.from_interpolation))
+            .interpolation
+        else
+            null,
+        .desugared_binop,
+        .desugared_unaryop,
+        .method_call,
+        => null,
+    };
+}
+
+/// The literal kind a flex var defaults as when it carries literal-conversion
+/// constraints (see `constraintLiteralKind`), by fixed precedence:
+/// numeral > quote > interpolation.
 ///
 /// A var can carry several kinds at once (a flex/flex merge like
 /// `if c 1 else "s"` unions the two literals' constraint sets). Such a var can
@@ -35,17 +75,17 @@ pub const DefaultTarget = enum {
 /// it must not depend on constraint storage order (which unify side each
 /// literal arrived on), or mirror-image programs would get different keys and
 /// diagnostics.
-pub fn dominantKind(constraints: []const StaticDispatchConstraint) ?LiteralKind {
+pub fn dominantKind(
+    idents: LiteralMethodIdents,
+    constraints: []const StaticDispatchConstraint,
+) ?LiteralKind {
     var has_quote = false;
     var has_interpolation = false;
     for (constraints) |constraint| {
-        switch (constraint.origin) {
-            .from_literal => |lit| switch (lit) {
-                .numeral => return .numeral,
-                .quote => has_quote = true,
-                .interpolation => has_interpolation = true,
-            },
-            else => {},
+        switch (constraintLiteralKind(idents, constraint) orelse continue) {
+            .numeral => return .numeral,
+            .quote => has_quote = true,
+            .interpolation => has_interpolation = true,
         }
     }
     return if (has_quote) .quote else if (has_interpolation) .interpolation else null;
@@ -138,17 +178,28 @@ pub fn isDefaultableArithmeticConstraint(
 /// literals and defaultable arithmetic default to Dec at specialization,
 /// quotes/interpolations to Str, anything else has no default.
 pub fn numericDefaultPhase(
-    idents: ArithmeticMethodIdents,
+    arithmetic_idents: ArithmeticMethodIdents,
+    literal_idents: LiteralMethodIdents,
     constraints: []const StaticDispatchConstraint,
 ) ?NumericDefaultPhase {
-    const kind = dominantKind(constraints);
+    const kind = dominantKind(literal_idents, constraints);
     if (kind == .numeral) return .mono_specialization;
     for (constraints) |constraint| {
-        if (isDefaultableArithmeticConstraint(idents, constraint)) return .mono_specialization;
+        if (isDefaultableArithmeticConstraint(arithmetic_idents, constraint)) return .mono_specialization;
     }
     if (kind == .quote or kind == .interpolation) return .mono_specialization_str;
     return null;
 }
+
+fn testIdent(idx: u29) Ident.Idx {
+    return .{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = idx };
+}
+
+const test_literal_idents = LiteralMethodIdents{
+    .from_numeral = testIdent(1),
+    .from_quote = testIdent(2),
+    .from_interpolation = testIdent(3),
+};
 
 test "dominant kind precedence is numeral > quote > interpolation" {
     const region = base.Region.zero();
@@ -173,12 +224,51 @@ test "dominant kind precedence is numeral > quote > interpolation" {
         .origin = .method_call,
     };
 
-    try std.testing.expectEqual(@as(?LiteralKind, null), dominantKind(&.{method_constraint}));
-    try std.testing.expectEqual(@as(?LiteralKind, .interpolation), dominantKind(&.{ method_constraint, interpolation_constraint }));
-    try std.testing.expectEqual(@as(?LiteralKind, .quote), dominantKind(&.{ interpolation_constraint, quote_constraint }));
+    try std.testing.expectEqual(@as(?LiteralKind, null), dominantKind(test_literal_idents, &.{method_constraint}));
+    try std.testing.expectEqual(@as(?LiteralKind, .interpolation), dominantKind(test_literal_idents, &.{ method_constraint, interpolation_constraint }));
+    try std.testing.expectEqual(@as(?LiteralKind, .quote), dominantKind(test_literal_idents, &.{ interpolation_constraint, quote_constraint }));
     // Order-independent: the numeral wins from either side.
-    try std.testing.expectEqual(@as(?LiteralKind, .numeral), dominantKind(&.{ quote_constraint, numeral_constraint }));
-    try std.testing.expectEqual(@as(?LiteralKind, .numeral), dominantKind(&.{ numeral_constraint, quote_constraint }));
+    try std.testing.expectEqual(@as(?LiteralKind, .numeral), dominantKind(test_literal_idents, &.{ quote_constraint, numeral_constraint }));
+    try std.testing.expectEqual(@as(?LiteralKind, .numeral), dominantKind(test_literal_idents, &.{ numeral_constraint, quote_constraint }));
+}
+
+test "where-clause literal-conversion hooks carry their hook's literal kind" {
+    const where_from_numeral = StaticDispatchConstraint{
+        .fn_name = test_literal_idents.from_numeral,
+        .fn_var = undefined,
+        .origin = .{ .where_clause = .{} },
+    };
+    const where_from_quote = StaticDispatchConstraint{
+        .fn_name = test_literal_idents.from_quote,
+        .fn_var = undefined,
+        .origin = .{ .where_clause = .{} },
+    };
+    const where_from_interpolation = StaticDispatchConstraint{
+        .fn_name = test_literal_idents.from_interpolation,
+        .fn_var = undefined,
+        .origin = .{ .where_clause = .{ .body_required = true } },
+    };
+    const where_plus = StaticDispatchConstraint{
+        .fn_name = testIdent(4),
+        .fn_var = undefined,
+        .origin = .{ .where_clause = .{} },
+    };
+    // A method-call constraint named like a hook is NOT a literal conversion:
+    // only the annotation's `where` contract and the literal's own origin are.
+    const method_call_from_numeral = StaticDispatchConstraint{
+        .fn_name = test_literal_idents.from_numeral,
+        .fn_var = undefined,
+        .origin = .method_call,
+    };
+
+    try std.testing.expectEqual(@as(?LiteralKind, .numeral), constraintLiteralKind(test_literal_idents, where_from_numeral));
+    try std.testing.expectEqual(@as(?LiteralKind, .quote), constraintLiteralKind(test_literal_idents, where_from_quote));
+    try std.testing.expectEqual(@as(?LiteralKind, .interpolation), constraintLiteralKind(test_literal_idents, where_from_interpolation));
+    try std.testing.expectEqual(@as(?LiteralKind, null), constraintLiteralKind(test_literal_idents, where_plus));
+    try std.testing.expectEqual(@as(?LiteralKind, null), constraintLiteralKind(test_literal_idents, method_call_from_numeral));
+
+    try std.testing.expectEqual(@as(?LiteralKind, .numeral), dominantKind(test_literal_idents, &.{ where_plus, where_from_numeral }));
+    try std.testing.expectEqual(@as(?LiteralKind, null), dominantKind(test_literal_idents, &.{where_plus}));
 }
 
 test "default targets are Dec for numerals and Str for string kinds" {

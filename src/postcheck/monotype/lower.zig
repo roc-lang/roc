@@ -11482,7 +11482,7 @@ const BodyContext = struct {
     /// Loop-carried control locals for a derived list parser. In Counted mode
     /// the format declared the element count up front, so the driver reads
     /// exactly `remaining` more elements and never calls `parse_list_next` or
-    /// `parse_list_after_element`.
+    /// `parse_list_after_item`.
     /// How a dict entry ends: `uncounted` asks the format whether more entries
     /// follow, `counted` re-enters the loop with one fewer entry left.
     const DictEntryEndMode = enum { counted, uncounted };
@@ -21673,7 +21673,7 @@ const BodyContext = struct {
         precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!DraftExprId {
         const ret_info = self.tryInfo(ret_ty);
-        const next_event_ty = try self.parseArrayEventType(state_ty, "Element", "Done");
+        const next_event_ty = try self.parseArrayEventType(state_ty, "Item", "Done");
         const next_try_ty = try self.tryTypeLike(ret_ty, next_event_ty, ret_info.err_ty);
         const next_try = try self.lowerParseFormatMethod(
             "parse_list_next",
@@ -21797,11 +21797,11 @@ const BodyContext = struct {
         ret_ty: Type.TypeId,
         precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!DraftExprId {
-        const element_tag = self.monoTagByText(event_ty, "Element");
+        const item_tag = self.monoTagByText(event_ty, "Item");
         const element_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
         const element_state_pat = try self.bindPat(element_state_local, state_ty);
         const element_pat = try self.addPat(.{ .ty = event_ty, .data = .{ .tag = .{
-            .name = element_tag.name,
+            .name = item_tag.name,
             .payloads = try self.addPatSpan(&[_]DraftPatId{element_state_pat}),
         } } });
         const element_body = try self.lowerParseListElement(
@@ -21875,14 +21875,14 @@ const BodyContext = struct {
         const after_event_ty = try self.parseArrayEventType(state_ty, "Continue", "Done");
         const after_try_ty = try self.tryTypeLike(ret_ty, after_event_ty, ret_info.err_ty);
         const after_try = try self.lowerParseFormatMethod(
-            "parse_list_after_element",
+            "parse_list_after_item",
             &.{ encoding_expr, try self.localExpr(rest_local, state_ty) },
             &.{ encoding_ty, state_ty },
             encoding_ty,
             after_try_ty,
         );
         const after_event_local = try self.addLocal(self.builder.symbols.fresh(), after_event_ty);
-        const after_body = try self.lowerParseListAfterElementEvent(
+        const after_body = try self.lowerParseListAfterItemEvent(
             elem_ty,
             list_ty,
             state_ty,
@@ -21897,7 +21897,7 @@ const BodyContext = struct {
         return try self.sequenceTryRecord(elem_parse, elem_parse_ret_ty, elem_local, value_name, rest_local, rest_name, sequenced_after, ret_ty);
     }
 
-    fn lowerParseListAfterElementEvent(
+    fn lowerParseListAfterItemEvent(
         self: *BodyContext,
         elem_ty: Type.TypeId,
         list_ty: Type.TypeId,
@@ -35369,7 +35369,7 @@ const BodyContext = struct {
             boundary_expr,
             shape_node,
             boundary_callable_node,
-            "parse_list_after_element",
+            "parse_list_after_item",
             false,
         ) or added;
         return added;
