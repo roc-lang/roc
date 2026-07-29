@@ -694,8 +694,8 @@ const Builder = struct {
         // Field kinds key by their RESOLVED state, byte-for-byte the same as
         // the checked artifact's encoding (`writeCheckedFieldKind`), so
         // solver and checked canonical keys agree: required (concrete
-        // `required`, a kind var solved `required`, or a still-undetermined
-        // kind — boundaries default flex to required) writes
+        // `required`, a kind var solved `required`, or a scheme interior's
+        // still-flex kind — required-equivalent, see the `.flex` arm) writes
         // `writeBool(false)` + the type; a `defaulted` kind writes the
         // checked `field_default` tag + the declaring module's content hash
         // + the default's expr node + the type; an `optional` kind writes
@@ -722,9 +722,14 @@ const Builder = struct {
                         try self.writeVar(unknown.var_);
                     },
                 },
-                // A still-undetermined kind: both rendering and publication
-                // default `.flex` presence to required (design.md "Field
-                // Kinds", kind defaulting), so key it required-equivalent.
+                // A still-flex kind here is a SCHEME INTERIOR: monomorphic
+                // literal-minted kinds are committed to `required` in the
+                // solved graph by the finalize sweep
+                // (Check.defaultLiteralFieldKinds, design.md "Field Kinds"
+                // kind defaulting), so only a scheme's quantified kind var
+                // (kept flex so instantiations may join `?:` annotations)
+                // still reads flex. Key it required-equivalent, matching
+                // rendering and checked publication.
                 .flex => {
                     self.writeBool(false);
                     try self.writeVar(unknown.var_);

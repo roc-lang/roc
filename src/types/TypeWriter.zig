@@ -721,8 +721,11 @@ fn writeFieldDefaultSuffix(self: *TypeWriter, writer: *ByteWrite, presence: Reco
 /// Write the separator between a field's name and its type, resolving the
 /// presence variable: a field whose kind solved to `present` (required)
 /// renders as a plain field, an `optional` kind renders `?:`, and a still
-/// undetermined kind renders as a plain field (it defaults to required —
-/// design.md "Field Kinds (All-Dynamic Optional Fields)").
+/// undetermined kind renders as a plain field. Post-check, a still-flex kind
+/// is a scheme interior (monomorphic literal-minted kinds are committed to
+/// `required` by the checker's finalize sweep — design.md "Field Kinds",
+/// kind defaulting), and rendering it required-equivalent matches the
+/// committed default an instantiation would take if nothing pinned it.
 fn writeRecordFieldSeparator(self: *TypeWriter, writer: *ByteWrite, presence: RecordField.Presence) error{WriteFailed}!void {
     try writer.writeAll(switch (presence) {
         .required => ": ",

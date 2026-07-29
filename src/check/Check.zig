@@ -177,6 +177,17 @@ pending_default_checks: std.ArrayList(PendingDefaultCheck),
 /// Kinds"). `optional_access_watermark` tracks the judged prefix.
 optional_field_accesses: std.ArrayList(OptionalFieldAccess),
 optional_access_watermark: usize = 0,
+/// Field-kind vars minted by record LITERALS (the fresh flex `.unknown`
+/// presence every literal field gets), recorded at the mint site so the
+/// finalize sweep (`defaultLiteralFieldKinds`) can commit still-undetermined
+/// MONOMORPHIC kinds to `required` from explicit data instead of walking the
+/// type store (design.md "Field Kinds" — kind defaulting as a checker pass).
+/// `.?`-minted kind vars are deliberately NOT recorded here:
+/// `judgeOptionalFieldAccesses` owns those and pins them to `optional`.
+/// `literal_field_kind_watermark` tracks the swept prefix (REPL sessions
+/// finalize repeatedly on one Check).
+literal_field_kinds: std.ArrayList(LiteralFieldKind),
+literal_field_kind_watermark: usize = 0,
 pending_default_seen: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{},
 /// True while `predeclareAnnotationScheme` materializes an annotation ahead
 /// of all body checking: a defaulted field's kind (identity) is minted as
@@ -1597,6 +1608,7 @@ fn initAssumePrepared(
         .type_decl_rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, Var){},
         .pending_default_checks = .empty,
         .optional_field_accesses = .empty,
+        .literal_field_kinds = .empty,
         .type_decl_generation_states = try initNodeSlots(TypeDeclGenerationState, gpa, node_count, .not_generated),
         .type_decl_dense_indices = try initNodeSlots(u32, gpa, node_count, no_type_decl_dense_index),
         .type_decl_statements = .empty,
@@ -1750,6 +1762,7 @@ pub fn deinit(self: *Self) void {
     self.type_decl_rigid_vars.deinit(self.gpa);
     self.pending_default_checks.deinit(self.gpa);
     self.optional_field_accesses.deinit(self.gpa);
+    self.literal_field_kinds.deinit(self.gpa);
     self.pending_default_seen.deinit(self.gpa);
     self.type_decl_generation_states.deinit(self.gpa);
     self.type_decl_dense_indices.deinit(self.gpa);
@@ -5619,6 +5632,14 @@ fn ensureBuiltinNominalDeclEntries(self: *Self) Allocator.Error!void {
 const OptionalFieldAccess = struct {
     presence_var: Var,
     field_name: Ident.Idx,
+    region: Region,
+};
+
+/// One record-literal field's minted kind var (see `literal_field_kinds`).
+/// The region is the literal's, reused when the finalize sweep mints the
+/// `required` content it commits the kind to.
+const LiteralFieldKind = struct {
+    presence_var: Var,
     region: Region,
 };
 
@@ -9509,6 +9530,10 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
     try self.resolvePendingTupleAccesses(&env, true);
     try self.checkAllConstraints(&env);
     try self.checkDefaultRestrictions();
+    // Kind defaulting, mirroring `finalizeTypes` (this path inlines its own
+    // finalize sequence): last, after every judgment above, for the same
+    // reasons documented there.
+    try self.defaultLiteralFieldKinds(&env);
     try self.checkForInfiniteType(CIR.Expr.Idx, expr_idx);
 
     try self.reportPolymorphicConstrainedExpr(expr_idx);
@@ -13623,18 +13648,26 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     const field_value = try self.checkStoredValueExpr(field.value, env, child_expected);
                     does_fx = field_value.does_fx or does_fx;
 
+                    // A literal field's KIND is undetermined: the literal
+                    // can serve as a required field or as an optional one
+                    // (construction wraps the tag exactly when the solved
+                    // kind is `optional`). Unification pins the kind to
+                    // whichever concrete kind the context demands
+                    // (design.md "Field Kinds (All-Dynamic Optional
+                    // Fields)"). The mint is recorded so the finalize sweep
+                    // can commit a kind nothing ever pinned to `required`
+                    // (see `defaultLiteralFieldKinds`).
+                    const field_kind_var = try self.fresh(env, expr_region);
+                    try self.literal_field_kinds.append(self.gpa, .{
+                        .presence_var = field_kind_var,
+                        .region = expr_region,
+                    });
+
                     // Append it to the scratch records array
                     try self.scratch_record_fields.append(types_mod.RecordField{
                         .name = field.name,
-                        // A literal field's KIND is undetermined: the literal
-                        // can serve as a required field or as an optional one
-                        // (construction wraps the tag exactly when the solved
-                        // kind is `optional`). Unification pins the kind to
-                        // whichever concrete kind the context demands
-                        // (design.md "Field Kinds (All-Dynamic Optional
-                        // Fields)").
                         .presence = .{ .unknown = .{
-                            .presence = try self.fresh(env, expr_region),
+                            .presence = field_kind_var,
                             .var_ = field_value.var_,
                         } },
                     });
@@ -19312,6 +19345,41 @@ fn judgeOptionalFieldAccesses(self: *Self, env: *Env) std.mem.Allocator.Error!vo
     }
 }
 
+/// Kind defaulting as a checker pass (design.md "Field Kinds"): commit every
+/// literal-minted field kind that is still undetermined at finalize — nothing
+/// ever pinned it to either kind — to `required`, the zero-cost kind, by
+/// ordinary unification. After this sweep a MONOMORPHIC module-level type can
+/// no longer carry a literal-minted flex kind, so the read boundaries
+/// (TypeWriter rendering, checked-artifact publication, canonical-key
+/// writing) read one committed fact instead of each re-applying a
+/// flex-means-required convention.
+///
+/// A kind var whose root is GENERALIZED is skipped, permanently: it is the
+/// interior of a scheme (e.g. `mk = |v| { a: v }`), and instantiations of
+/// that scheme may legitimately join a `?:` annotation later — committing it
+/// would mutate the scheme and change which programs typecheck. This is why
+/// the sweep runs at MODULE (and REPL-expression) finalize only, never at
+/// per-def generalization boundaries.
+fn defaultLiteralFieldKinds(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    while (self.literal_field_kind_watermark < self.literal_field_kinds.items.len) {
+        const entry = self.literal_field_kinds.items[self.literal_field_kind_watermark];
+        self.literal_field_kind_watermark += 1;
+        const resolved = self.types.resolveVar(entry.presence_var);
+        // Only a still-flex kind defaults: `.field_presence` is already
+        // committed (annotation pin, `.?` optional pin, absorption), and
+        // `.err` is a poisoned kind whose mismatch was already reported.
+        if (resolved.desc.content != .flex) continue;
+        // Scheme interior — stays flex by design (see doc comment above).
+        if (resolved.desc.rank == .generalized) continue;
+        const required_var = try self.freshFromContent(
+            .{ .field_presence = .required },
+            env,
+            entry.region,
+        );
+        _ = try self.unify(entry.presence_var, required_var, env);
+    }
+}
+
 /// Check every recorded default expression (design.md "Defaulted Fields"),
 /// once, after all defs are checked and callee effects are resolved: type
 /// the default against an INSTANTIATED copy of its field's type (a
@@ -19430,6 +19498,17 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     try self.resolvePendingTupleAccesses(env, true);
     try self.checkAllConstraints(env);
     try self.checkDefaultRestrictions();
+
+    // LAST, deliberately: every acceptance/rejection judgment above —
+    // `judgeOptionalFieldAccesses` (which may pin a literal-minted kind to
+    // `optional` first), the literal-defaulting rounds and the constraint
+    // validations (whose commits can run rows together and pin kinds from
+    // annotations), and `checkDefaultRestrictions` — must run on the exact
+    // pre-commit states, so the sweep is a pure commitment of already-final
+    // facts and cannot alter any accept/reject outcome. Nothing after
+    // finalize unifies types, so a kind committed here is a fact every
+    // consumer reads.
+    try self.defaultLiteralFieldKinds(env);
 }
 
 /// The candidate universe `runLiteralDefaultingRounds` gathers from—the only

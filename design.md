@@ -3426,15 +3426,26 @@ complete):
   compiler's — layout stays a function of the annotation alone, which is
   what keeps `?:` legal across the Host Symbol ABI.
 
+Kind defaulting as a checker pass (IMPLEMENTED): a literal-minted kind var
+still undetermined at module finalize (a literal field never used at either
+kind) is COMMITTED to `required` (zero-cost) in the solved graph, by
+ordinary unification (`Check.defaultLiteralFieldKinds` — the same
+fresh-content + unify shape `judgeOptionalFieldAccesses` uses for its
+`optional` pin). The mint sites record every literal field's kind var
+explicitly at creation; the sweep runs LAST at module (and REPL-expression)
+finalize, after `judgeOptionalFieldAccesses` and every other
+acceptance/rejection judgment, so it is a pure commitment of already-final
+facts. A GENERALIZED kind var is skipped BY DESIGN: it is a scheme interior
+(e.g. `mk = |v| { a: v }`), and instantiations of the scheme may
+legitimately join a `?:` annotation later — which is also why the sweep
+never runs at per-def generalization boundaries. Consequently the read
+boundaries' still-flex arms (TypeWriter rendering, `copyCheckedRecordFields`
+publication, `writeFieldPresenceForKey` canonical keys) now cover scheme
+interiors, which they read/publish/key required-equivalent; monomorphic
+literal-minted kinds reach them already committed.
+
 Deferred (explicitly not yet implemented):
 
-- Kind defaulting as a checker pass: a kind var still undetermined at the
-  end of checking (a literal field never used at either kind) defaults to
-  `required` (zero-cost). Today the commitment happens at the two read
-  boundaries — rendering and CheckedModule serialization both treat a
-  still-flex kind as required — rather than by binding the var in the
-  solved graph; a real defaulting pass (the literal-defaulting shape)
-  should eventually bind it so every consumer reads one committed kind.
 - Optional record update and optional destructure patterns
   (`{ field ?? fallback }`-style), which need their own typing rules here
   before implementation. UNSETTING a field in an update (`{ ..r, x: _ }`)

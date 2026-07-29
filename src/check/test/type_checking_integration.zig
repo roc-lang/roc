@@ -1013,6 +1013,73 @@ test "check type - record - opt - optional access through generalized function r
     try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
+test "check type - record - opt - unconstrained literal field kind commits to required at finalize" {
+    // Kind defaulting as a checker pass (design.md "Field Kinds"): a record
+    // literal mints a flex kind var per field, and `hello` is never used at
+    // either kind, so nothing pins it during checking. The finalize sweep
+    // (`defaultLiteralFieldKinds`) commits it to `required` IN THE SOLVED
+    // GRAPH — the presence var RESOLVES to `.field_presence = .required`,
+    // rather than staying flex for the read boundaries to reinterpret.
+    const source =
+        \\x = { hello: 1 }
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const kind = try resolveOnlyFieldKindContent(&test_env, "x");
+    try testing.expectEqual(types.Content{ .field_presence = .required }, kind);
+}
+
+test "check type - record - opt - scheme interior kind stays flex and joins optional at instantiation" {
+    // GUARD for the finalize kind sweep (design.md "Field Kinds", kind
+    // defaulting): `mk` generalizes with its literal-minted kind var still
+    // flex IN THE SCHEME — the sweep must skip generalized kind vars — so
+    // this instantiation can still join the `?:` annotation. If this fails,
+    // the sweep is committing too early or too broadly.
+    const source =
+        \\main! = |_| {}
+        \\
+        \\mk = |v| { a: v }
+        \\
+        \\x : { a ?: U8 }
+        \\x = mk(1)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "x" } },
+        \\{ a ?: U8 }
+    );
+}
+
+/// Resolve the named top-level def to a record with exactly one field and
+/// return that field's kind (presence) var's resolved content.
+fn resolveOnlyFieldKindContent(test_env: *TestEnv, def_name: []const u8) !types.Content {
+    const idents = test_env.module_env.getIdentStoreConst();
+    const defs_slice = test_env.module_env.store.sliceDefs(test_env.module_env.all_defs);
+    for (defs_slice) |def_idx| {
+        const def = test_env.module_env.store.getDef(def_idx);
+        const ptrn = test_env.module_env.store.getPattern(def.pattern);
+        switch (ptrn) {
+            .assign => |assign| {
+                if (!std.mem.eql(u8, def_name, idents.getText(assign.ident))) continue;
+                const resolved = test_env.module_env.types.resolveVar(ModuleEnv.varFrom(def_idx));
+                const record = switch (resolved.desc.content) {
+                    .structure => |flat| switch (flat) {
+                        .record => |record| record,
+                        else => return error.TestUnexpectedResult,
+                    },
+                    else => return error.TestUnexpectedResult,
+                };
+                const fields = test_env.module_env.types.getRecordFieldsSlice(record.fields);
+                try testing.expectEqual(@as(usize, 1), fields.len);
+                const kind_var = fields.items(.presence)[0].presenceVar() orelse return error.TestUnexpectedResult;
+                return test_env.module_env.types.resolveVar(kind_var).desc.content;
+            },
+            else => return error.TestUnexpectedResult,
+        }
+    }
+    return error.TestUnexpectedResult;
+}
+
 test "check type - record - default - type-decl default does not pin a referenced def (review H4)" {
     const source =
         \\main! = |_| {}

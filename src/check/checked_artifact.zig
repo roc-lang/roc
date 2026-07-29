@@ -7947,9 +7947,16 @@ fn copyCheckedRecordFields(
                     }
                     break :blk try appendCheckedTypeRoot(allocator, module, names, imports, store, active, unknown.var_);
                 },
-                // A kind still undetermined at publication defaults to
-                // `required` — nothing constrained it, so it takes the
-                // zero-cost kind (design.md "Field Kinds", kind defaulting).
+                // A still-flex kind here is a SCHEME INTERIOR: generalized
+                // defs' types are published as schemes, and a scheme's
+                // quantified kind var must stay flex (instantiations may
+                // join a `?:` annotation later). Monomorphic literal-minted
+                // kinds no longer reach publication flex — the finalize
+                // sweep commits them to `required` in the solved graph
+                // (Check.defaultLiteralFieldKinds, design.md "Field Kinds"
+                // kind defaulting). A scheme's flex kind publishes
+                // required-equivalent, matching what any uninstantiated
+                // reading of the scheme renders.
                 .flex => try appendCheckedTypeRoot(allocator, module, names, imports, store, active, unknown.var_),
                 // A poisoned presence var (a presence mismatch merges to err,
                 // unify.zig `unifyFieldPresence`) publishes the field through
