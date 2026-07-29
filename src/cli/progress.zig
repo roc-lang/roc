@@ -498,7 +498,7 @@ test "formatBytes ranges" {
     var buf: [16]u8 = undefined;
     try testing.expectEqualStrings("512KB", formatBytes(&buf, 512 * 1024));
     try testing.expectEqualStrings("123MB", formatBytes(&buf, 123 * 1024 * 1024));
-    try testing.expectEqualStrings("5.3GB", formatBytes(&buf, 5673 * 1024 * 1024));
+    try testing.expectEqualStrings("5.5GB", formatBytes(&buf, 5673 * 1024 * 1024));
 }
 
 test "formatMemRange collapses equal endpoints and skips missing samples" {
@@ -590,15 +590,22 @@ test "static breakdown lists every phase with the timings flag" {
     try testing.expect(std.mem.find(u8, out, "Type Inference") != null);
     try testing.expect(std.mem.find(u8, out, "Compile-Time Evaluation") != null);
     try testing.expect(std.mem.find(u8, out, "Specialization") != null);
-    try testing.expect(std.mem.find(u8, out, "Specialization 40ms") != null);
+    try testing.expect(std.mem.find(u8, out, "Specialization          40ms") != null);
     try testing.expect(std.mem.find(u8, out, "LIR Passes") != null);
     try testing.expect(std.mem.find(u8, out, "Store Results") != null);
     try testing.expect(std.mem.find(u8, out, "Code Generation") != null);
     // The post-codegen backend phases each get their own aligned row.
     try testing.expect(std.mem.find(u8, out, "LLVM Optimize + Emit") != null);
     try testing.expect(std.mem.find(u8, out, "Linking") != null);
-    // Type Checking is replaced by its breakdown, not shown directly.
-    try testing.expect(std.mem.find(u8, out, "Type Checking") == null);
+    // With a sampled memory range the parent row shows above its breakdown
+    // (the range is only truthful on the parent's contiguous window); without
+    // sampling the breakdown replaces it entirely.
+    if (base.process_memory.currentBytes() != null) {
+        try testing.expect(std.mem.find(u8, out, "Type Checking") != null);
+        try testing.expect(std.mem.find(u8, out, ", RSS ") != null);
+    } else {
+        try testing.expect(std.mem.find(u8, out, "Type Checking") == null);
+    }
 }
 
 test "fast run without the timings flag prints nothing" {
