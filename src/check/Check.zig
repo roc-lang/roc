@@ -17422,7 +17422,7 @@ fn probeUnifyWithoutRecordingProblems(
     var env = self.unifyEnv();
     env.problems = &probe_problems;
     env.snapshots = &probe_snapshots;
-    const result = try unifier.unify(&env, expected, actual, .{});
+    const result = try unifier.unify(&env, expected, actual, .{ .on_mismatch = .write_no_report });
 
     return result.isOk();
 }
