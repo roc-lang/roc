@@ -27,7 +27,7 @@ All paths are relative to `src/lsp/`.
 | Module | Purpose in completions |
 |---|---|
 | `canonicalize/ModuleEnv.zig` | Per-module compilation state: CIR node store, type store, method idents, ident table, etc. |
-| `compile/BuildEnv` | Root compilation environment. Contains `schedulers` (one per package/job) each holding a list of `ModuleState`. Also holds `builtin_modules`. |
+| `compile/BuildEnv` | Root compilation environment. Its `Coordinator` owns per-package `ModuleState` lists. Also holds `builtin_modules`. |
 | `types/` | Type inference results: `Var`, `Content`, `TypeStore`, records, aliases, nominals, functions, static dispatch constraints. |
 | `can/` (CIR) | Canonical Intermediate Representation — `Statement`, `Def`, `Pattern`, `Expr`, `TypeAnno`. |
 
@@ -198,7 +198,7 @@ does not merge their lookup or resolution.
 3. `addTypeCompletionsFromEnv(env)` — same as (1) but across all modules
    in the `BuildEnv`.
 4. `addModuleNameCompletionsFromEnv(env)` — adds all module names from
-   `BuildEnv` schedulers **and** calls `addBuiltinModuleNameCompletions()`
+   `BuildEnv` coordinator packages **and** calls `addBuiltinModuleNameCompletions()`
    which adds every entry in `BUILTIN_TYPES`.
 
 This means typing `x : ` suggests: user-defined type aliases and nominals,
@@ -307,7 +307,7 @@ From `src/canonicalize/ModuleEnv.zig`. Fields used by completions:
 
 | Field | Purpose |
 |---|---|
-| `schedulers` | `HashMap<JobQueueId, Scheduler>` — each scheduler has a `.modules` list of `ModuleState` |
+| `coordinator.packages` | Package map whose entries each have a `.modules` list of `ModuleState` |
 | `builtin_modules.builtin_module.env` | The `ModuleEnv` for the Builtin module (Str, List, etc.) |
 
 ### ScopeMap and Binding
@@ -338,7 +338,7 @@ Every public `add*` method on `CompletionBuilder`:
 | Method | What it adds |
 |---|---|
 | `addItem(item)` | Core: appends one item with deduplication. Returns `true` if added. |
-| `addModuleNameCompletionsFromEnv(env)` | All module names from `BuildEnv` schedulers + `addBuiltinModuleNameCompletions()`. |
+| `addModuleNameCompletionsFromEnv(env)` | All module names from `BuildEnv` coordinator state + `addBuiltinModuleNameCompletions()`. |
 | `addModuleNameCompletions(module_env)` | Imported module aliases from `s_import` statements. |
 | `addModuleMemberCompletions(env, name, opt)` | Exposed items from a named module (handles builtins and imports). |
 | `addModuleMemberCompletionsFromModuleEnv(env, name)` | Exposed items from a specific `ModuleEnv`. |
