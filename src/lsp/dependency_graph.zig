@@ -182,23 +182,23 @@ pub const DependencyGraph = struct {
         return true;
     }
 
-    /// Build the dependency graph from a PackageEnv after a successful build.
+    /// Build the dependency graph from a Coordinator PackageState after a successful build.
     /// This extracts module relationships from the compiler's internal state.
-    pub fn buildFromPackageEnv(self: *DependencyGraph, pkg_env: *compile.package.PackageEnv) Allocator.Error!void {
+    pub fn buildFromPackageState(self: *DependencyGraph, pkg: *compile.coordinator.PackageState) Allocator.Error!void {
         // First pass: create all module nodes
-        for (pkg_env.modules.items) |*module_state| {
+        for (pkg.modules.items) |*module_state| {
             const node = try self.getOrCreateModule(module_state.path, module_state.name);
             node.depth = module_state.depth;
         }
 
         // Second pass: build import/dependent relationships
-        for (pkg_env.modules.items) |*module_state| {
+        for (pkg.modules.items) |*module_state| {
             const node = self.modules.getPtr(module_state.path) orelse continue;
 
             // Add imports (local modules within same package)
             for (module_state.imports.items) |import_id| {
-                if (import_id < pkg_env.modules.items.len) {
-                    const imported_module = &pkg_env.modules.items[import_id];
+                if (import_id < pkg.modules.items.len) {
+                    const imported_module = &pkg.modules.items[import_id];
                     try node.addImport(self.allocator, imported_module.path);
 
                     // Add reverse dependency

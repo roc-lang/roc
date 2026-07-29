@@ -77,7 +77,88 @@ pub const TargetConfig = struct {
     /// so a differential harness can execute the Debug verifier's materialized
     /// Lambda Mono program. The slot receives a value only in Debug builds.
     debug_materialized_out: ?*?postcheck.LambdaMono.Ast.Program = null,
+    /// Optional timing accumulator for the checked-to-LIR pipeline.
+    timing: ?*Timing = null,
 };
+
+/// Thread-safe timing totals for the checked-to-LIR pipeline.
+pub const Timing = struct {
+    std_io: std.Io,
+    monotype_ns: TimingCounter = .{},
+    postcheck_to_lir_ns: TimingCounter = .{},
+    lir_passes_arc_ns: TimingCounter = .{},
+
+    pub fn init(std_io: std.Io) Timing {
+        return .{ .std_io = std_io };
+    }
+
+    pub fn snapshot(self: *const Timing) TimingSnapshot {
+        return .{
+            .monotype_ns = self.monotype_ns.load(),
+            .postcheck_to_lir_ns = self.postcheck_to_lir_ns.load(),
+            .lir_passes_arc_ns = self.lir_passes_arc_ns.load(),
+        };
+    }
+
+    pub fn addSnapshot(self: *Timing, snapshot_value: TimingSnapshot) void {
+        self.monotype_ns.add(snapshot_value.monotype_ns);
+        self.postcheck_to_lir_ns.add(snapshot_value.postcheck_to_lir_ns);
+        self.lir_passes_arc_ns.add(snapshot_value.lir_passes_arc_ns);
+    }
+
+    fn start(self: *const Timing) i64 {
+        return timingNowNs(self.std_io);
+    }
+
+    fn finish(self: *Timing, started_ns: i64, phase: TimingPhase) void {
+        const finished_ns = timingNowNs(self.std_io);
+        const elapsed_ns: u64 = @intCast(@max(0, finished_ns - started_ns));
+        switch (phase) {
+            .monotype => self.monotype_ns.add(elapsed_ns),
+            .postcheck_to_lir => self.postcheck_to_lir_ns.add(elapsed_ns),
+            .lir_passes_arc => self.lir_passes_arc_ns.add(elapsed_ns),
+        }
+    }
+};
+
+const TimingCounter = if (base.parallel.is_freestanding or builtin.target.cpu.arch == .wasm32) struct {
+    value: u64 = 0,
+
+    fn load(self: *const @This()) u64 {
+        return self.value;
+    }
+
+    fn add(self: *@This(), value: u64) void {
+        self.value +%= value;
+    }
+} else struct {
+    value: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+
+    fn load(self: *const @This()) u64 {
+        return self.value.load(.monotonic);
+    }
+
+    fn add(self: *@This(), value: u64) void {
+        _ = self.value.fetchAdd(value, .monotonic);
+    }
+};
+
+/// Immutable checked-to-LIR timings for progress reporting.
+pub const TimingSnapshot = struct {
+    monotype_ns: u64 = 0,
+    postcheck_to_lir_ns: u64 = 0,
+    lir_passes_arc_ns: u64 = 0,
+};
+
+const TimingPhase = enum {
+    monotype,
+    postcheck_to_lir,
+    lir_passes_arc,
+};
+
+fn timingNowNs(std_io: std.Io) i64 {
+    return @intCast(@max(0, std.Io.Timestamp.now(std_io, .awake).nanoseconds));
+}
 
 /// Whether the root checked module is complete or inside checking finalization.
 pub const CheckedModuleState = enum {
@@ -232,6 +313,7 @@ pub fn lowerCheckedModulesToLir(
     };
     defer allocator.free(static_data_requests);
 
+    const monotype_started_ns = if (target.timing) |timing| timing.start() else 0;
     var mono = try postcheck.Monotype.Lower.run(
         allocator,
         checkedModules(modules),
@@ -247,8 +329,11 @@ pub fn lowerCheckedModulesToLir(
             },
         },
     );
+    if (target.timing) |timing| timing.finish(monotype_started_ns, .monotype);
     var mono_owned = true;
     errdefer if (mono_owned) mono.deinit();
+
+    const postcheck_started_ns = if (target.timing) |timing| timing.start() else 0;
 
     // Each post-check transform consumes its input even when it returns an
     // error. Transfer ownership before entering the transform so its cleanup
@@ -291,7 +376,10 @@ pub fn lowerCheckedModulesToLir(
         .test_plan_metadata = roots.test_plan_metadata,
         .debug_materialized_out = target.debug_materialized_out,
     });
+    if (target.timing) |timing| timing.finish(postcheck_started_ns, .postcheck_to_lir);
     errdefer lowered.deinit();
+
+    const lir_passes_started_ns = if (target.timing) |timing| timing.start() else 0;
 
     // TRMC/TCE must rewrite recursive procs before ARC insertion: it deletes
     // calls and changes allocation sites, and ARC panics on pre-existing RC
@@ -310,6 +398,7 @@ pub fn lowerCheckedModulesToLir(
         .roots = lowered.lir_result.root_procs.items,
         .specialize = target.inline_mode != .none,
     });
+    if (target.timing) |timing| timing.finish(lir_passes_started_ns, .lir_passes_arc);
 
     if (roots.requests.len != 0 and lowered.lir_result.root_procs.items.len == 0) {
         checkedPipelineInvariant("explicit root set produced no LIR roots");

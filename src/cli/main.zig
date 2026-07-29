@@ -5996,7 +5996,7 @@ fn lowerLirWithBuildEnv(
         std.debug.panic("CLI lowering invariant violated: executable artifacts were not finalized", .{});
     }
     if (!build_env.executable_artifacts_finalized) unreachable;
-    if (reporter) |r| r.endWithBreakdown(&frontEndBreakdown(build_env.getTimingInfo()));
+    if (reporter) |r| finishFrontEndPhase(r, build_env.getTimingInfo());
 
     const root_artifact = build_env.executableRootCheckedArtifact();
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
@@ -8810,7 +8810,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         try renderDiagnostics(ctx, &build_env);
         return err;
     };
-    reporter.endWithBreakdown(&frontEndBreakdown(build_env.getTimingInfo()));
+    finishFrontEndPhase(&reporter, build_env.getTimingInfo());
 
     const diag = try build_env.renderDiagnostics(ctx.io.stderr(), ctx.reportConfig(.stderr));
     var total_warning_count = diag.warnings;
@@ -9118,7 +9118,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         try renderDiagnostics(ctx, &build_env);
         return err;
     };
-    reporter.endWithBreakdown(&frontEndBreakdown(build_env.getTimingInfo()));
+    finishFrontEndPhase(&reporter, build_env.getTimingInfo());
 
     const diag = try build_env.renderDiagnostics(ctx.io.stderr(), ctx.reportConfig(.stderr));
     var total_warning_count = diag.warnings;
@@ -9431,7 +9431,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         try renderDiagnostics(ctx, &build_env);
         return err;
     };
-    reporter.endWithBreakdown(&frontEndBreakdown(build_env.getTimingInfo()));
+    finishFrontEndPhase(&reporter, build_env.getTimingInfo());
 
     const diag = try build_env.renderDiagnostics(ctx.io.stderr(), ctx.reportConfig(.stderr));
     var total_warning_count = diag.warnings;
@@ -13811,6 +13811,29 @@ fn frontEndBreakdown(timing: anytype) [3]progress.SubTiming {
     };
 }
 
+fn compileTimeEvaluationBreakdown(timing: anytype) [7]progress.SubTiming {
+    return .{
+        .{ .name = "Monotype Specialization", .ns = timing.monotype_ns },
+        .{ .name = "Post-Check to LIR", .ns = timing.postcheck_to_lir_ns },
+        .{ .name = "LIR Passes + ARC", .ns = timing.lir_passes_arc_ns },
+        .{ .name = "Static Data", .ns = timing.static_data_ns },
+        .{ .name = "Code Generation", .ns = timing.code_generation_ns },
+        .{ .name = "Execution", .ns = timing.execution_ns },
+        .{ .name = "Store Results", .ns = timing.store_results_ns },
+    };
+}
+
+fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {
+    reporter.endWithBreakdown(&frontEndBreakdown(timing));
+    const compile_time = timing.compile_time_evaluation;
+    if (compile_time.total_ns == 0) return;
+    reporter.recordCompletedWithBreakdown(
+        "Compile-Time Evaluation",
+        compile_time.total_ns,
+        &compileTimeEvaluationBreakdown(compile_time),
+    );
+}
+
 /// Print the friendly post-build summary line and (optionally) cache statistics.
 fn printBuildSuccess(
     ctx: *CliCtx,
@@ -14185,27 +14208,6 @@ fn checkFileWithBuildEnvPreserved(
             .build_env = build_env,
         };
     };
-
-    // Force processing to ensure canonicalization happens
-    var sched_iter = build_env.schedulers.iterator();
-    if (sched_iter.next()) |sched_entry| {
-        const package_env = sched_entry.value_ptr.*;
-        if (package_env.modules.items.len > 0) {
-            const module_name = package_env.modules.items[0].name;
-
-            // Keep processing until the module is done
-            var max_iterations: u32 = 20;
-            while (max_iterations > 0) : (max_iterations -= 1) {
-                const phase = package_env.modules.items[0].phase;
-                if (phase == .Done) break;
-
-                package_env.processModuleByName(module_name) catch |err| switch (err) {
-                    error.OutOfMemory => return error.OutOfMemory,
-                    else => break,
-                };
-            }
-        }
-    }
 
     // Drain all reports
     const drained = try build_env.drainReports();
@@ -14643,7 +14645,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
             if (builtin.target.cpu.arch == .wasm32) {
                 reporter.end();
             } else {
-                reporter.endWithBreakdown(&frontEndBreakdown(check_result.timing));
+                finishFrontEndPhase(&reporter, check_result.timing);
             }
             reporter.finish();
 
@@ -14675,7 +14677,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
         if (builtin.target.cpu.arch == .wasm32) {
             reporter.end();
         } else {
-            reporter.endWithBreakdown(&frontEndBreakdown(check_result.timing));
+            finishFrontEndPhase(&reporter, check_result.timing);
         }
         reporter.finish();
 
@@ -14710,7 +14712,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
     if (builtin.target.cpu.arch == .wasm32) {
         reporter.end();
     } else {
-        reporter.endWithBreakdown(&frontEndBreakdown(check_result.timing));
+        finishFrontEndPhase(&reporter, check_result.timing);
     }
     reporter.finish();
 
@@ -15201,9 +15203,10 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
         try origins.put(ctx.gpa, builtin_env.module_name, builtin_origin);
         try origins.put(ctx.gpa, builtin_env.getIdentText(builtin_env.qualified_module_ident), builtin_origin);
 
-        var sched_iter = build_env.schedulers.iterator();
-        while (sched_iter.next()) |sched_entry| {
-            const pkg_name = sched_entry.key_ptr.*;
+        const coord = build_env.coordinator orelse return error.Internal;
+        var pkg_iter = coord.packages.iterator();
+        while (pkg_iter.next()) |coord_entry| {
+            const pkg_name = coord_entry.key_ptr.*;
             const origin_kind: bump.extract.OriginMap.Origin.Kind = origin_blk: {
                 if (std.mem.eql(u8, pkg_name, root_name)) break :origin_blk .self;
                 const pkg = build_env.packages.getPtr(pkg_name) orelse break :origin_blk .{ .unstable = pkg_name };
@@ -15223,8 +15226,8 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
                 // Path dependencies have no stable published identity.
                 break :origin_blk .{ .unstable = pkg.root_file };
             };
-            const package_env = sched_entry.value_ptr.*;
-            for (package_env.modules.items) |*module_state| {
+            const coord_pkg = coord_entry.value_ptr.*;
+            for (coord_pkg.modules.items) |*module_state| {
                 if (module_state.moduleEnv()) |mod_env| {
                     // Checked types record origins under the package-qualified
                     // module name; register the bare name too for roots whose
