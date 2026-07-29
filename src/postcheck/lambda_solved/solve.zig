@@ -60,6 +60,11 @@ const Solver = struct {
     return_contexts: std.ArrayList(ReturnContext),
     active_unifications: std.AutoHashMap(UnifyPair, void),
     active_private_evidence_relations: std.AutoHashMap(UnifyPair, void),
+    /// Per lifted Monotype: whether any `func` or `erased` node is reachable
+    /// from it. Clones of callable-free types carry no unbound slots and no
+    /// mutable lambda-set state, so one shared clone serves every use.
+    contains_callable: []bool,
+    shared_clones: std.AutoHashMap(MonoType.TypeId, Type.TypeVarId),
 
     const FunctionShape = struct {
         args: Type.Span,
@@ -100,6 +105,9 @@ const Solver = struct {
         errdefer allocator.free(generated_backing_pats);
         @memset(generated_backing_pats, false);
 
+        const contains_callable = try computeContainsCallable(allocator, lifted.types);
+        errdefer allocator.free(contains_callable);
+
         return .{
             .allocator = allocator,
             .program = program,
@@ -115,10 +123,14 @@ const Solver = struct {
             .return_contexts = .empty,
             .active_unifications = std.AutoHashMap(UnifyPair, void).init(allocator),
             .active_private_evidence_relations = std.AutoHashMap(UnifyPair, void).init(allocator),
+            .contains_callable = contains_callable,
+            .shared_clones = std.AutoHashMap(MonoType.TypeId, Type.TypeVarId).init(allocator),
         };
     }
 
     fn deinit(self: *Solver) void {
+        self.shared_clones.deinit();
+        self.allocator.free(self.contains_callable);
         self.active_private_evidence_relations.deinit();
         self.active_unifications.deinit();
         self.return_contexts.deinit(self.allocator);
@@ -163,7 +175,7 @@ const Solver = struct {
             const ty = if (request.fn_id) |fn_id|
                 self.fnRetType(fn_id)
             else
-                try self.lowerTypeFresh(request.ty);
+                try self.lowerTypeShared(request.ty);
             try self.markErasedCallablesReachedByType(ty);
             try self.program.layout_requests.append(self.allocator, .{
                 .checked_type = request.checked_type,
@@ -175,7 +187,7 @@ const Solver = struct {
 
         try self.program.runtime_schema_requests.ensureTotalCapacity(self.allocator, self.lifted.runtime_schema_requests.len);
         for (self.lifted.runtime_schema_requests) |request| {
-            const ty = try self.lowerTypeFresh(request.ty);
+            const ty = try self.lowerTypeShared(request.ty);
             try self.markErasedCallablesReachedByType(ty);
             try self.program.runtime_schema_requests.append(self.allocator, .{
                 .def = request.def,
@@ -188,13 +200,13 @@ const Solver = struct {
 
         try self.program.expr_tys.ensureTotalCapacity(self.allocator, self.expr_tys.len);
         for (self.expr_tys, 0..) |maybe_ty, index| {
-            const ty = maybe_ty orelse try self.lowerTypeFresh(self.lifted.exprs[index].ty);
+            const ty = maybe_ty orelse try self.lowerTypeShared(self.lifted.exprs[index].ty);
             try self.program.expr_tys.append(self.allocator, self.program.types.rootCompressed(ty));
         }
 
         try self.program.pat_tys.ensureTotalCapacity(self.allocator, self.pat_tys.len);
         for (self.pat_tys, 0..) |maybe_ty, index| {
-            const ty = maybe_ty orelse try self.lowerTypeFresh(self.lifted.pats[index].ty);
+            const ty = maybe_ty orelse try self.lowerTypeShared(self.lifted.pats[index].ty);
             try self.program.pat_tys.append(self.allocator, self.program.types.rootCompressed(ty));
         }
 
@@ -1074,6 +1086,17 @@ const Solver = struct {
                 }
             },
         }
+    }
+
+    /// Post-solve materialization: no later unification exists to rewrite the
+    /// returned vars, so callable-free subgraphs share one clone per Monotype.
+    fn lowerTypeShared(self: *Solver, ty: MonoType.TypeId) Allocator.Error!Type.TypeVarId {
+        var cloner = TypeCloner.init(self);
+        cloner.share = true;
+        defer cloner.deinit();
+        const lowered = try cloner.lower(ty);
+        try cloner.markForcedDynamicCallables();
+        return lowered;
     }
 
     fn lowerTypeFresh(self: *Solver, ty: MonoType.TypeId) Allocator.Error!Type.TypeVarId {
@@ -2131,9 +2154,108 @@ fn writeU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
     hasher.update(std.mem.asBytes(&little));
 }
 
+/// Reverse-reachability from `func` and `erased` nodes over the lifted
+/// Monotype store: exactly the types whose clones need fresh callable slots.
+fn computeContainsCallable(allocator: Allocator, types: anytype) Allocator.Error![]bool {
+    const count = types.types.len;
+    const flags = try allocator.alloc(bool, count);
+    errdefer allocator.free(flags);
+    @memset(flags, false);
+
+    const edge_counts = try allocator.alloc(u32, count);
+    defer allocator.free(edge_counts);
+    @memset(edge_counts, 0);
+
+    const Walk = struct {
+        fn children(store: @TypeOf(types), content: MonoType.Content, callback: anytype) void {
+            switch (content) {
+                .primitive, .zst, .erased => {},
+                .list, .box => |elem| callback.child(elem),
+                .tuple => |items| for (store.span(items)) |item| callback.child(item),
+                .record => |fields| for (store.fieldSpan(fields)) |field| callback.child(field.ty),
+                .tag_union => |tags| for (store.tagSpan(tags)) |tag| {
+                    for (store.span(tag.payloads)) |payload| callback.child(payload);
+                },
+                .named => |named| {
+                    for (store.span(named.args)) |arg| callback.child(arg);
+                    if (named.backing) |backing| callback.child(backing.ty);
+                    for (store.declaredFieldSpan(named.declared_order)) |declared| switch (declared) {
+                        .named => {},
+                        .padding => |padding_ty| callback.child(padding_ty),
+                    };
+                },
+                .func => |func| {
+                    for (store.span(func.args)) |arg| callback.child(arg);
+                    callback.child(func.ret);
+                },
+            }
+        }
+    };
+
+    for (types.types) |content| {
+        const Counter = struct {
+            counts: []u32,
+            fn child(self: @This(), ty: MonoType.TypeId) void {
+                self.counts[@intFromEnum(ty)] += 1;
+            }
+        };
+        Walk.children(types, content, Counter{ .counts = edge_counts });
+    }
+
+    var parent_starts = try allocator.alloc(u32, count + 1);
+    defer allocator.free(parent_starts);
+    parent_starts[0] = 0;
+    for (edge_counts, 0..) |edge_count, index| {
+        parent_starts[index + 1] = parent_starts[index] + edge_count;
+    }
+    const parents = try allocator.alloc(u32, parent_starts[count]);
+    defer allocator.free(parents);
+    const parent_writes = try allocator.dupe(u32, parent_starts[0..count]);
+    defer allocator.free(parent_writes);
+    for (types.types, 0..) |content, parent_index| {
+        const Filler = struct {
+            parents: []u32,
+            writes: []u32,
+            parent: u32,
+            fn child(self: @This(), ty: MonoType.TypeId) void {
+                const child_index = @intFromEnum(ty);
+                self.parents[self.writes[child_index]] = self.parent;
+                self.writes[child_index] += 1;
+            }
+        };
+        Walk.children(types, content, Filler{ .parents = parents, .writes = parent_writes, .parent = @intCast(parent_index) });
+    }
+
+    var work = std.ArrayList(u32).empty;
+    defer work.deinit(allocator);
+    for (types.types, 0..) |content, index| {
+        switch (content) {
+            .func, .erased => {
+                flags[index] = true;
+                try work.append(allocator, @intCast(index));
+            },
+            else => {},
+        }
+    }
+    while (work.pop()) |index| {
+        for (parents[parent_starts[index]..parent_starts[index + 1]]) |parent| {
+            if (flags[parent]) continue;
+            flags[parent] = true;
+            try work.append(allocator, parent);
+        }
+    }
+    return flags;
+}
+
 const TypeCloner = struct {
     solver: *Solver,
     map: std.AutoHashMap(MonoType.TypeId, Type.TypeVarId),
+    /// Unification rewrites var contents in place (alias backings, named
+    /// absorption, uninhabited links), so clones that can still reach `unify`
+    /// must stay per-use. After solving no var is unified again, and clones of
+    /// callable-free types carry no unbound slots, so those may share one var
+    /// per Monotype across the post-solve materialization loops.
+    share: bool = false,
 
     fn init(solver: *Solver) TypeCloner {
         return .{
@@ -2148,9 +2270,17 @@ const TypeCloner = struct {
 
     fn lower(self: *TypeCloner, ty: MonoType.TypeId) Allocator.Error!Type.TypeVarId {
         if (self.map.get(ty)) |cached| return cached;
+        const shareable = self.share and !self.solver.contains_callable[@intFromEnum(ty)];
+        if (shareable) {
+            if (self.solver.shared_clones.get(ty)) |shared| {
+                try self.map.put(ty, shared);
+                return shared;
+            }
+        }
         const reserved = try self.solver.program.types.add(.unbound);
         try self.map.put(ty, reserved);
         self.solver.program.types.set(reserved, try self.lowerContent(self.solver.lifted.types.get(ty)));
+        if (shareable) try self.solver.shared_clones.put(ty, reserved);
         return reserved;
     }
 
