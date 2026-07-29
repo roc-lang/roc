@@ -39180,22 +39180,197 @@ const BodyContext = struct {
     };
 
     /// A value-producing control-flow expression owns one result selection
-    /// while its inhabited branches are lowered. A finished expected Monotype
-    /// remains an immutable outer interface, so selection begins on a fresh
-    /// checked-public graph cell unless the caller already supplied exact
-    /// generated-private evidence.
+    /// while its inhabited branches are lowered. An exact private request from
+    /// the caller remains authoritative. Otherwise every public iterator
+    /// position is made explicitly forced-dynamic before branch emission, so
+    /// branch order cannot decide the representation of the join.
     fn initControlFlowResultSelection(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
         declared: DraftTypeCell,
     ) Allocator.Error!ControlFlowResultSelection {
         const declared_node = try declared.toGraphNode(self.graph);
-        const selected = if (try self.graph.containsGeneratedPrivate(declared_node) or
-            !try self.graph.containsFinishedMono(declared_node))
+        const selected = if (try self.graph.containsGeneratedPrivate(declared_node))
             DraftTypeCell.fromGraphNode(declared_node)
-        else
-            DraftTypeCell.fromGraphNode(try self.freshInstNode(checked_ty));
+        else blk: {
+            const fresh_public = try self.freshInstNode(checked_ty);
+            var rewritten = std.AutoHashMap(NodeId, NodeId).init(self.allocator);
+            defer rewritten.deinit();
+            const dynamic = try self.dynamicControlFlowResultNode(fresh_public, &rewritten);
+            if (try self.graph.containsGeneratedPrivate(dynamic)) {
+                break :blk DraftTypeCell.fromGraphNode(dynamic);
+            }
+            break :blk if (!try self.graph.containsFinishedMono(declared_node))
+                DraftTypeCell.fromGraphNode(declared_node)
+            else
+                DraftTypeCell.fromGraphNode(fresh_public);
+        };
         return .{ .declared = declared, .selected = selected };
+    }
+
+    /// Clone a public result shape into the defined control-flow join shape.
+    /// Ordinary cells keep their exact structure, while every public iterator
+    /// becomes the one forced-dynamic fixed point for its item type. The clone
+    /// is graph-owned and live until the enclosing specialization seals.
+    fn dynamicControlFlowResultNode(
+        self: *BodyContext,
+        raw_node: NodeId,
+        rewritten: *std.AutoHashMap(NodeId, NodeId),
+    ) Allocator.Error!NodeId {
+        const node = self.graph.rootNode(raw_node);
+        if (rewritten.get(node)) |existing| return existing;
+
+        const content = self.graph.content(node);
+        switch (content) {
+            .named => |named| {
+                if (named.def.iterator_representation == .none) {
+                    if (named.builtin_owner) |owner| {
+                        if (static_dispatch.isIteratorOwner(owner)) {
+                            const dynamic = try self.forcedDynamicIteratorFromPublicNode(node, named);
+                            try rewritten.put(node, dynamic);
+                            return dynamic;
+                        }
+                    }
+                }
+            },
+            .redirect => unreachable,
+            else => {},
+        }
+
+        return switch (content) {
+            .redirect => unreachable,
+            .unresolved,
+            .primitive,
+            .empty_tag_union,
+            .empty_record,
+            .erased,
+            .zst,
+            => node,
+            else => blk: {
+                const placeholder = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+                try rewritten.put(node, placeholder);
+                const built = try self.graph.newNode(switch (content) {
+                    .list => |item| .{ .list = try self.dynamicControlFlowResultNode(item, rewritten) },
+                    .box => |item| .{ .box = try self.dynamicControlFlowResultNode(item, rewritten) },
+                    .tuple => |items| tuple: {
+                        const mapped = try self.graph.arena().alloc(NodeId, items.len);
+                        for (items, mapped) |item, *out| {
+                            out.* = try self.dynamicControlFlowResultNode(item, rewritten);
+                        }
+                        break :tuple .{ .tuple = mapped };
+                    },
+                    .func => |function| function_node: {
+                        const args = try self.graph.arena().alloc(NodeId, function.args.len);
+                        for (function.args, args) |arg, *out| {
+                            out.* = try self.dynamicControlFlowResultNode(arg, rewritten);
+                        }
+                        break :function_node .{ .func = .{
+                            .args = args,
+                            .ret = try self.dynamicControlFlowResultNode(function.ret, rewritten),
+                        } };
+                    },
+                    .tag_union => |row| tags: {
+                        const mapped_tags = try self.graph.arena().alloc(InstTag, row.tags.len);
+                        for (row.tags, mapped_tags) |tag, *mapped_tag| {
+                            const payloads = try self.graph.arena().alloc(NodeId, tag.payloads.len);
+                            for (tag.payloads, payloads) |payload, *out| {
+                                out.* = try self.dynamicControlFlowResultNode(payload, rewritten);
+                            }
+                            mapped_tag.* = .{
+                                .name = tag.name,
+                                .checked_name = tag.checked_name,
+                                .payloads = payloads,
+                            };
+                        }
+                        break :tags .{ .tag_union = .{
+                            .tags = mapped_tags,
+                            .ext = try self.dynamicControlFlowResultNode(row.ext, rewritten),
+                        } };
+                    },
+                    .record => |row| record: {
+                        const fields = try self.graph.arena().alloc(InstField, row.fields.len);
+                        for (row.fields, fields) |field, *out| {
+                            out.* = .{
+                                .name = field.name,
+                                .ty = try self.dynamicControlFlowResultNode(field.ty, rewritten),
+                            };
+                        }
+                        break :record .{ .record = .{
+                            .fields = fields,
+                            .ext = try self.dynamicControlFlowResultNode(row.ext, rewritten),
+                        } };
+                    },
+                    .named => |named| named_node: {
+                        const args = try self.graph.arena().alloc(NodeId, named.args.len);
+                        for (named.args, args) |arg, *out| {
+                            out.* = try self.dynamicControlFlowResultNode(arg, rewritten);
+                        }
+                        const backing = if (named.backing) |backing| InstBacking{
+                            .node = try self.dynamicControlFlowResultNode(backing.node, rewritten),
+                            .use = backing.use,
+                            .authority = backing.authority,
+                        } else null;
+                        const declared_order = try self.graph.arena().alloc(InstDeclaredField, named.declared_order.len);
+                        for (named.declared_order, declared_order) |declared, *out| {
+                            out.* = switch (declared) {
+                                .named => |field| .{ .named = field },
+                                .padding => |padding| .{
+                                    .padding = try self.dynamicControlFlowResultNode(padding, rewritten),
+                                },
+                            };
+                        }
+                        break :named_node .{ .named = .{
+                            .named_type = named.named_type,
+                            .def = named.def,
+                            .kind = named.kind,
+                            .builtin_owner = named.builtin_owner,
+                            .args = args,
+                            .backing = backing,
+                            .generated_iterator = named.generated_iterator,
+                            .declared_order = declared_order,
+                        } };
+                    },
+                    .redirect,
+                    .unresolved,
+                    .primitive,
+                    .empty_tag_union,
+                    .empty_record,
+                    .erased,
+                    .zst,
+                    => unreachable,
+                });
+                try self.graph.unify(placeholder, built);
+                break :blk placeholder;
+            },
+        };
+    }
+
+    fn forcedDynamicIteratorFromPublicNode(
+        self: *BodyContext,
+        public_iterator: NodeId,
+        public_named: anytype,
+    ) Allocator.Error!NodeId {
+        if (public_named.args.len != 1 or public_named.def.iterator_representation != .none) {
+            Common.invariant("control-flow dynamic iterator source was not the public iterator contract");
+        }
+        const owner = public_named.builtin_owner orelse
+            Common.invariant("control-flow dynamic iterator source had no builtin owner");
+        if (!static_dispatch.isIteratorOwner(owner)) {
+            Common.invariant("control-flow dynamic iterator source was not an iterator builtin");
+        }
+        const backing = public_named.backing orelse
+            Common.invariant("control-flow dynamic iterator source had no public backing");
+        if (backing.authority != .checked_public) {
+            Common.invariant("control-flow dynamic iterator source did not have public backing authority");
+        }
+        return try self.forcedDynamicIteratorNode(public_iterator, public_named.args[0], .{
+            .named_type = public_named.named_type,
+            .def = public_named.def,
+            .kind = public_named.kind,
+            .builtin_owner = owner,
+            .backing = backing,
+            .declared_order = public_named.declared_order,
+        });
     }
 
     fn includeControlFlowResult(
@@ -39229,6 +39404,12 @@ const BodyContext = struct {
         self: *BodyContext,
         selection: ControlFlowResultSelection,
     ) Allocator.Error!DraftTypeCell {
+        // A control-flow expression whose every branch terminates never
+        // produces a runtime result. Its checked result variable may therefore
+        // remain unconstrained, and cannot supply representation evidence for
+        // the enclosing continuation's declared result cell.
+        if (!selection.has_value) return selection.declared;
+
         const declared_node = try selection.declared.toGraphNode(self.graph);
         const selected_node = try selection.selected.toGraphNode(self.graph);
         try relateRequestComponent(self.graph, declared_node, selected_node);

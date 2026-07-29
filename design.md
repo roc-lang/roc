@@ -2456,17 +2456,24 @@ witness. ConstStore preserves that witness beside the stored value, and restore
 relates the checked public interface to it without ordinary unification.
 
 A value-producing `if` or `match` likewise owns one explicit result selection
-for all of its inhabited branches. A finished expected Monotype remains an
-immutable outer interface, so selection begins on a fresh checked-public graph
-cell unless the caller already supplied exact generated-private evidence. Each
-branch settles that selection before the next branch is lowered, and every
-later branch consumes the selected cell as its explicit request. A live private
-producer selects the graph cell; an already-finished private producer remains
-immutable and its exact cell becomes the carried selection instead. Only after
-all branches have been lowered does the control-flow expression relate its
-selected result to the outer interface and seal. Representation selection
+for all of its inhabited branches. An exact generated-private request already
+supplied by the caller remains authoritative. Otherwise Monotype clones the
+checked-public result graph before branch emission and replaces every nested
+public iterator position with the defined forced-dynamic fixed point for its
+item type. This is the representation join for a public control-flow result:
+all branches consume it as their explicit request, so source order cannot make
+one branch's finished representation authoritative over another and lowering
+never needs to revise already-emitted branch code. Ordinary result positions
+remain public. Only after all branches have been lowered does the selected
+result relate to the outer interface and seal. Representation selection
 therefore never reconstructs branch evidence from finished output IR or
 reopens a durable Monotype.
+
+Branches that provably terminate do not participate in result selection. If
+every branch terminates, the control-flow expression produces no runtime value:
+its checked result variable remains unconstrained, no result relation is
+created, and the expression carries the enclosing continuation's declared cell.
+An unobservable continuation type is not representation evidence.
 
 Record constructors preserve that distinction structurally. If a field is a
 finished generated-private witness, the constructor emits a distinct record
