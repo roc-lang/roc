@@ -106,6 +106,8 @@ pub const Reporter = struct {
     sample_len: u16 = 0,
     sample_stride_ns: u64 = mem_tick_ns,
     last_sample_ns: u64 = 0,
+    /// Largest footprint sampled over the whole operation.
+    peak_bytes: u64 = 0,
     phases: [max_phases]Phase = undefined,
     phase_count: usize = 0,
     active: ?usize = null,
@@ -260,6 +262,9 @@ pub const Reporter = struct {
         const threshold_reached = self.is_tty and self.elapsedNs() >= self.threshold_ns;
         if (!self.displaying and (self.always or threshold_reached)) {
             self.printStaticBreakdown();
+        } else if (self.displaying) {
+            var totals_buf: [64]u8 = undefined;
+            self.writer.print("{f}{s}\n", .{ padName(self.op_label), self.formatTotals(&totals_buf) }) catch {};
         }
         self.writer.flush() catch {};
     }
@@ -323,6 +328,7 @@ pub const Reporter = struct {
         const p = &self.phases[idx];
         if (bytes < p.mem_min) p.mem_min = bytes;
         if (bytes > p.mem_max) p.mem_max = bytes;
+        if (bytes > self.peak_bytes) self.peak_bytes = bytes;
 
         const now = self.elapsedNs();
         if (self.sample_len > 0 and now - self.last_sample_ns < self.sample_stride_ns) return;
@@ -384,7 +390,8 @@ pub const Reporter = struct {
 
     /// Print the whole breakdown at once (no animation). Caller holds the mutex.
     fn printStaticBreakdown(self: *Reporter) void {
-        self.writer.print("{s}\n", .{self.op_label}) catch {};
+        var totals_buf: [64]u8 = undefined;
+        self.writer.print("{f}{s}\n", .{ padName(self.op_label), self.formatTotals(&totals_buf) }) catch {};
         var i: usize = 0;
         while (i < self.phase_count) : (i += 1) self.writeCommittedPhase(i);
     }
@@ -456,6 +463,18 @@ pub const Reporter = struct {
     fn clearLine(self: *Reporter) void {
         self.writer.writeAll("\r") catch {};
         ansi.clearFromCursorToLineEnd(self.writer) catch {};
+    }
+
+    /// "2m 25s, peak RSS 5.9GB" (the memory part only when sampled).
+    fn formatTotals(self: *Reporter, buf: []u8) []const u8 {
+        var dur_buf: [32]u8 = undefined;
+        const dur = formatDuration(&dur_buf, self.elapsedNs(), .final);
+        if (self.peak_bytes == 0) {
+            return std.fmt.bufPrint(buf, "{s}", .{dur}) catch buf[0..0];
+        }
+        var bytes_buf: [16]u8 = undefined;
+        const peak = formatBytes(&bytes_buf, self.peak_bytes);
+        return std.fmt.bufPrint(buf, "{s}, peak RSS {s}", .{ dur, peak }) catch buf[0..0];
     }
 
     fn elapsedNs(self: *Reporter) u64 {
@@ -651,7 +670,7 @@ test "static breakdown lists every phase with the timings flag" {
     collectStatic(&buf, true);
 
     const out = buf.written();
-    try testing.expect(std.mem.find(u8, out, "roc build\n") != null);
+    try testing.expect(std.mem.startsWith(u8, out, "roc build"));
     try testing.expect(std.mem.find(u8, out, "Resolving Dependencies") != null);
     try testing.expect(std.mem.find(u8, out, "Parsing") != null);
     try testing.expect(std.mem.find(u8, out, "Name Resolution") != null);
