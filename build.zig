@@ -4999,6 +4999,23 @@ pub fn build(b: *std.Build) void {
         .compile = cli_runner_unit_test,
     });
 
+    // Tidy unit tests: ci/tidy.zig is an executable root, so like
+    // parallel_cli_runner.zig above its test decls need a dedicated test compile.
+    const tidy_unit_test = b.addTest(.{
+        .name = "tidy_unit",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("ci/tidy.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .filters = test_filters,
+    });
+    test_suites.register(.{
+        .step_suffix = "tidy-unit",
+        .description = "Run tidy Zig unit tests",
+        .compile = tidy_unit_test,
+    });
+
     // LLVM backend aggregator test: src/backend/llvm/mod.zig is not the root of
     // the llvm_codegen module, so its refAllDecls compile coverage needs its own
     // test compile.

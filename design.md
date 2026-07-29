@@ -686,7 +686,7 @@ This mirrors simdjson stage 2 more closely than a generic labeled-state switch.
 simdjson's stage-2 parser walks a precomputed structural stream with concrete
 JSON grammar labels such as object-begin, object-continue, array-value, and
 scope-end. Its depth stack stores only open JSON scope fields (`is_array`,
-tape index, element count); it does not store "run this parser state next"
+tape index, item count); it does not store "run this parser state next"
 instructions. Roc parser kernels must follow the same split:
 tokenization performs linear input discovery, parser kernels inspect the
 current token directly, and parser-owned syntax state describes currently open
@@ -2077,7 +2077,7 @@ opaque representation, and an exact `to_inspect` method may override it.
 Derived container encoders carry two explicit state types. The outer state is
 accepted and returned by `encode_tag`, `encode_record`, `encode_tuple`, and
 `encode_list`, and by each value-writer callback. The container callback and
-its field or element writer instead thread a format-owned cursor type, which
+its field or item writer instead thread a format-owned cursor type, which
 may differ from the outer state. Checking validates that associated cursor type
 through the format method's complete callback protocol;
 Monotype consumes the same checked method shape when generating callbacks. It
@@ -3258,9 +3258,9 @@ The only time an unresolved checked variable with an empty-tag-union row
 default may become durable `tag_union []` is final graph sealing, after every
 checked relation and specialization demand for that body has been applied.
 After sealing, `tag_union []` is closed and uninhabited. Values such as `[]` can
-still be represented as `List(tag_union [])` because they contain no elements,
-and code that would need an actual element value must have constrained the
-element type earlier or must be unreachable at runtime.
+still be represented as `List(tag_union [])` because they contain no items,
+and code that would need an actual item value must have constrained the
+item type earlier or must be unreachable at runtime.
 
 Expression lowering is demand-aware. A runtime-value demand requires a
 constructible monomorphic value. If a checked generic value remains
@@ -3314,7 +3314,7 @@ the requested checked template owns explicit type-constructor arguments that
 may have no value-level occurrence, including phantom nominal arguments. Before
 the requester seals, Monotype traverses matching request and checked structure
 without relating ordinary value positions, and constrains only named type
-arguments and the explicit element arguments of builtin container types.
+arguments and the explicit item arguments of builtin container types.
 Unifying the two complete function roots here is forbidden: two sibling
 requests can legitimately carry different concrete value arguments, and a
 callee checked root must not make those caller-owned cells aliases. The callee
@@ -4709,7 +4709,7 @@ multiple positions is re-lowered at each reference, so downstream control
 sharing must go through typed lifted join points or LIR join points, never
 through re-lowering a Monotype id twice. Direct lowering preserves lifted
 `join_point`/`jump` as LIR `join`/`jump`. PR 9707 removed the one known violator,
-the list-pattern desugarer, after measuring ~(elements+1)^branches statement
+the list-pattern desugarer, after measuring ~(items+1)^branches statement
 blowup. The match
 compiler holds the invariant by construction: rows (branches) are never
 duplicated during specialization — a row that does not test the selected
@@ -4833,7 +4833,7 @@ rc node reachable in its committed layout:
 
 - the top-level value itself, when its layout is `str`, `list`, `list_of_zst`,
   `box`, `box_of_zst`, or `erased_callable`
-- the element resource of a `list`
+- the item resource of a `list`
 - the payload resource of a `box`
 - one resource per refcounted field of a `struct_`
 - one resource per refcounted payload position of each `tag_union` variant
@@ -5140,7 +5140,7 @@ Join ownership sets use the resource prefix of this same per-proc domain.
 Consequently neither ownership nor liveness rows are widened by locals from
 other procedures. Unrelated scalar locals are not ARC resources and never
 receive raw liveness bits. This distinction is load-bearing for wide static
-initializers: a list of a million scalar elements may require a million scalar
+initializers: a list of a million scalar items may require a million scalar
 LIR locals, but it contributes only the list allocation and its explicit
 ownership representatives to ARC's resource-bit width. Widening every row with
 non-resource or other-proc locals would make ARC memory quadratic in an input
@@ -5439,7 +5439,7 @@ may contain handles into these arguments' allocations. Unit-accounting
 masks already imply sharing for many ops (`result_aliases_consumed_args`,
 `result_borrows_args`, `retain_args` all contribute edges directly), but
 unit accounting does not describe handle sharing in general: `str_split_on`
-allocates a fresh owned list whose string elements are seamless slices into
+allocates a fresh owned list whose string items are seamless slices into
 the argument's allocation, and the byte/string conversions and
 prefix/suffix slicing ops are the same. Those ops set `result_shares_args`
 explicitly. A refcounted result of an op whose masks say nothing receives a
@@ -5499,7 +5499,7 @@ query against liveness state emission already maintains.
 outermost allocation has count 1 on return. Mutating ops qualify on both of
 their paths — in place keeps an allocation whose count was already 1, and
 the copy path returns a fresh one — and so do the ops that always allocate
-their outermost result, including the slicing ops whose inner elements
+their outermost result, including the slicing ops whose inner items
 share (`result_shares_args` describes the inner sharing; uniqueness is a
 property of the outermost allocation alone). As with the other masks, an op
 without the mask contributes nothing and its results stay conservatively
@@ -5532,11 +5532,11 @@ outcome of emission order.
 ### In-Place List.map
 
 `List.map` may overwrite a uniquely owned input list's buffer instead of
-allocating an output list when the input and output element layouts are
+allocating an output list when the input and output item layouts are
 interchangeable in one allocation: same stride, same allocation alignment
-class, and the same refcounted-elements header shape. The hidden header in
+class, and the same refcounted-items header shape. The hidden header in
 front of a list's data and the alignment handed to the allocator both
-derive from the element layout, so reusing an allocation across layouts
+derive from the item layout, so reusing an allocation across layouts
 that disagree on either would make a later free reconstruct the wrong
 allocation pointer.
 
@@ -5550,7 +5550,7 @@ layouts are not interchangeable (or the optimization is off), so the
 runtime check never runs for a pair it could corrupt.
 
 The in-place branch itself is dropped before it reaches LIR whenever the
-element layouts are not interchangeable or the optimization is disabled
+item layouts are not interchangeable or the optimization is disabled
 (`TargetConfig.list_in_place_map`, on for `--opt=size`/`--opt=speed`, off
 for dev, interpreter, and compile-time evaluation), so ineligible map
 specializations never carry dead in-place machinery and dev builds lower
@@ -5566,14 +5566,14 @@ runtime check — the primitive's own lowering independently gates the
 runtime path — and a fold regression surfaces as a Debug stride assertion
 in the backends rather than as silent dead code.
 
-Inside the in-place loop, `list_map_extract_unsafe` moves one element's
+Inside the in-place loop, `list_map_extract_unsafe` moves one item's
 ownership out of the buffer and `list_map_write_unsafe` moves the
 transform's result into the vacated slot. Neither performs RC work: the
-extracted element is an ordinary owned local, so ARC places its release
+extracted item is an ordinary owned local, so ARC places its release
 according to the transform's solved convention, and the certifier checks
 the loop like any other code. Between the two ops the slot holds stale
-bytes and the buffer is typed by the output element while later slots still
-hold input elements; this window is unobservable because no cleanup path
+bytes and the buffer is typed by the output item while later slots still
+hold input items; this window is unobservable because no cleanup path
 walks live values — `crash` is fatal and leaks by design — and the loop
 itself is the only holder of the buffer (the runtime count of 1 proved
 there were no other counted handles, and a live borrow of the list would
@@ -5672,7 +5672,7 @@ the supplied unique string accumulator. Any expression that cannot append
 directly is first lowered to an ordinary result and then appended as an
 explicit step. `append_into(List(T))` follows the same rule for list builders.
 These variants are created only for realized demands and are keyed by result
-kind and element layout, so specialization is bounded by the distinct demands
+kind and item layout, so specialization is bounded by the distinct demands
 the program actually uses.
 
 Each stage fully replaces the previous behavior when it lands; there are no
@@ -5719,7 +5719,7 @@ bounded by the emitted operation, never by source or layout nesting depth.
 Explicit emission worklists carry stack offsets and reuse their
 caller-provided result register across child continuations. They must not retain
 one newly allocated architecture register per recursive layout, control-flow node,
-list element layer, or tag payload layer. Register-pool exhaustion is therefore
+list item layer, or tag payload layer. Register-pool exhaustion is therefore
 an internal lifetime-invariant failure, not a source-program condition and not
 an invitation for an architecture-specific best-effort spill.
 
@@ -6839,7 +6839,7 @@ byte-swap tax.
 The vector types are full participants in the Host Symbol ABI. There is no
 internal-only restriction, wrapper-call convention, byte-array boundary type,
 or source-level adapter. A Roc programmer may use a vector directly, place one
-inside a record, tuple, tag payload, list element, box payload, or another
+inside a record, tuple, tag payload, list item, box payload, or another
 ordinary type, and use that type in either direction across a hosted or
 `provides` symbol.
 
@@ -7104,7 +7104,7 @@ known gaps, deliberately excluded from the SIMD effort, are:
 - wrapping scalar arithmetic does not exist, and plain `+`/`-`/`*` are
   checked (crash-on-overflow) even at `--opt=speed`, which also blocks
   auto-vectorization of reductions — #10300;
-- `for`/`Iter` loops carry per-element step calls and refcount traffic
+- `for`/`Iter` loops carry per-item step calls and refcount traffic
   that the equivalent `while` loop does not — #10301;
 - no scalar rotate, byte-swap, or unaligned multi-byte loads from
   `List(U8)` (bit-reader fuel for entropy decoders).
@@ -7126,7 +7126,7 @@ the pass/fail bar while the language is 128-bit-only.
 - Whether a 32/48/64-byte `table_lookup` tier (NEON `tbl2`–`tbl4`) earns
   its place once real kernels are measured (expressible today as multiple
   16-byte lookups plus selects).
-- Typed-element loads (`List(U16)` → `U16x8`, etc.) — deferred until a
+- Typed-item loads (`List(U16)` → `U16x8`, etc.) — deferred until a
   kernel wants them; byte buffers are the codec substrate.
 - Saturating arithmetic on 32/64-bit lanes, `abs` on `I64x2`, and unsigned
   ordering compares on `U64x2` are omitted because no cataloged kernel

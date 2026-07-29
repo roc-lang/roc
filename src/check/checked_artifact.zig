@@ -6607,6 +6607,10 @@ fn numericDefaultPhaseForConstraints(
         .div_trunc_by = idents.div_trunc_by,
         .rem_by = idents.rem_by,
         .negate = idents.negate,
+    }, .{
+        .from_numeral = idents.from_numeral,
+        .from_quote = idents.from_quote,
+        .from_interpolation = idents.from_interpolation,
     }, constraints);
 }
 
