@@ -198,7 +198,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
             .context = opts.context,
         } });
         // Only `poison_to_err` reaches here (`write_no_report` returned above).
-        try env.types.union_(a, b, .{ .content = .err, .rank = Rank.generalized });
+        try env.types.poisonOnMismatch(a, b);
         return Result{ .problem = problem_idx };
     };
 

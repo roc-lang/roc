@@ -1137,6 +1137,72 @@ canonicalization output explicit, keeps diagnostics in `Can`, and keeps release
 builds fast: the work runs once per source suffix or type declaration, with no
 runtime cost in the compiled program.
 
+## Checked Type Equivalence Classes
+
+The checked type store represents each solved equivalence class with two
+independent identities:
+
+- the **storage root** is an internal union-find node chosen only to keep the
+  equivalence-class forest shallow;
+- the **checked representative** is the type variable whose identity ordinary
+  unification says survives the merge.
+
+These identities must not be conflated. Ordinary unification continues to
+select its second resolved operand as the checked representative. Expected
+return variables, deferred dispatch constraints, generalization pools, checked
+type keys, and every other consumer of solved variable identity observe that
+checked representative exactly as they did before structural balancing. They
+must never observe or infer meaning from the storage root.
+
+The storage root is selected by a separate union-find rank. This structural
+rank is not `Descriptor.rank`: descriptor rank is the Hindley-Milner scope level
+used to decide generalization, while union-find rank is private data-structure
+metadata. On a union, the lower structural rank redirects to the higher one; a
+tie keeps the second storage root and increments its structural rank. Path
+compression may change storage parents at any time outside a solver savepoint.
+Neither operation may change the class descriptor or checked representative.
+
+Each live storage root names one descriptor whose root metadata contains the
+checked representative. Structural rank is stored separately on every slot,
+including redirects. This lets occurrence-directed error recovery explicitly
+re-root a class without coupling its new storage root to the descriptor chosen
+by checked unification. When a balanced union keeps the
+first operand's storage root but the second operand is the checked survivor,
+the retained storage root adopts the second class's descriptor and records the
+second checked representative. This preserves the unifier's descriptor merge
+destination and externally observable survivor while allowing the storage
+tree to remain balanced.
+
+`resolveVar` returns the checked representative and class descriptor;
+storage-root traversal is a private store operation. Consequently a checked
+representative is not required to be a storage root slot. `is_root` on a
+resolved variable means that the queried variable is the checked
+representative, which is the only root notion checker consumers may use.
+
+Solver savepoints journal storage-parent, structural-rank, and root-metadata
+mutations and restore all three byte-for-byte. Checked-store serialization
+includes both metadata stores, so loading a cached store preserves its checked
+representatives and balanced structure. A declared solver-mutating redirect
+joins whole classes through the same balanced mechanism while explicitly
+adopting the redirect destination's descriptor and checked representative; it
+must not directly graft one storage root beneath another and recreate an
+unbounded chain.
+
+A failed unification is different from a successful class union. Its first
+operand can be one checked occurrence already connected to a shared binding;
+error recovery must poison that exact occurrence without making the binding or
+an incidental storage child of the occurrence erroneous. When the queried
+variable is not the checked representative, `poisonOnMismatch` enumerates its
+class explicitly, re-roots and flattens the remainder at the checked
+representative, isolates the queried occurrence as a rank-zero singleton, and
+rank-merges that singleton with the second operand's error class. When the
+queried variable is the checked representative, the mismatch belongs to the
+class itself and the whole class is rank-merged into the error class. This rule
+makes error recovery independent of union-tree shape and path-compression
+history; it never guesses which variables are source occurrences from their
+storage parents. Error recovery must use this explicit operation rather than
+calling ordinary union or writing a raw redirect.
+
 ## Type Alias Invariant
 
 Source type aliases are transparent views of their backing type. An alias root
