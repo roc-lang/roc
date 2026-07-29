@@ -16,7 +16,7 @@ pub fn currentBytes() ?u64 {
         },
         .linux => {
             var buf: [128]u8 = undefined;
-            const file = std.fs.openFileAbsolute("/proc/self/statm", .{}) catch return null;
+            const file = std.fs.cwd().openFile("/proc/self/statm", .{}) catch return null;
             defer file.close();
             const len = file.read(&buf) catch return null;
             var it = std.mem.tokenizeScalar(u8, buf[0..len], ' ');
@@ -79,4 +79,4 @@ extern "kernel32" fn K32GetProcessMemoryInfo(
     process: std.os.windows.HANDLE,
     counters: *WindowsProcessMemoryCounters,
     cb: u32,
-) callconv(.winapi) std.os.windows.BOOL;
+) callconv(.winapi) i32;
