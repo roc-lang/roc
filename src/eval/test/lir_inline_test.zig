@@ -6537,6 +6537,126 @@ test "issue 10426 record update reads spread fields before the mutation" {
     try std.testing.expect(checked_any);
 }
 
+// Counts incref statements whose value is the target of a `ref.field` read
+// (or a pure alias of one) anywhere in the proc. Field takes hand such reads
+// the container's stored unit, so a take-covered read pays no retain.
+fn fieldReadRetainCount(
+    allocator: Allocator,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    proc_id: LIR.LirProcSpecId,
+) TestError!usize {
+    const store = &lowered.lir_result.store;
+    const proc = store.getProcSpec(proc_id);
+    const body = proc.body orelse return 0;
+
+    var read_targets = std.AutoHashMap(LIR.LocalId, void).init(allocator);
+    defer read_targets.deinit();
+    var retained = std.AutoHashMap(LIR.LocalId, void).init(allocator);
+    defer retained.deinit();
+    var visited = std.AutoHashMap(u32, void).init(allocator);
+    defer visited.deinit();
+    var stack = std.ArrayList(LIR.CFStmtId).empty;
+    defer stack.deinit(allocator);
+
+    // Two sweeps so alias edges and increfs seen before their read resolve:
+    // first collect read targets and their alias closure, then count.
+    for (0..2) |sweep| {
+        visited.clearRetainingCapacity();
+        stack.clearRetainingCapacity();
+        try stack.append(allocator, body);
+        while (stack.pop()) |cursor| {
+            const seen = try visited.getOrPut(@intFromEnum(cursor));
+            if (seen.found_existing) continue;
+            switch (store.getCFStmt(cursor)) {
+                .assign_ref => |stmt| {
+                    switch (stmt.op) {
+                        .field => try read_targets.put(stmt.target, {}),
+                        .local => |src| if (read_targets.contains(src)) {
+                            try read_targets.put(stmt.target, {});
+                        },
+                        else => {},
+                    }
+                    try stack.append(allocator, stmt.next);
+                },
+                .incref => |stmt| {
+                    if (sweep == 1 and read_targets.contains(stmt.value)) {
+                        try retained.put(stmt.value, {});
+                    }
+                    try stack.append(allocator, stmt.next);
+                },
+                inline .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .decref, .decref_if_initialized, .free => |stmt| {
+                    try stack.append(allocator, stmt.next);
+                },
+                .switch_stmt => |stmt| {
+                    const branches = store.getCFSwitchBranches(stmt.branches);
+                    for (0..GuardedList.borrowLen(branches)) |i| {
+                        try stack.append(allocator, GuardedList.at(branches, i).body);
+                    }
+                    try stack.append(allocator, stmt.default_branch);
+                    if (stmt.continuation) |continuation| try stack.append(allocator, continuation);
+                },
+                .switch_initialized_payload => |stmt| {
+                    try stack.append(allocator, stmt.initialized_branch);
+                    try stack.append(allocator, stmt.uninitialized_branch);
+                },
+                .str_match => |stmt| {
+                    try stack.append(allocator, stmt.on_match);
+                    try stack.append(allocator, stmt.on_miss);
+                },
+                .str_match_set => |stmt| {
+                    const arms = store.getStrMatchArms(stmt.arms);
+                    for (0..GuardedList.borrowLen(arms)) |i| {
+                        try stack.append(allocator, GuardedList.at(arms, i).on_match);
+                    }
+                    try stack.append(allocator, stmt.on_miss);
+                },
+                .join => |stmt| {
+                    try stack.append(allocator, stmt.body);
+                    try stack.append(allocator, stmt.remainder);
+                },
+                else => {},
+            }
+        }
+    }
+    return retained.count();
+}
+
+// A locally built record whose fields are read once each and then dies is
+// dismantled by field takes: every read on the record's spine keeps the
+// record's stored unit instead of paying a retain, so the update's mutation
+// sees a unique collection and writes in place. Both records here qualify,
+// leaving no retained field read anywhere in the program.
+test "field takes drop the field-read retains of dying local records" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : I64
+        \\main = {
+        \\    m = { count: 0.I64, other: List.repeat(1.I64, 8), rows: List.repeat(2.I64, 8) }
+        \\    a = { ..m, count: m.count + 1, rows: List.set(m.rows, 0, 7) ?? [] }
+        \\    a.count + (List.get(a.other, 0) ?? 0) + (List.get(a.rows, 0) ?? 0)
+        \\}
+    ;
+
+    var lowered = try lowerModule(allocator, source, .none);
+    defer lowered.deinit(allocator);
+
+    const store = &lowered.lowered.lir_result.store;
+    var root_retained: ?usize = null;
+    for (0..store.procSpecCount()) |index| {
+        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc = store.getProcSpec(proc_id);
+        const args = store.getLocalSpan(proc.args);
+        if (GuardedList.borrowLen(args) != 0) continue;
+        if (proc.body == null) continue;
+        const retained = try fieldReadRetainCount(allocator, &lowered.lowered, proc_id);
+        root_retained = (root_retained orelse 0) + retained;
+    }
+    // m's `count`/`other`/`rows` reads and a's `count`/`other` reads are all
+    // takes; only a's `rows` read may retain.
+    try std.testing.expect(root_retained != null);
+    try std.testing.expectEqual(@as(usize, 0), root_retained.?);
+}
+
 // Repro for https://github.com/roc-lang/roc/issues/10435: SpecConstr must
 // preserve the two observed loop results without mutating frozen Monotype type
 // data while removing the unused third result.
