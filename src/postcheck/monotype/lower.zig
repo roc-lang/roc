@@ -28741,8 +28741,7 @@ const BodyContext = struct {
                 const read_local = try self.addLocal(self.builder.symbols.fresh(), field.ty);
                 spread_reads[i] = .{ .local = read_local, .value = read };
                 break :blk try self.localExpr(read_local, field.ty);
-            } else
-                Common.invariant("closed record literal was missing a checked field value");
+            } else Common.invariant("closed record literal was missing a checked field value");
             lowered[i] = .{
                 .name = field.name,
                 .value = value,
@@ -28802,10 +28801,10 @@ const BodyContext = struct {
 
         // Spread-carried fields are read out of the base before the update's
         // own field expressions run, each bound to its own local. The reads
-        // are pure projections of an already-evaluated value, so hoisting them
+        // only inspect an already-evaluated value, so binding them first
         // is unobservable, and it ends the base's last use ahead of any
         // mutation an updated field performs. Without it, the base stays live
-        // across those mutations and only the field read last -- canonical
+        // across those mutations and only the field read last -- sorted
         // field order, so whichever sorts last -- finds its collection
         // uniquely referenced; every other field copies its whole value.
         const SpreadRead = struct { local: DraftLocalId, cell: DraftTypeCell, value: DraftExprId };

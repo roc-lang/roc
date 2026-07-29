@@ -41,10 +41,12 @@ pub const ResidualField = struct {
     layout_idx: layout_mod.Idx,
 };
 
+/// Residual refcounted fields that remain owned when a container dies.
 pub const Container = struct {
     residual: []const ResidualField,
 };
 
+/// The exact field takes and residual releases selected for ARC emission.
 pub const Dismantles = struct {
     arena: std.heap.ArenaAllocator,
     /// `assign_ref .field` statements whose reads consume the container's
