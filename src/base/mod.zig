@@ -12,6 +12,7 @@ pub const RegionInfo = @import("RegionInfo.zig");
 pub const SourceLoc = @import("source_loc.zig").SourceLoc;
 pub const Scratch = @import("Scratch.zig").Scratch;
 pub const parallel = @import("parallel.zig");
+pub const ConcurrentU64 = @import("ConcurrentU64.zig").ConcurrentU64;
 pub const SmallStringInterner = @import("SmallStringInterner.zig");
 pub const SerialStringInterner = @import("SerialStringInterner.zig");
 pub const ModuleIdentity = @import("module_identity.zig");
@@ -131,6 +132,7 @@ pub const Numeral = union(enum) {
 
 test "base tests" {
     std.testing.refAllDecls(@import("CommonEnv.zig"));
+    std.testing.refAllDecls(@import("ConcurrentU64.zig"));
     std.testing.refAllDecls(@import("DataSpan.zig"));
     std.testing.refAllDecls(@import("Ident.zig"));
     std.testing.refAllDecls(@import("InternedBytes.zig"));
