@@ -6772,3 +6772,208 @@ test "issue 10435 SpecConstr preserves frozen types for partially used while sta
         .value => |value| try std.testing.expectEqual(@as(u64, 9), value.read(u64)),
     }
 }
+
+// Repro for the ARC certifier failure behind
+// https://github.com/roc-lang/roc/issues/10461: ScalarizeJoins treated a
+// neighboring join's parameter as a splattable wrapper temporary because its
+// only initialization was a struct literal and its only use was a
+// `set_local initialize_join_param` copy. Splatting deleted the literal —
+// that join's edge initialization — leaving the parameter uninitialized, so
+// ARC's release of the (unused, refcounted) parameter had nothing to
+// release. The parameter must instead be seeded by field reads and dissolve
+// on a later fixpoint round.
+test "issue 10461 ScalarizeJoins keeps neighboring join parameter initialization" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : U64
+        \\main = {
+        \\    data_len = 300.U64
+        \\    var $bytes = List.with_capacity(8.U64)
+        \\    var $bitcount = 0.U8
+        \\    var $pos = 0.U64
+        \\
+        \\    while $pos < data_len {
+        \\        var $seqs = List.with_capacity(8.U64)
+        \\        var $litrun = 0.U64
+        \\        var $in_block = True
+        \\
+        \\        while $in_block {
+        \\            if data_len - $pos < 5 {
+        \\                var $k = 0.U64
+        \\                while $k < data_len - $pos {
+        \\                    $litrun = $litrun + 1
+        \\                    $pos = $pos + 1
+        \\                    $k = $k + 1
+        \\                }
+        \\                $in_block = False
+        \\            } else {
+        \\                if $pos % 2 == 1 {
+        \\                    $seqs = $seqs.append($litrun)
+        \\                    $litrun = 0
+        \\                    $pos = $pos + 4
+        \\                } else {
+        \\                    $litrun = $litrun + 1
+        \\                    $pos = $pos + 1
+        \\                }
+        \\
+        \\                if $pos >= data_len {
+        \\                    $in_block = False
+        \\                } else {}
+        \\            }
+        \\        }
+        \\
+        \\        seqs = if $litrun > 0 {
+        \\            $seqs.append($litrun)
+        \\        } else {
+        \\            $seqs
+        \\        }
+        \\        var $s = 0.U64
+        \\        while $s < seqs.len() {
+        \\            seq = match seqs.get($s) {
+        \\                Ok(v) => v
+        \\                Err(_) => 0
+        \\            }
+        \\            c = $bitcount + seq.to_u8_wrap()
+        \\            if c >= 8 {
+        \\                $bytes = $bytes.append(c)
+        \\                $bitcount = c - 8
+        \\            } else {
+        \\                $bitcount = c
+        \\            }
+        \\            $s = $s + 1
+        \\        }
+        \\    }
+        \\
+        \\    if $bitcount > 0 {
+        \\        $bytes = $bytes.append($bitcount)
+        \\    } else {}
+        \\    $bytes.len()
+        \\}
+    ;
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    var runtime_env = eval.RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+    var interpreter = try eval.Interpreter.init(
+        allocator,
+        &optimized.lowered.lir_result.store,
+        &optimized.lowered.lir_result.layouts,
+        runtime_env.get_ops(),
+        .preserve,
+    );
+    defer interpreter.deinit();
+
+    const result = try interpreter.eval(.{ .proc_id = try rootProc(&optimized.lowered) });
+    switch (result) {
+        .value => |value| try std.testing.expectEqual(@as(u64, 1), value.read(u64)),
+    }
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/10461: when SpecConstr
+// narrows an inner loop's partially demanded results and the continuation
+// after that loop ends in the enclosing loop's back edge, inlining the
+// continuation at the inner loop's exit site would rebind that `continue` to
+// the inner loop. The continuation must stay outside as a join body.
+test "issue 10461 SpecConstr keeps outer loop back edge out of inner loop body" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : U64
+        \\main = {
+        \\    var $a = 0.U64
+        \\    var $b = 0.U64
+        \\    var $c = 0.U64
+        \\    var $d = 0.U64
+        \\    while $a < 3 {
+        \\        var $x = 0.U64
+        \\        var $y = 0.U64
+        \\        var $z = 0.U64
+        \\        while $x < 2 {
+        \\            $x = $x + 1
+        \\            $y = $y + $a
+        \\            $z = $z + 2
+        \\        }
+        \\        $a = $a + $x
+        \\        $b = $b + $y
+        \\        $c = $c + 1
+        \\        $d = $d + 2
+        \\    }
+        \\    $a + $b
+        \\}
+    ;
+
+    var lifted = try liftModuleAfterSpecConstr(allocator, source);
+    defer lifted.deinit(allocator);
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    var runtime_env = eval.RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+    var interpreter = try eval.Interpreter.init(
+        allocator,
+        &optimized.lowered.lir_result.store,
+        &optimized.lowered.lir_result.layouts,
+        runtime_env.get_ops(),
+        .preserve,
+    );
+    defer interpreter.deinit();
+
+    const result = try interpreter.eval(.{ .proc_id = try rootProc(&optimized.lowered) });
+    switch (result) {
+        .value => |value| try std.testing.expectEqual(@as(u64, 8), value.read(u64)),
+    }
+}
+
+// A selected loop-result ABI applies to every break owned by that loop,
+// including breaks nested inside match arms. Rewriting only the terminating
+// spine leaves those tuple-valued breaks stamped with the selected scalar type
+// and Lambda Solved rejects the inconsistent expression.
+test "SpecConstr rewrites nested match breaks with the selected loop exit ABI" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : List(U8), U64, U64 -> U64
+        \\main = |bytes, a_start, b_start| {
+        \\    lo = a_start.min(b_start)
+        \\    delta = a_start.max(b_start).minus_saturated(lo)
+        \\    var $acc = 0.U64
+        \\    var $a = lo
+        \\
+        \\    while True {
+        \\        x = match U64.from_le_bytes(bytes, $a) {
+        \\            Ok(v) => v
+        \\            Err(_) => break
+        \\        }
+        \\        y = match U64.from_le_bytes(bytes, $a.plus_wrap(delta)) {
+        \\            Ok(v) => v
+        \\            Err(_) => break
+        \\        }
+        \\        if x != y {
+        \\            return $acc.plus_wrap(U64.count_trailing_zero_bits(x.bitwise_xor(y)).to_u64() // 8)
+        \\        }
+        \\        $acc = $acc.plus_wrap(8)
+        \\        $a = $a.plus_wrap(8)
+        \\    }
+        \\
+        \\    while True {
+        \\        p = match bytes.get($a) {
+        \\            Ok(v) => v
+        \\            Err(_) => break
+        \\        }
+        \\        q = match bytes.get($a.plus_wrap(delta)) {
+        \\            Ok(v) => v
+        \\            Err(_) => break
+        \\        }
+        \\        if p != q { break }
+        \\        $acc = $acc.plus_wrap(1)
+        \\        $a = $a.plus_wrap(1)
+        \\    }
+        \\
+        \\    $acc
+        \\}
+    ;
+
+    var lowered = try lowerModule(allocator, source, .wrappers);
+    defer lowered.deinit(allocator);
+}

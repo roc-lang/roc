@@ -2462,6 +2462,20 @@ a known iterator constructor, SpecConstr can:
 - supply each reachable `continue` edge with the scalar leaves required by the
   loop fixed point.
 
+When the continuation observes only part of a compiler-generated tuple loop
+result, SpecConstr may narrow the loop's exit ABI without narrowing its
+back-edge state. That rewrite is lexical: the ordinary full expression clone
+carries the selected exit ABI while cloning the owning loop body, rewrites
+every `break` owned by that loop wherever it occurs (including inside mixed
+value-producing branch arms and statement values), and pushes an explicit null
+selection while cloning a nested loop body. Initial values remain in the
+enclosing lexical loop context. Re-cloned output breaks carry an explicit
+SpecConstr-owned selected-ABI stamp, so normalization propagates the already
+completed transfer instead of trying to recognize it from its scalar shape.
+It is invalid to change the loop result type after rewriting only a terminating
+spine or a subset of exits; every selected exit must transfer exactly the
+explicitly selected tuple items.
+
 Iterator classification in this pass consumes the explicit iterator
 representation field (or the checked public `Builtin.Iter` identity). It does
 not identify generated iterator types solely from a nullable generated digest.
@@ -4731,15 +4745,21 @@ mechanically. The ARC algorithm is specified in ARC Borrow Inference below.
 
 Between direct LIR lowering and ARC insertion, one normalization splits
 struct-typed join parameters into per-field parameters when the parameter is
-only ever read field-by-field and only ever initialized from single-use
-struct literals. Each jump then passes the literal's operands directly and
-the literal's build is deleted; field reads become local aliases. This is
-required for refcounted loop state: without it, every jump pays a retain on
-each refcounted field read whose wrapper dies at the jump, and ARC cannot
-turn that into a move because the wrapper's release covers all fields at
-once. After scalarization the state flows through pure alias chains that
-borrow inference resolves to moves. Parameters with any whole-value use keep
-their shape, and the pass iterates so nested wrappers dissolve.
+only ever read field-by-field and every entry can explicitly supply all of its
+fields. Each entry snapshots every replacement field before changing any
+parameter, then performs the per-field writes. This preserves the original
+whole-struct assignment's materialize-before-rebind ordering: a replacement field may
+borrow through an old parameter value, so releasing that parameter before all
+replacement fields have been materialized would leave a later read dangling.
+Single-use literal wrappers disappear after their operands are snapshotted;
+non-literal initializers and the initial procedure-argument value are projected
+into snapshot locals. Field reads become local aliases. This is required for
+refcounted loop state: without it, every jump pays a retain on each refcounted
+field read whose wrapper dies at the jump, and ARC cannot turn that into a move
+because the wrapper's release covers all fields at once. After scalarization
+the state flows through pure alias chains that borrow inference resolves to
+moves. Parameters with any whole-value use keep their shape, and the pass
+iterates so nested wrappers dissolve.
 
 ## ARC Borrow Inference
 
