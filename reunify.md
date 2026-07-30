@@ -2326,6 +2326,41 @@ census was re-sited onto it before the argument could be redone.
    translation emitting the empty tag union where the graph carries a
    concrete type.
 
+2a-iv. **The seam, fully measured, and what remains.** Wiring the seal
+   exit alongside the live one takes coverage of the nameable reads from
+   0.25% to **581471 of 593171 on snapshots and 1050147 of 1063281 on
+   eval**, with `seam_direct_absent` 0 on both. Divergence rises with
+   coverage as it has at every step — 19 to 13268 and 721 to 14631 — and
+   it is one shape: on snapshots every one of the 13074 seal divergences
+   is directed translation emitting the empty tag union where the graph
+   carries content, with no head, row or identity disagreement at all.
+
+   **The graph is not the wrong side.** For eval's 540 divergences where
+   neither side is the empty tag union, asking whether the sealed type
+   still agrees with the head checking recorded gives 218 agreeing, 322
+   inconclusive and **0 contradicting**, once the lowerings §10 owns are
+   conceded — an enum-like tag union to an integer, a one-field record or
+   tuple unwrapped, a zero-sized value erased, a nominal taking its shape
+   from its backing. A first pass that did not concede them reported 140
+   contradictions; all were the check's own coarseness. So every
+   divergence measured anywhere is directed translation lacking a value,
+   never the graph deriving a wrong one.
+
+   **Most of what remains has no recorded value to find.** 13154 of the
+   13268 entered through no request edge, so the edge-sourced level cannot
+   reach them, and splitting those by whether the checked data names them
+   by any route: 5702 have a definition whose instantiation is recorded
+   elsewhere in the module, so the value exists and only the selecting key
+   is missing; **6426 have a free variable no scheme generalizes at all**;
+   863 have an owning definition the module records no site for; 163 reach
+   no free variable. Eval agrees in shape — 4215, 5783, 994 and 2692.
+
+   So roughly 7300 of 13154 on snapshots, and 6800 of 13684 on eval, want
+   a value nothing in the checked artifact records. That is not plumbing.
+   Closing them requires checking to publish what it does not publish
+   today, which is §15.2's contingency rather than a defect in this
+   instrument or in the graph.
+
 2b. **Re-measure the logical residual at the production seam.**
    `BodyContext.typeForChecked` compares directed translation against the
    graph at every read, holds the body-walk context the isolated operands
