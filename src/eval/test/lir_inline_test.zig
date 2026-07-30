@@ -6772,3 +6772,55 @@ test "issue 10435 SpecConstr preserves frozen types for partially used while sta
         .value => |value| try std.testing.expectEqual(@as(u64, 9), value.read(u64)),
     }
 }
+
+// A selected loop-result ABI applies to every break owned by that loop,
+// including breaks nested inside match arms. Rewriting only the terminating
+// spine leaves those tuple-valued breaks stamped with the selected scalar type
+// and Lambda Solved rejects the inconsistent expression.
+test "SpecConstr rewrites nested match breaks with the selected loop exit ABI" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : List(U8), U64, U64 -> U64
+        \\main = |bytes, a_start, b_start| {
+        \\    lo = a_start.min(b_start)
+        \\    delta = a_start.max(b_start).minus_saturated(lo)
+        \\    var $acc = 0.U64
+        \\    var $a = lo
+        \\
+        \\    while True {
+        \\        x = match U64.from_le_bytes(bytes, $a) {
+        \\            Ok(v) => v
+        \\            Err(_) => break
+        \\        }
+        \\        y = match U64.from_le_bytes(bytes, $a.plus_wrap(delta)) {
+        \\            Ok(v) => v
+        \\            Err(_) => break
+        \\        }
+        \\        if x != y {
+        \\            return $acc.plus_wrap(U64.count_trailing_zero_bits(x.bitwise_xor(y)).to_u64() // 8)
+        \\        }
+        \\        $acc = $acc.plus_wrap(8)
+        \\        $a = $a.plus_wrap(8)
+        \\    }
+        \\
+        \\    while True {
+        \\        p = match bytes.get($a) {
+        \\            Ok(v) => v
+        \\            Err(_) => break
+        \\        }
+        \\        q = match bytes.get($a.plus_wrap(delta)) {
+        \\            Ok(v) => v
+        \\            Err(_) => break
+        \\        }
+        \\        if p != q { break }
+        \\        $acc = $acc.plus_wrap(1)
+        \\        $a = $a.plus_wrap(1)
+        \\    }
+        \\
+        \\    $acc
+        \\}
+    ;
+
+    var lowered = try lowerModule(allocator, source, .wrappers);
+    defer lowered.deinit(allocator);
+}

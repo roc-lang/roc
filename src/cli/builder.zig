@@ -28,7 +28,7 @@ fn stderrWriter() *std.Io.Writer {
 /// each object into the current directory. Always committed as false.
 const dump_llvm_artifacts = false;
 
-/// Optimization levels for LLVM compilation.
+/// Optimization policy requested for LLVM code generation.
 pub const OptimizationLevel = enum {
     size, // --opt size (optimize for binary size)
     speed, // --opt speed (aggressive performance optimizations)

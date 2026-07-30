@@ -42,12 +42,12 @@ pub const ResidualField = struct {
     layout_idx: layout_mod.Idx,
 };
 
-/// A dismantled container and the fields it still owns at its death point.
+/// Residual ownership plan for one container local selected for dismantling.
 pub const Container = struct {
     residual: []const ResidualField,
 };
 
-/// Field-take analysis results consumed during ARC emission.
+/// Per-procedure dismantling decisions consumed while emitting ARC operations.
 pub const Dismantles = struct {
     arena: std.heap.ArenaAllocator,
     /// `assign_ref .field` statements whose reads consume the container's
