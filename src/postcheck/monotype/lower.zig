@@ -38752,6 +38752,17 @@ const BodyContext = struct {
             }
         }
 
+        // Select the shared result representation from every inhabited branch
+        // before any branch body is emitted. Match patterns already supplied
+        // their exact binder cells above, so branch-local lookups participate
+        // in this relation-production pass as ordinary producer evidence.
+        if (value_selection) |selection| {
+            for (pending.items) |*entry| {
+                try entry.ctx.rebindPreRegisteredPatternBindersAtNode(entry.pattern.pattern, scrutinee_node);
+                try entry.ctx.prepareControlFlowResultSelection(selection, entry.checked_body);
+            }
+        }
+
         // All checked pattern evidence must reach the shared scrutinee before
         // any branch body can request another specialization.
         for (pending.items) |*entry| {
@@ -39180,197 +39191,116 @@ const BodyContext = struct {
     };
 
     /// A value-producing control-flow expression owns one result selection
-    /// while its inhabited branches are lowered. An exact private request from
-    /// the caller remains authoritative. Otherwise every public iterator
-    /// position is made explicitly forced-dynamic before branch emission, so
-    /// branch order cannot decide the representation of the join.
+    /// while its inhabited branches are lowered. A finished expected Monotype
+    /// remains an immutable outer interface, so selection begins on a fresh
+    /// checked-public graph cell unless the caller already supplied exact
+    /// generated-private evidence.
     fn initControlFlowResultSelection(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
         declared: DraftTypeCell,
     ) Allocator.Error!ControlFlowResultSelection {
         const declared_node = try declared.toGraphNode(self.graph);
-        const selected = if (try self.graph.containsGeneratedPrivate(declared_node))
+        const selected = if (try self.graph.containsGeneratedPrivate(declared_node) or
+            !try self.graph.containsFinishedMono(declared_node))
             DraftTypeCell.fromGraphNode(declared_node)
-        else blk: {
-            const fresh_public = try self.freshInstNode(checked_ty);
-            var rewritten = std.AutoHashMap(NodeId, NodeId).init(self.allocator);
-            defer rewritten.deinit();
-            const dynamic = try self.dynamicControlFlowResultNode(fresh_public, &rewritten);
-            if (try self.graph.containsGeneratedPrivate(dynamic)) {
-                break :blk DraftTypeCell.fromGraphNode(dynamic);
-            }
-            break :blk if (!try self.graph.containsFinishedMono(declared_node))
-                DraftTypeCell.fromGraphNode(declared_node)
-            else
-                DraftTypeCell.fromGraphNode(fresh_public);
-        };
+        else
+            DraftTypeCell.fromGraphNode(try self.freshInstNode(checked_ty));
         return .{ .declared = declared, .selected = selected };
     }
 
-    /// Clone a public result shape into the defined control-flow join shape.
-    /// Ordinary cells keep their exact structure, while every public iterator
-    /// becomes the one forced-dynamic fixed point for its item type. The clone
-    /// is graph-owned and live until the enclosing specialization seals.
-    fn dynamicControlFlowResultNode(
+    /// Discover producer-authored representation evidence before emitting any
+    /// branch. Public-only evidence does not constrain the selection: every
+    /// inhabited branch will consume the final selected request during the
+    /// subsequent emission pass. Generated-private evidence is joined now, so
+    /// source order cannot make an already-emitted branch authoritative.
+    fn prepareControlFlowResultSelection(
         self: *BodyContext,
-        raw_node: NodeId,
-        rewritten: *std.AutoHashMap(NodeId, NodeId),
-    ) Allocator.Error!NodeId {
-        const node = self.graph.rootNode(raw_node);
-        if (rewritten.get(node)) |existing| return existing;
+        selection: *ControlFlowResultSelection,
+        checked_value: checked.CheckedExprId,
+    ) Allocator.Error!void {
+        const selected_node = try selection.selected.toGraphNode(self.graph);
+        const produced_node = (try self.controlFlowResultEvidenceNode(checked_value, selected_node)) orelse return;
+        if (!try self.graph.containsGeneratedPrivate(produced_node)) return;
 
-        const content = self.graph.content(node);
-        switch (content) {
-            .named => |named| {
-                if (named.def.iterator_representation == .none) {
-                    if (named.builtin_owner) |owner| {
-                        if (static_dispatch.isIteratorOwner(owner)) {
-                            const dynamic = try self.forcedDynamicIteratorFromPublicNode(node, named);
-                            try rewritten.put(node, dynamic);
-                            return dynamic;
-                        }
-                    }
-                }
-            },
-            .redirect => unreachable,
-            else => {},
+        try selectRequestRepresentation(self.graph, selected_node, produced_node);
+        const selected_private = try self.graph.containsGeneratedPrivate(selected_node);
+        const produced_private = try self.graph.containsGeneratedPrivate(produced_node);
+        if (selected_private == produced_private) return;
+        if (!selected_private and produced_private) {
+            selection.selected = DraftTypeCell.fromGraphNode(produced_node);
+            return;
         }
-
-        return switch (content) {
-            .redirect => unreachable,
-            .unresolved,
-            .primitive,
-            .empty_tag_union,
-            .empty_record,
-            .erased,
-            .zst,
-            => node,
-            else => blk: {
-                const placeholder = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
-                try rewritten.put(node, placeholder);
-                const built = try self.graph.newNode(switch (content) {
-                    .list => |item| .{ .list = try self.dynamicControlFlowResultNode(item, rewritten) },
-                    .box => |item| .{ .box = try self.dynamicControlFlowResultNode(item, rewritten) },
-                    .tuple => |items| tuple: {
-                        const mapped = try self.graph.arena().alloc(NodeId, items.len);
-                        for (items, mapped) |item, *out| {
-                            out.* = try self.dynamicControlFlowResultNode(item, rewritten);
-                        }
-                        break :tuple .{ .tuple = mapped };
-                    },
-                    .func => |function| function_node: {
-                        const args = try self.graph.arena().alloc(NodeId, function.args.len);
-                        for (function.args, args) |arg, *out| {
-                            out.* = try self.dynamicControlFlowResultNode(arg, rewritten);
-                        }
-                        break :function_node .{ .func = .{
-                            .args = args,
-                            .ret = try self.dynamicControlFlowResultNode(function.ret, rewritten),
-                        } };
-                    },
-                    .tag_union => |row| tags: {
-                        const mapped_tags = try self.graph.arena().alloc(InstTag, row.tags.len);
-                        for (row.tags, mapped_tags) |tag, *mapped_tag| {
-                            const payloads = try self.graph.arena().alloc(NodeId, tag.payloads.len);
-                            for (tag.payloads, payloads) |payload, *out| {
-                                out.* = try self.dynamicControlFlowResultNode(payload, rewritten);
-                            }
-                            mapped_tag.* = .{
-                                .name = tag.name,
-                                .checked_name = tag.checked_name,
-                                .payloads = payloads,
-                            };
-                        }
-                        break :tags .{ .tag_union = .{
-                            .tags = mapped_tags,
-                            .ext = try self.dynamicControlFlowResultNode(row.ext, rewritten),
-                        } };
-                    },
-                    .record => |row| record: {
-                        const fields = try self.graph.arena().alloc(InstField, row.fields.len);
-                        for (row.fields, fields) |field, *out| {
-                            out.* = .{
-                                .name = field.name,
-                                .ty = try self.dynamicControlFlowResultNode(field.ty, rewritten),
-                            };
-                        }
-                        break :record .{ .record = .{
-                            .fields = fields,
-                            .ext = try self.dynamicControlFlowResultNode(row.ext, rewritten),
-                        } };
-                    },
-                    .named => |named| named_node: {
-                        const args = try self.graph.arena().alloc(NodeId, named.args.len);
-                        for (named.args, args) |arg, *out| {
-                            out.* = try self.dynamicControlFlowResultNode(arg, rewritten);
-                        }
-                        const backing = if (named.backing) |backing| InstBacking{
-                            .node = try self.dynamicControlFlowResultNode(backing.node, rewritten),
-                            .use = backing.use,
-                            .authority = backing.authority,
-                        } else null;
-                        const declared_order = try self.graph.arena().alloc(InstDeclaredField, named.declared_order.len);
-                        for (named.declared_order, declared_order) |declared, *out| {
-                            out.* = switch (declared) {
-                                .named => |field| .{ .named = field },
-                                .padding => |padding| .{
-                                    .padding = try self.dynamicControlFlowResultNode(padding, rewritten),
-                                },
-                            };
-                        }
-                        break :named_node .{ .named = .{
-                            .named_type = named.named_type,
-                            .def = named.def,
-                            .kind = named.kind,
-                            .builtin_owner = named.builtin_owner,
-                            .args = args,
-                            .backing = backing,
-                            .generated_iterator = named.generated_iterator,
-                            .declared_order = declared_order,
-                        } };
-                    },
-                    .redirect,
-                    .unresolved,
-                    .primitive,
-                    .empty_tag_union,
-                    .empty_record,
-                    .erased,
-                    .zst,
-                    => unreachable,
-                });
-                try self.graph.unify(placeholder, built);
-                break :blk placeholder;
-            },
-        };
+        Common.invariant("control-flow representation prepass lost generated-private evidence");
     }
 
-    fn forcedDynamicIteratorFromPublicNode(
+    /// Resolve the exact result evidence of a branch producer against the
+    /// shared live request. This is the node-native counterpart of call-
+    /// argument evidence: it deliberately keeps the expected graph cell live
+    /// so recursive producers see the same fixed point during discovery and
+    /// emission.
+    fn controlFlowResultEvidenceNode(
         self: *BodyContext,
-        public_iterator: NodeId,
-        public_named: anytype,
-    ) Allocator.Error!NodeId {
-        if (public_named.args.len != 1 or public_named.def.iterator_representation != .none) {
-            Common.invariant("control-flow dynamic iterator source was not the public iterator contract");
-        }
-        const owner = public_named.builtin_owner orelse
-            Common.invariant("control-flow dynamic iterator source had no builtin owner");
-        if (!static_dispatch.isIteratorOwner(owner)) {
-            Common.invariant("control-flow dynamic iterator source was not an iterator builtin");
-        }
-        const backing = public_named.backing orelse
-            Common.invariant("control-flow dynamic iterator source had no public backing");
-        if (backing.authority != .checked_public) {
-            Common.invariant("control-flow dynamic iterator source did not have public backing authority");
-        }
-        return try self.forcedDynamicIteratorNode(public_iterator, public_named.args[0], .{
-            .named_type = public_named.named_type,
-            .def = public_named.def,
-            .kind = public_named.kind,
-            .builtin_owner = owner,
-            .backing = backing,
-            .declared_order = public_named.declared_order,
-        });
+        checked_value: checked.CheckedExprId,
+        expected_node: NodeId,
+    ) Allocator.Error!?NodeId {
+        if (self.checkedExprDivergesInLoweredRuntime(checked_value)) return null;
+        const expr = self.view.bodies.expr(checked_value);
+        return switch (expr.data) {
+            .call => |call| blk: {
+                const target = call.direct_target orelse break :blk null;
+                const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
+                const fn_node = try self.directCallTypeNode(
+                    expr.ty,
+                    call,
+                    source_fn_ty,
+                    expected_node,
+                );
+                const fn_nodes = try self.graph.functionNodes(fn_node);
+                if (self.isGeneratedIteratorEvidenceNode(fn_nodes.ret)) break :blk fn_nodes.ret;
+                if (!self.isIteratorInterfaceNode(fn_nodes.ret)) break :blk fn_nodes.ret;
+
+                try self.ensureNestedCallablesAtNodes(call.args, fn_nodes.args);
+                const callee = try self.fnTemplateForDirectCallAtNode(
+                    target,
+                    source_fn_ty,
+                    self.view.types.rootKey(source_fn_ty),
+                    fn_node,
+                );
+                const completed_fn_node = try self.draftFnSlotTypeNode(callee, fn_node);
+                break :blk (try self.graph.functionNodes(completed_fn_node)).ret;
+            },
+            .dispatch_call => |plan| try self.dispatchResultTypeNodeInPhase(
+                expr.ty,
+                plan,
+                expected_node,
+                .expression_lowering,
+            ),
+            .interpolation => |interpolation| try self.dispatchResultTypeNodeInPhase(
+                expr.ty,
+                interpolation.plan,
+                expected_node,
+                .expression_lowering,
+            ),
+            .type_dispatch_call => |plan| try self.dispatchResultTypeNodeInPhase(
+                expr.ty,
+                plan,
+                expected_node,
+                .expression_lowering,
+            ),
+            .method_eq => |plan| try self.dispatchResultTypeNodeInPhase(
+                expr.ty,
+                plan,
+                expected_node,
+                .expression_lowering,
+            ),
+            .field_access,
+            .lookup_local,
+            .lookup_external,
+            .lookup_required,
+            => try self.lowerExprTypeNode(checked_value),
+            else => null,
+        };
     }
 
     fn includeControlFlowResult(
@@ -39498,6 +39428,16 @@ const BodyContext = struct {
         comptime_site: ?DraftComptimeSiteId,
         value_selection: ?*ControlFlowResultSelection,
     ) Allocator.Error!BodyExprData {
+        // Conditions do not bind names visible in branch bodies, so all result
+        // producers can contribute their representation evidence up front.
+        // Branch emission below then consumes one settled request.
+        if (value_selection) |selection| {
+            for (if_.branches) |branch| {
+                try self.prepareControlFlowResultSelection(selection, branch.body);
+            }
+            try self.prepareControlFlowResultSelection(selection, if_.final_else);
+        }
+
         const branches = try self.allocator.alloc(DraftIfBranch, if_.branches.len);
         defer self.allocator.free(branches);
         for (if_.branches, 0..) |branch, index| {

@@ -2457,16 +2457,20 @@ relates the checked public interface to it without ordinary unification.
 
 A value-producing `if` or `match` likewise owns one explicit result selection
 for all of its inhabited branches. An exact generated-private request already
-supplied by the caller remains authoritative. Otherwise Monotype clones the
-checked-public result graph before branch emission and replaces every nested
-public iterator position with the defined forced-dynamic fixed point for its
-item type. This is the representation join for a public control-flow result:
-all branches consume it as their explicit request, so source order cannot make
-one branch's finished representation authoritative over another and lowering
-never needs to revise already-emitted branch code. Ordinary result positions
-remain public. Only after all branches have been lowered does the selected
-result relate to the outer interface and seal. Representation selection
-therefore never reconstructs branch evidence from finished output IR or
+supplied by the caller remains authoritative. Otherwise, before emitting any
+branch body, Monotype asks every branch's checked producer for its exact result
+evidence and joins all generated-private evidence into the shared live result
+selection. Public-only evidence does not settle the selection. Match patterns
+first project their exact binder cells from the shared scrutinee, so a branch
+producer reached through a pattern lookup participates in the same pre-emission
+pass. Every branch is then emitted once against the settled request. Distinct
+minted iterator producers therefore use the ordinary graph representation join,
+which keeps a compatible static representation and reaches the defined
+forced-dynamic fixed point only when the producer topology requires it. Source
+order cannot make one already-emitted branch authoritative, and lowering never
+needs to revise emitted branch code. Only after all branches have been lowered
+does the selected result relate to the outer interface and seal. Representation
+selection never reconstructs branch evidence from finished output IR or
 reopens a durable Monotype.
 
 Branches that provably terminate do not participate in result selection. If
