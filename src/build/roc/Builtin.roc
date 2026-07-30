@@ -49,8 +49,8 @@ Builtin :: [].{
 	# parse_dict_after_key between a key and its value, and
 	# parse_dict_after_entry.
 	#
-	# A dict key that the format renders as a key string — a Str, a Bool, a
-	# number, or a tag union whose tags all lack payloads — is read and written
+	# A dict key that the format renders as a key string—a Str, a Bool, a
+	# number, or a tag union whose tags all lack payloads—is read and written
 	# by the parse_key_* and encode_key_* methods. Any other key is read and
 	# written by the key type's own codec, after parse_key_start or
 	# encode_key_start opens the key position. A format whose key position only
@@ -2644,7 +2644,7 @@ Builtin :: [].{
 		## difference. The benefit is most pronounced when reallocation would
 		## otherwise force a full copy of the string.
 		##
-		## [Str.reserve] is not free — when more capacity is needed, it always
+		## [Str.reserve] is not free—when more capacity is needed, it always
 		## performs a heap allocation. Only use it when you actually expect to make
 		## use of the extra capacity.
 		##
@@ -3682,7 +3682,7 @@ Builtin :: [].{
 			# `Known(n)` guarantees exactly n items (count-changing combinators
 			# report `Unknown`), so reserve up front and use the unchecked append.
 			# When the length is unknown, start empty and grow with the reserving
-			# append — the unchecked append would corrupt a zero-capacity list.
+			# append—the unchecked append would corrupt a zero-capacity list.
 			length = Stream.size_hint(stream)
 			cap = match length {
 				Known(n) => n
@@ -3941,6 +3941,78 @@ Builtin :: [].{
 		## ```
 		append_if_ok : List(a), Try(a, err) -> List(a)
 		append_if_ok = |list, maybe_item| list_append_if_ok(list, maybe_item)
+
+		## Append `count` items to the end of the list, copying them from the
+		## list itself beginning at index `start`.
+		##
+		## The items are copied one at a time, and an item this call has just
+		## appended can itself be copied. So if the copy reaches the original
+		## end of the list, it keeps going into the freshly appended items,
+		## which repeats the items from `start` onward for as long as
+		## requested—copying 4 items from the last index of `[1, 2]`
+		## appends `2, 2, 2, 2`, and copying 3 items from index 0 of `[1, 2]`
+		## appends `1, 2, 1`.
+		##
+		## Returns `Err(OutOfBounds)` if `start` is not an index in the list,
+		## unless `count` is zero, which appends nothing.
+		## ```roc
+		## expect [1, 2, 3].append_range_within(1, 2) == Ok([1, 2, 3, 2, 3])
+		##
+		## expect [1, 2, 3].append_range_within(2, 4) == Ok([1, 2, 3, 3, 3, 3, 3])
+		##
+		## expect [1, 2].append_range_within(0, 3) == Ok([1, 2, 1, 2, 1])
+		##
+		## expect [1, 2].append_range_within(5, 1) == Err(OutOfBounds)
+		## ```
+		append_range_within : List(a), U64, U64 -> Try(List(a), [OutOfBounds, ..])
+		append_range_within = |list, start, count| {
+			if count == 0 {
+				Ok(list)
+			} else if start >= List.len(list) {
+				Err(OutOfBounds)
+			} else {
+				# `$src` begins below the length and gains one index per
+				# appended item, so every unchecked read stays behind the
+				# growing end.
+				var $list = List.reserve(list, count)
+				var $src = start
+				stop = start + count
+				while $src < stop {
+					item = list_get_unsafe($list, $src)
+					$list = list_append_unsafe($list, item)
+					$src = $src + 1
+				}
+				Ok($list)
+			}
+		}
+
+		## Append a range of another list to this one, without building the
+		## sublist as its own list first. Out-of-bounds ranges are clamped
+		## exactly as [List.sublist] clamps them, producing a shorter or empty
+		## append.
+		## ```roc
+		## expect [1, 2].append_sublist([3, 4, 5, 6], { start: 1, len: 2 }) == [1, 2, 4, 5]
+		##
+		## expect [1, 2].append_sublist([3, 4], { start: 1, len: 10 }) == [1, 2, 4]
+		##
+		## expect [1, 2].append_sublist([3, 4], { start: 10, len: 2 }) == [1, 2]
+		## ```
+		append_sublist : List(a), List(a), { start : U64, len : U64 } -> List(a)
+		append_sublist = |list, src, range| {
+			src_len = List.len(src)
+			start = range.start.min(src_len)
+			count = range.len.min(src_len - start)
+			# `$i` stays below `count`, which the clamps above keep within
+			# `src`, so every unchecked read is in bounds.
+			var $list = List.reserve(list, count)
+			var $i = 0
+			while $i < count {
+				item = list_get_unsafe(src, start + $i)
+				$list = list_append_unsafe($list, item)
+				$i = $i + 1
+			}
+			$list
+		}
 
 		## Add the `Ok` payload to the beginning of a list, or leave the list unchanged
 		## if the value is `Err`.
@@ -5315,7 +5387,7 @@ Builtin :: [].{
 		}
 
 		## If the result is `Err`, runs a recovery function on the value it holds. That
-		## function returns a new result, so recovering can itself fail — with a
+		## function returns a new result, so recovering can itself fail—with a
 		## different error type if you like. If the result is `Ok`, this has no effect.
 		## Use [Try.map_err] when you only want to transform the error without
 		## recovering from it.
@@ -6193,7 +6265,7 @@ Builtin :: [].{
 		## ```roc
 		## expect Set.from_list([1, 2, 3]).map(|n| n * 2) == Set.from_list([2, 4, 6])
 		##
-		## # Duplicates in the mapped output are collapsed — the result is a Set.
+		## # Duplicates in the mapped output are collapsed—the result is a Set.
 		## expect Set.from_list([1, -1, 2, -2]).map(|n| n * n) == Set.from_list([1, 4])
 		## ```
 		map : Set(a), (a -> b) -> Set(b)
@@ -11311,6 +11383,39 @@ Builtin :: [].{
 					Err(OutOfBounds)
 				} else {
 					Ok(u64_from_le_bytes_unchecked(bytes, index))
+				}
+			}
+
+			## Append this U64's `count` lowest bytes to the end of the list,
+			## least significant byte first—that is, in
+			## [little-endian](https://en.wikipedia.org/wiki/Endianness) byte
+			## order, which is what the `le` in the name refers to.
+			##
+			## This is the writing mirror of [U64.from_le_bytes].
+			## Returns `Err(OutOfBounds)` when
+			## `count > 8`, since a `U64` has 8 bytes.
+			## ```roc
+			## expect 0x1234.U64.append_le_bytes_to([], 2) == Ok([0x34, 0x12])
+			##
+			## expect 0xFF.U64.append_le_bytes_to([9], 1) == Ok([9, 0xFF])
+			##
+			## expect 1.U64.append_le_bytes_to([], 9) == Err(OutOfBounds)
+			## ```
+			append_le_bytes_to : U64, List(U8), U8 -> Try(List(U8), [OutOfBounds, ..])
+			append_le_bytes_to = |value, bytes, count| {
+				if count > 8 {
+					Err(OutOfBounds)
+				} else {
+					# `$i` stays below `count`, so the shift amount stays
+					# below 64 and every append was reserved for.
+					var $bytes = List.reserve(bytes, count.to_u64())
+					var $i = 0.U8
+					while $i < count {
+						byte = value.shr_zf_wrap($i * 8).to_u8_wrap()
+						$bytes = list_append_unsafe($bytes, byte)
+						$i = $i + 1
+					}
+					Ok($bytes)
 				}
 			}
 
@@ -17154,10 +17259,10 @@ Builtin :: [].{
 			to_inspect = |vector| Str.concat("U8x16(", Str.concat(Str.join_with(List.map(U8x16.to_list(vector), U8.to_str), ", "), ")"))
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
-			## `[i * 8, (i + 1) * 8)`. Free at runtime — no instructions.
+			## `[i * 8, (i + 1) * 8)`. Free at runtime—no instructions.
 			to_u128_bits : U8x16 -> U128
 
-			## Build a [U8x16] from 128 raw bits. Free at runtime — no
+			## Build a [U8x16] from 128 raw bits. Free at runtime—no
 			## instructions.
 			from_u128_bits : U128 -> U8x16
 
@@ -17419,7 +17524,7 @@ Builtin :: [].{
 			interleave_hi : U8x16, U8x16 -> U8x16
 
 			## The even-indexed lanes of a followed by the even-indexed lanes
-			## of b — the deinterleaving inverse of the interleave operations,
+			## of b—the deinterleaving inverse of the interleave operations,
 			## used to split interleaved channel data apart.
 			##
 			## Lowers to `pshufb`-based shuffles on x86-64, `uzp1` on AArch64
@@ -17466,7 +17571,7 @@ Builtin :: [].{
 			##
 			## Lowers to `pshufb` plus a one-instruction fixup on x86-64
 			## (`pshufb` alone wraps indices 16-127), `tbl` on AArch64 NEON,
-			## and `i8x16.swizzle` on wasm — the out-of-range-to-zero
+			## and `i8x16.swizzle` on wasm—the out-of-range-to-zero
 			## semantics here matches `tbl` and `swizzle` exactly.
 			## ```roc
 			## expect U8x16.splat(42).table_lookup(U8x16.splat(20)).get_lane(0) == 0
@@ -17700,10 +17805,10 @@ Builtin :: [].{
 			to_inspect = |vector| Str.concat("I8x16(", Str.concat(Str.join_with(List.map(I8x16.to_list(vector), I8.to_str), ", "), ")"))
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
-			## `[i * 8, (i + 1) * 8)`. Free at runtime — no instructions.
+			## `[i * 8, (i + 1) * 8)`. Free at runtime—no instructions.
 			to_u128_bits : I8x16 -> U128
 
-			## Build an [I8x16] from 128 raw bits. Free at runtime — no
+			## Build an [I8x16] from 128 raw bits. Free at runtime—no
 			## instructions.
 			from_u128_bits : U128 -> I8x16
 
@@ -17982,7 +18087,7 @@ Builtin :: [].{
 			interleave_hi : I8x16, I8x16 -> I8x16
 
 			## The even-indexed lanes of a followed by the even-indexed lanes
-			## of b — the deinterleaving inverse of the interleave operations,
+			## of b—the deinterleaving inverse of the interleave operations,
 			## used to split interleaved channel data apart.
 			##
 			## Lowers to `pshufb`-based shuffles on x86-64, `uzp1` on AArch64
@@ -18181,10 +18286,10 @@ Builtin :: [].{
 			to_inspect = |vector| Str.concat("U16x8(", Str.concat(Str.join_with(List.map(U16x8.to_list(vector), U16.to_str), ", "), ")"))
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
-			## `[i * 16, (i + 1) * 16)`. Free at runtime — no instructions.
+			## `[i * 16, (i + 1) * 16)`. Free at runtime—no instructions.
 			to_u128_bits : U16x8 -> U128
 
-			## Build a [U16x8] from 128 raw bits. Free at runtime — no
+			## Build a [U16x8] from 128 raw bits. Free at runtime—no
 			## instructions.
 			from_u128_bits : U128 -> U16x8
 
@@ -18460,7 +18565,7 @@ Builtin :: [].{
 			interleave_hi : U16x8, U16x8 -> U16x8
 
 			## The even-indexed lanes of a followed by the even-indexed lanes
-			## of b — the deinterleaving inverse of the interleave operations,
+			## of b—the deinterleaving inverse of the interleave operations,
 			## used to split interleaved channel data apart.
 			##
 			## Lowers to `pshufb`-based shuffles on x86-64, `uzp1` on AArch64
@@ -18674,10 +18779,10 @@ Builtin :: [].{
 			to_inspect = |vector| Str.concat("I16x8(", Str.concat(Str.join_with(List.map(I16x8.to_list(vector), I16.to_str), ", "), ")"))
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
-			## `[i * 16, (i + 1) * 16)`. Free at runtime — no instructions.
+			## `[i * 16, (i + 1) * 16)`. Free at runtime—no instructions.
 			to_u128_bits : I16x8 -> U128
 
-			## Build an [I16x8] from 128 raw bits. Free at runtime — no
+			## Build an [I16x8] from 128 raw bits. Free at runtime—no
 			## instructions.
 			from_u128_bits : U128 -> I16x8
 
@@ -18807,7 +18912,7 @@ Builtin :: [].{
 			## 32-bit lanes of an [I32x4]: result lane i is
 			## `a(2i) * b(2i) + a(2i+1) * b(2i+1)`. The only input that wraps
 			## the 32-bit result is all four lanes `-32768`, matching the
-			## hardware. This is the DCT/IDCT/FIR workhorse — multiply-accumulate
+			## hardware. This is the DCT/IDCT/FIR workhorse—multiply-accumulate
 			## over signed 16-bit taps.
 			##
 			## Lowers to `pmaddwd` on x86-64, a `smull` + `smull2` +
@@ -19062,7 +19167,7 @@ Builtin :: [].{
 			interleave_hi : I16x8, I16x8 -> I16x8
 
 			## The even-indexed lanes of a followed by the even-indexed lanes
-			## of b — the deinterleaving inverse of the interleave operations,
+			## of b—the deinterleaving inverse of the interleave operations,
 			## used to split interleaved channel data apart.
 			##
 			## Lowers to `pshufb`-based shuffles on x86-64, `uzp1` on AArch64
@@ -19211,10 +19316,10 @@ Builtin :: [].{
 			to_inspect = |vector| Str.concat("U32x4(", Str.concat(Str.join_with(List.map(U32x4.to_list(vector), U32.to_str), ", "), ")"))
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
-			## `[i * 32, (i + 1) * 32)`. Free at runtime — no instructions.
+			## `[i * 32, (i + 1) * 32)`. Free at runtime—no instructions.
 			to_u128_bits : U32x4 -> U128
 
-			## Build a [U32x4] from 128 raw bits. Free at runtime — no
+			## Build a [U32x4] from 128 raw bits. Free at runtime—no
 			## instructions.
 			from_u128_bits : U128 -> U32x4
 
@@ -19465,7 +19570,7 @@ Builtin :: [].{
 			interleave_hi : U32x4, U32x4 -> U32x4
 
 			## The even-indexed lanes of a followed by the even-indexed lanes
-			## of b — the deinterleaving inverse of the interleave operations,
+			## of b—the deinterleaving inverse of the interleave operations,
 			## used to split interleaved channel data apart.
 			##
 			## Lowers to `shufps`-class shuffles on x86-64, `uzp1` on AArch64
@@ -19649,10 +19754,10 @@ Builtin :: [].{
 			to_inspect = |vector| Str.concat("I32x4(", Str.concat(Str.join_with(List.map(I32x4.to_list(vector), I32.to_str), ", "), ")"))
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
-			## `[i * 32, (i + 1) * 32)`. Free at runtime — no instructions.
+			## `[i * 32, (i + 1) * 32)`. Free at runtime—no instructions.
 			to_u128_bits : I32x4 -> U128
 
-			## Build an [I32x4] from 128 raw bits. Free at runtime — no
+			## Build an [I32x4] from 128 raw bits. Free at runtime—no
 			## instructions.
 			from_u128_bits : U128 -> I32x4
 
@@ -19966,7 +20071,7 @@ Builtin :: [].{
 			interleave_hi : I32x4, I32x4 -> I32x4
 
 			## The even-indexed lanes of a followed by the even-indexed lanes
-			## of b — the deinterleaving inverse of the interleave operations,
+			## of b—the deinterleaving inverse of the interleave operations,
 			## used to split interleaved channel data apart.
 			##
 			## Lowers to `shufps`-class shuffles on x86-64, `uzp1` on AArch64
@@ -20114,10 +20219,10 @@ Builtin :: [].{
 			to_inspect = |vector| Str.concat("U64x2(", Str.concat(Str.join_with(List.map(U64x2.to_list(vector), U64.to_str), ", "), ")"))
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
-			## `[i * 64, (i + 1) * 64)`. Free at runtime — no instructions.
+			## `[i * 64, (i + 1) * 64)`. Free at runtime—no instructions.
 			to_u128_bits : U64x2 -> U128
 
-			## Build a [U64x2] from 128 raw bits. Free at runtime — no
+			## Build a [U64x2] from 128 raw bits. Free at runtime—no
 			## instructions.
 			from_u128_bits : U128 -> U64x2
 
@@ -20480,10 +20585,10 @@ Builtin :: [].{
 			to_inspect = |vector| Str.concat("I64x2(", Str.concat(Str.join_with(List.map(I64x2.to_list(vector), I64.to_str), ", "), ")"))
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
-			## `[i * 64, (i + 1) * 64)`. Free at runtime — no instructions.
+			## `[i * 64, (i + 1) * 64)`. Free at runtime—no instructions.
 			to_u128_bits : I64x2 -> U128
 
-			## Build an [I64x2] from 128 raw bits. Free at runtime — no
+			## Build an [I64x2] from 128 raw bits. Free at runtime—no
 			## instructions.
 			from_u128_bits : U128 -> I64x2
 
@@ -22202,8 +22307,8 @@ range_inclusive_with_len = |start, end, len_if_known|
 
 ## The result of scanning a JSON string body; all fields are zero-copy slices.
 ## `after` is the text following the closing quote. The body is:
-## - `NoEscapes` — it contains no escapes, so it already IS the decoded value
-## - `HasEscapes` — left undecoded, since the caller may be discarding it anyway
+## - `NoEscapes`—it contains no escapes, so it already IS the decoded value
+## - `HasEscapes`—left undecoded, since the caller may be discarding it anyway
 ScannedJsonString : { after : Str, body : [NoEscapes(Str), HasEscapes(Str)] }
 
 ## Scan a JSON string body to its closing (unescaped) quote, validating escapes
@@ -22492,7 +22597,7 @@ str_substring_unsafe : Str, U64, U64 -> Str
 
 ## Drop `count` bytes from the front of a string as a zero-copy slice ("" when
 ## `count` is at or past the end). Bounds are handled; what is NOT checked is
-## that `count` falls on a UTF-8 boundary — the caller guarantees that, so the
+## that `count` falls on a UTF-8 boundary—the caller guarantees that, so the
 ## slice is a valid string. (`Str.drop_first_bytes` is the checked version.)
 str_drop_first_bytes_unsafe : Str, U64 -> Str
 str_drop_first_bytes_unsafe = |s, count| {
