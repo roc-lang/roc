@@ -358,7 +358,7 @@ check_active_body_draft_seal_access();
 sub check_production_store_construction {
     my %allow = (
         'src/postcheck/monotype/solve.zig' => { map { $_ => 1 } qw(
-            sealNode sealStoreType sealNodeSpan sealTypeSpan sealRecordRow
+            sealNode sealNodeInner sealStoreType sealNodeSpan sealTypeSpan sealRecordRow
             sealTagRow sealDeclaredFieldSpan sealStoredFieldSpan
             sealStoredTagSpan sealStoredDeclaredFieldSpan
         ) },

@@ -336,6 +336,10 @@ pub const InstGraph = struct {
     /// attaches it while this graph lowers; null on every other path, and read by
     /// nothing inside this module.
     trace: ?*spec_rehearsal.SealTrace = null,
+    /// Debug/probe-only: the rehearsal that owns `trace`, so the seal exit can
+    /// compare what it produces against directed translation the same way the
+    /// live exit does (reunify.md 13.2 step 2a).
+    seal_probe: ?*spec_rehearsal.Rehearsal = null,
 
     pub fn create(
         allocator: Allocator,
@@ -1379,6 +1383,28 @@ pub const InstGraph = struct {
             if (trace.contextedFor(@intFromEnum(member))) |record| return record;
         }
         return null;
+    }
+
+    /// Debug/probe-only: compare the type this seal produces for a node against
+    /// what directed translation computes for the checked position the node
+    /// stands for. The seal exit is 553490 of the 628603 reads body lowering
+    /// makes, so leaving it unmeasured leaves the coverage claim mostly
+    /// unmade (reunify.md 13.2 step 2a).
+    pub fn noteSealExitRead(self: *InstGraph, node: NodeId, sealed: Type.TypeId) void {
+        if (comptime !census.enabled) return;
+        if (self.classNamesChecked(node)) {
+            census.bump("graph_exit_read_names_checked");
+        } else {
+            census.bump("graph_exit_read_derived");
+            self.noteDerivedReadKind(node);
+            return;
+        }
+        const probe = self.seal_probe orelse return;
+        const record = self.classContexted(node) orelse {
+            census.bump("exit_read_no_contexted_provenance");
+            return;
+        };
+        probe.compareSealedAgainstDirected(record, sealed);
     }
 
     /// Debug/probe-only: whether any node joined to this one stands for a
@@ -3970,26 +3996,26 @@ pub const GraphTypeFinals = struct {
         return ty;
     }
 
+    /// Seal one node, and at a depth-zero entry compare the type it produces
+    /// against what directed translation computes for the position the node
+    /// stands for. The comparison uses the SEALED RESULT rather than asking the
+    /// graph again, because asking re-enters sealing (reunify.md 13.2 2a).
     pub fn sealNode(self: *GraphTypeFinals, raw_node: NodeId) Allocator.Error!Type.TypeId {
-        // Debug/probe-only: the frozen-emission exit, counted alongside the live
-        // one so seam coverage has a denominator (reunify.md 13.2 step 2a). Only
-        // a depth-zero entry is a read a caller asked for.
+        const outermost = census.enabled and self.seal_depth == 0;
         if (comptime census.enabled) {
-            if (self.seal_depth == 0) {
-                census.bump("graph_exit_seal_entry");
-                if (self.graph.classNamesChecked(raw_node)) {
-                    census.bump("graph_exit_read_names_checked");
-                } else {
-                    census.bump("graph_exit_read_derived");
-                    self.graph.noteDerivedReadKind(raw_node);
-                }
-            }
+            if (self.seal_depth == 0) census.bump("graph_exit_seal_entry");
             census.bump("graph_exit_seal_node");
             self.seal_depth += 1;
         }
         defer if (comptime census.enabled) {
             self.seal_depth -= 1;
         };
+        const sealed = try self.sealNodeInner(raw_node);
+        if (outermost) self.graph.noteSealExitRead(raw_node, sealed);
+        return sealed;
+    }
+
+    fn sealNodeInner(self: *GraphTypeFinals, raw_node: NodeId) Allocator.Error!Type.TypeId {
         const node = self.graph.find(raw_node);
         if (self.sealed.get(node)) |existing| return existing;
 

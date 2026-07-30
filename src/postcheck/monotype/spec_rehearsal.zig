@@ -2005,6 +2005,44 @@ pub const Rehearsal = struct {
             return;
         };
         start.graph.trace = trace;
+        start.graph.seal_probe = self;
+    }
+
+    /// Debug/probe-only: compare one sealed type against what directed
+    /// translation computes for the position the node stands for, using the
+    /// position's own recorded address (reunify.md 13.2 step 2a).
+    pub fn compareSealedAgainstDirected(
+        self: *Rehearsal,
+        record: ContextedProvenance,
+        sealed: Type.TypeId,
+    ) void {
+        if (comptime !census.enabled) return;
+        if (self.disabled) return;
+        var binding: PositionBinding = .none;
+        const probed = self.typeForCheckedPositionWithEdge(
+            record.address,
+            record.callee_context,
+            &binding,
+            record.request_edge,
+        ) catch null;
+        const direct_ty = probed orelse {
+            census.bump("seam_direct_absent");
+            return;
+        };
+        const left = self.types.typeDigest(self.program_names, direct_ty);
+        const right = self.types.typeDigest(self.program_names, sealed);
+        if (std.mem.eql(u8, &left.bytes, &right.bytes)) {
+            census.bump("seam_direct");
+            return;
+        }
+        const left_unfolded = self.types.unfoldedDigest(self.program_names, direct_ty);
+        const right_unfolded = self.types.unfoldedDigest(self.program_names, sealed);
+        if (std.mem.eql(u8, &left_unfolded.bytes, &right_unfolded.bytes)) {
+            census.bump("seam_direct");
+            return;
+        }
+        census.bump("seam_direct_diverged");
+        census.bump("seal_exit_diverged");
     }
 
     /// Compare, position by position, what this specialization's directed
@@ -2046,6 +2084,7 @@ pub const Rehearsal = struct {
     /// Finish one specialization: detach the trace and pop the environment.
     pub fn endSpecialization(self: *Rehearsal, graph: *solve.InstGraph) void {
         graph.trace = null;
+        graph.seal_probe = null;
         if (self.frames.items.len == 0) return;
         var frame = self.frames.pop() orelse return;
         self.releaseFrame(&frame);
