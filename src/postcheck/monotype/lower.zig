@@ -14536,6 +14536,44 @@ const BodyContext = struct {
         return graph_ty;
     }
 
+    /// Debug/probe-only: whether a read declined for a differing binding
+    /// context would have agreed anyway. Counted apart from `seam_direct` so a
+    /// conservative guard is never mistaken for coverage.
+    fn measureDeclinedContextRead(
+        self: *BodyContext,
+        record: spec_rehearsal.ContextedProvenance,
+        graph_ty: Type.TypeId,
+    ) void {
+        if (comptime !census.enabled) return;
+        const instantiation = self.builder.rehearsal orelse return;
+        var binding: spec_rehearsal.Rehearsal.PositionBinding = .none;
+        const probed = instantiation.typeForCheckedPositionWithEdge(
+            record.address,
+            self.callee_context,
+            &binding,
+            record.request_edge,
+        ) catch null;
+        const direct_ty = probed orelse {
+            census.bump("declined_context_unresolvable");
+            return;
+        };
+        const types = &self.builder.program.types;
+        const name_store = &self.builder.program.names;
+        const left = types.typeDigest(name_store, direct_ty);
+        const right = types.typeDigest(name_store, graph_ty);
+        if (std.mem.eql(u8, &left.bytes, &right.bytes)) {
+            census.bump("declined_context_would_agree");
+            return;
+        }
+        const left_unfolded = types.unfoldedDigest(name_store, direct_ty);
+        const right_unfolded = types.unfoldedDigest(name_store, graph_ty);
+        if (std.mem.eql(u8, &left_unfolded.bytes, &right_unfolded.bytes)) {
+            census.bump("declined_context_would_agree");
+        } else {
+            census.bump("declined_context_would_diverge");
+        }
+    }
+
     /// Debug/probe-only: measure one read at a graph exit against directed
     /// translation, using the checked position the node was instantiated from
     /// (reunify.md 13.2 step 2a). A node built under a different binding
@@ -14552,6 +14590,11 @@ const BodyContext = struct {
             record.scope_depth != @as(u32, @intCast(self.decl_scopes.items.len)))
         {
             census.bump("exit_read_context_differs");
+            // The guard is conservative: a node made under a different binding
+            // context may still translate to the same type. Ask, without
+            // counting the answer as coverage, whether declining these costs
+            // anything (reunify.md 13.2 2a).
+            self.measureDeclinedContextRead(record, graph_ty);
             return;
         }
         if (!moduleBytesEqual(record.address.module_bytes, self.view.key.bytes)) {
