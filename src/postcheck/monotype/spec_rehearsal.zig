@@ -2070,6 +2070,51 @@ pub const Rehearsal = struct {
         } else {
             census.bump("seal_diverged_unclassified");
         }
+        if (!difference.left.isEmptyTagUnionHead() and !difference.right.isEmptyTagUnionHead()) {
+            self.noteSealedAgainstChecked(record.address, sealed);
+        }
+    }
+
+    /// Debug/probe-only: for a divergence where both sides carry content, ask
+    /// whether the type the GRAPH sealed still agrees with the head CHECKING
+    /// recorded at that position. The seam comparison is symmetric and cannot
+    /// say which side is wrong; checking is the authority on logical types, so
+    /// a sealed type contradicting the checked head is the graph's error
+    /// (reunify.md 15.1b).
+    fn noteSealedAgainstChecked(self: *Rehearsal, address: CheckedAddress, sealed: Type.TypeId) void {
+        if (comptime !census.enabled) return;
+        const cursor = self.lookup.cursor(address.module_bytes) orelse return;
+        const agrees = switch (cursor.view.payload(@enumFromInt(address.type_id))) {
+            .function => switch (self.types.get(sealed)) {
+                .func => true,
+                else => false,
+            },
+            .record, .record_unbound => switch (self.types.get(sealed)) {
+                .record => true,
+                else => false,
+            },
+            .tuple => switch (self.types.get(sealed)) {
+                .tuple => true,
+                else => false,
+            },
+            .tag_union => switch (self.types.get(sealed)) {
+                .tag_union, .named => true,
+                else => false,
+            },
+            .nominal => switch (self.types.get(sealed)) {
+                .named => true,
+                else => false,
+            },
+            else => {
+                census.bump("sealed_vs_checked_inconclusive");
+                return;
+            },
+        };
+        if (agrees) {
+            census.bump("sealed_agrees_with_checked_head");
+        } else {
+            census.bump("sealed_contradicts_checked_head");
+        }
     }
 
     /// Compare, position by position, what this specialization's directed

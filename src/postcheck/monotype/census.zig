@@ -424,6 +424,12 @@ pub const Census = struct {
     seal_diverged_row_width: Counter = Counter.init(0),
     seal_diverged_named_identity: Counter = Counter.init(0),
     seal_diverged_unclassified: Counter = Counter.init(0),
+    // For a content-vs-content divergence, whether the sealed type still
+    // agrees with the head checking recorded. A contradiction is the graph's
+    // error, since checking is the authority on logical types.
+    sealed_agrees_with_checked_head: Counter = Counter.init(0),
+    sealed_contradicts_checked_head: Counter = Counter.init(0),
+    sealed_vs_checked_inconclusive: Counter = Counter.init(0),
     // Of the reads at both exits, whether the node stands for a checked
     // position at all. A derived node - a record's field, a list's element -
     // names none, so no per-position measurement can ever cover it.
