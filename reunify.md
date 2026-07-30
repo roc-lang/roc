@@ -2709,6 +2709,20 @@ the project's own thesis rather than a remote possibility, and this
 project has already found such defects — the `reintern` call that dropped
 a named backing's authority is one.
 
+A first asymmetric reading now exists. `instantiateTargetFromPlanNode`
+holds the target's and the plan's checked function types alongside the
+graph nodes built for each, which is where the informative executions
+live, so it can ask the one shape no representation choice may alter:
+does the argument count the graph built match the one checking recorded.
+**125554 agree and none contradict** on the snapshot corpus. That is
+evidence against the graph fabricating structurally wrong function types
+at these sites — the likeliest form the bug hypothesis would take there —
+and it supports the empty-tag-union reading with something other than the
+shape of the placeholder. It settles nothing about a disagreement arity
+cannot see: a wrong argument type with the right count, a wrong nominal
+identity, a wrong row. Those need per-shape comparisons that respect the
+representation latitude §10 owns, which is the rest of this risk.
+
 The comparison that resolves direction is different from the one being
 run: checking is the authority on logical types, so a postcheck-derived
 type that contradicts the checked data for its position is wrong
