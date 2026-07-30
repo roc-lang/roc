@@ -2043,6 +2043,33 @@ pub const Rehearsal = struct {
         }
         census.bump("seam_direct_diverged");
         census.bump("seal_exit_diverged");
+        self.noteDivergenceEdgeSite(record.address, record.callee_context, record.request_edge);
+        // Classify it the way the constraint census classifies its own
+        // informative executions, so the seal exit's divergences can be
+        // compared against the shape already diagnosed there.
+        var path: DifferencePath = .{};
+        const difference = firstDifferenceOnPath(
+            self.types,
+            direct_ty,
+            self.types,
+            sealed,
+            self.program_names,
+            0,
+            &path,
+        );
+        if (difference.left.isEmptyTagUnionHead() and !difference.right.isEmptyTagUnionHead()) {
+            census.bump("seal_diverged_direct_unbound");
+        } else if (difference.right.isEmptyTagUnionHead() and !difference.left.isEmptyTagUnionHead()) {
+            census.bump("seal_diverged_graph_unbound");
+        } else if (difference.left.tag != difference.right.tag) {
+            census.bump("seal_diverged_head_tag");
+        } else if (difference.left.entries != difference.right.entries) {
+            census.bump("seal_diverged_row_width");
+        } else if (difference.named_field != .not_named and difference.named_field != .equal) {
+            census.bump("seal_diverged_named_identity");
+        } else {
+            census.bump("seal_diverged_unclassified");
+        }
     }
 
     /// Compare, position by position, what this specialization's directed

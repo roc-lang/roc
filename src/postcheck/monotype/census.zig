@@ -416,6 +416,14 @@ pub const Census = struct {
     graph_exit_seal_node: Counter = Counter.init(0),
     graph_exit_seal_entry: Counter = Counter.init(0),
     seal_exit_diverged: Counter = Counter.init(0),
+    // What a seal-exit divergence disagrees about, classified the same way the
+    // constraint census classifies its informative executions.
+    seal_diverged_direct_unbound: Counter = Counter.init(0),
+    seal_diverged_graph_unbound: Counter = Counter.init(0),
+    seal_diverged_head_tag: Counter = Counter.init(0),
+    seal_diverged_row_width: Counter = Counter.init(0),
+    seal_diverged_named_identity: Counter = Counter.init(0),
+    seal_diverged_unclassified: Counter = Counter.init(0),
     // Of the reads at both exits, whether the node stands for a checked
     // position at all. A derived node - a record's field, a list's element -
     // names none, so no per-position measurement can ever cover it.
