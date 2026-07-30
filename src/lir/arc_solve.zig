@@ -3468,6 +3468,13 @@ fn computeUniquenessDetailed(
                     const param = GuardedList.at(params, param_index);
                     join_param_set.set(@intFromEnum(param));
                 }
+                // Conditionally initialized parameters never settle unique,
+                // matching the typed-lift fact emission.
+                const maybe_uninitialized_params = store.getLocalSpan(join_stmt.maybe_uninitialized_params);
+                for (0..GuardedList.borrowLen(maybe_uninitialized_params)) |param_index| {
+                    const param = GuardedList.at(maybe_uninitialized_params, param_index);
+                    foreign_def.set(@intFromEnum(param));
+                }
             },
             // Returning is the value's consuming use: the unit moves to the
             // caller, which feeds the per-proc unique-return solve.
