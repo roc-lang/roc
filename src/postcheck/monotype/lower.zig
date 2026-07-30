@@ -5297,35 +5297,12 @@ const Builder = struct {
         const constructor_node = try ctx.parseTagUnionSyntheticBoundary(callable, callable.ret);
         const result = try ctx.graphParserResultNodes(callable.ret);
 
-        var added_relation = false;
-        var required_error_seen = std.AutoHashMap(NodeId, void).init(self.allocator);
-        defer required_error_seen.deinit();
-        if (try ctx.graphParserShapeNeedsRequiredFieldError(result.value, &required_error_seen)) {
-            added_relation = try ctx.ensureGraphParserMissingRequiredFieldError(constructor_node);
-            if (!added_relation and !try ctx.graphRowHasTag(result.err, "MissingRequiredField")) {
-                // Checker-closed row without the report: emission crash-maps
-                // this decode, so no format-method relations may widen it.
-                return false;
-            }
-        }
-        var invalid_value_seen = std.AutoHashMap(NodeId, void).init(self.allocator);
-        defer invalid_value_seen.deinit();
-        if (try ctx.graphParserShapeNeedsInvalidValue(result.value, result.err, &invalid_value_seen)) {
-            added_relation = try ctx.prepareParserInvalidValueCodecCall(
-                boundary.expr,
-                result.value,
-                constructor_node,
-            ) or added_relation;
-        }
-        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
-        defer seen.deinit();
-        return try ctx.prepareCustomCodecCallsAtNode(
+        return try ctx.prepareParseTagUnionPayloadCodecCalls(
             boundary.expr,
-            .parser,
             result.value,
+            result.err,
             constructor_node,
-            &seen,
-        ) or added_relation;
+        );
     }
 
     /// Phase B for deferred equality. The graph is frozen and `sealer` is the
@@ -34624,6 +34601,61 @@ const BodyContext = struct {
             boundary_callable_node,
             &seen,
         ) or added_relation;
+    }
+
+    /// `ParseTagUnionSpec.parse` decodes only the selected tag's payloads; the
+    /// enclosing format method has already consumed the tag name. Preparing a
+    /// full tag-union parser here would re-enter the same format method before
+    /// the current synthetic parser is registered.
+    fn prepareParseTagUnionPayloadCodecCalls(
+        self: *BodyContext,
+        boundary_expr: DraftExprId,
+        union_node: NodeId,
+        err_node: NodeId,
+        boundary_callable_node: NodeId,
+    ) Allocator.Error!bool {
+        var added_relation = false;
+        var missing_required_field_ready = false;
+
+        var required_error_seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        defer required_error_seen.deinit();
+        var invalid_value_seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        defer invalid_value_seen.deinit();
+        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        defer seen.deinit();
+
+        for ((try self.graph.tagRowNodes(union_node)).tags) |tag| {
+            for (tag.payloads) |payload| {
+                if (try self.graphParserShapeNeedsRequiredFieldError(payload, &required_error_seen)) {
+                    if (!missing_required_field_ready) {
+                        const added_missing = try self.ensureGraphParserMissingRequiredFieldError(boundary_callable_node);
+                        added_relation = added_missing or added_relation;
+                        missing_required_field_ready = added_missing or try self.graphRowHasTag(err_node, "MissingRequiredField");
+                        if (!missing_required_field_ready) {
+                            // Checker-closed row without the report: emission
+                            // crash-maps this decode, so no format-method
+                            // relations may widen it.
+                            return false;
+                        }
+                    }
+                }
+                if (try self.graphParserShapeNeedsInvalidValue(payload, err_node, &invalid_value_seen)) {
+                    added_relation = try self.prepareParserInvalidValueCodecCall(
+                        boundary_expr,
+                        payload,
+                        boundary_callable_node,
+                    ) or added_relation;
+                }
+                added_relation = try self.prepareCustomCodecCallsAtNode(
+                    boundary_expr,
+                    .parser,
+                    payload,
+                    boundary_callable_node,
+                    &seen,
+                ) or added_relation;
+            }
+        }
+        return added_relation;
     }
 
     fn resolvedPreparedCodecCallsForBoundary(
