@@ -1292,13 +1292,6 @@ pub const StaticDispatchPlanTable = struct {
         checked_types: anytype,
         checked_bodies: anytype,
         build_data: *PlanTableBuildData,
-        /// Answers whether a checked literal expression's target type is a
-        /// CONCRETE builtin (such literals convert at Monotype lowering and
-        /// need no runtime literal-dispatch plan; still-open defaultable
-        /// targets keep a plan for potential custom instantiations).
-        /// Duck-typed to avoid a circular import with the checked artifact's
-        /// type-store view.
-        literal_targets: anytype,
     ) Allocator.Error!StaticDispatchPlanTable {
         var plans = std.ArrayList(StaticDispatchCallPlan).empty;
         errdefer plans.deinit(allocator);
@@ -1458,6 +1451,13 @@ pub const StaticDispatchPlanTable = struct {
         const module_env = module.moduleEnvConst();
         for (module_env.store.literalDispatchPlans()) |numeral_plan| {
             if (numeral_plan.dispatchKind() != .numeral) continue;
+            switch (numeral_plan.dispatchResolution()) {
+                .builtin_direct, .checked_error => continue,
+                .custom_dispatch, .specialization_dispatch => {},
+                .unresolved => if (@import("builtin").mode == .Debug) {
+                    std.debug.panic("unresolved numeral dispatch plan reached checked publication", .{});
+                } else unreachable,
+            }
             const node: CIR.Node.Idx = @enumFromInt(numeral_plan.node_idx);
             const checked_expr = checked_bodies.exprIdAtRawNode(numeral_plan.node_idx) orelse
                 checked_bodies.numeralConversionExprAtRawNode(numeral_plan.node_idx) orelse
@@ -1475,16 +1475,6 @@ pub const StaticDispatchPlanTable = struct {
                     unreachable;
                 },
             }
-            // Concrete builtin-targeted literals get their bits at monotype
-            // lowering; non-builtin (custom `from_numeral`) targets need a
-            // plan, and so does a literal whose target is still an OPEN
-            // defaultable variable — a generalized literal can be
-            // instantiated at a custom from_numeral type later (issue: a
-            // generic `|x| x.plus(1)` called with a custom number type
-            // panicked lowering with a plan-less from_numeral call). When
-            // every instantiation lands on a builtin, the recorded plan is
-            // simply never consulted.
-            if (literal_targets.literalTargetIsConcreteBuiltin(checked_expr)) continue;
             const literal = module_env.numeralLiteralForNode(node) orelse {
                 if (@import("builtin").mode == .Debug) {
                     std.debug.panic(
@@ -1525,38 +1515,25 @@ pub const StaticDispatchPlanTable = struct {
 
         for (module_env.store.literalDispatchPlans()) |quote_plan| {
             if (quote_plan.dispatchKind() != .quote) continue;
+            switch (quote_plan.dispatchResolution()) {
+                .builtin_direct, .checked_error => continue,
+                .custom_dispatch, .specialization_dispatch => {},
+                .unresolved => if (@import("builtin").mode == .Debug) {
+                    std.debug.panic("unresolved quote dispatch plan reached checked publication", .{});
+                } else unreachable,
+            }
             const node: CIR.Node.Idx = @enumFromInt(quote_plan.node_idx);
             const checked_expr = checked_bodies.exprIdAtRawNode(quote_plan.node_idx) orelse
                 checked_bodies.numeralConversionExprAtRawNode(quote_plan.node_idx) orelse
                 continue;
             const literal = switch (checked_bodies.expr(checked_expr).data) {
-                .str_from_quote => |quote| blk: {
-                    if (literal_targets.literalTargetIsConcreteBuiltin(checked_expr)) {
-                        if (@import("builtin").mode == .Debug) {
-                            std.debug.panic(
-                                "checked static dispatch invariant violated: concrete builtin quote target {d} retained a from_quote expression",
-                                .{quote_plan.node_idx},
-                            );
-                        }
-                        unreachable;
-                    }
-                    break :blk quote.literal;
-                },
-                // Only a target already proven builtin may keep the direct
-                // string encoding. An open generalized target needs the plan
-                // for potential custom from_quote instantiations.
-                .str, .str_segment => {
-                    if (!literal_targets.literalTargetIsConcreteBuiltin(checked_expr)) {
-                        if (@import("builtin").mode == .Debug) {
-                            std.debug.panic(
-                                "checked static dispatch invariant violated: open quote target {d} lost its from_quote expression",
-                                .{quote_plan.node_idx},
-                            );
-                        }
-                        unreachable;
-                    }
-                    continue;
-                },
+                .str_from_quote => |quote| quote.literal,
+                .str, .str_segment => if (@import("builtin").mode == .Debug) {
+                    std.debug.panic(
+                        "checked static dispatch invariant violated: non-builtin quote target {d} lost its from_quote expression",
+                        .{quote_plan.node_idx},
+                    );
+                } else unreachable,
                 .runtime_error => continue,
                 else => {
                     if (@import("builtin").mode == .Debug) {

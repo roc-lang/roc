@@ -171,6 +171,12 @@ scratch_deferred_static_dispatch_constraints: base.Scratch(DeferredConstraintChe
 // Cache for imported types. This cache lives for the entire type-checking session
 /// of a module, so the same imported type can be reused across the entire module.
 import_cache: ImportCache,
+/// Generalized imported method schemes copied into this solver exactly once.
+/// Each use still instantiates from this immutable scheme, so polymorphic uses
+/// remain fresh without recopied import graphs. The append-only log gives
+/// speculative probes an exact rollback boundary.
+imported_method_schemes: std.ArrayListUnmanaged(ImportedMethodScheme) = .empty,
+imported_method_scheme_by_source: std.AutoHashMapUnmanaged(ImportedMethodSchemeKey, u32) = .empty,
 /// Copied Bool type from Bool module (for use in if conditions, etc.)
 bool_var: Var,
 /// Copied Str type from Builtin module (for use in string literals, etc.)
@@ -704,6 +710,16 @@ const DispatchTargetInstantiation = struct {
     target_binding: ModuleEnv.MethodBinding,
     method_name: Ident.Idx,
     method_var: Var,
+};
+
+const ImportedMethodSchemeKey = struct {
+    env: *const ModuleEnv,
+    type_node_idx: CIR.Node.Idx,
+};
+
+const ImportedMethodScheme = struct {
+    key: ImportedMethodSchemeKey,
+    scheme_var: Var,
 };
 
 fn literalMethodIdents(self: *const Self) literal_defaulting.LiteralMethodIdents {
@@ -1631,6 +1647,8 @@ pub fn deinit(self: *Self) void {
     self.scratch_static_dispatch_constraints.deinit();
     self.scratch_deferred_static_dispatch_constraints.deinit();
     self.import_cache.deinit(self.gpa);
+    self.imported_method_schemes.deinit(self.gpa);
+    self.imported_method_scheme_by_source.deinit(self.gpa);
     self.ident_to_var_map.deinit();
     self.checked_interpolation_part_constraints.deinit();
     self.reported_constraint_errors.deinit();
@@ -2400,6 +2418,7 @@ fn markHoistInvalidatedExpr(
 ) Allocator.Error!void {
     const entry = try self.hoist_invalidated_exprs.getOrPut(self.gpa, expr);
     if (entry.found_existing) return;
+    self.cir.store.retireLiteralDispatchPlan(ModuleEnv.nodeIdxFrom(expr));
     try work.append(self.gpa, expr);
 }
 
@@ -5416,6 +5435,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.reportNonExhaustiveForPatterns(&env);
 
     try self.pruneSelectedHoistedRootsAfterSolving();
+    try self.finalizeLiteralDispatchResolutions();
 
     self.debugAssertNominalDeclTableComplete();
 }
@@ -14129,7 +14149,7 @@ fn methodVarFromOriginalEnv(
     self: *Self,
     original_env: *const ModuleEnv,
     is_this_module: bool,
-    type_node_idx: anytype,
+    type_node_idx: CIR.Node.Idx,
     dispatcher_name: Ident.Idx,
     env: *Env,
     region: Region,
@@ -14141,8 +14161,8 @@ fn methodVarFromOriginalEnv(
         }
         break :blk def_var;
     } else blk: {
-        const copied = try self.copyVar(def_var, original_env, region);
-        break :blk try self.instantiateVar(copied, env, .{ .explicit = region });
+        const imported_scheme = try self.importedMethodSchemeFromSource(original_env, type_node_idx);
+        break :blk try self.instantiateVar(imported_scheme, env, .{ .explicit = region });
     };
     return .{ .var_ = method_var, .dispatcher_name = dispatcher_name };
 }
@@ -17265,6 +17285,7 @@ const Probe = struct {
     scheme_use_pairs_len: usize,
     rejected_static_dispatches_len: usize,
     dispatch_target_instantiations_len: usize,
+    imported_method_schemes_len: usize,
 
     fn rollback(self: *Probe) void {
         self.check.types.rollbackToSavepoint(&self.savepoint);
@@ -17291,6 +17312,11 @@ const Probe = struct {
             const did_remove = self.check.dispatch_target_instantiation_by_fn_var.remove(removed.constraint_fn_var);
             std.debug.assert(did_remove);
         }
+        while (self.check.imported_method_schemes.items.len > self.imported_method_schemes_len) {
+            const removed = self.check.imported_method_schemes.pop().?;
+            const did_remove = self.check.imported_method_scheme_by_source.remove(removed.key);
+            std.debug.assert(did_remove);
+        }
     }
 
     /// Close the probe scope KEEPING everything it did: the type-store
@@ -17312,6 +17338,7 @@ fn beginProbe(self: *Self) std.mem.Allocator.Error!Probe {
     const scheme_use_pairs_len = self.cir.scheme_use_pairs.items.items.len;
     const rejected_static_dispatches_len = self.cir.rejected_static_dispatches.items.items.len;
     const dispatch_target_instantiations_len = self.dispatch_target_instantiations.items.len;
+    const imported_method_schemes_len = self.imported_method_schemes.items.len;
     return .{
         .check = self,
         .regions_len = regions_len,
@@ -17323,6 +17350,7 @@ fn beginProbe(self: *Self) std.mem.Allocator.Error!Probe {
         .scheme_use_pairs_len = scheme_use_pairs_len,
         .rejected_static_dispatches_len = rejected_static_dispatches_len,
         .dispatch_target_instantiations_len = dispatch_target_instantiations_len,
+        .imported_method_schemes_len = imported_method_schemes_len,
         .savepoint = try self.types.createSavepoint(),
     };
 }
@@ -18862,7 +18890,6 @@ fn staticDispatchConstraintAcceptsCandidate(
         self.cir,
         constraint.fn_name,
     ) orelse return false;
-    const method_env = method_lookup.env;
     const def_var: Var = ModuleEnv.varFrom(method_lookup.binding.type_node_idx);
 
     const method_var = if (method_lookup.is_this_module) blk: {
@@ -18871,8 +18898,8 @@ fn staticDispatchConstraintAcceptsCandidate(
         }
         break :blk def_var;
     } else blk: {
-        const copied_var = try self.copyVar(def_var, method_env, self.getRegionAt(candidate_var));
-        break :blk try self.instantiateVar(copied_var, env, .{ .explicit = self.getRegionAt(candidate_var) });
+        const imported_scheme = try self.importedMethodScheme(method_lookup);
+        break :blk try self.instantiateVar(imported_scheme, env, .{ .explicit = self.getRegionAt(candidate_var) });
     };
 
     // The real unify wrapper, not the throwaway-store probe unify: on the commit
@@ -19073,6 +19100,44 @@ fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
 /// non-terminating cycle, reported as an infinite type instead of hanging.
 const max_deferred_dispatch_iterations: usize = 1 << 14;
 
+fn importedMethodScheme(
+    self: *Self,
+    method_lookup: StaticDispatchMethodBinding,
+) Allocator.Error!Var {
+    std.debug.assert(!method_lookup.is_this_module);
+    return self.importedMethodSchemeFromSource(method_lookup.env, method_lookup.binding.type_node_idx);
+}
+
+fn importedMethodSchemeFromSource(
+    self: *Self,
+    source_env: *const ModuleEnv,
+    type_node_idx: CIR.Node.Idx,
+) Allocator.Error!Var {
+    const key = ImportedMethodSchemeKey{
+        .env = source_env,
+        .type_node_idx = type_node_idx,
+    };
+    if (self.imported_method_scheme_by_source.get(key)) |index| {
+        return self.imported_method_schemes.items[index].scheme_var;
+    }
+
+    try self.imported_method_schemes.ensureUnusedCapacity(self.gpa, 1);
+    try self.imported_method_scheme_by_source.ensureUnusedCapacity(self.gpa, 1);
+
+    // The cached graph is the generalized import scheme, not a use. Keep it
+    // source-owned and regionless; each fresh instantiation below receives its
+    // own use-site region and can be unified or rejected independently.
+    const source_var = ModuleEnv.varFrom(type_node_idx);
+    const scheme_var = try self.copyVar(source_var, source_env, null);
+    const index: u32 = @intCast(self.imported_method_schemes.items.len);
+    self.imported_method_schemes.appendAssumeCapacity(.{
+        .key = key,
+        .scheme_var = scheme_var,
+    });
+    self.imported_method_scheme_by_source.putAssumeCapacityNoClobber(key, index);
+    return scheme_var;
+}
+
 /// Return the one local method var selected for this raw dispatch edge.
 /// Deferred-constraint fixpoints may observe an edge more than once; the first
 /// observation performs the target copy/instantiation and records its nested
@@ -19119,8 +19184,8 @@ fn dispatchTargetMethodVar(
         }
         break :blk local_method_type_var;
     } else blk: {
-        const copied_var = try self.copyVar(method_type_var, method_lookup.env, region);
-        break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
+        const imported_scheme = try self.importedMethodScheme(method_lookup);
+        break :blk try self.instantiateVar(imported_scheme, env, .{ .explicit = region });
     };
 
     // A target that reused an in-flight cycle var performed no instantiation,
@@ -19372,6 +19437,22 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         env,
                     )) {
                         continue;
+                    }
+                    // Builtin literals are a primitive checking rule: the
+                    // parser-owned exact value was validated above, and
+                    // Monotype materializes it directly. There is no callable
+                    // to look up, copy, instantiate, or unify for this edge.
+                    if (constraint.origin == .from_literal) {
+                        if (constraint.fn_name.eql(self.cir.idents.from_numeral) and
+                            self.nominalIsBuiltinNumberType(nominal_type))
+                        {
+                            continue;
+                        }
+                        if (constraint.fn_name.eql(self.cir.idents.from_quote) and
+                            self.nominalIsBuiltinStrType(nominal_type))
+                        {
+                            continue;
+                        }
                     }
                     if (constraint.origin.literalKind() == .interpolation) {
                         if (self.nominalIsBuiltinStrType(nominal_type)) {
@@ -21545,6 +21626,283 @@ fn validateResolvedOpenNumeralLiterals(
     }
 }
 
+fn literalTargetContainsIdentity(
+    self: *Self,
+    var_: Var,
+    visited: *std.AutoHashMap(Var, void),
+) Allocator.Error!bool {
+    const resolved = self.types.resolveVar(var_);
+    if (visited.contains(resolved.var_)) return false;
+    try visited.put(resolved.var_, {});
+
+    return switch (resolved.desc.content) {
+        .flex, .rigid => true,
+        .err => false,
+        .alias => |alias| blk: {
+            if (try self.literalTargetContainsIdentity(self.types.getAliasBackingVar(alias), visited)) break :blk true;
+            for (self.types.sliceAliasArgs(alias)) |arg| {
+                if (try self.literalTargetContainsIdentity(arg, visited)) break :blk true;
+            }
+            break :blk false;
+        },
+        .structure => |structure| switch (structure) {
+            .empty_record, .empty_tag_union => false,
+            .tuple => |tuple| blk: {
+                for (self.types.sliceVars(tuple.elems)) |elem| {
+                    if (try self.literalTargetContainsIdentity(elem, visited)) break :blk true;
+                }
+                break :blk false;
+            },
+            .nominal_type => |nominal| blk: {
+                for (self.types.sliceNominalArgs(nominal)) |arg| {
+                    if (try self.literalTargetContainsIdentity(arg, visited)) break :blk true;
+                }
+                break :blk false;
+            },
+            .fn_pure, .fn_effectful, .fn_unbound => |function| blk: {
+                for (self.types.sliceVars(function.args)) |arg| {
+                    if (try self.literalTargetContainsIdentity(arg, visited)) break :blk true;
+                }
+                break :blk try self.literalTargetContainsIdentity(function.ret, visited);
+            },
+            .record => |record| blk: {
+                const fields = self.types.getRecordFieldsSlice(record.fields);
+                for (fields.items(.var_)) |field| {
+                    if (try self.literalTargetContainsIdentity(field, visited)) break :blk true;
+                }
+                break :blk try self.literalTargetContainsIdentity(record.ext, visited);
+            },
+            .record_unbound => |record_fields| blk: {
+                const fields = self.types.getRecordFieldsSlice(record_fields);
+                for (fields.items(.var_)) |field| {
+                    if (try self.literalTargetContainsIdentity(field, visited)) break :blk true;
+                }
+                break :blk false;
+            },
+            .tag_union => |tag_union| blk: {
+                const tags = self.types.getTagsSlice(tag_union.tags);
+                for (tags.items(.args)) |args| {
+                    for (self.types.sliceVars(args)) |arg| {
+                        if (try self.literalTargetContainsIdentity(arg, visited)) break :blk true;
+                    }
+                }
+                break :blk try self.literalTargetContainsIdentity(tag_union.ext, visited);
+            },
+        },
+    };
+}
+
+fn literalTargetIsBuiltinDirect(
+    self: *Self,
+    var_: Var,
+    kind: can.NodeStore.LiteralDispatchPlan.Kind,
+    visited: *std.AutoHashMap(Var, void),
+) Allocator.Error!bool {
+    const resolved = self.types.resolveVar(var_);
+    if (visited.contains(resolved.var_)) return false;
+    try visited.put(resolved.var_, {});
+
+    return switch (resolved.desc.content) {
+        .alias => |alias| try self.literalTargetIsBuiltinDirect(
+            self.types.getAliasBackingVar(alias),
+            kind,
+            visited,
+        ),
+        .structure => |structure| switch (structure) {
+            .nominal_type => |nominal| switch (kind) {
+                .numeral => self.nominalIsBuiltinNumberType(nominal),
+                .quote => self.nominalIsBuiltinStrType(nominal),
+            },
+            else => false,
+        },
+        .err, .flex, .rigid => false,
+    };
+}
+
+/// Seal every live literal record with the exact decision checking made. The
+/// method-instantiation table is positive evidence for a concrete custom
+/// target; an identity-bearing target remains a specialization obligation.
+fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
+    var visited = std.AutoHashMap(Var, void).init(self.gpa);
+    defer visited.deinit();
+
+    const plans = self.cir.store.literalDispatchPlans();
+    var plan_index: usize = 0;
+    while (plan_index < plans.len) : (plan_index += 1) {
+        // Finalization mutates only the record's resolution field and cannot
+        // reallocate the dense plan list, so index-based iteration is stable.
+        const plan = self.cir.store.literalDispatchPlans()[plan_index];
+        if (plan.dispatchResolution() != .unresolved) {
+            std.debug.panic("literal dispatch plan reached finalization already resolved", .{});
+        }
+
+        const target_var: Var = @enumFromInt(plan.target_var);
+        const fn_var: Var = @enumFromInt(plan.fn_var);
+        const resolution: can.NodeStore.LiteralDispatchPlan.Resolution = resolution: {
+            // A dispatch-specific rejection is stronger than a concrete
+            // builtin target (for example, an out-of-range U8 literal).
+            if (self.rejected_static_dispatches.contains(fn_var)) {
+                break :resolution .checked_error;
+            }
+
+            const node_idx: CIR.Node.Idx = @enumFromInt(plan.node_idx);
+            if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag) and
+                self.erroneous_value_exprs.contains(@enumFromInt(plan.node_idx)))
+            {
+                break :resolution .checked_error;
+            }
+
+            // An independently reported error can poison the receiver after
+            // this dispatch checked successfully. Preserve that distinct,
+            // explicit value-error fence at the checked boundary.
+            visited.clearRetainingCapacity();
+            if (try self.varContainsError(target_var, &visited)) {
+                break :resolution .checked_error;
+            }
+
+            visited.clearRetainingCapacity();
+            if (try self.literalTargetIsBuiltinDirect(target_var, plan.dispatchKind(), &visited)) {
+                break :resolution .builtin_direct;
+            }
+
+            visited.clearRetainingCapacity();
+            if (try self.literalTargetContainsIdentity(target_var, &visited)) {
+                break :resolution .specialization_dispatch;
+            }
+            if (self.dispatch_target_instantiation_by_fn_var.contains(fn_var)) {
+                break :resolution .custom_dispatch;
+            }
+
+            // Error recovery can leave a literal live after another mismatch
+            // pins its target to a concrete type that has no conversion (for
+            // example, a quote coerced to I64 by a failing loop body). The
+            // settled checker state is total here: successful concrete
+            // conversions have positive builtin/callable evidence above. Seal
+            // this exact raw edge as rejected, but never let that recovery path
+            // hide missing evidence in an otherwise valid module.
+            if (self.problems.len() != 0) {
+                try self.markStaticDispatchFnRejected(fn_var);
+                break :resolution .checked_error;
+            }
+
+            const target = self.types.resolveVar(target_var);
+            const callable = self.types.resolveVar(fn_var);
+            const target_shape = switch (target.desc.content) {
+                .structure => |structure| @tagName(structure),
+                else => @tagName(target.desc.content),
+            };
+            const callable_shape = switch (callable.desc.content) {
+                .structure => |structure| @tagName(structure),
+                else => @tagName(callable.desc.content),
+            };
+            const target_name = switch (target.desc.content) {
+                .structure => |structure| switch (structure) {
+                    .nominal_type => |nominal| self.cir.getIdent(nominal.ident.ident_idx),
+                    else => "<unnamed>",
+                },
+                .alias => |alias| self.cir.getIdent(alias.ident.ident_idx),
+                else => "<unnamed>",
+            };
+            std.debug.panic(
+                "live concrete {s} literal plan for node {d} has no checked builtin or custom resolution (target var {d}: {s} {s}, callable var {d}: {s})",
+                .{
+                    @tagName(plan.dispatchKind()),
+                    plan.node_idx,
+                    @intFromEnum(target.var_),
+                    target_shape,
+                    target_name,
+                    @intFromEnum(callable.var_),
+                    callable_shape,
+                },
+            );
+        };
+        self.cir.finalizeLiteralDispatchResolution(@enumFromInt(plan.node_idx), resolution);
+    }
+}
+
+test "literal dispatch finalization records builtin direct resolution" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.init("LiteralResolution", "value : U64\nvalue = 42");
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    var found = false;
+    for (test_env.module_env.store.literalDispatchPlans()) |plan| {
+        if (plan.dispatchKind() != .numeral) continue;
+        try std.testing.expectEqual(can.NodeStore.LiteralDispatchPlan.Resolution.builtin_direct, plan.dispatchResolution());
+        found = true;
+    }
+    try std.testing.expect(found);
+}
+
+test "literal dispatch finalization records custom callable resolution" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\MyNum := [].{
+        \\    from_numeral : Numeral -> Try(MyNum, [InvalidNumeral(Str)])
+        \\    from_numeral = |_| Err(InvalidNumeral("not supported"))
+        \\}
+        \\
+        \\value : MyNum
+        \\value = 42
+    ;
+    var test_env = try TestEnv.init("LiteralResolution", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    var found = false;
+    for (test_env.module_env.store.literalDispatchPlans()) |plan| {
+        if (plan.dispatchKind() != .numeral) continue;
+        try std.testing.expectEqual(can.NodeStore.LiteralDispatchPlan.Resolution.custom_dispatch, plan.dispatchResolution());
+        found = true;
+    }
+    try std.testing.expect(found);
+}
+
+test "literal dispatch finalization preserves generalized specialization obligations" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\number = |_| 42
+        \\quote = |_| "hello"
+    ;
+    var test_env = try TestEnv.init("LiteralResolution", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    var numeral_found = false;
+    var quote_found = false;
+    for (test_env.module_env.store.literalDispatchPlans()) |plan| {
+        try std.testing.expectEqual(
+            can.NodeStore.LiteralDispatchPlan.Resolution.specialization_dispatch,
+            plan.dispatchResolution(),
+        );
+        switch (plan.dispatchKind()) {
+            .numeral => numeral_found = true,
+            .quote => quote_found = true,
+        }
+    }
+    try std.testing.expect(numeral_found);
+    try std.testing.expect(quote_found);
+}
+
+test "imported method schemes are copied once and freshly instantiated per use" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\wide : U64
+        \\wide = 1
+        \\small : U64
+        \\small = 2
+        \\wide_result = wide.plus_wrap(3)
+        \\small_result = small.plus_wrap(4)
+    ;
+    var test_env = try TestEnv.init("ImportedMethodScheme", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    try std.testing.expectEqual(@as(usize, 1), test_env.checker.imported_method_schemes.items.len);
+    try std.testing.expectEqual(@as(usize, 1), test_env.checker.imported_method_scheme_by_source.count());
+}
+
 const DerivedMapAnalysis = struct {
     plan: types_mod.DerivedMapPlan,
     selected_payload: Var,
@@ -23407,8 +23765,8 @@ fn validateDerivedParseNominal(
         }
         break :blk method_type_var;
     } else blk: {
-        const copied_var = try self.copyVar(method_type_var, method_lookup.env, region);
-        break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
+        const imported_scheme = try self.importedMethodScheme(method_lookup);
+        break :blk try self.instantiateVar(imported_scheme, env, .{ .explicit = region });
     };
 
     const child_err_var = try self.fresh(env, region);
@@ -23836,8 +24194,8 @@ fn validateDerivedEncodeNominal(
         }
         break :blk method_type_var;
     } else blk: {
-        const copied_var = try self.copyVar(method_type_var, method_lookup.env, region);
-        break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
+        const imported_scheme = try self.importedMethodScheme(method_lookup);
+        break :blk try self.instantiateVar(imported_scheme, env, .{ .explicit = region });
     };
 
     const expected_ret = try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region);
@@ -23969,9 +24327,8 @@ fn checkFlexVarConstraintCompatibility(
             };
             defer self.evidence_target_site = null;
 
-            const method_type_var = ModuleEnv.varFrom(method_binding.type_node_idx);
-            const copied_var = try self.copyVar(method_type_var, builtin_env, region);
-            break :method_var try self.instantiateVar(copied_var, env, .{ .explicit = region });
+            const imported_scheme = try self.importedMethodSchemeFromSource(builtin_env, method_binding.type_node_idx);
+            break :method_var try self.instantiateVar(imported_scheme, env, .{ .explicit = region });
         };
 
         const result = try self.unifyInContext(method_var, constraint.fn_var, env, .{
@@ -24235,9 +24592,13 @@ fn varsContainError(self: *Self, vars: []const Var, visited: *std.AutoHashMap(Va
 /// is evidence metadata, not a type fact: mutating the callable return can poison
 /// a valid receiver when the method contract shares its argument and result.
 fn markStaticDispatchRejected(self: *Self, constraint: StaticDispatchConstraint) Allocator.Error!void {
-    const entry = try self.rejected_static_dispatches.getOrPut(constraint.fn_var);
+    return self.markStaticDispatchFnRejected(constraint.fn_var);
+}
+
+fn markStaticDispatchFnRejected(self: *Self, fn_var: Var) Allocator.Error!void {
+    const entry = try self.rejected_static_dispatches.getOrPut(fn_var);
     if (entry.found_existing) return;
-    try self.cir.recordRejectedStaticDispatch(constraint.fn_var);
+    try self.cir.recordRejectedStaticDispatch(fn_var);
 }
 
 /// Find the source region of the string literal whose from_quote constraint

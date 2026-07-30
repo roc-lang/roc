@@ -3894,6 +3894,15 @@ pub fn numeralDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?NodeSt
     return if (plan.dispatchKind() == .numeral) plan else null;
 }
 
+/// Commit checking's exact resolution for a live numeral or quote literal.
+pub fn finalizeLiteralDispatchResolution(
+    self: *Self,
+    node_idx: Node.Idx,
+    resolution: NodeStore.LiteralDispatchPlan.Resolution,
+) void {
+    self.store.finalizeLiteralDispatchResolution(node_idx, resolution);
+}
+
 /// Record the checked `from_quote` function for a string literal node.
 pub fn recordQuoteDispatchPlan(
     self: *Self,
