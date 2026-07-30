@@ -84,6 +84,7 @@ pub const TargetConfig = struct {
 /// Thread-safe timing totals for the checked-to-LIR pipeline.
 pub const Timing = struct {
     std_io: std.Io,
+    detailed_monotype_body: bool = false,
     monotype_ns: TimingCounter = .{},
     monotype_setup_ns: TimingCounter = .{},
     monotype_procedure_specialization_ns: TimingCounter = .{},
@@ -92,6 +93,12 @@ pub const Timing = struct {
     monotype_procedure_dispatch_evidence_ns: TimingCounter = .{},
     monotype_procedure_body_graph_setup_ns: TimingCounter = .{},
     monotype_procedure_body_lowering_ns: TimingCounter = .{},
+    monotype_procedure_body_type_graph_ns: TimingCounter = .{},
+    monotype_procedure_body_call_dispatch_ns: TimingCounter = .{},
+    monotype_procedure_body_draft_ir_ns: TimingCounter = .{},
+    monotype_procedure_body_reachability_ns: TimingCounter = .{},
+    monotype_procedure_body_source_mapping_ns: TimingCounter = .{},
+    monotype_procedure_body_local_proc_context_ns: TimingCounter = .{},
     monotype_procedure_body_finalization_ns: TimingCounter = .{},
     monotype_procedure_completion_ns: TimingCounter = .{},
     monotype_layout_requests_ns: TimingCounter = .{},
@@ -109,6 +116,12 @@ pub const Timing = struct {
         return .{ .std_io = std_io };
     }
 
+    /// Enable fine-grained, per-node Monotype body timing. This is opt-in
+    /// because timestamping interleaved body work has measurable overhead.
+    pub fn enableDetailedMonotypeBody(self: *Timing) void {
+        self.detailed_monotype_body = true;
+    }
+
     pub fn snapshot(self: *const Timing) TimingSnapshot {
         return .{
             .monotype_ns = self.monotype_ns.load(),
@@ -119,6 +132,12 @@ pub const Timing = struct {
             .monotype_procedure_dispatch_evidence_ns = self.monotype_procedure_dispatch_evidence_ns.load(),
             .monotype_procedure_body_graph_setup_ns = self.monotype_procedure_body_graph_setup_ns.load(),
             .monotype_procedure_body_lowering_ns = self.monotype_procedure_body_lowering_ns.load(),
+            .monotype_procedure_body_type_graph_ns = self.monotype_procedure_body_type_graph_ns.load(),
+            .monotype_procedure_body_call_dispatch_ns = self.monotype_procedure_body_call_dispatch_ns.load(),
+            .monotype_procedure_body_draft_ir_ns = self.monotype_procedure_body_draft_ir_ns.load(),
+            .monotype_procedure_body_reachability_ns = self.monotype_procedure_body_reachability_ns.load(),
+            .monotype_procedure_body_source_mapping_ns = self.monotype_procedure_body_source_mapping_ns.load(),
+            .monotype_procedure_body_local_proc_context_ns = self.monotype_procedure_body_local_proc_context_ns.load(),
             .monotype_procedure_body_finalization_ns = self.monotype_procedure_body_finalization_ns.load(),
             .monotype_procedure_completion_ns = self.monotype_procedure_completion_ns.load(),
             .monotype_layout_requests_ns = self.monotype_layout_requests_ns.load(),
@@ -143,6 +162,12 @@ pub const Timing = struct {
         self.monotype_procedure_dispatch_evidence_ns.add(snapshot_value.monotype_procedure_dispatch_evidence_ns);
         self.monotype_procedure_body_graph_setup_ns.add(snapshot_value.monotype_procedure_body_graph_setup_ns);
         self.monotype_procedure_body_lowering_ns.add(snapshot_value.monotype_procedure_body_lowering_ns);
+        self.monotype_procedure_body_type_graph_ns.add(snapshot_value.monotype_procedure_body_type_graph_ns);
+        self.monotype_procedure_body_call_dispatch_ns.add(snapshot_value.monotype_procedure_body_call_dispatch_ns);
+        self.monotype_procedure_body_draft_ir_ns.add(snapshot_value.monotype_procedure_body_draft_ir_ns);
+        self.monotype_procedure_body_reachability_ns.add(snapshot_value.monotype_procedure_body_reachability_ns);
+        self.monotype_procedure_body_source_mapping_ns.add(snapshot_value.monotype_procedure_body_source_mapping_ns);
+        self.monotype_procedure_body_local_proc_context_ns.add(snapshot_value.monotype_procedure_body_local_proc_context_ns);
         self.monotype_procedure_body_finalization_ns.add(snapshot_value.monotype_procedure_body_finalization_ns);
         self.monotype_procedure_completion_ns.add(snapshot_value.monotype_procedure_completion_ns);
         self.monotype_layout_requests_ns.add(snapshot_value.monotype_layout_requests_ns);
@@ -184,6 +209,12 @@ pub const Timing = struct {
         self.monotype_procedure_dispatch_evidence_ns.add(snapshot_value.procedure_dispatch_evidence_ns);
         self.monotype_procedure_body_graph_setup_ns.add(snapshot_value.procedure_body_graph_setup_ns);
         self.monotype_procedure_body_lowering_ns.add(snapshot_value.procedure_body_lowering_ns);
+        self.monotype_procedure_body_type_graph_ns.add(snapshot_value.procedure_body_type_graph_ns);
+        self.monotype_procedure_body_call_dispatch_ns.add(snapshot_value.procedure_body_call_dispatch_ns);
+        self.monotype_procedure_body_draft_ir_ns.add(snapshot_value.procedure_body_draft_ir_ns);
+        self.monotype_procedure_body_reachability_ns.add(snapshot_value.procedure_body_reachability_ns);
+        self.monotype_procedure_body_source_mapping_ns.add(snapshot_value.procedure_body_source_mapping_ns);
+        self.monotype_procedure_body_local_proc_context_ns.add(snapshot_value.procedure_body_local_proc_context_ns);
         self.monotype_procedure_body_finalization_ns.add(snapshot_value.procedure_body_finalization_ns);
         self.monotype_procedure_completion_ns.add(snapshot_value.procedure_completion_ns);
         self.monotype_layout_requests_ns.add(snapshot_value.layout_requests_ns);
@@ -204,6 +235,12 @@ pub const TimingSnapshot = struct {
     monotype_procedure_dispatch_evidence_ns: u64 = 0,
     monotype_procedure_body_graph_setup_ns: u64 = 0,
     monotype_procedure_body_lowering_ns: u64 = 0,
+    monotype_procedure_body_type_graph_ns: u64 = 0,
+    monotype_procedure_body_call_dispatch_ns: u64 = 0,
+    monotype_procedure_body_draft_ir_ns: u64 = 0,
+    monotype_procedure_body_reachability_ns: u64 = 0,
+    monotype_procedure_body_source_mapping_ns: u64 = 0,
+    monotype_procedure_body_local_proc_context_ns: u64 = 0,
     monotype_procedure_body_finalization_ns: u64 = 0,
     monotype_procedure_completion_ns: u64 = 0,
     monotype_layout_requests_ns: u64 = 0,
@@ -391,6 +428,9 @@ pub fn lowerCheckedModulesToLir(
         postcheck.Monotype.Lower.Timing.init(timing.std_io)
     else
         null;
+    if (monotype_timing) |*detail| {
+        detail.body_work_timing_enabled = target.timing.?.detailed_monotype_body;
+    }
     var mono = try postcheck.Monotype.Lower.run(
         allocator,
         checkedModules(modules),

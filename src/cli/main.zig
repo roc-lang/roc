@@ -6006,6 +6006,7 @@ fn lowerLirWithBuildEnv(
 
     if (reporter) |r| r.begin(post_check_lowering_phase_name);
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
+    if (reporter != null and reporter.?.always) spec_timing.enableDetailedMonotypeBody();
     var lowered = try lowerCheckedSourceToLir(
         lir_allocator,
         ctx.gpa,
@@ -8883,6 +8884,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
 
     reporter.begin(post_check_lowering_phase_name);
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
+    if (args.timings) spec_timing.enableDetailedMonotypeBody();
     var lowered = try lowerCheckedSourceToLir(
         ctx.gpa,
         ctx.gpa,
@@ -9197,6 +9199,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
 
     reporter.begin(post_check_lowering_phase_name);
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
+    if (args.timings) spec_timing.enableDetailedMonotypeBody();
     var lowered = try lowerCheckedSourceToLir(
         ctx.gpa,
         ctx.gpa,
@@ -9520,6 +9523,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
 
     reporter.begin(post_check_lowering_phase_name);
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
+    if (args.timings) spec_timing.enableDetailedMonotypeBody();
     var lowered = try lowerCheckedSourceToLir(
         ctx.gpa,
         ctx.gpa,
@@ -13893,14 +13897,26 @@ fn compileTimeEvaluationBreakdown(timing: anytype) [8]progress.SubTiming {
 
 const post_check_lowering_phase_name = "Post-Check Lowering";
 
-fn postCheckLoweringBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [18]progress.SubTiming {
+fn postCheckLoweringBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [24]progress.SubTiming {
+    const classified_body_ns = timing.monotype_procedure_body_type_graph_ns +|
+        timing.monotype_procedure_body_call_dispatch_ns +|
+        timing.monotype_procedure_body_draft_ir_ns +|
+        timing.monotype_procedure_body_reachability_ns +|
+        timing.monotype_procedure_body_source_mapping_ns +|
+        timing.monotype_procedure_body_local_proc_context_ns;
     return .{
         .{ .name = "Monotype Setup", .ns = timing.monotype_setup_ns },
         .{ .name = "Root + Wrapper Setup", .ns = timing.monotype_procedure_root_wrapper_ns },
         .{ .name = "Specialization Lookup + Reservation", .ns = timing.monotype_procedure_lookup_reservation_ns },
         .{ .name = "Dispatch Evidence", .ns = timing.monotype_procedure_dispatch_evidence_ns },
         .{ .name = "Body Graph Setup", .ns = timing.monotype_procedure_body_graph_setup_ns },
-        .{ .name = "Procedure Body Construction", .ns = timing.monotype_procedure_body_lowering_ns },
+        .{ .name = "Body Traversal + Binding", .ns = timing.monotype_procedure_body_lowering_ns -| classified_body_ns },
+        .{ .name = "Body Type Graph", .ns = timing.monotype_procedure_body_type_graph_ns },
+        .{ .name = "Body Call Dispatch", .ns = timing.monotype_procedure_body_call_dispatch_ns },
+        .{ .name = "Body Draft IR Construction", .ns = timing.monotype_procedure_body_draft_ir_ns },
+        .{ .name = "Body Reachability + Proofs", .ns = timing.monotype_procedure_body_reachability_ns },
+        .{ .name = "Body Source Mapping", .ns = timing.monotype_procedure_body_source_mapping_ns },
+        .{ .name = "Body Local Procedure Context", .ns = timing.monotype_procedure_body_local_proc_context_ns },
         .{ .name = "Body Sealing + Commit", .ns = timing.monotype_procedure_body_finalization_ns },
         .{ .name = "Procedure Completion", .ns = timing.monotype_procedure_completion_ns },
         .{ .name = "Layout Requests", .ns = timing.monotype_layout_requests_ns },
@@ -13924,7 +13940,13 @@ test "post-check timing names distinct work and keep inlining separate from Spec
         .monotype_procedure_lookup_reservation_ns = 3,
         .monotype_procedure_dispatch_evidence_ns = 4,
         .monotype_procedure_body_graph_setup_ns = 5,
-        .monotype_procedure_body_lowering_ns = 6,
+        .monotype_procedure_body_lowering_ns = 27,
+        .monotype_procedure_body_type_graph_ns = 1,
+        .monotype_procedure_body_call_dispatch_ns = 2,
+        .monotype_procedure_body_draft_ir_ns = 3,
+        .monotype_procedure_body_reachability_ns = 4,
+        .monotype_procedure_body_source_mapping_ns = 5,
+        .monotype_procedure_body_local_proc_context_ns = 6,
         .monotype_procedure_body_finalization_ns = 7,
         .monotype_procedure_completion_ns = 8,
         .monotype_layout_requests_ns = 9,
@@ -13943,16 +13965,21 @@ test "post-check timing names distinct work and keep inlining separate from Spec
     try std.testing.expectEqualStrings("Specialization Lookup + Reservation", rows[2].name);
     try std.testing.expectEqualStrings("Dispatch Evidence", rows[3].name);
     try std.testing.expectEqualStrings("Body Graph Setup", rows[4].name);
-    try std.testing.expectEqualStrings("Procedure Body Construction", rows[5].name);
-    try std.testing.expectEqualStrings("Body Sealing + Commit", rows[6].name);
-    try std.testing.expectEqualStrings("Procedure Completion", rows[7].name);
-    for (rows[1..8], 2..) |row, expected_ns| {
-        try std.testing.expectEqual(@as(u64, @intCast(expected_ns)), row.ns);
-    }
-    try std.testing.expectEqualStrings("SpecConstr", rows[12].name);
-    try std.testing.expectEqualStrings("Inline Planning", rows[14].name);
-    try std.testing.expectEqual(@as(u64, 13), rows[12].ns);
-    try std.testing.expectEqual(@as(u64, 15), rows[14].ns);
+    try std.testing.expectEqualStrings("Body Traversal + Binding", rows[5].name);
+    try std.testing.expectEqualStrings("Body Type Graph", rows[6].name);
+    try std.testing.expectEqualStrings("Body Call Dispatch", rows[7].name);
+    try std.testing.expectEqualStrings("Body Draft IR Construction", rows[8].name);
+    try std.testing.expectEqualStrings("Body Reachability + Proofs", rows[9].name);
+    try std.testing.expectEqualStrings("Body Source Mapping", rows[10].name);
+    try std.testing.expectEqualStrings("Body Local Procedure Context", rows[11].name);
+    try std.testing.expectEqualStrings("Body Sealing + Commit", rows[12].name);
+    try std.testing.expectEqualStrings("Procedure Completion", rows[13].name);
+    const expected_body_ns = [_]u64{ 6, 1, 2, 3, 4, 5, 6 };
+    for (rows[5..12], expected_body_ns) |row, expected_ns| try std.testing.expectEqual(expected_ns, row.ns);
+    try std.testing.expectEqualStrings("SpecConstr", rows[18].name);
+    try std.testing.expectEqualStrings("Inline Planning", rows[20].name);
+    try std.testing.expectEqual(@as(u64, 13), rows[18].ns);
+    try std.testing.expectEqual(@as(u64, 15), rows[20].ns);
     for (rows) |row| {
         try std.testing.expect(!std.mem.eql(u8, post_check_lowering_phase_name, row.name));
     }

@@ -134,13 +134,22 @@ pub const Timing = struct {
     procedure_dispatch_evidence_ns: u64 = 0,
     procedure_body_graph_setup_ns: u64 = 0,
     procedure_body_lowering_ns: u64 = 0,
+    procedure_body_type_graph_ns: u64 = 0,
+    procedure_body_call_dispatch_ns: u64 = 0,
+    procedure_body_draft_ir_ns: u64 = 0,
+    procedure_body_reachability_ns: u64 = 0,
+    procedure_body_source_mapping_ns: u64 = 0,
+    procedure_body_local_proc_context_ns: u64 = 0,
     procedure_body_finalization_ns: u64 = 0,
     procedure_completion_ns: u64 = 0,
     layout_requests_ns: u64 = 0,
     static_data_requests_ns: u64 = 0,
     finalization_ns: u64 = 0,
+    body_work_timing_enabled: bool = false,
     active_procedure_phase: ?ProcedureTimingPhase = null,
     active_procedure_phase_started_ns: i64 = 0,
+    active_body_work_phase: ?BodyWorkTimingPhase = null,
+    active_body_work_started_ns: i64 = 0,
 
     pub fn init(std_io: std.Io) Timing {
         return .{ .std_io = std_io };
@@ -155,6 +164,12 @@ pub const Timing = struct {
             .procedure_dispatch_evidence_ns = self.procedure_dispatch_evidence_ns,
             .procedure_body_graph_setup_ns = self.procedure_body_graph_setup_ns,
             .procedure_body_lowering_ns = self.procedure_body_lowering_ns,
+            .procedure_body_type_graph_ns = self.procedure_body_type_graph_ns,
+            .procedure_body_call_dispatch_ns = self.procedure_body_call_dispatch_ns,
+            .procedure_body_draft_ir_ns = self.procedure_body_draft_ir_ns,
+            .procedure_body_reachability_ns = self.procedure_body_reachability_ns,
+            .procedure_body_source_mapping_ns = self.procedure_body_source_mapping_ns,
+            .procedure_body_local_proc_context_ns = self.procedure_body_local_proc_context_ns,
             .procedure_body_finalization_ns = self.procedure_body_finalization_ns,
             .procedure_completion_ns = self.procedure_completion_ns,
             .layout_requests_ns = self.layout_requests_ns,
@@ -208,6 +223,23 @@ pub const Timing = struct {
         self.active_procedure_phase = next;
         self.active_procedure_phase_started_ns = now;
     }
+
+    fn switchBodyWorkPhase(self: *Timing, next: ?BodyWorkTimingPhase) void {
+        const now = self.start();
+        if (self.active_body_work_phase) |phase| {
+            const elapsed_ns: u64 = @intCast(@max(0, now - self.active_body_work_started_ns));
+            switch (phase) {
+                .type_graph => self.procedure_body_type_graph_ns +%= elapsed_ns,
+                .call_dispatch => self.procedure_body_call_dispatch_ns +%= elapsed_ns,
+                .draft_ir => self.procedure_body_draft_ir_ns +%= elapsed_ns,
+                .reachability => self.procedure_body_reachability_ns +%= elapsed_ns,
+                .source_mapping => self.procedure_body_source_mapping_ns +%= elapsed_ns,
+                .local_proc_context => self.procedure_body_local_proc_context_ns +%= elapsed_ns,
+            }
+        }
+        self.active_body_work_phase = next;
+        self.active_body_work_started_ns = now;
+    }
 };
 
 /// Immutable Monotype phase timings consumed by checked-pipeline reporting.
@@ -219,6 +251,12 @@ pub const TimingSnapshot = struct {
     procedure_dispatch_evidence_ns: u64 = 0,
     procedure_body_graph_setup_ns: u64 = 0,
     procedure_body_lowering_ns: u64 = 0,
+    procedure_body_type_graph_ns: u64 = 0,
+    procedure_body_call_dispatch_ns: u64 = 0,
+    procedure_body_draft_ir_ns: u64 = 0,
+    procedure_body_reachability_ns: u64 = 0,
+    procedure_body_source_mapping_ns: u64 = 0,
+    procedure_body_local_proc_context_ns: u64 = 0,
     procedure_body_finalization_ns: u64 = 0,
     procedure_completion_ns: u64 = 0,
     layout_requests_ns: u64 = 0,
@@ -259,6 +297,42 @@ const ProcedureTimingScope = struct {
         const timing = self.timing orelse return;
         timing.switchProcedurePhase(self.previous);
         self.timing = null;
+    }
+};
+
+const BodyWorkTimingPhase = enum {
+    type_graph,
+    call_dispatch,
+    draft_ir,
+    reachability,
+    source_mapping,
+    local_proc_context,
+};
+
+/// Measure mutually-exclusive work nested inside procedure-body lowering.
+/// A nested category pauses its parent category and restores it on exit, so
+/// the reported rows never double-count one another.
+const BodyWorkTimingScope = struct {
+    timing: ?*Timing = null,
+    previous: ?BodyWorkTimingPhase = null,
+    changed: bool = false,
+
+    fn begin(timing: ?*Timing, phase: BodyWorkTimingPhase) BodyWorkTimingScope {
+        const active = timing orelse return .{};
+        if (!active.body_work_timing_enabled) return .{};
+        if (active.active_procedure_phase != .body_lowering) return .{};
+        const previous = active.active_body_work_phase;
+        if (previous == phase) return .{};
+        active.switchBodyWorkPhase(phase);
+        return .{ .timing = active, .previous = previous, .changed = true };
+    }
+
+    fn end(self: *BodyWorkTimingScope) void {
+        if (!self.changed) return;
+        const timing = self.timing.?;
+        timing.switchBodyWorkPhase(self.previous);
+        self.timing = null;
+        self.changed = false;
     }
 };
 
@@ -1328,7 +1402,81 @@ const HostedSectionMap = struct {
     }
 };
 
-const BinderMap = std.AutoHashMap(checked.PatternBinderId, DraftLocalId);
+/// Pattern binders are dense IDs allocated by `CheckedBodyStore`, so their
+/// active local bindings belong in indexed storage rather than a hash table.
+const BinderMap = struct {
+    allocator: Allocator,
+    locals: []?DraftLocalId,
+    active_count: usize = 0,
+
+    const Entry = struct {
+        binder: checked.PatternBinderId,
+        local: DraftLocalId,
+    };
+
+    const Iterator = struct {
+        locals: []const ?DraftLocalId,
+        index: usize = 0,
+
+        fn next(self: *Iterator) ?Entry {
+            while (self.index < self.locals.len) {
+                const binder_index = self.index;
+                self.index += 1;
+                if (self.locals[binder_index]) |local| {
+                    return .{ .binder = @enumFromInt(@as(u32, @intCast(binder_index))), .local = local };
+                }
+            }
+            return null;
+        }
+    };
+
+    fn init(allocator: Allocator, binder_count: usize) Allocator.Error!BinderMap {
+        const locals = try allocator.alloc(?DraftLocalId, binder_count);
+        @memset(locals, null);
+        return .{ .allocator = allocator, .locals = locals };
+    }
+
+    fn deinit(self: *BinderMap) void {
+        self.allocator.free(self.locals);
+        self.* = undefined;
+    }
+
+    fn index(self: *const BinderMap, binder: checked.PatternBinderId) usize {
+        const raw = @intFromEnum(binder);
+        if (raw >= self.locals.len) Common.invariant("pattern binder was outside its checked body store");
+        return raw;
+    }
+
+    fn get(self: *const BinderMap, binder: checked.PatternBinderId) ?DraftLocalId {
+        return self.locals[self.index(binder)];
+    }
+
+    fn put(self: *BinderMap, binder: checked.PatternBinderId, local: DraftLocalId) Allocator.Error!void {
+        const slot = &self.locals[self.index(binder)];
+        if (slot.* == null) self.active_count += 1;
+        slot.* = local;
+    }
+
+    fn remove(self: *BinderMap, binder: checked.PatternBinderId) bool {
+        const slot = &self.locals[self.index(binder)];
+        if (slot.* == null) return false;
+        slot.* = null;
+        self.active_count -= 1;
+        return true;
+    }
+
+    fn contains(self: *const BinderMap, binder: checked.PatternBinderId) bool {
+        return self.get(binder) != null;
+    }
+
+    fn count(self: *const BinderMap) usize {
+        return self.active_count;
+    }
+
+    fn iterator(self: *const BinderMap) Iterator {
+        return .{ .locals = self.locals };
+    }
+};
 const TypedBinder = struct {
     binder: checked.PatternBinderId,
     type_digest: names.TypeDigest,
@@ -1684,6 +1832,9 @@ const Builder = struct {
     timing: ?*Timing,
     symbols: Common.SymbolGen = .{},
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
+    /// Exact inhabitation answers for sealed Monotype types. These types are
+    /// immutable, so the structural walk is needed at most once per TypeId.
+    uninhabited_type_cache: std.AutoHashMap(Type.TypeId, bool),
     spec_store: specialize.SpecBuilder,
     lowered_templates: std.AutoHashMap(Ast.FnId, LoweredTemplate),
     /// Nested-fn specialization records keyed by function id; the durable
@@ -1757,6 +1908,7 @@ const Builder = struct {
             .target_usize = options.target_usize,
             .timing = options.timing,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
+            .uninhabited_type_cache = std.AutoHashMap(Type.TypeId, bool).init(allocator),
             .spec_store = spec_store,
             .lowered_templates = std.AutoHashMap(Ast.FnId, LoweredTemplate).init(allocator),
             .lowered_nested_by_fn = std.AutoHashMap(Ast.FnId, Ast.SpecId).init(allocator),
@@ -1854,6 +2006,7 @@ const Builder = struct {
         self.lowered_nested_by_fn.deinit();
         self.lowered_templates.deinit();
         self.spec_store.deinit();
+        self.uninhabited_type_cache.deinit();
         self.type_cache.deinit();
         self.evidence_arena.deinit();
     }
@@ -7769,9 +7922,12 @@ const Builder = struct {
     }
 
     fn typeIsProvenUninhabited(self: *Builder, ty: Type.TypeId) Allocator.Error!bool {
+        if (self.uninhabited_type_cache.get(ty)) |cached| return cached;
         var visiting = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
         defer visiting.deinit();
-        return self.typeIsProvenUninhabitedInner(ty, &visiting);
+        const result = try self.typeIsProvenUninhabitedInner(ty, &visiting);
+        try self.uninhabited_type_cache.put(ty, result);
+        return result;
     }
 
     fn typeIsProvenUninhabitedInner(
@@ -10286,6 +10442,30 @@ const BodyDraftStore = struct {
         return .{ .start = start, .len = @intCast(ids.len) };
     }
 
+    const ReservedExprSpan = struct {
+        span: DraftSpan(DraftExprId),
+    };
+
+    /// Reserve the final flat-pool range so callers can lower directly into
+    /// its destination instead of allocating a temporary slice and copying it.
+    fn reserveExprSpan(self: *BodyDraftStore, len: usize) Allocator.Error!ReservedExprSpan {
+        const start: u32 = @intCast(self.expr_ids.items.len);
+        _ = try self.expr_ids.addManyAsSlice(self.allocator, len);
+        return .{
+            .span = .{ .start = start, .len = @intCast(len) },
+        };
+    }
+
+    fn setReservedExprSpanItem(
+        self: *BodyDraftStore,
+        reserved: ReservedExprSpan,
+        index: usize,
+        expr: DraftExprId,
+    ) void {
+        if (index >= reserved.span.len) Common.invariant("reserved expression span write was out of bounds");
+        self.expr_ids.items[reserved.span.start + index] = expr;
+    }
+
     fn addPatSpan(self: *BodyDraftStore, ids: []const DraftPatId) Allocator.Error!DraftSpan(DraftPatId) {
         const start: u32 = @intCast(self.pat_ids.items.len);
         try self.pat_ids.appendSlice(self.allocator, ids);
@@ -11362,23 +11542,13 @@ fn appendRuntimeImpossibilityProof(
     return id;
 }
 
-fn appendRuntimeImpossibilityProofSpan(
-    draft: *BodyDraftStore,
-    allocator: Allocator,
-    ids: []const RuntimeImpossibilityProofId,
-) Allocator.Error!DraftSpan(RuntimeImpossibilityProofId) {
-    const start: u32 = @intCast(draft.impossibility_proof_ids.items.len);
-    try draft.impossibility_proof_ids.appendSlice(allocator, ids);
-    return .{ .start = start, .len = @intCast(ids.len) };
-}
-
 fn anyRuntimeImpossibilityProof(
     draft: *BodyDraftStore,
     allocator: Allocator,
     candidates: []const ?RuntimeImpossibilityProofId,
 ) Allocator.Error!?RuntimeImpossibilityProofId {
-    var ids = std.ArrayList(RuntimeImpossibilityProofId).empty;
-    defer ids.deinit(allocator);
+    var active_count: usize = 0;
+    var sole: RuntimeImpossibilityProofId = undefined;
     for (candidates) |candidate| if (candidate) |id| switch (draft.impossibility_proofs.items[@intFromEnum(id)]) {
         // `any(false, x) == x`. False proofs are represented canonically as
         // null outside the proof store, so never retain an explicit `.never`
@@ -11387,14 +11557,30 @@ fn anyRuntimeImpossibilityProof(
         // `any(true, x) == true`; the remaining operands cannot affect the
         // result.
         .always => return id,
-        else => try ids.append(allocator, id),
+        else => {
+            sole = id;
+            active_count += 1;
+        },
     };
-    return switch (ids.items.len) {
+    return switch (active_count) {
         0 => null,
-        1 => ids.items[0],
-        else => try appendRuntimeImpossibilityProof(draft, allocator, .{
-            .any = try appendRuntimeImpossibilityProofSpan(draft, allocator, ids.items),
-        }),
+        1 => sole,
+        else => blk: {
+            const start: u32 = @intCast(draft.impossibility_proof_ids.items.len);
+            const ids = try draft.impossibility_proof_ids.addManyAsSlice(allocator, active_count);
+            var index: usize = 0;
+            for (candidates) |candidate| if (candidate) |id| switch (draft.impossibility_proofs.items[@intFromEnum(id)]) {
+                .never => {},
+                .always => unreachable,
+                else => {
+                    ids[index] = id;
+                    index += 1;
+                },
+            };
+            break :blk try appendRuntimeImpossibilityProof(draft, allocator, .{
+                .any = .{ .start = start, .len = @intCast(active_count) },
+            });
+        },
     };
 }
 
@@ -11403,8 +11589,8 @@ fn allRuntimeImpossibilityProof(
     allocator: Allocator,
     candidates: []const ?RuntimeImpossibilityProofId,
 ) Allocator.Error!?RuntimeImpossibilityProofId {
-    var ids = std.ArrayList(RuntimeImpossibilityProofId).empty;
-    defer ids.deinit(allocator);
+    var active_count: usize = 0;
+    var sole: RuntimeImpossibilityProofId = undefined;
     for (candidates) |candidate| {
         const id = candidate orelse return null;
         switch (draft.impossibility_proofs.items[@intFromEnum(id)]) {
@@ -11412,15 +11598,34 @@ fn allRuntimeImpossibilityProof(
             .never => return null,
             // `all(true, x) == x`.
             .always => {},
-            else => try ids.append(allocator, id),
+            else => {
+                sole = id;
+                active_count += 1;
+            },
         }
     }
-    return switch (ids.items.len) {
+    return switch (active_count) {
         0 => try appendRuntimeImpossibilityProof(draft, allocator, .always),
-        1 => ids.items[0],
-        else => try appendRuntimeImpossibilityProof(draft, allocator, .{
-            .all = try appendRuntimeImpossibilityProofSpan(draft, allocator, ids.items),
-        }),
+        1 => sole,
+        else => blk: {
+            const start: u32 = @intCast(draft.impossibility_proof_ids.items.len);
+            const ids = try draft.impossibility_proof_ids.addManyAsSlice(allocator, active_count);
+            var index: usize = 0;
+            for (candidates) |candidate| {
+                const id = candidate orelse unreachable;
+                switch (draft.impossibility_proofs.items[@intFromEnum(id)]) {
+                    .never => unreachable,
+                    .always => {},
+                    else => {
+                        ids[index] = id;
+                        index += 1;
+                    },
+                }
+            }
+            break :blk try appendRuntimeImpossibilityProof(draft, allocator, .{
+                .all = .{ .start = start, .len = @intCast(active_count) },
+            });
+        },
     };
 }
 
@@ -11472,6 +11677,9 @@ const BodyContext = struct {
     /// imported template is specialized for a caller's concrete types.
     method_scope: ModuleView,
     view: ModuleView,
+    /// Source-file identity for `view`, resolved once when this body context is
+    /// created instead of through the draft hash table for every source node.
+    source_file_id: ?u32,
     owner_template: names.ProcTemplate,
     owner_context_fn_key: names.TypeDigest,
     current_fn_key: names.TypeDigest,
@@ -11486,6 +11694,10 @@ const BodyContext = struct {
     /// This specialization's type solver, shared by every instantiation
     /// context created while lowering the same specialization.
     graph: *InstGraph,
+    /// Reusable recursion-path scratch for exact graph inhabitation walks.
+    /// Node IDs are dense, and each walk unsets on exit, so this replaces a
+    /// fresh visitation hash table per query.
+    inhabitation_visiting: std.bit_set.DynamicBitSetUnmanaged,
     /// Draft body output owned by this specialization graph.
     draft: *BodyDraftStore,
     /// Instantiation cache: checked types this context already cloned into the
@@ -12026,8 +12238,10 @@ const BodyContext = struct {
         graph: *InstGraph,
         draft: *BodyDraftStore,
     ) Allocator.Error!BodyContext {
-        var ctx = initTypeOnly(allocator, builder, view, owner_template, graph, draft);
+        var ctx = try initTypeOnly(allocator, builder, view, owner_template, graph, draft);
+        errdefer ctx.deinit();
         ctx.method_scope = method_scope;
+        ctx.source_file_id = try draft.sourceFileIdFor(view.module_identity.module_idx, view.module_env.module_name);
         const string_literals = try allocator.alloc(?DraftStringLiteralId, view.bodies.stringLiteralCount());
         @memset(string_literals, null);
         ctx.string_literals = string_literals;
@@ -12044,12 +12258,13 @@ const BodyContext = struct {
         owner_template: names.ProcTemplate,
         graph: *InstGraph,
         draft: *BodyDraftStore,
-    ) BodyContext {
+    ) Allocator.Error!BodyContext {
         return .{
             .allocator = allocator,
             .builder = builder,
             .method_scope = view,
             .view = view,
+            .source_file_id = null,
             .owner_template = owner_template,
             .owner_context_fn_key = .{},
             .current_fn_key = .{},
@@ -12057,10 +12272,11 @@ const BodyContext = struct {
             .generated_encoder_source_fn_ty = null,
             .generated_encoder_source_expr = null,
             .generated_encoder_lambda_index = 0,
-            .binders = BinderMap.init(allocator),
+            .binders = try BinderMap.init(allocator, view.bodies.patternBinderCount()),
             .typed_binders = TypedBinders.init(allocator),
             .local_proc_contexts = std.AutoHashMap(DraftLocalProcAddress, DraftLocalProcContextId).init(allocator),
             .graph = graph,
+            .inhabitation_visiting = .{},
             .draft = draft,
             .evidence = rootEvidence(owner_template, &.{}),
             .restore_evidence = rootEvidence(owner_template, &.{}),
@@ -12096,6 +12312,7 @@ const BodyContext = struct {
         self.loop_contexts.deinit(self.allocator);
         self.allocator.free(self.string_literals);
         self.decl_scopes.deinit(self.allocator);
+        self.inhabitation_visiting.deinit(self.allocator);
         self.node_map.deinit();
         self.local_proc_contexts.deinit();
         self.typed_binders.deinit();
@@ -12107,6 +12324,8 @@ const BodyContext = struct {
     }
 
     fn activeTypeFromNode(self: *BodyContext, node: NodeId) Allocator.Error!Type.TypeId {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
+        defer timing_scope.end();
         return try self.graph.activeTypeViewForNode(node);
     }
 
@@ -12153,6 +12372,8 @@ const BodyContext = struct {
         self: *BodyContext,
         candidates: []const ?RuntimeImpossibilityProofId,
     ) Allocator.Error!?RuntimeImpossibilityProofId {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .reachability);
+        defer timing_scope.end();
         return try anyRuntimeImpossibilityProof(self.draft, self.allocator, candidates);
     }
 
@@ -12167,29 +12388,28 @@ const BodyContext = struct {
         self: *BodyContext,
         nodes: []const NodeId,
     ) Allocator.Error!?RuntimeImpossibilityProofId {
-        const proofs = try self.allocator.alloc(?RuntimeImpossibilityProofId, nodes.len);
-        defer self.allocator.free(proofs);
-        for (nodes, proofs) |node, *proof| proof.* = try self.maybeNodeImpossibilityProof(node);
-        return try self.anyImpossibilityProof(proofs);
+        var combined: ?RuntimeImpossibilityProofId = null;
+        for (nodes) |node| {
+            combined = try self.anyImpossibilityProof(&.{ combined, try self.maybeNodeImpossibilityProof(node) });
+        }
+        return combined;
     }
 
     fn currentRuntimeImpossibilityProof(
         self: *BodyContext,
         expression_proof: ?RuntimeImpossibilityProofId,
     ) Allocator.Error!?RuntimeImpossibilityProofId {
-        var proofs = std.ArrayList(?RuntimeImpossibilityProofId).empty;
-        defer proofs.deinit(self.allocator);
+        var combined: ?RuntimeImpossibilityProofId = null;
         if (self.function_entry_demand_guards.len != 0) {
-            try proofs.append(self.allocator, try self.maybeNodesImpossibilityProof(self.function_entry_demand_guards));
+            combined = try self.maybeNodesImpossibilityProof(self.function_entry_demand_guards);
         }
         var frame_id = self.runtime_demand_guard_frames.head;
         while (frame_id) |id| {
             const frame = runtimeDemandGuardFrame(self.draft, id);
-            try proofs.append(self.allocator, frame.proof);
+            combined = try self.anyImpossibilityProof(&.{ combined, frame.proof });
             frame_id = frame.parent;
         }
-        try proofs.append(self.allocator, expression_proof);
-        return try self.anyImpossibilityProof(proofs.items);
+        return try self.anyImpossibilityProof(&.{ combined, expression_proof });
     }
 
     fn exprImpossibilityProof(self: *BodyContext, expr: DraftExprId) ?RuntimeImpossibilityProofId {
@@ -12204,10 +12424,47 @@ const BodyContext = struct {
         self: *BodyContext,
         span: DraftSpan(DraftExprId),
     ) Allocator.Error!?RuntimeImpossibilityProofId {
-        var proofs = std.ArrayList(?RuntimeImpossibilityProofId).empty;
-        defer proofs.deinit(self.allocator);
-        for (self.exprSpan(span)) |expr| try proofs.append(self.allocator, self.exprImpossibilityProof(expr));
-        return try self.anyImpossibilityProof(proofs.items);
+        var combined: ?RuntimeImpossibilityProofId = null;
+        for (self.exprSpan(span)) |expr| {
+            combined = try self.anyImpossibilityProof(&.{ combined, self.exprImpossibilityProof(expr) });
+        }
+        return combined;
+    }
+
+    fn anyStmtSpanImpossibilityProof(
+        self: *BodyContext,
+        stmts: []const DraftStmtId,
+    ) Allocator.Error!?RuntimeImpossibilityProofId {
+        var active_count: usize = 0;
+        var sole: RuntimeImpossibilityProofId = undefined;
+        for (stmts) |stmt| if (self.stmtImpossibilityProof(stmt)) |id| switch (self.draft.impossibility_proofs.items[@intFromEnum(id)]) {
+            .never => {},
+            .always => return id,
+            else => {
+                sole = id;
+                active_count += 1;
+            },
+        };
+        return switch (active_count) {
+            0 => null,
+            1 => sole,
+            else => blk: {
+                const start: u32 = @intCast(self.draft.impossibility_proof_ids.items.len);
+                const ids = try self.draft.impossibility_proof_ids.addManyAsSlice(self.allocator, active_count);
+                var index: usize = 0;
+                for (stmts) |stmt| if (self.stmtImpossibilityProof(stmt)) |id| switch (self.draft.impossibility_proofs.items[@intFromEnum(id)]) {
+                    .never => {},
+                    .always => unreachable,
+                    else => {
+                        ids[index] = id;
+                        index += 1;
+                    },
+                };
+                break :blk try self.addImpossibilityProof(.{
+                    .any = .{ .start = start, .len = @intCast(active_count) },
+                });
+            },
+        };
     }
 
     fn patternSuccessImpossibilityProof(
@@ -12239,6 +12496,8 @@ const BodyContext = struct {
         ty: DraftTypeCell,
         data: DraftPatData,
     ) Allocator.Error!?RuntimeImpossibilityProofId {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .reachability);
+        defer timing_scope.end();
         var proofs = std.ArrayList(?RuntimeImpossibilityProofId).empty;
         defer proofs.deinit(self.allocator);
         try proofs.append(self.allocator, try self.cellImpossibilityProof(ty));
@@ -12269,6 +12528,8 @@ const BodyContext = struct {
         ty: DraftTypeCell,
         data: DraftExprData,
     ) Allocator.Error!?RuntimeImpossibilityProofId {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .reachability);
+        defer timing_scope.end();
         return switch (data) {
             .local,
             .unit,
@@ -12405,6 +12666,8 @@ const BodyContext = struct {
         self: *BodyContext,
         stmt: DraftStmt,
     ) Allocator.Error!?RuntimeImpossibilityProofId {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .reachability);
+        defer timing_scope.end();
         return switch (stmt) {
             .uninitialized => null,
             .let_ => |let_| try self.anyImpossibilityProof(&.{
@@ -12417,6 +12680,8 @@ const BodyContext = struct {
     }
 
     fn addExpr(self: *BodyContext, expr: BodyExpr) Allocator.Error!DraftExprId {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .draft_ir);
+        defer timing_scope.end();
         const id = try self.draft.addExprWithSource(
             .{ .ty = try self.draftTypeCell(expr.ty), .data = expr.data },
             self.builder.program.current_loc,
@@ -12430,6 +12695,8 @@ const BodyContext = struct {
     }
 
     fn addExprWithTypeCell(self: *BodyContext, ty: DraftTypeCell, data: BodyExprData) Allocator.Error!DraftExprId {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .draft_ir);
+        defer timing_scope.end();
         const id = try self.draft.addExprWithSource(
             .{ .ty = ty, .data = data },
             self.builder.program.current_loc,
@@ -12487,6 +12754,8 @@ const BodyContext = struct {
     }
 
     fn addPat(self: *BodyContext, pat: BodyPat) Allocator.Error!DraftPatId {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .draft_ir);
+        defer timing_scope.end();
         const ty = try self.draftTypeCell(pat.ty);
         const id = try self.draft.addPat(.{ .ty = ty, .data = pat.data });
         self.draft.pat_impossibility_proofs.items[@intFromEnum(id)] = try self.patDataImpossibilityProof(ty, pat.data);
@@ -12494,6 +12763,8 @@ const BodyContext = struct {
     }
 
     fn addPatWithTypeCell(self: *BodyContext, ty: DraftTypeCell, data: BodyPatData) Allocator.Error!DraftPatId {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .draft_ir);
+        defer timing_scope.end();
         const id = try self.draft.addPat(.{ .ty = ty, .data = data });
         self.draft.pat_impossibility_proofs.items[@intFromEnum(id)] = try self.patDataImpossibilityProof(ty, data);
         return id;
@@ -12518,6 +12789,8 @@ const BodyContext = struct {
         ty: DraftTypeCell,
         binder: ?checked.PatternBinderId,
     ) Allocator.Error!DraftLocalId {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .draft_ir);
+        defer timing_scope.end();
         const inherited_capture_id = if (binder) |source_binder| blk: {
             const existing = self.binders.get(source_binder) orelse break :blk null;
             break :blk self.draft.locals.items[@intFromEnum(existing)].capture_id;
@@ -12544,6 +12817,8 @@ const BodyContext = struct {
         ty: DraftTypeCell,
         binder: checked.PatternBinderId,
     ) Allocator.Error!DraftLocalId {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .draft_ir);
+        defer timing_scope.end();
         return try self.draft.addLocal(symbol, ty, binder, null);
     }
 
@@ -12568,10 +12843,20 @@ const BodyContext = struct {
     }
 
     fn addExprSpan(self: *BodyContext, ids: []const DraftExprId) Allocator.Error!DraftSpan(DraftExprId) {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .draft_ir);
+        defer timing_scope.end();
         return try self.draft.addExprSpan(ids);
     }
 
+    fn reserveExprSpan(self: *BodyContext, len: usize) Allocator.Error!BodyDraftStore.ReservedExprSpan {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .draft_ir);
+        defer timing_scope.end();
+        return try self.draft.reserveExprSpan(len);
+    }
+
     fn addPatSpan(self: *BodyContext, ids: []const DraftPatId) Allocator.Error!DraftSpan(DraftPatId) {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .draft_ir);
+        defer timing_scope.end();
         return try self.draft.addPatSpan(ids);
     }
 
@@ -12588,12 +12873,16 @@ const BodyContext = struct {
     }
 
     fn addStmt(self: *BodyContext, stmt: DraftStmt) Allocator.Error!DraftStmtId {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .draft_ir);
+        defer timing_scope.end();
         const id = try self.draft.addStmtWithSource(stmt, self.builder.program.current_loc, self.builder.program.current_region);
         self.draft.stmt_impossibility_proofs.items[@intFromEnum(id)] = try self.stmtDataImpossibilityProof(stmt);
         return id;
     }
 
     fn addStmtSpan(self: *BodyContext, ids: []const DraftStmtId) Allocator.Error!DraftSpan(DraftStmtId) {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .draft_ir);
+        defer timing_scope.end();
         return try self.draft.addStmtSpan(ids);
     }
 
@@ -13214,7 +13503,7 @@ const BodyContext = struct {
 
         var binder_iter = self.binders.iterator();
         while (binder_iter.next()) |entry| {
-            try child.binders.put(entry.key_ptr.*, entry.value_ptr.*);
+            try child.binders.put(entry.binder, entry.local);
         }
 
         var typed_binder_iter = self.typed_binders.iterator();
@@ -13242,9 +13531,9 @@ const BodyContext = struct {
     fn constrainCopiedBinderTypes(self: *BodyContext) Allocator.Error!void {
         var binder_iter = self.binders.iterator();
         while (binder_iter.next()) |entry| {
-            const local = entry.value_ptr.*;
+            const local = entry.local;
             const local_ty = self.localTypeCell(local);
-            try self.constrainCheckedInterfaceToCell(checkedBinderType(self.view, entry.key_ptr.*), local_ty);
+            try self.constrainCheckedInterfaceToCell(checkedBinderType(self.view, entry.binder), local_ty);
         }
     }
 
@@ -13530,8 +13819,8 @@ const BodyContext = struct {
         while (iter.next()) |entry| {
             entries[index] = .{
                 .kind = 0,
-                .binder = @intFromEnum(entry.key_ptr.*),
-                .local = @intFromEnum(entry.value_ptr.*),
+                .binder = @intFromEnum(entry.binder),
+                .local = @intFromEnum(entry.local),
                 .type_digest = .{ .bytes = [_]u8{0} ** 32 },
             };
             index += 1;
@@ -14023,7 +14312,23 @@ const BodyContext = struct {
         checked_ty: checked.CheckedTypeId,
         mono_ty: Type.TypeId,
     ) Allocator.Error!void {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
+        defer timing_scope.end();
         try self.graph.unify(try self.instNode(checked_ty), try self.graph.importMono(mono_ty));
+    }
+
+    fn requireClosedCheckedType(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        mono_ty: Type.TypeId,
+    ) Allocator.Error!void {
+        if (!self.checkedTypeIsClosed(checked_ty)) {
+            Common.invariant("sealed Monotype cell was paired with an identity-bearing checked type");
+        }
+        const lowered = try self.builder.lowerType(self.view, checked_ty);
+        if (!self.sameType(lowered, mono_ty)) {
+            Common.invariant("sealed Monotype cell differed from its closed checked type");
+        }
     }
 
     fn constrainTypeToCell(
@@ -14031,6 +14336,8 @@ const BodyContext = struct {
         checked_ty: checked.CheckedTypeId,
         cell: DraftTypeCell,
     ) Allocator.Error!void {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
+        defer timing_scope.end();
         try self.graph.unify(try self.instNode(checked_ty), try cell.toGraphNode(self.graph));
     }
 
@@ -14044,6 +14351,8 @@ const BodyContext = struct {
         checked_ty: checked.CheckedTypeId,
         cell: DraftTypeCell,
     ) Allocator.Error!void {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
+        defer timing_scope.end();
         const value_node = try cell.toGraphNode(self.graph);
         if (try self.graph.containsGeneratedPrivate(value_node)) {
             try self.graph.relateOpaqueInterface(try self.freshInstNode(checked_ty), value_node);
@@ -14060,6 +14369,8 @@ const BodyContext = struct {
         right_ctx: *BodyContext,
         right_ty: checked.CheckedTypeId,
     ) Allocator.Error!void {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
+        defer timing_scope.end();
         if (self.graph != right_ctx.graph) {
             Common.invariant("checked type relation crossed specialization graphs");
         }
@@ -14089,6 +14400,8 @@ const BodyContext = struct {
     }
 
     fn lowerTypeNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!NodeId {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
+        defer timing_scope.end();
         return try self.instNode(checked_ty);
     }
 
@@ -14169,6 +14482,8 @@ const BodyContext = struct {
     }
 
     fn activeNodeFromType(self: *BodyContext, ty: Type.TypeId) Allocator.Error!NodeId {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
+        defer timing_scope.end();
         if (self.graph.activeSnapshotNode(ty)) |node| return node;
         return try self.graph.importMono(ty);
     }
@@ -14247,6 +14562,8 @@ const BodyContext = struct {
     /// checked identity so every occurrence of the same checked root resolves
     /// to the same node within this instantiation context.
     fn instNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!NodeId {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
+        defer timing_scope.end();
         const address = self.typeAddress(checked_ty);
         if (self.scopedNode(address)) |existing| return existing;
         const placeholder = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
@@ -14257,6 +14574,8 @@ const BodyContext = struct {
     }
 
     fn freshInstNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!NodeId {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
+        defer timing_scope.end();
         var fresh = try BodyContext.initWithMethodScope(
             self.allocator,
             self.builder,
@@ -14877,6 +15196,8 @@ const BodyContext = struct {
         request_ret_node: NodeId,
         produced_ret_node: NodeId,
     ) Allocator.Error!bool {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
+        defer timing_scope.end();
         var visiting = std.AutoHashMap(RequestCompletionPair, void).init(self.allocator);
         defer visiting.deinit();
         return (try self.requestCompletionRelation(request_ret_node, produced_ret_node, &visiting)) == .completed;
@@ -15657,6 +15978,8 @@ const BodyContext = struct {
     }
 
     fn lowerExprTypeNode(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!NodeId {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
+        defer timing_scope.end();
         const expr = self.view.bodies.expr(expr_id);
         return switch (expr.data) {
             .call => |call| try self.callResultTypeNode(expr.ty, call, null),
@@ -15699,6 +16022,8 @@ const BodyContext = struct {
     /// Resolve a checked node's source region to a `SourceLoc` in this body's
     /// module.
     fn sourceLocFor(self: *BodyContext, region: base.Region) Allocator.Error!base.SourceLoc {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .source_mapping);
+        defer timing_scope.end();
         if (region.isEmpty()) return base.SourceLoc.none;
         const line_starts = self.view.module_env.common.getLineStartsAll();
         if (line_starts.len == 0) return base.SourceLoc.none;
@@ -15707,7 +16032,8 @@ const BodyContext = struct {
         const column = base.RegionInfo.columnIdx(line_starts, line, offset) catch
             Common.invariant("checked node region resolved to an invalid line/column position");
         return .{
-            .file = try self.draft.sourceFileIdFor(self.view.module_identity.module_idx, self.view.module_env.module_name),
+            .file = self.source_file_id orelse
+                Common.invariant("expression-capable body context had no source-file identity"),
             .line = line + 1,
             .column = column + 1,
         };
@@ -16327,16 +16653,34 @@ const BodyContext = struct {
         return lowered;
     }
 
+    fn requireLoweredExprAtCell(
+        self: *BodyContext,
+        expr: checked.CheckedExpr,
+        cell: DraftTypeCell,
+        demand: LoweringDemand,
+        lowered: DraftExprId,
+    ) Allocator.Error!DraftExprId {
+        if (demand != .runtime_value) return lowered;
+        return switch (cell) {
+            // A sealed inhabited type cannot later become an impossible
+            // runtime demand, so it needs neither an InstGraph node nor a
+            // deferred reachability record.
+            .sealed => |ty| if (!try self.typeIsProvenUninhabited(ty))
+                lowered
+            else
+                try self.requireLoweredExpr(expr, try self.activeNodeFromType(ty), demand, lowered),
+            .graph_node => |node| try self.requireLoweredExpr(expr, node, demand, lowered),
+        };
+    }
+
     fn nodeIsProvenUninhabited(self: *BodyContext, node: NodeId) Allocator.Error!bool {
-        var visiting = std.AutoHashMap(NodeId, void).init(self.allocator);
-        defer visiting.deinit();
-        return self.nodeIsProvenUninhabitedInner(node, &visiting, .inspectable_only);
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .reachability);
+        defer timing_scope.end();
+        return self.nodeIsProvenUninhabitedInner(node, .inspectable_only);
     }
 
     fn producedRuntimeValueIsProvenUninhabited(self: *BodyContext, node: NodeId) Allocator.Error!bool {
-        var visiting = std.AutoHashMap(NodeId, void).init(self.allocator);
-        defer visiting.deinit();
-        return self.nodeIsProvenUninhabitedInner(node, &visiting, .runtime_layout);
+        return self.nodeIsProvenUninhabitedInner(node, .runtime_layout);
     }
 
     fn deferredInspectHasProvenUninhabitedValueGuard(
@@ -16404,43 +16748,46 @@ const BodyContext = struct {
     fn nodeIsProvenUninhabitedInner(
         self: *BodyContext,
         node: NodeId,
-        visiting: *std.AutoHashMap(NodeId, void),
         backing_access: UninhabitedBackingAccess,
     ) Allocator.Error!bool {
         const root = self.graph.rootNode(node);
-        const entry = try visiting.getOrPut(root);
-        if (entry.found_existing) return false;
-        defer _ = visiting.remove(root);
+        const root_index = @intFromEnum(root);
+        if (self.inhabitation_visiting.bit_length <= root_index) {
+            try self.inhabitation_visiting.resize(self.allocator, root_index + 1, false);
+        }
+        if (self.inhabitation_visiting.isSet(root_index)) return false;
+        self.inhabitation_visiting.set(root_index);
+        defer self.inhabitation_visiting.unset(root_index);
 
         return switch (self.graph.content(root)) {
-            .redirect => |target| self.nodeIsProvenUninhabitedInner(target, visiting, backing_access),
+            .redirect => |target| self.nodeIsProvenUninhabitedInner(target, backing_access),
             .empty_tag_union => true,
             .named => |named| if (named.backing) |backing|
                 if (backing.use == .inspectable or backing_access == .runtime_layout)
-                    self.nodeIsProvenUninhabitedInner(backing.node, visiting, backing_access)
+                    self.nodeIsProvenUninhabitedInner(backing.node, backing_access)
                 else
                     false
             else
                 false,
-            .box => |payload| self.nodeIsProvenUninhabitedInner(payload, visiting, backing_access),
+            .box => |payload| self.nodeIsProvenUninhabitedInner(payload, backing_access),
             .tuple => |elems| blk: {
                 for (elems) |elem| {
-                    if (try self.nodeIsProvenUninhabitedInner(elem, visiting, backing_access)) break :blk true;
+                    if (try self.nodeIsProvenUninhabitedInner(elem, backing_access)) break :blk true;
                 }
                 break :blk false;
             },
             .record => |record| blk: {
                 for (record.fields) |field| {
-                    if (try self.nodeIsProvenUninhabitedInner(field.ty, visiting, backing_access)) break :blk true;
+                    if (try self.nodeIsProvenUninhabitedInner(field.ty, backing_access)) break :blk true;
                 }
                 break :blk false;
             },
             .tag_union => |tag_union| blk: {
-                if (!try self.nodeIsProvenUninhabitedInner(tag_union.ext, visiting, backing_access)) break :blk false;
+                if (!try self.nodeIsProvenUninhabitedInner(tag_union.ext, backing_access)) break :blk false;
                 for (tag_union.tags) |tag| {
                     var tag_is_inhabited = true;
                     for (tag.payloads) |payload| {
-                        if (try self.nodeIsProvenUninhabitedInner(payload, visiting, backing_access)) {
+                        if (try self.nodeIsProvenUninhabitedInner(payload, backing_access)) {
                             tag_is_inhabited = false;
                             break;
                         }
@@ -16461,6 +16808,8 @@ const BodyContext = struct {
     }
 
     fn typeIsProvenUninhabited(self: *BodyContext, ty: Type.TypeId) Allocator.Error!bool {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .reachability);
+        defer timing_scope.end();
         // A durable TypeId is already a closed snapshot. Inspecting its
         // inhabitation must not import it back into the active graph; deferred
         // inspect generation runs after relation production is frozen.
@@ -23575,6 +23924,8 @@ const BodyContext = struct {
         expected_ret_node: ?NodeId,
         expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!LoweredCall {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .call_dispatch);
+        defer timing_scope.end();
         if (try self.lowerCallThatCannotReachCallee(checked_ret_ty, call, expected_ret_node)) |lowered| return lowered;
 
         if (call.direct_target) |target| {
@@ -24710,13 +25061,19 @@ const BodyContext = struct {
             null,
         );
         const previous_view = self.view;
+        const previous_source_file_id = self.source_file_id;
+        const local_source_file_id = try self.draft.sourceFileIdFor(local_view.module_identity.module_idx, local_view.module_env.module_name);
         self.view = local_view;
-        defer self.view = previous_view;
+        self.source_file_id = local_source_file_id;
+        defer {
+            self.view = previous_view;
+            self.source_file_id = previous_source_file_id;
+        }
         const crosses_module = !moduleBytesEqual(previous_view.key.bytes, local_view.key.bytes);
         const previous_binders = self.binders;
         const previous_typed_binders = self.typed_binders;
         if (crosses_module) {
-            self.binders = BinderMap.init(self.allocator);
+            self.binders = try BinderMap.init(self.allocator, local_view.bodies.patternBinderCount());
             self.typed_binders = TypedBinders.init(self.allocator);
         }
         defer if (crosses_module) {
@@ -25258,6 +25615,20 @@ const BodyContext = struct {
             const local_id = binding.local;
             const local_ty = try self.localType(local_id);
             const binder_ty = checkedBinderType(self.view, binding.binder);
+            if (self.localTypeCell(local_id) == .sealed and
+                self.checkedTypeIsClosed(binder_ty) and
+                self.checkedTypeIsClosed(checked_ty) and
+                self.sameType(local_ty, ty))
+            {
+                const checked_binder_ty = try self.builder.lowerType(self.view, binder_ty);
+                const checked_use_ty = try self.builder.lowerType(self.view, checked_ty);
+                if (!self.sameType(checked_binder_ty, local_ty) or
+                    !self.sameType(checked_use_ty, ty))
+                {
+                    Common.invariant("closed checked local lookup differed from its sealed binding type");
+                }
+                return try self.addExprWithTypeCell(.{ .sealed = local_ty }, .{ .local = local_id });
+            }
             // The local's Monotype identifies the binder's node in the
             // context that bound it; importing it unifies this context's
             // instantiation with that node before the use type is unified.
@@ -25364,6 +25735,14 @@ const BodyContext = struct {
             .platform_required_declaration => Common.invariant("platform required declaration reached Monotype without a binding"),
             .platform_required_checked_error => return try self.runtimeCrashExpr(ty, "platform requirement failed checking"),
         };
+    }
+
+    fn checkedTypeIsClosed(self: *const BodyContext, ty: checked.CheckedTypeId) bool {
+        const raw = @intFromEnum(ty);
+        if (raw >= self.view.types.roots.len) {
+            Common.invariant("checked type closure query referenced a missing root");
+        }
+        return !self.view.types.roots[raw].contains_identity_variables;
     }
 
     fn lowerLookupExprAtNode(
@@ -27904,6 +28283,8 @@ const BodyContext = struct {
         checked_expr: checked.CheckedExprId,
         expected_node: NodeId,
     ) Allocator.Error!void {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
+        defer timing_scope.end();
         // Divergent expressions never return a value to relate to the request.
         // In particular, checking may replace a failed callee with
         // `runtime_error`, which emits a crash, while its unused call type
@@ -28075,15 +28456,19 @@ const BodyContext = struct {
     }
 
     fn lowerExprSpan(self: *BodyContext, checked_exprs: []const checked.CheckedExprId) Allocator.Error!DraftSpan(DraftExprId) {
-        const lowered = try self.allocator.alloc(DraftExprId, checked_exprs.len);
-        defer self.allocator.free(lowered);
+        const reserved = try self.reserveExprSpan(checked_exprs.len);
+        errdefer self.draft.expr_ids.shrinkRetainingCapacity(reserved.span.start);
         for (checked_exprs, 0..) |child, i| {
-            lowered[i] = try self.lowerExprAtTypeCell(
-                child,
-                DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(child)),
+            self.draft.setReservedExprSpanItem(
+                reserved,
+                i,
+                try self.lowerExprAtTypeCell(
+                    child,
+                    DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(child)),
+                ),
             );
         }
-        return try self.addExprSpan(lowered);
+        return reserved.span;
     }
 
     fn prepareExprSpanAtNodes(
@@ -28104,12 +28489,16 @@ const BodyContext = struct {
         nodes: []const NodeId,
     ) Allocator.Error!DraftSpan(DraftExprId) {
         if (checked_exprs.len != nodes.len) Common.invariant("checked call argument count differed from graph function arity");
-        const lowered = try self.allocator.alloc(DraftExprId, checked_exprs.len);
-        defer self.allocator.free(lowered);
+        const reserved = try self.reserveExprSpan(checked_exprs.len);
+        errdefer self.draft.expr_ids.shrinkRetainingCapacity(reserved.span.start);
         for (checked_exprs, nodes, 0..) |checked_expr, node, index| {
-            lowered[index] = try self.lowerExprAtTypeCell(checked_expr, DraftTypeCell.fromGraphNode(node));
+            self.draft.setReservedExprSpanItem(
+                reserved,
+                index,
+                try self.lowerExprAtTypeCell(checked_expr, DraftTypeCell.fromGraphNode(node)),
+            );
         }
-        return try self.addExprSpan(lowered);
+        return reserved.span;
     }
 
     fn lowerListExpr(self: *BodyContext, checked_exprs: []const checked.CheckedExprId, ty: Type.TypeId) Allocator.Error!DraftSpan(DraftExprId) {
@@ -28117,15 +28506,16 @@ const BodyContext = struct {
             .list => |elem| elem,
             else => Common.invariant("list expression had a non-list monotype"),
         };
-        const lowered = try self.allocator.alloc(DraftExprId, checked_exprs.len);
-        defer self.allocator.free(lowered);
+        const reserved = try self.reserveExprSpan(checked_exprs.len);
+        errdefer self.draft.expr_ids.shrinkRetainingCapacity(reserved.span.start);
         for (checked_exprs, 0..) |child, i| {
-            lowered[i] = if (try self.typeIsProvenUninhabited(elem_ty))
+            const lowered = if (try self.typeIsProvenUninhabited(elem_ty))
                 try self.lowerExplicitUninhabitedInvocation(child, elem_ty)
             else
                 try self.lowerExprAtType(child, elem_ty);
+            self.draft.setReservedExprSpanItem(reserved, i, lowered);
         }
-        return try self.addExprSpan(lowered);
+        return reserved.span;
     }
 
     fn lowerExprSpanAtTypes(
@@ -28136,15 +28526,16 @@ const BodyContext = struct {
         if (checked_exprs.len != GuardedList.borrowLen(tys)) Common.invariant("call argument arity differs from concrete function type");
         const stable_tys = try GuardedList.dupe(self.allocator, Type.TypeId, tys);
         defer self.allocator.free(stable_tys);
-        const lowered = try self.allocator.alloc(DraftExprId, checked_exprs.len);
-        defer self.allocator.free(lowered);
+        const reserved = try self.reserveExprSpan(checked_exprs.len);
+        errdefer self.draft.expr_ids.shrinkRetainingCapacity(reserved.span.start);
         for (checked_exprs, stable_tys, 0..) |child, ty, i| {
-            lowered[i] = if (try self.typeIsProvenUninhabited(ty))
+            const lowered = if (try self.typeIsProvenUninhabited(ty))
                 try self.lowerExplicitUninhabitedInvocation(child, ty)
             else
                 try self.lowerExprAtType(child, ty);
+            self.draft.setReservedExprSpanItem(reserved, i, lowered);
         }
-        return try self.addExprSpan(lowered);
+        return reserved.span;
     }
 
     const PreLoweredOperand = struct {
@@ -28177,9 +28568,17 @@ const BodyContext = struct {
         nodes: []const NodeId,
         pre_lowered: []const PreLoweredOperand,
     ) Allocator.Error!DraftSpan(DraftExprId) {
+        try self.prepareDispatchOperandsAtNodes(operands, nodes, pre_lowered);
+        return try self.lowerPreparedDispatchOperandsAtNodes(operands, nodes, pre_lowered);
+    }
+
+    fn prepareDispatchOperandsAtNodes(
+        self: *BodyContext,
+        operands: []const static_dispatch.StaticDispatchOperand,
+        nodes: []const NodeId,
+        pre_lowered: []const PreLoweredOperand,
+    ) Allocator.Error!void {
         if (operands.len != nodes.len) Common.invariant("dispatch argument arity differs from function graph node");
-        const lowered = try self.allocator.alloc(DraftExprId, operands.len);
-        defer self.allocator.free(lowered);
         for (operands, nodes, 0..) |operand, node, index| {
             if (self.preLoweredOperandAt(pre_lowered, index)) |pre| {
                 try relateRequestComponent(
@@ -28207,25 +28606,37 @@ const BodyContext = struct {
                 => {},
             }
         }
+    }
+
+    fn lowerPreparedDispatchOperandsAtNodes(
+        self: *BodyContext,
+        operands: []const static_dispatch.StaticDispatchOperand,
+        nodes: []const NodeId,
+        pre_lowered: []const PreLoweredOperand,
+    ) Allocator.Error!DraftSpan(DraftExprId) {
+        if (operands.len != nodes.len) Common.invariant("dispatch argument arity differs from function graph node");
+        const reserved = try self.reserveExprSpan(operands.len);
+        errdefer self.draft.expr_ids.shrinkRetainingCapacity(reserved.span.start);
         for (operands, nodes, 0..) |operand, node, index| {
             if (self.preLoweredOperandAt(pre_lowered, index)) |pre| {
-                lowered[index] = pre;
+                self.draft.setReservedExprSpanItem(reserved, index, pre);
                 continue;
             }
-            lowered[index] = switch (operand) {
+            const lowered = switch (operand) {
                 .checked_expr => |expr| try self.lowerExprAtTypeCell(expr, DraftTypeCell.fromGraphNode(node)),
                 .generated_interpolation_iter,
                 .generated_numeral,
                 .generated_quote,
                 => try self.lowerDispatchOperandAtType(operand, try self.activeTypeFromNode(node)),
             };
+            self.draft.setReservedExprSpanItem(reserved, index, lowered);
             try relateRequestComponent(
                 self.graph,
                 node,
-                try self.exprTypeCell(lowered[index]).toGraphNode(self.graph),
+                try self.exprTypeCell(lowered).toGraphNode(self.graph),
             );
         }
-        return try self.addExprSpan(lowered);
+        return reserved.span;
     }
 
     fn lowerDispatchOperandAtType(
@@ -28544,16 +28955,7 @@ const BodyContext = struct {
         checked_expr: checked.CheckedExprId,
         ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        switch (self.view.bodies.expr(checked_expr).data) {
-            .lookup_local,
-            .lookup_external,
-            .lookup_required,
-            .lambda,
-            .closure,
-            => return try self.lowerExprAtTypeCell(checked_expr, .{ .sealed = ty }),
-            else => {},
-        }
-        return self.lowerExprAtTypeWithDemand(checked_expr, ty, .runtime_value);
+        return try self.lowerExprAtTypeCell(checked_expr, .{ .sealed = ty });
     }
 
     fn lowerExprAtTypeCell(
@@ -28570,6 +28972,21 @@ const BodyContext = struct {
         cell: DraftTypeCell,
         demand: LoweringDemand,
     ) Allocator.Error!DraftExprId {
+        return try self.lowerExprAtTypeCellWithKnownDivergence(
+            checked_expr,
+            cell,
+            demand,
+            self.checkedExprDivergesInLoweredRuntime(checked_expr),
+        );
+    }
+
+    fn lowerExprAtTypeCellWithKnownDivergence(
+        self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
+        cell: DraftTypeCell,
+        demand: LoweringDemand,
+        expr_diverges: bool,
+    ) Allocator.Error!DraftExprId {
         const expr = self.view.bodies.expr(checked_expr);
         const saved_loc = self.builder.program.current_loc;
         defer self.builder.program.current_loc = saved_loc;
@@ -28578,12 +28995,22 @@ const BodyContext = struct {
         const region = self.sourceRegionForExpr(expr);
         self.builder.program.current_loc = try self.sourceLocFor(region);
         self.builder.program.current_region = region;
-        const expected_node = try cell.toGraphNode(self.graph);
-        const lowered = if (try self.lowerDivergentExprInContext(checked_expr, .{ .type_cell = cell })) |divergent|
-            divergent
-        else
-            try self.lowerExprAtTypeCellInner(checked_expr, cell, expected_node);
-        return try self.requireLoweredExpr(expr, expected_node, demand, lowered);
+        return switch (cell) {
+            .sealed => |ty| blk: {
+                const lowered = if (expr_diverges)
+                    try self.lowerDivergentExprAtTypeCell(checked_expr, cell)
+                else
+                    try self.lowerExprAtTypeWithDemandInner(checked_expr, ty);
+                break :blk try self.requireLoweredExprAtCell(expr, cell, demand, lowered);
+            },
+            .graph_node => |expected_node| blk: {
+                const lowered = if (expr_diverges)
+                    try self.lowerDivergentExprAtTypeCell(checked_expr, cell)
+                else
+                    try self.lowerExprAtTypeCellInner(checked_expr, cell, expected_node);
+                break :blk try self.requireLoweredExpr(expr, expected_node, demand, lowered);
+            },
+        };
     }
 
     fn lowerExprAtTypeCellInner(
@@ -28593,16 +29020,7 @@ const BodyContext = struct {
         expected_node: NodeId,
     ) Allocator.Error!DraftExprId {
         return switch (cell) {
-            .sealed => |ty| blk: {
-                switch (self.view.bodies.expr(checked_expr).data) {
-                    .lookup_local => |lookup| break :blk try self.lowerLookupExprAtNode(checked_expr, lookup.resolved, expected_node),
-                    .lookup_external => |resolved| break :blk try self.lowerLookupExprAtNode(checked_expr, resolved, expected_node),
-                    .lookup_required => |resolved| break :blk try self.lowerLookupExprAtNode(checked_expr, resolved, expected_node),
-                    .lambda => break :blk try self.lowerLambdaExprAtNode(checked_expr, expected_node),
-                    .closure => |closure| break :blk try self.lowerClosureAtNode(checked_expr, closure, expected_node),
-                    else => break :blk try self.lowerExprAtTypeWithDemandInner(checked_expr, ty),
-                }
-            },
+            .sealed => Common.invariant("sealed expression reached graph-cell lowering"),
             .graph_node => blk: {
                 if (try self.restoredHoistedExprAtNode(checked_expr, expected_node)) |restored| {
                     break :blk restored;
@@ -28799,14 +29217,7 @@ const BodyContext = struct {
         ty: Type.TypeId,
         demand: LoweringDemand,
     ) Allocator.Error!DraftExprId {
-        const expr = self.view.bodies.expr(checked_expr);
-        const lowered = try self.lowerExprAtTypeWithDemandInner(checked_expr, ty);
-        return try self.requireLoweredExpr(
-            expr,
-            try self.activeNodeFromType(ty),
-            demand,
-            lowered,
-        );
+        return try self.lowerExprAtTypeCellWithDemand(checked_expr, .{ .sealed = ty }, demand);
     }
 
     fn lowerExprAtTypeWithDemandInner(
@@ -28815,14 +29226,6 @@ const BodyContext = struct {
         ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         const expr = self.view.bodies.expr(checked_expr);
-        const saved_loc = self.builder.program.current_loc;
-        defer self.builder.program.current_loc = saved_loc;
-        const saved_region = self.builder.program.current_region;
-        defer self.builder.program.current_region = saved_region;
-        const region = self.sourceRegionForExpr(expr);
-        self.builder.program.current_loc = try self.sourceLocFor(region);
-        self.builder.program.current_region = region;
-        if (try self.lowerDivergentExprInContext(checked_expr, .{ .mono_type = ty })) |lowered| return lowered;
         switch (expr.data) {
             .call => |call| if (try self.lowerInspectOnlyCall(
                 expr.ty,
@@ -29719,6 +30122,8 @@ const BodyContext = struct {
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
         expected_ret_cell: DraftTypeCell,
     ) Allocator.Error!DraftExprId {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .call_dispatch);
+        defer timing_scope.end();
         const plan_id = maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
         var direct_parametric_low_level: ?can.CIR.Expr.LowLevel = null;
@@ -29933,19 +30338,22 @@ const BodyContext = struct {
 
     fn lowerClosedDirectLowLevelDispatch(
         self: *BodyContext,
-        checked_ret_ty: checked.CheckedTypeId,
+        _: checked.CheckedTypeId,
         plan: static_dispatch.StaticDispatchCallPlan,
         op: can.CIR.Expr.LowLevel,
         expected_ret_cell: DraftTypeCell,
     ) Allocator.Error!DraftExprId {
-        const callable_ty = try self.builder.lowerType(self.view, plan.callable_ty);
+        const callable_ty = blk: {
+            var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
+            defer timing_scope.end();
+            break :blk try self.builder.lowerType(self.view, plan.callable_ty);
+        };
         const function = self.builder.functionShape(callable_ty, "checked closed direct low-level call had a non-function type");
         const operands = plan.argsSlice(self.view.static_dispatch_plans);
         if (operands.len != self.builder.program.types.span(function.args).len) {
             Common.invariant("checked closed direct low-level call argument arity differed from its callable type");
         }
 
-        try self.constrainTypeToMono(checked_ret_ty, function.ret);
         switch (expected_ret_cell) {
             .sealed => |expected| if (!self.sameType(expected, function.ret)) {
                 Common.invariant("checked closed direct low-level call result differed from its expected type");
@@ -29957,9 +30365,9 @@ const BodyContext = struct {
             ),
         }
 
-        const lowered = switch (try self.lowerClosedDispatchOperandsAtNode(
+        const lowered = switch (try self.lowerClosedDispatchOperandsAtTypes(
             operands,
-            try self.activeNodeFromType(callable_ty),
+            self.builder.program.types.span(function.args),
             expected_ret_cell,
         )) {
             .args => |args| args,
@@ -29972,6 +30380,58 @@ const BodyContext = struct {
         return try self.applyDispatchResultMode(plan.result_mode, call, function.ret);
     }
 
+    fn lowerClosedDispatchOperandsAtTypes(
+        self: *BodyContext,
+        operands: []const static_dispatch.StaticDispatchOperand,
+        arg_types: anytype,
+        ret_cell: DraftTypeCell,
+    ) Allocator.Error!ClosedDispatchOperands {
+        if (operands.len != GuardedList.borrowLen(arg_types)) {
+            Common.invariant("closed dispatch argument arity differed from its sealed callable type");
+        }
+        const stable_types = try GuardedList.dupe(self.allocator, Type.TypeId, arg_types);
+        defer self.allocator.free(stable_types);
+
+        for (stable_types, 0..) |arg_ty, uninhabited_index| {
+            if (!try self.typeIsProvenUninhabited(arg_ty)) continue;
+            const checked_arg = switch (operands[uninhabited_index]) {
+                .checked_expr => |expr| expr,
+                .generated_interpolation_iter,
+                .generated_numeral,
+                .generated_quote,
+                => Common.invariant("compiler-generated dispatch operand had an uninhabited sealed type"),
+            };
+            const prior = try self.allocator.alloc(DraftExprId, uninhabited_index);
+            defer self.allocator.free(prior);
+            for (operands[0..uninhabited_index], stable_types[0..uninhabited_index], prior) |operand, ty, *out| {
+                out.* = try self.lowerDispatchOperandAtType(operand, ty);
+            }
+            const scrutinee = try self.lowerUninhabitedScrutinee(checked_arg, arg_ty);
+            var result = try self.zeroBranchMatchAtTypeCell(scrutinee, ret_cell);
+            var index = uninhabited_index;
+            while (index > 0) {
+                index -= 1;
+                result = try self.addExprWithTypeCell(ret_cell, .{ .let_ = .{
+                    .bind = try self.addPatWithTypeCell(.{ .sealed = stable_types[index] }, .wildcard),
+                    .value = prior[index],
+                    .rest = result,
+                } });
+            }
+            return .{ .uninhabited = result };
+        }
+
+        const reserved = try self.reserveExprSpan(operands.len);
+        errdefer self.draft.expr_ids.shrinkRetainingCapacity(reserved.span.start);
+        for (operands, stable_types, 0..) |operand, ty, index| {
+            self.draft.setReservedExprSpanItem(
+                reserved,
+                index,
+                try self.lowerDispatchOperandAtType(operand, ty),
+            );
+        }
+        return .{ .args = reserved.span };
+    }
+
     fn lowerClosedDirectProcedureDispatch(
         self: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
@@ -29980,7 +30440,11 @@ const BodyContext = struct {
         procedure: static_dispatch.ProcedureMethodTarget,
         expected_ret_cell: DraftTypeCell,
     ) Allocator.Error!DraftExprId {
-        const callable_ty = try self.builder.lowerType(self.view, plan.callable_ty);
+        const callable_ty = blk: {
+            var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
+            defer timing_scope.end();
+            break :blk try self.builder.lowerType(self.view, plan.callable_ty);
+        };
         const function = self.builder.functionShape(callable_ty, "checked closed direct procedure call had a non-function type");
         const operands = plan.argsSlice(self.view.static_dispatch_plans);
         if (operands.len != self.builder.program.types.span(function.args).len) {
@@ -30080,24 +30544,15 @@ const BodyContext = struct {
         callable_node: NodeId,
         expected_ret_cell: DraftTypeCell,
     ) Allocator.Error!ClosedDispatchOperands {
-        const function = try self.graph.functionNodes(callable_node);
+        const function = blk: {
+            var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
+            defer timing_scope.end();
+            break :blk try self.graph.functionNodes(callable_node);
+        };
         if (operands.len != function.args.len) {
             Common.invariant("closed dispatch argument arity differed from its callable type");
         }
-        for (operands, function.args) |operand, node| switch (operand) {
-            .checked_expr => |expr| try self.relateExprAtNode(expr, node),
-            .generated_interpolation_iter,
-            .generated_numeral,
-            .generated_quote,
-            => {},
-        };
-        for (operands, function.args) |operand, node| switch (operand) {
-            .checked_expr => |expr| try self.ensureNestedCallableAtNode(expr, node),
-            .generated_interpolation_iter,
-            .generated_numeral,
-            .generated_quote,
-            => {},
-        };
+        try self.prepareDispatchOperandsAtNodes(operands, function.args, &.{});
         if (try self.lowerDispatchWithUninhabitedArgument(
             operands,
             function.args,
@@ -30105,7 +30560,7 @@ const BodyContext = struct {
         )) |uninhabited| {
             return .{ .uninhabited = uninhabited };
         }
-        return .{ .args = try self.lowerDispatchOperandsAtNodes(
+        return .{ .args = try self.lowerPreparedDispatchOperandsAtNodes(
             operands,
             function.args,
             &.{},
@@ -30898,6 +31353,21 @@ const BodyContext = struct {
         plan: static_dispatch.StaticDispatchCallPlan,
         expected_ret_node: ?NodeId,
     ) Allocator.Error!?NodeId {
+        const ret_ty = (try self.closedDirectGraphFreeResultType(checked_ret_ty, plan)) orelse return null;
+        const ret_node = try self.activeNodeFromType(ret_ty);
+        if (expected_ret_node) |expected| {
+            try relateRequestComponent(self.graph, ret_node, expected);
+        }
+        return ret_node;
+    }
+
+    /// Return the exact sealed result selected by checked publication for a
+    /// closed direct call. No specialization graph node is created here.
+    fn closedDirectGraphFreeResultType(
+        self: *BodyContext,
+        _: checked.CheckedTypeId,
+        plan: static_dispatch.StaticDispatchCallPlan,
+    ) Allocator.Error!?Type.TypeId {
         const direct = switch (plan.resolution) {
             .direct_closed => |direct| direct,
             .direct_pending,
@@ -30923,12 +31393,20 @@ const BodyContext = struct {
             callable_ty,
             "checked closed direct call had a non-function callable type",
         );
-        try self.constrainTypeToMono(checked_ret_ty, function.ret);
-        const ret_node = try self.activeNodeFromType(function.ret);
-        if (expected_ret_node) |expected| {
-            try relateRequestComponent(self.graph, ret_node, expected);
-        }
-        return ret_node;
+        return function.ret;
+    }
+
+    fn graphFreeResultTypeForExpr(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!?Type.TypeId {
+        const expr = self.view.bodies.expr(expr_id);
+        const plan_id = switch (expr.data) {
+            .dispatch_call => |plan| plan,
+            .interpolation => |interpolation| interpolation.plan,
+            .type_dispatch_call => |plan| plan,
+            .method_eq => |plan| plan,
+            else => return null,
+        } orelse return null;
+        const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+        return try self.closedDirectGraphFreeResultType(expr.ty, plan);
     }
 
     fn callableDispatchResultTypeNodeInPhase(
@@ -40936,16 +41414,16 @@ const BodyContext = struct {
                 .none;
             const statement_start = lowered.len;
             if (!try self.appendExpandedPatternStatement(statement, &lowered)) {
-                const statement_result = try self.lowerStatement(statement);
+                const statement_result = try self.lowerStatement(statement, statement_diverges);
                 if (statement_result.stmt) |stmt| try lowered.append(self.allocator, stmt);
                 termination = statement_result.termination;
             }
-            var statement_proofs = std.ArrayList(?RuntimeImpossibilityProofId).empty;
-            defer statement_proofs.deinit(self.allocator);
-            for (lowered.items[statement_start..lowered.len]) |stmt|
-                try statement_proofs.append(self.allocator, self.stmtImpossibilityProof(stmt));
-            if (try self.anyImpossibilityProof(statement_proofs.items)) |proof| {
-                self.runtime_demand_guard_frames = try self.withStatementSuccessRuntimeDemandGuardFrame(statement, proof);
+            {
+                var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .reachability);
+                defer timing_scope.end();
+                if (try self.anyStmtSpanImpossibilityProof(lowered.items[statement_start..lowered.len])) |proof| {
+                    self.runtime_demand_guard_frames = try self.withStatementSuccessRuntimeDemandGuardFrame(statement, proof);
+                }
             }
             switch (termination) {
                 .none => {},
@@ -40962,6 +41440,8 @@ const BodyContext = struct {
         self: *BodyContext,
         statement_id: checked.CheckedStatementId,
     ) Allocator.Error!?DraftExprId {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .reachability);
+        defer timing_scope.end();
         const statement = self.view.bodies.statement(statement_id);
         const expr_id = switch (statement.data) {
             .decl => |decl| if (self.statementDeclIsLocalProc(decl.pattern, decl.expr)) return null else decl.expr,
@@ -40976,6 +41456,10 @@ const BodyContext = struct {
         // erroneous source type. Probing its type node here would demand an
         // instantiation checking intentionally did not produce.
         if (self.view.bodies.expr(expr_id).data == .runtime_error) return null;
+        if (try self.graphFreeResultTypeForExpr(expr_id)) |ty| {
+            if (!try self.typeIsProvenUninhabited(ty)) return null;
+            return try self.lowerUninhabitedScrutineeAtTypeCell(expr_id, .{ .sealed = ty });
+        }
         const node = try self.lowerExprTypeNode(expr_id);
         if (!try self.nodeIsProvenUninhabited(node)) return null;
         return try self.lowerUninhabitedScrutineeAtTypeCell(expr_id, DraftTypeCell.fromGraphNode(node));
@@ -41199,6 +41683,8 @@ const BodyContext = struct {
     }
 
     fn checkedStatementHasRuntimeEffect(self: *BodyContext, statement_id: checked.CheckedStatementId) bool {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .reachability);
+        defer timing_scope.end();
         const raw = @intFromEnum(statement_id);
         if (raw >= self.view.bodies.statementCount()) {
             Common.invariant("checked runtime statement filter referenced a missing statement");
@@ -41502,6 +41988,8 @@ const BodyContext = struct {
     }
 
     fn checkedStatementDivergesInLoweredRuntime(self: *BodyContext, statement_id: checked.CheckedStatementId) bool {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .reachability);
+        defer timing_scope.end();
         if (self.specializationDispatchDivergence()) |divergence| {
             const raw = @intFromEnum(statement_id);
             if (raw >= divergence.statements.len) Common.invariant("specialization divergence referenced a missing checked statement");
@@ -41514,6 +42002,8 @@ const BodyContext = struct {
     }
 
     fn checkedExprDivergesInLoweredRuntime(self: *BodyContext, expr_id: checked.CheckedExprId) bool {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .reachability);
+        defer timing_scope.end();
         if (self.specializationDispatchDivergence()) |divergence| {
             const raw = @intFromEnum(expr_id);
             if (raw >= divergence.exprs.len) Common.invariant("specialization divergence referenced a missing checked expression");
@@ -42516,7 +43006,11 @@ const BodyContext = struct {
         termination: StatementTermination,
     };
 
-    fn lowerStatement(self: *BodyContext, statement_id: checked.CheckedStatementId) Allocator.Error!LoweredStatement {
+    fn lowerStatement(
+        self: *BodyContext,
+        statement_id: checked.CheckedStatementId,
+        statement_diverges: bool,
+    ) Allocator.Error!LoweredStatement {
         const statement = self.view.bodies.statement(statement_id);
         const saved_loc = self.builder.program.current_loc;
         defer self.builder.program.current_loc = saved_loc;
@@ -42540,18 +43034,18 @@ const BodyContext = struct {
                     const unit_ty = try self.unitType();
                     break :blk .{ .expr = try self.addExpr(.{ .ty = unit_ty, .data = .unit }) };
                 }
-                const lowered = try self.lowerPatternStatement(decl.pattern, decl.expr, statement.source_region);
+                const lowered = try self.lowerPatternStatement(decl.pattern, decl.expr, statement.source_region, statement_diverges);
                 termination = lowered.termination;
                 break :blk lowered.stmt orelse return .{ .stmt = null, .termination = termination };
             },
             .var_ => |decl| blk: {
-                const lowered = try self.lowerPatternStatement(decl.pattern, decl.expr, statement.source_region);
+                const lowered = try self.lowerPatternStatement(decl.pattern, decl.expr, statement.source_region, statement_diverges);
                 termination = lowered.termination;
                 break :blk lowered.stmt orelse return .{ .stmt = null, .termination = termination };
             },
             .var_uninitialized => |decl| .{ .uninitialized = try self.lowerUninitializedPatternStatement(decl.pattern) },
             .reassign => |decl| blk: {
-                const lowered = try self.lowerPatternStatement(decl.pattern, decl.expr, statement.source_region);
+                const lowered = try self.lowerPatternStatement(decl.pattern, decl.expr, statement.source_region, statement_diverges);
                 termination = lowered.termination;
                 break :blk lowered.stmt orelse return .{ .stmt = null, .termination = termination };
             },
@@ -42643,7 +43137,7 @@ const BodyContext = struct {
         return .{
             .stmt = try self.addStmt(stmt),
             .termination = switch (termination) {
-                .none => if (self.checkedStatementDivergesInLoweredRuntime(statement_id)) .checked_control_transfer else .none,
+                .none => if (statement_diverges) .checked_control_transfer else .none,
                 else => termination,
             },
         };
@@ -42666,32 +43160,57 @@ const BodyContext = struct {
         pattern: checked.CheckedPatternId,
         expr: checked.CheckedExprId,
         source_region: base.Region,
+        statement_diverges: bool,
     ) Allocator.Error!LoweredPatternStatement {
         // A divergent initializer never produces a value to bind, so emitting a
         // pattern or reading the initializer's dead checked type would invent a
         // relation for a value that cannot exist.
-        if (self.checkedExprDivergesInLoweredRuntime(expr)) {
+        if (statement_diverges) {
             const unit_ty = try self.unitType();
             return .{
                 .stmt = .{ .expr = try self.lowerDivergentExprAtType(expr, unit_ty) },
                 .termination = .none,
             };
         }
-        const requested_cell = DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(expr));
+        const requested_cell: DraftTypeCell = if (try self.graphFreeResultTypeForExpr(expr)) |ty|
+            .{ .sealed = ty }
+        else
+            DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(expr));
         // The checked pattern is explicit evidence for the value's shape.
         // Apply that relation before either the value or a shape-dependent
         // pattern asks for a concrete view of the graph-backed value type.
-        try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(pattern).ty, requested_cell);
-        const value = try self.lowerExprAtTypeCell(expr, requested_cell);
+        switch (requested_cell) {
+            .sealed => |ty| try self.requireClosedCheckedType(self.view.bodies.pattern(pattern).ty, ty),
+            .graph_node => try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(pattern).ty, requested_cell),
+        }
+        const value = try self.lowerExprAtTypeCellWithKnownDivergence(
+            expr,
+            requested_cell,
+            .runtime_value,
+            false,
+        );
         const produced_cell = self.exprTypeCell(value);
-        const requested_node = try requested_cell.toGraphNode(self.graph);
-        const produced_node = try produced_cell.toGraphNode(self.graph);
-        const completes_request = try self.resultCompletesRequest(requested_node, produced_node);
-        const contains_generated_private = try self.graph.containsGeneratedPrivate(produced_node);
-        const value_cell = if (completes_request or contains_generated_private)
-            produced_cell
-        else
-            requested_cell;
+        const value_cell = switch (requested_cell) {
+            .sealed => |requested_ty| blk: {
+                const produced_ty = switch (produced_cell) {
+                    .sealed => |ty| ty,
+                    .graph_node => Common.invariant("graph-free closed dispatch produced a graph-backed result"),
+                };
+                if (!self.sameType(requested_ty, produced_ty)) {
+                    Common.invariant("graph-free closed dispatch produced a different sealed result type");
+                }
+                break :blk produced_cell;
+            },
+            .graph_node => |requested_node| blk: {
+                const produced_node = try produced_cell.toGraphNode(self.graph);
+                const completes_request = try self.resultCompletesRequest(requested_node, produced_node);
+                const contains_generated_private = try self.graph.containsGeneratedPrivate(produced_node);
+                break :blk if (completes_request or contains_generated_private)
+                    produced_cell
+                else
+                    requested_cell;
+            },
+        };
         const comptime_site = if (self.shouldRecordComptimeSite(.destructure) and self.patternCanMiss(pattern))
             try self.addComptimeSite(.destructure, source_region, self.view.exhaustiveness_sites.lookupByDestructurePattern(pattern), &.{})
         else
@@ -42743,12 +43262,16 @@ const BodyContext = struct {
         ty_cell: DraftTypeCell,
     ) Allocator.Error!DraftPatId {
         const pattern = self.view.bodies.pattern(pattern_id);
-        const pattern_node = try self.instNode(pattern.ty);
-        const value_node = try ty_cell.toGraphNode(self.graph);
-        if (!try self.resultCompletesRequest(pattern_node, value_node) or
-            try self.graph.containsGeneratedPrivate(value_node))
-        {
-            try self.constrainCheckedInterfaceToCell(pattern.ty, ty_cell);
+        switch (ty_cell) {
+            .sealed => |ty| try self.requireClosedCheckedType(pattern.ty, ty),
+            .graph_node => |value_node| {
+                const pattern_node = try self.instNode(pattern.ty);
+                if (!try self.resultCompletesRequest(pattern_node, value_node) or
+                    try self.graph.containsGeneratedPrivate(value_node))
+                {
+                    try self.constrainCheckedInterfaceToCell(pattern.ty, ty_cell);
+                }
+            },
         }
         const data: BodyPatData = switch (pattern.data) {
             .assign => |binder| .{ .bind = try self.materializePatternBinderAtCell(binder, ty_cell) },
@@ -42859,6 +43382,8 @@ const BodyContext = struct {
         self: *BodyContext,
         statement_id: checked.CheckedStatementId,
     ) Allocator.Error!void {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .local_proc_context);
+        defer timing_scope.end();
         for (self.view.method_registry.entries) |entry| switch (entry.target.kind) {
             .local_proc => |local| {
                 if (local.context_anchor == statement_id) {
