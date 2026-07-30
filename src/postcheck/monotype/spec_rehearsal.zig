@@ -2084,26 +2084,43 @@ pub const Rehearsal = struct {
     fn noteSealedAgainstChecked(self: *Rehearsal, address: CheckedAddress, sealed: Type.TypeId) void {
         if (comptime !census.enabled) return;
         const cursor = self.lookup.cursor(address.module_bytes) orelse return;
+        // Only a head no representation choice may alter counts as a
+        // contradiction. Roc lowers an enum-like tag union to an integer,
+        // unwraps a one-field record or tuple, and erases a zero-sized value,
+        // so those shapes are conceded rather than reported (reunify.md 10).
         const agrees = switch (cursor.view.payload(@enumFromInt(address.type_id))) {
             .function => switch (self.types.get(sealed)) {
-                .func => true,
+                .func, .zst, .erased => true,
                 else => false,
             },
-            .record, .record_unbound => switch (self.types.get(sealed)) {
+            .record => |record| switch (self.types.get(sealed)) {
                 .record => true,
-                else => false,
+                else => record.fields.len <= 1,
             },
-            .tuple => switch (self.types.get(sealed)) {
+            .record_unbound => |fields| switch (self.types.get(sealed)) {
+                .record => true,
+                else => fields.len <= 1,
+            },
+            .tuple => |items| switch (self.types.get(sealed)) {
                 .tuple => true,
-                else => false,
+                else => items.len <= 1,
             },
-            .tag_union => switch (self.types.get(sealed)) {
+            .tag_union => |union_type| switch (self.types.get(sealed)) {
                 .tag_union, .named => true,
-                else => false,
+                else => blk: {
+                    // An enum-like union - every tag payload-free - lowers to an
+                    // integer, which is a representation choice, not a defect.
+                    for (union_type.tags) |tag| {
+                        if (tag.args_len != 0) break :blk false;
+                    }
+                    break :blk true;
+                },
             },
-            .nominal => switch (self.types.get(sealed)) {
-                .named => true,
-                else => false,
+            // A nominal's runtime shape comes from its backing, which section 10
+            // owns, so a differing head here says nothing about logical typing.
+            .nominal => {
+                census.bump("sealed_vs_checked_inconclusive");
+                return;
             },
             else => {
                 census.bump("sealed_vs_checked_inconclusive");
