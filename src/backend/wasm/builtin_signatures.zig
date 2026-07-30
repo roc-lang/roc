@@ -89,6 +89,8 @@ pub const BuiltinKind = enum {
     str_from_utf8_result,
     list_append_unsafe,
     list_concat,
+    list_append_range_within,
+    list_append_sublist,
     list_drop_at,
     list_reserve,
     list_replace,

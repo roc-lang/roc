@@ -469,6 +469,8 @@ dec_from_str_import: ?u32 = null,
 float_from_str_import: ?u32 = null,
 list_append_unsafe_import: ?u32 = null,
 list_concat_import: ?u32 = null,
+list_append_range_within_import: ?u32 = null,
+list_append_sublist_import: ?u32 = null,
 list_drop_at_import: ?u32 = null,
 list_reserve_import: ?u32 = null,
 list_reverse_import: ?u32 = null,
@@ -761,6 +763,8 @@ fn hostBuiltinImports(self: *const Self) HostBuiltinImports {
             .str_from_utf8_result => null,
             .list_append_unsafe => self.list_append_unsafe_import,
             .list_concat => self.list_concat_import,
+            .list_append_range_within => self.list_append_range_within_import,
+            .list_append_sublist => self.list_append_sublist_import,
             .list_drop_at => self.list_drop_at_import,
             .list_reserve => self.list_reserve_import,
             .list_replace => self.list_replace_import,
@@ -1899,6 +1903,14 @@ fn registerHostImports(self: *Self) Allocator.Error!void {
 
     const list_concat_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32, .i32 }, &.{});
     self.list_concat_import = try self.module.addImport("env", "roc_list_concat", list_concat_type);
+
+    // roc_list_append_range_within(list_ptr, elem_width, alignment, start, count, result_ptr)
+    const list_append_range_within_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i64, .i64, .i32 }, &.{});
+    self.list_append_range_within_import = try self.module.addImport("env", "roc_list_append_range_within", list_append_range_within_type);
+
+    // roc_list_append_sublist(list_ptr, src_ptr, elem_width, alignment, start, len, result_ptr)
+    const list_append_sublist_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32, .i64, .i64, .i32 }, &.{});
+    self.list_append_sublist_import = try self.module.addImport("env", "roc_list_append_sublist", list_append_sublist_type);
 
     const list_drop_at_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32, .i32 }, &.{});
     self.list_drop_at_import = try self.module.addImport("env", "roc_list_drop_at", list_drop_at_type);
@@ -12028,6 +12040,14 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // list_concat(list_a, list_b) -> concatenated list
             try self.generateLLListConcat(args, ll.ret_layout, ll.unique_args);
         },
+        .list_append_range_within => {
+            // list_append_range_within(list, start, count) -> extended list
+            try self.generateLLListAppendRangeWithin(args, ll.ret_layout, ll.unique_args);
+        },
+        .list_append_sublist => {
+            // list_append_sublist(list, src, start, len) -> extended list
+            try self.generateLLListAppendSublist(args, ll.ret_layout, ll.unique_args);
+        },
         .list_reverse => {
             // list_reverse(list) -> reversed list
             try self.generateLLListReverse(args, ll.ret_layout, ll.unique_args);
@@ -18341,6 +18361,142 @@ fn generateLLListPrepend(self: *Self, args: anytype, ret_layout: layout.Idx) All
     try self.emitMemCopyLoop(new_data, dst_off, old_data, old_byte_len);
 
     try self.buildRocList(new_data, new_len);
+}
+
+/// Generate LowLevel list_append_range_within: append elements copied from
+/// the list itself, reading through freshly appended elements.
+fn generateLLListAppendRangeWithin(self: *Self, args: anytype, ret_layout: layout.Idx, unique_args: u64) Allocator.Error!void {
+    const list_abi = self.builtinInternalListAbi("wasm.generateLLListAppendRangeWithin.builtin_list_abi", ret_layout);
+    const elem_size = list_abi.elem_size;
+    const elem_align = list_abi.elem_align;
+
+    try self.emitProcLocal(GuardedList.at(args, 0));
+    const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(list_ptr);
+
+    const start_local = try self.materializeListIndex(GuardedList.at(args, 1));
+    const count_local = try self.materializeListIndex(GuardedList.at(args, 2));
+
+    const result_offset = try self.allocStackMemory(12, 4);
+
+    if (elem_size == 0) {
+        // ZST elements: only the length grows.
+        const len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitLocalGet(list_ptr);
+        try self.emitLoadOp(.i32, 4);
+        try self.emitLocalGet(count_local);
+        self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+        self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+        try self.emitLocalSet(len);
+
+        const zero = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
+        try self.emitLocalSet(zero);
+
+        try self.buildRocListWithCap(zero, len, len);
+        return;
+    }
+
+    switch (self.external_calls) {
+        .host_imports => {
+            try self.emitLocalGet(list_ptr);
+            try self.emitI32Const(@intCast(elem_size));
+            try self.emitI32Const(@intCast(elem_align));
+            try self.emitLocalGet(start_local);
+            try self.emitLocalGet(count_local);
+            try self.emitFpOffset(result_offset);
+            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_range_within)), self.list_append_range_within_import);
+        },
+        .builtin_relocs => {
+            const fields = try self.loadRocListFields(list_ptr);
+            const callbacks = try self.listElementCallbacks(list_abi);
+            try self.emitFpOffset(result_offset);
+            try self.emitRocListFields(fields);
+            try self.emitLocalGet(start_local);
+            try self.emitLocalGet(count_local);
+            try self.emitI32Const(@intCast(elem_align));
+            try self.emitI32Const(@intCast(elem_size));
+            try self.emitI32Const(@intCast(callbacks.elements_refcounted));
+            try self.emitI32Const(@intCast(callbacks.incref_table_idx));
+            try self.emitI32Const(@intCast(callbacks.decref_table_idx));
+            try self.emitI32Const(@intCast(unique_args & 1));
+            try self.emitLocalGet(self.roc_ops_local);
+            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_range_within)), null);
+        },
+        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_append_range_within", .{}),
+    }
+    try self.emitFpOffset(result_offset);
+}
+
+/// Generate LowLevel list_append_sublist: append a range of another list.
+fn generateLLListAppendSublist(self: *Self, args: anytype, ret_layout: layout.Idx, unique_args: u64) Allocator.Error!void {
+    const list_abi = self.builtinInternalListAbi("wasm.generateLLListAppendSublist.builtin_list_abi", ret_layout);
+    const elem_size = list_abi.elem_size;
+    const elem_align = list_abi.elem_align;
+
+    try self.emitProcLocal(GuardedList.at(args, 0));
+    const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(list_ptr);
+    try self.emitProcLocal(GuardedList.at(args, 1));
+    const src_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(src_ptr);
+
+    const start_local = try self.materializeListIndex(GuardedList.at(args, 2));
+    const len_local = try self.materializeListIndex(GuardedList.at(args, 3));
+
+    const result_offset = try self.allocStackMemory(12, 4);
+
+    if (elem_size == 0) {
+        const len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitLocalGet(list_ptr);
+        try self.emitLoadOp(.i32, 4);
+        try self.emitLocalGet(len_local);
+        self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+        self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+        try self.emitLocalSet(len);
+
+        const zero = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
+        try self.emitLocalSet(zero);
+
+        try self.buildRocListWithCap(zero, len, len);
+        return;
+    }
+
+    switch (self.external_calls) {
+        .host_imports => {
+            try self.emitLocalGet(list_ptr);
+            try self.emitLocalGet(src_ptr);
+            try self.emitI32Const(@intCast(elem_size));
+            try self.emitI32Const(@intCast(elem_align));
+            try self.emitLocalGet(start_local);
+            try self.emitLocalGet(len_local);
+            try self.emitFpOffset(result_offset);
+            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_sublist)), self.list_append_sublist_import);
+        },
+        .builtin_relocs => {
+            const fields = try self.loadRocListFields(list_ptr);
+            const src_fields = try self.loadRocListFields(src_ptr);
+            const callbacks = try self.listElementCallbacks(list_abi);
+            try self.emitFpOffset(result_offset);
+            try self.emitRocListFields(fields);
+            try self.emitRocListFields(src_fields);
+            try self.emitLocalGet(start_local);
+            try self.emitLocalGet(len_local);
+            try self.emitI32Const(@intCast(elem_align));
+            try self.emitI32Const(@intCast(elem_size));
+            try self.emitI32Const(@intCast(callbacks.elements_refcounted));
+            try self.emitI32Const(@intCast(callbacks.incref_table_idx));
+            try self.emitI32Const(@intCast(callbacks.decref_table_idx));
+            try self.emitI32Const(@intCast(unique_args & 1));
+            try self.emitLocalGet(self.roc_ops_local);
+            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_sublist)), null);
+        },
+        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_append_sublist", .{}),
+    }
+    try self.emitFpOffset(result_offset);
 }
 
 /// Generate LowLevel list_concat: concatenate two lists.

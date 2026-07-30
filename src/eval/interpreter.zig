@@ -5161,6 +5161,75 @@ pub const Interpreter = struct {
                 );
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
+            .list_append_range_within => blk: {
+                const info = self.listElemInfo(arg_layout);
+                const elems_rc = self.builtinListElemRc(arg_layout);
+                const list_val = self.valueToRocListForLayout(args[0], arg_layout);
+                const count = args[2].read(u64);
+                if (info.width == 0) {
+                    break :blk self.rocListToValue(canonicalZstList(list_val.len() + @as(usize, @intCast(count))), ll.ret_layout);
+                }
+                if (count == 0) {
+                    break :blk self.rocListToValue(list_val, ll.ret_layout);
+                }
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                var elem_rc_ctx = ListElementRcContext{
+                    .interp = self,
+                    .elem_layout = self.listElemLayout(arg_layout),
+                };
+                const result = builtins.list.listAppendRangeWithin(
+                    list_val,
+                    args[1].read(u64),
+                    count,
+                    info.alignment,
+                    info.width,
+                    elems_rc,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
+                    updateModeForArg0(ll.unique_args),
+                    &self.roc_ops,
+                );
+                break :blk self.rocListToValue(result, ll.ret_layout);
+            },
+            .list_append_sublist => blk: {
+                const info = self.listElemInfo(arg_layout);
+                const elems_rc = self.builtinListElemRc(arg_layout);
+                const list_val = self.valueToRocListForLayout(args[0], arg_layout);
+                const src_val = self.valueToRocListForLayout(args[1], arg_layout);
+                const count = args[3].read(u64);
+                if (info.width == 0) {
+                    break :blk self.rocListToValue(canonicalZstList(list_val.len() + @as(usize, @intCast(count))), ll.ret_layout);
+                }
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                var elem_rc_ctx = ListElementRcContext{
+                    .interp = self,
+                    .elem_layout = self.listElemLayout(arg_layout),
+                };
+                const result = builtins.list.listAppendSublist(
+                    list_val,
+                    src_val,
+                    args[2].read(u64),
+                    count,
+                    info.alignment,
+                    info.width,
+                    elems_rc,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
+                    updateModeForArg0(ll.unique_args),
+                    &self.roc_ops,
+                );
+                break :blk self.rocListToValue(result, ll.ret_layout);
+            },
             .list_prepend => blk: {
                 const info = self.listElemInfo(arg_layout);
                 const elems_rc = self.builtinListElemRc(arg_layout);

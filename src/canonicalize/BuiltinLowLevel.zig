@@ -297,6 +297,12 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("list_reserve")) |list_reserve_ident| {
         try low_level_map.put(list_reserve_ident, .list_reserve);
     }
+    if (env.common.findIdent("list_append_range_within")) |ident| {
+        try low_level_map.put(ident, .list_append_range_within);
+    }
+    if (env.common.findIdent("list_append_sublist")) |ident| {
+        try low_level_map.put(ident, .list_append_sublist);
+    }
     if (env.common.findIdent("u8_list_reserve")) |ident| {
         try low_level_map.put(ident, .list_reserve);
     }

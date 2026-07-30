@@ -60,6 +60,8 @@ pub const LowLevel = enum(u16) {
     list_get_unsafe,
     list_append_unsafe,
     list_concat,
+    list_append_range_within,
+    list_append_sublist,
     list_with_capacity,
     list_drop_at,
     list_sublist,
@@ -877,6 +879,12 @@ pub const LowLevel = enum(u16) {
             => RcEffect.runtimeUniquenessRetainingArgs(argMask(&.{0}), argMask(&.{2})),
 
             .list_concat => RcEffect.runtimeUniqueness(argMask(&.{ 0, 1 })),
+
+            // Both appends mutate only their first list; `list_append_sublist`
+            // reads its source without consuming or retaining it.
+            .list_append_range_within,
+            .list_append_sublist,
+            => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
             .list_first,
             .list_last,

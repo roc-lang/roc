@@ -665,6 +665,123 @@ pub fn listReserve(
     }
 }
 
+/// Append `count` elements copied from the list itself beginning at `start`.
+/// The copy reads through its own freshly appended elements, so a range past
+/// the original end repeats the elements from `start` onward. The caller has
+/// already verified `start < list.len()` and `count > 0`.
+pub fn listAppendRangeWithin(
+    list: RocList,
+    start_u64: u64,
+    count_u64: u64,
+    alignment: u32,
+    element_width: usize,
+    elements_refcounted: bool,
+    inc_context: ?*anyopaque,
+    inc: Inc,
+    dec_context: ?*anyopaque,
+    dec: Dec,
+    update_mode: UpdateMode,
+    roc_ops: *RocOps,
+) callconv(.c) RocList {
+    const original_len = list.len();
+    const start: usize = @intCast(start_u64);
+    const count: usize = @intCast(@min(count_u64, @as(u64, @intCast(std.math.maxInt(usize)))));
+
+    var output = listReserve(
+        list,
+        alignment,
+        count_u64,
+        element_width,
+        elements_refcounted,
+        inc_context,
+        inc,
+        dec_context,
+        dec,
+        update_mode,
+        roc_ops,
+    );
+    const base = output.bytes.?;
+
+    // The elements from `start` through the write cursor always hold a
+    // contiguous prefix of the repeating range, so each copy can take as
+    // much as has been materialized so far: sizes double until the tail.
+    const src = base + start * element_width;
+    var dst = base + original_len * element_width;
+    var available = (original_len - start) * element_width;
+    var remaining = count * element_width;
+    while (remaining > 0) {
+        const chunk = @min(available, remaining);
+        @memcpy(dst[0..chunk], src[0..chunk]);
+        dst += chunk;
+        available += chunk;
+        remaining -= chunk;
+    }
+
+    if (elements_refcounted) {
+        var i: usize = 0;
+        while (i < count) : (i += 1) {
+            inc(inc_context, base + (original_len + i) * element_width);
+        }
+    }
+
+    output.length = original_len + count;
+    return output;
+}
+
+/// Append `len` elements of `src` beginning at `start` to `list`. The caller
+/// has already clamped the range to `src`'s length. `src` is borrowed: its
+/// refcount is untouched, and copied refcounted elements gain a reference.
+pub fn listAppendSublist(
+    list: RocList,
+    src: RocList,
+    start_u64: u64,
+    len_u64: u64,
+    alignment: u32,
+    element_width: usize,
+    elements_refcounted: bool,
+    inc_context: ?*anyopaque,
+    inc: Inc,
+    dec_context: ?*anyopaque,
+    dec: Dec,
+    update_mode: UpdateMode,
+    roc_ops: *RocOps,
+) callconv(.c) RocList {
+    const count: usize = @intCast(len_u64);
+    if (count == 0) return list;
+    const original_len = list.len();
+    const start: usize = @intCast(start_u64);
+
+    var output = listReserve(
+        list,
+        alignment,
+        len_u64,
+        element_width,
+        elements_refcounted,
+        inc_context,
+        inc,
+        dec_context,
+        dec,
+        update_mode,
+        roc_ops,
+    );
+    const base = output.bytes.?;
+    const src_ptr = src.bytes.?;
+    @memcpy(
+        (base + original_len * element_width)[0 .. count * element_width],
+        (src_ptr + start * element_width)[0 .. count * element_width],
+    );
+
+    if (elements_refcounted) {
+        var i: usize = 0;
+        while (i < count) : (i += 1) {
+            inc(inc_context, base + (original_len + i) * element_width);
+        }
+    }
+
+    output.length = original_len + count;
+    return output;
+}
+
 /// Reduce memory usage by trimming unused capacity when list has shrunk significantly.
 pub fn listReleaseExcessCapacity(
     list: RocList,

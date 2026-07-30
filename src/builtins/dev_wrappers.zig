@@ -209,6 +209,8 @@ const strWithAsciiUppercased = str.strWithAsciiUppercased;
 const fromUtf8Lossy = str.fromUtf8Lossy;
 
 const listConcat = list.listConcat;
+const listAppendRangeWithin = list.listAppendRangeWithin;
+const listAppendSublist = list.listAppendSublist;
 const listPrepend = list.listPrepend;
 const listSublist = list.listSublist;
 const listDropAt = list.listDropAt;
@@ -729,6 +731,48 @@ pub fn roc_builtins_list_concat(out: *RocList, a_bytes: ?[*]u8, a_len: usize, a_
         );
     } else {
         out.* = listConcat(a, b, alignment, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), update_mode_a, update_mode_b, roc_ops);
+    }
+}
+
+/// Wrapper: listAppendRangeWithin(RocList, start, count, alignment, element_width, ..., *RocOps) -> RocList.
+/// The update mode is forwarded to the builtin's uniqueness check; `.InPlace`
+/// skips it.
+pub fn roc_builtins_list_append_range_within(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, start: u64, count: u64, alignment: u32, element_width: usize, elements_refcounted: bool, element_incref: ?RcIncFn, element_decref: ?RcDropFn, update_mode: utils.UpdateMode, roc_ops: *RocOps) callconv(.c) void {
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    if (elements_refcounted) {
+        var inc_ctx = CallbackElementIncrefContext{
+            .callback = element_incref orelse unreachable,
+            .roc_ops = roc_ops,
+        };
+        var dec_ctx = CallbackElementDecrefContext{
+            .callback = element_decref orelse unreachable,
+            .roc_ops = roc_ops,
+        };
+        out.* = listAppendRangeWithin(l, start, count, alignment, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, update_mode, roc_ops);
+    } else {
+        out.* = listAppendRangeWithin(l, start, count, alignment, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), update_mode, roc_ops);
+    }
+}
+
+/// Wrapper: listAppendSublist(RocList, RocList src, start, len, alignment, element_width, ..., *RocOps) -> RocList.
+/// The source list is borrowed: only copied elements gain references. The
+/// update mode is forwarded to the destination's uniqueness check; `.InPlace`
+/// skips it.
+pub fn roc_builtins_list_append_sublist(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, src_bytes: ?[*]u8, src_len: usize, src_cap: usize, start: u64, len: u64, alignment: u32, element_width: usize, elements_refcounted: bool, element_incref: ?RcIncFn, element_decref: ?RcDropFn, update_mode: utils.UpdateMode, roc_ops: *RocOps) callconv(.c) void {
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    const src = RocList{ .bytes = src_bytes, .length = src_len, .capacity_or_alloc_ptr = src_cap };
+    if (elements_refcounted) {
+        var inc_ctx = CallbackElementIncrefContext{
+            .callback = element_incref orelse unreachable,
+            .roc_ops = roc_ops,
+        };
+        var dec_ctx = CallbackElementDecrefContext{
+            .callback = element_decref orelse unreachable,
+            .roc_ops = roc_ops,
+        };
+        out.* = listAppendSublist(l, src, start, len, alignment, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, update_mode, roc_ops);
+    } else {
+        out.* = listAppendSublist(l, src, start, len, alignment, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), update_mode, roc_ops);
     }
 }
 

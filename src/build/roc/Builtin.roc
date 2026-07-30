@@ -3971,18 +3971,7 @@ Builtin :: [].{
 			} else if start >= List.len(list) {
 				Err(OutOfBounds)
 			} else {
-				# `$src` begins below the length and gains one index per
-				# appended item, so every unchecked read stays behind the
-				# growing end.
-				var $list = List.reserve(list, count)
-				var $src = start
-				stop = start + count
-				while $src < stop {
-					item = list_get_unsafe($list, $src)
-					$list = list_append_unsafe($list, item)
-					$src = $src + 1
-				}
-				Ok($list)
+				Ok(list_append_range_within(list, start, count))
 			}
 		}
 
@@ -4002,16 +3991,7 @@ Builtin :: [].{
 			src_len = List.len(src)
 			start = range.start.min(src_len)
 			count = range.len.min(src_len - start)
-			# `$i` stays below `count`, which the clamps above keep within
-			# `src`, so every unchecked read is in bounds.
-			var $list = List.reserve(list, count)
-			var $i = 0
-			while $i < count {
-				item = list_get_unsafe(src, start + $i)
-				$list = list_append_unsafe($list, item)
-				$i = $i + 1
-			}
-			$list
+			list_append_sublist(list, src, start, count)
 		}
 
 		## Add the `Ok` payload to the beginning of a list, or leave the list unchanged
@@ -22634,6 +22614,15 @@ list_map_write_unsafe : List(output), U64, output -> List(output)
 
 # Implemented by the compiler, ensures at least spare additional items of capacity
 list_reserve : List(item), U64 -> List(item)
+
+# Implemented by the compiler. Appends count items copied from the list
+# itself beginning at start, reading through freshly appended items. The
+# caller has already verified start is in bounds and count is nonzero.
+list_append_range_within : List(item), U64, U64 -> List(item)
+
+# Implemented by the compiler. Appends len items of src beginning at start.
+# The caller has already clamped the range to src's length.
+list_append_sublist : List(item), List(item), U64, U64 -> List(item)
 
 # Implemented by the compiler, trims unused list capacity
 list_release_excess_capacity : List(item) -> List(item)
