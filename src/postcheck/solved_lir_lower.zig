@@ -1635,25 +1635,22 @@ const Lowerer = struct {
             .list => |elem| .{ .list = try self.constPlanOfType(elem) },
             .box => |elem| .{ .box = try self.constPlanOfType(elem) },
             .tuple => |items| blk: {
-                const source = self.types.span(items);
-                const plans = try self.allocator.alloc(LirProgram.ConstPlanId, source.len);
+                const plans = try self.allocator.alloc(LirProgram.ConstPlanId, items.len);
                 errdefer self.allocator.free(plans);
-                for (0..source.len) |i| plans[i] = try self.constPlanOfType(GuardedList.at(source, i));
+                for (0..items.len) |i| plans[i] = try self.constPlanOfType(self.types.typeAt(items, i));
                 break :blk .{ .tuple = plans };
             },
             .record => |fields| blk: {
-                const source = self.types.fieldSpan(fields);
-                const plans = try self.allocator.alloc(LirProgram.ConstPlanId, source.len);
+                const plans = try self.allocator.alloc(LirProgram.ConstPlanId, fields.len);
                 errdefer self.allocator.free(plans);
-                for (0..source.len) |i| {
-                    const field = GuardedList.at(source, i);
+                for (0..fields.len) |i| {
+                    const field = self.types.fieldAt(fields, i);
                     plans[i] = try self.constPlanOfType(field.ty);
                 }
                 break :blk .{ .record = plans };
             },
             .tag_union => |tags| blk: {
-                const source = self.types.tagSpan(tags);
-                const variants = try self.allocator.alloc(LirProgram.ConstTagVariant, source.len);
+                const variants = try self.allocator.alloc(LirProgram.ConstTagVariant, tags.len);
                 var initialized: usize = 0;
                 errdefer {
                     for (variants[0..initialized]) |variant| {
@@ -1662,15 +1659,14 @@ const Lowerer = struct {
                     }
                     self.allocator.free(variants);
                 }
-                for (0..source.len) |i| {
-                    const tag = GuardedList.at(source, i);
+                for (0..tags.len) |i| {
+                    const tag = self.types.tagAt(tags, i);
                     const name = try self.allocator.dupe(u8, self.solved.lifted.names.tagLabelText(tag.name));
                     errdefer self.allocator.free(name);
-                    const payload_tys = self.types.span(tag.payloads);
-                    const payloads = try self.allocator.alloc(LirProgram.ConstPlanId, payload_tys.len);
+                    const payloads = try self.allocator.alloc(LirProgram.ConstPlanId, tag.payloads.len);
                     var payloads_owned = true;
                     errdefer if (payloads_owned) self.allocator.free(payloads);
-                    for (0..payload_tys.len) |j| payloads[j] = try self.constPlanOfType(GuardedList.at(payload_tys, j));
+                    for (0..tag.payloads.len) |j| payloads[j] = try self.constPlanOfType(self.types.typeAt(tag.payloads, j));
                     variants[i] = .{
                         .name = name,
                         .checked_name = tag.checked_name,
@@ -1751,18 +1747,16 @@ const Lowerer = struct {
             .list => |elem| .{ .list = try self.constTypeOfType(elem) },
             .box => |elem| .{ .box = try self.constTypeOfType(elem) },
             .tuple => |items| blk: {
-                const source = self.types.span(items);
-                const out = try self.allocator.alloc(const_store.ConstTypeId, source.len);
+                const out = try self.allocator.alloc(const_store.ConstTypeId, items.len);
                 defer self.allocator.free(out);
-                for (0..source.len) |i| out[i] = try self.constTypeOfType(GuardedList.at(source, i));
+                for (0..items.len) |i| out[i] = try self.constTypeOfType(self.types.typeAt(items, i));
                 break :blk .{ .tuple = try self.result.const_types.appendTypeSpan(out) };
             },
             .record => |fields| blk: {
-                const source = self.types.fieldSpan(fields);
-                const out = try self.allocator.alloc(const_store.TypeField, source.len);
+                const out = try self.allocator.alloc(const_store.TypeField, fields.len);
                 defer self.allocator.free(out);
-                for (0..source.len) |i| {
-                    const field = GuardedList.at(source, i);
+                for (0..fields.len) |i| {
+                    const field = self.types.fieldAt(fields, i);
                     out[i] = .{
                         .name = try self.constRecordFieldName(field.name),
                         .ty = try self.constTypeOfType(field.ty),
@@ -1771,15 +1765,13 @@ const Lowerer = struct {
                 break :blk .{ .record = try self.result.const_types.appendFieldSpan(out) };
             },
             .tag_union => |tags| blk: {
-                const source = self.types.tagSpan(tags);
-                const out = try self.allocator.alloc(const_store.TypeTag, source.len);
+                const out = try self.allocator.alloc(const_store.TypeTag, tags.len);
                 defer self.allocator.free(out);
-                for (0..source.len) |i| {
-                    const tag = GuardedList.at(source, i);
-                    const payloads = self.types.span(tag.payloads);
-                    const stored_payloads = try self.allocator.alloc(const_store.ConstTypeId, payloads.len);
+                for (0..tags.len) |i| {
+                    const tag = self.types.tagAt(tags, i);
+                    const stored_payloads = try self.allocator.alloc(const_store.ConstTypeId, tag.payloads.len);
                     defer self.allocator.free(stored_payloads);
-                    for (0..payloads.len) |j| stored_payloads[j] = try self.constTypeOfType(GuardedList.at(payloads, j));
+                    for (0..tag.payloads.len) |j| stored_payloads[j] = try self.constTypeOfType(self.types.typeAt(tag.payloads, j));
                     out[i] = .{
                         .name = try self.constTagName(tag.name),
                         .checked_name = try self.constTagName(tag.checked_name),
@@ -1789,16 +1781,14 @@ const Lowerer = struct {
                 break :blk .{ .tag_union = try self.result.const_types.appendTagSpan(out) };
             },
             .named => |named| blk: {
-                const args = self.types.span(named.args);
-                const stored_args = try self.allocator.alloc(const_store.ConstTypeId, args.len);
+                const stored_args = try self.allocator.alloc(const_store.ConstTypeId, named.args.len);
                 defer self.allocator.free(stored_args);
-                for (0..args.len) |i| stored_args[i] = try self.constTypeOfType(GuardedList.at(args, i));
+                for (0..named.args.len) |i| stored_args[i] = try self.constTypeOfType(self.types.typeAt(named.args, i));
 
-                const declared = self.types.declaredFieldSpan(named.declared_order);
-                const stored_declared = try self.allocator.alloc(const_store.TypeDeclaredField, declared.len);
+                const stored_declared = try self.allocator.alloc(const_store.TypeDeclaredField, named.declared_order.len);
                 defer self.allocator.free(stored_declared);
-                for (0..declared.len) |i| {
-                    const entry = GuardedList.at(declared, i);
+                for (0..named.declared_order.len) |i| {
+                    const entry = self.types.declaredFieldAt(named.declared_order, i);
                     stored_declared[i] = switch (entry) {
                         .named => |name| .{ .named = try self.constRecordFieldName(name) },
                         .padding => |padding| .{ .padding = try self.constTypeOfType(padding) },

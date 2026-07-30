@@ -24,7 +24,6 @@ fn stderrWriter() *std.Io.Writer {
     return &stderr_file_writer.interface;
 }
 
-/// Optimization levels for compilation
 /// Set to true locally to have the LLVM backend also write the optimized IR for
 /// each object into the current directory. Always committed as false.
 const dump_llvm_artifacts = false;
