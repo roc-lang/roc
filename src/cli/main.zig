@@ -6004,7 +6004,8 @@ fn lowerLirWithBuildEnv(
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(relation_artifacts);
 
-    if (reporter) |r| r.begin("Specializing");
+    if (reporter) |r| r.begin("Specialization");
+    var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
     var lowered = try lowerCheckedSourceToLir(
         lir_allocator,
         ctx.gpa,
@@ -6015,9 +6016,10 @@ fn lowerLirWithBuildEnv(
         opt,
         base.target.TargetUsize.native,
         false,
+        &spec_timing,
     );
     errdefer lowered.deinit();
-    if (reporter) |r| r.end();
+    if (reporter) |r| r.endWithBreakdownSequential(&specializationBreakdown(spec_timing.snapshot()));
 
     const internal_static_data: ?[]backend.StaticDataExport = switch (artifact) {
         .lir_image => null,
@@ -8830,7 +8832,8 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
 
     const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
 
-    reporter.begin("Specializing");
+    reporter.begin("Specialization");
+    var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
     var lowered = try lowerCheckedSourceToLir(
         ctx.gpa,
         ctx.gpa,
@@ -8841,9 +8844,10 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         args.opt,
         target_usize,
         args.synthetic_default_platform,
+        &spec_timing,
     );
     defer lowered.deinit();
-    reporter.end();
+    reporter.endWithBreakdownSequential(&specializationBreakdown(spec_timing.snapshot()));
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
@@ -9138,7 +9142,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
 
     const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
 
-    reporter.begin("Specializing");
+    reporter.begin("Specialization");
+    var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
     var lowered = try lowerCheckedSourceToLir(
         ctx.gpa,
         ctx.gpa,
@@ -9149,9 +9154,10 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         args.opt,
         target_usize,
         args.synthetic_default_platform,
+        &spec_timing,
     );
     defer lowered.deinit();
-    reporter.end();
+    reporter.endWithBreakdownSequential(&specializationBreakdown(spec_timing.snapshot()));
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
@@ -9456,7 +9462,8 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     const shm_allocator = shm.allocator();
     const image_header = try shm_allocator.create(lir.LirImage.Header);
 
-    reporter.begin("Specializing");
+    reporter.begin("Specialization");
+    var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
     var lowered = try lowerCheckedSourceToLir(
         ctx.gpa,
         ctx.gpa,
@@ -9467,9 +9474,10 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         args.opt,
         base.target.TargetUsize.native,
         false,
+        &spec_timing,
     );
     defer lowered.deinit();
-    reporter.end();
+    reporter.endWithBreakdownSequential(&specializationBreakdown(spec_timing.snapshot()));
 
     reporter.begin("Code Generation");
     const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
@@ -10406,6 +10414,7 @@ fn lowerCheckedSourceToLir(
     opt: cli_args.OptLevel,
     target_usize: base.target.TargetUsize,
     proc_debug_names: bool,
+    timing: ?*lir.CheckedPipeline.Timing,
 ) Allocator.Error!lir.CheckedPipeline.LoweredProgram {
     const selected_roots: []const check.CheckedArtifact.RootRequest = switch (roots) {
         .platform_entrypoints => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests),
@@ -10457,6 +10466,7 @@ fn lowerCheckedSourceToLir(
             .list_in_place_map = listInPlaceMapForOpt(opt),
             .tag_reachability = tagReachabilityForOpt(opt),
             .proc_debug_names = proc_debug_names,
+            .timing = timing,
         },
     );
 }
@@ -11089,6 +11099,7 @@ fn lowerPlannedTestModule(
         opt,
         base.target.TargetUsize.native,
         false,
+        null,
     );
     errdefer lowered.deinit();
 
@@ -13811,15 +13822,25 @@ fn frontEndBreakdown(timing: anytype) [3]progress.SubTiming {
     };
 }
 
-fn compileTimeEvaluationBreakdown(timing: anytype) [7]progress.SubTiming {
+fn compileTimeEvaluationBreakdown(timing: anytype) [6]progress.SubTiming {
     return .{
-        .{ .name = "Monotype Specialization", .ns = timing.monotype_ns },
-        .{ .name = "Post-Check to LIR", .ns = timing.postcheck_to_lir_ns },
-        .{ .name = "LIR Passes + ARC", .ns = timing.lir_passes_arc_ns },
-        .{ .name = "Static Data", .ns = timing.static_data_ns },
-        .{ .name = "Code Generation", .ns = timing.code_generation_ns },
+        .{ .name = "Specialization", .ns = timing.monotype_ns },
+        .{ .name = "LIR Generation", .ns = timing.postcheck_to_lir_ns },
+        .{ .name = "LIR Passes", .ns = timing.lir_passes_arc_ns },
+        .{ .name = "Code Generation", .ns = timing.code_generation_ns + timing.static_data_ns },
         .{ .name = "Execution", .ns = timing.execution_ns },
         .{ .name = "Store Results", .ns = timing.store_results_ns },
+    };
+}
+
+fn specializationBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [6]progress.SubTiming {
+    return .{
+        .{ .name = "Specialization", .ns = timing.monotype_ns },
+        .{ .name = "Lifting", .ns = timing.lift_ns },
+        .{ .name = "SpecConstr", .ns = timing.spec_constr_ns },
+        .{ .name = "Lambda Sets", .ns = timing.lambda_solve_ns },
+        .{ .name = "LIR Generation", .ns = timing.lir_gen_ns },
+        .{ .name = "LIR Passes", .ns = timing.lir_passes_arc_ns },
     };
 }
 
@@ -13830,6 +13851,7 @@ fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {
     reporter.recordCompletedWithBreakdown(
         "Compile-Time Evaluation",
         compile_time.total_ns,
+        .{ .min = compile_time.mem_min, .max = compile_time.mem_max },
         &compileTimeEvaluationBreakdown(compile_time),
     );
 }

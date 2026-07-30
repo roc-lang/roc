@@ -106,7 +106,24 @@ pub const Content = union(enum) {
         members: Span = .empty(),
     },
     zst,
+    /// Lazy leaf: this var's type is the referenced lifted Monotype, not yet
+    /// materialized in this store. The solver expands a leaf one level the
+    /// first time unification or a shape read touches it, and end-of-solve
+    /// finalization replaces every surviving leaf with a link to a
+    /// materialized clone, so program views never observe one. Each use still
+    /// gets its own leaf var: unification rewrites var contents in place, so
+    /// clones that can reach `unify` must own their vars.
+    mono: struct {
+        id: MonoType.TypeId,
+        /// Clone context tying recursive back-references within one lazily
+        /// materialized tree to their existing vars, exactly as an eager
+        /// clone's memo map did. `no_leaf_context` until first expansion.
+        ctx: u32 = no_leaf_context,
+    },
 };
+
+/// Sentinel for a lazy leaf that has not been reached by any expansion yet.
+pub const no_leaf_context: u32 = std.math.maxInt(u32);
 
 test "lambda solved named backing preserves generated-private authority" {
     const content = Content{ .named = .{

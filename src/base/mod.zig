@@ -21,6 +21,7 @@ pub const ModuleIdentity = @import("module_identity.zig");
 pub const SingleThreadArena = @import("collections").SingleThreadArena;
 
 pub const safe_memory = @import("safe_memory.zig");
+pub const process_memory = @import("process_memory.zig");
 pub const signal_handler = @import("signal_handler.zig");
 pub const stack_overflow = @import("stack_overflow.zig");
 pub const elf_self_relocate = @import("elf_self_relocate.zig");
