@@ -2310,6 +2310,22 @@ census was re-sited onto it before the argument could be redone.
    acceptance condition are therefore coupled — raising coverage exposes
    more of the same gap rather than a different one.
 
+2a-iii. **Both corpora.** The acceptance condition is stated over
+   snapshots and eval, and eval is the larger and more varied corpus, so
+   it is measured too (7498 census writers, suite green). Coverage there is
+   **257870 of 1063281 nameable reads, 24.3%**, against 10.9% on
+   snapshots. Every one of eval's **56154** derived reads grounds out in
+   checked-named structure, none ungrounded, which confirms on the larger
+   corpus what snapshots showed: composites owe no declared rule.
+
+   `seam_direct_diverged` is **857** on eval against 19 on snapshots. The
+   ratio tracks coverage rather than corpus size alone, which is the
+   expected behaviour if divergence is a property of the surface being
+   measured rather than of a few programs — raising coverage exposes more
+   of one gap. Both counts are of the same shape §13.3 records: directed
+   translation emitting the empty tag union where the graph carries a
+   concrete type.
+
 2b. **Re-measure the logical residual at the production seam.**
    `BodyContext.typeForChecked` compares directed translation against the
    graph at every read, holds the body-walk context the isolated operands
