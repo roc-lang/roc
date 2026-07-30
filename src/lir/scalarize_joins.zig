@@ -1426,7 +1426,7 @@ test "scalarize sees through pure aliases to field reads" {
         .body = make_view,
         .remainder = num_assign,
     } });
-    _ = try store.addProcSpec(.{
+    const proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .args = LIR.LocalSpan.empty(),
         .body = join,
