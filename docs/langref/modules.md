@@ -245,8 +245,9 @@ import Internal.Http.Client exposing [send]
 ```
 
 These imports load `Src/Widget.roc` and `Internal/Http/Client.roc`,
-respectively. The source-visible module name is the final path segment, so
-`Src/Widget.roc` defines the nominal type `Widget`.
+respectively, relative to the directory containing the importing `.roc` file.
+The source-visible module name is the final path segment, so `Src/Widget.roc`
+defines the nominal type `Widget`.
 
 The explicit clause disambiguates a directory path from a nested type import.
 Without one, `import Url.ParseErr` imports the nested `ParseErr` type from
