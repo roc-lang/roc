@@ -430,6 +430,13 @@ pub const Census = struct {
     // can close the gap, or whether no recorded route reaches the position.
     diverged_node_inside_request_edge: Counter = Counter.init(0),
     diverged_node_outside_request_edge: Counter = Counter.init(0),
+    // For a diverging position, whether the checked data names its unbound
+    // variable's owning definition at the request edge it entered through.
+    divergence_site_at_request_edge: Counter = Counter.init(0),
+    divergence_no_site_at_request_edge: Counter = Counter.init(0),
+    divergence_no_request_edge: Counter = Counter.init(0),
+    divergence_no_free_variable: Counter = Counter.init(0),
+    divergence_free_var_unowned: Counter = Counter.init(0),
     // What a read naming no checked position is, by node shape.
     derived_read_redirect: Counter = Counter.init(0),
     derived_read_unresolved: Counter = Counter.init(0),

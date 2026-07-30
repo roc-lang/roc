@@ -557,6 +557,10 @@ pub const ContextedProvenance = struct {
     /// Whether an edge-naming request scope was open when the node was made,
     /// which is the binding a read could resolve from if none other names it.
     inside_request_edge: bool = false,
+    /// The request edge open when this node was instantiated. The site that
+    /// names the position's owning definition, if one does, is keyed at THIS
+    /// use expression rather than at the read's (reunify.md 13.2 2a).
+    request_edge: ?RequestEdgeName = null,
 };
 
 /// Debug/probe-only record of what each graph node stands for and how it
@@ -1381,6 +1385,57 @@ pub const Rehearsal = struct {
             .checked => |edge| .{ .module_bytes = edge.module_bytes, .use_expr = edge.use_expr },
             .none, .generated => null,
         };
+    }
+
+    /// Debug/probe-only: for a position that diverged, whether the checked data
+    /// names its unbound variable's owning definition AT THE REQUEST EDGE the
+    /// position entered through. The read's own use expression never carries
+    /// that site; the edge's might, and that is the difference between building
+    /// a level for the definition and having nothing to build it from.
+    pub fn noteDivergenceEdgeSite(
+        self: *Rehearsal,
+        address: CheckedAddress,
+        under_callee: bool,
+        edge: ?RequestEdgeName,
+    ) void {
+        if (comptime !census.enabled) return;
+        if (self.disabled) return;
+        const named = edge orelse {
+            census.bump("divergence_no_request_edge");
+            return;
+        };
+        const cursor = self.lookup.cursor(address.module_bytes) orelse return;
+        var env: ?*const direct_translate.BindingEnvironment = null;
+        const callee = if (under_callee) self.innermostCallee(address.module_bytes) else null;
+        if (callee) |level| {
+            env = level.chain.innermost();
+        } else if (self.frameForModule(address.module_bytes)) |frame| {
+            env = frame.environment();
+        }
+        const free = self.firstFreeVariable(cursor.view, @enumFromInt(address.type_id), env) orelse {
+            census.bump("divergence_no_free_variable");
+            return;
+        };
+        var owner: ?u32 = null;
+        for (cursor.view.schemes) |scheme| {
+            for (scheme.generalizedVars(cursor.view)) |binder| {
+                if (binder == free) {
+                    owner = scheme.owner_node;
+                    break;
+                }
+            }
+            if (owner != null) break;
+        }
+        const owner_node = owner orelse {
+            census.bump("divergence_free_var_unowned");
+            return;
+        };
+        const caller = self.lookup.cursor(named.module_bytes) orelse return;
+        if (self.siteQuietly(caller, named.use_expr, owner_node) != null) {
+            census.bump("divergence_site_at_request_edge");
+        } else {
+            census.bump("divergence_no_site_at_request_edge");
+        }
     }
 
     pub fn openRequestEdge(
