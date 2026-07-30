@@ -409,6 +409,11 @@ const UniqueFact = union(enum) {
     consume: LIR.LocalId,
     destroy: LIR.LocalId,
     read: LIR.LocalId,
+    /// A join parameter declaration; its uniqueness settles from its
+    /// `initialize_join_param` writes rather than a definition of its own.
+    join_param: LIR.LocalId,
+    /// One `initialize_join_param` write moving `value` into `param`.
+    param_write: struct { param: LIR.LocalId, value: LIR.LocalId },
 };
 
 const ParamUseFact = struct {
@@ -963,6 +968,17 @@ const UniqueReturnWork = struct {
     alias_offsets: []const u32,
     alias_lens: []const u32,
     alias_edges: []const u32,
+    /// Join-parameter settling: `param_edge_*` maps a value to the
+    /// parameters its `initialize_join_param` writes feed, and
+    /// `remaining_nonunique_writes` counts each parameter's writes whose
+    /// value is not yet unique. `param_blocked` marks parameters that can
+    /// never settle: a destroyed write value, another definition, or a
+    /// foreign origin.
+    param_edge_offsets: []const u32,
+    param_edge_lens: []const u32,
+    param_edges: []const u32,
+    remaining_nonunique_writes: []u32,
+    param_blocked: []const bool,
     proc_work: *std.ArrayList(u32),
     born_work: *std.ArrayList(u32),
 
@@ -1004,6 +1020,31 @@ const UniqueReturnWork = struct {
         if (!self.uniqueness.destroyed.isSet(local) and !self.uniqueness.unique.isSet(local)) {
             self.uniqueness.unique.set(local);
             try self.noteUnique(local);
+            try self.noteUniqueParamWrites(local);
+        }
+    }
+
+    fn noteUniqueParamWrites(self: *@This(), local: u32) SolveError!void {
+        const start = self.param_edge_offsets[local];
+        const end = start + self.param_edge_lens[local];
+        for (self.param_edges[start..end]) |param| {
+            if (self.remaining_nonunique_writes[param] == 0) {
+                solveInvariant("ARC unique join-parameter write dependency was satisfied twice");
+            }
+            self.remaining_nonunique_writes[param] -= 1;
+            if (self.remaining_nonunique_writes[param] == 0) try self.attemptBornParam(param);
+        }
+    }
+
+    fn attemptBornParam(self: *@This(), param: u32) SolveError!void {
+        if (self.uniqueness.born_unique.isSet(param)) return;
+        if (self.param_blocked[param]) return;
+        self.uniqueness.born_unique.set(param);
+        try self.born_work.append(self.solver.allocator, param);
+        if (!self.uniqueness.destroyed.isSet(param) and !self.uniqueness.unique.isSet(param)) {
+            self.uniqueness.unique.set(param);
+            try self.noteUnique(param);
+            try self.noteUniqueParamWrites(param);
         }
     }
 
@@ -1103,6 +1144,81 @@ fn solveUniqueReturnModes(
         }
     }
 
+    // Join-parameter write dependencies, in the same shape as the call and
+    // alias dependencies: a value's edge list names the parameters its
+    // writes feed, and each parameter counts down its not-yet-unique writes.
+    var param_is_param = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+    defer param_is_param.deinit(allocator);
+    const param_blocked = try allocator.alloc(bool, local_count);
+    defer allocator.free(param_blocked);
+    @memset(param_blocked, false);
+    const remaining_nonunique_writes = try allocator.alloc(u32, local_count);
+    defer allocator.free(remaining_nonunique_writes);
+    @memset(remaining_nonunique_writes, 0);
+    const write_counts = try allocator.alloc(u32, local_count);
+    defer allocator.free(write_counts);
+    @memset(write_counts, 0);
+    const param_edge_lens = try allocator.alloc(u32, local_count);
+    defer allocator.free(param_edge_lens);
+    @memset(param_edge_lens, 0);
+
+    for (solver.unique_facts.items) |fact| switch (fact) {
+        .join_param => |local| if (solver.domain.indexOf(local)) |index| {
+            param_is_param.set(index);
+            if (origins.static_foreign.isSet(index) or origins.has_def.isSet(index)) {
+                param_blocked[index] = true;
+            }
+        },
+        .param_write => |write| if (solver.domain.indexOf(write.param)) |param| {
+            write_counts[param] += 1;
+            if (solver.domain.indexOf(write.value)) |value| {
+                if (uniqueness.destroyed.isSet(value)) param_blocked[param] = true;
+            } else {
+                param_blocked[param] = true;
+            }
+        },
+        else => {},
+    };
+    var blocked_iter = param_is_param.iterator(.{});
+    while (blocked_iter.next()) |param| {
+        if (write_counts[param] == 0) param_blocked[param] = true;
+    }
+    for (solver.unique_facts.items) |fact| switch (fact) {
+        .param_write => |write| if (solver.domain.indexOf(write.param)) |param| {
+            if (param_blocked[param]) continue;
+            const value = solver.domain.indexOf(write.value) orelse continue;
+            if (!uniqueness.unique.isSet(value)) {
+                remaining_nonunique_writes[param] += 1;
+                param_edge_lens[value] += 1;
+            }
+        },
+        else => {},
+    };
+
+    const param_edge_offsets = try allocator.alloc(u32, local_count);
+    defer allocator.free(param_edge_offsets);
+    var param_edge_count: u32 = 0;
+    for (param_edge_lens, 0..) |len, index| {
+        param_edge_offsets[index] = param_edge_count;
+        param_edge_count += len;
+    }
+    const param_edges = try allocator.alloc(u32, param_edge_count);
+    defer allocator.free(param_edges);
+    const param_edge_fill = try allocator.alloc(u32, local_count);
+    defer allocator.free(param_edge_fill);
+    @memset(param_edge_fill, 0);
+    for (solver.unique_facts.items) |fact| switch (fact) {
+        .param_write => |write| if (solver.domain.indexOf(write.param)) |param| {
+            if (param_blocked[param]) continue;
+            const value = solver.domain.indexOf(write.value) orelse continue;
+            if (!uniqueness.unique.isSet(value)) {
+                param_edges[param_edge_offsets[value] + param_edge_fill[value]] = param;
+                param_edge_fill[value] += 1;
+            }
+        },
+        else => {},
+    };
+
     var proc_work = std.ArrayList(u32).empty;
     defer proc_work.deinit(allocator);
     var born_work = std.ArrayList(u32).empty;
@@ -1119,11 +1235,22 @@ fn solveUniqueReturnModes(
         .alias_offsets = alias_offsets,
         .alias_lens = alias_lens,
         .alias_edges = alias_edges,
+        .param_edge_offsets = param_edge_offsets,
+        .param_edge_lens = param_edge_lens,
+        .param_edges = param_edges,
+        .remaining_nonunique_writes = remaining_nonunique_writes,
+        .param_blocked = param_blocked,
         .proc_work = &proc_work,
         .born_work = &born_work,
     };
     for (0..proc_count) |proc_index| {
         if (remaining_returns[proc_index] == 0) try work.seedProc(@intCast(proc_index));
+    }
+    var seed_param_iter = param_is_param.iterator(.{});
+    while (seed_param_iter.next()) |param| {
+        if (!param_blocked[param] and remaining_nonunique_writes[param] == 0) {
+            try work.attemptBornParam(@intCast(param));
+        }
     }
     try work.run();
 }
@@ -1924,9 +2051,16 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
             if (assign.target != assign.value) try solver.binding_facts.append(allocator, .{ .demand = assign.value });
             try liftVisibilityLink(solver, assign.target, assign.value);
-            try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
-            try solver.unique_facts.append(allocator, .{ .destroy = assign.target });
-            try solver.unique_facts.append(allocator, .{ .destroy = assign.value });
+            if (assign.mode == .initialize_join_param) {
+                // The write moves the value into the parameter; the
+                // parameter's uniqueness settles from all of its writes.
+                try solver.unique_facts.append(allocator, .{ .param_write = .{ .param = assign.target, .value = assign.value } });
+                try solver.unique_facts.append(allocator, .{ .consume = assign.value });
+            } else {
+                try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
+                try solver.unique_facts.append(allocator, .{ .destroy = assign.target });
+                try solver.unique_facts.append(allocator, .{ .destroy = assign.value });
+            }
         },
         .debug => |debug_stmt| try solver.unique_facts.append(allocator, .{ .read = debug_stmt.message }),
         // The failure report takes ownership of the message.
@@ -1988,7 +2122,7 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 const param = GuardedList.at(params, param_index);
                 try solver.binding_facts.append(allocator, .{ .multi = param });
                 if (solver.domain.indexOf(param)) |arc_index| solver.join_param.set(arc_index);
-                try solver.unique_facts.append(allocator, .{ .foreign = param });
+                try solver.unique_facts.append(allocator, .{ .join_param = param });
             }
             const maybe_uninitialized_params = store.getLocalSpan(join_stmt.maybe_uninitialized_params);
             const maybe_uninitialized_conditions = store.getLocalSpan(join_stmt.maybe_uninitialized_conditions);
@@ -2000,6 +2134,8 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 const param = GuardedList.at(maybe_uninitialized_params, index);
                 const condition = GuardedList.at(maybe_uninitialized_conditions, index);
                 const mask = GuardedList.at(maybe_uninitialized_condition_masks, index);
+                // Conditionally initialized parameters never settle unique.
+                try solver.unique_facts.append(allocator, .{ .foreign = param });
                 const param_index = solver.domain.indexOf(param) orelse continue;
                 solver.maybe_uninitialized_join_param.set(param_index);
                 solver.maybe_uninitialized_condition[param_index] = @intFromEnum(condition);
@@ -2732,11 +2868,16 @@ fn computeUniquenessFromFacts(
     defer has_def.deinit(allocator);
     var multi_def = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
     defer multi_def.deinit(allocator);
+
     const alias_source = try allocator.alloc(u32, local_count);
     defer allocator.free(alias_source);
     @memset(alias_source, no_local);
     var alias_targets = std.ArrayList(u32).empty;
     defer alias_targets.deinit(allocator);
+    var param_set = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+    defer param_set.deinit(allocator);
+    var param_write_edges = std.ArrayList([2]u32).empty;
+    defer param_write_edges.deinit(allocator);
 
     const Marks = struct {
         fn trackDef(
@@ -2788,6 +2929,14 @@ fn computeUniquenessFromFacts(
         .consume => |local| if (domain.indexOf(local)) |index| Marks.consume(&consumed, &destroyed, index),
         .destroy => |local| if (domain.indexOf(local)) |index| destroyed.set(index),
         .read => |local| if (domain.indexOf(local)) |index| read.set(index),
+        .join_param => |local| if (domain.indexOf(local)) |index| param_set.set(index),
+        .param_write => |write| if (domain.indexOf(write.param)) |param_index| {
+            if (domain.indexOf(write.value)) |value_index| {
+                try param_write_edges.append(allocator, .{ param_index, value_index });
+            } else {
+                foreign.set(param_index);
+            }
+        },
     };
 
     // Direct-call facts are static, but their return origins and argument
@@ -2875,6 +3024,49 @@ fn computeUniquenessFromFacts(
         }
     }
 
+    // Settle the join parameters against the finished ordinary bits. A
+    // parameter is born unique when every recorded write moves in a unique
+    // value and nothing else defines it; parameters can feed parameters
+    // through nested joins and pure aliases, so alternate with the alias
+    // propagation until neither adds a birth. This mirrors the independent
+    // whole-store model in `computeUniquenessDetailed`.
+    var params_changed = true;
+    while (params_changed) {
+        params_changed = false;
+        var param_iter = param_set.iterator(.{});
+        params: while (param_iter.next()) |param_index| {
+            if (born.isSet(param_index)) continue;
+            if (foreign.isSet(param_index)) continue;
+            if (has_def.isSet(param_index)) continue;
+            var write_count: usize = 0;
+            for (param_write_edges.items) |edge| {
+                if (edge[0] != param_index) continue;
+                write_count += 1;
+                if (!born.isSet(edge[1]) or destroyed.isSet(edge[1])) continue :params;
+            }
+            if (write_count == 0) continue;
+            born.set(@intCast(param_index));
+            params_changed = true;
+            try enqueue(allocator, &work, &queued, @intCast(param_index));
+        }
+        if (!params_changed) break;
+        while (work.pop()) |source| {
+            queued.unset(source);
+            for (alias_edges[alias_offsets[source]..alias_offsets[source + 1]]) |target| {
+                var changed = false;
+                if (!foreign.isSet(target) and !born.isSet(target) and born.isSet(source)) {
+                    born.set(target);
+                    changed = true;
+                }
+                if (!destroyed.isSet(target) and (destroyed.isSet(source) or read.isSet(source))) {
+                    destroyed.set(target);
+                    changed = true;
+                }
+                if (changed) try enqueue(allocator, &work, &queued, target);
+            }
+        }
+    }
+
     var unique = try born.clone(allocator);
     errdefer unique.deinit(allocator);
     var destroyed_iter = destroyed.iterator(.{});
@@ -2956,6 +3148,26 @@ fn computeUniquenessDetailed(
     defer has_def.deinit(allocator);
     var multi_def = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
     defer multi_def.deinit(allocator);
+
+    // Join parameters inherit uniqueness from their writes: a parameter
+    // whose every `initialize_join_param` write moves in a unique value is
+    // itself unique — the loop-carried accumulator rebound from an
+    // append-style result each iteration is the shape this serves. A
+    // parameter with any other definition (a proc argument entering a
+    // tail-call header, a plain edge assignment, an alias) stays foreign.
+    var join_param_set = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+    defer join_param_set.deinit(allocator);
+    var param_write_edges = std.ArrayList([2]u32).empty;
+    defer param_write_edges.deinit(allocator);
+    var proc_arg_set = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+    defer proc_arg_set.deinit(allocator);
+    for (0..store.procSpecCount()) |proc_index| {
+        const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+        const proc_args = store.getLocalSpan(proc.args);
+        for (0..GuardedList.borrowLen(proc_args)) |position| {
+            proc_arg_set.set(@intFromEnum(GuardedList.at(proc_args, position)));
+        }
+    }
 
     // Single pure-alias source per target (`no_local` when the local is not
     // an alias target), plus the list of distinct alias targets to settle.
@@ -3236,18 +3448,25 @@ fn computeUniquenessDetailed(
                 if (assign.payload) |payload| marks.destroy(&destroyed, payload);
             },
             .set_local => |assign| {
-                marks.trackDef(&has_def, &multi_def, assign.target);
-                marks.destroy(&foreign_def, assign.target);
-                marks.destroy(&destroyed, assign.target);
-                marks.destroy(&destroyed, assign.value);
+                if (assign.mode == .initialize_join_param) {
+                    // The write moves the value into the parameter; the
+                    // parameter's own uniqueness is settled by the join
+                    // parameter fixpoint below.
+                    try param_write_edges.append(allocator, .{ @intFromEnum(assign.target), @intFromEnum(assign.value) });
+                    marks.consume(&consumed_once, &destroyed, assign.value);
+                } else {
+                    marks.trackDef(&has_def, &multi_def, assign.target);
+                    marks.destroy(&foreign_def, assign.target);
+                    marks.destroy(&destroyed, assign.target);
+                    marks.destroy(&destroyed, assign.value);
+                }
             },
             .incref => |rc| marks.destroy(&destroyed, rc.value),
             .join => |join_stmt| {
                 const params = store.getLocalSpan(join_stmt.params);
                 for (0..GuardedList.borrowLen(params)) |param_index| {
                     const param = GuardedList.at(params, param_index);
-                    marks.trackDef(&has_def, &multi_def, param);
-                    marks.destroy(&foreign_def, param);
+                    join_param_set.set(@intFromEnum(param));
                 }
             },
             // Returning is the value's consuming use: the unit moves to the
@@ -3355,6 +3574,54 @@ fn computeUniquenessDetailed(
                 changed = true;
             }
             if (changed) try queueAliasSource(allocator, &alias_work, &alias_queued, target);
+        }
+    }
+
+    // Settle the join parameters against the finished ordinary bits. A
+    // parameter is born unique when it has at least one recorded write,
+    // every write moves in a value that is unique at that point, and no
+    // other definition claims it: a proc argument shared into a tail-call
+    // header, a plain edge assignment (which tracks a definition), or a
+    // stray non-move write (which marks it foreign) all keep it out.
+    // Parameters can feed parameters through nested joins and pure aliases,
+    // so alternate with the alias propagation until neither adds a birth.
+    var params_changed = true;
+    while (params_changed) {
+        params_changed = false;
+        var param_iter = join_param_set.iterator(.{});
+        params: while (param_iter.next()) |param_index| {
+            if (born.isSet(param_index)) continue;
+            if (foreign_def.isSet(param_index)) continue;
+            if (has_def.isSet(param_index)) continue;
+            if (proc_arg_set.isSet(param_index)) continue;
+            var write_count: usize = 0;
+            for (param_write_edges.items) |edge| {
+                if (edge[0] != param_index) continue;
+                write_count += 1;
+                if (!born.isSet(edge[1]) or destroyed.isSet(edge[1])) continue :params;
+            }
+            if (write_count == 0) continue;
+            born.set(param_index);
+            params_changed = true;
+            try queueAliasSource(allocator, &alias_work, &alias_queued, @intCast(param_index));
+        }
+        if (!params_changed) break;
+        while (alias_work.pop()) |source| {
+            alias_queued.unset(source);
+            for (alias_edges[alias_offsets[source]..alias_offsets[source + 1]]) |target| {
+                var changed = false;
+                if (!foreign_def.isSet(target) and !born.isSet(target) and born.isSet(source)) {
+                    born.set(target);
+                    changed = true;
+                }
+                if (!destroyed.isSet(target) and
+                    (destroyed.isSet(source) or borrow_used.isSet(source)))
+                {
+                    destroyed.set(target);
+                    changed = true;
+                }
+                if (changed) try queueAliasSource(allocator, &alias_work, &alias_queued, target);
+            }
         }
     }
 
