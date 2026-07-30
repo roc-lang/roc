@@ -8353,6 +8353,29 @@ fn llvmOptimizationLevel(opt: cli_args.OptLevel) builder.OptimizationLevel {
     };
 }
 
+fn devCodeGenerationPhaseName(target_arch: std.Target.Cpu.Arch) []const u8 {
+    return switch (target_arch) {
+        .x86_64 => "x64 Instruction Generation",
+        .aarch64 => "arm64 Instruction Generation",
+        .wasm32 => "wasm32 Bytecode Generation",
+        else => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "dev code-generation timing requested for unsupported architecture {s}",
+                    .{@tagName(target_arch)},
+                );
+            }
+            unreachable;
+        },
+    };
+}
+
+test "dev code-generation timing labels name the emitted instruction format" {
+    try std.testing.expectEqualStrings("x64 Instruction Generation", devCodeGenerationPhaseName(.x86_64));
+    try std.testing.expectEqualStrings("arm64 Instruction Generation", devCodeGenerationPhaseName(.aarch64));
+    try std.testing.expectEqualStrings("wasm32 Bytecode Generation", devCodeGenerationPhaseName(.wasm32));
+}
+
 fn noTargetLibcallsForLlvmBuild(target: RocTarget) bool {
     return switch (target.toOsTag()) {
         .macos, .windows => false,
@@ -8382,7 +8405,7 @@ fn compileLlvmAppObject(
     static_data_exports: []const backend.StaticDataExport,
     enable_default_platform_runtime: bool,
     enable_default_platform_hosted_calls: bool,
-    // When present, the caller has an active "Code Generation" phase covering
+    // When present, the caller has an active "LLVM IR Generation" phase covering
     // LIR-to-bitcode lowering; this transitions it to a distinct
     // "LLVM Optimize + Emit" phase at the point LLVM takes over the bitcode.
     reporter: ?*progress.Reporter,
@@ -8562,6 +8585,7 @@ fn rocBuildWasmLlvm(
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
     static_data_exports: []const backend.StaticDataExport,
+    reporter: *progress.Reporter,
 ) CliMainError!void {
     if (entrypoints.len == 0) {
         if (builtin.mode == .Debug) {
@@ -8570,8 +8594,6 @@ fn rocBuildWasmLlvm(
         unreachable;
     }
 
-    // wasm LLVM output codegen, optimize, emit, and link within one phase, so no
-    // separate "LLVM Optimize + Emit" row is reported here.
     const app_object = try compileLlvmAppObject(
         ctx,
         args,
@@ -8582,9 +8604,12 @@ fn rocBuildWasmLlvm(
         static_data_exports,
         false,
         false,
-        null,
+        reporter,
     );
     defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, app_object.artifact_dir) catch {};
+
+    reporter.end();
+    reporter.begin("Linking");
 
     var owned_inputs: std.ArrayList([]u8) = .empty;
     defer freeOwnedWasmInputs(ctx, &owned_inputs);
@@ -8868,7 +8893,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     }
 
     if (target == .wasm32) {
-        reporter.begin("Code Generation");
+        reporter.begin("LLVM IR Generation");
         try rocBuildWasmLlvm(
             ctx,
             args,
@@ -8879,10 +8904,11 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
             &lowered,
             entrypoints,
             static_data_exports,
+            &reporter,
         );
         reporter.end();
     } else {
-        reporter.begin("Code Generation");
+        reporter.begin("LLVM IR Generation");
         const hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
         const enable_default_platform_runtime = args.synthetic_default_platform and DefaultPlatformRuntimeObjects.forTarget(target) != null;
 
@@ -9102,6 +9128,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
             return error.UnsupportedTarget;
         },
     }
+    const code_generation_phase_name = devCodeGenerationPhaseName(target_arch);
 
     const final_output_path = if (args.output != null)
         output_path
@@ -9169,7 +9196,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
 
     if (target_arch == .wasm32) {
-        reporter.begin("Code Generation");
+        reporter.begin(code_generation_phase_name);
         try rocBuildWasmSurgical(
             ctx,
             args,
@@ -9199,7 +9226,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         return;
     }
 
-    reporter.begin("Code Generation");
+    reporter.begin(code_generation_phase_name);
     if (entrypoints.len == 0 and static_data_exports.len == 0) {
         if (builtin.mode == .Debug) {
             std.debug.panic("native build invariant violated: no exported platform entrypoints or data symbols", .{});
@@ -9471,7 +9498,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     defer lowered.deinit();
     reporter.end();
 
-    reporter.begin("Code Generation");
+    reporter.begin("LIR Image Generation");
     const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
     defer ctx.gpa.free(platform_entrypoints);
     const copied = try lir.LirImage.copyProgramIntoBuffer(
@@ -13817,7 +13844,7 @@ fn compileTimeEvaluationBreakdown(timing: anytype) [7]progress.SubTiming {
         .{ .name = "Post-Check to LIR", .ns = timing.postcheck_to_lir_ns },
         .{ .name = "LIR Passes + ARC", .ns = timing.lir_passes_arc_ns },
         .{ .name = "Static Data", .ns = timing.static_data_ns },
-        .{ .name = "Code Generation", .ns = timing.code_generation_ns },
+        .{ .name = devCodeGenerationPhaseName(backend.dev.LirCodeGenMod.host_lir_codegen_target.toCpuArch()), .ns = timing.code_generation_ns },
         .{ .name = "Execution", .ns = timing.execution_ns },
         .{ .name = "Store Results", .ns = timing.store_results_ns },
     };
