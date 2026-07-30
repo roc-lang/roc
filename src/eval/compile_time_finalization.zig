@@ -77,7 +77,8 @@ pub const Timing = struct {
             .total_ns = self.total_ns.load(),
             .monotype_ns = lowering.monotype_ns,
             .postcheck_to_lir_ns = lowering.lift_ns + lowering.spec_constr_ns + lowering.lambda_solve_ns + lowering.lir_gen_ns,
-            .lir_passes_arc_ns = lowering.lir_passes_arc_ns,
+            .lir_passes_ns = lowering.lir_passes_ns,
+            .arc_ns = lowering.arc_ns,
             .static_data_ns = self.static_data_ns.load(),
             .code_generation_ns = self.code_generation_ns.load(),
             .execution_ns = self.execution_ns.load(),
@@ -93,7 +94,8 @@ pub const Timing = struct {
             // The compile-time evaluation report shows lowering as one
             // category; re-attribute the merged span to its first stage.
             .lift_ns = snapshot_value.postcheck_to_lir_ns,
-            .lir_passes_arc_ns = snapshot_value.lir_passes_arc_ns,
+            .lir_passes_ns = snapshot_value.lir_passes_ns,
+            .arc_ns = snapshot_value.arc_ns,
         });
         self.total_ns.add(snapshot_value.total_ns);
         self.static_data_ns.add(snapshot_value.static_data_ns);
@@ -205,7 +207,8 @@ pub const TimingSnapshot = struct {
     total_ns: u64 = 0,
     monotype_ns: u64 = 0,
     postcheck_to_lir_ns: u64 = 0,
-    lir_passes_arc_ns: u64 = 0,
+    lir_passes_ns: u64 = 0,
+    arc_ns: u64 = 0,
     static_data_ns: u64 = 0,
     code_generation_ns: u64 = 0,
     execution_ns: u64 = 0,

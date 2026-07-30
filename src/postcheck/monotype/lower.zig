@@ -3009,7 +3009,7 @@ const Builder = struct {
             .runtime_demand_guard_frames = try source_ctx.runtimeDemandGuardFrameAddresses(),
             .demand_start = demand_boundary,
             .demand_end = demand_boundary,
-            .demand_frame_floor = @intCast(source_ctx.runtime_demand_guard_frames.len),
+            .demand_frame_floor = source_ctx.runtime_demand_guard_frames,
             .requires_local = local_context_dependent,
             .local_context_dependent = local_context_dependent,
             .lexical_owner = lexical_owner,
@@ -4696,7 +4696,7 @@ const Builder = struct {
             .evidence = requested_evidence,
             .runtime_demand_guard_frames = try source_ctx.runtimeDemandGuardFrameAddresses(),
             .demand_start = @intCast(source_ctx.draft.runtime_value_demands.items.len),
-            .demand_frame_floor = @intCast(source_ctx.runtime_demand_guard_frames.len),
+            .demand_frame_floor = source_ctx.runtime_demand_guard_frames,
             .capture_entry_guards = try source_ctx.graph.arena().dupe(NodeId, capture_entry_guards),
             .lexical_owner = source_ctx.draft.current_owner,
             .requires_local = evidenceChainRequiresLocalContext(requested_evidence),
@@ -8961,7 +8961,7 @@ fn verifyReusedDemandRange(
     reuse: DraftSpecReuse,
     start: u32,
     end: u32,
-    frame_floor: u32,
+    frame_floor: RuntimeDemandGuardFrameStack,
 ) Allocator.Error!void {
     if (start > end or end > body_draft.runtime_value_demands.items.len) {
         Common.invariant("reused specialization demand range was out of bounds");
@@ -8976,11 +8976,19 @@ fn verifyReusedDemandRange(
         if (try evaluator.holds(demand.impossibility_proof)) continue;
         if (try evaluator.holds(reuse.prefix_proof)) continue;
         if (try evaluator.holds(demand.local_proof)) continue;
-        if (demand.frames.len < frame_floor) {
+        if (demand.frames.depth < frame_floor.depth) {
             Common.invariant("reused specialization demand lost its inherited guard frame prefix");
         }
-        for (demand.frames[frame_floor..]) |frame| {
+        var demand_frames = demand.frames;
+        while (demand_frames.depth > frame_floor.depth) {
+            const frame_id = demand_frames.head orelse
+                Common.invariant("non-empty runtime-demand guard stack had no head frame");
+            const frame = runtimeDemandGuardFrame(body_draft, frame_id);
             if (try evaluator.holds(frame.proof)) continue :demand_loop;
+            demand_frames = .{ .head = frame.parent, .depth = demand_frames.depth - 1 };
+        }
+        if (demand_frames.head != frame_floor.head) {
+            Common.invariant("reused specialization demand did not inherit its recorded guard frame prefix");
         }
         Common.invariant("runtime-value demand finalized as a closed empty tag-union type under a reusing guard context");
     }
@@ -9113,8 +9121,9 @@ const DraftTemplateSpec = struct {
     demand_start: u32 = 0,
     demand_end: u32 = 0,
     /// Guard frames inherited from the requesting context at body start; a
-    /// demand's frames below this floor belong to the reused-away context.
-    demand_frame_floor: u32 = 0,
+    /// demand's ancestors below this snapshot belong to the reused-away
+    /// context.
+    demand_frame_floor: RuntimeDemandGuardFrameStack = .{},
     requires_local: bool = false,
     local_context_dependent: bool = false,
     lexical_owner: ?DraftOwner = null,
@@ -9317,9 +9326,9 @@ const DraftRuntimeValueDemand = struct {
     impossibility_proof: ?RuntimeImpossibilityProofId,
     /// The exact guard frame stack at record time. A specialization reused
     /// from a different guard context re-verifies its demands at seal against
-    /// the reusing context, substituting that context for the slice below the
-    /// owning specialization's inherited-frame floor.
-    frames: []const RuntimeDemandGuardFrame,
+    /// the reusing context, substituting that context for the persistent stack
+    /// below the owning specialization's inherited-frame floor.
+    frames: RuntimeDemandGuardFrameStack,
     /// Context-independent exemption parts: function entry guards and the
     /// expression's own proof.
     local_proof: ?RuntimeImpossibilityProofId,
@@ -9341,27 +9350,70 @@ const RuntimeDemandGuardFrameAddress = struct {
     kind: RuntimeDemandGuardFrameKind,
 };
 
+const RuntimeDemandGuardFrameId = enum(u32) { _ };
+
+/// An immutable snapshot of the active runtime-demand guards. Every push adds
+/// one parent-linked node to `BodyDraftStore.runtime_demand_guard_frames`, so
+/// saving, restoring, and inheriting a stack is a fixed-size value copy.
+const RuntimeDemandGuardFrameStack = struct {
+    head: ?RuntimeDemandGuardFrameId = null,
+    depth: u32 = 0,
+};
+
 const RuntimeDemandGuardFrame = struct {
+    parent: ?RuntimeDemandGuardFrameId,
     address: RuntimeDemandGuardFrameAddress,
     proof: RuntimeImpossibilityProofId,
 };
 
-fn addRuntimeDemandGuardFrame(
-    graph: *InstGraph,
-    existing: []const RuntimeDemandGuardFrame,
+fn runtimeDemandGuardFrame(
+    draft: *const BodyDraftStore,
+    id: RuntimeDemandGuardFrameId,
+) *const RuntimeDemandGuardFrame {
+    const index = @intFromEnum(id);
+    if (index >= draft.runtime_demand_guard_frames.items.len) {
+        Common.invariant("runtime-demand guard frame ID was outside the draft frame store");
+    }
+    return &draft.runtime_demand_guard_frames.items[index];
+}
+
+fn runtimeDemandGuardFrameStackContains(
+    draft: *const BodyDraftStore,
+    stack: RuntimeDemandGuardFrameStack,
+    address: RuntimeDemandGuardFrameAddress,
+) bool {
+    var current = stack.head;
+    while (current) |id| {
+        const frame = runtimeDemandGuardFrame(draft, id);
+        if (std.meta.eql(frame.address, address)) return true;
+        current = frame.parent;
+    }
+    return false;
+}
+
+fn pushRuntimeDemandGuardFrame(
+    draft: *BodyDraftStore,
+    existing: RuntimeDemandGuardFrameStack,
     address: RuntimeDemandGuardFrameAddress,
     proof: RuntimeImpossibilityProofId,
-) Allocator.Error![]const RuntimeDemandGuardFrame {
-    for (existing) |frame| {
-        if (std.meta.eql(frame.address, address)) return existing;
-    }
-    const frames = try graph.arena().alloc(RuntimeDemandGuardFrame, existing.len + 1);
-    @memcpy(frames[0..existing.len], existing);
-    frames[existing.len] = .{
+) Allocator.Error!RuntimeDemandGuardFrameStack {
+    const id: RuntimeDemandGuardFrameId = @enumFromInt(draft.runtime_demand_guard_frames.items.len);
+    try draft.runtime_demand_guard_frames.append(draft.allocator, .{
+        .parent = existing.head,
         .address = address,
         .proof = proof,
-    };
-    return frames;
+    });
+    return .{ .head = id, .depth = existing.depth + 1 };
+}
+
+fn addRuntimeDemandGuardFrame(
+    draft: *BodyDraftStore,
+    existing: RuntimeDemandGuardFrameStack,
+    address: RuntimeDemandGuardFrameAddress,
+    proof: RuntimeImpossibilityProofId,
+) Allocator.Error!RuntimeDemandGuardFrameStack {
+    if (runtimeDemandGuardFrameStackContains(draft, existing, address)) return existing;
+    return try pushRuntimeDemandGuardFrame(draft, existing, address, proof);
 }
 
 const FrozenRuntimeImpossibilityProofEvaluator = struct {
@@ -9452,7 +9504,7 @@ const DraftNestedSpec = struct {
     runtime_demand_guard_frames: []const RuntimeDemandGuardFrameAddress,
     demand_start: u32 = 0,
     demand_end: u32 = 0,
-    demand_frame_floor: u32 = 0,
+    demand_frame_floor: RuntimeDemandGuardFrameStack = .{},
     capture_entry_guards: []const NodeId,
     capture_abi_digest: ?names.TypeDigest = null,
     lexical_owner: DraftOwner,
@@ -9573,6 +9625,7 @@ const BodyDraftStore = struct {
     prepared_inspect_methods: std.ArrayList(DraftPreparedInspectMethod),
     structural_eq_method_calls: std.ArrayList(DraftStructuralEqMethodCall),
     runtime_value_demands: std.ArrayList(DraftRuntimeValueDemand),
+    runtime_demand_guard_frames: std.ArrayList(RuntimeDemandGuardFrame),
     template_spec_reuses: std.ArrayList(DraftSpecReuse),
     nested_spec_reuses: std.ArrayList(DraftSpecReuse),
     impossibility_proofs: std.ArrayList(RuntimeImpossibilityProof),
@@ -9641,6 +9694,7 @@ const BodyDraftStore = struct {
             .prepared_inspect_methods = .empty,
             .structural_eq_method_calls = .empty,
             .runtime_value_demands = .empty,
+            .runtime_demand_guard_frames = .empty,
             .template_spec_reuses = .empty,
             .nested_spec_reuses = .empty,
             .impossibility_proofs = .empty,
@@ -9745,6 +9799,7 @@ const BodyDraftStore = struct {
         self.roots.deinit(self.allocator);
         self.proc_debug_names.deinit(self.allocator);
         self.runtime_value_demands.deinit(self.allocator);
+        self.runtime_demand_guard_frames.deinit(self.allocator);
         self.template_spec_reuses.deinit(self.allocator);
         self.nested_spec_reuses.deinit(self.allocator);
         self.structural_eq_method_calls.deinit(self.allocator);
@@ -11103,6 +11158,68 @@ fn appendRuntimeImpossibilityProof(
     return id;
 }
 
+fn appendRuntimeImpossibilityProofSpan(
+    draft: *BodyDraftStore,
+    allocator: Allocator,
+    ids: []const RuntimeImpossibilityProofId,
+) Allocator.Error!DraftSpan(RuntimeImpossibilityProofId) {
+    const start: u32 = @intCast(draft.impossibility_proof_ids.items.len);
+    try draft.impossibility_proof_ids.appendSlice(allocator, ids);
+    return .{ .start = start, .len = @intCast(ids.len) };
+}
+
+fn anyRuntimeImpossibilityProof(
+    draft: *BodyDraftStore,
+    allocator: Allocator,
+    candidates: []const ?RuntimeImpossibilityProofId,
+) Allocator.Error!?RuntimeImpossibilityProofId {
+    var ids = std.ArrayList(RuntimeImpossibilityProofId).empty;
+    defer ids.deinit(allocator);
+    for (candidates) |candidate| if (candidate) |id| switch (draft.impossibility_proofs.items[@intFromEnum(id)]) {
+        // `any(false, x) == x`. False proofs are represented canonically as
+        // null outside the proof store, so never retain an explicit `.never`
+        // leaf in a composite proof.
+        .never => {},
+        // `any(true, x) == true`; the remaining operands cannot affect the
+        // result.
+        .always => return id,
+        else => try ids.append(allocator, id),
+    };
+    return switch (ids.items.len) {
+        0 => null,
+        1 => ids.items[0],
+        else => try appendRuntimeImpossibilityProof(draft, allocator, .{
+            .any = try appendRuntimeImpossibilityProofSpan(draft, allocator, ids.items),
+        }),
+    };
+}
+
+fn allRuntimeImpossibilityProof(
+    draft: *BodyDraftStore,
+    allocator: Allocator,
+    candidates: []const ?RuntimeImpossibilityProofId,
+) Allocator.Error!?RuntimeImpossibilityProofId {
+    var ids = std.ArrayList(RuntimeImpossibilityProofId).empty;
+    defer ids.deinit(allocator);
+    for (candidates) |candidate| {
+        const id = candidate orelse return null;
+        switch (draft.impossibility_proofs.items[@intFromEnum(id)]) {
+            // `all(false, x) == false`, represented canonically as null.
+            .never => return null,
+            // `all(true, x) == x`.
+            .always => {},
+            else => try ids.append(allocator, id),
+        }
+    }
+    return switch (ids.items.len) {
+        0 => try appendRuntimeImpossibilityProof(draft, allocator, .always),
+        1 => ids.items[0],
+        else => try appendRuntimeImpossibilityProof(draft, allocator, .{
+            .all = try appendRuntimeImpossibilityProofSpan(draft, allocator, ids.items),
+        }),
+    };
+}
+
 const BinderRestore = struct {
     binder: checked.PatternBinderId,
     previous: ?DraftLocalId,
@@ -11184,7 +11301,7 @@ const BodyContext = struct {
     /// Frozen-at-creation reachability topology attached to runtime demands
     /// emitted while lowering one match branch. The root plus explicit
     /// constructor payload/element cells prove when that branch cannot run.
-    runtime_demand_guard_frames: []const RuntimeDemandGuardFrame = &.{},
+    runtime_demand_guard_frames: RuntimeDemandGuardFrameStack = .{},
     /// Exact argument nodes of the function body currently being lowered.
     /// If any argument finalizes as uninhabited, the body is unreachable.
     /// This callee-owned proof is separate from call-chain frame identity.
@@ -11803,15 +11920,6 @@ const BodyContext = struct {
         return try appendRuntimeImpossibilityProof(self.draft, self.allocator, proof);
     }
 
-    fn addImpossibilityProofSpan(
-        self: *BodyContext,
-        ids: []const RuntimeImpossibilityProofId,
-    ) Allocator.Error!DraftSpan(RuntimeImpossibilityProofId) {
-        const start: u32 = @intCast(self.draft.impossibility_proof_ids.items.len);
-        try self.draft.impossibility_proof_ids.appendSlice(self.allocator, ids);
-        return .{ .start = start, .len = @intCast(ids.len) };
-    }
-
     fn impossibilityProofSpan(
         self: *BodyContext,
         span: DraftSpan(RuntimeImpossibilityProofId),
@@ -11822,10 +11930,6 @@ const BodyContext = struct {
             Common.invariant("runtime impossibility proof span was outside the draft proof store");
         }
         return self.draft.impossibility_proof_ids.items[span.start..][0..span.len];
-    }
-
-    fn nodeImpossibilityProof(self: *BodyContext, node: NodeId) Allocator.Error!RuntimeImpossibilityProofId {
-        return (try self.maybeNodeImpossibilityProof(node)) orelse try self.neverImpossibilityProof();
     }
 
     /// A `.node` proof leaf, or null when the node provably can never finalize
@@ -11841,36 +11945,18 @@ const BodyContext = struct {
         return try self.addImpossibilityProof(.always);
     }
 
-    fn neverImpossibilityProof(self: *BodyContext) Allocator.Error!RuntimeImpossibilityProofId {
-        return try self.addImpossibilityProof(.never);
-    }
-
     fn anyImpossibilityProof(
         self: *BodyContext,
         candidates: []const ?RuntimeImpossibilityProofId,
     ) Allocator.Error!?RuntimeImpossibilityProofId {
-        var ids = std.ArrayList(RuntimeImpossibilityProofId).empty;
-        defer ids.deinit(self.allocator);
-        for (candidates) |candidate| if (candidate) |id| try ids.append(self.allocator, id);
-        return switch (ids.items.len) {
-            0 => null,
-            1 => ids.items[0],
-            else => try self.addImpossibilityProof(.{ .any = try self.addImpossibilityProofSpan(ids.items) }),
-        };
+        return try anyRuntimeImpossibilityProof(self.draft, self.allocator, candidates);
     }
 
     fn allImpossibilityProof(
         self: *BodyContext,
         candidates: []const ?RuntimeImpossibilityProofId,
     ) Allocator.Error!?RuntimeImpossibilityProofId {
-        if (candidates.len == 0) return try self.alwaysImpossibilityProof();
-        var ids = try self.allocator.alloc(RuntimeImpossibilityProofId, candidates.len);
-        defer self.allocator.free(ids);
-        for (candidates, 0..) |candidate, index| ids[index] = candidate orelse return null;
-        return if (ids.len == 1)
-            ids[0]
-        else
-            try self.addImpossibilityProof(.{ .all = try self.addImpossibilityProofSpan(ids) });
+        return try allRuntimeImpossibilityProof(self.draft, self.allocator, candidates);
     }
 
     fn maybeNodesImpossibilityProof(
@@ -11892,7 +11978,12 @@ const BodyContext = struct {
         if (self.function_entry_demand_guards.len != 0) {
             try proofs.append(self.allocator, try self.maybeNodesImpossibilityProof(self.function_entry_demand_guards));
         }
-        for (self.runtime_demand_guard_frames) |frame| try proofs.append(self.allocator, frame.proof);
+        var frame_id = self.runtime_demand_guard_frames.head;
+        while (frame_id) |id| {
+            const frame = runtimeDemandGuardFrame(self.draft, id);
+            try proofs.append(self.allocator, frame.proof);
+            frame_id = frame.parent;
+        }
         try proofs.append(self.allocator, expression_proof);
         return try self.anyImpossibilityProof(proofs.items);
     }
@@ -11929,13 +12020,13 @@ const BodyContext = struct {
     fn cellImpossibilityProof(
         self: *BodyContext,
         cell: DraftTypeCell,
-    ) Allocator.Error!RuntimeImpossibilityProofId {
+    ) Allocator.Error!?RuntimeImpossibilityProofId {
         return switch (cell) {
-            .graph_node => |node| try self.nodeImpossibilityProof(node),
+            .graph_node => |node| try self.maybeNodeImpossibilityProof(node),
             .sealed => |ty| if (try self.typeIsProvenUninhabited(ty))
                 try self.alwaysImpossibilityProof()
             else
-                try self.neverImpossibilityProof(),
+                null,
         };
     }
 
@@ -12842,7 +12933,7 @@ const BodyContext = struct {
 
     const CallableBodyDemandScope = struct {
         ctx: *BodyContext,
-        previous_frames: []const RuntimeDemandGuardFrame,
+        previous_frames: RuntimeDemandGuardFrameStack,
         previous_entry_guards: []const NodeId,
 
         fn leave(self: CallableBodyDemandScope) void {
@@ -12870,7 +12961,7 @@ const BodyContext = struct {
             node.* = try self.activeNodeFromType(ty);
         for (capture_tys, entry_guards[argument_tys.len..]) |ty, *node|
             node.* = try self.activeNodeFromType(ty);
-        self.runtime_demand_guard_frames = &.{};
+        self.runtime_demand_guard_frames = .{};
         self.function_entry_demand_guards = entry_guards;
         return scope;
     }
@@ -12879,7 +12970,7 @@ const BodyContext = struct {
         self: *BodyContext,
         scope: CallableBodyDemandScope,
     ) CallableBodyDemandScope {
-        self.runtime_demand_guard_frames = &.{};
+        self.runtime_demand_guard_frames = .{};
         self.function_entry_demand_guards = &.{};
         return scope;
     }
@@ -37460,7 +37551,20 @@ const BodyContext = struct {
         const merge_binders = try self.stateMergeBinders(expr_id);
         defer self.allocator.free(merge_binders);
         if (merge_binders.len == 0) {
-            return try self.lowerMatchExprWithOutput(match, .{ .value = result_cell }, comptime_site);
+            var selection = try self.initControlFlowResultSelection(
+                self.view.bodies.expr(expr_id).ty,
+                result_cell,
+            );
+            const data = try self.lowerMatch(
+                match,
+                .{ .value = selection.selected },
+                comptime_site,
+                &selection,
+            );
+            return try self.addExprWithTypeCell(
+                try self.finishControlFlowResultSelection(selection),
+                data,
+            );
         }
 
         const state_cell = try self.stateResultTypeCell(merge_binders, result_cell);
@@ -37478,12 +37582,10 @@ const BodyContext = struct {
         output: MatchOutput,
         comptime_site: ?DraftComptimeSiteId,
     ) Allocator.Error!DraftExprId {
-        const data = try self.lowerMatch(match, output, comptime_site);
-        const output_cell = switch (output) {
-            .value => |declared| try self.joinMatchValueResultCell(declared, data.match_),
-            .state_result, .state_only => self.matchOutputCell(output),
-        };
-        return try self.addExprWithTypeCell(output_cell, data);
+        return try self.addExprWithTypeCell(
+            self.matchOutputCell(output),
+            try self.lowerMatch(match, output, comptime_site, null),
+        );
     }
 
     fn patternNeedsExplicitBinding(self: *BodyContext, pattern_id: checked.CheckedPatternId) bool {
@@ -38811,7 +38913,13 @@ const BodyContext = struct {
         return regions;
     }
 
-    fn lowerMatch(self: *BodyContext, match: anytype, output: MatchOutput, comptime_site: ?DraftComptimeSiteId) Allocator.Error!BodyExprData {
+    fn lowerMatch(
+        self: *BodyContext,
+        match: anytype,
+        output: MatchOutput,
+        comptime_site: ?DraftComptimeSiteId,
+        value_selection: ?*ControlFlowResultSelection,
+    ) Allocator.Error!BodyExprData {
         const PendingBranch = struct {
             ctx: BodyContext,
             pattern: checked.CheckedMatchBranchPattern,
@@ -38855,6 +38963,17 @@ const BodyContext = struct {
             }
         }
 
+        // Select the shared result representation from every inhabited branch
+        // before any branch body is emitted. Match patterns already supplied
+        // their exact binder cells above, so branch-local lookups participate
+        // in this relation-production pass as ordinary producer evidence.
+        if (value_selection) |selection| {
+            for (pending.items) |*entry| {
+                try entry.ctx.rebindPreRegisteredPatternBindersAtNode(entry.pattern.pattern, scrutinee_node);
+                try entry.ctx.prepareControlFlowResultSelection(selection, entry.checked_body);
+            }
+        }
+
         // All checked pattern evidence must reach the shared scrutinee before
         // any branch body can request another specialization.
         for (pending.items) |*entry| {
@@ -38864,11 +38983,18 @@ const BodyContext = struct {
             );
             try entry.ctx.rebindPreRegisteredPatternBindersAtNode(entry.pattern.pattern, scrutinee_node);
             entry.user_guard = if (entry.checked_guard) |guard_expr| try entry.ctx.lowerExpr(guard_expr) else null;
+            const branch_output: MatchOutput = if (value_selection) |selection|
+                .{ .value = selection.selected }
+            else
+                output;
             entry.body = try entry.ctx.wrapComptimeBranch(
                 comptime_site,
                 entry.source_index,
-                try entry.ctx.lowerMatchBranchBody(entry.checked_body, output),
+                try entry.ctx.lowerMatchBranchBody(entry.checked_body, branch_output),
             );
+            if (value_selection) |selection| {
+                try self.includeControlFlowResult(selection, entry.body);
+            }
         }
 
         const scrutinee = if (try self.nodeIsProvenUninhabited(scrutinee_node))
@@ -38923,17 +39049,16 @@ const BodyContext = struct {
         self: *BodyContext,
         pattern_id: checked.CheckedPatternId,
         node: NodeId,
-    ) Allocator.Error![]const RuntimeDemandGuardFrame {
+    ) Allocator.Error!RuntimeDemandGuardFrameStack {
         const address = self.runtimeDemandGuardFrameAddress(pattern_id, .match_branch);
-        for (self.runtime_demand_guard_frames) |frame| {
-            if (std.meta.eql(frame.address, address)) return self.runtime_demand_guard_frames;
-        }
+        if (runtimeDemandGuardFrameStackContains(self.draft, self.runtime_demand_guard_frames, address))
+            return self.runtime_demand_guard_frames;
         // A frame whose proof can never hold exempts nothing; pushing it would
         // only fragment specialization identity across guard contexts.
         const proof = (try self.maybeNodesImpossibilityProof(try self.runtimeDemandGuardsForPattern(pattern_id, node))) orelse
             return self.runtime_demand_guard_frames;
         return try addRuntimeDemandGuardFrame(
-            self.graph,
+            self.draft,
             self.runtime_demand_guard_frames,
             address,
             proof,
@@ -38943,12 +39068,12 @@ const BodyContext = struct {
     fn withPatternSuccessRuntimeDemandGuardFrame(
         self: *BodyContext,
         guard: PatternSuccessGuard,
-    ) Allocator.Error![]const RuntimeDemandGuardFrame {
+    ) Allocator.Error!RuntimeDemandGuardFrameStack {
         const address = self.runtimeDemandGuardFrameAddress(guard.root_pattern, .pattern_success);
         const proof = (try self.maybeNodesImpossibilityProof(try self.runtimeDemandGuardsForPattern(guard.root_pattern, guard.root_node))) orelse
             return self.runtime_demand_guard_frames;
         return try addRuntimeDemandGuardFrame(
-            self.graph,
+            self.draft,
             self.runtime_demand_guard_frames,
             address,
             proof,
@@ -38959,11 +39084,10 @@ const BodyContext = struct {
         self: *BodyContext,
         pattern_id: checked.CheckedPatternId,
         step: IterStepShape,
-    ) Allocator.Error![]const RuntimeDemandGuardFrame {
+    ) Allocator.Error!RuntimeDemandGuardFrameStack {
         const address = self.runtimeDemandGuardFrameAddress(pattern_id, .iterator_one);
-        for (self.runtime_demand_guard_frames) |frame| {
-            if (std.meta.eql(frame.address, address)) return self.runtime_demand_guard_frames;
-        }
+        if (runtimeDemandGuardFrameStackContains(self.draft, self.runtime_demand_guard_frames, address))
+            return self.runtime_demand_guard_frames;
         const item_guards = try self.runtimeDemandGuardsForPattern(pattern_id, step.one_item.node);
         const guards = try self.graph.arena().alloc(NodeId, item_guards.len + 1);
         guards[0] = step.one_payload_node;
@@ -38971,7 +39095,7 @@ const BodyContext = struct {
         const proof = (try self.maybeNodesImpossibilityProof(guards)) orelse
             return self.runtime_demand_guard_frames;
         return try addRuntimeDemandGuardFrame(
-            self.graph,
+            self.draft,
             self.runtime_demand_guard_frames,
             address,
             proof,
@@ -38982,9 +39106,12 @@ const BodyContext = struct {
         self: *BodyContext,
         statement_id: checked.CheckedStatementId,
         proof: RuntimeImpossibilityProofId,
-    ) Allocator.Error![]const RuntimeDemandGuardFrame {
-        return try addRuntimeDemandGuardFrame(
-            self.graph,
+    ) Allocator.Error!RuntimeDemandGuardFrameStack {
+        // Checked statement IDs are unique within the module, and the owner
+        // template is part of the address. Unlike recursive branch frames,
+        // statement-success frames therefore cannot already be active.
+        return try pushRuntimeDemandGuardFrame(
+            self.draft,
             self.runtime_demand_guard_frames,
             self.runtimeDemandGuardFrameAddressRaw(@intFromEnum(statement_id), .statement_success),
             proof,
@@ -38994,8 +39121,18 @@ const BodyContext = struct {
     fn runtimeDemandGuardFrameAddresses(
         self: *BodyContext,
     ) Allocator.Error![]const RuntimeDemandGuardFrameAddress {
-        const addresses = try self.graph.arena().alloc(RuntimeDemandGuardFrameAddress, self.runtime_demand_guard_frames.len);
-        for (self.runtime_demand_guard_frames, addresses) |frame, *address| address.* = frame.address;
+        const addresses = try self.graph.arena().alloc(RuntimeDemandGuardFrameAddress, self.runtime_demand_guard_frames.depth);
+        var address_index = addresses.len;
+        var frame_id = self.runtime_demand_guard_frames.head;
+        while (frame_id) |id| {
+            const frame = runtimeDemandGuardFrame(self.draft, id);
+            address_index -= 1;
+            addresses[address_index] = frame.address;
+            frame_id = frame.parent;
+        }
+        if (address_index != 0) {
+            Common.invariant("runtime-demand guard stack length did not match its parent chain");
+        }
         return addresses;
     }
 
@@ -39231,11 +39368,21 @@ const BodyContext = struct {
         const comptime_site = try self.ifComptimeSite(expr_id, if_);
         const merge_binders = try self.stateMergeBinders(expr_id);
         defer self.allocator.free(merge_binders);
-
         if (merge_binders.len == 0) {
-            const data = try self.lowerIfAtTypeCells(if_, result_cell, result_cell, &.{}, comptime_site);
+            var selection = try self.initControlFlowResultSelection(
+                self.view.bodies.expr(expr_id).ty,
+                result_cell,
+            );
+            const data = try self.lowerIfAtTypeCells(
+                if_,
+                result_cell,
+                result_cell,
+                &.{},
+                comptime_site,
+                &selection,
+            );
             return try self.addExprWithTypeCell(
-                try self.joinIfValueResultCell(result_cell, data.if_),
+                try self.finishControlFlowResultSelection(selection),
                 data,
             );
         }
@@ -39243,9 +39390,174 @@ const BodyContext = struct {
         const state_cell = try self.stateResultTypeCell(merge_binders, result_cell);
         const state_expr = try self.addExprWithTypeCell(
             state_cell,
-            try self.lowerIfAtTypeCells(if_, result_cell, state_cell, merge_binders, comptime_site),
+            try self.lowerIfAtTypeCells(if_, result_cell, state_cell, merge_binders, comptime_site, null),
         );
         return try self.unwrapStateResultAtTypeCells(state_expr, state_cell, result_cell, merge_binders);
+    }
+
+    const ControlFlowResultSelection = struct {
+        declared: DraftTypeCell,
+        selected: DraftTypeCell,
+        has_value: bool = false,
+    };
+
+    /// A value-producing control-flow expression owns one result selection
+    /// while its inhabited branches are lowered. A finished expected Monotype
+    /// remains an immutable outer interface, so selection begins on a fresh
+    /// checked-public graph cell unless the caller already supplied exact
+    /// generated-private evidence.
+    fn initControlFlowResultSelection(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        declared: DraftTypeCell,
+    ) Allocator.Error!ControlFlowResultSelection {
+        const declared_node = try declared.toGraphNode(self.graph);
+        const selected = if (try self.graph.containsGeneratedPrivate(declared_node) or
+            !try self.graph.containsFinishedMono(declared_node))
+            DraftTypeCell.fromGraphNode(declared_node)
+        else
+            DraftTypeCell.fromGraphNode(try self.freshInstNode(checked_ty));
+        return .{ .declared = declared, .selected = selected };
+    }
+
+    /// Discover producer-authored representation evidence before emitting any
+    /// branch. Public-only evidence does not constrain the selection: every
+    /// inhabited branch will consume the final selected request during the
+    /// subsequent emission pass. Generated-private evidence is joined now, so
+    /// source order cannot make an already-emitted branch authoritative.
+    fn prepareControlFlowResultSelection(
+        self: *BodyContext,
+        selection: *ControlFlowResultSelection,
+        checked_value: checked.CheckedExprId,
+    ) Allocator.Error!void {
+        const selected_node = try selection.selected.toGraphNode(self.graph);
+        const produced_node = (try self.controlFlowResultEvidenceNode(checked_value, selected_node)) orelse return;
+        if (!try self.graph.containsGeneratedPrivate(produced_node)) return;
+
+        try selectRequestRepresentation(self.graph, selected_node, produced_node);
+        const selected_private = try self.graph.containsGeneratedPrivate(selected_node);
+        const produced_private = try self.graph.containsGeneratedPrivate(produced_node);
+        if (selected_private == produced_private) return;
+        if (!selected_private and produced_private) {
+            selection.selected = DraftTypeCell.fromGraphNode(produced_node);
+            return;
+        }
+        Common.invariant("control-flow representation prepass lost generated-private evidence");
+    }
+
+    /// Resolve the exact result evidence of a branch producer against the
+    /// shared live request. This is the node-native counterpart of call-
+    /// argument evidence: it deliberately keeps the expected graph cell live
+    /// so recursive producers see the same fixed point during discovery and
+    /// emission.
+    fn controlFlowResultEvidenceNode(
+        self: *BodyContext,
+        checked_value: checked.CheckedExprId,
+        expected_node: NodeId,
+    ) Allocator.Error!?NodeId {
+        if (self.checkedExprDivergesInLoweredRuntime(checked_value)) return null;
+        const expr = self.view.bodies.expr(checked_value);
+        return switch (expr.data) {
+            .call => |call| blk: {
+                const target = call.direct_target orelse break :blk null;
+                const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
+                const fn_node = try self.directCallTypeNode(
+                    expr.ty,
+                    call,
+                    source_fn_ty,
+                    expected_node,
+                );
+                const fn_nodes = try self.graph.functionNodes(fn_node);
+                if (self.isGeneratedIteratorEvidenceNode(fn_nodes.ret)) break :blk fn_nodes.ret;
+                if (!self.isIteratorInterfaceNode(fn_nodes.ret)) break :blk fn_nodes.ret;
+
+                try self.ensureNestedCallablesAtNodes(call.args, fn_nodes.args);
+                const callee = try self.fnTemplateForDirectCallAtNode(
+                    target,
+                    source_fn_ty,
+                    self.view.types.rootKey(source_fn_ty),
+                    fn_node,
+                );
+                const completed_fn_node = try self.draftFnSlotTypeNode(callee, fn_node);
+                break :blk (try self.graph.functionNodes(completed_fn_node)).ret;
+            },
+            .dispatch_call => |plan| try self.dispatchResultTypeNodeInPhase(
+                expr.ty,
+                plan,
+                expected_node,
+                .expression_lowering,
+            ),
+            .interpolation => |interpolation| try self.dispatchResultTypeNodeInPhase(
+                expr.ty,
+                interpolation.plan,
+                expected_node,
+                .expression_lowering,
+            ),
+            .type_dispatch_call => |plan| try self.dispatchResultTypeNodeInPhase(
+                expr.ty,
+                plan,
+                expected_node,
+                .expression_lowering,
+            ),
+            .method_eq => |plan| try self.dispatchResultTypeNodeInPhase(
+                expr.ty,
+                plan,
+                expected_node,
+                .expression_lowering,
+            ),
+            .field_access,
+            .lookup_local,
+            .lookup_external,
+            .lookup_required,
+            => try self.lowerExprTypeNode(checked_value),
+            else => null,
+        };
+    }
+
+    fn includeControlFlowResult(
+        self: *BodyContext,
+        selection: *ControlFlowResultSelection,
+        value: DraftExprId,
+    ) Allocator.Error!void {
+        if (self.exprImpossibilityProof(value) != null) return;
+        const selected_node = try selection.selected.toGraphNode(self.graph);
+        const value_cell = self.exprTypeCell(value);
+        const value_node = try value_cell.toGraphNode(self.graph);
+        try selectRequestRepresentation(self.graph, selected_node, value_node);
+
+        const selected_private = try self.graph.containsGeneratedPrivate(selected_node);
+        const value_private = try self.graph.containsGeneratedPrivate(value_node);
+        if (selected_private != value_private) {
+            if (!selection.has_value and !selected_private and value_private) {
+                // A finished private producer remains immutable and therefore
+                // cannot merge into the live public accumulator. Carry its
+                // exact cell forward as the request for every later branch.
+                selection.selected = value_cell;
+            } else {
+                Common.invariant("control-flow branch could not use its selected runtime representation");
+            }
+        }
+        selection.has_value = true;
+        self.draft.exprs.items[@intFromEnum(value)].ty = selection.selected;
+    }
+
+    fn finishControlFlowResultSelection(
+        self: *BodyContext,
+        selection: ControlFlowResultSelection,
+    ) Allocator.Error!DraftTypeCell {
+        // A control-flow expression whose every branch terminates never
+        // produces a runtime result. Its checked result variable may therefore
+        // remain unconstrained, and cannot supply representation evidence for
+        // the enclosing continuation's declared result cell.
+        if (!selection.has_value) return selection.declared;
+
+        const declared_node = try selection.declared.toGraphNode(self.graph);
+        const selected_node = try selection.selected.toGraphNode(self.graph);
+        try relateRequestComponent(self.graph, declared_node, selected_node);
+        return if (try self.graph.containsGeneratedPrivate(selected_node))
+            selection.selected
+        else
+            selection.declared;
     }
 
     fn stateMergeBinders(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error![]MergeBinder {
@@ -39325,96 +39637,64 @@ const BodyContext = struct {
         branch_cell: DraftTypeCell,
         merge_binders: []const MergeBinder,
         comptime_site: ?DraftComptimeSiteId,
+        value_selection: ?*ControlFlowResultSelection,
     ) Allocator.Error!BodyExprData {
+        // Conditions do not bind names visible in branch bodies, so all result
+        // producers can contribute their representation evidence up front.
+        // Branch emission below then consumes one settled request.
+        if (value_selection) |selection| {
+            for (if_.branches) |branch| {
+                try self.prepareControlFlowResultSelection(selection, branch.body);
+            }
+            try self.prepareControlFlowResultSelection(selection, if_.final_else);
+        }
+
         const branches = try self.allocator.alloc(DraftIfBranch, if_.branches.len);
         defer self.allocator.free(branches);
         for (if_.branches, 0..) |branch, index| {
             const cond = try self.lowerExpr(branch.cond);
             var branch_ctx = try self.childContext(self.current_fn_key);
             defer branch_ctx.deinit();
+            const requested_result_cell = if (value_selection) |selection| selection.selected else result_cell;
+            const requested_branch_cell = if (value_selection != null) requested_result_cell else branch_cell;
             branches[index] = .{
                 .cond = cond,
                 .body = try branch_ctx.wrapComptimeBranch(
                     comptime_site,
                     index,
-                    try branch_ctx.lowerIfBranchBodyAtTypeCells(branch.body, result_cell, branch_cell, merge_binders),
+                    try branch_ctx.lowerIfBranchBodyAtTypeCells(
+                        branch.body,
+                        requested_result_cell,
+                        requested_branch_cell,
+                        merge_binders,
+                    ),
                 ),
             };
+            if (value_selection) |selection| {
+                try self.includeControlFlowResult(selection, branches[index].body);
+            }
         }
         var else_ctx = try self.childContext(self.current_fn_key);
         defer else_ctx.deinit();
+        const requested_result_cell = if (value_selection) |selection| selection.selected else result_cell;
+        const requested_branch_cell = if (value_selection != null) requested_result_cell else branch_cell;
+        const final_else = try else_ctx.wrapComptimeBranch(
+            comptime_site,
+            if_.branches.len,
+            try else_ctx.lowerIfBranchBodyAtTypeCells(
+                if_.final_else,
+                requested_result_cell,
+                requested_branch_cell,
+                merge_binders,
+            ),
+        );
+        if (value_selection) |selection| {
+            try self.includeControlFlowResult(selection, final_else);
+        }
         return .{ .if_ = .{
             .branches = try self.addIfBranchSpan(branches),
-            .final_else = try else_ctx.wrapComptimeBranch(
-                comptime_site,
-                if_.branches.len,
-                try else_ctx.lowerIfBranchBodyAtTypeCells(if_.final_else, result_cell, branch_cell, merge_binders),
-            ),
+            .final_else = final_else,
         } };
-    }
-
-    const ControlFlowResultJoin = struct {
-        private_node: ?NodeId = null,
-        saw_public_value: bool = false,
-    };
-
-    fn includeControlFlowResult(
-        self: *BodyContext,
-        join: *ControlFlowResultJoin,
-        body: DraftExprId,
-    ) Allocator.Error!void {
-        if (self.exprImpossibilityProof(body) != null) return;
-        const node = try self.exprTypeCell(body).toGraphNode(self.graph);
-        if (try self.graph.containsGeneratedPrivate(node)) {
-            if (join.saw_public_value) {
-                Common.invariant("control-flow result mixed explicit generated-private and checked-public runtime representations");
-            }
-            if (join.private_node) |existing| {
-                try self.graph.unify(existing, node);
-            } else {
-                join.private_node = node;
-            }
-        } else {
-            if (join.private_node != null) {
-                Common.invariant("control-flow result mixed explicit generated-private and checked-public runtime representations");
-            }
-            join.saw_public_value = true;
-        }
-    }
-
-    fn finishControlFlowResultJoin(
-        self: *BodyContext,
-        declared: DraftTypeCell,
-        join: ControlFlowResultJoin,
-    ) Allocator.Error!DraftTypeCell {
-        const private_node = join.private_node orelse return declared;
-        try relateRequestComponent(self.graph, try declared.toGraphNode(self.graph), private_node);
-        return DraftTypeCell.fromGraphNode(private_node);
-    }
-
-    fn joinIfValueResultCell(
-        self: *BodyContext,
-        declared: DraftTypeCell,
-        if_: DraftIfExpr,
-    ) Allocator.Error!DraftTypeCell {
-        var join = ControlFlowResultJoin{};
-        for (self.ifBranchSpan(if_.branches)) |branch| {
-            try self.includeControlFlowResult(&join, branch.body);
-        }
-        try self.includeControlFlowResult(&join, if_.final_else);
-        return try self.finishControlFlowResultJoin(declared, join);
-    }
-
-    fn joinMatchValueResultCell(
-        self: *BodyContext,
-        declared: DraftTypeCell,
-        match: DraftMatchExpr,
-    ) Allocator.Error!DraftTypeCell {
-        var join = ControlFlowResultJoin{};
-        for (self.branchSpan(match.branches)) |branch| {
-            try self.includeControlFlowResult(&join, branch.body);
-        }
-        return try self.finishControlFlowResultJoin(declared, join);
     }
 
     fn lowerIfBranchBodyAtTypeCells(
@@ -39577,6 +39857,7 @@ const BodyContext = struct {
                     result_cell,
                     &.{},
                     try self.ifComptimeSite(expr_id, if_),
+                    null,
                 ),
             );
             return try self.stateResultAfterValueAtTypeCells(
@@ -39596,6 +39877,7 @@ const BodyContext = struct {
                 nested_state_cell,
                 nested_merge_binders,
                 try self.ifComptimeSite(expr_id, if_),
+                null,
             ),
         );
         return try self.composeNestedStateResultAtTypeCells(
@@ -40121,6 +40403,7 @@ const BodyContext = struct {
                     state_cell,
                     merge_binders,
                     try self.ifComptimeSite(expr_id, if_),
+                    null,
                 ),
             ),
             .match_ => |match| try self.lowerMatchExprWithOutput(
@@ -42933,20 +43216,23 @@ test "open draft recursive provenance joins fresh interface cells only while low
     };
     const active_proof = try appendRuntimeImpossibilityProof(&draft, gpa, .never);
     const recursive_proof = try appendRuntimeImpossibilityProof(&draft, gpa, .always);
-    var frames: []const RuntimeDemandGuardFrame = &.{};
-    frames = try addRuntimeDemandGuardFrame(graph, frames, shared_frame, active_proof);
-    const recursive_frames = try addRuntimeDemandGuardFrame(graph, frames, shared_frame, recursive_proof);
-    try std.testing.expectEqual(@as(usize, 1), recursive_frames.len);
-    try std.testing.expectEqual(active_proof, recursive_frames[0].proof);
+    var frames = RuntimeDemandGuardFrameStack{};
+    frames = try addRuntimeDemandGuardFrame(&draft, frames, shared_frame, active_proof);
+    const recursive_frames = try addRuntimeDemandGuardFrame(&draft, frames, shared_frame, recursive_proof);
+    try std.testing.expectEqual(@as(u32, 1), recursive_frames.depth);
+    const recursive_head = runtimeDemandGuardFrame(&draft, recursive_frames.head.?);
+    try std.testing.expectEqual(active_proof, recursive_head.proof);
     var success_frame = shared_frame;
     success_frame.kind = .pattern_success;
-    const success_frames = try addRuntimeDemandGuardFrame(graph, recursive_frames, success_frame, recursive_proof);
-    try std.testing.expectEqual(@as(usize, 2), success_frames.len);
-    try std.testing.expectEqual(recursive_proof, success_frames[1].proof);
+    const success_frames = try addRuntimeDemandGuardFrame(&draft, recursive_frames, success_frame, recursive_proof);
+    try std.testing.expectEqual(@as(u32, 2), success_frames.depth);
+    const success_head = runtimeDemandGuardFrame(&draft, success_frames.head.?);
+    try std.testing.expectEqual(recursive_proof, success_head.proof);
+    try std.testing.expectEqual(recursive_frames.head, success_head.parent);
     var nested_frame = shared_frame;
     nested_frame.pattern += 1;
-    frames = try addRuntimeDemandGuardFrame(graph, recursive_frames, nested_frame, recursive_proof);
-    try std.testing.expectEqual(@as(usize, 2), frames.len);
+    frames = try addRuntimeDemandGuardFrame(&draft, recursive_frames, nested_frame, recursive_proof);
+    try std.testing.expectEqual(@as(u32, 2), frames.depth);
 
     try std.testing.expect(!graph.sameFunctionInterface(active_fn, recursive_fn));
     const initial_arg_classes = try graph.snapshotFunctionArgumentClasses(active_fn);
@@ -43068,6 +43354,39 @@ test "frozen runtime impossibility proofs evaluate node constants alternatives a
     try std.testing.expect(try evaluator.holds(all_proof));
     try std.testing.expect(!try evaluator.holds(failed_all_proof));
     try std.testing.expect(!try evaluator.holds(null));
+}
+
+test "runtime impossibility proof constructors canonicalize boolean constants" {
+    const gpa = std.testing.allocator;
+    var draft = BodyDraftStore.init(gpa);
+    defer draft.deinit();
+
+    const never_proof = try appendRuntimeImpossibilityProof(&draft, gpa, .never);
+    const always_proof = try appendRuntimeImpossibilityProof(&draft, gpa, .always);
+    const dynamic_proof = try appendRuntimeImpossibilityProof(&draft, gpa, .pending);
+
+    try std.testing.expectEqual(
+        @as(?RuntimeImpossibilityProofId, null),
+        try anyRuntimeImpossibilityProof(&draft, gpa, &.{ never_proof, null }),
+    );
+    try std.testing.expectEqual(
+        @as(?RuntimeImpossibilityProofId, dynamic_proof),
+        try anyRuntimeImpossibilityProof(&draft, gpa, &.{ never_proof, dynamic_proof }),
+    );
+    try std.testing.expectEqual(
+        @as(?RuntimeImpossibilityProofId, always_proof),
+        try anyRuntimeImpossibilityProof(&draft, gpa, &.{ dynamic_proof, always_proof }),
+    );
+    try std.testing.expectEqual(
+        @as(?RuntimeImpossibilityProofId, null),
+        try allRuntimeImpossibilityProof(&draft, gpa, &.{ always_proof, never_proof, dynamic_proof }),
+    );
+    try std.testing.expectEqual(
+        @as(?RuntimeImpossibilityProofId, dynamic_proof),
+        try allRuntimeImpossibilityProof(&draft, gpa, &.{ always_proof, dynamic_proof }),
+    );
+    const empty_all = (try allRuntimeImpossibilityProof(&draft, gpa, &.{})).?;
+    try std.testing.expect(draft.impossibility_proofs.items[@intFromEnum(empty_all)] == .always);
 }
 
 test "monotype sameType keeps failed alias alternatives out of recursion stack" {

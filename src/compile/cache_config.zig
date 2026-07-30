@@ -65,7 +65,8 @@ pub const Constants = struct {
     /// 39: ModuleEnv stores exact top-level demand dependencies.
     /// 41: Encoding protocol names containers by Roc shape: list, tuple, record, dict.
     /// 42: Checked modules store explicitly rejected static-dispatch obligations.
-    pub const CACHE_VERSION = 42;
+    /// 43: Checked type stores persist representatives and structural union ranks.
+    pub const CACHE_VERSION = 43;
 };
 
 /// Configuration for the Roc cache system.

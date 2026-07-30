@@ -89,7 +89,8 @@ pub const Timing = struct {
     spec_constr_ns: TimingCounter = .{},
     lambda_solve_ns: TimingCounter = .{},
     lir_gen_ns: TimingCounter = .{},
-    lir_passes_arc_ns: TimingCounter = .{},
+    lir_passes_ns: TimingCounter = .{},
+    arc_ns: TimingCounter = .{},
 
     pub fn init(std_io: std.Io) Timing {
         return .{ .std_io = std_io };
@@ -102,7 +103,8 @@ pub const Timing = struct {
             .spec_constr_ns = self.spec_constr_ns.load(),
             .lambda_solve_ns = self.lambda_solve_ns.load(),
             .lir_gen_ns = self.lir_gen_ns.load(),
-            .lir_passes_arc_ns = self.lir_passes_arc_ns.load(),
+            .lir_passes_ns = self.lir_passes_ns.load(),
+            .arc_ns = self.arc_ns.load(),
         };
     }
 
@@ -112,7 +114,8 @@ pub const Timing = struct {
         self.spec_constr_ns.add(snapshot_value.spec_constr_ns);
         self.lambda_solve_ns.add(snapshot_value.lambda_solve_ns);
         self.lir_gen_ns.add(snapshot_value.lir_gen_ns);
-        self.lir_passes_arc_ns.add(snapshot_value.lir_passes_arc_ns);
+        self.lir_passes_ns.add(snapshot_value.lir_passes_ns);
+        self.arc_ns.add(snapshot_value.arc_ns);
     }
 
     fn start(self: *const Timing) i64 {
@@ -128,7 +131,8 @@ pub const Timing = struct {
             .spec_constr => self.spec_constr_ns.add(elapsed_ns),
             .lambda_solve => self.lambda_solve_ns.add(elapsed_ns),
             .lir_gen => self.lir_gen_ns.add(elapsed_ns),
-            .lir_passes_arc => self.lir_passes_arc_ns.add(elapsed_ns),
+            .lir_passes => self.lir_passes_ns.add(elapsed_ns),
+            .arc => self.arc_ns.add(elapsed_ns),
         }
     }
 };
@@ -162,7 +166,8 @@ pub const TimingSnapshot = struct {
     spec_constr_ns: u64 = 0,
     lambda_solve_ns: u64 = 0,
     lir_gen_ns: u64 = 0,
-    lir_passes_arc_ns: u64 = 0,
+    lir_passes_ns: u64 = 0,
+    arc_ns: u64 = 0,
 };
 
 const TimingPhase = enum {
@@ -171,7 +176,8 @@ const TimingPhase = enum {
     spec_constr,
     lambda_solve,
     lir_gen,
-    lir_passes_arc,
+    lir_passes,
+    arc,
 };
 
 fn timingNowNs(std_io: std.Io) i64 {
@@ -417,12 +423,14 @@ pub fn lowerCheckedModulesToLir(
         try TagReachability.run(&lowered.lir_result);
     }
     try ReachableProcs.run(&lowered.lir_result);
+    if (target.timing) |timing| timing.finish(lir_passes_started_ns, .lir_passes);
 
+    const arc_started_ns = if (target.timing) |timing| timing.start() else 0;
     try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts, .{
         .roots = lowered.lir_result.root_procs.items,
         .specialize = target.inline_mode != .none,
     });
-    if (target.timing) |timing| timing.finish(lir_passes_started_ns, .lir_passes_arc);
+    if (target.timing) |timing| timing.finish(arc_started_ns, .arc);
 
     if (roots.requests.len != 0 and lowered.lir_result.root_procs.items.len == 0) {
         checkedPipelineInvariant("explicit root set produced no LIR roots");

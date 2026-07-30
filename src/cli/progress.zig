@@ -37,8 +37,9 @@ const mem_tick_ns: u64 = 10 * std.time.ns_per_ms;
 /// Operations slower than this show their breakdown even without `--timings`.
 const default_threshold_ns: u64 = std.time.ns_per_s;
 
-/// Column the phase durations are aligned to (phase names are padded to this).
-const name_width: usize = 26;
+/// Minimum width of the phase-name column. A separator is always emitted after
+/// the padded name so a future longer label cannot run into its duration.
+const name_width: usize = 28;
 
 /// Maximum number of top-level phases a single operation reports.
 const max_phases: usize = 16;
@@ -406,7 +407,7 @@ pub const Reporter = struct {
         var buf: [32]u8 = undefined;
         const elapsed = self.elapsedNs() - p.start_ns;
         const dur = formatDuration(&buf, elapsed, .live);
-        self.writer.print("  {s} {f}{s}\n", .{ frame, padName(p.name), dur }) catch {};
+        self.writer.print("  {s} {f} {s}\n", .{ frame, padName(p.name), dur }) catch {};
         // Park the cursor back on the line so the next frame overwrites it.
         self.writer.print("\x1B[1A", .{}) catch {};
         self.pending_partial = true;
@@ -437,7 +438,7 @@ pub const Reporter = struct {
                 var parent_buf: [32]u8 = undefined;
                 const total = (p.end_ns orelse self.elapsedNs()) - p.start_ns;
                 const parent_dur = formatDuration(&parent_buf, total, .final);
-                self.writer.print("  {s} {f}{s}{s}\n", .{ check, padName(p.name), parent_dur, mem }) catch {};
+                self.writer.print("  {s} {f} {s}{s}\n", .{ check, padName(p.name), parent_dur, mem }) catch {};
             }
             for (p.sub[0..p.sub_len], 0..) |s, sub_index| {
                 var buf: [32]u8 = undefined;
@@ -446,9 +447,9 @@ pub const Reporter = struct {
                 const sub_range = p.sub_mem[sub_index];
                 const sub_mem = formatMemRange(&sub_mem_buf, sub_range.min, sub_range.max);
                 if (show_parent) {
-                    self.writer.print("      {f}{s}{s}\n", .{ padChildName(s.name), dur, sub_mem }) catch {};
+                    self.writer.print("      {f} {s}{s}\n", .{ padChildName(s.name), dur, sub_mem }) catch {};
                 } else {
-                    self.writer.print("  {s} {f}{s}{s}\n", .{ check, padName(s.name), dur, sub_mem }) catch {};
+                    self.writer.print("  {s} {f} {s}{s}\n", .{ check, padName(s.name), dur, sub_mem }) catch {};
                 }
             }
             return;
@@ -456,7 +457,7 @@ pub const Reporter = struct {
         const total = (p.end_ns orelse self.elapsedNs()) - p.start_ns;
         var buf: [32]u8 = undefined;
         const dur = formatDuration(&buf, total, .final);
-        self.writer.print("  {s} {f}{s}{s}\n", .{ check, padName(p.name), dur, mem }) catch {};
+        self.writer.print("  {s} {f} {s}{s}\n", .{ check, padName(p.name), dur, mem }) catch {};
     }
 
     /// Return to the start of the current line and clear it. Caller holds mutex.
@@ -625,7 +626,14 @@ test "padName pads short names and leaves long names" {
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
     try aw.writer.print("[{f}]", .{padName("Parsing")});
-    try testing.expectEqualStrings("[Parsing                   ]", aw.written());
+    try testing.expectEqualStrings("[Parsing                     ]", aw.written());
+}
+
+test "full-width phase name remains separated from its duration" {
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try aw.writer.print("{f} {s}", .{ padName("arm64 Instruction Generation"), "4ms" });
+    try testing.expectEqualStrings("arm64 Instruction Generation 4ms", aw.written());
 }
 
 fn collectStatic(buf: *std.Io.Writer.Allocating, timings_flag: bool) void {
@@ -650,12 +658,14 @@ fn collectStatic(buf: *std.Io.Writer.Allocating, timings_flag: bool) void {
     reporter.recordCompletedWithBreakdown("Compile-Time Evaluation", 70 * std.time.ns_per_ms, .{}, &.{
         .{ .name = "Specialization", .ns = 40 * std.time.ns_per_ms },
         .{ .name = "LIR Generation", .ns = 10 * std.time.ns_per_ms },
-        .{ .name = "LIR Passes", .ns = 10 * std.time.ns_per_ms },
-        .{ .name = "Code Generation", .ns = 5 * std.time.ns_per_ms },
+        .{ .name = "LIR Passes", .ns = 3 * std.time.ns_per_ms },
+        .{ .name = "ARC", .ns = 2 * std.time.ns_per_ms },
+        .{ .name = "Static Data", .ns = 5 * std.time.ns_per_ms },
+        .{ .name = "x64 Instruction Generation", .ns = 5 * std.time.ns_per_ms },
         .{ .name = "Execution", .ns = 3 * std.time.ns_per_ms },
         .{ .name = "Store Results", .ns = 2 * std.time.ns_per_ms },
     });
-    reporter.begin("Code Generation");
+    reporter.begin("LLVM IR Generation");
     reporter.end();
     reporter.begin("LLVM Optimize + Emit");
     reporter.end();
@@ -677,10 +687,12 @@ test "static breakdown lists every phase with the timings flag" {
     try testing.expect(std.mem.find(u8, out, "Type Inference") != null);
     try testing.expect(std.mem.find(u8, out, "Compile-Time Evaluation") != null);
     try testing.expect(std.mem.find(u8, out, "Specialization") != null);
-    try testing.expect(std.mem.find(u8, out, "Specialization          40ms") != null);
+    try testing.expect(std.mem.find(u8, out, "40ms") != null);
     try testing.expect(std.mem.find(u8, out, "LIR Passes") != null);
+    try testing.expect(std.mem.find(u8, out, "ARC") != null);
     try testing.expect(std.mem.find(u8, out, "Store Results") != null);
-    try testing.expect(std.mem.find(u8, out, "Code Generation") != null);
+    try testing.expect(std.mem.find(u8, out, "x64 Instruction Generation") != null);
+    try testing.expect(std.mem.find(u8, out, "LLVM IR Generation") != null);
     // The post-codegen backend phases each get their own aligned row.
     try testing.expect(std.mem.find(u8, out, "LLVM Optimize + Emit") != null);
     try testing.expect(std.mem.find(u8, out, "Linking") != null);

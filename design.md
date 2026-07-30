@@ -443,6 +443,17 @@ every selected compile-time root that can be evaluated without effectful calls
 or runtime data. It must run `crash`, `dbg`, and `expect` during that
 evaluation and output their diagnostics during `roc check`.
 
+A function-typed top-level binding whose entire checked right-hand side is one
+resolved procedure lookup already has its complete checked callable identity.
+It has no value computation for compile-time evaluation to perform. Checking
+keeps the callable root and binding so ordinary runtime uses can instantiate the
+referenced procedure, but it does not add a compile-time request for that root;
+the root payload remains pending. This decision consumes the checked expression
+kind and its resolved value reference. It must not infer a procedure from source
+names, function type alone, body shape below the root expression, or post-check
+specialization results. Any wrapper, capture, conditional, call, or other
+function-valued computation remains an ordinary compile-time callable root.
+
 Evaluation and static storage are separate checked outputs. Unreachable
 top-level values are still evaluated when eligible so their `crash`, `dbg`, and
 `expect` behavior is reported, but successfully evaluated unreachable data does
@@ -1125,6 +1136,72 @@ and scratch spans as the current hand-written paths. This keeps
 canonicalization output explicit, keeps diagnostics in `Can`, and keeps release
 builds fast: the work runs once per source suffix or type declaration, with no
 runtime cost in the compiled program.
+
+## Checked Type Equivalence Classes
+
+The checked type store represents each solved equivalence class with two
+independent identities:
+
+- the **storage root** is an internal union-find node chosen only to keep the
+  equivalence-class forest shallow;
+- the **checked representative** is the type variable whose identity ordinary
+  unification says survives the merge.
+
+These identities must not be conflated. Ordinary unification continues to
+select its second resolved operand as the checked representative. Expected
+return variables, deferred dispatch constraints, generalization pools, checked
+type keys, and every other consumer of solved variable identity observe that
+checked representative exactly as they did before structural balancing. They
+must never observe or infer meaning from the storage root.
+
+The storage root is selected by a separate union-find rank. This structural
+rank is not `Descriptor.rank`: descriptor rank is the Hindley-Milner scope level
+used to decide generalization, while union-find rank is private data-structure
+metadata. On a union, the lower structural rank redirects to the higher one; a
+tie keeps the second storage root and increments its structural rank. Path
+compression may change storage parents at any time outside a solver savepoint.
+Neither operation may change the class descriptor or checked representative.
+
+Each live storage root names one descriptor whose root metadata contains the
+checked representative. Structural rank is stored separately on every slot,
+including redirects. This lets occurrence-directed error recovery explicitly
+re-root a class without coupling its new storage root to the descriptor chosen
+by checked unification. When a balanced union keeps the
+first operand's storage root but the second operand is the checked survivor,
+the retained storage root adopts the second class's descriptor and records the
+second checked representative. This preserves the unifier's descriptor merge
+destination and externally observable survivor while allowing the storage
+tree to remain balanced.
+
+`resolveVar` returns the checked representative and class descriptor;
+storage-root traversal is a private store operation. Consequently a checked
+representative is not required to be a storage root slot. `is_root` on a
+resolved variable means that the queried variable is the checked
+representative, which is the only root notion checker consumers may use.
+
+Solver savepoints journal storage-parent, structural-rank, and root-metadata
+mutations and restore all three byte-for-byte. Checked-store serialization
+includes both metadata stores, so loading a cached store preserves its checked
+representatives and balanced structure. A declared solver-mutating redirect
+joins whole classes through the same balanced mechanism while explicitly
+adopting the redirect destination's descriptor and checked representative; it
+must not directly graft one storage root beneath another and recreate an
+unbounded chain.
+
+A failed unification is different from a successful class union. Its first
+operand can be one checked occurrence already connected to a shared binding;
+error recovery must poison that exact occurrence without making the binding or
+an incidental storage child of the occurrence erroneous. When the queried
+variable is not the checked representative, `poisonOnMismatch` enumerates its
+class explicitly, re-roots and flattens the remainder at the checked
+representative, isolates the queried occurrence as a rank-zero singleton, and
+rank-merges that singleton with the second operand's error class. When the
+queried variable is the checked representative, the mismatch belongs to the
+class itself and the whole class is rank-merged into the error class. This rule
+makes error recovery independent of union-tree shape and path-compression
+history; it never guesses which variables are source occurrences from their
+storage parents. Error recovery must use this explicit operation rather than
+calling ordinary union or writing a raw redirect.
 
 ## Type Alias Invariant
 
@@ -2377,6 +2454,30 @@ interface without merging either class, and the enclosing procedure or
 compile-time wrapper carries the private result cell as its exact output
 witness. ConstStore preserves that witness beside the stored value, and restore
 relates the checked public interface to it without ordinary unification.
+
+A value-producing `if` or `match` likewise owns one explicit result selection
+for all of its inhabited branches. An exact generated-private request already
+supplied by the caller remains authoritative. Otherwise, before emitting any
+branch body, Monotype asks every branch's checked producer for its exact result
+evidence and joins all generated-private evidence into the shared live result
+selection. Public-only evidence does not settle the selection. Match patterns
+first project their exact binder cells from the shared scrutinee, so a branch
+producer reached through a pattern lookup participates in the same pre-emission
+pass. Every branch is then emitted once against the settled request. Distinct
+minted iterator producers therefore use the ordinary graph representation join,
+which keeps a compatible static representation and reaches the defined
+forced-dynamic fixed point only when the producer topology requires it. Source
+order cannot make one already-emitted branch authoritative, and lowering never
+needs to revise emitted branch code. Only after all branches have been lowered
+does the selected result relate to the outer interface and seal. Representation
+selection never reconstructs branch evidence from finished output IR or
+reopens a durable Monotype.
+
+Branches that provably terminate do not participate in result selection. If
+every branch terminates, the control-flow expression produces no runtime value:
+its checked result variable remains unconstrained, no result relation is
+created, and the expression carries the enclosing continuation's declared cell.
+An unobservable continuation type is not representation evidence.
 
 Record constructors preserve that distinction structurally. If a field is a
 finished generated-private witness, the constructor emits a distinct record
