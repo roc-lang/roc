@@ -1013,7 +1013,7 @@ pub const Coordinator = struct {
 
     /// Initialize a `Coordinator`.
     ///
-    /// `compiler_version` is a cache-key discriminant — it is incorporated
+    /// `compiler_version` is a cache-key discriminant—it is incorporated
     /// into the keys used by `cache_manager` so that artifacts from
     /// different compiler versions (or different consumer wrappers) stay
     /// segregated. Embedders should pass a stable string that changes
@@ -1164,7 +1164,7 @@ pub const Coordinator = struct {
     }
 
     /// Set the I/O / core context implementation. Callers must supply a fully
-    /// initialised `CoreCtx` — it must not create a replacement
+    /// initialised `CoreCtx`—it must not create a replacement
     /// `CoreCtx.default(...)` here because the existing context may have been
     /// constructed via `CoreCtx.testing(undefined, undefined)` (see
     /// `cache_config.zig`), in which case snapshotting its fields into a
@@ -1266,7 +1266,7 @@ pub const Coordinator = struct {
     /// returns, the caller should call `start()` and `coordinatorLoop()`.
     ///
     /// Only relative paths (`./...`, `../...`) are supported for the platform
-    /// spec and non-platform packages — URL specs return
+    /// spec and non-platform packages—URL specs return
     /// `error.UnsupportedPlatformSpec` or `error.UnsupportedPackageSpec`.
     /// Embedders that need URL pre-resolution (downloading + caching) should
     /// call `compile.app_header.parseAppHeader` themselves, resolve URLs to
@@ -1981,7 +1981,7 @@ pub const Coordinator = struct {
         };
     }
 
-    /// One entry yielded by `ReportIter` — a single diagnostic with the package
+    /// One entry yielded by `ReportIter`—a single diagnostic with the package
     /// and module it came from. Pointers borrow from the Coordinator's storage.
     /// The report may be appended to in place (e.g. to attach notes), but
     /// reports must not be added or removed while iterating.
@@ -1992,7 +1992,7 @@ pub const Coordinator = struct {
     };
 
     /// Iterator over every report from every module in every package.
-    /// Borrows from `Coordinator` storage — do not add or remove reports
+    /// Borrows from `Coordinator` storage—do not add or remove reports
     /// while iterating.
     pub const ReportIter = struct {
         pkg_it: std.StringHashMap(*PackageState).Iterator,
@@ -2108,7 +2108,7 @@ pub const Coordinator = struct {
         // The root module graph was built ONCE by the caller and is reused here: it
         // both determines the republished artifact's cache key (a hit relocates the
         // previously-republished root artifact and skips the expensive republish) and,
-        // on a miss, feeds the publish below — so the graph (and its per-env
+        // on a miss, feeds the publish below—so the graph (and its per-env
         // `prepareRuntimeEnv` pass) is never built twice. A key failure (OOM) just
         // falls through to a normal republish.
         if (probe_cache) {
@@ -2215,7 +2215,7 @@ pub const Coordinator = struct {
         // already folds in the relation context. Store failures never poison the
         // build (they only forgo the future cache hit). Only cache a diagnostic-free
         // root: a relocate-on-load hit skips the finalizer, so it can't reproduce the
-        // finalizer's non-fatal diagnostics — caching only clean roots keeps a cache
+        // finalizer's non-fatal diagnostics—caching only clean roots keeps a cache
         // hit observably identical to a cold republish.
         if (mod.reports.items.len == 0) {
             if (mod.checkedArtifact()) |republished_artifact| {
@@ -2990,7 +2990,7 @@ pub const Coordinator = struct {
         // runtime env with the frozen artifact and leaves its interner heap-owned so
         // `deinitCachedModule` frees it correctly (e.g. when a root module is later
         // republished, which mutates the env via `enableRuntimeInserts`). Call the prep
-        // directly — building a `Modules` graph just to discard it would do O(defs)
+        // directly—building a `Modules` graph just to discard it would do O(defs)
         // hashmap work on every cache hit.
         check.TypedCIR.prepareRuntimeEnv(module_alloc, cached_env) catch {
             manager.stats.recordInvalidation();
@@ -3243,8 +3243,8 @@ pub const Coordinator = struct {
 
     /// When a platform root finishes checking with a published artifact and a
     /// requires clause, expose its requirement surface for app-root checks.
-    /// The surface borrows the platform's checked env — stable once the module
-    /// is Done — and derives its cache-identity context from the published
+    /// The surface borrows the platform's checked env—stable once the module
+    /// is Done—and derives its cache-identity context from the published
     /// artifact, so the checker input and the cache key can never disagree.
     /// A platform whose check failed publishes no artifact and installs no
     /// surface; its own diagnostics gate the build instead.
@@ -3574,7 +3574,7 @@ pub const Coordinator = struct {
         errdefer task_payload_alloc.free(imported_artifacts);
         // Requirement unification copies platform-owned types into the app's
         // store, so the app's published API can reference the platform's nominal
-        // types — including types that only appear in the platform's `requires`
+        // types—including types that only appear in the platform's `requires`
         // signatures (like `Host`), whose declaring modules are not part of the
         // platform root's public-API type owners. Seed the availability walk with
         // every checked module of the platform package so each such declaration
@@ -4773,7 +4773,7 @@ pub const Coordinator = struct {
 
             // Execute task. On OOM we cannot return an error from this `void`
             // thread entry point, so record it for the coordinator to observe
-            // and stop pulling work — the coordinator aborts the build.
+            // and stop pulling work—the coordinator aborts the build.
             const result = self.executeTaskInline(t, worker_allocs.taskAllocators()) catch |err| switch (err) {
                 error.OutOfMemory => {
                     self.worker_oom.store(true, .release);
@@ -5169,7 +5169,7 @@ test "warm build reloads the deferred platform root without republishing" {
     try std.testing.expect(warm.cache_hits > 0);
 
     // The republished executable root is content-addressed, so both runs produce
-    // a byte-identical key — and byte-identical artifacts: the cache-relocated
+    // a byte-identical key—and byte-identical artifacts: the cache-relocated
     // relation-bearing platform root serializes exactly as the fresh publication
     // did, and the cached app artifact carries the same recorded requirement
     // solutions as a fresh check (the relation is a pure function of the
@@ -5259,7 +5259,7 @@ test "app artifact records platform requirement solutions from checking" {
     try std.testing.expectEqual(@as(u32, 0), solution.requires_idx);
     try std.testing.expectEqual(check.CheckedArtifact.PlatformRequiredValueKind.const_value, solution.value_kind);
 
-    // The recorded export id resolves to the app's exported `prog` value —
+    // The recorded export id resolves to the app's exported `prog` value—
     // the correspondence is id-keyed, and the ids must agree with the app's
     // own published top-level value table.
     const top_level = app_artifact.top_level_values.lookupByDef(solution.def) orelse return error.TestUnexpectedResult;
@@ -5673,7 +5673,7 @@ test "hosted distinctness: identical hosted declarations bound to different plat
     try std.testing.expect(!coord.hasUserErrors());
 
     // Per design.md, hosted identities are the platform-header symbol strings
-    // and declaration slots — never content hashes — so no deduplication or
+    // and declaration slots—never content hashes—so no deduplication or
     // merging step may collapse the two entries even though their declaring
     // modules are as content-identical as the language allows.
     const root = coord.executableRootCheckedArtifact();
@@ -6478,7 +6478,7 @@ test "Coordinator isComplete with multi_threaded max_threads=0 (inline execution
     var coord = try Coordinator.init(
         allocator,
         .multi_threaded,
-        0, // auto — but <= 1, so no workers spawned
+        0, // auto—but <= 1, so no workers spawned
         roc_target.RocTarget.detectNative(),
         undefined,
         "test",
@@ -6489,7 +6489,7 @@ test "Coordinator isComplete with multi_threaded max_threads=0 (inline execution
 
     try std.testing.expect(coord.isComplete());
 
-    // Enqueue a task — inflight must stay 0 since there are no workers
+    // Enqueue a task—inflight must stay 0 since there are no workers
     try coord.enqueueTask(.{
         .parse = .{
             .package_name = "test",
@@ -6503,7 +6503,7 @@ test "Coordinator isComplete with multi_threaded max_threads=0 (inline execution
     });
     try std.testing.expectEqual(@as(usize, 0), coord.inflight.load(.monotonic));
 
-    // Drain the task — should be complete again
+    // Drain the task—should be complete again
     if (coord.task_channel.tryRecv()) |_| {} else {}
     try std.testing.expect(coord.isComplete());
 }
@@ -6546,7 +6546,7 @@ test "Coordinator shutdown does not drain buffered tasks" {
     // Verify tasks are buffered
     try std.testing.expectEqual(@as(usize, 4), coord.task_channel.len());
 
-    // Shut down immediately — no workers were started, but exercise the
+    // Shut down immediately—no workers were started, but exercise the
     // flag + close path so we can verify the channel is NOT drained.
     coord.shutdown();
 
@@ -6817,7 +6817,7 @@ test "Coordinator handleParseFailed advances module to Done" {
     // Verifies that handleParseFailed (which previously had orelse return)
     // correctly transitions a module to Done and decrements counters.
     // If the package/module lookup silently returned, the module would
-    // stay in Parsing forever — exactly the bug from CI.
+    // stay in Parsing forever—exactly the bug from CI.
     const allocator = std.testing.allocator;
     const app_identity = package_identity.synthetic_app_identity;
 

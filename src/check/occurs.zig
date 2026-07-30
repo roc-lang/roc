@@ -833,7 +833,7 @@ test "occurs: value graph never traverses a nominal's backing (args only)" {
     // Root = ( N, )   where   N := Inner   and   Inner = [ Cons(Inner), Nil ]
     //
     // The only cycle lives in N's backing structure. Backing structure is
-    // declaration data — its recursion is validated by the declaration-graph
+    // declaration data—its recursion is validated by the declaration-graph
     // pass (`occursDeclarationGraph`), and the checker poisons invalid
     // declarations before any use exists. The value-graph occurs check
     // therefore does not traverse backings at all, and this graph is valid
@@ -902,7 +902,7 @@ fn testRegisterDecl(
 }
 
 test "occursDeclarationGraph: valid recursion through a tag payload" {
-    // List := [ Nil, Cons(List) ] — the template's recursive reference is an
+    // List := [ Nil, Cons(List) ]—the template's recursive reference is an
     // application of the same declaration key.
     const gpa = std.testing.allocator;
     var types_store = try Store.init(gpa);
@@ -934,7 +934,7 @@ test "occursDeclarationGraph: valid recursion through a tag payload" {
 }
 
 test "occursDeclarationGraph: self-recursion through a tuple is infinite" {
-    // T := (T,) — the cycle never passes a recursion-allowed position.
+    // T := (T,)—the cycle never passes a recursion-allowed position.
     const gpa = std.testing.allocator;
     var types_store = try Store.init(gpa);
     defer types_store.deinit();
@@ -961,7 +961,7 @@ test "occursDeclarationGraph: self-recursion through a tuple is infinite" {
 }
 
 test "occursDeclarationGraph: mutual recursion closes by declaration key" {
-    // T := (U,)   U := (T,) — each template references the OTHER declaration
+    // T := (U,)   U := (T,)—each template references the OTHER declaration
     // by key. Per-use instantiation copies would disconnect this cycle; the
     // declaration table closes it.
     const gpa = std.testing.allocator;
@@ -1007,7 +1007,7 @@ test "occursDeclarationGraph: mutual recursion closes by declaration key" {
 }
 
 test "occursDeclarationGraph: anonymous recursion inside a template is rejected" {
-    // N := Inner where Inner = [ Cons(Inner), Nil ] — the cycle inside the
+    // N := Inner where Inner = [ Cons(Inner), Nil ]—the cycle inside the
     // template passes a tag payload but never re-enters a nominal backing.
     const gpa = std.testing.allocator;
     var types_store = try Store.init(gpa);

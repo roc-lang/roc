@@ -8,7 +8,7 @@ import pf.Stdout
 #   (&strListElementDecref in src/builtins/dev_wrappers.zig)
 # - a dropped List(List(Str)) exercises roc_builtins_list_decref_flat_list
 #   (&flatListElementDecref, which decrefs the inner lists and their strings)
-# Both pass address-taken decref callbacks — the pattern the lld-COFF linker
+# Both pass address-taken decref callbacks—the pattern the lld-COFF linker
 # misresolved for strJoinWithC's &strDecref. Strings come from stdin and are
 # >= 24 bytes so the drops free real heap allocations.
 

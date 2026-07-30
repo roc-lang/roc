@@ -133,7 +133,7 @@ pub const TypeCheckTask = struct {
 /// The platform root's requirement surface, borrowed from its completed
 /// type check: the checked platform ModuleEnv (stable once the module is
 /// Done), the cache-identity context derived from its published artifact,
-/// and the platform path for diagnostics. Plain borrowed data — nothing here
+/// and the platform path for diagnostics. Plain borrowed data—nothing here
 /// is owned, so copies are free and there is nothing to deinit.
 pub const PlatformRequirementSurface = struct {
     env: *const ModuleEnv,

@@ -5,7 +5,7 @@
 The numeric-conversion `LowLevel` ops (~230 variants: every
 `int_to_int`, `to_dec`, `to_frac`, `_wrap`/`_try`/`_trunc` family
 member) are handled by explicit exhaustive switch arms in the
-interpreter, the dev backend, and the wasm backend — so adding or
+interpreter, the dev backend, and the wasm backend—so adding or
 renaming one is a compile error there. The LLVM backend is the
 exception: its `emitLowLevel` dispatch ends in
 `else => try self.emitNumericConversionOrCrash(...)`
@@ -20,7 +20,7 @@ name as the message.
 
 The enum's naming convention is load-bearing codegen logic in exactly
 one of four executors. A new conversion op that doesn't fit the
-substring heuristics — or a variant renamed for clarity — compiles
+substring heuristics—or a variant renamed for clarity—compiles
 cleanly and either misroutes through a heuristic or becomes a runtime
 crash in compiled programs only, while the other three backends would
 have refused to build. This is both a competing source of truth (the
@@ -41,11 +41,11 @@ obvious home beside them.
 
 ## Evidence
 
-- `src/backend/llvm/MonoLlvmCodeGen.zig:2945` — the `else` prong that
+- `src/backend/llvm/MonoLlvmCodeGen.zig:2945`—the `else` prong that
   exempts LLVM from the exhaustiveness guarantee.
-- `:3542-3608` — `emitNumericConversionOrCrash`'s substring
+- `:3542-3608`—`emitNumericConversionOrCrash`'s substring
   heuristics and the `emitCrashBytes(name)` fallback.
-- The three sibling backends' explicit arms (cited above) — proof the
+- The three sibling backends' explicit arms (cited above)—proof the
   explicit form is tractable at this op count.
 
 ## Solution design
@@ -55,7 +55,7 @@ obvious home beside them.
    `conversionSpec(op) ?struct { src: NumType, dst: NumType, mode:
    enum { exact, wrap, try_, trunc, to_str } }`. It may be *built* at
    comptime from the tag names (the convention is real and
-   comptime-checkable) — the difference from today is that the parse
+   comptime-checkable)—the difference from today is that the parse
    happens once, at comptime, with a `@compileError` for any
    conversion-shaped tag it cannot classify, instead of at emission
    time with a crash fallback.
@@ -67,7 +67,7 @@ obvious home beside them.
    compile error in the backend, matching dev/wasm.
 3. **Optional convergence.** dev and wasm may later consume the same
    `conversionSpec` to shrink their grouped arms, but that is not
-   required for this project — the goal is ending LLVM's silent-drift
+   required for this project—the goal is ending LLVM's silent-drift
    exemption.
 
 ## What success looks like
@@ -80,7 +80,7 @@ Every criterion below must hold; the project is not done until all do:
   variant breaks the LLVM build until handled, exactly as it breaks
   dev/wasm/interpreter today.
 - Renaming any conversion op's tag is semantics-neutral (the comptime
-  builder either still classifies it or fails the build — never a
+  builder either still classifies it or fails the build—never a
   silent behavior change).
 - LLVM-path output for every existing conversion op is unchanged
   (existing eval/backend agreement tests stay green).
@@ -105,10 +105,10 @@ diffing emitted IR for a conversion-heavy fixture).
   conversion has a `conversionSpec`, and vice versa.
 - One end-to-end fixture per conversion mode (exact/wrap/try/trunc/
   to_str) compiled via the LLVM path and compared against interpreter
-  results — pinning that the de-stringing changed nothing.
+  results—pinning that the de-stringing changed nothing.
 
 ## Related projects
 
 - The landed single-source builtin registration
-  (`src/builtins/builtin_registry.zig`) — cured the same backend's
+  (`src/builtins/builtin_registry.zig`)—cured the same backend's
   symbol-string drift; same disease, neighboring mechanism.

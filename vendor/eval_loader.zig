@@ -6,7 +6,7 @@
 //! Zig 0.16's `ElfDynLib` is not a complete loader for our use:
 //!
 //!  1. It mishandles writable segments. For a writable `PT_LOAD` it does
-//!     `@memcpy(sect_mem[0..p_filesz], file_bytes[0..p_filesz])` — copying from
+//!     `@memcpy(sect_mem[0..p_filesz], file_bytes[0..p_filesz])`—copying from
 //!     **file offset 0** (the ELF header) to the segment's page-aligned start,
 //!     ignoring both `p_offset` (the real source) and the page-alignment gap
 //!     (the real destination, `base + p_vaddr`). So `.data`/`.got`/`.dynamic`
@@ -20,7 +20,7 @@
 //!
 //! This vendored loader maps every segment from the correct file bytes and
 //! applies the object's dynamic relocations, so the loaded image is correct
-//! regardless of what the linker emitted — rather than relying on codegen never
+//! regardless of what the linker emitted—rather than relying on codegen never
 //! producing a relocation (which protected visibility narrows but cannot
 //! guarantee). It is used only on the static/no-libc linux configuration; every
 //! other configuration keeps using `std.DynLib`, whose `DlDynLib` defers to the
@@ -37,7 +37,7 @@ const mem = std.mem;
 const self_relocate = @import("base").elf_self_relocate;
 
 /// True when `std.DynLib` resolves to the relocation-free, incomplete
-/// `ElfDynLib` (a static, no-libc — i.e. static-musl — linux binary) and we
+/// `ElfDynLib` (a static, no-libc—i.e. static-musl—linux binary) and we
 /// should use this vendored loader instead.
 pub const active = self_relocate.loader_skips_relocations;
 

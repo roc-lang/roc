@@ -1,4 +1,4 @@
-## parser_v1 with the `fail` method removed — a MAJOR change.
+## parser_v1 with the `fail` method removed—a MAJOR change.
 
 Parser(input, val) := { run : input -> [Ok(val, input), Err(Str)] }.{
 

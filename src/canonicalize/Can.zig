@@ -256,7 +256,7 @@ exposed_ident_texts: std.StringHashMapUnmanaged(Region) = .{},
 exposed_type_texts: std.StringHashMapUnmanaged(Region) = .{},
 /// Track which identifiers in the current scope are placeholders (not yet replaced with real definitions)
 /// Maps the fully qualified placeholder ident to its component parts for hierarchical registration.
-/// In the common case this stays empty — it is only populated by builtin canon paths that still
+/// In the common case this stays empty—it is only populated by builtin canon paths that still
 /// want to pre-register hierarchical qualified item names for cross-module lookup.
 placeholder_idents: std.AutoHashMapUnmanaged(Ident.Idx, PlaceholderInfo) = .{},
 /// Definitions requested by the caller as explicit post-check roots.
@@ -417,7 +417,7 @@ enclosing_lambda: ?Expr.Idx = null,
 /// Directory containing the source file, used to resolve file imports.
 source_dir: ?[]const u8 = null,
 /// I/O for file operations (e.g., file imports).
-/// Required — callers must provide a real CoreCtx (use a testing one if file imports are not needed).
+/// Required—callers must provide a real CoreCtx (use a testing one if file imports are not needed).
 roc_ctx: CoreCtx,
 const Ident = base.Ident;
 const Region = base.Region;
@@ -441,7 +441,7 @@ const BlockLocalDef = struct {
     /// with `refs_back` this identifies a mutual-recursion pair.
     fwd_ref_from: ?Ident.Idx = null,
     /// Set while canonicalizing THIS def's body if it references its
-    /// forward-referencer back — completing a 2-cycle (mutual recursion).
+    /// forward-referencer back—completing a 2-cycle (mutual recursion).
     refs_back: bool = false,
 };
 // ModuleEnv is already imported at the top
@@ -1640,7 +1640,7 @@ fn typePathForBinding(self: *const Self, binding: Scope.TypeBinding) ?AST.DeclIn
 }
 
 /// The type name a top-level alias declaration refers to, when its annotation
-/// is a plain (possibly applied) type reference — `ThingAlias : Thing` or
+/// is a plain (possibly applied) type reference—`ThingAlias : Thing` or
 /// `Wrapped(a) : Wrapper(a)`. Null for every other binding or annotation
 /// shape.
 fn aliasBindingTargetName(self: *const Self, binding: Scope.TypeBinding) ?Ident.Idx {
@@ -1661,7 +1661,7 @@ fn aliasBindingTargetName(self: *const Self, binding: Scope.TypeBinding) ?Ident.
 }
 
 /// The type path an alias type path points at, when the alias declaration's
-/// annotation is a plain (possibly applied) type reference — the path-level
+/// annotation is a plain (possibly applied) type reference—the path-level
 /// counterpart of `aliasBindingTargetName`, covering associated aliases such
 /// as `Api.ThingAlias : Thing`. Null for every other declaration or
 /// annotation shape.
@@ -3051,7 +3051,7 @@ fn processAssociatedBlock(
 /// (whether by qualified or bare name) already created a forward-reference
 /// placeholder, adopt it and bind both names to that pattern; otherwise
 /// produce a fresh pattern and register both names. Keeps every reference to
-/// the item — qualified, bare, definition site — sharing one Pattern.Idx.
+/// the item—qualified, bare, definition site—sharing one Pattern.Idx.
 fn findOrCreateAssocPattern(
     self: *Self,
     qualified_ident: Ident.Idx,
@@ -3234,8 +3234,8 @@ fn drainForwardReferences(
 /// promote a forward-reference placeholder pattern (whose original ident
 /// matched the reference site spelling, e.g. `b`) to the canonical qualified
 /// name for the definition that adopts it (e.g. `Test.MyType.b`), so
-/// downstream consumers that key off `pattern.assign.ident` — including the
-/// test harness's `assertDefType` — see the fully-qualified name.
+/// downstream consumers that key off `pattern.assign.ident`—including the
+/// test harness's `assertDefType`—see the fully-qualified name.
 fn rebindPlaceholderPatternIdent(
     self: *Self,
     pattern_idx: CIR.Pattern.Idx,
@@ -3464,14 +3464,14 @@ fn canonicalizeAssociatedDeclBodyNow(
 }
 
 /// Walk an associated block's statements in source order, fully canonicalizing
-/// each one — including nested type declarations and their associated blocks.
+/// each one—including nested type declarations and their associated blocks.
 /// Register a single nested type declaration's bindings, then let the caller
 /// canonicalize its associated block body in source order. Sibling nested types
 /// resolve through parser declaration inventory when they are referenced before
 /// their declaration.
 ///
 /// The relative-parent-name passed to `registerTypeDecl` is the path up to (but
-/// not including) this type — `null` for direct children of the module root so
+/// not including) this type—`null` for direct children of the module root so
 /// the type's relative_name stays bare, the parent path joined with `.` for
 /// deeper nesting.
 fn registerNestedTypeDecl(
@@ -3517,7 +3517,7 @@ fn registerNestedTypeDecl(
     if (owner_is_module_visible) {
         // Also publish the user-facing qualified name (e.g. `Test.MyBool`)
         // at the module scope so references from outside the associated
-        // block — like `x = Test.MyBool.method(...)` at top level —
+        // block—like `x = Test.MyBool.method(...)` at top level—
         // can still resolve the nested type after this scope is exited.
         try self.introduceAssociatedTypeAliasInScope(0, user_qualified_ident_idx, nested_type_decl_idx);
 
@@ -3943,7 +3943,7 @@ fn canonicalizeAssociatedItems(
                     const anno_type_qualified_idx: Ident.Idx = if (parent_name.eql(type_name))
                         qualified_idx
                     else blk_atq: {
-                        // Re-fetch the ident texts here — earlier calls
+                        // Re-fetch the ident texts here—earlier calls
                         // (createAnnotationDef, setExposedValueNodeIndexById, …) may
                         // have grown the interner and invalidated the slices
                         // captured before this point.
@@ -4038,8 +4038,8 @@ fn canonicalizeAssociatedItems(
     return .done;
 }
 
-/// Canonicalize a top-level type declaration: register the type itself, then —
-/// if it has an associated block — canonicalize that block with the module-
+/// Canonicalize a top-level type declaration: register the type itself, then—
+/// if it has an associated block—canonicalize that block with the module-
 /// qualified parent name. Called once per type declaration in source order
 /// from the file-level walk.
 fn canonicalizeTopLevelTypeDecl(
@@ -4187,8 +4187,8 @@ pub fn canonicalizeFile(
     defer self.declScopeExit();
 
     // Walk every top-level statement in source order. Names defined later in the
-    // file — recursive values, recursive or mutually-recursive types, associated
-    // items that reference siblings, types appearing before their declaration —
+    // file—recursive values, recursive or mutually-recursive types, associated
+    // items that reference siblings, types appearing before their declaration—
     // resolve through placeholder patterns and placeholder type declarations
     // created on demand by the lookup paths and filled in once the real definition
     // is reached.
@@ -4648,7 +4648,7 @@ pub fn validateForExplicitRoots(self: *Self) std.mem.Allocator.Error!void {
     try self.env.publishScratchDiagnostics();
 }
 
-/// Run post-canonicalization validation that the type checker depends on —
+/// Run post-canonicalization validation that the type checker depends on—
 /// module-kind sanity for type modules / default apps, header presence on
 /// non-default-app files, and any other deferred diagnostics.
 pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
@@ -4789,7 +4789,7 @@ fn createAnnotationPattern(
 ) std.mem.Allocator.Error!Pattern.Idx {
     return create_new: {
         // If an earlier reference parked a forward-reference placeholder for
-        // this ident, adopt that pattern instead of creating a new one — all
+        // this ident, adopt that pattern instead of creating a new one—all
         // existing e_lookup_local nodes already point at it, so the def must
         // use the same Pattern.Idx to stay consistent.
         {
@@ -17406,7 +17406,7 @@ fn canonicalizeNominalBackingAnno(self: *Self, anno_idx: AST.TypeAnno.Idx) std.m
     // The backing record may be wrapped in parentheses (e.g. `Foo := ({ ... })`).
     // The kernel descends through parens and compares each record against the
     // backing AST index, so point the comparison at the unwrapped node it will
-    // actually reach — otherwise the inner record's unnamed fields are mistaken
+    // actually reach—otherwise the inner record's unnamed fields are mistaken
     // for a structural record and rejected.
     var backing_anno = anno_idx;
     while (true) {
@@ -20633,7 +20633,7 @@ fn getExternalTypeBase(self: *Self, type_ident: Ident.Idx) std.mem.Allocator.Err
             }
         }
     }
-    // This should not happen for builtin types like Str/Try — if it does,
+    // This should not happen for builtin types like Str/Try—if it does,
     // it indicates a missing type binding in the scope or module_envs.
     @panic("getExternalTypeBase: type not found in scope or auto-imports");
 }

@@ -9,9 +9,9 @@
 //! copy, or the pristine root recorded by a `SchemeUseRecord`)
 //! enumerate identical lists without sharing var identities.
 //!
-//! Order contract: depth-first over the resolved type structure — function
+//! Order contract: depth-first over the resolved type structure—function
 //! args then return, ordinary alias/nominal args then backing, and logical row
-//! fields/tags across the complete extension chain, all in store order —
+//! fields/tags across the complete extension chain, all in store order—
 //! emitting each constrained var's constraints in range order at its first
 //! occurrence; then the collected
 //! constraints' fn types are walked the same way in emission order (they can
@@ -21,8 +21,8 @@
 //! dispatcher's first occurrence (function arg positions, type arguments,
 //! row labels, …). Row-extension storage chains, including transparent aliases
 //! within them, are normalized away: a field or tag payload in any tail is
-//! addressed directly from the logical row root. Compiler-generated call edges — structural-derivation
-//! component calls, builtin helper calls — have no checked instantiation
+//! addressed directly from the logical row root. Compiler-generated call edges—structural-derivation
+//! component calls, builtin helper calls—have no checked instantiation
 //! records, so monotype resolves a target's obligations by walking these
 //! paths over the concrete monomorphic callable instead.
 
@@ -163,7 +163,7 @@ pub fn enumerateEvidenceParams(
     try walk(gpa, store, root, true, scratch, out);
     // Constraint fn types can bind further constrained vars; the queue holds
     // every emitted constraint's fn var in emission order. `walk` may grow the
-    // queue while we drain it — index-based drain keeps that sound. Params
+    // queue while we drain it—index-based drain keeps that sound. Params
     // found through the queue are pathless: no path over the scheme's
     // callable reaches them.
     var queue_index: usize = 0;

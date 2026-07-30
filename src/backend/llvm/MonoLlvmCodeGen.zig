@@ -8458,7 +8458,7 @@ pub const MonoLlvmCodeGen = struct {
     /// Emits one helper's body. The helper tree below a single RC statement
     /// shares the statement's atomicity: nested struct/tag/closure helpers are
     /// direct calls, so they keep it, and the element/payload callbacks handed
-    /// to the teardown builtins name the helper variant matching it — the C
+    /// to the teardown builtins name the helper variant matching it—the C
     /// function-pointer ABI carries no atomicity parameter, so the atomicity
     /// is baked into which function the pointer names. Free builtins never
     /// update a count, so they have no single-thread entries.

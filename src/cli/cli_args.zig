@@ -90,7 +90,7 @@ pub const OptLevel = enum {
 };
 
 /// Default optimization level for commands that favor fast compilation over
-/// fast output — `run`, `test`, `repl`, and `glue` all default here.
+/// fast output—`run`, `test`, `repl`, and `glue` all default here.
 pub const default_dev_opt: OptLevel = .dev;
 
 /// Default optimization level for `roc build`, which favors execution speed of
@@ -1235,7 +1235,7 @@ const bump_help =
     \\modules exposed by the package header are compared; platform
     \\provides/requires are not yet part of the comparison.
     \\
-    \\If this is the package's first release, there is nothing to compare —
+    \\If this is the package's first release, there is nothing to compare—
     \\publish it as 1.0.0.
     \\
 ;

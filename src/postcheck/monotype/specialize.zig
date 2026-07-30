@@ -1,9 +1,9 @@
 //! Monotype specialization reservation and reuse.
 //!
 //! `SpecBuilder` is the single index that answers every specialization reuse
-//! question in the Monotype pass. A specialization's identity — its callable,
+//! question in the Monotype pass. A specialization's identity—its callable,
 //! its checked source function type digest, and the closed monomorphic
-//! function type REQUESTED by the call site that reserved it — is written once
+//! function type REQUESTED by the call site that reserved it—is written once
 //! at `reserve` and never rewritten. Refinements produced later (a deferred
 //! request type sealed by its requester's graph, or the solved type produced
 //! by lowering the body) are data on the `SpecRecord` and become *alias*
@@ -18,7 +18,7 @@
 //!
 //! Boundary notes: the generated structural-derivation helper defs in
 //! `lower.zig` (`inspect_defs`/`equality_defs`/`hash_defs`) are def memos keyed
-//! by process-local type ids — they have no `FnId` and are not specialization
+//! by process-local type ids—they have no `FnId` and are not specialization
 //! records, so they deliberately live outside this index. Likewise
 //! `monotype_lifted/spec_constr.zig` specializes on call-pattern *value*
 //! shape, not type, and owns its own separate identity space.
@@ -282,7 +282,7 @@ pub const SpecBuilder = struct {
     /// record is a finished snapshot, and a requester that matches it embeds
     /// the matched type directly. A request at the record's (less specific)
     /// requested shape has no way to adopt the snapshot's solved evidence
-    /// into its graph, so it lowers a local specialization instead — the same
+    /// into its graph, so it lowers a local specialization instead—the same
     /// join the pre-immutability cache implemented by serializing identities
     /// already rewritten to the solved type.
     pub fn insertLoadedReady(
@@ -473,8 +473,8 @@ pub const SpecBuilder = struct {
     /// graph sealed the deferred request type. The identity keeps the
     /// creation-time request; the sealed shape becomes the record's current
     /// request view plus an alias lookup entry. This can happen more than
-    /// once while the record stays `.reserved` — each graph that deferred a
-    /// request against the record seals its own view — and each superseded
+    /// once while the record stays `.reserved`—each graph that deferred a
+    /// request against the record seals its own view—and each superseded
     /// shape's entry stays inert in the map: it no longer matches (only the
     /// owning graphs could produce those shapes), and a later independent
     /// request at a superseded shape reserves its own record.
@@ -812,7 +812,7 @@ test "monotype spec builder keeps identity immutable and aliases the solved type
 
     // A solved-shaped request reuses the record through the alias entry, and
     // the original request shape (less specific than the solved type) still
-    // reuses it through the request entry — the record is never rekeyed.
+    // reuses it through the request entry—the record is never rekeyed.
     const solved_found = (try builder.find(solved_shaped_identity, testEvidenceView())) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(spec, solved_found.local.spec);
     try std.testing.expectEqual(solved_ty, solved_found.local.match_ty);
@@ -1035,8 +1035,8 @@ test "monotype spec builder reuses loaded records through exact cross-store type
     try std.testing.expectEqual(Ast.FnSlot{ .imported = imported }, solved_hit.target());
 
     // A request shaped like the loaded record's (less specific) REQUEST type
-    // must not reuse the snapshot — it has no way to adopt the solved
-    // evidence — and lowers a fresh local specialization instead.
+    // must not reuse the snapshot—it has no way to adopt the solved
+    // evidence—and lowers a fresh local specialization instead.
     const request_shaped = testSpecIdentity(current_unit, source_digest, request_digest);
     try std.testing.expectEqual(@as(?LookupResult, null), try builder.find(request_shaped, testEvidenceView()));
     const local_miss = try builder.reserve(request_shaped, testEvidenceView(), @enumFromInt(1));
@@ -1188,7 +1188,7 @@ test "monotype spec builder validator catches a hand-corrupted identity" {
     const spec = reserved.spec orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(?SpecBuilder.IntegrityError, null), builder.lookupIntegrityError());
 
-    // Rewrite the identity behind the builder's back — the exact mutation the
+    // Rewrite the identity behind the builder's back—the exact mutation the
     // immutable-identity design forbids.
     records.getPtrImmediate(@intFromEnum(spec)).identity.request_fn_ty = str_ty;
     records.getPtrImmediate(@intFromEnum(spec)).identity.request_fn_ty_digest = digestWithFirstByte(3);

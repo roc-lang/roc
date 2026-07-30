@@ -401,7 +401,7 @@ pub const Literal = union(enum) {
     /// identified by an id `NumeralKeyInterner` assigns per distinct digit
     /// spelling: branches repeating the same spelling compare equal (so the
     /// duplicate-branch warning fires), while spelling variants of one value
-    /// (`1.5` vs `1.50`) stay distinct — sound for usefulness, since a
+    /// (`1.5` vs `1.50`) stay distinct—sound for usefulness, since a
     /// literal never covers another pattern.
     exact_numeral: u32,
 
@@ -551,7 +551,7 @@ pub const UnresolvedRows = struct {
 /// `Literal.eql` detects duplicate branches without carrying digit slices.
 /// Identity is the verbatim digit string (`1.5` ≠ `1.50`), matching
 /// `NumeralInfo.keyBytes`' deliberate no-normalization design. A pattern with
-/// no recorded digits gets a fresh unique id — the conservative pre-interner
+/// no recorded digits gets a fresh unique id—the conservative pre-interner
 /// occurrence identity.
 pub const NumeralKeyInterner = struct {
     module_env: *const Can.ModuleEnv,
@@ -2366,7 +2366,7 @@ fn getCtorArgTypes(allocator: std.mem.Allocator, type_store: *TypeStore, builtin
                 // The opening operation instantiates the declaration's
                 // backing template with the application's actual args already
                 // substituted for its formals, so the constructor args it
-                // yields are the concrete payload types — no positional
+                // yields are the concrete payload types—no positional
                 // substitution needed.
                 const backing_var = (try openNominalBacking(type_store, builtin_idents, nominal)) orelse return &[_]Var{};
                 return try getCtorArgTypes(allocator, type_store, builtin_idents, backing_var, tag_id);
@@ -4055,7 +4055,7 @@ pub fn checkMatch(
     // Filter: remove any ext vars that should be kept open.
     // This handles cases where a specialized branch (e.g., one match arm) sees
     // all tags without wildcards, but a different branch has wildcards for the
-    // same type position — meaning the union should stay open.
+    // same type position—meaning the union should stay open.
     var filtered_close: std.ArrayList(Var) = .empty;
     for (ext_vars_to_close.items) |close_var| {
         var dominated = false;

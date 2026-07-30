@@ -2,7 +2,7 @@
 //!
 //! The interpreter knows a hosted function's signature only at runtime, and pure Zig cannot
 //! synthesize a call to a runtime-determined signature. Rather than JIT a per-signature stub
-//! (which would require mapping memory executable — forbidden in sandboxed embeddings and at
+//! (which would require mapping memory executable—forbidden in sandboxed embeddings and at
 //! odds with the interpreter's "no codegen" property), we use the libffi-style technique: a
 //! single fixed assembly stub, compiled into this binary ahead of time, that loads *all*
 //! argument registers from caller-prepared "register image" arrays and calls the target.
@@ -189,7 +189,7 @@ fn invoke(ctl: *const Call) void {
 
 // The fixed trampoline, defined in `host_trampoline.S`. It saves the control pointer in a
 // callee-saved register, copies any stack arguments, loads every argument register from the
-// images, calls the target, and captures the result registers. It never generates code — it
+// images, calls the target, and captures the result registers. It never generates code—it
 // is assembled into this binary's .text ahead of time.
 extern fn rocCallTrampoline(ctl: *const Call) callconv(.c) void;
 

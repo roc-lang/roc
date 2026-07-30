@@ -37,7 +37,7 @@ fn sanitisePathForSnapshots(path: []const u8) []const u8 {
     return path;
 }
 
-/// Byte offset where `path`'s filename starts — just past the last separator,
+/// Byte offset where `path`'s filename starts—just past the last separator,
 /// or 0 when there is none. Both separators are handled so the split is the
 /// same on every platform.
 fn filenameStart(path: []const u8) usize {
@@ -78,7 +78,7 @@ fn assertValidHeadline(report: *const Report) void {
         }
     }
     // `last` stays 0 when the headline has no text content at all (legacy
-    // reports without a headline) — those are exempt.
+    // reports without a headline)—those are exempt.
     std.debug.assert(last == 0 or last == '.');
 }
 
@@ -155,7 +155,7 @@ pub fn renderReportToBoxPlain(report: *const Report, writer: *std.Io.Writer, con
 // beneath instead. There is always a blank row above the snippet, and a
 // blank-equivalent row above the bottom edge (a single-line region's underline
 // counts as blank). The same layout is used for the colored terminal output and
-// the plain markdown/snapshot output — the only difference is the palette (ANSI
+// the plain markdown/snapshot output—the only difference is the palette (ANSI
 // vs NO_COLOR).
 
 /// The thin red rule under the offending span. U+203E sits at the top of its
@@ -214,7 +214,7 @@ fn findBoxedRegion(elements: []const DocumentElement) ?BoxedRegion {
 /// keep inline code, symbols, etc. colored. `colors` ends up the same length as
 /// `plain`. In a no-color palette every color is "" and this is just plain text.
 /// Whether an annotation marks a code span (identifier, keyword, operator,
-/// type, …) — the spans the markdown renderer wraps in backticks. The box
+/// type, …)—the spans the markdown renderer wraps in backticks. The box
 /// renderers wrap these in backticks too, but only when there's no color to
 /// distinguish them (see `wantsBacktick`).
 fn isCodeAnnotation(a: Annotation) bool {
@@ -501,7 +501,7 @@ pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette:
     const inner_len = title.len + 2; // " TITLE "
     const tbw = inner_len + 2; // label box width
     // Grow the box past the configured width if the title is so wide that the
-    // label box plus a minimal summary slot wouldn't otherwise fit — so the
+    // label box plus a minimal summary slot wouldn't otherwise fit—so the
     // walls stay aligned on narrow terminals (the whole box just wraps in the
     // terminal) instead of overrunning.
     const total: usize = @max(config.getMaxLineWidth(), tbw + 15);
@@ -551,7 +551,7 @@ pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette:
         try writer.writeByte('\n');
     }
 
-    // Row 3: "└┬─…─┘" — the ┬ becomes the indented main left wall — then summary
+    // Row 3: "└┬─…─┘"—the ┬ becomes the indented main left wall—then summary
     // line 1 (if any), aligned under summary line 0.
     {
         var col: usize = 0;
@@ -782,7 +782,7 @@ fn renderBelowContent(
     var ctx = RenderCtx{ .config = config, .palette = palette, .annotation_stack = &ann };
 
     // Walk the below-the-box elements (everything except the main box's region).
-    // Prose accumulates in `buf` and is flushed — word-wrapped and indented —
+    // Prose accumulates in `buf` and is flushed—word-wrapped and indented—
     // whenever we reach a source region, which renders as its own embedded box.
     // `started` tracks whether the one leading blank line (which separates the
     // below-content from the box) has been emitted yet.
@@ -844,8 +844,8 @@ fn flushBelowText(
 }
 
 /// Render a secondary source region (e.g. the original definition pointed at by
-/// "…was already defined here:") as a box mirroring the main report box — full
-/// border with the location tucked into the bottom-right corner — but with the
+/// "…was already defined here:") as a box mirroring the main report box—full
+/// border with the location tucked into the bottom-right corner—but with the
 /// line number rendered in a gutter to the LEFT of the box, outside it.
 fn renderEmbeddedBox(
     writer: *std.Io.Writer,
@@ -1044,7 +1044,7 @@ fn wrapAndEmitBelowLine(writer: *std.Io.Writer, line: []const u8, base_indent: u
         start = end;
     }
     if (first) {
-        // Body was empty (prefix only) — still emit it.
+        // Body was empty (prefix only)—still emit it.
         try writer.splatByteAll(' ', base_indent);
         try writer.writeAll(prefix);
         try writer.writeByte('\n');
@@ -1325,7 +1325,7 @@ fn lineHasCaretRow(regions: []const UnderlineRegion, line_num: u32) bool {
 /// Write one caret row: the `^^^` line drawn under a source line. The padding
 /// before the first span mirrors the source line's own whitespace (preserving
 /// tabs so the carets stay aligned), gaps between spans are spaces, and each
-/// span becomes a run of carets — colored by its annotation on the terminal
+/// span becomes a run of carets—colored by its annotation on the terminal
 /// target, bare elsewhere. This is the single implementation of underline
 /// layout; every target that draws carets draws them through here.
 fn writeCaretRowForLine(

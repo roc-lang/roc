@@ -105,7 +105,7 @@ test "SYNTAX_PROBLEM report along with all four render types" {
             std.mem.endsWith(u8, line, "┘");
         if (!reaches_edge) continue;
         if (!seen_label_top and std.mem.endsWith(u8, line, "┐")) {
-            // The label box's top edge — short, doesn't reach the right wall.
+            // The label box's top edge—short, doesn't reach the right wall.
             seen_label_top = true;
             continue;
         }

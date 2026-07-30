@@ -604,7 +604,7 @@ generate_roc_list_generic =
 	\\            const alloc_ptr = self.getAllocationPtr() orelse return;
 	\\            const data_addr = @intFromPtr(alloc_ptr);
 	\\            const rc: *isize = @ptrFromInt(data_addr - @sizeOf(isize));
-	\\            if (rc.* == 0) return; // REFCOUNT_STATIC_DATA — bytes are in read-only memory
+	\\            if (rc.* == 0) return; // REFCOUNT_STATIC_DATA—bytes are in read-only memory
 	\\            const prev = @atomicRmw(isize, rc, .Sub, 1, .monotonic);
 	\\            if (prev == 1) {
 	\\                const base: *anyopaque = @ptrFromInt(data_addr - header_bytes);
@@ -624,7 +624,7 @@ generate_roc_list_generic =
 	\\        pub fn isUnique(self: Self) bool {
 	\\            const alloc_ptr = self.getAllocationPtr() orelse return true;
 	\\            const rc: *const isize = @ptrFromInt(@intFromPtr(alloc_ptr) - @sizeOf(isize));
-	\\            if (rc.* == 0) return true; // REFCOUNT_STATIC_DATA — treated as unique
+	\\            if (rc.* == 0) return true; // REFCOUNT_STATIC_DATA—treated as unique
 	\\            return rc.* == 1;
 	\\        }
 	\\
@@ -1901,7 +1901,7 @@ generate_roc_str =
 	\\        const alloc_ptr = self.getAllocationPtr() orelse return;
 	\\        const data_addr = @intFromPtr(alloc_ptr);
 	\\        const rc: *isize = @ptrFromInt(data_addr - @sizeOf(isize));
-	\\        if (rc.* == 0) return; // REFCOUNT_STATIC_DATA — bytes are in read-only memory
+	\\        if (rc.* == 0) return; // REFCOUNT_STATIC_DATA—bytes are in read-only memory
 	\\        const prev = @atomicRmw(isize, rc, .Sub, 1, .monotonic);
 	\\        if (prev == 1) {
 	\\            const ptr_width = @sizeOf(usize);
@@ -1924,7 +1924,7 @@ generate_roc_str =
 	\\        if (self.isSmallStr()) return true;
 	\\        const alloc_ptr = self.getAllocationPtr() orelse return true;
 	\\        const rc: *const isize = @ptrFromInt(@intFromPtr(alloc_ptr) - @sizeOf(isize));
-	\\        if (rc.* == 0) return true; // REFCOUNT_STATIC_DATA — treated as unique
+	\\        if (rc.* == 0) return true; // REFCOUNT_STATIC_DATA—treated as unique
 	\\        return rc.* == 1;
 	\\    }
 	\\

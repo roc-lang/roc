@@ -18,10 +18,10 @@
 //! (pow/sqrt/trig/log) and Dec floor/ceiling, `str_from_utf8` invalid-UTF-8
 //! error details, imported function calls, hosted function bodies, roots
 //! with runtime arguments, and recursion beyond the depth cap. Everything
-//! else in the Lambda Mono IR — every expression, statement, and pattern
+//! else in the Lambda Mono IR—every expression, statement, and pattern
 //! form, callable and erased dispatch, capture records, try sequencing,
 //! loops, the numeric op and conversion matrix, string and list op
-//! families — executes and is compared.
+//! families—executes and is compared.
 
 const std = @import("std");
 const base = @import("base");

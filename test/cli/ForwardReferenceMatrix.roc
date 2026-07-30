@@ -1,6 +1,6 @@
 # Forward-reference matrix (plan.md tests): a top-level def referencing
 # later functions (annotated and unannotated), and a function referencing a
-# later function — all backward references in graph order, so no re-entrant
+# later function—all backward references in graph order, so no re-entrant
 # checking is ever needed.
 combined = |extra| quadruple(11) + halve(44) + extra
 

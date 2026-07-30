@@ -3,7 +3,7 @@
 ## Problem
 
 Surface syntax is mostly single-sourced (escape alphabet, precedence
-table, highlight classification — see Background), but three facts are
+table, highlight classification—see Background), but three facts are
 still encoded more than once:
 
 1. **Keyword spellings ×3.** The tokenizer's `keywords`
@@ -17,8 +17,8 @@ still encoded more than once:
    `"requires {"`, and more); and the test-only reverse map in
    `rebuildBufferForTesting` (`tokenize.zig:2474-2569`) spells them a
    third time. Notably the formatter already does this right for
-   operators — it emits them via `pushTokenText` reading source
-   (`fmt.zig:1677, 1702`) — so the keyword literals are an
+   operators—it emits them via `pushTokenText` reading source
+   (`fmt.zig:1677, 1702`)—so the keyword literals are an
    inconsistency within fmt itself.
 2. **The deprecated numeric-suffix map is a hand-written
    bidirectional pair.** In `src/parse/NumericLiteral.zig`,
@@ -26,7 +26,7 @@ still encoded more than once:
    `deprecatedSuffixFromText()` (`:243-258`, text→enum as an `eql`
    chain) encode the same strings twice; a typo makes them disagree
    silently. (The tokenizer's accepted-suffix set is already
-   comptime-derived from `oldText()` at `tokenize.zig:590-603` —
+   comptime-derived from `oldText()` at `tokenize.zig:590-603`—
    the remaining gap is only between the two functions.)
 3. **The number-literal grammar is scanned twice.** The tokenizer's
    `chompNumber`/`chompIntegerBase16/8/2`/`chompExponent`
@@ -54,8 +54,8 @@ holdouts.
 
 - The fmt keyword-literal sites cited above versus the operator path
   in the same file.
-- `NumericLiteral.zig:64-81` vs `:243-258` — the unlinked pair.
-- `tokenize.zig:788-940` vs `NumericLiteral.zig:293-357` — the two
+- `NumericLiteral.zig:64-81` vs `:243-258`—the unlinked pair.
+- `tokenize.zig:788-940` vs `NumericLiteral.zig:293-357`—the two
   scanners' parallel base-prefix switches.
 
 ## Solution design
@@ -63,12 +63,12 @@ holdouts.
 1. **Keywords.** Add `Token.Tag.keywordText() ?[]const u8` (one
    switch, adjacent to the `keywords` map, with a comptime check that
    the map and the function agree in both directions). The formatter's
-   keyword literals become `keywordText(.kw_if)` etc. — or, where a
+   keyword literals become `keywordText(.kw_if)` etc.—or, where a
    token is at hand, `pushTokenText` like the operator path.
    `rebuildBufferForTesting`'s keyword arms derive from the same
    function.
 2. **Suffixes.** Replace `deprecatedSuffixFromText`'s `eql` chain with
-   a comptime loop over the enum comparing against `oldText()` — the
+   a comptime loop over the enum comparing against `oldText()`—the
    inverse is then correct by construction.
 3. **Number grammar.** Extract the shared micro-facts into
    `NumericLiteral` (or a small shared decl both import): base-prefix
@@ -111,12 +111,12 @@ same comparisons. Confirm the tokenizer benchmark (if any) and
 
 - The bidirectional keywords-map/`keywordText` comptime check.
 - A suffix round-trip test (`fromText(oldText(s)) == s` for all
-  variants — trivially true after step 2, kept as a guard).
+  variants—trivially true after step 2, kept as a guard).
 - Cross-scanner agreement corpus: number strings (all bases,
   underscores, exponents, malformed variants) where
   tokenizer-accepts must imply value-parser-succeeds.
 
 ## Related projects
 
-- [lsp-and-docs-truth-reuse.md](lsp-and-docs-truth-reuse.md) — the
+- [lsp-and-docs-truth-reuse.md](lsp-and-docs-truth-reuse.md)—the
   same reuse move for editor-facing syntax facts.

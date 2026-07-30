@@ -1105,7 +1105,7 @@ test "run handles a checked type mismatch in function args" {
     // Should report the type mismatch
     try testing.expect(std.mem.find(u8, run_result.stderr, "TYPE MISMATCH") != null);
 
-    // Must not crash with SIGABRT — the process should exit cleanly (or with
+    // Must not crash with SIGABRT—the process should exit cleanly (or with
     // a runtime error exit code), not be killed by a signal.
     switch (run_result.term) {
         .exited => {},

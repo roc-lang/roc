@@ -3,12 +3,12 @@
 //! These let a store keep its in-memory `[]T` representation unchanged while
 //! still serializing via the CompactWriter offset-relocation scheme: a slice of
 //! POD (relocation-invariant) elements is written contiguously and reconstructed
-//! by recomputing one base-relative pointer — a single fixup per slice,
+//! by recomputing one base-relative pointer—a single fixup per slice,
 //! independent of the slice length. This is the transform-A building block (no
 //! representation change, no consumer churn).
 //!
 //! "POD / relocation-invariant" means `T` contains only scalars, enums, packed
-//! structs, and `Idx`/offset integers — NO pointers, slices, or maps nested
+//! structs, and `Idx`/offset integers—NO pointers, slices, or maps nested
 //! inside an element. Slices whose elements embed pointers/slices need the
 //! side-list (transform B) treatment instead and must NOT use this helper.
 
@@ -22,7 +22,7 @@ const CompactWriter = collections.CompactWriter;
 /// `@compileError` unless `T` is relocation-invariant ("POD"): it transitively
 /// contains no pointers or slices, so the only fixup needed when a `[]T` moves
 /// is the outer slice's base pointer. This is what makes a single-fixup
-/// `SerializedSlice(T)` *correct* — an element with an embedded pointer/slice
+/// `SerializedSlice(T)` *correct*—an element with an embedded pointer/slice
 /// would silently dangle after relocation, so we reject it at compile time
 /// (such a type needs the transform-B side-list treatment instead).
 pub fn assertRelocatablePod(comptime T: type) void {
@@ -105,7 +105,7 @@ fn assertPortableSerializedInner(comptime T: type) void {
 
 /// Reject an `= undefined` field default anywhere inside a serialized POD type. A
 /// fixed-layout serialized element always writes every field's bytes, so an `undefined`
-/// default leaks uninitialized memory into the blob — a non-deterministic, cache-poisoning
+/// default leaks uninitialized memory into the blob—a non-deterministic, cache-poisoning
 /// result. Reading the bytes of an `undefined` comptime default is illegal, so building
 /// this for such a type fails with "use of undefined value" pointing at the offending
 /// type. The fix is to give the field a zero/explicit default (e.g. `= .{}` or
@@ -143,8 +143,8 @@ fn touchAllDefined(comptime T: type, comptime value: T) void {
 /// and so knows how to fix its own base pointer on load) or a relocation-invariant
 /// POD leaf/aggregate. The hazard this closes: a raw pointer or slice embedded
 /// *directly* in a `Serialized` struct (outside a marker) is silently skipped by
-/// `relocatablePointerCount` — a `.pointer` type falls through to its `else => 0`
-/// arm — so it contributes no fixup and dangles after relocation. A marker is
+/// `relocatablePointerCount`—a `.pointer` type falls through to its `else => 0`
+/// arm—so it contributes no fixup and dangles after relocation. A marker is
 /// exempt because it self-describes relocation and its element/payload type was
 /// already validated by `assertRelocatablePod` where the marker was built.
 ///
@@ -188,7 +188,7 @@ pub fn SerializedSlice(comptime T: type) type {
 
         /// The element type whose bytes this slice serializes. Read by the layout
         /// fingerprint (`serializedLayoutFingerprint`) so a change to the element's
-        /// field order/size — which changes the serialized bytes — is reflected in
+        /// field order/size—which changes the serialized bytes—is reflected in
         /// the version hash even though this container's own `{offset,len}` layout
         /// is unchanged.
         pub const SerializedElement = T;
@@ -197,7 +197,7 @@ pub fn SerializedSlice(comptime T: type) type {
         pub const serialized_relocatable_pointers: usize = 1;
 
         /// Append `slice`'s bytes to `writer` and record their offset/len. Uses
-        /// `appendSlicePodZeroed` so element padding is zeroed — the serialized blob is
+        /// `appendSlicePodZeroed` so element padding is zeroed—the serialized blob is
         /// byte-deterministic (reproducible builds; content-stable cache bodies).
         pub fn serialize(self: *Self, slice: []const T, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
             if (slice.len == 0) {
@@ -275,11 +275,11 @@ pub fn SerializedOptional(comptime T: type) type {
 }
 
 /// Count the relocatable base pointers a `Serialized` type fixes up when it
-/// moves — i.e. its deserialization fixup count. A `SerializedSlice` /
+/// moves—i.e. its deserialization fixup count. A `SerializedSlice` /
 /// `SerializedOptional` field contributes exactly 1 (via its
 /// `serialized_relocatable_pointers` decl); a nested aggregate is summed
 /// recursively. This is a pure compile-time function of the *type*, never of the
-/// data, so a store can `comptime`-assert its fixup count is a fixed constant —
+/// data, so a store can `comptime`-assert its fixup count is a fixed constant—
 /// the core invariant that makes deserialization O(1) in the data size.
 pub fn relocatablePointerCount(comptime T: type) usize {
     return switch (@typeInfo(T)) {
@@ -306,7 +306,7 @@ pub fn serializedLayoutFingerprint(comptime T: type, hasher: anytype) void {
         .@"struct" => |s| {
             // A container (SerializedSlice / SafeList.Serialized / …) fixes a
             // {offset,len[,capacity]} header but its *element* layout determines the
-            // serialized bytes — fold the element type in so an element reorder is seen.
+            // serialized bytes—fold the element type in so an element reorder is seen.
             if (@hasDecl(T, "SerializedElement")) {
                 hasher.update("E<");
                 serializedLayoutFingerprint(T.SerializedElement, hasher);
@@ -351,7 +351,7 @@ pub fn serializedLayoutFingerprint(comptime T: type, hasher: anytype) void {
 
 /// Comptime FNV-1a accumulator. Cheap enough to fold a large recursive layout
 /// fingerprint at compile time without exhausting the eval branch quota (a full
-/// SHA-256 over the whole artifact layout does — and cryptographic strength is
+/// SHA-256 over the whole artifact layout does—and cryptographic strength is
 /// unnecessary for detecting *accidental* layout drift).
 const LayoutHasher = struct {
     state: u64 = 0xcbf29ce484222325,
@@ -435,11 +435,11 @@ pub fn binarySearchByKey(
 }
 
 /// Append `items` to a flat side pool (`ArrayList`), returning their `(start, len)`
-/// range as `RangeT` (a `start: u32, len: u32` struct — a store's named range or the
+/// range as `RangeT` (a `start: u32, len: u32` struct—a store's named range or the
 /// shared `Span`). This is the single implementation behind every transform-B "flatten
 /// a slice into a shared pool" helper. An empty input appends nothing and returns the
 /// canonical empty range `{ .start = 0, .len = 0 }` (a zero-length range never indexes
-/// the pool, so its start is irrelevant — every consumer slices `pool[start..start+0]`).
+/// the pool, so its start is irrelevant—every consumer slices `pool[start..start+0]`).
 pub fn appendSpan(
     comptime RangeT: type,
     comptime T: type,
@@ -487,7 +487,7 @@ fn allocatorField(comptime Store: type) ?[]const u8 {
 /// store lists them in a `pub const serde_transient_fields = [_][]const u8{...}` decl;
 /// `deserialize` resets each to its struct default (so they must declare one). They
 /// are excluded from the serialized set, and a store field that is neither serialized,
-/// the flag, the allocator, nor listed here is a compile error — closing the
+/// the flag, the allocator, nor listed here is a compile error—closing the
 /// "forgot to serialize a data field" footgun the strict field set otherwise guards.
 fn transientFields(comptime Store: type) []const []const u8 {
     if (@hasDecl(Store, "serde_transient_fields")) return &Store.serde_transient_fields;
@@ -504,7 +504,7 @@ fn isTransientField(comptime Store: type, comptime name: []const u8) bool {
 /// Comptime serialization framework for "transform-A" stores: a store backed by a
 /// set of same-named `SerializedSlice`/`SerializedOptional`/nested-`Serialized`
 /// fields. It generates `serialize`/`deserialize` by iterating the `Serialized`
-/// fields, so the two can never drift apart when a field is added or removed — the
+/// fields, so the two can never drift apart when a field is added or removed—the
 /// hand-written triplet's classic footgun (a missed line silently drops or misaligns
 /// a field). A store opts in inside its `Serialized` extern struct:
 ///
@@ -517,14 +517,14 @@ fn isTransientField(comptime Store: type, comptime name: []const u8) bool {
 ///     };
 ///
 /// Stores carrying extra runtime state are handled by reflection, not excluded:
-///   * a `serialized: bool` frozen flag — auto-detected and set `true` on load;
-///   * a retained `allocator: Allocator` — auto-detected; the store aliases
+///   * a `serialized: bool` frozen flag—auto-detected and set `true` on load;
+///   * a retained `allocator: Allocator`—auto-detected; the store aliases
 ///     `deserialize = Serde.deserializeWithAllocator` and the allocator is injected;
-///   * build-only side tables — declared in `serde_transient_fields` and reset to
+///   * build-only side tables—declared in `serde_transient_fields` and reset to
 ///     their struct default on load;
-///   * `ArrayList`-backed fields — adapted via `.items`/`arrayListFromSlice`.
+///   * `ArrayList`-backed fields—adapted via `.items`/`arrayListFromSlice`.
 /// Every store field must be one of: serialized (a `Serialized` field), the frozen
-/// flag, the allocator, or a declared transient — otherwise a compile error fires, so
+/// flag, the allocator, or a declared transient—otherwise a compile error fires, so
 /// a data field accidentally left out of `Serialized` cannot silently vanish. `deinit`
 /// stays hand-written per store: it encodes genuine per-store ownership (slice-free vs
 /// list/interner deinit, frozen gating, allocator retention) that does not belong in
@@ -749,7 +749,7 @@ test "relocatablePointerCount: counts SafeList.Serialized base pointers and sums
     };
     try testing.expectEqual(@as(usize, 3), relocatablePointerCount(InternerLike));
 
-    // A store composed of slices + a nested interner sums to the true total — the
+    // A store composed of slices + a nested interner sums to the true total—the
     // invariant that lets the artifact assert its full constant fixup count.
     const Composed = extern struct {
         a: SerializedSlice(Elem),
@@ -830,7 +830,7 @@ test "layoutVersionHash: flips on nested reorder, element reorder, and version b
     // A version-discriminant bump changes the hash.
     try testing.expect(!versionHashesEqual(hA1, hA2));
     // Reordering the ELEMENT type's fields changes the hash even though the
-    // container's own {offset,len} layout is identical — captured via SerializedElement.
+    // container's own {offset,len} layout is identical—captured via SerializedElement.
     try testing.expect(!versionHashesEqual(hC1, hC2));
     // Same for SafeList-backed element layout.
     try testing.expect(!versionHashesEqual(hL1, hL2));
@@ -905,7 +905,7 @@ test "SerializedSlice.serialize: padding-free elements are iovec'd verbatim (no 
     const aa = arena.allocator();
 
     // A padding-free element type (u32). The serializer must NOT allocate a
-    // writer-owned copy buffer for it — it iovecs the source directly. Measure the
+    // writer-owned copy buffer for it—it iovecs the source directly. Measure the
     // `allocated_memory` delta across the slice serialize (the header `appendAlloc`
     // registers one entry up front, which is not what we're measuring).
     const PodHolder = extern struct { items: SerializedSlice(u32) = .{} };

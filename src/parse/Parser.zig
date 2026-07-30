@@ -5799,7 +5799,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .pattern_tag_args_next;
                     }
                     if (self.peek() == .Dot and self.peekN(1) == .NoSpaceOpenRound) {
-                        // `Type.(pattern)` — nominal-value destructure, the inverse
+                        // `Type.(pattern)`—nominal-value destructure, the inverse
                         // of `Type.(value)` construction. Parse the backing
                         // pattern(s) just like tag args, flagged as backing_value.
                         self.advance(); // `.`

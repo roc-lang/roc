@@ -1,6 +1,6 @@
 # Types
 
-Roc is statically typed, and types are inferred — you rarely have to write them,
+Roc is statically typed, and types are inferred—you rarely have to write them,
 but you can, and any annotation you write is checked.
 
 ## Roc's Type System
@@ -12,7 +12,7 @@ Roc uses Hindley–Milner type inference with a few deliberate restrictions:
   argument is used at a single type—i.e. you can't take an `(a -> a)` argument
   and apply it at several element types within one call (that needs rank-2).
 - **No higher-kinded polymorphism.** Type variables range over types
-  (`Str`, `List(U64)`), never over type constructors — you can't abstract over
+  (`Str`, `List(U64)`), never over type constructors—you can't abstract over
   `List` itself, as in `f : m(a) -> m(b)`.
 - **No subtyping.** Types relate by unification, not a sub/supertype lattice.
   The width flexibility of records and tag unions is expressed with extension
@@ -20,7 +20,7 @@ Roc uses Hindley–Milner type inference with a few deliberate restrictions:
 
 ### Generalization
 
-A definition is *generalized* — made reusable at many types — only in these
+A definition is *generalized*—made reusable at many types—only in these
 cases:
 
 - **Functions** are always generalized; each call site is checked at its own
@@ -33,8 +33,8 @@ cases:
   the binding is generalized to it (`empty : List(a)` is then reusable at any
   `a`). Note that we report an error for top-level values with free vars, so in
   practice this only applies to let-defs.
-- **A value alias** — a binding whose right-hand side is a bare reference to an
-  already-generalized binding (`shorthand = Foo.my_func`) — stays generalized,
+- **A value alias**—a binding whose right-hand side is a bare reference to an
+  already-generalized binding (`shorthand = Foo.my_func`)—stays generalized,
   since copying a reference does no work and so is safe to reuse at many types.
 
 Every other value is monomorphic: one type, fixed by its definition and uses.
@@ -43,7 +43,7 @@ recomputed at each type it might otherwise take.
 
 A mutable variable (`var`) is never generalized, even with an annotation: it has
 a single type, fixed by its first use. This is the value restriction in its
-original, soundness role — a polymorphic mutable cell could be written at one
+original, soundness role—a polymorphic mutable cell could be written at one
 type and read back at another, so a `var` is always monomorphic.
 
 ## Type Annotations
@@ -59,7 +59,7 @@ identity : a -> a
 identity = |x| x
 ```
 
-Capitalized declarations introduce *types* rather than values — see
+Capitalized declarations introduce *types* rather than values—see
 [Nominal Types](#nominal-types) (`:=`) and [Type Aliases](#type-aliases) (`:`).
 
 ### Where Clauses
@@ -83,9 +83,9 @@ items = []
 Structural types are defined by their shape: two of them are the same type when
 their shapes match, with no declaration required.
 
-- **Records** — `{ name : Str, age : U64 }`. See [records](records).
-- **Tag unions** — `[Ok(a), Err(e)]`. See [tag unions](tag-unions).
-- **Tuples** — `(Str, U64)`. See [tuples](tuples).
+- **Records**—`{ name : Str, age : U64 }`. See [records](records).
+- **Tag unions**—`[Ok(a), Err(e)]`. See [tag unions](tag-unions).
+- **Tuples**—`(Str, U64)`. See [tuples](tuples).
 
 Records and tag unions are either **closed** (exactly the listed fields or tags)
 or **open**, ending in an extension variable that stands for "and possibly
@@ -109,7 +109,7 @@ A nominal type is a distinct type with its own identity, declared with `:=`:
 UserId := U64
 ```
 
-`UserId` and `U64` share a representation but are different types — unification
+`UserId` and `U64` share a representation but are different types—unification
 will not silently mix them. Nominal types may take parameters (`Tree(a) := …`)
 and define associated methods in a trailing `.{ }` block.
 
@@ -134,7 +134,7 @@ uid = UserId.(0)      # a number literal needs explicit construction (see below)
 ```
 
 You can also construct a nominal value **explicitly** by naming the type. This is
-required when no expected type drives the conversion — for example, returning a
+required when no expected type drives the conversion—for example, returning a
 nominal from a function whose argument is the plain backing value:
 
 ```roc
@@ -150,17 +150,17 @@ to_distance : U64 -> Distance
 to_distance = |n| Distance.(n)   # `|n| n` is a type error: a plain U64 is not a Distance
 ```
 
-**Structural** literals — records and tags — coerce into a nominal type
+**Structural** literals—records and tags—coerce into a nominal type
 implicitly when the expected type supplies the identity (`p` and `c` above): the
 literal *is* the backing shape, so it lifts by unification.
 
 **Number and string** literals do not implicitly become a nominal. They coerce
 only into a builtin number/string type, or into a nominal that declares its own
 [`from_numeral` / `from_quote`](static-dispatch#literal-conversion). For
-any other nominal — including a transparent newtype like `UserId := U64` — use
+any other nominal—including a transparent newtype like `UserId := U64`—use
 explicit construction (`UserId.(0)`).
 
-A value that already has a concrete type — like the `U64` parameter `n` above —
+A value that already has a concrete type—like the `U64` parameter `n` above—
 must also be constructed explicitly; it does not silently become a different
 nominal.
 
@@ -234,8 +234,8 @@ This is useful for grouping related types under a common namespace.
 
 ## Type Aliases
 
-A type alias names an existing type with `:` (not `:=`). Aliases are transparent
-— substituted away during compilation — so an alias and its definition are the
+A type alias names an existing type with `:` (not `:=`). Aliases are transparent—
+substituted away during compilation—so an alias and its definition are the
 *same* type and interchange freely:
 
 ```roc

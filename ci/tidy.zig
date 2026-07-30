@@ -128,7 +128,7 @@ fn runTidy(gpa: Allocator, io: std.Io) !void {
     std.debug.print("{s}[OK]{s} All tidy checks passed!\n", .{ TermColor.green, TermColor.reset });
 }
 
-/// `plan.md` and `*.mdtodo` files are working scratch — planning notes and
+/// `plan.md` and `*.mdtodo` files are working scratch—planning notes and
 /// aspirational snapshots kept on a branch. They are allowed to exist on the
 /// filesystem, but must never be checked in. Fail the build only if one is
 /// git-tracked; an untracked scratch file in the working tree is fine. The
@@ -234,6 +234,13 @@ const Errors = struct {
         );
     }
 
+    pub fn addSpacedEmDash(errors: *Errors, file: SourceFile, offset: usize) void {
+        errors.emit(
+            "{s}:{d}: error: em dash with adjacent whitespace; an em dash binds tightly to the words on both sides\n",
+            .{ file.path, file.lineNumber(offset) },
+        );
+    }
+
     pub fn addAmbiguousPrecedence(errors: *Errors, file: SourceFile, line_index: usize) void {
         const line_number = line_index + 1;
         errors.emit(
@@ -300,7 +307,7 @@ const Errors = struct {
             "{s}:{d}: error: '{s}' is exposed as a top-level Builtin type. The only types allowed " ++
                 "directly under Builtin are: Str, Hasher, Iter, Stream, List, Bool, Box, Try, Dict, Set, Num, Encoding, Crypto. " ++
                 "Make '{s}' private by moving it below the exposed Builtin block (to the module's top level), " ++
-                "unless a user-facing method needs it and would break without it — in which case nest it under a " ++
+                "unless a user-facing method needs it and would break without it—in which case nest it under a " ++
                 "logical Builtin type instead (e.g. DictBucket under Dict, ParseTagUnionSpec under Encoding).\n",
             .{ file.path, file.lineNumber(offset), name, name },
         );
@@ -338,6 +345,7 @@ fn tidyFile(
     errors: *Errors,
 ) Allocator.Error!void {
     tidyControlCharacters(file, errors);
+    tidyEmDashSpacing(file, errors);
     if (file.hasExtension(".zig")) {
         tidyBanned(file, errors);
         tidyBannedAnyerror(file, errors);
@@ -420,8 +428,8 @@ fn tidyBuiltinExposedTypes(file: SourceFile, errors: *Errors) void {
 }
 
 /// Ban "element"/"elem" in the files that define the language's own vocabulary.
-/// The things inside a collection are called items — `Iter(item)`, `encode_item`,
-/// `from_iter` — and a second word for the same concept makes the API and the design
+/// The things inside a collection are called items—`Iter(item)`, `encode_item`,
+/// `from_iter`—and a second word for the same concept makes the API and the design
 /// doc read as though the language had two of them. This covers prose and identifiers
 /// alike, including compound identifiers such as `write_elements` and
 /// `parse_list_after_element`, since a banned word buried in a name is exactly how the
@@ -433,7 +441,7 @@ fn tidyBuiltinExposedTypes(file: SourceFile, errors: *Errors) void {
 /// about) stays legal. `_` is a DELIMITER rather than a word byte, which is what
 /// makes compound identifiers work: `write_elements` is caught because its `elements`
 /// segment sits between an underscore and the end of the name. Treating `_` as part
-/// of the word instead would silently miss every compound name — the exact case this
+/// of the word instead would silently miss every compound name—the exact case this
 /// check exists to catch.
 ///
 /// Consequence worth knowing: these files cannot quote a Zig or C-ABI identifier that
@@ -494,7 +502,7 @@ test "item terminology is enforced in the vocabulary-defining files" {
     try std.testing.expect(isItemTerminologyFile("design.md"));
     try std.testing.expect(isItemTerminologyFile("/abs/checkout/design.md"));
 
-    // Every other file keeps using whatever word fits it — `elem_ty` in the Zig
+    // Every other file keeps using whatever word fits it—`elem_ty` in the Zig
     // internals and user-defined HTML `Element` tags in test fixtures are fine.
     try std.testing.expect(!isItemTerminologyFile("src/postcheck/monotype/lower.zig"));
     try std.testing.expect(!isItemTerminologyFile("test/fx/platform/Element.roc"));
@@ -575,6 +583,24 @@ fn tidyBannedBuiltinStdFormat(file: SourceFile, errors: *Errors) void {
     }
 }
 
+/// An em dash binds tightly to the words on both of its sides; writing one
+/// with a space or tab next to it is banned in every text file. The needle
+/// is spelled with an escape so this file never flags itself.
+fn tidyEmDashSpacing(file: SourceFile, errors: *Errors) void {
+    const em_dash = "\u{2014}";
+    var search_from: usize = 0;
+    while (mem.find(u8, file.text[search_from..], em_dash)) |relative| {
+        const index = search_from + relative;
+        search_from = index + em_dash.len;
+        const space_before = index > 0 and (file.text[index - 1] == ' ' or file.text[index - 1] == '\t');
+        const after = index + em_dash.len;
+        const space_after = after < file.text.len and (file.text[after] == ' ' or file.text[after] == '\t');
+        if (space_before or space_after) {
+            errors.addSpacedEmDash(file, index);
+        }
+    }
+}
+
 fn tidyControlCharacters(file: SourceFile, errors: *Errors) void {
     // Check for carriage returns (CRLF line endings).
     // Tabs are intentionally allowed everywhere.
@@ -627,7 +653,7 @@ fn tidyBannedStdIo(file: SourceFile, errors: *Errors) void {
 
     // Ban specific OS entry points that bypass the CoreCtx abstraction.
     // Using std.Io sub-types (Timestamp, File, Dir) as types for values received
-    // from CoreCtx is fine — only ban the calls that reach into the OS directly.
+    // from CoreCtx is fine—only ban the calls that reach into the OS directly.
     const banned_io_patterns: []const struct { []const u8, []const u8 } = &.{
         .{ "std.Io.Dir.cwd(", "CoreCtx filesystem methods (readFile, writeFile, etc.)" },
         .{ "std.Io.File.stdout(", "CoreCtx.writeStdout() or CliCtx I/O" },
@@ -729,7 +755,7 @@ fn tidyBannedCoreCtxCreation(file: SourceFile, errors: *Errors) void {
         if (std.mem.endsWith(u8, file.path, ep)) return;
     }
 
-    // Only scan production code — skip inline test blocks at the bottom of files.
+    // Only scan production code—skip inline test blocks at the bottom of files.
     const scan_text = if (std.mem.find(u8, file.text, "\ntest \"")) |test_start|
         file.text[0..test_start]
     else

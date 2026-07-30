@@ -31,7 +31,7 @@ const unbundle = @import("unbundle");
 const fmt = @import("fmt");
 const WasmFilesystem = @import("WasmFilesystem.zig");
 
-// WASM filesystem context — module-level so it persists across compilations.
+// WASM filesystem context—module-level so it persists across compilations.
 var wasm_ctx: WasmFilesystem.WasmContext = .{};
 const layout = @import("layout");
 const compiled_builtins = @import("compiled_builtins");

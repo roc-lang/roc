@@ -12,7 +12,7 @@
 //! Like precise lifetimes, take solving is order-sensitive, so it runs in
 //! the ARC stage against the solved binding modes rather than inside the
 //! mode fixpoint. It is deliberately demand-driven: a local that cannot
-//! benefit — wrong layout shape, borrowed, or non-operand whole uses —
+//! benefit—wrong layout shape, borrowed, or non-operand whole uses—
 //! contributes nothing beyond its visit in one linear statement scan, and
 //! per-candidate tables exist only for locals that pass the layout gate.
 //! The rules are specified in design.md's "Field Takes From Dying
@@ -110,7 +110,7 @@ const Candidate = struct {
     def_count: u32 = 0,
     disqualified: bool = false,
     reads: std.ArrayList(Read) = .empty,
-    /// Statements consuming or observing the container as one value — moved
+    /// Statements consuming or observing the container as one value—moved
     /// into an aggregate, passed to a call, returned, or join-carried. Takes
     /// stay valid as long as no whole use can run after a take, which the
     /// dataflow checks exactly like a borrow of every field at once.
@@ -205,7 +205,7 @@ const Analysis = struct {
         self.disqualify(local);
     }
 
-    /// A whole-value use of the container as an operand — moved into an
+    /// A whole-value use of the container as an operand—moved into an
     /// aggregate or a call, returned, or join-carried. The container stays
     /// eligible; the dataflow rejects takes that could run before it.
     fn useWholeAt(self: *Analysis, local: LIR.LocalId, stmt: LIR.CFStmtId) Error!void {
@@ -700,8 +700,8 @@ pub fn compute(
                         // Control continues at the join's body; meet this
                         // path's state into it and re-walk on change. A jump
                         // to a join declared before the definition leaves
-                        // the candidate's region — a loop back edge or an
-                        // enclosing early exit — so it ends this path like a
+                        // the candidate's region—a loop back edge or an
+                        // enclosing early exit—so it ends this path like a
                         // return would. Reads living past it are never
                         // visited, which keeps their fields residual.
                         const body = join_bodies.get(@intFromEnum(stmt.target)) orelse {

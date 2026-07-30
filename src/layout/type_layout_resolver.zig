@@ -856,7 +856,7 @@ pub const Resolver = struct {
                 .desugared_binop, .desugared_unaryop => return true,
                 // A `where`-clause contract naming the numeral-conversion hook
                 // asserts the same thing a numeral literal's own constraint
-                // does, and the checker defaults such a var to Dec — the
+                // does, and the checker defaults such a var to Dec—the
                 // layout must agree.
                 .where_clause => if (constraint.fn_name.eql(self.envFor(module_idx).idents.from_numeral)) return true,
                 .method_call => {},

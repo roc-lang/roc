@@ -3,8 +3,8 @@
 //! Match-arm and loop lowering shuttle multi-value state between joins inside
 //! by-value wrapper structs: each jump builds a fresh struct, the join body
 //! immediately reads the fields back out, and nothing else ever touches the
-//! whole value. The wrapper costs a build, per-field reads, and — once ARC
-//! runs — a retain on each refcounted field read paired with a release of the
+//! whole value. The wrapper costs a build, per-field reads, and—once ARC
+//! runs—a retain on each refcounted field read paired with a release of the
 //! wrapper, because the field read's lender dies at the jump.
 //!
 //! This pass runs after direct LIR lowering and before ARC insertion. For a
@@ -18,7 +18,7 @@
 //! inference turns into moves, and the wrapper disappears entirely.
 //!
 //! A join's remainder (its run-once entry path) may enter the join without an
-//! `initialize_join_param` write for a parameter — a plain tail-call
+//! `initialize_join_param` write for a parameter—a plain tail-call
 //! elimination loop header does this, entering with a bare jump because the
 //! parameters are the proc's own argument locals. Such a parameter is still
 //! scalarizable: its per-field parameters are seeded once on the remainder by

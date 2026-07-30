@@ -148,7 +148,7 @@ pub const EchoEnv = struct {
 pub var g_roc_ops: ?*host_abi.RocOps = null;
 
 /// Echo host function: reads a RocStr arg and writes it unchanged to stdout.
-/// Ownership of `roc_str` transfers to this host function — the RC insertion
+/// Ownership of `roc_str` transfers to this host function—the RC insertion
 /// pass emits zero RC ops for hosted-call args (see test in `src/lir/arc.zig`
 /// "RC hosted call transfers unused refcounted arg to host", and the test
 /// platform host in `test/fx/platform/host.zig` which decrefs every RocStr
@@ -170,7 +170,7 @@ pub fn echoHostedFn(str: RocStr) callconv(.c) void {
         const stdout_file: std.Io.File = .stdout();
         stdout_file.writeStreamingAll(env.std_io, message) catch |err| handleStdoutError(err);
     }
-    // Returns {} (ZST) — no bytes to write to ret_bytes
+    // Returns {} (ZST)—no bytes to write to ret_bytes
 }
 
 /// wasm uniform-ABI entry for `Echo.line!`. On wasm32 the interpreter cannot
@@ -280,7 +280,7 @@ pub fn makeDefaultRocOps(env: *EchoEnv, hosted_fns: []host_abi.HostedFn) host_ab
 
         fn rocDbg(ops: *host_abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
             if (comptime is_wasm) {
-                // No-op on wasm — no stderr available
+                // No-op on wasm—no stderr available
             } else {
                 const echo_env: *EchoEnv = @ptrCast(@alignCast(ops.env));
                 const msg = bytes[0..len];
@@ -294,7 +294,7 @@ pub fn makeDefaultRocOps(env: *EchoEnv, hosted_fns: []host_abi.HostedFn) host_ab
             const echo_env_for_flag: *EchoEnv = @ptrCast(@alignCast(ops.env));
             echo_env_for_flag.inline_expect_failed = true;
             if (comptime is_wasm) {
-                // No-op on wasm — no stderr available
+                // No-op on wasm—no stderr available
             } else {
                 const echo_env: *EchoEnv = @ptrCast(@alignCast(ops.env));
                 const msg = bytes[0..len];
@@ -362,7 +362,7 @@ fn sanitizeUtf8(input: []const u8, allocator: std.mem.Allocator) std.mem.Allocat
     var in_i: usize = 0;
     while (in_i < input.len) {
         const seq_len = std.unicode.utf8ByteSequenceLength(input[in_i]) catch {
-            // Invalid lead byte — replacement char
+            // Invalid lead byte—replacement char
             buf[out_i] = 0xEF;
             buf[out_i + 1] = 0xBF;
             buf[out_i + 2] = 0xBD;

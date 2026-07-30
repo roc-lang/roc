@@ -1081,7 +1081,7 @@ pub const DebugRefcountTracker = struct {
         return null;
     }
 
-    /// Called from allocateWithRefcount — initial refcount = 1
+    /// Called from allocateWithRefcount—initial refcount = 1
     pub fn trackAlloc(rc_addr: usize) void {
         if (!active) return;
         if (findOrInsert(rc_addr)) |idx| {
@@ -1099,7 +1099,7 @@ pub const DebugRefcountTracker = struct {
         }
     }
 
-    /// Called from decref_ptr_to_refcount (inline fn — site identifies the caller)
+    /// Called from decref_ptr_to_refcount (inline fn—site identifies the caller)
     pub fn onDecref(rc_addr: usize, site: Site) void {
         if (!active) return;
         if (find(rc_addr)) |idx| {

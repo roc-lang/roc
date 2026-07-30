@@ -1,4 +1,4 @@
-## An extra exposed type module on top of parser_v1 — a MINOR change.
+## An extra exposed type module on top of parser_v1—a MINOR change.
 
 Extras := { label : Str }.{
 

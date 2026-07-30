@@ -103,7 +103,7 @@ test "fractional literal - scientific notation at f32 boundary" {
 }
 
 test "fractional literal - very small scientific notation" {
-    // 1e-40 needs 40 fractional decimal places — beyond Dec's 18 — so it must
+    // 1e-40 needs 40 fractional decimal places—beyond Dec's 18—so it must
     // NOT take a compact dec fast path (which cannot represent it); it keeps
     // its exact digits and converts at a concrete float type, or fails Dec fit
     // validation with a proper error.

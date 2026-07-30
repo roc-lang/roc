@@ -2886,19 +2886,19 @@ fn computeUniquenessFromFacts(
 /// at the local's definition with nothing later adding a holder: born unique
 /// by a fresh allocation or a direct call to a unique-returning callee,
 /// destroyed by any occurrence that can create another handle to the
-/// allocation — an incref, an aggregate or capture operand, a `set_local`
+/// allocation—an incref, an aggregate or capture operand, a `set_local`
 /// value or target, or a second consuming use. Consuming uses (a consumed
 /// low-level argument, an owned-position direct-call argument, a return)
 /// take the value's single unit with them, so the first one preserves
 /// uniqueness and any further one destroys it; borrowed-position call
 /// arguments and erased-call arguments conservatively destroy. A pure
-/// same-value alias (`.local`, `.list_reinterpret`, `.nominal` — not
+/// same-value alias (`.local`, `.list_reinterpret`, `.nominal`—not
 /// payload reads, which name interior allocations of a possibly-shared
 /// outer value) inherits uniqueness: its definition is the chain's
 /// consuming use of the source, so the source's single unit moves through
-/// to the target, and any other occurrence of the source — consuming,
+/// to the target, and any other occurrence of the source—consuming,
 /// holder-adding, or a mere read, before or after, since the analysis is
-/// flow-insensitive — destroys the target's uniqueness (a read elsewhere
+/// flow-insensitive—destroys the target's uniqueness (a read elsewhere
 /// forces emission to give the alias its own unit, holding the count above
 /// 1). A multi-bound alias target never inherits. Variant parameter seeds
 /// are not applied here: variants share parameter locals with their source
@@ -2947,8 +2947,8 @@ fn computeUniquenessDetailed(
     defer consumed_once.deinit(allocator);
     // Non-consuming, non-holder-adding reads (payload reads, borrowed
     // low-level arguments, expect/debug/switch operands). They never destroy
-    // a local's own uniqueness — emission's path-sensitive facts cover the
-    // checked argument itself — but they block alias inheritance, because a
+    // a local's own uniqueness—emission's path-sensitive facts cover the
+    // checked argument itself—but they block alias inheritance, because a
     // source read anywhere keeps the source live past the alias definition.
     var borrow_used = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
     defer borrow_used.deinit(allocator);
@@ -3343,9 +3343,9 @@ fn computeUniquenessDetailed(
                 born.set(target);
                 changed = true;
             }
-            // Any other occurrence of the source — a holder-adding or
+            // Any other occurrence of the source—a holder-adding or
             // second consuming use (destroyed) or a mere read
-            // (borrow_used) — keeps the source live past the alias
+            // (borrow_used)—keeps the source live past the alias
             // definition, so the shared allocation's count exceeds 1 at
             // the target's consuming use.
             if (!destroyed.isSet(target) and

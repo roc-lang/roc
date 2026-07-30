@@ -658,7 +658,7 @@ pub const LowLevel = enum(u16) {
         /// uniqueness-checking ops qualify on both of their paths (in place
         /// keeps an allocation whose count was already 1, the copy path
         /// returns a fresh one), as do ops that always allocate their
-        /// outermost result — interior sharing described by
+        /// outermost result—interior sharing described by
         /// `result_shares_args` is irrelevant to the outermost count.
         result_unique: bool = false,
 

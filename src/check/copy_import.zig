@@ -9,7 +9,7 @@
 //! alias `origin_module` values are env-local indices into the source env's
 //! module identity table, so the copy reads the 32-byte content identity hash
 //! from the source table and getOrInserts it into the destination table. This is
-//! the single cross-env identity resolution mechanism — no name matching.
+//! the single cross-env identity resolution mechanism—no name matching.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -123,7 +123,7 @@ fn copyVarCtx(ctx: *const CopyContext, source_var: Var) std.mem.Allocator.Error!
     // NOTE: a copied var whose content is a flex carrying a literal-conversion
     // constraint is an open literal in the destination module. Registering it on
     // the checker's open-literal worklist is the CALLER's job (see `Check.copyVar`,
-    // which walks `var_mapping` after the copy) — this module only copies type
+    // which walks `var_mapping` after the copy)—this module only copies type
     // data between stores.
     return placeholder_var;
 }
@@ -414,7 +414,7 @@ pub fn ensureNominalDeclForStatement(
 /// self-referential backing templates terminate: copying the template's own
 /// recursive application re-enters `ensureNominalDeclCopied` and finds the key
 /// already present. Nothing reads the reserved entry's formals/backing while
-/// the copy is in flight — lookups only test key presence.
+/// the copy is in flight—lookups only test key presence.
 fn copyNominalDeclEntry(
     ctx: *const CopyContext,
     source_entry: types_mod.NominalDecl,

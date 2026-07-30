@@ -6,7 +6,7 @@ test "issue 9711: custom interpolation against an instantiated annotation is a c
     // `g` interpolates its parameter `x`, so `"hello ${x}"` desugars to
     // `MyType.from_interpolation` whose item type is `x`'s type. The call
     // `g({}, B)` makes the item type `{}`, but the annotation pins the result to
-    // `MyType(Str)` — so the program is genuinely ill-typed (`MyType({})` vs
+    // `MyType(Str)`—so the program is genuinely ill-typed (`MyType({})` vs
     // `MyType(Str)`). Checking must report exactly one TYPE MISMATCH: the
     // per-instantiation interpolation re-check reconciles the item type against the
     // instantiated part vars, so the mismatch surfaces here at check time.

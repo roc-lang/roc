@@ -21,7 +21,7 @@ pub fn io() std.Io {
         },
         // Any other host (FreeBSD/NetBSD/OpenBSD/Solaris/etc.) falls through to
         // std.Io.failing, whose vtable panics on every method call. This is a
-        // trap rather than working IO — those targets aren't supported by the
+        // trap rather than working IO—those targets aren't supported by the
         // shim yet and need their own vtable added above.
         else => std.Io.failing,
     };
@@ -41,7 +41,7 @@ pub fn elfDebugInfoSearchPaths(_: []const u8) switch (builtin.object_format) {
 /// Shared `std.Options` value for shim and platform-host code that needs to disable
 /// std stack tracing. Zig 0.16's `std.debug.SelfInfo` on Windows references
 /// `ntdll.LdrRegisterDllNotification`, which isn't linked into roc-compiled
-/// programs that embed these static archives — leaving stack tracing on would
+/// programs that embed these static archives—leaving stack tracing on would
 /// trigger an unresolved-symbol link error. Hosts that need extra fields
 /// (e.g. `logFn`, `log_level`) should declare their own `std.Options` literal
 /// rather than alias this one.

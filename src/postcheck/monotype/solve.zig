@@ -1022,7 +1022,7 @@ pub const InstGraph = struct {
     }
 
     /// Whether an inhabitance proof over this node could still hold under any
-    /// future relations — the monotone counterpart of
+    /// future relations—the monotone counterpart of
     /// `finalizesAsUninhabited`. A class that carries a numeric default
     /// finalizes numeric and inhabited-only content (primitives, lists,
     /// functions, empty records) is permanent, so `false` here is stable for
@@ -3108,8 +3108,8 @@ pub const InstGraph = struct {
 
         while (true) {
             if (seen.contains(ext)) {
-                // A cyclic extension chain contributes no further tags — every
-                // tag on the cycle is already collected — but the row remains
+                // A cyclic extension chain contributes no further tags—every
+                // tag on the cycle is already collected—but the row remains
                 // extensible, so the chain terminates open.
                 ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) });
                 break;
@@ -3159,8 +3159,8 @@ pub const InstGraph = struct {
 
         while (true) {
             if (seen.contains(ext)) {
-                // A cyclic extension chain contributes no further fields —
-                // every field on the cycle is already collected — but the row
+                // A cyclic extension chain contributes no further fields—
+                // every field on the cycle is already collected—but the row
                 // remains extensible, so the chain terminates open.
                 ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_record) });
                 break;

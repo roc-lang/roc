@@ -292,7 +292,7 @@ fn containsBoxDrawingCorner(content: []const u8) bool {
     while (i + 2 < content.len) : (i += 1) {
         if (content[i] == 0xE2 and content[i + 1] == 0x94) {
             // U+2500 block: 0xE2 0x94 0x80-0xBF
-            // U+2500 (─) is 0x80 — skip it, everything else is a corner/intersection
+            // U+2500 (─) is 0x80—skip it, everything else is a corner/intersection
             if (content[i + 2] != 0x80) return true;
             i += 2; // skip the rest of this UTF-8 sequence
         } else if (content[i] == 0xE2 and content[i + 1] == 0x95) {

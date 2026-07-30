@@ -69,7 +69,7 @@ pub const PackageDocs = struct {
             for (self.modules, 0..) |*mod, i| {
                 if (std.mem.eql(u8, mod.name, "Builtin")) break :blk i;
             }
-            return; // No Builtin module — nothing to reshape.
+            return; // No Builtin module—nothing to reshape.
         };
 
         const builtin = self.modules[bi];
@@ -99,7 +99,7 @@ pub const PackageDocs = struct {
             });
         }
 
-        // Free the old Builtin shell — its entries were moved out, so free only
+        // Free the old Builtin shell—its entries were moved out, so free only
         // the backing slice, not the elements.
         gpa.free(builtin.entries);
         if (builtin.module_doc) |doc| gpa.free(doc);
@@ -649,7 +649,7 @@ fn rewriteDocTypeRefs(
     }
 }
 
-/// Documentation for a Roc application — the app's own modules,
+/// Documentation for a Roc application—the app's own modules,
 /// its platform, and all dependency packages (recursively).
 pub const AppDocs = struct {
     name: []const u8,
@@ -696,7 +696,7 @@ pub const AppDocs = struct {
     }
 };
 
-/// Documentation for a Roc platform — the platform's own modules
+/// Documentation for a Roc platform—the platform's own modules
 /// and all dependency packages.
 pub const PlatformDocs = struct {
     name: []const u8,
@@ -907,7 +907,7 @@ pub const ModuleDocs = struct {
     /// 1-based source line where `module_doc`'s first `##` line begins.
     /// Zero when there is no module doc or the line is unknown.
     module_doc_start_line: u32 = 0,
-    /// True for modules synthesized by `PackageDocs.reshapeBuiltin` — each is one
+    /// True for modules synthesized by `PackageDocs.reshapeBuiltin`—each is one
     /// of the builtin types (`Str`, `Num`, …) promoted to a top-level module so
     /// the `Builtin` container never appears in the docs. The renderer uses this
     /// to strip the module-name prefix from anchors, giving bare ids like

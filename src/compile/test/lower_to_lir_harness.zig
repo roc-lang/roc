@@ -141,7 +141,7 @@ pub fn expectDeterministicLir(app_body: []const u8) LowerToLirHarnessError!void 
 
 /// Lower `app_body` for both pointer widths (with in-place `List.map` reuse
 /// enabled) and assert the two LIR dumps are byte-identical. This guards that
-/// lowering produces a target-independent op stream — the property that lets a
+/// lowering produces a target-independent op stream—the property that lets a
 /// single lowered LIR image be cached across 32-bit and 64-bit targets. A
 /// regression that reintroduced a pointer-width-dependent lowering decision
 /// (for example, baking the `list_map_can_reuse` interchangeability check for

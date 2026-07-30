@@ -105,7 +105,7 @@ pub fn Channel(comptime T: type) type {
 
         /// Send an item, growing the buffer if full (never blocks on capacity).
         /// Use this when the sender must remain responsive and cannot afford to
-        /// block — e.g. a coordinator that also needs to drain another channel.
+        /// block—e.g. a coordinator that also needs to drain another channel.
         pub fn sendGrowable(self: *Self, item: T) error{ Closed, OutOfMemory }!void {
             self.mutex.lockUncancelable(self.std_io);
             defer self.mutex.unlock(self.std_io);
@@ -130,7 +130,7 @@ pub fn Channel(comptime T: type) type {
                 self.read_pos = 0;
                 self.write_pos = self.count;
 
-                // Wake any producers blocked in send() — there is room now.
+                // Wake any producers blocked in send()—there is room now.
                 self.not_full.broadcast(self.std_io);
             }
 

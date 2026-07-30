@@ -155,8 +155,8 @@ pub fn main(init: std.process.Init) !void {
     // Imports are followed transitively: aggregator roots frequently wire
     // test files through intermediate aggregators (e.g. src/lsp/unit_tests.zig
     // imports test/unit.zig, which imports the individual test files). This
-    // makes the import-level layer generous — it only proves a file is
-    // reachable, not that its tests run — which is fine because the semantic
+    // makes the import-level layer generous—it only proves a file is
+    // reachable, not that its tests run—which is fine because the semantic
     // layer below is the actual gate.
     var scan_queue: PathList = .empty;
     defer freePathList(&scan_queue, gpa);

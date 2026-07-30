@@ -542,7 +542,7 @@ test "cross-module mono: recursive nominal type with self-referencing children" 
     var env_b = try MonoTestEnv.initWithImport("B", source_b, "Elem", &env_a);
     defer env_b.deinit();
 
-    // Type-check should succeed — the recursive nominal type is usable cross-module
+    // Type-check should succeed—the recursive nominal type is usable cross-module
     const main_ident = env_b.module_env.common.findIdent("main");
     try testing.expect(main_ident != null);
 }
@@ -723,7 +723,7 @@ test "cross-module mono: 3-module linear chain (A -> B -> C)" {
     });
     defer env_c.deinit();
 
-    // C should type-check successfully — transitive type visibility works
+    // C should type-check successfully—transitive type visibility works
     const main_ident = env_c.module_env.common.findIdent("main");
     try testing.expect(main_ident != null);
 }
@@ -778,7 +778,7 @@ test "cross-module mono: 3-module diamond (A <- B, A <- C, B+C <- D)" {
     });
     defer env_d.deinit();
 
-    // D should type-check successfully — diamond dependency works
+    // D should type-check successfully—diamond dependency works
     const main_ident = env_d.module_env.common.findIdent("main");
     try testing.expect(main_ident != null);
 }
@@ -821,7 +821,7 @@ test "cross-module mono: 4-module chain with wrapper types (A -> B -> C -> D)" {
     });
     defer env_c.deinit();
 
-    // Module D: imports C, B, and Base — calls the full chain
+    // Module D: imports C, B, and Base—calls the full chain
     const source_d =
         \\import C
         \\import B
@@ -837,7 +837,7 @@ test "cross-module mono: 4-module chain with wrapper types (A -> B -> C -> D)" {
     });
     defer env_d.deinit();
 
-    // D should type-check successfully — deep transitive chain works
+    // D should type-check successfully—deep transitive chain works
     const main_ident = env_d.module_env.common.findIdent("main");
     try testing.expect(main_ident != null);
 }
@@ -882,7 +882,7 @@ test "cross-module mono: 5-module fan-in (A, B, C independent; D combines; E use
     var env_c = try MonoTestEnv.init("Depth", source_c);
     defer env_c.deinit();
 
-    // Module D: imports A, B, C — defines volume
+    // Module D: imports A, B, C—defines volume
     const source_d =
         \\import Width
         \\import Height
@@ -898,7 +898,7 @@ test "cross-module mono: 5-module fan-in (A, B, C independent; D combines; E use
     });
     defer env_d.deinit();
 
-    // Module E: imports A, B, C, D — creates all three types and calls D.volume
+    // Module E: imports A, B, C, D—creates all three types and calls D.volume
     const source_e =
         \\import Width
         \\import Height
@@ -916,7 +916,7 @@ test "cross-module mono: 5-module fan-in (A, B, C independent; D combines; E use
     });
     defer env_e.deinit();
 
-    // E should type-check successfully — wide fan-in works
+    // E should type-check successfully—wide fan-in works
     const main_ident = env_e.module_env.common.findIdent("main");
     try testing.expect(main_ident != null);
 }

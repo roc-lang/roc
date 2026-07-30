@@ -2334,7 +2334,7 @@ inline fn wordCaselessAsciiEqualMasked(left: u64, right: u64, active: u64) bool 
 
 /// One shared caseless-ASCII-equality test vector. `left` and `right` are the
 /// eight bytes of each SWAR word (lane 0 first, little-endian); `active_len` is
-/// how many low lanes carry real string bytes — the remaining high lanes are
+/// how many low lanes carry real string bytes—the remaining high lanes are
 /// ignored, exactly as a partial-word tail mask ignores them. `expected` is the
 /// caseless-ASCII-equal answer. This set drives `wordCaselessAsciiEqualMasked`
 /// here and documents the exact behavior the LLVM emitter

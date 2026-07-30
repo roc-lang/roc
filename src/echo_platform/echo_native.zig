@@ -1,4 +1,4 @@
-//! Native CLI for the echo platform — reproduces the WASM `compileAndRun`
+//! Native CLI for the echo platform—reproduces the WASM `compileAndRun`
 //! flow with real stack traces. Use this to debug pipeline failures that
 //! surface as silent exit-255s in the browser.
 //!
@@ -121,14 +121,14 @@ pub fn main(init: std.process.Init) EchoNativeError!void {
     const source = try std.Io.Dir.cwd().readFileAlloc(io, app_path, gpa, .unlimited);
 
     // Use a 128 MiB FBA so the pipeline behaves like the wasm case (single
-    // contiguous heap) — this is also what the LIR image migration in
+    // contiguous heap)—this is also what the LIR image migration in
     // Phase 3 will require.
     const RUNTIME_BUFFER_SIZE: usize = 128 * 1024 * 1024;
     const runtime_buffer = try gpa.alignedAlloc(u8, .@"16", RUNTIME_BUFFER_SIZE);
     defer gpa.free(runtime_buffer);
     var runtime_fba = std.heap.FixedBufferAllocator.init(runtime_buffer);
 
-    // ECHO_NATIVE_TARGET env var: "native" (default), "wasm32" — cross-compile
+    // ECHO_NATIVE_TARGET env var: "native" (default), "wasm32"—cross-compile
     // through the same target_usize=.u32 path the wasm uses, while still
     // running the interpreter natively. Useful to isolate wasm-runtime bugs
     // from wasm32-target compilation bugs.

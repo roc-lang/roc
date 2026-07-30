@@ -200,7 +200,7 @@ pub const CallableIdentity = union(enum(u8)) {
 /// The identity is immutable: it is written once when the record is reserved
 /// and never rewritten. Body evidence that refines the requested type is data
 /// on the `SpecRecord` (`request_fn_ty`/`solved_fn_ty` views), reachable
-/// through additional lookup aliases — never a rekey of this identity.
+/// through additional lookup aliases—never a rekey of this identity.
 pub const SpecIdentity = struct {
     callable: CallableIdentity,
     method_scope: names.CheckedModuleDigest,
@@ -221,7 +221,7 @@ pub const SpecStatus = enum(u8) {
 ///
 /// `identity` is the immutable creation-time key. The type views are data:
 /// `request_fn_ty` starts as the identity's requested type and may be refined
-/// while the record is still `.reserved` — once per deferring graph that
+/// while the record is still `.reserved`—once per deferring graph that
 /// seals its view of the request; `solved_fn_ty` mirrors the request view
 /// until `.ready` records the body's solved type. Both views only ever become
 /// more specific; a finished record is never widened (one-way snapshot rule).

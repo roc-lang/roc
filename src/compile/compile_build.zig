@@ -214,7 +214,7 @@ pub const BuildEnv = struct {
     synthetic_root_platform_identity: bool = false,
 
     /// The bundle URL the root itself came from, when the build was launched
-    /// from a URL or installed source. The URL — never the extracted path —
+    /// from a URL or installed source. The URL—never the extracted path—
     /// is then the root's package identity, so direct-URL use and installed
     /// use of the same URL share one identity, and moving the extracted
     /// directory cannot change it.
@@ -620,7 +620,7 @@ pub const BuildEnv = struct {
                 try self.build(root_file);
             } else {
                 // The main file is the discovery root here, so its bundle
-                // provenance — not the checked file's — is the root identity.
+                // provenance—not the checked file's—is the root identity.
                 if (self.main_url) |*main_url| {
                     if (self.root_url) |*existing| {
                         existing.deinit(self.gpa);

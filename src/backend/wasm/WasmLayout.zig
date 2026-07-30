@@ -46,7 +46,7 @@ pub fn wasmRepr(layout_idx: layout.Idx) WasmRepr {
         .i128, .u128 => .{ .stack_memory = 16 },
         .dec => .{ .stack_memory = 16 },
         .str => .{ .stack_memory = 12 }, // wasm32: ptr(4) + encoded cap(4) + len(4)
-        else => .{ .stack_memory = 0 }, // composite — use wasmReprWithStore for size
+        else => .{ .stack_memory = 0 }, // composite—use wasmReprWithStore for size
     };
 }
 
@@ -54,7 +54,7 @@ pub fn wasmRepr(layout_idx: layout.Idx) WasmRepr {
 /// composite types (records, tuples, tags).
 pub fn wasmReprWithStore(layout_idx: layout.Idx, ls: *const layout.Store) Error!WasmRepr {
     // For unwrapped_capture closures, the runtime value IS the capture value
-    // itself, so a closure's representation is its captures' representation —
+    // itself, so a closure's representation is its captures' representation—
     // except that a stack_memory captures makes the closure live in stack memory
     // sized to this outermost closure. We follow the closure-capture chain with a
     // loop (no recursion) and remember the outermost closure.
@@ -71,7 +71,7 @@ pub fn wasmReprWithStore(layout_idx: layout.Idx, ls: *const layout.Store) Error!
                     if (outer_closure) |outer| return .{ .stack_memory = ls.layoutSize(outer) };
                     return basic;
                 }
-                // Composite type — look up from layout store.
+                // Composite type—look up from layout store.
                 const l = ls.getLayout(idx);
                 if (l.tag == .closure) {
                     if (outer_closure == null) outer_closure = l;

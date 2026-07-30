@@ -39,7 +39,7 @@ pub const doc_comment = @import("doc_comment.zig");
 
 /// The default general-purpose allocator for the current target (fast, not leak-checking).
 /// Prefers libc's malloc (its ASan/Valgrind/LD_PRELOAD tooling, and on LLVM paths
-/// it's the allocator LLVM already uses) — except on musl, whose malloc is slow,
+/// it's the allocator LLVM already uses)—except on musl, whose malloc is slow,
 /// where smp_allocator wins. Falls back to smp_allocator without libc, and to
 /// wasm_allocator on freestanding.
 pub fn defaultGpa() std.mem.Allocator {

@@ -1178,7 +1178,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.uses_caller_stack_arg_base = false;
 
             // Initialize stack_offset to reserve space for callee-saved area
-            // (same convention as compileProcSpec — positive offsets, deferred prologue)
+            // (same convention as compileProcSpec—positive offsets, deferred prologue)
             if (comptime target.toCpuArch() == .x86_64) {
                 self.codegen.stack_offset = -CodeGen.CALLEE_SAVED_AREA_SIZE;
             } else {
@@ -1431,7 +1431,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
         }
 
-        /// Generate code for a local reference (raw — may return bare register locations).
+        /// Generate code for a local reference (raw—may return bare register locations).
         fn emitValueLocalRaw(self: *Self, local: LocalId) Allocator.Error!ValueLocation {
             return try self.generateLookup(local);
         }
@@ -3736,7 +3736,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return try self.generateAbsDiff(a_loc, b_loc, ll.ret_layout, lhs_layout);
                 },
 
-                // Numeric arithmetic and comparison ops — route to existing binop helpers
+                // Numeric arithmetic and comparison ops—route to existing binop helpers
                 .num_plus,
                 .num_plus_checked,
                 .num_minus,
@@ -4263,7 +4263,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .box_unbox => {
                     // Box.unbox(box) -> value: dereference the box pointer
                     const ls = self.layout_store;
-                    // The argument is the Box — get its layout to find element info
+                    // The argument is the Box—get its layout to find element info
                     const box_arg_layout = self.valueLayout(GuardedList.at(args, 0));
                     const box_layout_data = ls.getLayout(box_arg_layout);
                     const erased_box_ptr = box_layout_data.tag == .scalar and box_layout_data.getScalar().tag == .opaque_ptr;
@@ -11224,7 +11224,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.codegen.emit.csel(.w64, diff_lo, diff_lo, bma_lo, .eq);
                 try self.codegen.emit.csel(.w64, diff_hi, diff_hi, bma_hi, .eq);
             } else {
-                // Compute a - b (128-bit) — SBB sets flags for 128-bit comparison
+                // Compute a - b (128-bit)—SBB sets flags for 128-bit comparison
                 try self.emitMovRegReg(diff_lo, a_parts.low);
                 try self.codegen.emit.subRegReg(.w64, diff_lo, b_parts.low);
                 try self.emitMovRegReg(diff_hi, a_parts.high);
@@ -11325,7 +11325,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
             }
 
-            // Mask to actual discriminant size — memory loads may include padding bytes
+            // Mask to actual discriminant size—memory loads may include padding bytes
             if (tu_disc_size != 0 and tu_disc_size < 4) {
                 const mask: i32 = (@as(i32, 1) << @as(u5, @intCast(tu_disc_size * 8))) - 1;
                 if (comptime target.toCpuArch() == .aarch64) {
@@ -12576,7 +12576,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_roc_ops_reg = self.roc_ops_reg;
             const saved_ret_ptr_slot = self.ret_ptr_slot;
             const saved_uses_caller_stack_arg_base = self.uses_caller_stack_arg_base;
-            // Reset register state for new function scope — each RC helper is a
+            // Reset register state for new function scope—each RC helper is a
             // separate callable with its own prologue/epilogue, so it starts with
             // a full set of registers regardless of what the parent is using.
             self.codegen.callee_saved_used = 0;
@@ -14973,7 +14973,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return reg;
                 },
                 .immediate_i64 => |val| {
-                    // Integer literal used in float context — convert at compile time
+                    // Integer literal used in float context—convert at compile time
                     loc = if (width == .f32)
                         .{ .immediate_f32 = @as(f32, @floatFromInt(val)) }
                     else
@@ -15203,7 +15203,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             return;
                         },
                         .zst => {
-                            // Zero-sized type — nothing to store.
+                            // Zero-sized type—nothing to store.
                             return;
                         },
                         .box, .erased_callable, .ptr => {
@@ -15213,7 +15213,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             return;
                         },
                         .box_of_zst => {
-                            // Box of zero-sized type — nothing to store.
+                            // Box of zero-sized type—nothing to store.
                             return;
                         },
                         .closure => {
@@ -15379,7 +15379,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(reg);
                 },
                 .general_reg => |reg| {
-                    // Only have low 64 bits in register — sign-extend to i128
+                    // Only have low 64 bits in register—sign-extend to i128
                     // by arithmetic-shifting right by 63 to fill high word.
                     const sign_reg = try self.allocTempGeneral();
                     if (comptime target.toCpuArch() == .aarch64) {
@@ -16386,7 +16386,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
 
                 // Emit prologue using DeferredFrameBuilder (now knows callee_saved_used).
-                // Pass only the actual locals size — the builder adds callee-saved space internally.
+                // Pass only the actual locals size—the builder adds callee-saved space internally.
                 const prologue_start = self.codegen.currentOffset();
                 const actual_locals_x86: u32 = @intCast(-self.codegen.stack_offset - CodeGen.CALLEE_SAVED_AREA_SIZE);
                 try self.codegen.emitPrologueWithAllocAndStackProbe(actual_locals_x86, stack_probe_required);
@@ -16936,7 +16936,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn placeCallArguments(self: *Self, arg_infos: []const ArgInfo, config: CallConfig) Allocator.Error!PlacedCall {
             // Compute stack_spill_size.
             // When pass_by_ptr is provided, multi-reg args that would overflow are
-            // already converted to pointers — account for that.
+            // already converted to pointers—account for that.
             var stack_arg_bytes: i32 = 0;
             {
                 var reg_count: u8 = if (config.needs_ret_ptr) 1 else 0;
@@ -17077,7 +17077,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         reg_idx += 1;
                     }
                 } else {
-                    // Spill to stack — registers exhausted
+                    // Spill to stack—registers exhausted
                     try self.spillArgToStack(
                         .{ .stack = .{ .offset = frozen.stack_offset, .size = frozen.value_size, .layout_idx = arg_layout orelse .u64 } },
                         arg_layout,
@@ -17592,7 +17592,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .struct_, .tag_union => {
                     const size_align = ls.layoutSizeAlign(layout_val);
                     if (size_align.size == 0) {
-                        // Zero-sized — nothing to move
+                        // Zero-sized—nothing to move
                     } else if (size_align.size <= 8) {
                         // 1 register
                         try self.moveOneRegToReturn(loc);
@@ -19002,7 +19002,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Like `emitRocStaticMessageCall`, but reuses a single per-proc stack
         /// slot for the message and args. Safe because only one debug crash
-        /// can fire per program run — the program exits after the first.
+        /// can fire per program run—the program exits after the first.
         fn emitRocStaticDebugMessageCall(self: *Self, field_offset: i32, msg: []const u8) Allocator.Error!void {
             return self.emitRocStaticMessageCallShared(field_offset, msg, true);
         }

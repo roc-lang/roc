@@ -23,7 +23,7 @@ pub const bin_dir_name = "bin";
 pub const manifest_format_version: u32 = 1;
 
 /// How a CLI source argument is interpreted. Classification is purely
-/// syntactic — no filesystem probing, and never a fallback from one
+/// syntactic—no filesystem probing, and never a fallback from one
 /// category to another.
 pub const SourceRefKind = enum {
     /// A filesystem path (anything that is neither a URL nor a valid shorthand).
@@ -225,7 +225,7 @@ pub const ParsedManifest = struct {
 };
 
 /// Parse and validate manifest JSON. Returns null when the bytes are not a
-/// valid manifest of the current format version — callers must treat that as
+/// valid manifest of the current format version—callers must treat that as
 /// a corrupt entry, never fall back to guessing.
 pub fn parseManifest(allocator: Allocator, bytes: []const u8) Allocator.Error!?ParsedManifest {
     const parsed = std.json.parseFromSlice(Manifest, allocator, bytes, .{}) catch |err| switch (err) {

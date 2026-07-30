@@ -268,7 +268,7 @@ pub const Store = struct {
         };
     }
 
-    /// Discard every snapshot recorded after `mark` was captured — the
+    /// Discard every snapshot recorded after `mark` was captured—the
     /// rollback of a speculative probe that recorded against this store.
     /// Owned memory is released exactly as `deinit` would: the `formatted`
     /// string of each truncated tag is freed, and the `formatted_strings`
@@ -495,7 +495,7 @@ pub const Store = struct {
 
         // vars[0] is the backing, kept for report traversals (e.g. equality
         // explanations descend into it). The application itself carries no
-        // backing, so snapshot the DECLARATION's backing template — formals
+        // backing, so snapshot the DECLARATION's backing template—formals
         // read as rigids there, which the traversals treat optimistically.
         const backing_snapshot: SnapshotContentIdx = blk: {
             if (store.lookupNominalDecl(nominal_type)) |decl_idx| {

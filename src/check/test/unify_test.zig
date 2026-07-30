@@ -179,7 +179,7 @@ const TestEnv = struct {
     /// does for local declarations. The test's arg vars double as the
     /// declaration's formals: opening seeds an identity substitution, and
     /// since test vars are not generalized the open yields the very backing
-    /// graph the test built — preserving pre-#9983 test semantics where the
+    /// graph the test built—preserving pre-#9983 test semantics where the
     /// backing was embedded in the application.
     fn mkNominalTypeWithOpacity(self: *Self, name: []const u8, backing_var: Var, args: []const Var, is_opaque: bool) std.mem.Allocator.Error!Content {
         const ident = try self.mkTypeIdent(name);
@@ -907,7 +907,7 @@ test "unify - distinct concrete builtin numeric nominals never unify" {
     // src/check/Check.zig): its dispatcher-position refutation (and the
     // witness-probe assertion in `commitLiteralDefault`) assumes two
     // CONCRETE builtin numeric nominals with different identities (origin +
-    // source decl) can never unify —
+    // source decl) can never unify—
     // there is no implicit numeric widening/coercion in the unifier. If such
     // coercion is ever added, this test fails legibly BEFORE the structural
     // pre-filter starts skipping probes that would now succeed.
@@ -2004,7 +2004,7 @@ test "unify order - deferred constraint origin var depends on operand order" {
     // So unifying a constrained flex with a concrete type in opposite orders
     // attaches the deferred constraint to different surviving root vars. This
     // operand-order sensitivity is why `store.union_`'s survivor choice is
-    // load-bearing — see the documented reliance on it in
+    // load-bearing—see the documented reliance on it in
     // `Check.checkBranchBodyAgainstExpected`.
     const gpa = std.testing.allocator;
     const Helper = struct {
@@ -2169,7 +2169,7 @@ test "content identity: declaration reordering changes no identity except via th
     const gpa = std.testing.allocator;
 
     // Reordering declarations changes the module's source bytes, hence its
-    // deep hash — and nothing else: an unrelated module's identity is
+    // deep hash—and nothing else: an unrelated module's identity is
     // untouched, and the reordered module's identity changes wholesale.
     var ordered = try DeclaringModule.init(gpa, "M", "A := {}\nB := {}");
     defer ordered.deinit();

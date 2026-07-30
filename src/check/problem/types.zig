@@ -131,7 +131,7 @@ pub const AnnotationOnlyValue = struct {
 
 /// A mutable `var` whose annotation introduces an unbound type variable. A `var`
 /// is never generalized, so a free type variable in its annotation can never be
-/// bound — the variable must have a concrete type.
+/// bound—the variable must have a concrete type.
 pub const PolymorphicVarAnnotation = struct {
     region: base.Region,
 };
@@ -393,8 +393,8 @@ pub const UnresolvedDispatcher = struct {
     /// Optional secondary region (the call/argument that left the receiver's type
     /// undetermined) for the per-instantiation, helper-hidden case. When non-null
     /// and distinct from `region`, the renderer shows a connecting note and a
-    /// second source region (mirroring `buildNumberUsedAsNonNumber`). When null —
-    /// or equal to `region`, i.e. the dispatch IS the call site — only the primary
+    /// second source region (mirroring `buildNumberUsedAsNonNumber`). When null—
+    /// or equal to `region`, i.e. the dispatch IS the call site—only the primary
     /// region is shown, so the direct cases render identically to before.
     secondary_region: ?base.Region,
     /// Snapshot of the dispatcher (receiver) type for rendering.

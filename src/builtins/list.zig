@@ -3114,7 +3114,7 @@ test "listReplace with wide element through copy_fallback" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    const Elem = [3]u64; // 24-byte element type — must use copy_fallback (not a specialized helper)
+    const Elem = [3]u64; // 24-byte element type—must use copy_fallback (not a specialized helper)
     const elem_align: u32 = @alignOf(Elem);
     const elem_width: usize = @sizeOf(Elem);
 

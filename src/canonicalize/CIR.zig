@@ -538,7 +538,7 @@ pub const Annotation = struct {
     /// Whether `anno` *introduces* a type variable (`.rigid_var`). Derived and
     /// populated like `mentions_type_var`.
     introduces_type_var: bool = false,
-    /// Whether the annotation contains an `_` inference hole — in `anno` or in
+    /// Whether the annotation contains an `_` inference hole—in `anno` or in
     /// any where-clause method signature. Derived by `addAnnotation` and
     /// populated on read by `getAnnotation`; the value passed at construction is
     /// ignored. A hole is inferred from the def's body, so an annotation

@@ -307,7 +307,7 @@ comptime {
 ///
 /// `lowered` must already have been allocated from an allocator that owns
 /// the buffer at `base_ptr` (the buffer must contain every pointer reachable
-/// from `lowered`). This function only installs offset metadata — it does not
+/// from `lowered`). This function only installs offset metadata—it does not
 /// copy data.
 ///
 /// This is the IPC-agnostic variant. Use it for in-process embedders that
@@ -376,7 +376,7 @@ pub fn copyProgramIntoBuffer(
 
 /// View an ARC-inserted LIR program in place from a mapped buffer.
 ///
-/// The buffer is treated as read-only by the view — `LirStore` and
+/// The buffer is treated as read-only by the view—`LirStore` and
 /// `layout_mod.Store` are constructed with slices that the interpreter
 /// reads but never mutates. Accepting `const` here lets embedders that
 /// hold the buffer behind a `const` pointer (e.g. a `FixedBufferAllocator`
@@ -392,7 +392,7 @@ pub fn viewMappedImage(header: *const Header, base_ptr: [*]align(1) const u8, ma
 /// The image contents (LIR op stream and layout store) are pointer-width
 /// independent, so the caller supplies the width to resolve layout sizes,
 /// offsets, and alignments for. The same image bytes can be viewed for either
-/// width — e.g. a cross-width cache reused by both a native interpreter and a
+/// width—e.g. a cross-width cache reused by both a native interpreter and a
 /// 32-bit codegen backend.
 pub fn viewMappedImageWithAllocator(
     header: *const Header,

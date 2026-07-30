@@ -14,7 +14,7 @@
 //! - leaves the proc untouched.
 //!
 //! Without this pass, list builders like `repeat`, `map`, and `filter` grow a
-//! stack frame per element and overflow on large inputs — a correctness
+//! stack frame per element and overflow on large inputs—a correctness
 //! issue, not just performance.
 //!
 //! ## Value holes (vs. the old Rust compiler's pointer holes)
@@ -25,7 +25,7 @@
 //! interior field addresses. This compiler represents a recursive union as a
 //! by-value blob (payload struct + in-cell discriminant); recursion is broken
 //! only at struct-field edges, which have layout `box(Union)`, and the heap
-//! allocation in LIR is the `box_box` low-level — not the tag construction.
+//! allocation in LIR is the `box_box` low-level—not the tag construction.
 //!
 //! The hole here is therefore "a pointer to where a child union VALUE lives":
 //! initially a stack slot for the result (`ptr_alloca`), afterwards the
@@ -46,7 +46,7 @@
 //! ARC; the cell keeps its `box(U)` layout and ARC accounts it exactly like
 //! the `box_box` it replaced. `ptr_store` consumes its value operand
 //! (ownership moves into the structure), and the stored local is always the
-//! chain head — dead on every loop path — so no protective retain is needed.
+//! chain head—dead on every loop path—so no protective retain is needed.
 //! Zero-filled cells are decref-safe: in-flight box fields read as null, and
 //! the RC runtime treats null as a no-op.
 //!
@@ -198,7 +198,7 @@ const Candidate = struct {
     call_args: LIR.LocalSpan,
     /// The box_box statement (rewritten to box_alloc_zeroed). Valid from .boxed.
     box_stmt: CFStmtId,
-    /// The assign_tag target — what gets stored through the hole. Valid from .tagged.
+    /// The assign_tag target—what gets stored through the hole. Valid from .tagged.
     head_local: LocalId,
     /// Alias-hop statements after the tag (unlinked on the rewritten path),
     /// with their incoming edges as recorded during the walk.
@@ -238,7 +238,7 @@ const WorkItem = struct { stmt: CFStmtId, edge: Edge };
 /// Per-run reusable buffers for detection: the containers that would
 /// otherwise be allocated and freed for every proc. The ArrayLists clear in
 /// O(1) via clearRetainingCapacity, and the visited marks clear by bumping
-/// `generation` — so after the high-water marks are reached, a proc's walk
+/// `generation`—so after the high-water marks are reached, a proc's walk
 /// allocates nothing and costs one array load per statement instead of a
 /// hash probe. (A reused hashmap would be worse than no reuse for the
 /// visited set: its clearRetainingCapacity is O(capacity), which stays at
@@ -361,14 +361,14 @@ const Detection = struct {
     ///
     /// Fusing join collection with the candidate walk is sound because a jump
     /// may only target an enclosing join point, and every enclosing join's
-    /// statement is an ancestor on every DFS path to the jump — so it is
+    /// statement is an ancestor on every DFS path to the jump—so it is
     /// recorded before the jump (or any returnsLocal forwarding chase through
     /// it) is processed.
     ///
     /// Statement graphs are DAGs, not trees: lowering shares linear tails
     /// (two predecessors pointing at the same `next` chain), so the visited
-    /// stamps are what guarantees each statement is processed — and each ret
-    /// epilogue-rewritten — exactly once.
+    /// stamps are what guarantees each statement is processed—and each ret
+    /// epilogue-rewritten—exactly once.
     fn walk(self: *Detection, body: CFStmtId) ResourceError!void {
         const gpa = self.scratch.gpa;
         const work = &self.scratch.work;
@@ -518,7 +518,7 @@ const Detection = struct {
         // blessed next step for at most ONE candidate: when two candidates'
         // chains meet (e.g. `Node(build(a), v, build(b))` placing two cells in
         // one payload struct), the first claims the constructor and the others
-        // see it as an ordinary use of their tracked cell and drop out — their
+        // see it as an ordinary use of their tracked cell and drop out—their
         // recursive calls remain real calls, exactly like the old Rust pass.
         var claimed = false;
         for (self.scratch.candidates.items) |*candidate| {

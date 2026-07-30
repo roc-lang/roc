@@ -450,7 +450,7 @@ const Skip = union(enum) {
     windows: []const u8,
 };
 
-/// A single CLI test operation — one matrix cell of work.
+/// A single CLI test operation—one matrix cell of work.
 const CliCase = struct {
     /// Unique id within this runner invocation. This keeps generated binary
     /// names distinct even on hosts that run all specs in the same process.
@@ -6705,7 +6705,7 @@ fn customInstallRunRoundtrip(io: std.Io, allocator: Allocator, env: *const CaseE
     })) |failure| return failure;
 
     // 3. Desert island: delete the package cache; the installed tool must
-    //    still run (and must not touch the network — the server is gone).
+    //    still run (and must not touch the network—the server is gone).
     std.Io.Dir.cwd().deleteTree(io, env.dirs.roc_cache_dir) catch |err|
         return customInfraFailure(allocator, timer, "failed to delete cache dir: {}", .{err});
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
@@ -7391,7 +7391,7 @@ fn compileGlueRuntimeCHost(
     // double` is 80-bit x87, so those f128 libcalls are never referenced.)
     //
     // So the merge is needed only on aarch64. On x86_64 the host object links
-    // cleanly on its own, so we archive it directly — which also matters
+    // cleanly on its own, so we archive it directly—which also matters
     // because the merge itself is broken there: `zig cc -r` (and the LLD `-r`
     // it drives) aborts when fed the `-fcompiler-rt` object on x86_64, so
     // merging would be both pointless and a hard crash.
@@ -7609,7 +7609,7 @@ fn fileHasWasmMagic(io: std.Io, path: []const u8) bool {
 /// some compiler_builtins intrinsics as host-arch (x86_64) ELF objects rather
 /// than wasm; `wasm-ld --whole-archive` force-includes every member and aborts
 /// on those ("Bitcode section not found in object file"). The dropped
-/// intrinsics are unreferenced by the glue contract apps — if a future app
+/// intrinsics are unreferenced by the glue contract apps—if a future app
 /// needed one, the final wasm link would report it undefined rather than
 /// miscompile.
 fn rebuildWasmOnlyArchive(
@@ -9274,7 +9274,7 @@ pub fn main(init: std.process.Init) CliRunnerError!void {
     // `--worker <idx>` (single test) or `--worker-stream` (persistent). The
     // worker rebuilt the same case list above, so indices stay aligned with
     // the parent's. Handling these before the parent path matters: a worker
-    // that fell through would reentrantly spawn its own pool of workers —
+    // that fell through would reentrantly spawn its own pool of workers—
     // fork-bombing the box.
     if (Pool.runWorkerMode(init.io, args, tests, timeout_ms)) return;
 

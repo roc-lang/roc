@@ -4253,8 +4253,8 @@ test "boundary field access projects private leaf branch" {
     // sparse private product, and an if branch whose value is an opaque call
     // result is carried whole as a private leaf. A boundary argument that
     // projects a field from such an if value must project through every
-    // branch — including the leaf branch, whose field is an ordinary field
-    // access on the carried public value — rather than materialize the
+    // branch—including the leaf branch, whose field is an ordinary field
+    // access on the carried public value—rather than materialize the
     // sparse receiver whole.
     const allocator = std.testing.allocator;
     var optimized = try lowerModule(allocator,
@@ -6729,8 +6729,8 @@ test "field takes cross a fall-through branch diamond" {
     try std.testing.expectEqual(@as(usize, 0), root_retained.?);
 }
 
-// A field consumed on every arm of a branch — here List.set's success arm and
-// the `??` fallback arm — takes on each path: the paths are exclusive, each
+// A field consumed on every arm of a branch—here List.set's success arm and
+// the `??` fallback arm—takes on each path: the paths are exclusive, each
 // takes exactly once, and the residual is the same wherever the record dies.
 test "field takes split across the arms of a branch" {
     const allocator = std.testing.allocator;
@@ -6934,8 +6934,8 @@ test "issue 10435 SpecConstr preserves frozen types for partially used while sta
 // https://github.com/roc-lang/roc/issues/10461: ScalarizeJoins treated a
 // neighboring join's parameter as a splattable wrapper temporary because its
 // only initialization was a struct literal and its only use was a
-// `set_local initialize_join_param` copy. Splatting deleted the literal —
-// that join's edge initialization — leaving the parameter uninitialized, so
+// `set_local initialize_join_param` copy. Splatting deleted the literal—
+// that join's edge initialization—leaving the parameter uninitialized, so
 // ARC's release of the (unused, refcounted) parameter had nothing to
 // release. The parameter must instead be seeded by field reads and dissolve
 // on a later fixpoint round.

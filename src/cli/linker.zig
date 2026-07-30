@@ -943,8 +943,8 @@ fn optimizeWasmOutput(ctx: *CliCtx, config: LinkConfig) LinkError!void {
         // build, where the roc-bootstrap tarball's libbinaryen.a is absent), so
         // the optimization step is skipped and the already-written wasm at
         // config.output_path is kept unoptimized. Because binaryen_available is
-        // a comptime build option, in normal builds this whole branch — warning
-        // string included — is compile-time eliminated and costs nothing.
+        // a comptime build option, in normal builds this whole branch—warning
+        // string included—is compile-time eliminated and costs nothing.
         std.log.warn("Skipping wasm optimization for {s}: this roc build has no bundled Binaryen (system-LLVM or custom-LLVM build), so the wasm output is left unoptimized.", .{config.output_path});
         return;
     }
@@ -1003,7 +1003,7 @@ fn patchMachoStackSize(path: []const u8, stacksize: u64, io: std.Io) PatchMachoS
         }
         offset += lc.cmdsize;
     }
-    // No LC_MAIN — leave as-is (e.g. dylibs or unusual layouts).
+    // No LC_MAIN—leave as-is (e.g. dylibs or unusual layouts).
 }
 
 /// Rewrite a Mach-O binary's ad-hoc code signature in place. The signature

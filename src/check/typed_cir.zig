@@ -215,7 +215,7 @@ pub const Modules = struct {
 
 /// Prepare a checked `ModuleEnv` for runtime use so it can pair with a published or
 /// relocated artifact: enable runtime ident inserts, ensure module-name idents, and
-/// finalize method tables. This is the single source of that 3-step prep — used by
+/// finalize method tables. This is the single source of that 3-step prep—used by
 /// `Modules.init`'s `SourceModule` handling and called DIRECTLY (without building a
 /// whole `Modules` graph) by the builtin and cache-hit load paths, which only need
 /// the env prepared.

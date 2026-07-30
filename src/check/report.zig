@@ -495,7 +495,7 @@ pub const ReportBuilder = struct {
         }
 
         /// Render a slice of Doc fragments into `out` (a document owned by
-        /// `report`), joining with spaces — like `renderSlice`, but targeting an
+        /// `report`), joining with spaces—like `renderSlice`, but targeting an
         /// arbitrary document such as `report.headline` so inline styling is kept.
         fn renderSliceInto(docs: []const Doc, builder: *ReportBuilder, report: *Report, out: *Document) Allocator.Error!void {
             for (docs, 0..) |doc, i| {
@@ -2339,8 +2339,8 @@ pub const ReportBuilder = struct {
         // When the dispatch is hidden inside a helper, the call site (primary
         // region) and the argument that left the receiver's type undetermined
         // (secondary region) differ. In that case, show the argument too, with a
-        // connecting note. When they coincide — the dispatch IS the call site, as
-        // in the direct cases — omit the secondary so the rendering is unchanged.
+        // connecting note. When they coincide—the dispatch IS the call site, as
+        // in the direct cases—omit the secondary so the rendering is unchanged.
         if (data.secondary_region) |secondary| {
             if (secondary.start.offset != data.region.start.offset or
                 secondary.end.offset != data.region.end.offset)
@@ -3552,7 +3552,7 @@ pub const ReportBuilder = struct {
 
         try D.renderSlice(&.{
             D.bytes("Hint:").withAnnotation(.emphasized),
-            D.bytes("Recursion in a nominal type is only allowed inside a tag union payload or record field — for example"),
+            D.bytes("Recursion in a nominal type is only allowed inside a tag union payload or record field—for example"),
             D.bytes("ConsList(a) := [Nil, Cons(a, ConsList(a))]").withAnnotation(.inline_code),
             D.bytes(".").withNoPrecedingSpace(),
         }, self, &report);

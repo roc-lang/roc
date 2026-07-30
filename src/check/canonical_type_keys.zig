@@ -282,7 +282,7 @@ const Builder = struct {
 
     /// INVARIANT: a still-open flex may be keyed as the canonical literal
     /// default (Dec for numerals, Str for quotes) ONLY when every constraint on
-    /// it is a literal conversion — either a literal's own `from_literal`
+    /// it is a literal conversion—either a literal's own `from_literal`
     /// constraint or a `where`-clause contract naming a literal-conversion hook.
     /// Such a var is exactly what the checker's defaulting commits to the kind's
     /// default.
@@ -290,13 +290,13 @@ const Builder = struct {
     /// other method) feeds the checker's candidate probing, which may commit a
     /// non-default candidate (e.g. an integer-only method commits I64); such a
     /// var must already be concrete when a concrete key is requested, so finding
-    /// one still open here means an upstream defaulting step was skipped —
+    /// one still open here means an upstream defaulting step was skipped—
     /// keying it as the default would be a guess, so we raise an invariant
     /// violation instead.
     ///
     /// Both the kind and the "is this a literal conversion" test come from the
     /// defaulting oracle (src/types/literal_defaulting.zig), so this key builder
-    /// cannot disagree with the checker's defaulting about which vars default —
+    /// cannot disagree with the checker's defaulting about which vars default—
     /// including the mixed-kind set (both numeral and quote literal constraints,
     /// reachable only via a flex/flex merge the checker reports as a type error,
     /// so it never survives to key generation), where the oracle's precedence

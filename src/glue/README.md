@@ -128,9 +128,9 @@ Treat an unexpected diff as an emitter bug, not a regen trigger.
 
 ## Host ABI Lock
 
-The templates restate the host ABI — the `RocStr`/`RocList`/`RocDec`
+The templates restate the host ABI—the `RocStr`/`RocList`/`RocDec`
 layouts, the `RocHost` callback vtable, the extern runtime symbols, and the
-erased-callable payload — as text in their output languages, so the compiler
+erased-callable payload—as text in their output languages, so the compiler
 cannot import those restatements. `zig build run-check-glue-abi` is the
 enforcement. It generates Zig glue and compiles `test/glue/zig_abi_lock.zig`
 against both the generated file and the canonical `builtins` definitions for

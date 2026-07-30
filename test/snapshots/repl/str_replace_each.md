@@ -10,7 +10,7 @@ type=repl
 » "a,b".replace_each(",", "x,y")
 » "abc".replace_each("x", "y")
 » "abc".replace_each("", "X")
-» source = "alpha, beta, gamma, delta — this is a long heap string that will not fit inline"
+» source = "alpha, beta, gamma, delta—this is a long heap string that will not fit inline"
 » Str.replace_each(source, ", ", " / ")
 » source
 ~~~
@@ -27,8 +27,8 @@ type=repl
 ---
 assigned `source`
 ---
-"alpha / beta / gamma / delta — this is a long heap string that will not fit inline"
+"alpha / beta / gamma / delta—this is a long heap string that will not fit inline"
 ---
-"alpha, beta, gamma, delta — this is a long heap string that will not fit inline"
+"alpha, beta, gamma, delta—this is a long heap string that will not fit inline"
 # PROBLEMS
 NIL

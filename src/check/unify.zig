@@ -137,7 +137,7 @@ pub const MismatchBehavior = enum {
     /// (anything unifies OK against `.err`).
     poison_to_err,
     /// Merge on success exactly like a normal unify, but on a top-level mismatch
-    /// record NOTHING and poison NOTHING — return `Result.mismatch`. The caller
+    /// record NOTHING and poison NOTHING—return `Result.mismatch`. The caller
     /// owns the diagnostic (with correct expected/actual roles) and any
     /// rollback. Used by the branch-vs-expected check.
     write_no_report,
@@ -183,7 +183,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
             error.TypeMismatch => {},
         }
 
-        // write_no_report: no record, no poison — the caller owns it.
+        // write_no_report: no record, no poison—the caller owns it.
         if (opts.on_mismatch == .write_no_report) return Result.mismatch;
 
         const expected_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, a);
@@ -315,7 +315,7 @@ const Unifier = struct {
     /// to highlight where the user's code is, not the constraint's origin.
     /// NOTE: if flex-side dispatch constraints ever start FIRING mid-unify
     /// instead of deferring here, revisit `structurallyIncompatiblePair` (bottom
-    /// of this module) — the defaulting pre-filter's soundness fence relies on
+    /// of this module)—the defaulting pre-filter's soundness fence relies on
     /// this deferral.
     fn recordDeferredConstraint(
         self: *Self,
@@ -778,7 +778,7 @@ const Unifier = struct {
                 // NOTE: this arm short-circuits applications of INVALID
                 // declarations to a SUCCESSFUL `.err` merge (the declaration
                 // error was already reported); if that changes, revisit
-                // `structurallyIncompatiblePair` (bottom of this module) — the
+                // `structurallyIncompatiblePair` (bottom of this module)—the
                 // defaulting pre-filter's soundness fence encodes it.
                 if (self.types_store.nominalDeclIsInvalid(a_type)) {
                     try self.merge(vars, .err);
@@ -1062,7 +1062,7 @@ const Unifier = struct {
     // Unify nominal type //
 
     /// Unify two nominal type applications: identity, arity, then actual
-    /// args pairwise. Backing types are never inspected here — nominal
+    /// args pairwise. Backing types are never inspected here—nominal
     /// identity is the whole contract (callers already short-circuited
     /// applications of invalid declarations to `.err`).
     fn unifyNominalType(self: *Self, vars: *const ResolvedVarDescs, a_type: NominalType, b_type: NominalType) Error!void {
@@ -1071,7 +1071,7 @@ const Unifier = struct {
 
         // NOTE: if distinct nominal identities ever start unifying (e.g.
         // implicit numeric coercion), revisit `structurallyIncompatiblePair`
-        // (bottom of this module) — its refutation theorem is exactly this
+        // (bottom of this module)—its refutation theorem is exactly this
         // check.
         if (!sameNominalIdentity(a_type, b_type)) {
             return error.TypeMismatch;
@@ -1229,7 +1229,7 @@ const Unifier = struct {
             }
         };
         if (backing_is_empty) {
-            // Both are empty — merge to the NOMINAL side.
+            // Both are empty—merge to the NOMINAL side.
             try self.mergeToNominal(vars, direction);
         } else {
             // Nominal has a non-empty backing, can't unify
@@ -1238,7 +1238,7 @@ const Unifier = struct {
     }
 
     /// After a structural value successfully unifies with a nominal's backing,
-    /// merge the result to the nominal side — the nominal "wins" over the
+    /// merge the result to the nominal side—the nominal "wins" over the
     /// anonymous record/tag it lifted from.
     fn mergeToNominal(self: *Self, vars: *const ResolvedVarDescs, direction: NominalDirection) Error!void {
         switch (direction) {
@@ -1606,7 +1606,7 @@ const Unifier = struct {
             }
         }
 
-        // Unification succeeded — the nominal type wins.
+        // Unification succeeded—the nominal type wins.
         _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .merge_to_nominal = .{
             .vars = vars.*,
             .direction = direction,
@@ -1657,7 +1657,7 @@ const Unifier = struct {
             // The nominal's backing is an empty record {}
             // The anon record should also be empty for unification to succeed
             if (anon_record_fields.len() == 0) {
-                // Both are empty — merge to the NOMINAL type.
+                // Both are empty—merge to the NOMINAL type.
                 try self.mergeToNominal(vars, direction);
                 return;
             } else {
@@ -1674,7 +1674,7 @@ const Unifier = struct {
 
         const nominal_backing_record = nominal_backing_flat.record;
 
-        // Unification succeeded — the nominal type wins.
+        // Unification succeeded—the nominal type wins.
         _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .merge_to_nominal = .{
             .vars = vars.*,
             .direction = direction,
@@ -1796,7 +1796,7 @@ const Unifier = struct {
     ///
     /// All field unification is done using `unifySharedFields`, and new variables are created using `fresh`.
     ///
-    /// This function does not attempt to deduplicate fields or reorder them — callers are responsible
+    /// This function does not attempt to deduplicate fields or reorder them—callers are responsible
     /// for providing consistent field names.
     fn unifyTwoRecords(
         self: *Self,
@@ -2281,7 +2281,7 @@ const Unifier = struct {
     ///
     /// All tag unification is done using `unifySharedTags`, and new variables are created using `fresh`.
     ///
-    /// This function does not attempt to deduplicate tags or reorder them — callers are responsible
+    /// This function does not attempt to deduplicate tags or reorder them—callers are responsible
     /// for providing consistent tag names.
     fn unifyTwoTagUnions(
         self: *Self,
@@ -2701,7 +2701,7 @@ const Unifier = struct {
             }
             // Preserve a body-forced where-clause across unification. The bit only
             // exists on a `where_clause` origin, so it survives only by keeping that
-            // origin — or by promoting a payload-less `method_call` to it (the gap the
+            // origin—or by promoting a payload-less `method_call` to it (the gap the
             // ambiguity judgment would otherwise miss when a same-named direct call
             // wins the merge). A `from_literal`/operator origin is left intact: its
             // payload (numeral info, binop negation) is load-bearing for defaulting
@@ -2722,7 +2722,7 @@ const Unifier = struct {
             // Provenance is metadata (excluded from constraint identity): merge it
             // field-wise, keeping the winner's value and falling back to the other
             // side's so an introducing site or expect region recorded on either
-            // constraint survives the merge — the old var-keyed side tables linked
+            // constraint survives the merge—the old var-keyed side tables linked
             // both unified vars to the same entry.
             if (constraint.provenance.intro_expr == .none) {
                 constraint.provenance.intro_expr = two_constraints.a.provenance.intro_expr;
@@ -2888,7 +2888,7 @@ pub const DeferredConstraintCheck = struct {
     /// unannotated local def and the checker re-deferred it for resolution at
     /// the enclosing binding group's generalization boundary. Such an entry is
     /// not "resolvable" for the literal-defaulting cascade even though its
-    /// receiver is concrete — re-processing it before the target's group is
+    /// receiver is concrete—re-processing it before the target's group is
     /// checked would just re-defer it again.
     waiting_on_target_def: bool = false,
 
@@ -3064,7 +3064,7 @@ pub const Scratch = struct {
     // Memo of declaration openings performed during the CURRENT unify call:
     // one instantiated backing per (declaration, resolved arg roots). Without
     // this, a cyclic anonymous structure unifying with a recursive nominal
-    // never converges — every lift would mint a fresh backing whose interior
+    // never converges—every lift would mint a fresh backing whose interior
     // recursive application is a new var, so the in-progress pair guard never
     // sees a repeat. Reusing the first opening restores the fixed graph the
     // guard needs. Reset per unify call; savepoints bracket whole unify calls,
@@ -3215,7 +3215,7 @@ pub const Scratch = struct {
         // Allocate space for merged result
         try self.gathered_fields.items.ensureUnusedCapacity(self.gpa, new_count);
 
-        // IMPORTANT: re-slice after the reserve — growing `gathered_fields`
+        // IMPORTANT: re-slice after the reserve—growing `gathered_fields`
         // can reallocate its backing array, invalidating `current_fields`.
         const current_fields_after = self.gathered_fields.sliceRange(.{ .start = range.start, .count = @intCast(current_len) });
 
@@ -3278,7 +3278,7 @@ pub const Scratch = struct {
         // Allocate space for merged result
         try self.gathered_tags.items.ensureUnusedCapacity(self.gpa, new_count);
 
-        // IMPORTANT: re-slice after the reserve — growing `gathered_tags` can
+        // IMPORTANT: re-slice after the reserve—growing `gathered_tags` can
         // reallocate its backing array, invalidating `current_tags`.
         const current_tags_after = self.gathered_tags.sliceRange(.{ .start = range.start, .count = @intCast(current_len) });
 
@@ -3412,8 +3412,8 @@ fn inPlaceMergeTags(items: []Tag, left_len: usize, ident_store: *const Ident.Sto
 pub const StructuralPairInspection = enum {
     /// This pair proves the probe's method unify must fail.
     refuting,
-    /// This pair cannot soften another pair's refutation (it either fails —
-    /// which also fails the probe — or merges without spreading `.err`), but
+    /// This pair cannot soften another pair's refutation (it either fails—
+    /// which also fails the probe—or merges without spreading `.err`), but
     /// proves nothing by itself.
     safe,
     /// Outside the closed world the soundness argument covers; the whole
@@ -3427,7 +3427,7 @@ pub const StructuralPairInspection = enum {
 /// mutating neither; no Check or Unifier state is consulted.
 ///
 /// CONTRACT: returns `.refuting` only when `unify` on this pair MUST fail,
-/// given the fence conditions hold across the whole constraint range — see
+/// given the fence conditions hold across the whole constraint range—see
 /// `numeralCandidateStructurallyRefuted` in Check.zig for the range-wide
 /// fence (it classifies every argument/return position of EVERY constraint in
 /// the range, requires matching arities, and abandons refutation for the
@@ -3436,15 +3436,15 @@ pub const StructuralPairInspection = enum {
 /// The refutation core is ONE theorem about this module: distinct zero-arg
 /// builtin nominal identities never unify (`unifyNominalType` requires
 /// `sameNominalIdentity`, and there is no implicit numeric coercion). A
-/// `.refuting` pair is a dispatcher position — the method side is the
-/// candidate's own concrete builtin nominal — whose constraint side is a
+/// `.refuting` pair is a dispatcher position—the method side is the
+/// candidate's own concrete builtin nominal—whose constraint side is a
 /// CONCRETE builtin numeric nominal with a different source decl, so that
 /// position's unify must throw and the probe cannot succeed.
 ///
 /// SOUNDNESS FENCE: the theorem is decisive only if no successful earlier
 /// unify in the probe can soften the mismatching pair by merging `.err` into
 /// either side (this module short-circuits applications of INVALID
-/// declarations to a SUCCESSFUL err merge — see the `.nominal_type` arms of
+/// declarations to a SUCCESSFUL err merge—see the `.nominal_type` arms of
 /// `unifyFlatType`). The method side is freshly instantiated per
 /// constraint, so its only err sources are its own positions; the constraint
 /// side shares vars across the range. Both are closed off by requiring, for
@@ -3456,14 +3456,14 @@ pub const StructuralPairInspection = enum {
 ///     no backing at all, so nothing else about the position can soften);
 ///   - every constraint position resolves to a flex var, a rigid var, or a
 ///     nominal whose declaration is valid (terminal-or-failing shapes
-///     whose pairwise unifies either fail outright — which also fails the
-///     probe, consistent with refutation — or merge without creating or
+///     whose pairwise unifies either fail outright—which also fails the
+///     probe, consistent with refutation—or merge without creating or
 ///     spreading err; flex-side dispatch constraints are deferred by
 ///     `recordDeferredConstraint`, never fired mid-unify);
 ///   - arities match (so every pair above is actually the pair `unifyFunc`
-///     visits) — enforced by the range-wide caller.
-/// Any deviation — aliases, records, tag unions, tuples, err content,
-/// polymorphic method positions, non-fn shapes — returns `.uninspectable`,
+///     visits)—enforced by the range-wide caller.
+/// Any deviation—aliases, records, tag unions, tuples, err content,
+/// polymorphic method positions, non-fn shapes—returns `.uninspectable`,
 /// making the whole candidate fall through to the probe rather than weakening
 /// soundness.
 pub fn structurallyIncompatiblePair(
@@ -3475,7 +3475,7 @@ pub fn structurallyIncompatiblePair(
 ) StructuralPairInspection {
     // Method side: exactly a builtin numeric nominal (builtin origin, no type
     // args, backing root not `.err`). The dispatcher-position check below is
-    // made per position, not assumed — but the pre-filter's EFFECTIVENESS
+    // made per position, not assumed—but the pre-filter's EFFECTIVENESS
     // comes from builtin numeric methods being homogeneous (`T, T -> T`, e.g.
     // `Dec.plus : Dec, Dec -> Dec`): every position of such a method IS the
     // dispatcher type, so a concrete mismatch at any position refutes the
@@ -3493,14 +3493,14 @@ pub fn structurallyIncompatiblePair(
     // above, the candidate by construction in
     // `numeralCandidateStructurallyRefuted`), there is exactly one builtin
     // module, and every builtin-origin source decl is a statement index into
-    // that single module's store — so equal decls name the same declaration.
+    // that single module's store—so equal decls name the same declaration.
     // `copyVar` and instantiation preserve the packed source bits verbatim,
     // making this exactly the `source_decl.eql` the post-copy
     // `sameNominalIdentity` evaluates for present decls. Soundness never
     // rested on origin modules anyway: `.refuting` below also requires
     // `constraint_decl != candidate_source_decl`, hence method_decl !=
     // constraint_decl (both present, both builtin), which already forces
-    // `sameNominalIdentity` — and therefore `unifyNominalType` — to fail
+    // `sameNominalIdentity`—and therefore `unifyNominalType`—to fail
     // regardless of the origin idents.
     const is_dispatcher_pos = method_decl == candidate_source_decl;
 
@@ -3513,7 +3513,7 @@ pub fn structurallyIncompatiblePair(
         .structure => |flat| switch (flat) {
             .nominal_type => |constraint_nominal| {
                 // An application of an invalid declaration unifies
-                // SUCCESSFULLY into `.err` and can contaminate shared vars —
+                // SUCCESSFULLY into `.err` and can contaminate shared vars—
                 // outside the closed world.
                 if (constraint_types.nominalDeclIsInvalid(constraint_nominal)) return .uninspectable;
                 if (!is_dispatcher_pos) return .safe;

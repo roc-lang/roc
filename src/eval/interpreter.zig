@@ -127,7 +127,7 @@ const InterpreterRocEnv = struct {
         if (self.expect_err_message) |msg| self.allocator.free(msg);
     }
 
-    /// Reset the static buffer — call once at the start of a full evaluation.
+    /// Reset the static buffer—call once at the start of a full evaluation.
     fn resetForEval(self: *InterpreterRocEnv) void {
         self.crashed = false;
         if (self.crash_message) |msg| self.allocator.free(msg);
@@ -273,7 +273,7 @@ pub const Interpreter = struct {
     const LirInterpreter = @This();
     /// Debug-build-only call-depth guard. Release builds of the compiler must
     /// never constrain what compile-time evaluation (or interpreted execution)
-    /// can do, including how deeply it recurses — an arbitrary depth budget
+    /// can do, including how deeply it recurses—an arbitrary depth budget
     /// would make well-formed programs compile in Debug and fail in release,
     /// or vice versa. In release builds recursion is bounded only by actual
     /// native stack memory. Exhausting it is reported by whoever owns the
@@ -3856,7 +3856,7 @@ pub const Interpreter = struct {
         }, .str);
     }
 
-    // Function calls — all go through the stack-safe engine via enterFunction/evalProcStackSafe.
+    // Function calls—all go through the stack-safe engine via enterFunction/evalProcStackSafe.
 
     // Reference counting
 
@@ -7921,7 +7921,7 @@ pub const Interpreter = struct {
 
     /// ptr_alloca: reserve a zeroed frame slot for the ptr layout's element and
     /// yield its address. The slot lives in the eval arena, which outlives the
-    /// frame — fine, since TRMC emits at most one alloca per proc invocation.
+    /// frame—fine, since TRMC emits at most one alloca per proc invocation.
     fn evalPtrAlloca(self: *LirInterpreter, ret_layout: layout_mod.Idx) Error!Value {
         const ret_layout_val = self.layout_store.getLayout(ret_layout);
         if (builtin.mode == .Debug and ret_layout_val.tag != .ptr) {
@@ -7938,7 +7938,7 @@ pub const Interpreter = struct {
         return result;
     }
 
-    /// box_alloc_zeroed: a box_box whose payload is all zeroes — heap cell with
+    /// box_alloc_zeroed: a box_box whose payload is all zeroes—heap cell with
     /// rc=1 and a zero-filled payload (so any box fields inside read as null).
     fn evalBoxAllocZeroed(self: *LirInterpreter, ret_layout: layout_mod.Idx) Error!Value {
         const ret_layout_val = self.layout_store.getLayout(ret_layout);

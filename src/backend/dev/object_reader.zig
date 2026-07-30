@@ -783,7 +783,7 @@ fn resolveSymbol(
     const st_value = std.mem.readInt(u64, sym[8..16], .little);
 
     if (st_shndx == 0) {
-        // SHN_UNDEF — undefined symbol, try dlsym
+        // SHN_UNDEF—undefined symbol, try dlsym
         const st_name = std.mem.readInt(u32, sym[0..4], .little);
         if (st_name < strtab.len) {
             const name = getSectionName(strtab, st_name);

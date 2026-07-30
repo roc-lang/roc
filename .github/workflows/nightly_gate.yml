@@ -9,7 +9,7 @@ name: Nightly Gate
 # once when the run is created and inherited by every reusable-workflow job.
 # All jobs use bare actions/checkout, which checks out that SHA, so the whole
 # run tests a single commit even if main advances mid-run. Do not add
-# `ref: main` to any checkout in the called workflows — that would
+# `ref: main` to any checkout in the called workflows—that would
 # reintroduce drift.
 
 on:
@@ -62,4 +62,4 @@ jobs:
           to: "contributing"
           type: "stream"
           topic: "Main branch CI failures"
-          content: 'Nightly Gate failed on main @ ${{ github.sha }} — the nightly branch was not advanced: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+          content: 'Nightly Gate failed on main @ ${{ github.sha }}—the nightly branch was not advanced: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'

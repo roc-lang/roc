@@ -653,7 +653,7 @@ pub const Diagnostic = struct {
         import_must_be_top_level,
         invalid_type_arg,
         expr_arrow_expects_ident,
-        /// `a..b` is not range syntax — ranges are `a..<b` (exclusive) or `a..=b` (inclusive)
+        /// `a..b` is not range syntax—ranges are `a..<b` (exclusive) or `a..=b` (inclusive)
         expr_double_dot_is_not_range,
         var_only_allowed_in_a_body,
         var_must_have_ident,
@@ -1301,7 +1301,7 @@ pub const Pattern = union(enum) {
         /// True when the tag was written with an argument list, including an
         /// empty argument list such as `Tag()`.
         has_args: bool = false,
-        /// True when written as `Type.(pattern)` — a nominal-value destructure
+        /// True when written as `Type.(pattern)`—a nominal-value destructure
         /// (the inverse of `Type.(value)` construction), where `tag_tok` is the
         /// nominal type and `args` is the backing pattern. False for ordinary
         /// tag patterns like `Tag(args)` / `Module.Tag`.

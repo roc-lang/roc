@@ -548,11 +548,11 @@ const CheckTypeCheckerPatternsStep = struct {
         // while module_name is from the importing module's ident store - no way to compare without strings
         .{ .file = "Check.zig", .start = 5530, .end = 5547 },
         // Cross-module nominal type matching in store.zig requires string comparison
-        // because ident indices are module-local — same nominal from different modules
+        // because ident indices are module-local—same nominal from different modules
         // has different Ident.Idx values, so we must compare the underlying strings
         .{ .file = "store.zig", .start = 340, .end = 355 },
         // Cross-module ident matching in cir_to_lir.zig requires string comparison
-        // because platform and app modules have separate ident stores — the same alias
+        // because platform and app modules have separate ident stores—the same alias
         // name has different Ident.Idx values across modules, so we must compare via text.
         .{ .file = "cir_to_lir.zig", .start = 110, .end = 115 },
     };
@@ -676,9 +676,9 @@ const CheckTypeCheckerPatternsStep = struct {
 
 /// Header marker present in files vendored from the Zig compiler. Such files
 /// are exempt from Roc's architecture-style checks (the @enumFromInt(0) and
-/// unused-suppression bans below): their idioms — e.g. zero-valued enum
+/// unused-suppression bans below): their idioms—e.g. zero-valued enum
 /// constants like `AddrSpace = @enumFromInt(0)` and `_ =` suppressions in
-/// upstream TODO stubs — are correct at the source and rewriting them would
+/// upstream TODO stubs—are correct at the source and rewriting them would
 /// only diverge from upstream. This mirrors how ci/tidy.zig skips crates/.
 const vendored_zig_marker = "Adapted from the Zig compiler";
 
@@ -1522,7 +1522,7 @@ const CoverageSummaryStep = struct {
     /// - macOS (ARM64 and x86_64): Uses libdwarf for DWARF parsing
     /// - Linux ARM64: Uses libdw (elfutils) for DWARF parsing
     ///
-    /// TODO ZIG 16: re-check if this DWARF bug is fixed in 0.16 — may be able to enable x86_64 coverage
+    /// TODO ZIG 16: re-check if this DWARF bug is fixed in 0.16—may be able to enable x86_64 coverage
     /// Coverage does NOT work on Linux x86_64 due to a Zig 0.15.2 compiler bug that
     /// generates invalid DWARF .debug_line sections. libdw fails with "invalid
     /// .debug_line section" when parsing user code compilation units, while stdlib
@@ -2219,7 +2219,7 @@ const FixArchivePaddingStep = struct {
         const io = step.owner.graph.io;
 
         const file = std.Io.Dir.cwd().openFile(io, self.archive_path, .{ .mode = .read_write }) catch {
-            // Archive doesn't exist yet (e.g. cross-compilation target not built) — skip silently.
+            // Archive doesn't exist yet (e.g. cross-compilation target not built)—skip silently.
             return;
         };
         defer file.close(io);
@@ -2545,7 +2545,7 @@ fn absoluteBuildPath(b: *std.Build, path: []const u8) []const u8 {
 pub fn build(b: *std.Build) void {
     configureZigCacheEnvironment(b);
 
-    // Ensure zig-out/bin exists — Zig's install step can silently fail after `rm -rf zig-out`
+    // Ensure zig-out/bin exists—Zig's install step can silently fail after `rm -rf zig-out`
     std.Io.Dir.cwd().createDirPath(b.graph.io, "zig-out/bin") catch {};
 
     // Build/run split used by MiniCI:
@@ -2721,7 +2721,7 @@ pub fn build(b: *std.Build) void {
     build_options.addOption([]const u8, "compiler_version_git", compiler_version_git);
     build_options.addOption([32]u8, "compiler_artifact_hash", getCompilerArtifactHash(b, compiler_version_git));
     // `compiler_version` (e.g. "release-fast-abc12345") is assembled in the generated
-    // build_options module so its build-mode prefix comes from @import("builtin").mode — the
+    // build_options module so its build-mode prefix comes from @import("builtin").mode—the
     // actual optimization level of each compiled binary. The prefix can't be baked here because
     // build_options is shared between the dev `roc` exe (whose mode follows -Doptimize) and the
     // `release` exe (always built ReleaseFast); a single build-time value can't be right for both.
@@ -3963,7 +3963,7 @@ pub fn build(b: *std.Build) void {
     const playground_install = b.addInstallArtifact(playground_exe, .{});
     build_playground_step.dependOn(&playground_install.step);
 
-    // Build echo.wasm — echo platform compiled to wasm32-freestanding.
+    // Build echo.wasm—echo platform compiled to wasm32-freestanding.
     // Also serves as a regression test that the compile module stays wasm-compatible.
     {
         const echo_wasm_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding });
@@ -4515,7 +4515,7 @@ pub fn build(b: *std.Build) void {
             run_wasm_iter_for_dev_test.step.dependOn(build_test_wasm_static_lib_runner_step);
             run_test_wasm_static_lib_step.dependOn(&run_wasm_iter_for_dev_test.step);
 
-            // Noiter twin — asserts correctness and prints its size so CI logs
+            // Noiter twin—asserts correctness and prints its size so CI logs
             // carry both numbers for premium tracking.
             const run_wasm_iter_noiter_test = b.addRunArtifact(wasm_test_exe);
             run_wasm_iter_noiter_test.addArgs(&.{
@@ -4609,7 +4609,7 @@ pub fn build(b: *std.Build) void {
 
         // Dead host code must be dead-code-eliminated while live host code
         // survives, checked by byte-scanning for marker data blobs (data works
-        // on every object format, unlike symbol names — PE retains no internal
+        // on every object format, unlike symbol names—PE retains no internal
         // symbol names): the dead-hosted and dead-only-helper blobs must be
         // absent, and the blob shared with the live Host.double! path must be
         // present. (That roc_run_app/roc_main are exported and the hidden
@@ -5372,7 +5372,7 @@ pub fn build(b: *std.Build) void {
     if (is_coverage_supported and isNativeishOrMusl(target)) {
         // Get the kcov dependency and build it from source
         // lazyDependency returns null on first pass; Zig re-runs build() after fetching
-        // TODO ZIG 16: re-check if lazy dependency bug is fixed — may be able to restructure this block
+        // TODO ZIG 16: re-check if lazy dependency bug is fixed—may be able to restructure this block
         // ALL coverage-related code must be inside this block due to Zig 0.15.2 lazy dependency bug
         // where dependencies added to a step outside the lazy block are not executed when the step
         // also has dependencies added inside the lazy block.
@@ -5440,7 +5440,7 @@ pub fn build(b: *std.Build) void {
 
             // Eval coverage: builds a separate binary with coverage=true (comptime),
             // which DCEs dev/wasm backends, disables fork isolation, and forces
-            // single-threaded — so kcov can trace the interpreter in-process.
+            // single-threaded—so kcov can trace the interpreter in-process.
             // Run separately via: zig build run-coverage-eval
             {
                 const coverage_eval_step = b.step("run-coverage-eval", "Run eval tests with kcov code coverage");
@@ -6282,7 +6282,7 @@ fn addMainExe(
     });
     // The in-process interpreter (used by `--opt=interpreter`) recurses Zig stack
     // frames per Roc call. With Zig 0.16 codegen frame sizes, the Windows 1 MiB
-    // default reserve isn't enough — recursion-heavy Roc programs trip our
+    // default reserve isn't enough—recursion-heavy Roc programs trip our
     // SetUnhandledExceptionFilter stack-overflow handler before the interpreter
     // can catch the overflow itself. Reserve 64 MiB to match eval-test-runner.
     exe.stack_size = 64 * 1024 * 1024;
@@ -7243,7 +7243,7 @@ const llvm_libs = [_][]const u8{
 /// Get the git-commit component of the compiler version (e.g. "abc12345"), used for cache
 /// versioning. Falls back to "no-git" when git is unavailable. The human-readable build-mode
 /// prefix (e.g. "release-fast-") is prepended at the binary's compile time from
-/// @import("builtin").mode — see where `compiler_version` is assembled in build().
+/// @import("builtin").mode—see where `compiler_version` is assembled in build().
 fn getCompilerVersionGit(b: *std.Build) []const u8 {
     // Try to get git commit SHA using std.process.run
     const result = std.process.run(b.allocator, b.graph.io, .{
