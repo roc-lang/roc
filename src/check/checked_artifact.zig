@@ -2464,14 +2464,7 @@ fn runtimeResultProvenanceForProcedureDef(
     module: TypedCIR.Module,
     def_idx: CIR.Def.Idx,
 ) ?RuntimeResultProvenance {
-    const body_idx = switch (module.def(def_idx).expr.data) {
-        .e_lambda => |lambda| lambda.body,
-        else => return null,
-    };
-    const op = switch (module.expr(body_idx).data) {
-        .e_run_low_level => |run| run.op,
-        else => return null,
-    };
+    const op = module.moduleEnvConst().providedLowLevelForDef(def_idx) orelse return null;
     return switch (op) {
         .list_get_unsafe => .list_element_read,
         else => null,
@@ -5773,9 +5766,9 @@ fn appendCheckedNominalDeclarationFromPayload(
     for (declarations.items) |existing| {
         if (canonicalNominalTypeKeyEql(existing.nominal, nominal_key)) {
             if (existing.backing == backing and
-                checkedTypeIdSliceEql(existing.formalArgs(store), nominal.args) and
-                checkedTypeIdSliceEql(existing.paddingFieldTypes(store), nominal.padding_field_types) and
-                checkedNominalRecordFieldSliceEql(existing.declaredRecordFields(store), declared_record_fields))
+                checkedTypeRootKeySliceEql(store, existing.formalArgs(store), nominal.args) and
+                checkedTypeRootKeySliceEql(store, existing.paddingFieldTypes(store), nominal.padding_field_types) and
+                checkedNominalRecordFieldRootKeySliceEql(store, existing.declaredRecordFields(store), declared_record_fields))
             {
                 return;
             }
@@ -5812,6 +5805,19 @@ fn checkedTypeIdSliceEql(a: []const CheckedTypeId, b: []const CheckedTypeId) boo
     if (a.len != b.len) return false;
     for (a, b) |left, right| {
         if (left != right) return false;
+    }
+    return true;
+}
+
+fn checkedTypeRootKeySliceEql(store: *const CheckedTypeStore, a: []const CheckedTypeId, b: []const CheckedTypeId) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |left, right| {
+        const left_index: usize = @intFromEnum(left);
+        const right_index: usize = @intFromEnum(right);
+        if (left_index >= store.roots.items.len or right_index >= store.roots.items.len) {
+            checkedArtifactInvariant("nominal declaration compared a missing checked type root", .{});
+        }
+        if (!std.meta.eql(store.roots.items[left_index].key.bytes, store.roots.items[right_index].key.bytes)) return false;
     }
     return true;
 }
@@ -5977,7 +5983,11 @@ fn checkedTypePayloadBuildEqlStored(
     };
 }
 
-fn checkedNominalRecordFieldSliceEql(a: []const CheckedNominalRecordField, b: []const CheckedNominalRecordField) bool {
+fn checkedNominalRecordFieldRootKeySliceEql(
+    store: *const CheckedTypeStore,
+    a: []const CheckedNominalRecordField,
+    b: []const CheckedNominalRecordField,
+) bool {
     if (a.len != b.len) return false;
     for (a, b) |left, right| {
         switch (left) {
@@ -5987,7 +5997,7 @@ fn checkedNominalRecordFieldSliceEql(a: []const CheckedNominalRecordField, b: []
             },
             .padding => |left_ty| switch (right) {
                 .named => return false,
-                .padding => |right_ty| if (left_ty != right_ty) return false,
+                .padding => |right_ty| if (!checkedTypeRootKeySliceEql(store, &.{left_ty}, &.{right_ty})) return false,
             },
         }
     }
@@ -10908,10 +10918,10 @@ pub const DispatchDivergence = struct {
     }
 };
 
-fn dispatchResolutionCrashes(resolution: static_dispatch.StaticDispatchResolution) bool {
+fn dispatchResolutionCrashes(resolution: static_dispatch.CheckedCallResolution) bool {
     return switch (resolution) {
-        .checked_error, .unreachable_dispatch => true,
-        .direct, .constraint, .structural => false,
+        .checked_error, .@"unreachable" => true,
+        .direct_pending, .direct_closed, .direct_parametric, .evidence_dependent, .structural => false,
     };
 }
 
@@ -14282,6 +14292,11 @@ const EvidencePass = struct {
     value_use_record_by_pattern: std.AutoHashMap(u32, u32),
     /// Memoized evidence node per dispatch_target record.
     node_by_record: std.AutoHashMap(u32, static_dispatch.EvidenceNodeId),
+    /// Hash buckets and collision chains for structurally interned evidence
+    /// nodes. Every durable `EvidenceNodeId` is therefore an exact evidence
+    /// identity, independent of which checker record requested it.
+    evidence_node_buckets: std.AutoHashMap(u64, static_dispatch.EvidenceNodeId),
+    evidence_node_next: std.ArrayList(?static_dispatch.EvidenceNodeId),
     record_in_progress: std.AutoHashMap(u32, void),
     /// Site-evidence dedupe (a checked expr can be reachable from two
     /// templates, e.g. a const body and its entry wrapper).
@@ -14362,6 +14377,8 @@ const EvidencePass = struct {
             .local_value_scheme_by_var = std.AutoHashMap(u32, u32).init(allocator),
             .value_use_record_by_pattern = std.AutoHashMap(u32, u32).init(allocator),
             .node_by_record = std.AutoHashMap(u32, static_dispatch.EvidenceNodeId).init(allocator),
+            .evidence_node_buckets = std.AutoHashMap(u64, static_dispatch.EvidenceNodeId).init(allocator),
+            .evidence_node_next = .empty,
             .record_in_progress = std.AutoHashMap(u32, void).init(allocator),
             .site_seen = std.AutoHashMap(u32, void).init(allocator),
             .evidence_nodes = .empty,
@@ -14386,6 +14403,8 @@ const EvidencePass = struct {
         self.local_value_scheme_by_var.deinit();
         self.value_use_record_by_pattern.deinit();
         self.node_by_record.deinit();
+        self.evidence_node_buckets.deinit();
+        self.evidence_node_next.deinit(self.allocator);
         self.record_in_progress.deinit();
         self.site_seen.deinit();
         self.evidence_nodes.deinit(self.allocator);
@@ -14918,7 +14937,7 @@ const EvidencePass = struct {
         constraint_fn_var: ?Var,
         chain: []const []const EvidenceParam,
         commit_unpinned: bool,
-    ) Allocator.Error!?static_dispatch.StaticDispatchResolution {
+    ) Allocator.Error!?static_dispatch.CheckedCallResolution {
         if (constraint_fn_var) |fn_var| {
             if (self.rejected_static_dispatches.contains(@intFromEnum(fn_var))) return .checked_error;
         }
@@ -14984,7 +15003,7 @@ const EvidencePass = struct {
         constraint_fn_var: ?Var,
         chain: []const []const EvidenceParam,
         commit_unpinned: bool,
-    ) Allocator.Error!?static_dispatch.StaticDispatchResolution {
+    ) Allocator.Error!?static_dispatch.CheckedCallResolution {
         if (try self.chainParamIndex(chain, dispatcher_root, method)) |ref| {
             // A constraint(k) resolution consumes evidence entry k, whose
             // callable is the scheme's pristine constraint fn type. The
@@ -14998,7 +15017,7 @@ const EvidencePass = struct {
                     checkedArtifactInvariant("constraint-resolved dispatch callable was not the scheme-pristine constraint fn type", .{});
                 }
             }
-            return .{ .constraint = ref };
+            return .{ .evidence_dependent = ref };
         }
 
         // Not bound by this chain. During template walks another template's
@@ -15032,10 +15051,10 @@ const EvidencePass = struct {
         // that never exist is defined); a value dispatch is statically
         // unreachable and lowers to an explicit crash.
         if (structural_kind) |kind| switch (kind) {
-            .map, .map_effectful => return .unreachable_dispatch,
+            .map, .map_effectful => return .@"unreachable",
             else => return .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) },
         };
-        return .unreachable_dispatch;
+        return .@"unreachable";
     }
 
     fn structuralDerivation(
@@ -15125,7 +15144,7 @@ const EvidencePass = struct {
         target: static_dispatch.MethodTarget,
         structural_kind: ?static_dispatch.StructuralKind,
         constraint_fn_var: ?Var,
-    ) Allocator.Error!static_dispatch.StaticDispatchResolution {
+    ) Allocator.Error!static_dispatch.CheckedCallResolution {
         return switch (target.kind) {
             .structural => |kind| blk: {
                 if (structural_kind == null or structural_kind.? != kind) {
@@ -15133,7 +15152,7 @@ const EvidencePass = struct {
                 }
                 break :blk .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) };
             },
-            .procedure, .local_proc => .{ .direct = try self.evidenceNodeForTarget(target, constraint_fn_var) },
+            .procedure, .local_proc => .{ .direct_pending = try self.evidenceNodeForTarget(target, constraint_fn_var) },
         };
     }
 
@@ -15239,8 +15258,7 @@ const EvidencePass = struct {
                     checkedArtifactInvariant("recorded procedure target evidence length differed from its declared params", .{});
                 }
             }
-            const node_id: static_dispatch.EvidenceNodeId = @enumFromInt(@as(u32, @intCast(self.evidence_nodes.items.len)));
-            try self.evidence_nodes.append(self.allocator, .{
+            const node_id = try self.internEvidenceNode(.{
                 .target = target,
                 .instantiation = .{ .callable = instantiated_callable_ty },
                 .nested = .{ .resolved = nested },
@@ -15254,13 +15272,11 @@ const EvidencePass = struct {
                 checkedArtifactInvariant("callable-derived procedure evidence had no checked callable relation", .{});
             const callable = self.checked_types.rootForSourceVar(self.module, fn_var) orelse
                 checkedArtifactInvariant("callable-derived dispatch target was missing from checked type output", .{});
-            const node_id: static_dispatch.EvidenceNodeId = @enumFromInt(@as(u32, @intCast(self.evidence_nodes.items.len)));
-            try self.evidence_nodes.append(self.allocator, .{
+            return try self.internEvidenceNode(.{
                 .target = target,
                 .instantiation = .{ .callable = callable },
                 .nested = .from_callable,
             });
-            return node_id;
         }
 
         if (procedure_schema == .requires_record) {
@@ -15274,13 +15290,67 @@ const EvidencePass = struct {
             .callable = self.checked_types.rootForSourceVar(self.module, fn_var) orelse
                 checkedArtifactInvariant("dispatch target callable was missing from checked type output", .{}),
         } else .monomorphic;
-        const node_id: static_dispatch.EvidenceNodeId = @enumFromInt(@as(u32, @intCast(self.evidence_nodes.items.len)));
-        try self.evidence_nodes.append(self.allocator, .{
+        return try self.internEvidenceNode(.{
             .target = target,
             .instantiation = instantiation,
             .nested = .{ .resolved = .{} },
         });
+    }
+
+    fn internEvidenceNode(
+        self: *EvidencePass,
+        candidate: static_dispatch.EvidenceNode,
+    ) Allocator.Error!static_dispatch.EvidenceNodeId {
+        var hasher = std.hash.Wyhash.init(0);
+        std.hash.autoHash(&hasher, candidate.target);
+        std.hash.autoHash(&hasher, candidate.instantiation);
+        switch (candidate.nested) {
+            .from_callable => std.hash.autoHash(&hasher, @as(u8, 0)),
+            .resolved => |span| {
+                std.hash.autoHash(&hasher, @as(u8, 1));
+                const refs = self.evidence_refs.items[span.start .. span.start + span.len];
+                std.hash.autoHash(&hasher, refs.len);
+                for (refs) |ref| std.hash.autoHash(&hasher, ref);
+            },
+        }
+        const hash = hasher.final();
+        var existing = self.evidence_node_buckets.get(hash);
+        while (existing) |node_id| {
+            if (self.evidenceNodesEql(self.evidence_nodes.items[@intFromEnum(node_id)], candidate)) {
+                return node_id;
+            }
+            existing = self.evidence_node_next.items[@intFromEnum(node_id)];
+        }
+
+        const node_id: static_dispatch.EvidenceNodeId = @enumFromInt(@as(u32, @intCast(self.evidence_nodes.items.len)));
+        try self.evidence_nodes.append(self.allocator, candidate);
+        try self.evidence_node_next.append(self.allocator, self.evidence_node_buckets.get(hash));
+        try self.evidence_node_buckets.put(hash, node_id);
         return node_id;
+    }
+
+    fn evidenceNodesEql(
+        self: *const EvidencePass,
+        left: static_dispatch.EvidenceNode,
+        right: static_dispatch.EvidenceNode,
+    ) bool {
+        if (!std.meta.eql(left.target, right.target) or
+            !std.meta.eql(left.instantiation, right.instantiation)) return false;
+        return switch (left.nested) {
+            .from_callable => right.nested == .from_callable,
+            .resolved => |left_span| switch (right.nested) {
+                .from_callable => false,
+                .resolved => |right_span| blk: {
+                    const left_refs = self.evidence_refs.items[left_span.start .. left_span.start + left_span.len];
+                    const right_refs = self.evidence_refs.items[right_span.start .. right_span.start + right_span.len];
+                    if (left_refs.len != right_refs.len) break :blk false;
+                    for (left_refs, right_refs) |left_ref, right_ref| {
+                        if (!std.meta.eql(left_ref, right_ref)) break :blk false;
+                    }
+                    break :blk true;
+                },
+            },
+        };
     }
 
     /// Resolve one scheme-use record's obligations (in the scheme's canonical
@@ -15342,8 +15412,9 @@ const EvidencePass = struct {
 
         const resolution = (try self.resolveObligation(var_, method, structural_kind, fresh_fn_var, self.current_chain, commit_unpinned)) orelse return null;
         return switch (resolution) {
-            .direct => |node| .{ .direct = node },
-            .constraint => |ref| .{ .constraint = ref },
+            .direct_pending => |node| .{ .direct = node },
+            .direct_closed, .direct_parametric => checkedArtifactInvariant("call resolution was finalized before evidence publication completed", .{}),
+            .evidence_dependent => |ref| .{ .constraint = ref },
             .structural => |kind| .{ .structural = kind },
             .checked_error => blk: {
                 if (@import("builtin").mode == .Debug) {
@@ -15354,7 +15425,7 @@ const EvidencePass = struct {
                 }
                 break :blk .checked_error;
             },
-            .unreachable_dispatch => .unreachable_value,
+            .@"unreachable" => .unreachable_value,
         };
     }
 
@@ -16274,7 +16345,13 @@ pub const CheckedProcedureTemplate = struct {
     body: CheckedProcedureBody,
     checked_fn_scheme: canonical.CanonicalTypeSchemeKey,
     checked_fn_root: CheckedTypeId,
+    /// Build/publication traversal span containing every call plan in the
+    /// template. Post-check consumers use the classified spans below.
     static_dispatch_plans: StaticDispatchPlanTableRef,
+    /// Range into `StaticDispatchPlanTable.direct_template_refs`.
+    direct_dispatch_plans: StaticDispatchPlanTableRef,
+    /// Range into `StaticDispatchPlanTable.dispatch_relation_refs`.
+    dispatch_relations: StaticDispatchPlanTableRef,
     resolved_value_refs: ResolvedValueRefTableRef,
     top_level_value_uses: TopLevelUseSummaryRef,
     nested_proc_sites: NestedProcSiteTableRef,
@@ -16340,9 +16417,10 @@ pub const CheckedProcedureTemplateTable = struct {
     evidence_params_pool: []static_dispatch.EvidenceParamRecord = &.{},
     /// Flat pool backing each evidence param's `path` span.
     evidence_param_paths: []static_dispatch.EvidencePathStep = &.{},
-    /// Scope of each `StaticDispatchPlanTable.template_refs` entry.
+    /// Scope of each `StaticDispatchPlanTable.dispatch_relation_refs` entry.
     dispatch_ref_scopes: []DispatchScope = &.{},
-    /// Relation semantics of each `StaticDispatchPlanTable.template_refs` entry.
+    /// Relation semantics of each
+    /// `StaticDispatchPlanTable.dispatch_relation_refs` entry.
     dispatch_relation_kinds: []DispatchRelationKind = &.{},
     /// Generalized-local scopes referenced by `dispatch_ref_scopes`.
     dispatch_scopes: []DispatchRefScope = &.{},
@@ -16458,6 +16536,8 @@ pub const CheckedProcedureTemplateTable = struct {
                 .checked_fn_scheme = checked_fn_scheme,
                 .checked_fn_root = checked_fn_root,
                 .static_dispatch_plans = .{},
+                .direct_dispatch_plans = .{},
+                .dispatch_relations = .{},
                 .resolved_value_refs = .{},
                 .top_level_value_uses = .{},
                 .nested_proc_sites = .{},
@@ -16542,6 +16622,8 @@ pub const CheckedProcedureTemplateTable = struct {
                 .checked_fn_scheme = checked_fn_scheme,
                 .checked_fn_root = checked_fn_root,
                 .static_dispatch_plans = .{},
+                .direct_dispatch_plans = .{},
+                .dispatch_relations = .{},
                 .resolved_value_refs = .{},
                 .top_level_value_uses = .{},
                 .nested_proc_sites = .{},
@@ -18274,11 +18356,15 @@ fn specializeResolvedStaticDispatchPlanCallables(
 ) Allocator.Error!void {
     var instantiated_pairs: std.AutoHashMapUnmanaged(ResolvedDispatchCallablePair, CheckedTypeId) = .empty;
     defer instantiated_pairs.deinit(allocator);
+    const evidence_closure = try allocator.alloc(DirectEvidenceClosure, plans.evidence_nodes.len);
+    defer allocator.free(evidence_closure);
+    @memset(evidence_closure, .unknown);
 
     for (plans.plans) |*plan| {
         const node_id = switch (plan.resolution) {
-            .direct => |node_id| node_id,
-            .constraint, .structural, .checked_error, .unreachable_dispatch => continue,
+            .direct_pending => |node_id| node_id,
+            .direct_closed, .direct_parametric => checkedArtifactInvariant("static dispatch plan was finalized more than once", .{}),
+            .evidence_dependent, .structural, .checked_error, .@"unreachable" => continue,
         };
         const target = plans.evidenceNode(node_id).target;
         const target_callable = try projectResolvedDispatchTargetCallable(
@@ -18298,11 +18384,17 @@ fn specializeResolvedStaticDispatchPlanCallables(
             plan.callable_ty,
             &instantiated_pairs,
         );
+        const direct: static_dispatch.DirectCall = .{ .evidence = node_id };
+        plan.resolution = if (store.rootContainsIdentityVariables(plan.callable_ty) or
+            !directEvidenceIsClosed(plans, node_id, evidence_closure))
+            .{ .direct_parametric = direct }
+        else
+            .{ .direct_closed = direct };
     }
     for (plans.iterator_for_plans) |*iterator_plan| {
         inline for (.{ &iterator_plan.iter, &iterator_plan.next }) |call| {
             switch (call.resolution) {
-                .direct => |node_id| {
+                .direct_pending => |node_id| {
                     const target = plans.evidenceNode(node_id).target;
                     const target_callable = try projectResolvedDispatchTargetCallable(
                         allocator,
@@ -18321,11 +18413,150 @@ fn specializeResolvedStaticDispatchPlanCallables(
                         call.callable_ty,
                         &instantiated_pairs,
                     );
+                    const direct: static_dispatch.DirectCall = .{ .evidence = node_id };
+                    call.resolution = if (store.rootContainsIdentityVariables(call.callable_ty) or
+                        !directEvidenceIsClosed(plans, node_id, evidence_closure))
+                        .{ .direct_parametric = direct }
+                    else
+                        .{ .direct_closed = direct };
                 },
-                .constraint, .structural, .checked_error, .unreachable_dispatch => {},
+                .direct_closed, .direct_parametric => checkedArtifactInvariant("iterator dispatch plan was finalized more than once", .{}),
+                .evidence_dependent, .structural, .checked_error, .@"unreachable" => {},
             }
         }
     }
+}
+
+const DirectEvidenceClosure = enum(u8) {
+    unknown,
+    visiting,
+    closed,
+    parametric,
+};
+
+/// Whether a concrete target's entire nested evidence tree is independent of
+/// the enclosing specialization. This is the evidence half of
+/// `direct_closed`: a structurally closed callable whose nested evidence still
+/// forwards a constraint is parametric, not closed.
+fn directEvidenceIsClosed(
+    plans: *const static_dispatch.StaticDispatchPlanTable,
+    node_id: static_dispatch.EvidenceNodeId,
+    states: []DirectEvidenceClosure,
+) bool {
+    const raw_node = @intFromEnum(node_id);
+    if (raw_node >= states.len) checkedArtifactInvariant("direct evidence closure referenced a missing node", .{});
+    switch (states[raw_node]) {
+        .closed => return true,
+        .parametric => return false,
+        .visiting => checkedArtifactInvariant("direct evidence closure contained a cycle", .{}),
+        .unknown => states[raw_node] = .visiting,
+    }
+    const node = plans.evidenceNode(node_id);
+    switch (node.target.kind) {
+        .local_proc => {
+            // The declaration identity is checked data, but its capture/context
+            // identity belongs to the enclosing Monotype specialization.
+            states[raw_node] = .parametric;
+            return false;
+        },
+        .procedure => {},
+        .structural => checkedArtifactInvariant("direct evidence closure contained a structural target", .{}),
+    }
+    const nested = switch (node.nested) {
+        .from_callable => {
+            states[raw_node] = .parametric;
+            return false;
+        },
+        .resolved => |span| plans.evidence_refs[span.start .. span.start + span.len],
+    };
+    for (nested) |evidence| switch (evidence) {
+        .direct => |child| if (!directEvidenceIsClosed(plans, child, states)) {
+            states[raw_node] = .parametric;
+            return false;
+        },
+        .constraint, .from_callable => {
+            states[raw_node] = .parametric;
+            return false;
+        },
+        .structural, .checked_error, .unreachable_value => {},
+    };
+    states[raw_node] = .closed;
+    return true;
+}
+
+fn checkedDispatchPlanNeedsRelation(
+    plans: *const static_dispatch.StaticDispatchPlanTable,
+    plan: static_dispatch.StaticDispatchCallPlan,
+) bool {
+    return switch (plan.resolution) {
+        .direct_closed, .direct_parametric => |direct| switch (plans.evidenceNode(direct.evidence).target.kind) {
+            .procedure => |procedure| switch (procedure.runtime_target) {
+                .graph_participating => true,
+                .procedure, .low_level => false,
+            },
+            .local_proc => false,
+            .structural => checkedArtifactInvariant("direct checked call targeted a structural derivation", .{}),
+        },
+        .direct_pending => checkedArtifactInvariant("unfinalized direct call reached template classification", .{}),
+        .evidence_dependent, .structural, .@"unreachable", .checked_error => true,
+    };
+}
+
+/// Publish category-specific per-template call spans after every checked call
+/// has its final classification. Monotype's evidence replay consumes only the
+/// relation pool, so a template with thousands of closed direct calls performs
+/// no scan over those calls during specialization setup.
+fn classifyTemplateDispatchPlanRefs(
+    allocator: Allocator,
+    plans: *static_dispatch.StaticDispatchPlanTable,
+    templates: *CheckedProcedureTemplateTable,
+) Allocator.Error!void {
+    var direct_refs = std.ArrayList(static_dispatch.StaticDispatchPlanId).empty;
+    errdefer direct_refs.deinit(allocator);
+    var relation_refs = std.ArrayList(static_dispatch.StaticDispatchPlanId).empty;
+    errdefer relation_refs.deinit(allocator);
+    var relation_scopes = std.ArrayList(DispatchScope).empty;
+    errdefer relation_scopes.deinit(allocator);
+    var relation_kinds = std.ArrayList(DispatchRelationKind).empty;
+    errdefer relation_kinds.deinit(allocator);
+
+    for (templates.templates) |*template| {
+        const original = template.static_dispatch_plans;
+        const refs = plans.template_refs[original.start .. original.start + original.len];
+        const scopes = templates.dispatch_ref_scopes[original.start .. original.start + original.len];
+        const kinds = templates.dispatch_relation_kinds[original.start .. original.start + original.len];
+        if (refs.len != scopes.len or refs.len != kinds.len) {
+            checkedArtifactInvariant("template dispatch refs and publication metadata differed in length", .{});
+        }
+
+        const direct_start: u32 = @intCast(direct_refs.items.len);
+        const relation_start: u32 = @intCast(relation_refs.items.len);
+        for (refs, scopes, kinds) |plan_id, scope, kind| {
+            const plan = plans.plans[@intFromEnum(plan_id)];
+            if (checkedDispatchPlanNeedsRelation(plans, plan)) {
+                try relation_refs.append(allocator, plan_id);
+                try relation_scopes.append(allocator, scope);
+                try relation_kinds.append(allocator, kind);
+            } else {
+                try direct_refs.append(allocator, plan_id);
+            }
+        }
+        template.direct_dispatch_plans = .{
+            .start = direct_start,
+            .len = @intCast(direct_refs.items.len - direct_start),
+        };
+        template.dispatch_relations = .{
+            .start = relation_start,
+            .len = @intCast(relation_refs.items.len - relation_start),
+        };
+    }
+
+    plans.direct_template_refs = try direct_refs.toOwnedSlice(allocator);
+    plans.dispatch_relation_refs = try relation_refs.toOwnedSlice(allocator);
+    allocator.free(templates.dispatch_ref_scopes);
+    templates.dispatch_ref_scopes = try relation_scopes.toOwnedSlice(allocator);
+    allocator.free(templates.dispatch_relation_kinds);
+    templates.dispatch_relation_kinds = try relation_kinds.toOwnedSlice(allocator);
 }
 
 const ResolvedDispatchCallablePair = struct {
@@ -25124,6 +25355,7 @@ pub const DispatchEvidenceFailure = struct {
         dispatch_expr_plan_out_of_bounds,
         iterator_for_missing_plan,
         iterator_for_plan_out_of_bounds,
+        plan_unfinalized_direct,
         plan_evidence_node_out_of_bounds,
         evidence_node_nested_refs_out_of_bounds,
         evidence_ref_node_out_of_bounds,
@@ -25131,7 +25363,13 @@ pub const DispatchEvidenceFailure = struct {
         site_evidence_refs_out_of_bounds,
         site_evidence_keys_unsorted,
         template_plan_ref_out_of_bounds,
+        template_direct_plan_ref_out_of_bounds,
+        template_relation_plan_ref_out_of_bounds,
         template_plan_refs_out_of_bounds,
+        template_direct_plan_refs_out_of_bounds,
+        template_relation_plan_refs_out_of_bounds,
+        template_dispatch_partition_mismatch,
+        template_relation_metadata_length_mismatch,
         template_evidence_params_out_of_bounds,
         evidence_param_path_out_of_bounds,
         evidence_param_path_invalid_kind,
@@ -25374,7 +25612,7 @@ pub const CheckedModuleArtifact = struct {
             // `proc_bases`; `checked_types` includes its `var_names` interner = 3).
             // POD inline `key`/`module_identity` contribute 0. Fixed at compile time,
             // independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 201);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 203);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -25522,7 +25760,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 48;
+    const serialized_layout_version: u32 = 49;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -25970,7 +26208,13 @@ pub const CheckedModuleArtifact = struct {
 
         for (table.plans, 0..) |plan, i| {
             switch (plan.resolution) {
-                .direct => |node| if (@intFromEnum(node) >= table.evidence_nodes.len) {
+                .direct_pending => return .{
+                    .kind = .plan_unfinalized_direct,
+                    .expr = plan.expr,
+                    .index = @intCast(i),
+                    .method = plan.method,
+                },
+                .direct_closed, .direct_parametric => |direct| if (@intFromEnum(direct.evidence) >= table.evidence_nodes.len) {
                     return .{
                         .kind = .plan_evidence_node_out_of_bounds,
                         .expr = plan.expr,
@@ -25978,20 +26222,25 @@ pub const CheckedModuleArtifact = struct {
                         .method = plan.method,
                     };
                 },
-                .constraint, .structural, .checked_error, .unreachable_dispatch => {},
+                .evidence_dependent, .structural, .checked_error, .@"unreachable" => {},
             }
         }
         for (table.iterator_for_plans, 0..) |plan, i| {
             for ([2]static_dispatch.IteratorDispatchCall{ plan.iter, plan.next }) |call| {
                 switch (call.resolution) {
-                    .direct => |node| if (@intFromEnum(node) >= table.evidence_nodes.len) {
+                    .direct_pending => return .{
+                        .kind = .plan_unfinalized_direct,
+                        .index = @intCast(i),
+                        .method = call.method,
+                    },
+                    .direct_closed, .direct_parametric => |direct| if (@intFromEnum(direct.evidence) >= table.evidence_nodes.len) {
                         return .{
                             .kind = .plan_evidence_node_out_of_bounds,
                             .index = @intCast(i),
                             .method = call.method,
                         };
                     },
-                    .constraint, .structural, .checked_error, .unreachable_dispatch => {},
+                    .evidence_dependent, .structural, .checked_error, .@"unreachable" => {},
                 }
             }
         }
@@ -26030,11 +26279,58 @@ pub const CheckedModuleArtifact = struct {
                 return .{ .kind = .template_plan_ref_out_of_bounds, .index = @intCast(i) };
             }
         }
+        for (table.direct_template_refs, 0..) |plan_id, i| {
+            if (@intFromEnum(plan_id) >= table.plans.len) {
+                return .{ .kind = .template_direct_plan_ref_out_of_bounds, .index = @intCast(i) };
+            }
+        }
+        for (table.dispatch_relation_refs, 0..) |plan_id, i| {
+            if (@intFromEnum(plan_id) >= table.plans.len) {
+                return .{ .kind = .template_relation_plan_ref_out_of_bounds, .index = @intCast(i) };
+            }
+        }
 
         const templates = &self.checked_procedure_templates;
+        if (templates.dispatch_ref_scopes.len != table.dispatch_relation_refs.len or
+            templates.dispatch_relation_kinds.len != table.dispatch_relation_refs.len)
+        {
+            return .{ .kind = .template_relation_metadata_length_mismatch };
+        }
         for (templates.templates, 0..) |template, i| {
             if (@as(u64, template.static_dispatch_plans.start) + template.static_dispatch_plans.len > table.template_refs.len) {
                 return .{ .kind = .template_plan_refs_out_of_bounds, .index = @intCast(i) };
+            }
+            if (@as(u64, template.direct_dispatch_plans.start) + template.direct_dispatch_plans.len > table.direct_template_refs.len) {
+                return .{ .kind = .template_direct_plan_refs_out_of_bounds, .index = @intCast(i) };
+            }
+            if (@as(u64, template.dispatch_relations.start) + template.dispatch_relations.len > table.dispatch_relation_refs.len) {
+                return .{ .kind = .template_relation_plan_refs_out_of_bounds, .index = @intCast(i) };
+            }
+            if (template.direct_dispatch_plans.len + template.dispatch_relations.len != template.static_dispatch_plans.len) {
+                return .{ .kind = .template_dispatch_partition_mismatch, .index = @intCast(i) };
+            }
+            const all_refs = table.template_refs[template.static_dispatch_plans.start .. template.static_dispatch_plans.start + template.static_dispatch_plans.len];
+            const direct_refs = table.direct_template_refs[template.direct_dispatch_plans.start .. template.direct_dispatch_plans.start + template.direct_dispatch_plans.len];
+            const relation_refs = table.dispatch_relation_refs[template.dispatch_relations.start .. template.dispatch_relations.start + template.dispatch_relations.len];
+            var direct_index: usize = 0;
+            var relation_index: usize = 0;
+            for (all_refs) |plan_id| {
+                const classified = if (checkedDispatchPlanNeedsRelation(table, table.plans[@intFromEnum(plan_id)])) blk: {
+                    if (relation_index >= relation_refs.len) {
+                        return .{ .kind = .template_dispatch_partition_mismatch, .index = @intCast(i) };
+                    }
+                    defer relation_index += 1;
+                    break :blk relation_refs[relation_index];
+                } else blk: {
+                    if (direct_index >= direct_refs.len) {
+                        return .{ .kind = .template_dispatch_partition_mismatch, .index = @intCast(i) };
+                    }
+                    defer direct_index += 1;
+                    break :blk direct_refs[direct_index];
+                };
+                if (classified != plan_id) {
+                    return .{ .kind = .template_dispatch_partition_mismatch, .index = @intCast(i) };
+                }
             }
             if (@as(u64, template.evidence_params.start) + template.evidence_params.len > templates.evidence_params_pool.len) {
                 return .{ .kind = .template_evidence_params_out_of_bounds, .index = @intCast(i) };
@@ -28378,6 +28674,11 @@ pub fn publishFromTypedModule(
         inputs.available_artifacts,
         &static_dispatch_plans,
     );
+    try classifyTemplateDispatchPlanRefs(
+        allocator,
+        &static_dispatch_plans,
+        &checked_procedure_templates,
+    );
     try checked_bodies.publishResolvedDispatchDivergence(allocator, &static_dispatch_plans);
     template_iterator_refs.deinit(allocator);
     plan_build_data.deinit(allocator);
@@ -30634,8 +30935,149 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xD1, 0x47, 0xD7, 0xF4, 0x46, 0xF0, 0xB4, 0xA6, 0x80, 0x19, 0x1F, 0x41, 0x70, 0xC8, 0x30, 0x78,
-        0x11, 0x9A, 0xF7, 0x32, 0x99, 0x9D, 0xEB, 0x8C, 0x7D, 0x1C, 0x36, 0x55, 0xAD, 0x98, 0x9D, 0x22,
+        0xB1, 0xB4, 0x20, 0x37, 0x17, 0x0C, 0x7B, 0x2E, 0xCD, 0xBF, 0x3F, 0x6B, 0x4E, 0x31, 0xAF, 0x57,
+        0x77, 0xDB, 0x93, 0x52, 0xF8, 0xE3, 0x28, 0x30, 0x2E, 0x03, 0xCD, 0x75, 0x55, 0xBE, 0x48, 0x6D,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
+}
+
+test "closed direct evidence excludes specialization-dependent nested recipes" {
+    var refs = [_]static_dispatch.CheckedEvidence{
+        .{ .constraint = .{ .depth = 0, .index = 0 } },
+        .{ .direct = @enumFromInt(0) },
+        .{ .direct = @enumFromInt(1) },
+    };
+    const procedure_target = static_dispatch.MethodTarget{
+        .module_idx = 0,
+        .def_idx = @enumFromInt(0),
+        .kind = .{ .procedure = .{ .proc = undefined, .template = undefined } },
+        .callable_ty = @enumFromInt(0),
+    };
+    const local_target = static_dispatch.MethodTarget{
+        .module_idx = 0,
+        .def_idx = @enumFromInt(1),
+        .kind = .{ .local_proc = .{
+            .binder = @enumFromInt(0),
+            .expr = @enumFromInt(0),
+            .context_anchor = @enumFromInt(0),
+        } },
+        .callable_ty = @enumFromInt(0),
+    };
+    var nodes = [_]static_dispatch.EvidenceNode{
+        .{ .target = procedure_target, .instantiation = .monomorphic, .nested = .{ .resolved = .{} } },
+        .{ .target = procedure_target, .instantiation = .monomorphic, .nested = .from_callable },
+        .{ .target = procedure_target, .instantiation = .monomorphic, .nested = .{ .resolved = .{ .start = 0, .len = 1 } } },
+        .{ .target = procedure_target, .instantiation = .monomorphic, .nested = .{ .resolved = .{ .start = 1, .len = 1 } } },
+        .{ .target = procedure_target, .instantiation = .monomorphic, .nested = .{ .resolved = .{ .start = 2, .len = 1 } } },
+        .{ .target = local_target, .instantiation = .monomorphic, .nested = .{ .resolved = .{} } },
+    };
+    const plans = static_dispatch.StaticDispatchPlanTable{
+        .evidence_nodes = &nodes,
+        .evidence_refs = &refs,
+    };
+    var states = [_]DirectEvidenceClosure{.unknown} ** nodes.len;
+
+    try std.testing.expect(directEvidenceIsClosed(&plans, @enumFromInt(0), &states));
+    try std.testing.expect(!directEvidenceIsClosed(&plans, @enumFromInt(1), &states));
+    try std.testing.expect(!directEvidenceIsClosed(&plans, @enumFromInt(2), &states));
+    try std.testing.expect(directEvidenceIsClosed(&plans, @enumFromInt(3), &states));
+    try std.testing.expect(!directEvidenceIsClosed(&plans, @enumFromInt(4), &states));
+    try std.testing.expect(!directEvidenceIsClosed(&plans, @enumFromInt(5), &states));
+}
+
+test "template dispatch classification separates direct calls from graph relations" {
+    const allocator = std.testing.allocator;
+    var evidence_nodes = [_]static_dispatch.EvidenceNode{
+        .{
+            .target = .{
+                .module_idx = 0,
+                .def_idx = @enumFromInt(0),
+                .kind = .{ .procedure = .{
+                    .proc = undefined,
+                    .template = undefined,
+                    .runtime_target = .{ .low_level = .num_plus_wrap },
+                } },
+                .callable_ty = @enumFromInt(0),
+            },
+            .instantiation = .monomorphic,
+        },
+        .{
+            .target = .{
+                .module_idx = 0,
+                .def_idx = @enumFromInt(1),
+                .kind = .{ .local_proc = .{
+                    .binder = @enumFromInt(0),
+                    .expr = @enumFromInt(0),
+                    .context_anchor = @enumFromInt(0),
+                } },
+                .callable_ty = @enumFromInt(0),
+            },
+            .instantiation = .monomorphic,
+        },
+        .{
+            .target = .{
+                .module_idx = 0,
+                .def_idx = @enumFromInt(2),
+                .kind = .{ .procedure = .{
+                    .proc = undefined,
+                    .template = undefined,
+                    .runtime_target = .{ .graph_participating = .{ .iterator_procedure = .iter_map } },
+                } },
+                .callable_ty = @enumFromInt(0),
+            },
+            .instantiation = .monomorphic,
+        },
+    };
+    var call_plans = [_]static_dispatch.StaticDispatchCallPlan{
+        .{ .expr = @enumFromInt(0), .method = @enumFromInt(0), .dispatcher = .type_only, .dispatcher_ty = @enumFromInt(0), .callable_ty = @enumFromInt(0), .result_mode = .value, .resolution = .{ .direct_closed = .{ .evidence = @enumFromInt(0) } } },
+        .{ .expr = @enumFromInt(1), .method = @enumFromInt(0), .dispatcher = .type_only, .dispatcher_ty = @enumFromInt(0), .callable_ty = @enumFromInt(0), .result_mode = .value, .resolution = .{ .direct_parametric = .{ .evidence = @enumFromInt(1) } } },
+        .{ .expr = @enumFromInt(2), .method = @enumFromInt(0), .dispatcher = .type_only, .dispatcher_ty = @enumFromInt(0), .callable_ty = @enumFromInt(0), .result_mode = .value, .resolution = .{ .direct_closed = .{ .evidence = @enumFromInt(2) } } },
+        .{ .expr = @enumFromInt(3), .method = @enumFromInt(0), .dispatcher = .type_only, .dispatcher_ty = @enumFromInt(0), .callable_ty = @enumFromInt(0), .result_mode = .value, .resolution = .{ .evidence_dependent = .{ .depth = 0, .index = 0 } } },
+    };
+    var refs = [_]static_dispatch.StaticDispatchPlanId{
+        @enumFromInt(0),
+        @enumFromInt(1),
+        @enumFromInt(2),
+        @enumFromInt(3),
+    };
+    var plans = static_dispatch.StaticDispatchPlanTable{
+        .plans = &call_plans,
+        .template_refs = &refs,
+        .evidence_nodes = &evidence_nodes,
+    };
+    defer allocator.free(plans.direct_template_refs);
+    defer allocator.free(plans.dispatch_relation_refs);
+
+    var template_array = [_]CheckedProcedureTemplate{.{
+        .proc_base = undefined,
+        .template_id = undefined,
+        .body = undefined,
+        .checked_fn_scheme = undefined,
+        .checked_fn_root = undefined,
+        .static_dispatch_plans = .{ .start = 0, .len = refs.len },
+        .direct_dispatch_plans = .{},
+        .dispatch_relations = .{},
+        .resolved_value_refs = .{},
+        .top_level_value_uses = .{},
+        .nested_proc_sites = .{},
+        .target = .roc,
+    }};
+    var templates = CheckedProcedureTemplateTable{
+        .templates = &template_array,
+        .dispatch_ref_scopes = try allocator.alloc(DispatchScope, refs.len),
+        .dispatch_relation_kinds = try allocator.alloc(DispatchRelationKind, refs.len),
+    };
+    @memset(templates.dispatch_ref_scopes, .root);
+    @memset(templates.dispatch_relation_kinds, .callable_result);
+    defer allocator.free(templates.dispatch_ref_scopes);
+    defer allocator.free(templates.dispatch_relation_kinds);
+
+    try classifyTemplateDispatchPlanRefs(allocator, &plans, &templates);
+
+    try std.testing.expectEqual(@as(u32, 2), template_array[0].direct_dispatch_plans.len);
+    try std.testing.expectEqual(@as(u32, 2), template_array[0].dispatch_relations.len);
+    try std.testing.expectEqual(@as(static_dispatch.StaticDispatchPlanId, @enumFromInt(0)), plans.direct_template_refs[0]);
+    try std.testing.expectEqual(@as(static_dispatch.StaticDispatchPlanId, @enumFromInt(1)), plans.direct_template_refs[1]);
+    try std.testing.expectEqual(@as(static_dispatch.StaticDispatchPlanId, @enumFromInt(2)), plans.dispatch_relation_refs[0]);
+    try std.testing.expectEqual(@as(static_dispatch.StaticDispatchPlanId, @enumFromInt(3)), plans.dispatch_relation_refs[1]);
 }

@@ -1580,6 +1580,17 @@ const GeneratedParserDefAddress = struct {
     result_ty: u32,
 };
 
+/// Process-local O(1) reuse key for a checker-classified closed direct
+/// procedure call. `evidence` is an interned producer identity in `module`;
+/// the plan's closed callable type is likewise structurally interned there.
+/// The method scope remains part of specialization identity because imported
+/// bodies resolve compiler-generated method calls in that scope.
+const ClosedDirectCallIdentity = struct {
+    callable: CheckedTypeAddress,
+    evidence: static_dispatch.EvidenceNodeId,
+    method_scope: checked.ModuleId,
+};
+
 /// Tracks a memoized structural-derivation helper def (is_eq / inspect /
 /// to_hash). `reserved` means the def id is allocated but its body has not yet
 /// been filled in (used to break recursion); `ready` means the body is complete.
@@ -3217,6 +3228,7 @@ const Builder = struct {
             .fn_id = fn_id,
             .open_group_member = open_group_member,
         });
+        try source_ctx.draft.template_spec_by_fn.put(fn_id, @intCast(spec_index));
         lexical_needs_cleanup = false;
         var indexed_nodes = std.AutoHashMap(NodeId, void).init(self.allocator);
         defer indexed_nodes.deinit();
@@ -8629,6 +8641,11 @@ const DraftFnSlot = union(enum(u8)) {
     imported: Ast.ImportedFnId,
 };
 
+const ClosedDirectDraftSpecialization = struct {
+    slot: DraftFnSlot,
+    draft_spec: ?u32,
+};
+
 const DraftProcCallee = union(enum(u8)) {
     func: DraftFnSlot,
     lifted: Ast.LiftedFnId,
@@ -9814,7 +9831,11 @@ const BodyDraftStore = struct {
     def_owners: std.ArrayList(DraftOwner),
     nested_defs: std.ArrayList(DraftNestedDef),
     template_specs: std.ArrayList(DraftTemplateSpec),
+    template_spec_by_fn: std.AutoHashMap(DraftFnId, u32),
     template_spec_lookup: std.AutoHashMap(DraftTemplateLookupAddress, std.ArrayList(u32)),
+    /// Exact checked identities bypass the general graph/digest lookup after
+    /// the first closed direct call in this draft.
+    closed_direct_specializations: std.AutoHashMap(ClosedDirectCallIdentity, ClosedDirectDraftSpecialization),
     active_callable_eval_bindings: std.ArrayList(ActiveCallableEvalBinding),
     active_const_bindings: std.ArrayList(ActiveConstBinding),
     deferred_const_uses: std.ArrayList(DraftDeferredConstUse),
@@ -9883,7 +9904,9 @@ const BodyDraftStore = struct {
             .def_owners = .empty,
             .nested_defs = .empty,
             .template_specs = .empty,
+            .template_spec_by_fn = std.AutoHashMap(DraftFnId, u32).init(allocator),
             .template_spec_lookup = std.AutoHashMap(DraftTemplateLookupAddress, std.ArrayList(u32)).init(allocator),
+            .closed_direct_specializations = std.AutoHashMap(ClosedDirectCallIdentity, ClosedDirectDraftSpecialization).init(allocator),
             .active_callable_eval_bindings = .empty,
             .active_const_bindings = .empty,
             .deferred_const_uses = .empty,
@@ -9976,6 +9999,8 @@ const BodyDraftStore = struct {
         var template_lookup_lists = self.template_spec_lookup.valueIterator();
         while (template_lookup_lists.next()) |list| list.deinit(self.allocator);
         self.template_spec_lookup.deinit();
+        self.closed_direct_specializations.deinit();
+        self.template_spec_by_fn.deinit();
         var nested_lookup_lists = self.nested_spec_lookup.valueIterator();
         while (nested_lookup_lists.next()) |list| list.deinit(self.allocator);
         self.nested_spec_lookup.deinit();
@@ -14680,8 +14705,8 @@ const BodyContext = struct {
         template: checked.CheckedProcedureTemplate,
         scope_id: ?checked.DispatchScopeId,
     ) Allocator.Error!void {
-        const span = template.static_dispatch_plans;
-        const refs = self.view.static_dispatch_plans.template_refs[span.start .. span.start + span.len];
+        const span = template.dispatch_relations;
+        const refs = self.view.static_dispatch_plans.dispatch_relation_refs[span.start .. span.start + span.len];
         const scopes = self.view.templates.dispatch_ref_scopes[span.start .. span.start + span.len];
         const kinds = self.view.templates.dispatch_relation_kinds[span.start .. span.start + span.len];
         if (refs.len != scopes.len or refs.len != kinds.len) Common.invariant("checked template dispatch refs and relation metadata differed in length");
@@ -17156,7 +17181,7 @@ const BodyContext = struct {
         target: static_dispatch.MethodTarget,
     ) ?checked.IteratorProcedureId {
         return switch (target.kind) {
-            .procedure => |procedure| procedure.iterator_procedure,
+            .procedure => |procedure| procedure.runtime_target.iteratorProcedure(),
             .local_proc, .structural => null,
         };
     }
@@ -29719,6 +29744,47 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const plan_id = maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+        var direct_parametric_low_level: ?can.CIR.Expr.LowLevel = null;
+        var direct_graph_call = false;
+        switch (plan.resolution) {
+            .direct_closed => |direct| {
+                const node = self.view.static_dispatch_plans.evidenceNode(direct.evidence);
+                switch (node.target.kind) {
+                    .procedure => |procedure| switch (procedure.runtime_target) {
+                        .low_level => |op| return try self.lowerClosedDirectLowLevelDispatch(
+                            checked_ret_ty,
+                            plan,
+                            op,
+                            expected_ret_cell,
+                        ),
+                        .procedure => return try self.lowerClosedDirectProcedureDispatch(
+                            checked_ret_ty,
+                            plan,
+                            direct.evidence,
+                            procedure,
+                            expected_ret_cell,
+                        ),
+                        .graph_participating => {},
+                    },
+                    .local_proc => direct_graph_call = true,
+                    .structural => {},
+                }
+            },
+            .direct_parametric => |direct| {
+                const node = self.view.static_dispatch_plans.evidenceNode(direct.evidence);
+                switch (node.target.kind) {
+                    .procedure => |procedure| switch (procedure.runtime_target) {
+                        .low_level => |op| direct_parametric_low_level = op,
+                        .procedure => direct_graph_call = true,
+                        .graph_participating => {},
+                    },
+                    .local_proc => direct_graph_call = true,
+                    .structural => {},
+                }
+            },
+            .direct_pending => Common.invariant("unfinalized direct call reached Monotype"),
+            .evidence_dependent, .structural, .@"unreachable", .checked_error => {},
+        }
         const callable_plan = switch (self.dispatchRuntimePlan(plan)) {
             .callable => |value| value,
             .crash => |reason| {
@@ -29749,18 +29815,20 @@ const BodyContext = struct {
             .expression_lowering,
         );
         const resolution = self.evidenceResolution(plan) orelse
-            Common.invariant("runtime method call had no StaticDispatchResolution evidence");
+            Common.invariant("runtime method call had no CheckedCallResolution evidence");
         switch (resolution) {
             .target => |initial_lookup| {
-                const target_node = try self.methodTargetNodeFromPlan(initial_lookup, &call_ctx, plan.callable_ty);
-                try relateFunctionRequestInterface(self.graph, target_node, callable_node);
-                if (try self.generatedIteratorMethodRequestNode(
-                    initial_lookup,
-                    target_node,
-                    callable_node,
-                    plan_args,
-                )) |private_node| {
-                    callable_node = private_node;
+                if (direct_parametric_low_level == null and !direct_graph_call) {
+                    const target_node = try self.methodTargetNodeFromPlan(initial_lookup, &call_ctx, plan.callable_ty);
+                    try relateFunctionRequestInterface(self.graph, target_node, callable_node);
+                    if (try self.generatedIteratorMethodRequestNode(
+                        initial_lookup,
+                        target_node,
+                        callable_node,
+                        plan_args,
+                    )) |private_node| {
+                        callable_node = private_node;
+                    }
                 }
             },
             .structural => {},
@@ -29841,7 +29909,30 @@ const BodyContext = struct {
         else
             try self.lowerTypeNode(checked_ret_ty);
         _ = try checkedMonoRequestNode(self.graph, checked_result_node, plan_ret_node);
-        const call_data = try self.lowerResolvedDispatchAtNode(plan, resolved, callable_node, self, pre_lowered.items);
+        if (direct_parametric_low_level) |op| {
+            const args = try self.lowerDispatchOperandsAtNodes(
+                plan_args,
+                callable_graph.args,
+                pre_lowered.items,
+            );
+            const call_ret_cell = if (try self.graph.containsGeneratedPrivate(plan_ret_node))
+                DraftTypeCell.fromGraphNode(plan_ret_node)
+            else
+                expected_ret_cell;
+            const call_expr = try self.addExprWithTypeCell(call_ret_cell, .{ .low_level = .{
+                .op = op,
+                .args = args,
+            } });
+            return try self.applyDispatchResultMode(
+                plan.result_mode,
+                call_expr,
+                try self.activeTypeFromNode(plan_ret_node),
+            );
+        }
+        const call_data = if (direct_graph_call)
+            try self.lowerResolvedDirectDispatchAtNode(plan, resolved, callable_node, self, pre_lowered.items)
+        else
+            try self.lowerResolvedDispatchAtNode(plan, resolved, callable_node, self, pre_lowered.items);
         const call_ret_cell = if (try self.graph.containsGeneratedPrivate(plan_ret_node))
             DraftTypeCell.fromGraphNode(plan_ret_node)
         else
@@ -29861,6 +29952,187 @@ const BodyContext = struct {
                 break :blk try self.applyDispatchResultMode(plan.result_mode, call_expr, ret_ty);
             },
         };
+    }
+
+    fn lowerClosedDirectLowLevelDispatch(
+        self: *BodyContext,
+        checked_ret_ty: checked.CheckedTypeId,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        op: can.CIR.Expr.LowLevel,
+        expected_ret_cell: DraftTypeCell,
+    ) Allocator.Error!DraftExprId {
+        const callable_ty = try self.builder.lowerType(self.view, plan.callable_ty);
+        const function = self.builder.functionShape(callable_ty, "checked closed direct low-level call had a non-function type");
+        const operands = plan.argsSlice(self.view.static_dispatch_plans);
+        if (operands.len != self.builder.program.types.span(function.args).len) {
+            Common.invariant("checked closed direct low-level call argument arity differed from its callable type");
+        }
+
+        try self.constrainTypeToMono(checked_ret_ty, function.ret);
+        switch (expected_ret_cell) {
+            .sealed => |expected| if (!self.sameType(expected, function.ret)) {
+                Common.invariant("checked closed direct low-level call result differed from its expected type");
+            },
+            .graph_node => |expected| try relateRequestComponent(
+                self.graph,
+                expected,
+                try self.activeNodeFromType(function.ret),
+            ),
+        }
+
+        const lowered = switch (try self.lowerClosedDispatchOperandsAtNode(
+            operands,
+            try self.activeNodeFromType(callable_ty),
+            expected_ret_cell,
+        )) {
+            .args => |args| args,
+            .uninhabited => |expr| return expr,
+        };
+        const call = try self.addExprWithTypeCell(expected_ret_cell, .{ .low_level = .{
+            .op = op,
+            .args = lowered,
+        } });
+        return try self.applyDispatchResultMode(plan.result_mode, call, function.ret);
+    }
+
+    fn lowerClosedDirectProcedureDispatch(
+        self: *BodyContext,
+        checked_ret_ty: checked.CheckedTypeId,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        evidence_id: static_dispatch.EvidenceNodeId,
+        procedure: static_dispatch.ProcedureMethodTarget,
+        expected_ret_cell: DraftTypeCell,
+    ) Allocator.Error!DraftExprId {
+        const callable_ty = try self.builder.lowerType(self.view, plan.callable_ty);
+        const function = self.builder.functionShape(callable_ty, "checked closed direct procedure call had a non-function type");
+        const operands = plan.argsSlice(self.view.static_dispatch_plans);
+        if (operands.len != self.builder.program.types.span(function.args).len) {
+            Common.invariant("checked closed direct procedure call argument arity differed from its callable type");
+        }
+        try self.constrainTypeToMono(checked_ret_ty, function.ret);
+        switch (expected_ret_cell) {
+            .sealed => |expected| if (!self.sameType(expected, function.ret)) {
+                Common.invariant("checked closed direct procedure call result differed from its expected type");
+            },
+            .graph_node => |expected| try relateRequestComponent(
+                self.graph,
+                expected,
+                try self.activeNodeFromType(function.ret),
+            ),
+        }
+
+        const callable_node = try self.activeNodeFromType(callable_ty);
+        const lowered = switch (try self.lowerClosedDispatchOperandsAtNode(
+            operands,
+            callable_node,
+            expected_ret_cell,
+        )) {
+            .args => |args| args,
+            .uninhabited => |expr| return expr,
+        };
+        const evidence_node = self.view.static_dispatch_plans.evidenceNode(evidence_id);
+        const lookup = self.methodLookupForResolvedTarget(evidence_node.target);
+        const direct_key = ClosedDirectCallIdentity{
+            .callable = checkedTypeAddress(self.view, plan.callable_ty),
+            .evidence = evidence_id,
+            .method_scope = self.method_scope.key,
+        };
+        const slot = if (self.draft.closed_direct_specializations.get(direct_key)) |existing| blk: {
+            if (existing.draft_spec) |raw_spec| {
+                if (raw_spec >= self.draft.template_specs.items.len) {
+                    Common.invariant("closed direct call cache referenced a missing draft specialization");
+                }
+                const spec = &self.draft.template_specs.items[raw_spec];
+                if (spec.state != .deferred and !runtimeDemandGuardFrameSetsEql(
+                    spec.runtime_demand_guard_frames,
+                    try self.runtimeDemandGuardFrameAddresses(),
+                )) {
+                    try self.draft.template_spec_reuses.append(self.allocator, .{
+                        .spec = raw_spec,
+                        .prefix_proof = try self.currentRuntimeImpossibilityProof(null),
+                    });
+                }
+            }
+            break :blk existing.slot;
+        } else blk: {
+            const evidence_vector = switch (try self.evidenceForDispatchTarget(plan)) {
+                .resolved => |evidence| evidence,
+                .synthesize => Common.invariant("closed direct procedure call had specialization-dependent evidence"),
+            };
+            const source_fn_ty = lookup.target.callable_ty;
+            const created = try self.builder.lowerDraftTemplateFromContext(
+                self,
+                procedure.template,
+                source_fn_ty,
+                lookup.view.types.rootKey(source_fn_ty),
+                callable_node,
+                evidence_vector,
+                .resolved,
+                .independent_roots,
+            );
+            const draft_spec: ?u32 = switch (created) {
+                .local => |local| switch (local) {
+                    .draft => |draft_fn| self.draft.template_spec_by_fn.get(draft_fn) orelse
+                        Common.invariant("closed direct call created a draft function without a specialization record"),
+                    .final => null,
+                },
+                .imported => null,
+            };
+            try self.draft.closed_direct_specializations.put(direct_key, .{
+                .slot = created,
+                .draft_spec = draft_spec,
+            });
+            break :blk created;
+        };
+        const call = try self.addExprWithTypeCell(expected_ret_cell, .{ .call_proc = .{
+            .callee = draftProcCalleeForSlot(slot),
+            .args = lowered,
+            .captures = try self.methodTargetCaptureSpan(lookup),
+        } });
+        return try self.applyDispatchResultMode(plan.result_mode, call, function.ret);
+    }
+
+    const ClosedDispatchOperands = union(enum) {
+        args: DraftSpan(DraftExprId),
+        uninhabited: DraftExprId,
+    };
+
+    fn lowerClosedDispatchOperandsAtNode(
+        self: *BodyContext,
+        operands: []const static_dispatch.StaticDispatchOperand,
+        callable_node: NodeId,
+        expected_ret_cell: DraftTypeCell,
+    ) Allocator.Error!ClosedDispatchOperands {
+        const function = try self.graph.functionNodes(callable_node);
+        if (operands.len != function.args.len) {
+            Common.invariant("closed dispatch argument arity differed from its callable type");
+        }
+        for (operands, function.args) |operand, node| switch (operand) {
+            .checked_expr => |expr| try self.relateExprAtNode(expr, node),
+            .generated_interpolation_iter,
+            .generated_numeral,
+            .generated_quote,
+            => {},
+        };
+        for (operands, function.args) |operand, node| switch (operand) {
+            .checked_expr => |expr| try self.ensureNestedCallableAtNode(expr, node),
+            .generated_interpolation_iter,
+            .generated_numeral,
+            .generated_quote,
+            => {},
+        };
+        if (try self.lowerDispatchWithUninhabitedArgument(
+            operands,
+            function.args,
+            expected_ret_cell,
+        )) |uninhabited| {
+            return .{ .uninhabited = uninhabited };
+        }
+        return .{ .args = try self.lowerDispatchOperandsAtNodes(
+            operands,
+            function.args,
+            &.{},
+        ) };
     }
 
     fn lowerDispatchWithUninhabitedArgument(
@@ -30622,6 +30894,9 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         const plan_id = maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+        if (try self.closedDirectGraphFreeResultNode(checked_ret_ty, plan, expected_ret_node)) |ret_node| {
+            return ret_node;
+        }
         return switch (self.dispatchRuntimePlan(plan)) {
             .callable => |callable_plan| try self.callableDispatchResultTypeNodeInPhase(
                 checked_ret_ty,
@@ -30632,6 +30907,51 @@ const BodyContext = struct {
             .crash => expected_ret_node orelse
                 Common.invariant("rejected dispatch reached result type lookup without a contextual result cell"),
         };
+    }
+
+    /// Consume a CheckedModule-proved closed direct call without constructing a
+    /// dispatch graph. The producer's runtime category is authoritative:
+    /// ordinary procedures and exact low-level operations have a sealed
+    /// checked callable interface, while graph-participating operations and
+    /// parametric/local/evidence-dependent calls continue through the relation
+    /// path below.
+    fn closedDirectGraphFreeResultNode(
+        self: *BodyContext,
+        checked_ret_ty: checked.CheckedTypeId,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        expected_ret_node: ?NodeId,
+    ) Allocator.Error!?NodeId {
+        const direct = switch (plan.resolution) {
+            .direct_closed => |direct| direct,
+            .direct_pending,
+            .direct_parametric,
+            .evidence_dependent,
+            .structural,
+            .checked_error,
+            .@"unreachable",
+            => return null,
+        };
+        const evidence = self.view.static_dispatch_plans.evidenceNode(direct.evidence);
+        const procedure = switch (evidence.target.kind) {
+            .procedure => |procedure| procedure,
+            .local_proc, .structural => return null,
+        };
+        switch (procedure.runtime_target) {
+            .graph_participating => return null,
+            .procedure, .low_level => {},
+        }
+
+        const callable_ty = try self.builder.lowerType(self.view, plan.callable_ty);
+        const function = self.builder.functionShape(
+            callable_ty,
+            "checked closed direct call had a non-function callable type",
+        );
+        try self.constrainTypeToMono(checked_ret_ty, function.ret);
+        const ret_node = try self.activeNodeFromType(function.ret);
+        if (expected_ret_node) |expected| {
+            try relateRequestComponent(self.graph, ret_node, expected);
+        }
+        return ret_node;
     }
 
     fn callableDispatchResultTypeNodeInPhase(
@@ -30659,7 +30979,7 @@ const BodyContext = struct {
             phase,
         );
         const resolution = self.evidenceResolution(plan) orelse
-            Common.invariant("runtime method result had no StaticDispatchResolution evidence");
+            Common.invariant("runtime method result had no CheckedCallResolution evidence");
         switch (resolution) {
             .target => |lookup| {
                 const target_node = try self.methodTargetNodeFromPlan(lookup, &call_ctx, plan.callable_ty);
@@ -30920,14 +31240,14 @@ const BodyContext = struct {
     /// refs; a constraint plan's edge-supplied target carries it materialized.
     fn evidenceForDispatchTarget(self: *BodyContext, plan: static_dispatch.StaticDispatchCallPlan) Allocator.Error!SpecEvidenceVector {
         switch (plan.resolution) {
-            .direct => |node_id| {
-                const node = self.view.static_dispatch_plans.evidenceNode(node_id);
+            .direct_closed, .direct_parametric => |direct| {
+                const node = self.view.static_dispatch_plans.evidenceNode(direct.evidence);
                 return switch (node.nested) {
                     .resolved => .{ .resolved = try self.materializeEvidence(self.view.static_dispatch_plans.nestedEvidence(node)) },
                     .from_callable => .synthesize,
                 };
             },
-            .constraint => |constraint_ref| {
+            .evidence_dependent => |constraint_ref| {
                 const entry = self.evidence.at(constraint_ref) orelse
                     Common.invariant("method target evidence was absent from its lexical chain");
                 return switch (entry) {
@@ -30938,7 +31258,8 @@ const BodyContext = struct {
                     .structural, .unreachable_value, .checked_error => Common.invariant("method target selected non-target checked evidence"),
                 };
             },
-            .structural, .checked_error, .unreachable_dispatch => Common.invariant("method target evidence requested for a non-target resolution"),
+            .direct_pending => Common.invariant("unfinalized direct call reached Monotype"),
+            .structural, .checked_error, .@"unreachable" => Common.invariant("method target evidence requested for a non-target resolution"),
         }
     }
 
@@ -30946,14 +31267,14 @@ const BodyContext = struct {
     /// mirroring `evidenceForDispatchTarget` for `IteratorDispatchCall`s.
     fn evidenceForIteratorCall(self: *BodyContext, call: static_dispatch.IteratorDispatchCall) Allocator.Error!SpecEvidenceVector {
         switch (call.resolution) {
-            .direct => |node_id| {
-                const node = self.view.static_dispatch_plans.evidenceNode(node_id);
+            .direct_closed, .direct_parametric => |direct| {
+                const node = self.view.static_dispatch_plans.evidenceNode(direct.evidence);
                 return switch (node.nested) {
                     .resolved => .{ .resolved = try self.materializeEvidence(self.view.static_dispatch_plans.nestedEvidence(node)) },
                     .from_callable => .synthesize,
                 };
             },
-            .constraint => |constraint_ref| {
+            .evidence_dependent => |constraint_ref| {
                 const entry = self.evidence.at(constraint_ref) orelse
                     Common.invariant("iterator target evidence was absent from its lexical chain");
                 return switch (entry) {
@@ -30964,7 +31285,8 @@ const BodyContext = struct {
                     .structural, .unreachable_value, .checked_error => Common.invariant("iterator target selected non-target checked evidence"),
                 };
             },
-            .structural, .checked_error, .unreachable_dispatch => Common.invariant("iterator target evidence requested for a non-target resolution"),
+            .direct_pending => Common.invariant("unfinalized iterator direct call reached Monotype"),
+            .structural, .checked_error, .@"unreachable" => Common.invariant("iterator target evidence requested for a non-target resolution"),
         }
     }
 
@@ -30979,8 +31301,8 @@ const BodyContext = struct {
     /// checked-error and explicitly unreachable dispatches.
     fn evidenceResolution(self: *BodyContext, plan: static_dispatch.StaticDispatchCallPlan) ?EvidenceResolved {
         switch (plan.resolution) {
-            .direct => |node_id| {
-                const node = self.view.static_dispatch_plans.evidenceNode(node_id);
+            .direct_closed, .direct_parametric => |direct| {
+                const node = self.view.static_dispatch_plans.evidenceNode(direct.evidence);
                 var lookup = self.methodLookupForResolvedTarget(node.target);
                 lookup.instantiation = switch (node.instantiation) {
                     .monomorphic => null,
@@ -30988,7 +31310,7 @@ const BodyContext = struct {
                 };
                 return .{ .target = lookup };
             },
-            .constraint => |constraint_ref| {
+            .evidence_dependent => |constraint_ref| {
                 const entry = self.evidence.at(constraint_ref) orelse
                     Common.invariant("dispatch resolution evidence was absent from its lexical chain");
                 return switch (entry) {
@@ -31005,7 +31327,8 @@ const BodyContext = struct {
                 };
             },
             .structural => |derivation| return .{ .structural = derivation },
-            .checked_error, .unreachable_dispatch => return null,
+            .direct_pending => Common.invariant("unfinalized direct call reached Monotype"),
+            .checked_error, .@"unreachable" => return null,
         }
     }
 
@@ -31057,8 +31380,9 @@ const BodyContext = struct {
         plan: static_dispatch.StaticDispatchCallPlan,
     ) CallableDispatchPlan {
         switch (plan.resolution) {
-            .checked_error, .unreachable_dispatch => Common.invariant("stored generated runtime had a rejected dispatch plan"),
-            .direct, .constraint, .structural => {},
+            .checked_error, .@"unreachable" => Common.invariant("stored generated runtime had a rejected dispatch plan"),
+            .direct_pending => Common.invariant("unfinalized direct call reached Monotype"),
+            .direct_closed, .direct_parametric, .evidence_dependent, .structural => {},
         }
         return .{
             .plan = plan,
@@ -31072,14 +31396,15 @@ const BodyContext = struct {
     /// ordinary Roc runtime crash instead of a dispatch call for both cases.
     fn dispatchCrashReason(self: *BodyContext, plan: static_dispatch.StaticDispatchCallPlan) ?DispatchCrashReason {
         return switch (plan.resolution) {
-            .unreachable_dispatch => .unreachable_value,
+            .@"unreachable" => .unreachable_value,
             .checked_error => .checked_error,
-            .constraint => |constraint_ref| if (self.evidence.at(constraint_ref)) |entry| switch (entry) {
+            .evidence_dependent => |constraint_ref| if (self.evidence.at(constraint_ref)) |entry| switch (entry) {
                 .unreachable_value => .unreachable_value,
                 .checked_error => .checked_error,
                 .target, .structural => null,
             } else Common.invariant("dispatch runtime evidence was absent from its lexical chain"),
-            .direct, .structural => null,
+            .direct_pending => Common.invariant("unfinalized direct call reached Monotype"),
+            .direct_closed, .direct_parametric, .structural => null,
         };
     }
 
@@ -31987,7 +32312,7 @@ const BodyContext = struct {
                         .resolved => .resolved,
                         .synthesize => .synthesized,
                     },
-                    if (procedure.iterator_procedure == .iter_from_step) .exact_graph else .independent_roots,
+                    if (procedure.runtime_target.iteratorProcedure() == .iter_from_step) .exact_graph else .independent_roots,
                 );
                 break :blk slot;
             },
@@ -32032,6 +32357,92 @@ const BodyContext = struct {
         };
     }
 
+    /// Lower a checker-classified direct target at the already-instantiated
+    /// request interface. Unlike evidence-dependent dispatch, this does not
+    /// instantiate the target's checked root and relate it back to the request:
+    /// CheckedModule construction already performed that target instantiation and
+    /// recorded the exact callable in the plan.
+    fn methodTargetCalleeDirectAtNode(
+        self: *BodyContext,
+        raw_lookup: MethodLookup,
+        request_fn_node: NodeId,
+        evidence_vector: SpecEvidenceVector,
+    ) Allocator.Error!DraftFnSlot {
+        const lookup = try self.withLocalProcContext(raw_lookup);
+        if (try self.preparedCodecCalleeAtNode(lookup, request_fn_node)) |prepared| return prepared;
+        const source_fn_ty = lookup.target.callable_ty;
+        const source_fn_key = lookup.view.types.rootKey(source_fn_ty);
+        return switch (lookup.target.kind) {
+            .procedure => |procedure| blk: {
+                const template = lookup.view.templates.get(procedure.template.template);
+                const params = lookup.view.templates.evidenceParams(&template);
+                const evidence = switch (evidence_vector) {
+                    .resolved => |resolved| resolved,
+                    .synthesize => blk_evidence: {
+                        const components = try self.projectEvidenceComponentNodes(
+                            lookup.view,
+                            params,
+                            request_fn_node,
+                        );
+                        defer self.allocator.free(components);
+                        break :blk_evidence try self.synthesizeEvidenceAtComponentNodes(
+                            lookup.view,
+                            params,
+                            components,
+                        );
+                    },
+                };
+                break :blk try self.builder.lowerDraftTemplateFromContext(
+                    self,
+                    procedure.template,
+                    source_fn_ty,
+                    source_fn_key,
+                    request_fn_node,
+                    evidence,
+                    switch (evidence_vector) {
+                        .resolved => .resolved,
+                        .synthesize => .synthesized,
+                    },
+                    if (procedure.runtime_target.iteratorProcedure() == .iter_from_step) .exact_graph else .independent_roots,
+                );
+            },
+            .local_proc => |local| blk: {
+                const params = self.localProcEvidenceParams(lookup.view, local);
+                const evidence = switch (evidence_vector) {
+                    .resolved => |resolved| resolved,
+                    .synthesize => blk_evidence: {
+                        const components = try self.projectEvidenceComponentNodes(
+                            lookup.view,
+                            params,
+                            request_fn_node,
+                        );
+                        defer self.allocator.free(components);
+                        break :blk_evidence try self.synthesizeEvidenceAtComponentNodes(
+                            lookup.view,
+                            params,
+                            components,
+                        );
+                    },
+                };
+                break :blk .{ .local = try self.lowerDraftLocalProcAtNode(
+                    .{
+                        .binder = local.binder,
+                        .expr = local.expr,
+                        .dispatch_scope = local.dispatch_scope,
+                    },
+                    lookup.view,
+                    lookup.local_proc_context orelse
+                        Common.invariant("direct local method target did not carry its declaration context"),
+                    source_fn_ty,
+                    source_fn_key,
+                    request_fn_node,
+                    evidence,
+                ) };
+            },
+            .structural => Common.invariant("direct checked call targeted a structural derivation"),
+        };
+    }
+
     fn lowerResolvedDispatchAtNode(
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
@@ -32055,6 +32466,32 @@ const BodyContext = struct {
             )),
             .args = args,
             .iterator_procedure = self.iteratorProcedureForMethodTarget(contextual_lookup.target),
+            .captures = try self.methodTargetCaptureSpan(contextual_lookup),
+        } };
+    }
+
+    fn lowerResolvedDirectDispatchAtNode(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        lookup: MethodLookup,
+        callable_node: NodeId,
+        arg_ctx: *BodyContext,
+        pre_lowered: []const PreLoweredOperand,
+    ) Allocator.Error!BodyExprData {
+        const fn_nodes = try self.graph.functionNodes(callable_node);
+        const args = try arg_ctx.lowerDispatchOperandsAtNodes(
+            plan.argsSlice(self.view.static_dispatch_plans),
+            fn_nodes.args,
+            pre_lowered,
+        );
+        const contextual_lookup = try self.withLocalProcContext(lookup);
+        return .{ .call_proc = .{
+            .callee = draftProcCalleeForSlot(try self.methodTargetCalleeDirectAtNode(
+                contextual_lookup,
+                callable_node,
+                try self.evidenceForDispatchTarget(plan),
+            )),
+            .args = args,
             .captures = try self.methodTargetCaptureSpan(contextual_lookup),
         } };
     }
@@ -41317,8 +41754,8 @@ const BodyContext = struct {
 
     fn iteratorMethodLookup(self: *BodyContext, plan: static_dispatch.IteratorDispatchCall) MethodLookup {
         return switch (plan.resolution) {
-            .direct => |node_id| blk: {
-                const node = self.view.static_dispatch_plans.evidenceNode(node_id);
+            .direct_closed, .direct_parametric => |direct| blk: {
+                const node = self.view.static_dispatch_plans.evidenceNode(direct.evidence);
                 var lookup = self.methodLookupForResolvedTarget(node.target);
                 lookup.instantiation = switch (node.instantiation) {
                     .monomorphic => null,
@@ -41326,7 +41763,7 @@ const BodyContext = struct {
                 };
                 break :blk lookup;
             },
-            .constraint => |constraint_ref| if (self.evidence.at(constraint_ref)) |entry| switch (entry) {
+            .evidence_dependent => |constraint_ref| if (self.evidence.at(constraint_ref)) |entry| switch (entry) {
                 .target => |target| .{
                     .view = target.view,
                     .target = target.target,
@@ -41335,7 +41772,8 @@ const BodyContext = struct {
                 },
                 .structural, .unreachable_value, .checked_error => Common.invariant("iterator dispatch evidence was not a callable target"),
             } else Common.invariant("iterator method evidence was absent from its lexical chain"),
-            .structural, .checked_error, .unreachable_dispatch => Common.invariant("iterator dispatch plan resolution was not a callable target"),
+            .direct_pending => Common.invariant("unfinalized iterator direct call reached Monotype"),
+            .structural, .checked_error, .@"unreachable" => Common.invariant("iterator dispatch plan resolution was not a callable target"),
         };
     }
 
