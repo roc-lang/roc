@@ -14592,7 +14592,12 @@ const BodyContext = struct {
                     .type_id = @intFromEnum(checked_ty),
                 };
                 var binding: spec_rehearsal.Rehearsal.PositionBinding = .none;
-                const probed = instantiation.typeForCheckedPosition(address, self.callee_context, &binding) catch null;
+                const probed = instantiation.typeForCheckedPositionWithEdge(
+                    address,
+                    self.callee_context,
+                    &binding,
+                    entering_edge,
+                ) catch null;
                 if (probed) |direct_ty| {
                     const types = &self.builder.program.types;
                     const name_store = &self.builder.program.names;

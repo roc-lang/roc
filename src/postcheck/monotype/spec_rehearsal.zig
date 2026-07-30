@@ -3759,11 +3759,86 @@ pub const Rehearsal = struct {
         none,
     };
 
+    /// Debug/probe-only: translate a position after adding a level for the
+    /// definition its unbound variable belongs to, bound from the site the
+    /// entering edge names (reunify.md 13.2 2a). The existing levels are kept
+    /// underneath: 753 of the divergences already receive a frame binding, so
+    /// what is wrong is a missing level for another definition, not the
+    /// environment as a whole.
+    fn typeUnderEdgeLevel(
+        self: *Rehearsal,
+        address: CheckedAddress,
+        base_env: ?*const direct_translate.BindingEnvironment,
+        base_owner_node: u32,
+        edge: RequestEdgeName,
+    ) ?Type.TypeId {
+        const cursor = self.lookup.cursor(address.module_bytes) orelse return null;
+        const free = self.firstFreeVariable(cursor.view, @enumFromInt(address.type_id), base_env) orelse return null;
+        var owner_node: ?u32 = null;
+        for (cursor.view.schemes) |scheme| {
+            for (scheme.generalizedVars(cursor.view)) |binder| {
+                if (binder == free) {
+                    owner_node = scheme.owner_node;
+                    break;
+                }
+            }
+            if (owner_node != null) break;
+        }
+        const owner = owner_node orelse return null;
+        const scheme_id = cursor.view.schemeIdForOwnerNode(owner) orelse return null;
+        const scheme = cursor.view.schemeById(scheme_id) orelse return null;
+        if (scheme.captured_len != 0) return null;
+        const caller = self.lookup.cursor(edge.module_bytes) orelse return null;
+        const site = self.siteQuietly(caller, edge.use_expr, owner) orelse return null;
+
+        const binders = scheme.generalizedVars(cursor.view);
+        const actuals = site.actuals(caller.view);
+        if (actuals.len != binders.len or binders.len == 0) return null;
+        const bound = self.allocator.alloc(direct_translate.BoundType, binders.len) catch return null;
+        defer self.allocator.free(bound);
+        for (actuals, 0..) |actual, index| {
+            if (@intFromEnum(actual) == checked.checked_instantiation_actual_unreached) return null;
+            const translated = self.emitQuietly(caller, base_env, base_owner_node, actual) orelse return null;
+            bound[index] = direct_translate.BoundType.of(translated);
+        }
+        var depth: usize = 0;
+        var walk = base_env;
+        while (walk) |level| : (walk = level.parent) depth += 1;
+        var chain = self.copyEnvironmentChain(base_env, depth, .{
+            .scheme = .{ .module_bytes = cursor.module_bytes, .scheme = @intFromEnum(scheme_id) },
+            .binders = binders,
+            .bound = bound,
+            .captured = &.{},
+        }) orelse return null;
+        defer chain.release(self.allocator);
+        census.bump("position_bound_by_edge_level");
+        var reason: direct_translate.SkipReason = undefined;
+        return self.translator.translateUnderEnvironment(
+            cursor,
+            chain.innermost(),
+            base_owner_node,
+            @enumFromInt(address.type_id),
+            &reason,
+        ) catch null;
+    }
+
     pub fn typeForCheckedPosition(
         self: *Rehearsal,
         address: CheckedAddress,
         under_callee: bool,
         binding: *PositionBinding,
+    ) Allocator.Error!?Type.TypeId {
+        return self.typeForCheckedPositionWithEdge(address, under_callee, binding, null);
+    }
+
+    /// The same, first trying a level for the definition the position's unbound
+    /// variable belongs to, bound from the site the entering edge names.
+    pub fn typeForCheckedPositionWithEdge(
+        self: *Rehearsal,
+        address: CheckedAddress,
+        under_callee: bool,
+        binding: *PositionBinding,
+        edge: ?RequestEdgeName,
     ) Allocator.Error!?Type.TypeId {
         const cursor = self.lookup.cursor(address.module_bytes) orelse return null;
         var env: ?*const direct_translate.BindingEnvironment = null;
@@ -3778,6 +3853,9 @@ pub const Rehearsal = struct {
             env = frame.environment();
             owner_node = frame.owner_node;
             binding.* = .frame;
+        }
+        if (edge) |named| {
+            if (self.typeUnderEdgeLevel(address, env, owner_node, named)) |leveled| return leveled;
         }
         var reason: direct_translate.SkipReason = undefined;
         return self.translator.translateUnderEnvironment(

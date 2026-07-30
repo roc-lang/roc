@@ -432,6 +432,7 @@ pub const Census = struct {
     diverged_node_outside_request_edge: Counter = Counter.init(0),
     // For a diverging position, whether the checked data names its unbound
     // variable's owning definition at the request edge it entered through.
+    position_bound_by_edge_level: Counter = Counter.init(0),
     divergence_site_at_request_edge: Counter = Counter.init(0),
     divergence_no_site_at_request_edge: Counter = Counter.init(0),
     divergence_no_request_edge: Counter = Counter.init(0),
