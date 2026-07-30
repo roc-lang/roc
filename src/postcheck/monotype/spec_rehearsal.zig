@@ -545,6 +545,13 @@ const EnvironmentLevel = struct {
 pub const SealTrace = struct {
     allocator: Allocator,
     provenance: std.AutoHashMapUnmanaged(u32, CheckedAddress),
+    /// Every node instantiated from a checked position, regardless of the
+    /// binding context it was created under. `provenance` records only the
+    /// contexts whose binding the rehearsal can describe; this records the
+    /// question "does this node stand for a checked position at all", which is
+    /// what says whether a read of it could ever name one (reunify.md 13.2
+    /// step 2a).
+    from_checked: std.AutoHashMapUnmanaged(u32, void),
     sealed: std.AutoHashMapUnmanaged(u32, Type.TypeId),
     disabled: bool,
 
@@ -553,6 +560,7 @@ pub const SealTrace = struct {
         return .{
             .allocator = allocator,
             .provenance = .empty,
+            .from_checked = .empty,
             .sealed = .empty,
             .disabled = false,
         };
@@ -561,11 +569,25 @@ pub const SealTrace = struct {
     /// Release the trace's tables.
     pub fn deinit(self: *SealTrace) void {
         self.provenance.deinit(self.allocator);
+        self.from_checked.deinit(self.allocator);
         self.sealed.deinit(self.allocator);
     }
 
     /// Record that `node` was instantiated from `address`. Repeats keep the
     /// first address: one node stands for one checked position.
+    /// Record that `node` was instantiated from some checked position.
+    pub fn noteFromChecked(self: *SealTrace, node: u32) void {
+        if (self.disabled) return;
+        _ = self.from_checked.getOrPut(self.allocator, node) catch {
+            self.disabled = true;
+        };
+    }
+
+    /// Whether `node` stands for a checked position.
+    pub fn isFromChecked(self: *const SealTrace, node: u32) bool {
+        return self.from_checked.contains(node);
+    }
+
     pub fn noteProvenance(self: *SealTrace, node: u32, address: CheckedAddress) void {
         if (self.disabled) return;
         const gop = self.provenance.getOrPut(self.allocator, node) catch {

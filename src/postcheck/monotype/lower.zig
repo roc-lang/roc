@@ -12258,6 +12258,19 @@ const BodyContext = struct {
     }
 
     fn activeTypeFromNode(self: *BodyContext, node: NodeId) Allocator.Error!Type.TypeId {
+        // Debug/probe-only: one of the two exits by which body lowering obtains
+        // a Monotype from the graph (reunify.md 13.2 step 2a). Counting them is
+        // what makes seam coverage a fraction rather than a direction.
+        census.bump("graph_exit_active_type_view");
+        if (comptime census.enabled) {
+            if (self.graph.trace) |trace| {
+                if (trace.isFromChecked(@intFromEnum(node))) {
+                    census.bump("graph_exit_read_names_checked");
+                } else {
+                    census.bump("graph_exit_read_derived");
+                }
+            }
+        }
         return try self.graph.activeTypeViewForNode(node);
     }
 
@@ -14611,6 +14624,7 @@ const BodyContext = struct {
         // instantiation scope or a per-call context binds the same checked id
         // under a different binding, which this specialization's environment
         // does not describe.
+        if (self.graph.trace) |trace| trace.noteFromChecked(@intFromEnum(placeholder));
         if (self.spec_root_context and self.decl_scopes.items.len == 0) {
             if (self.graph.trace) |trace| trace.noteProvenance(@intFromEnum(placeholder), .{
                 .module_bytes = address.module_bytes,

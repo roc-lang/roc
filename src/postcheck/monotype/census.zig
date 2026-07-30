@@ -409,6 +409,18 @@ pub const Census = struct {
     // the checked data describes.
     seam_direct: Counter = Counter.init(0),
     seam_direct_absent: Counter = Counter.init(0),
+    // The two exits by which body lowering obtains a Monotype from the graph
+    // (reunify.md 13.2 step 2a). Their sum is the denominator seam coverage is
+    // a fraction of.
+    graph_exit_active_type_view: Counter = Counter.init(0),
+    graph_exit_seal_node: Counter = Counter.init(0),
+    graph_exit_seal_entry: Counter = Counter.init(0),
+    // Of the reads at both exits, whether the node stands for a checked
+    // position at all. A derived node - a record's field, a list's element -
+    // names none, so no per-position measurement can ever cover it.
+    graph_exit_read_names_checked: Counter = Counter.init(0),
+    graph_exit_read_derived: Counter = Counter.init(0),
+
     // Whether a graph-built function node still carries the argument count the
     // checked function type recorded (reunify.md 15.1b). A contradiction names
     // a defect in the solver being deleted, not a gap in the data replacing it.

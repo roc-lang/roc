@@ -3772,6 +3772,11 @@ pub const GraphTypeFinals = struct {
     sealed: std.AutoHashMap(NodeId, Type.TypeId),
     sealed_types: std.AutoHashMap(Type.TypeId, Type.TypeId),
     mode: SealMode,
+    /// Debug/probe-only: how deep the current seal is. Sealing a node seals its
+    /// children through the same entry point, so only a depth-zero call is a
+    /// read a caller asked for; the rest is the graph materializing itself
+    /// (reunify.md 13.2 step 2a).
+    seal_depth: u32 = 0,
 
     pub fn init(graph: *InstGraph) GraphTypeFinals {
         graph.requireFrozenRelations();
@@ -3811,6 +3816,26 @@ pub const GraphTypeFinals = struct {
     }
 
     pub fn sealNode(self: *GraphTypeFinals, raw_node: NodeId) Allocator.Error!Type.TypeId {
+        // Debug/probe-only: the frozen-emission exit, counted alongside the live
+        // one so seam coverage has a denominator (reunify.md 13.2 step 2a). Only
+        // a depth-zero entry is a read a caller asked for.
+        if (comptime census.enabled) {
+            if (self.seal_depth == 0) {
+                census.bump("graph_exit_seal_entry");
+                if (self.graph.trace) |trace| {
+                    if (trace.isFromChecked(@intFromEnum(raw_node))) {
+                        census.bump("graph_exit_read_names_checked");
+                    } else {
+                        census.bump("graph_exit_read_derived");
+                    }
+                }
+            }
+            census.bump("graph_exit_seal_node");
+            self.seal_depth += 1;
+        }
+        defer if (comptime census.enabled) {
+            self.seal_depth -= 1;
+        };
         const node = self.graph.find(raw_node);
         if (self.sealed.get(node)) |existing| return existing;
 
