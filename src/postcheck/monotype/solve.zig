@@ -1368,6 +1368,20 @@ pub const InstGraph = struct {
         return .{ .graph = self, .current = self.class_member_head.items[@intFromEnum(root)] };
     }
 
+    /// Debug/probe-only: whether any node joined to this one stands for a
+    /// checked position. Unification means a read can land on any member of a
+    /// class, so asking only the node handed over understates how many reads
+    /// name a checked position (reunify.md 13.2 step 2a).
+    pub fn classNamesChecked(self: *InstGraph, node: NodeId) bool {
+        const trace = self.trace orelse return false;
+        if (trace.isFromChecked(@intFromEnum(node))) return true;
+        var it = self.classMemberIterator(node);
+        while (it.next()) |member| {
+            if (trace.isFromChecked(@intFromEnum(member))) return true;
+        }
+        return false;
+    }
+
     /// Collision authority for open function-interface lookup buckets.
     pub fn sameFunctionInterface(self: *InstGraph, left: NodeId, right: NodeId) bool {
         const left_fn = switch (self.content(left)) {
@@ -3822,12 +3836,10 @@ pub const GraphTypeFinals = struct {
         if (comptime census.enabled) {
             if (self.seal_depth == 0) {
                 census.bump("graph_exit_seal_entry");
-                if (self.graph.trace) |trace| {
-                    if (trace.isFromChecked(@intFromEnum(raw_node))) {
-                        census.bump("graph_exit_read_names_checked");
-                    } else {
-                        census.bump("graph_exit_read_derived");
-                    }
+                if (self.graph.classNamesChecked(raw_node)) {
+                    census.bump("graph_exit_read_names_checked");
+                } else {
+                    census.bump("graph_exit_read_derived");
                 }
             }
             census.bump("graph_exit_seal_node");

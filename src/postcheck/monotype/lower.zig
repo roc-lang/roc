@@ -12263,12 +12263,10 @@ const BodyContext = struct {
         // what makes seam coverage a fraction rather than a direction.
         census.bump("graph_exit_active_type_view");
         if (comptime census.enabled) {
-            if (self.graph.trace) |trace| {
-                if (trace.isFromChecked(@intFromEnum(node))) {
-                    census.bump("graph_exit_read_names_checked");
-                } else {
-                    census.bump("graph_exit_read_derived");
-                }
+            if (self.graph.classNamesChecked(node)) {
+                census.bump("graph_exit_read_names_checked");
+            } else {
+                census.bump("graph_exit_read_derived");
             }
         }
         return try self.graph.activeTypeViewForNode(node);
@@ -14633,6 +14631,11 @@ const BodyContext = struct {
         }
         try self.putScopedNode(address, placeholder);
         const built = try self.instNodeContent(checked_ty);
+        // Both nodes stand for this checked position: the placeholder the
+        // scope memoizes and the content it unifies with. A read can land on
+        // either representative, so marking only one understates how many
+        // reads name a checked position (reunify.md 13.2 step 2a).
+        if (self.graph.trace) |trace| trace.noteFromChecked(@intFromEnum(built));
         self.noteUnifyConstruction(.inst_node_placeholder_to_content);
         try self.graph.unify(placeholder, built);
         return placeholder;
