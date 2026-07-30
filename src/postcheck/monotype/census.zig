@@ -431,6 +431,18 @@ pub const Census = struct {
     derived_read_tag_union: Counter = Counter.init(0),
     derived_read_record: Counter = Counter.init(0),
     derived_read_other: Counter = Counter.init(0),
+    // Whether a composite read's own components name checked positions, which
+    // says whether it is correct by construction or owes a declared rule.
+    derived_components_all_nameable: Counter = Counter.init(0),
+    derived_components_partly_nameable: Counter = Counter.init(0),
+    derived_components_none_nameable: Counter = Counter.init(0),
+    derived_components_none: Counter = Counter.init(0),
+    derived_components_not_composite: Counter = Counter.init(0),
+    // Whether a derived read's whole structure bottoms out in checked-named
+    // nodes, asked recursively rather than one level deep.
+    derived_structure_grounded: Counter = Counter.init(0),
+    derived_structure_ungrounded: Counter = Counter.init(0),
+    derived_structure_unallocatable: Counter = Counter.init(0),
 
     // Whether a graph-built function node still carries the argument count the
     // checked function type recorded (reunify.md 15.1b). A contradiction names

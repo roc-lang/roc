@@ -1388,6 +1388,16 @@ pub const InstGraph = struct {
     /// something the design has no account of (reunify.md 13.2 step 2a).
     pub fn noteDerivedReadKind(self: *InstGraph, node: NodeId) void {
         if (comptime !census.enabled) return;
+        self.noteDerivedReadComponents(node);
+        if (self.structureGroundsInChecked(node)) |grounded| {
+            if (grounded) {
+                census.bump("derived_structure_grounded");
+            } else {
+                census.bump("derived_structure_ungrounded");
+            }
+        } else {
+            census.bump("derived_structure_unallocatable");
+        }
         switch (self.content(node)) {
             .redirect => census.bump("derived_read_redirect"),
             .unresolved => census.bump("derived_read_unresolved"),
@@ -1399,6 +1409,104 @@ pub const InstGraph = struct {
             .tag_union => census.bump("derived_read_tag_union"),
             .record => census.bump("derived_read_record"),
             else => census.bump("derived_read_other"),
+        }
+    }
+
+    /// Debug/probe-only: whether a node's whole structure bottoms out in nodes
+    /// that name checked positions — itself nameable, or a composite every
+    /// component of which recursively satisfies the same. Iterative with an
+    /// explicit visited set, so a self-referential type is answered rather than
+    /// rejected by an arbitrary depth cap (reunify.md 15.10); revisiting a node
+    /// already on the walk is co-inductively grounded, since a cycle asks
+    /// nothing further. Returns null only if the probe could not allocate.
+    fn structureGroundsInChecked(self: *InstGraph, root: NodeId) ?bool {
+        var visited = std.AutoHashMap(NodeId, void).init(self.allocator);
+        defer visited.deinit();
+        var stack = std.ArrayList(NodeId).empty;
+        defer stack.deinit(self.allocator);
+        stack.append(self.allocator, root) catch return null;
+        while (stack.pop()) |node| {
+            const seen = visited.getOrPut(node) catch return null;
+            if (seen.found_existing) continue;
+            if (self.classNamesChecked(node)) continue;
+            switch (self.content(node)) {
+                .func => |function| {
+                    for (function.args) |arg| stack.append(self.allocator, arg) catch return null;
+                    stack.append(self.allocator, function.ret) catch return null;
+                },
+                .tuple => |items| for (items) |item| {
+                    stack.append(self.allocator, item) catch return null;
+                },
+                .record => |record| for (record.fields) |field| {
+                    stack.append(self.allocator, field.ty) catch return null;
+                },
+                .tag_union => |tag_row| for (tag_row.tags) |tag| for (tag.payloads) |payload| {
+                    stack.append(self.allocator, payload) catch return null;
+                },
+                .named => |named| {
+                    for (named.args) |arg| stack.append(self.allocator, arg) catch return null;
+                    if (named.backing) |backing| stack.append(self.allocator, backing.node) catch return null;
+                },
+                .list, .box => |elem| stack.append(self.allocator, elem) catch return null,
+                .primitive, .zst, .empty_record, .empty_tag_union, .erased => {},
+                else => return false,
+            }
+        }
+        return true;
+    }
+
+    /// Debug/probe-only: whether every component of a composite read that names
+    /// no checked position itself names one. A composite whose parts all name
+    /// positions is correct by construction once its parts are, so it owes no
+    /// declared rule; one with an unnameable part does (reunify.md 13.2 2a-i).
+    pub fn noteDerivedReadComponents(self: *InstGraph, node: NodeId) void {
+        if (comptime !census.enabled) return;
+        var total: usize = 0;
+        var nameable: usize = 0;
+        switch (self.content(node)) {
+            .func => |function| {
+                for (function.args) |arg| {
+                    total += 1;
+                    if (self.classNamesChecked(arg)) nameable += 1;
+                }
+                total += 1;
+                if (self.classNamesChecked(function.ret)) nameable += 1;
+            },
+            .tuple => |items| for (items) |item| {
+                total += 1;
+                if (self.classNamesChecked(item)) nameable += 1;
+            },
+            .record => |record| for (record.fields) |field| {
+                total += 1;
+                if (self.classNamesChecked(field.ty)) nameable += 1;
+            },
+            .tag_union => |tag_row| for (tag_row.tags) |tag| for (tag.payloads) |payload| {
+                total += 1;
+                if (self.classNamesChecked(payload)) nameable += 1;
+            },
+            .named => |named| {
+                for (named.args) |arg| {
+                    total += 1;
+                    if (self.classNamesChecked(arg)) nameable += 1;
+                }
+                if (named.backing) |backing| {
+                    total += 1;
+                    if (self.classNamesChecked(backing.node)) nameable += 1;
+                }
+            },
+            else => {
+                census.bump("derived_components_not_composite");
+                return;
+            },
+        }
+        if (total == 0) {
+            census.bump("derived_components_none");
+        } else if (nameable == total) {
+            census.bump("derived_components_all_nameable");
+        } else if (nameable == 0) {
+            census.bump("derived_components_none_nameable");
+        } else {
+            census.bump("derived_components_partly_nameable");
         }
     }
 

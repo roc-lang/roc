@@ -2269,14 +2269,23 @@ census was re-sited onto it before the argument could be redone.
    composites — 13084 functions, 12493 named, 4416 tag unions, 3727
    tuples, 1712 records — with **zero** unresolved variables, primitives,
    lists, boxes or redirects. Nothing generated-looking dominates them.
-   The shape that fits is structural composition: a function node built
-   from argument and return nodes, a nominal built from its arguments,
-   where the parts may name checked positions and the composite does not.
-   If that holds, their correctness follows from their parts rather than
-   needing a declared rule, and the coverage identity is properly stated
-   over reads that name a position, with composites discharged by
-   construction. Whether their components carry provenance is the
-   measurement that decides it, and it has not been run.
+   The shape that fits is structural composition, and the measurement
+   confirms it: asking whether a derived read's whole structure bottoms out
+   in nodes that name checked positions — terminating at primitives, empty
+   rows and erased leaves — **all 35432 ground out, with none ungrounded**.
+   No logical structure enters postcheck without checked backing, so these
+   composites owe no `GeneratedInstantiationRule`; they are correct once
+   their parts are, and the coverage identity is properly stated over reads
+   that name a position with composites discharged by construction.
+
+   That answer took three attempts and the first two pointed the opposite
+   way. One level deep, only 24% had all components nameable. A recursive
+   walk with a depth cap of 24 reported 25% grounded and 75% exceeding the
+   cap, because Roc's types are routinely self-referential and the walk had
+   no cycle handling — the exact failure §15.10 forbids. Rewritten
+   iteratively with an insert-before-recurse visited set, treating a
+   revisit as co-inductively grounded and traversing list and box elements
+   the recursive form had omitted, the figure is 100%.
 
 2b. **Re-measure the logical residual at the production seam.**
    `BodyContext.typeForChecked` compares directed translation against the
