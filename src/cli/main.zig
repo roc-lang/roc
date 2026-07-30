@@ -6004,7 +6004,8 @@ fn lowerLirWithBuildEnv(
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(relation_artifacts);
 
-    if (reporter) |r| r.begin("Specializing");
+    if (reporter) |r| r.begin("Specialization");
+    var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
     var lowered = try lowerCheckedSourceToLir(
         lir_allocator,
         ctx.gpa,
@@ -6015,9 +6016,10 @@ fn lowerLirWithBuildEnv(
         opt,
         base.target.TargetUsize.native,
         false,
+        &spec_timing,
     );
     errdefer lowered.deinit();
-    if (reporter) |r| r.end();
+    if (reporter) |r| r.endWithBreakdownSequential(&specializationBreakdown(spec_timing.snapshot()));
 
     const internal_static_data: ?[]backend.StaticDataExport = switch (artifact) {
         .lir_image => null,
@@ -8353,6 +8355,53 @@ fn llvmOptimizationLevel(opt: cli_args.OptLevel) builder.OptimizationLevel {
     };
 }
 
+fn devBackendPhaseName(target_arch: std.Target.Cpu.Arch) []const u8 {
+    return switch (target_arch) {
+        .x86_64 => "x64 Backend",
+        .aarch64 => "arm64 Backend",
+        .wasm32 => "wasm32 Bytecode Generation",
+        else => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "dev code-generation timing requested for unsupported architecture {s}",
+                    .{@tagName(target_arch)},
+                );
+            }
+            unreachable;
+        },
+    };
+}
+
+fn devInstructionGenerationPhaseName(target_arch: std.Target.Cpu.Arch) []const u8 {
+    return switch (target_arch) {
+        .x86_64 => "x64 Instruction Generation",
+        .aarch64 => "arm64 Instruction Generation",
+        .wasm32 => "wasm32 Bytecode Generation",
+        else => devBackendPhaseName(target_arch),
+    };
+}
+
+fn devBackendBreakdown(timing: backend.ObjectFileCompiler.TimingSnapshot) [8]progress.SubTiming {
+    return .{
+        .{ .name = "Backend Setup", .ns = timing.backend_setup_ns },
+        .{ .name = "Procedure Instructions", .ns = timing.procedure_instructions_ns },
+        .{ .name = "RC Helper Instructions", .ns = timing.rc_helper_instructions_ns },
+        .{ .name = "Entrypoint Instructions", .ns = timing.entrypoint_instructions_ns },
+        .{ .name = "Symbols + Relocations", .ns = timing.symbol_relocations_ns },
+        .{ .name = "DWARF Generation", .ns = timing.dwarf_ns },
+        .{ .name = "Object Encoding", .ns = timing.object_encoding_ns },
+        .{ .name = "Object File Write", .ns = timing.file_io_ns },
+    };
+}
+
+test "dev backend timing labels name the backend and emitted instruction format" {
+    try std.testing.expectEqualStrings("x64 Backend", devBackendPhaseName(.x86_64));
+    try std.testing.expectEqualStrings("arm64 Backend", devBackendPhaseName(.aarch64));
+    try std.testing.expectEqualStrings("wasm32 Bytecode Generation", devBackendPhaseName(.wasm32));
+    try std.testing.expectEqualStrings("x64 Instruction Generation", devInstructionGenerationPhaseName(.x86_64));
+    try std.testing.expectEqualStrings("arm64 Instruction Generation", devInstructionGenerationPhaseName(.aarch64));
+}
+
 fn noTargetLibcallsForLlvmBuild(target: RocTarget) bool {
     return switch (target.toOsTag()) {
         .macos, .windows => false,
@@ -8382,7 +8431,7 @@ fn compileLlvmAppObject(
     static_data_exports: []const backend.StaticDataExport,
     enable_default_platform_runtime: bool,
     enable_default_platform_hosted_calls: bool,
-    // When present, the caller has an active "Code Generation" phase covering
+    // When present, the caller has an active "LLVM IR Generation" phase covering
     // LIR-to-bitcode lowering; this transitions it to a distinct
     // "LLVM Optimize + Emit" phase at the point LLVM takes over the bitcode.
     reporter: ?*progress.Reporter,
@@ -8562,6 +8611,7 @@ fn rocBuildWasmLlvm(
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
     static_data_exports: []const backend.StaticDataExport,
+    reporter: *progress.Reporter,
 ) CliMainError!void {
     if (entrypoints.len == 0) {
         if (builtin.mode == .Debug) {
@@ -8570,8 +8620,6 @@ fn rocBuildWasmLlvm(
         unreachable;
     }
 
-    // wasm LLVM output codegen, optimize, emit, and link within one phase, so no
-    // separate "LLVM Optimize + Emit" row is reported here.
     const app_object = try compileLlvmAppObject(
         ctx,
         args,
@@ -8582,9 +8630,12 @@ fn rocBuildWasmLlvm(
         static_data_exports,
         false,
         false,
-        null,
+        reporter,
     );
     defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, app_object.artifact_dir) catch {};
+
+    reporter.end();
+    reporter.begin("Linking");
 
     var owned_inputs: std.ArrayList([]u8) = .empty;
     defer freeOwnedWasmInputs(ctx, &owned_inputs);
@@ -8830,7 +8881,8 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
 
     const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
 
-    reporter.begin("Specializing");
+    reporter.begin("Specialization");
+    var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
     var lowered = try lowerCheckedSourceToLir(
         ctx.gpa,
         ctx.gpa,
@@ -8841,13 +8893,15 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         args.opt,
         target_usize,
         args.synthetic_default_platform,
+        &spec_timing,
     );
     defer lowered.deinit();
-    reporter.end();
+    reporter.endWithBreakdownSequential(&specializationBreakdown(spec_timing.snapshot()));
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
 
+    reporter.begin("Static Data");
     const static_data_exports = try compile.static_data_exports.buildStaticData(
         ctx.gpa,
         .{
@@ -8858,6 +8912,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         target,
         .{ .include_provided_exports = true },
     );
+    reporter.end();
     defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
 
     if (entrypoints.len == 0 and static_data_exports.len == 0) {
@@ -8868,7 +8923,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     }
 
     if (target == .wasm32) {
-        reporter.begin("Code Generation");
+        reporter.begin("LLVM IR Generation");
         try rocBuildWasmLlvm(
             ctx,
             args,
@@ -8879,10 +8934,11 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
             &lowered,
             entrypoints,
             static_data_exports,
+            &reporter,
         );
         reporter.end();
     } else {
-        reporter.begin("Code Generation");
+        reporter.begin("LLVM IR Generation");
         const hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
         const enable_default_platform_runtime = args.synthetic_default_platform and DefaultPlatformRuntimeObjects.forTarget(target) != null;
 
@@ -9102,6 +9158,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
             return error.UnsupportedTarget;
         },
     }
+    const code_generation_phase_name = devBackendPhaseName(target_arch);
 
     const final_output_path = if (args.output != null)
         output_path
@@ -9138,7 +9195,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
 
     const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
 
-    reporter.begin("Specializing");
+    reporter.begin("Specialization");
+    var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
     var lowered = try lowerCheckedSourceToLir(
         ctx.gpa,
         ctx.gpa,
@@ -9149,13 +9207,15 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         args.opt,
         target_usize,
         args.synthetic_default_platform,
+        &spec_timing,
     );
     defer lowered.deinit();
-    reporter.end();
+    reporter.endWithBreakdownSequential(&specializationBreakdown(spec_timing.snapshot()));
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
 
+    reporter.begin("Static Data");
     const static_data_exports = try compile.static_data_exports.buildStaticData(
         ctx.gpa,
         .{
@@ -9166,10 +9226,11 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         target,
         .{ .include_provided_exports = true },
     );
+    reporter.end();
     defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
 
     if (target_arch == .wasm32) {
-        reporter.begin("Code Generation");
+        reporter.begin(code_generation_phase_name);
         try rocBuildWasmSurgical(
             ctx,
             args,
@@ -9199,7 +9260,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         return;
     }
 
-    reporter.begin("Code Generation");
+    reporter.begin(code_generation_phase_name);
     if (entrypoints.len == 0 and static_data_exports.len == 0) {
         if (builtin.mode == .Debug) {
             std.debug.panic("native build invariant violated: no exported platform entrypoints or data symbols", .{});
@@ -9209,6 +9270,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
 
     var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
     object_compiler.enable_default_platform_runtime = args.synthetic_default_platform;
+    var backend_timing = backend.ObjectFileCompiler.Timing.init(ctx.io.std_io);
+    object_compiler.timing = &backend_timing;
 
     const build_scratch_dir = createUniqueTempDir(ctx) catch |err| {
         return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
@@ -9234,7 +9297,9 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         std.log.err("Native compilation failed: {}", .{err});
         return error.NativeCompilationFailed;
     };
+    reporter.endWithBreakdown(&devBackendBreakdown(backend_timing.snapshot()));
 
+    reporter.begin("Linking");
     const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, resolved_targets_config, target, link_type);
 
     const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, BuiltinsObjects.filenameExtern(target) });
@@ -9252,9 +9317,6 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
             return error.UnsupportedTarget;
         }
     }
-    reporter.end();
-
-    reporter.begin("Linking");
     if (link_type == .archive) {
         try writeArchiveOutput(ctx, target, final_output_path, link_inputs, object_files.items);
     } else {
@@ -9456,7 +9518,8 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     const shm_allocator = shm.allocator();
     const image_header = try shm_allocator.create(lir.LirImage.Header);
 
-    reporter.begin("Specializing");
+    reporter.begin("Specialization");
+    var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
     var lowered = try lowerCheckedSourceToLir(
         ctx.gpa,
         ctx.gpa,
@@ -9467,11 +9530,12 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         args.opt,
         base.target.TargetUsize.native,
         false,
+        &spec_timing,
     );
     defer lowered.deinit();
-    reporter.end();
+    reporter.endWithBreakdownSequential(&specializationBreakdown(spec_timing.snapshot()));
 
-    reporter.begin("Code Generation");
+    reporter.begin("LIR Image Generation");
     const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
     defer ctx.gpa.free(platform_entrypoints);
     const copied = try lir.LirImage.copyProgramIntoBuffer(
@@ -10406,6 +10470,7 @@ fn lowerCheckedSourceToLir(
     opt: cli_args.OptLevel,
     target_usize: base.target.TargetUsize,
     proc_debug_names: bool,
+    timing: ?*lir.CheckedPipeline.Timing,
 ) Allocator.Error!lir.CheckedPipeline.LoweredProgram {
     const selected_roots: []const check.CheckedArtifact.RootRequest = switch (roots) {
         .platform_entrypoints => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests),
@@ -10457,6 +10522,7 @@ fn lowerCheckedSourceToLir(
             .list_in_place_map = listInPlaceMapForOpt(opt),
             .tag_reachability = tagReachabilityForOpt(opt),
             .proc_debug_names = proc_debug_names,
+            .timing = timing,
         },
     );
 }
@@ -11089,6 +11155,7 @@ fn lowerPlannedTestModule(
         opt,
         base.target.TargetUsize.native,
         false,
+        null,
     );
     errdefer lowered.deinit();
 
@@ -13811,15 +13878,28 @@ fn frontEndBreakdown(timing: anytype) [3]progress.SubTiming {
     };
 }
 
-fn compileTimeEvaluationBreakdown(timing: anytype) [7]progress.SubTiming {
+fn compileTimeEvaluationBreakdown(timing: anytype) [8]progress.SubTiming {
     return .{
-        .{ .name = "Monotype Specialization", .ns = timing.monotype_ns },
-        .{ .name = "Post-Check to LIR", .ns = timing.postcheck_to_lir_ns },
-        .{ .name = "LIR Passes + ARC", .ns = timing.lir_passes_arc_ns },
+        .{ .name = "Specialization", .ns = timing.monotype_ns },
+        .{ .name = "LIR Generation", .ns = timing.postcheck_to_lir_ns },
+        .{ .name = "LIR Passes", .ns = timing.lir_passes_ns },
+        .{ .name = "ARC", .ns = timing.arc_ns },
         .{ .name = "Static Data", .ns = timing.static_data_ns },
-        .{ .name = "Code Generation", .ns = timing.code_generation_ns },
+        .{ .name = devInstructionGenerationPhaseName(backend.dev.LirCodeGenMod.host_lir_codegen_target.toCpuArch()), .ns = timing.code_generation_ns },
         .{ .name = "Execution", .ns = timing.execution_ns },
         .{ .name = "Store Results", .ns = timing.store_results_ns },
+    };
+}
+
+fn specializationBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [7]progress.SubTiming {
+    return .{
+        .{ .name = "Specialization", .ns = timing.monotype_ns },
+        .{ .name = "Lifting", .ns = timing.lift_ns },
+        .{ .name = "SpecConstr", .ns = timing.spec_constr_ns },
+        .{ .name = "Lambda Sets", .ns = timing.lambda_solve_ns },
+        .{ .name = "LIR Generation", .ns = timing.lir_gen_ns },
+        .{ .name = "LIR Passes", .ns = timing.lir_passes_ns },
+        .{ .name = "ARC", .ns = timing.arc_ns },
     };
 }
 
@@ -13830,6 +13910,7 @@ fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {
     reporter.recordCompletedWithBreakdown(
         "Compile-Time Evaluation",
         compile_time.total_ns,
+        .{ .min = compile_time.mem_min, .max = compile_time.mem_max },
         &compileTimeEvaluationBreakdown(compile_time),
     );
 }

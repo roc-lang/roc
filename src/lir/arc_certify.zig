@@ -899,6 +899,11 @@ const LocalSummary = struct {
     /// unit-carrying value in the lender/holder chain. Equal to `repr` for
     /// ABI-borrowed parameters, which are self-anchored.
     lender_repr: u32,
+    /// True when the summarized value is a borrowed proc parameter's value:
+    /// live for the whole call by ABI even while it transiently carries an
+    /// ownership unit, so rebuilt states must keep it readable after the
+    /// unit moves on.
+    abi_live: bool = false,
     /// For conditional-owned locals: raw local id of the presence condition.
     condition: u32,
     /// For conditional-owned locals: presence mask on `condition`.
@@ -1485,6 +1490,7 @@ const Certifier = struct {
             hasher.update(std.mem.asBytes(&entry.repr));
             hasher.update(std.mem.asBytes(&entry.balance));
             hasher.update(std.mem.asBytes(&entry.lender_repr));
+            hasher.update(std.mem.asBytes(&entry.abi_live));
             hasher.update(std.mem.asBytes(&entry.condition));
             hasher.update(std.mem.asBytes(&entry.condition_mask));
             hasher.update(std.mem.asBytes(&entry.claims));
@@ -1505,12 +1511,14 @@ const Certifier = struct {
             if (entry.class != .owned or entry.repr != dense) continue;
             const local = self.proc_locals.items[dense];
             const value = try self.bindFresh(&state, local, @intCast(entry.balance), &.{});
+            if (entry.abi_live) self.values.items[value].always_live = true;
             if (entry.claims != 0) try state.setClaims(value, entry.claims);
         }
         for (summary, 0..) |entry, dense| {
             if (entry.class != .conditional_owned or entry.repr != dense) continue;
             const local = self.proc_locals.items[dense];
             const value = try self.bindFresh(&state, local, 1, &.{});
+            if (entry.abi_live) self.values.items[value].always_live = true;
             try state.setConditional(value, .{ .local = @enumFromInt(entry.condition), .mask = entry.condition_mask });
         }
         for (summary, 0..) |entry, dense| {
@@ -1625,6 +1633,7 @@ const Certifier = struct {
     fn modesCompatible(a: []const LocalSummary, b: []const LocalSummary) bool {
         for (a, b) |ga, sb| {
             if (ga.class != sb.class) return false;
+            if (ga.abi_live != sb.abi_live) return false;
             switch (ga.class) {
                 .unbound => {},
                 // Claims are per-field spend records, not attributable
@@ -2599,6 +2608,7 @@ const Certifier = struct {
                     if (value != no_value) {
                         const repr = self.repr_scratch.get(value) orelse 0;
                         const units = state.balanceOf(value);
+                        const abi_live = self.values.items[value].always_live;
                         if (units > 0) {
                             if (state.conditionalConditionOf(value)) |condition| {
                                 summary = .{
@@ -2606,11 +2616,12 @@ const Certifier = struct {
                                     .repr = repr,
                                     .balance = @intCast(units),
                                     .lender_repr = 0,
+                                    .abi_live = abi_live,
                                     .condition = @intFromEnum(condition.local),
                                     .condition_mask = condition.mask,
                                 };
                             } else {
-                                summary = .{ .class = .owned, .repr = repr, .balance = @intCast(units), .lender_repr = 0, .condition = no_dense, .condition_mask = 0, .claims = state.claimsOf(value) };
+                                summary = .{ .class = .owned, .repr = repr, .balance = @intCast(units), .lender_repr = 0, .abi_live = abi_live, .condition = no_dense, .condition_mask = 0, .claims = state.claimsOf(value) };
                             }
                         } else if (try self.valueIsLive(state, value)) {
                             summary = .{
@@ -2618,6 +2629,7 @@ const Certifier = struct {
                                 .repr = repr,
                                 .balance = 0,
                                 .lender_repr = try self.borrowSummaryAnchorRepr(state, value),
+                                .abi_live = abi_live,
                                 .condition = no_dense,
                                 .condition_mask = 0,
                             };

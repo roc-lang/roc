@@ -1039,6 +1039,9 @@ pub const RootRequestTable = struct {
             if (!concrete) {
                 continue;
             }
+            if (compileTimeCallableRootIsProcedureReference(checked_bodies, resolved_value_refs, root)) {
+                continue;
+            }
             if (compileTimeRootDependsOnUnboundPlatformRequirement(
                 checked_bodies,
                 resolved_value_refs,
@@ -1806,6 +1809,47 @@ fn compileTimeRootHasRootRequest(
         return true;
     }
     return false;
+}
+
+/// An exact checked procedure lookup already carries the callable identity
+/// that compile-time evaluation would rediscover. Keep its callable binding
+/// pending for runtime demand instead of scheduling an evaluator wrapper.
+fn compileTimeCallableRootIsProcedureReference(
+    checked_bodies: *const CheckedBodyStore,
+    resolved_value_refs: *const ResolvedValueRefTable,
+    root: CompileTimeRoot,
+) bool {
+    if (root.kind != .callable_binding) return false;
+    switch (checked_bodies.expr(root.expr).data) {
+        .lookup_local, .lookup_external, .lookup_required => {},
+        else => return false,
+    }
+    const ref_id = resolved_value_refs.lookupIdByCheckedExpr(root.expr) orelse
+        checkedArtifactInvariant("checked callable lookup root had no resolved value reference", .{});
+    const raw = @intFromEnum(ref_id);
+    if (raw >= resolved_value_refs.records.len) {
+        checkedArtifactInvariant("checked callable lookup root resolved reference was outside the checked table", .{});
+    }
+    return switch (resolved_value_refs.records[raw].ref) {
+        .top_level_proc,
+        .imported_proc,
+        .hosted_proc,
+        .platform_required_proc,
+        .promoted_top_level_proc,
+        => true,
+        .local_param,
+        .local_value,
+        .local_mutable_version,
+        .pattern_binder,
+        .local_proc,
+        .selected_hoisted_const,
+        .top_level_const,
+        .imported_const,
+        .platform_required_declaration,
+        .platform_required_checked_error,
+        .platform_required_const,
+        => false,
+    };
 }
 
 fn compileTimeRootKindMatchesRequest(

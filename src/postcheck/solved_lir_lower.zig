@@ -1276,6 +1276,7 @@ const Lowerer = struct {
         return switch (content) {
             .link => Common.invariant("direct Lambda Mono type lowering saw an unresolved Lambda Solved link"),
             .unbound, .forall => Common.invariant("direct Lambda Mono type lowering saw an unresolved Lambda Solved type"),
+            .mono => Common.invariant("direct Lambda Mono type lowering saw an unfinalized lazy Monotype leaf"),
             .primitive => |primitive| .{ .primitive = primitive },
             .zst => .zst,
             .erased => |erased| .{ .erased_fn = .{
@@ -1634,25 +1635,22 @@ const Lowerer = struct {
             .list => |elem| .{ .list = try self.constPlanOfType(elem) },
             .box => |elem| .{ .box = try self.constPlanOfType(elem) },
             .tuple => |items| blk: {
-                const source = self.types.span(items);
-                const plans = try self.allocator.alloc(LirProgram.ConstPlanId, source.len);
+                const plans = try self.allocator.alloc(LirProgram.ConstPlanId, items.len);
                 errdefer self.allocator.free(plans);
-                for (0..source.len) |i| plans[i] = try self.constPlanOfType(GuardedList.at(source, i));
+                for (0..items.len) |i| plans[i] = try self.constPlanOfType(self.types.typeAt(items, i));
                 break :blk .{ .tuple = plans };
             },
             .record => |fields| blk: {
-                const source = self.types.fieldSpan(fields);
-                const plans = try self.allocator.alloc(LirProgram.ConstPlanId, source.len);
+                const plans = try self.allocator.alloc(LirProgram.ConstPlanId, fields.len);
                 errdefer self.allocator.free(plans);
-                for (0..source.len) |i| {
-                    const field = GuardedList.at(source, i);
+                for (0..fields.len) |i| {
+                    const field = self.types.fieldAt(fields, i);
                     plans[i] = try self.constPlanOfType(field.ty);
                 }
                 break :blk .{ .record = plans };
             },
             .tag_union => |tags| blk: {
-                const source = self.types.tagSpan(tags);
-                const variants = try self.allocator.alloc(LirProgram.ConstTagVariant, source.len);
+                const variants = try self.allocator.alloc(LirProgram.ConstTagVariant, tags.len);
                 var initialized: usize = 0;
                 errdefer {
                     for (variants[0..initialized]) |variant| {
@@ -1661,15 +1659,14 @@ const Lowerer = struct {
                     }
                     self.allocator.free(variants);
                 }
-                for (0..source.len) |i| {
-                    const tag = GuardedList.at(source, i);
+                for (0..tags.len) |i| {
+                    const tag = self.types.tagAt(tags, i);
                     const name = try self.allocator.dupe(u8, self.solved.lifted.names.tagLabelText(tag.name));
                     errdefer self.allocator.free(name);
-                    const payload_tys = self.types.span(tag.payloads);
-                    const payloads = try self.allocator.alloc(LirProgram.ConstPlanId, payload_tys.len);
+                    const payloads = try self.allocator.alloc(LirProgram.ConstPlanId, tag.payloads.len);
                     var payloads_owned = true;
                     errdefer if (payloads_owned) self.allocator.free(payloads);
-                    for (0..payload_tys.len) |j| payloads[j] = try self.constPlanOfType(GuardedList.at(payload_tys, j));
+                    for (0..tag.payloads.len) |j| payloads[j] = try self.constPlanOfType(self.types.typeAt(tag.payloads, j));
                     variants[i] = .{
                         .name = name,
                         .checked_name = tag.checked_name,
@@ -1750,18 +1747,16 @@ const Lowerer = struct {
             .list => |elem| .{ .list = try self.constTypeOfType(elem) },
             .box => |elem| .{ .box = try self.constTypeOfType(elem) },
             .tuple => |items| blk: {
-                const source = self.types.span(items);
-                const out = try self.allocator.alloc(const_store.ConstTypeId, source.len);
+                const out = try self.allocator.alloc(const_store.ConstTypeId, items.len);
                 defer self.allocator.free(out);
-                for (0..source.len) |i| out[i] = try self.constTypeOfType(GuardedList.at(source, i));
+                for (0..items.len) |i| out[i] = try self.constTypeOfType(self.types.typeAt(items, i));
                 break :blk .{ .tuple = try self.result.const_types.appendTypeSpan(out) };
             },
             .record => |fields| blk: {
-                const source = self.types.fieldSpan(fields);
-                const out = try self.allocator.alloc(const_store.TypeField, source.len);
+                const out = try self.allocator.alloc(const_store.TypeField, fields.len);
                 defer self.allocator.free(out);
-                for (0..source.len) |i| {
-                    const field = GuardedList.at(source, i);
+                for (0..fields.len) |i| {
+                    const field = self.types.fieldAt(fields, i);
                     out[i] = .{
                         .name = try self.constRecordFieldName(field.name),
                         .ty = try self.constTypeOfType(field.ty),
@@ -1770,15 +1765,13 @@ const Lowerer = struct {
                 break :blk .{ .record = try self.result.const_types.appendFieldSpan(out) };
             },
             .tag_union => |tags| blk: {
-                const source = self.types.tagSpan(tags);
-                const out = try self.allocator.alloc(const_store.TypeTag, source.len);
+                const out = try self.allocator.alloc(const_store.TypeTag, tags.len);
                 defer self.allocator.free(out);
-                for (0..source.len) |i| {
-                    const tag = GuardedList.at(source, i);
-                    const payloads = self.types.span(tag.payloads);
-                    const stored_payloads = try self.allocator.alloc(const_store.ConstTypeId, payloads.len);
+                for (0..tags.len) |i| {
+                    const tag = self.types.tagAt(tags, i);
+                    const stored_payloads = try self.allocator.alloc(const_store.ConstTypeId, tag.payloads.len);
                     defer self.allocator.free(stored_payloads);
-                    for (0..payloads.len) |j| stored_payloads[j] = try self.constTypeOfType(GuardedList.at(payloads, j));
+                    for (0..tag.payloads.len) |j| stored_payloads[j] = try self.constTypeOfType(self.types.typeAt(tag.payloads, j));
                     out[i] = .{
                         .name = try self.constTagName(tag.name),
                         .checked_name = try self.constTagName(tag.checked_name),
@@ -1788,16 +1781,14 @@ const Lowerer = struct {
                 break :blk .{ .tag_union = try self.result.const_types.appendTagSpan(out) };
             },
             .named => |named| blk: {
-                const args = self.types.span(named.args);
-                const stored_args = try self.allocator.alloc(const_store.ConstTypeId, args.len);
+                const stored_args = try self.allocator.alloc(const_store.ConstTypeId, named.args.len);
                 defer self.allocator.free(stored_args);
-                for (0..args.len) |i| stored_args[i] = try self.constTypeOfType(GuardedList.at(args, i));
+                for (0..named.args.len) |i| stored_args[i] = try self.constTypeOfType(self.types.typeAt(named.args, i));
 
-                const declared = self.types.declaredFieldSpan(named.declared_order);
-                const stored_declared = try self.allocator.alloc(const_store.TypeDeclaredField, declared.len);
+                const stored_declared = try self.allocator.alloc(const_store.TypeDeclaredField, named.declared_order.len);
                 defer self.allocator.free(stored_declared);
-                for (0..declared.len) |i| {
-                    const entry = GuardedList.at(declared, i);
+                for (0..named.declared_order.len) |i| {
+                    const entry = self.types.declaredFieldAt(named.declared_order, i);
                     stored_declared[i] = switch (entry) {
                         .named => |name| .{ .named = try self.constRecordFieldName(name) },
                         .padding => |padding| .{ .padding = try self.constTypeOfType(padding) },
@@ -7746,34 +7737,42 @@ const Lowerer = struct {
             if (self.types.get(other_ty) != .named) continue;
             var visited = std.AutoHashMap(u64, void).init(self.allocator);
             defer visited.deinit();
-            if (try self.publicTypesEquivalent(ty, other_ty, &visited) and
-                try self.namedBackingsEquivalentForLayoutReuse(ty, other_ty))
-            {
+            if (try self.representationTypesEquivalent(ty, other_ty, &visited)) {
                 return .{ .ty = other_ty, .layout_idx = entry.value_ptr.* };
             }
         }
         return null;
     }
 
-    fn namedBackingsEquivalentForLayoutReuse(self: *Lowerer, lhs_ty: Type.TypeId, rhs_ty: Type.TypeId) Common.LowerError!bool {
-        const lhs = switch (self.types.get(lhs_ty)) {
-            .named => |named| named,
-            else => return false,
-        };
-        const rhs = switch (self.types.get(rhs_ty)) {
-            .named => |named| named,
-            else => return false,
-        };
-        if (lhs.backing == null or rhs.backing == null) return lhs.backing == null and rhs.backing == null;
-        if (lhs.backing.?.use != rhs.backing.?.use) return false;
-        if (lhs.backing.?.authority != rhs.backing.?.authority) return false;
-        var visited = std.AutoHashMap(u64, void).init(self.allocator);
-        defer visited.deinit();
-        return try self.publicTypesEquivalent(lhs.backing.?.ty, rhs.backing.?.ty, &visited);
-    }
+    /// Public equivalence compares the checked interface of two Lambda Mono
+    /// types; nominal backings are private and stay uncompared. Representation
+    /// equivalence additionally requires private backings (and so callable
+    /// member sets) to match, which is what shared-layout reuse must key on:
+    /// a layout's field slots, discriminant space, and dispatch targets are
+    /// functions of the representation, not of the public interface.
+    const EquivalenceMode = enum { public, representation };
 
     fn publicTypesEquivalent(
         self: *Lowerer,
+        lhs_ty: Type.TypeId,
+        rhs_ty: Type.TypeId,
+        visited: *std.AutoHashMap(u64, void),
+    ) Common.LowerError!bool {
+        return try self.typesEquivalentInMode(.public, lhs_ty, rhs_ty, visited);
+    }
+
+    fn representationTypesEquivalent(
+        self: *Lowerer,
+        lhs_ty: Type.TypeId,
+        rhs_ty: Type.TypeId,
+        visited: *std.AutoHashMap(u64, void),
+    ) Common.LowerError!bool {
+        return try self.typesEquivalentInMode(.representation, lhs_ty, rhs_ty, visited);
+    }
+
+    fn typesEquivalentInMode(
+        self: *Lowerer,
+        comptime mode: EquivalenceMode,
         lhs_ty: Type.TypeId,
         rhs_ty: Type.TypeId,
         visited: *std.AutoHashMap(u64, void),
@@ -7791,21 +7790,22 @@ const Lowerer = struct {
             .primitive => |primitive| primitive == rhs.primitive,
             .zst => true,
             .erased_capture_ptr => true,
-            .list => |elem| try self.publicTypesEquivalent(elem, rhs.list, visited),
-            .box => |elem| try self.publicTypesEquivalent(elem, rhs.box, visited),
-            .tuple => |items| try self.publicTypeSpansEquivalent(items, rhs.tuple, visited),
-            .record => |fields| try self.publicFieldsEquivalent(fields, rhs.record, visited),
-            .capture_record => |fields| try self.publicCaptureFieldsEquivalent(fields, rhs.capture_record, visited),
-            .tag_union => |tags| try self.publicTagsEquivalent(tags, rhs.tag_union, visited),
-            .callable => |variants| try self.publicFnVariantsEquivalent(variants, rhs.callable, visited),
+            .list => |elem| try self.typesEquivalentInMode(mode, elem, rhs.list, visited),
+            .box => |elem| try self.typesEquivalentInMode(mode, elem, rhs.box, visited),
+            .tuple => |items| try self.typeSpansEquivalentInMode(mode, items, rhs.tuple, visited),
+            .record => |fields| try self.fieldsEquivalentInMode(mode, fields, rhs.record, visited),
+            .capture_record => |fields| try self.captureFieldsEquivalentInMode(mode, fields, rhs.capture_record, visited),
+            .tag_union => |tags| try self.tagsEquivalentInMode(mode, tags, rhs.tag_union, visited),
+            .callable => |variants| try self.fnVariantsEquivalentInMode(mode, variants, rhs.callable, visited),
             .erased_fn => |erased| std.mem.eql(u8, erased.source_fn_ty.bytes[0..], rhs.erased_fn.source_fn_ty.bytes[0..]) and
-                try self.publicFnVariantsEquivalent(erased.members, rhs.erased_fn.members, visited),
-            .named => |named| try self.publicNamedTypesEquivalent(named, rhs.named, visited),
+                try self.fnVariantsEquivalentInMode(mode, erased.members, rhs.erased_fn.members, visited),
+            .named => |named| try self.namedTypesEquivalentInMode(mode, named, rhs.named, visited),
         };
     }
 
-    fn publicNamedTypesEquivalent(
+    fn namedTypesEquivalentInMode(
         self: *Lowerer,
+        comptime mode: EquivalenceMode,
         lhs: std.meta.fieldInfo(Type.Content, .named).type,
         rhs: std.meta.fieldInfo(Type.Content, .named).type,
         visited: *std.AutoHashMap(u64, void),
@@ -7820,20 +7820,28 @@ const Lowerer = struct {
             return false;
         }
         if (!std.meta.eql(lhs.builtin_owner, rhs.builtin_owner)) return false;
-        if (!try self.publicTypeSpansEquivalent(lhs.args, rhs.args, visited)) return false;
+        if (!try self.typeSpansEquivalentInMode(mode, lhs.args, rhs.args, visited)) return false;
 
         if (lhs.kind == .alias) {
             const lhs_backing = lhs.backing orelse return rhs.backing == null;
             const rhs_backing = rhs.backing orelse return false;
-            return try self.publicTypesEquivalent(lhs_backing.ty, rhs_backing.ty, visited);
+            return try self.typesEquivalentInMode(mode, lhs_backing.ty, rhs_backing.ty, visited);
         }
 
         if (lhs.builtin_owner) |owner| {
             if (generatedEvidenceOwnerUsesBacking(owner)) {
                 const lhs_backing = lhs.backing orelse return rhs.backing == null;
                 const rhs_backing = rhs.backing orelse return false;
-                return try self.publicTypesEquivalent(lhs_backing.ty, rhs_backing.ty, visited);
+                return try self.typesEquivalentInMode(mode, lhs_backing.ty, rhs_backing.ty, visited);
             }
+        }
+
+        if (mode == .representation) {
+            const lhs_backing = lhs.backing orelse return rhs.backing == null;
+            const rhs_backing = rhs.backing orelse return false;
+            if (lhs_backing.use != rhs_backing.use) return false;
+            if (lhs_backing.authority != rhs_backing.authority) return false;
+            return try self.typesEquivalentInMode(mode, lhs_backing.ty, rhs_backing.ty, visited);
         }
 
         return true;
@@ -7848,8 +7856,9 @@ const Lowerer = struct {
         };
     }
 
-    fn publicTypeSpansEquivalent(
+    fn typeSpansEquivalentInMode(
         self: *Lowerer,
+        comptime mode: EquivalenceMode,
         lhs_span: Type.Span,
         rhs_span: Type.Span,
         visited: *std.AutoHashMap(u64, void),
@@ -7860,13 +7869,14 @@ const Lowerer = struct {
         for (0..lhs.len) |index| {
             const lhs_ty = GuardedList.at(lhs, index);
             const rhs_ty = GuardedList.at(rhs, index);
-            if (!try self.publicTypesEquivalent(lhs_ty, rhs_ty, visited)) return false;
+            if (!try self.typesEquivalentInMode(mode, lhs_ty, rhs_ty, visited)) return false;
         }
         return true;
     }
 
-    fn publicFieldsEquivalent(
+    fn fieldsEquivalentInMode(
         self: *Lowerer,
+        comptime mode: EquivalenceMode,
         lhs_span: Type.Span,
         rhs_span: Type.Span,
         visited: *std.AutoHashMap(u64, void),
@@ -7878,13 +7888,14 @@ const Lowerer = struct {
             const lhs_field = GuardedList.at(lhs, index);
             const rhs_field = GuardedList.at(rhs, index);
             if (lhs_field.name != rhs_field.name) return false;
-            if (!try self.publicTypesEquivalent(lhs_field.ty, rhs_field.ty, visited)) return false;
+            if (!try self.typesEquivalentInMode(mode, lhs_field.ty, rhs_field.ty, visited)) return false;
         }
         return true;
     }
 
-    fn publicCaptureFieldsEquivalent(
+    fn captureFieldsEquivalentInMode(
         self: *Lowerer,
+        comptime mode: EquivalenceMode,
         lhs_span: Type.Span,
         rhs_span: Type.Span,
         visited: *std.AutoHashMap(u64, void),
@@ -7896,13 +7907,14 @@ const Lowerer = struct {
             const lhs_field = GuardedList.at(lhs, index);
             const rhs_field = GuardedList.at(rhs, index);
             if (!std.meta.eql(lhs_field.capture_id, rhs_field.capture_id)) return false;
-            if (!try self.publicTypesEquivalent(lhs_field.ty, rhs_field.ty, visited)) return false;
+            if (!try self.typesEquivalentInMode(mode, lhs_field.ty, rhs_field.ty, visited)) return false;
         }
         return true;
     }
 
-    fn publicTagsEquivalent(
+    fn tagsEquivalentInMode(
         self: *Lowerer,
+        comptime mode: EquivalenceMode,
         lhs_span: Type.Span,
         rhs_span: Type.Span,
         visited: *std.AutoHashMap(u64, void),
@@ -7915,13 +7927,14 @@ const Lowerer = struct {
             const rhs_tag = GuardedList.at(rhs, index);
             if (lhs_tag.name != rhs_tag.name) return false;
             if (lhs_tag.checked_name != rhs_tag.checked_name) return false;
-            if (!try self.publicTypeSpansEquivalent(lhs_tag.payloads, rhs_tag.payloads, visited)) return false;
+            if (!try self.typeSpansEquivalentInMode(mode, lhs_tag.payloads, rhs_tag.payloads, visited)) return false;
         }
         return true;
     }
 
-    fn publicFnVariantsEquivalent(
+    fn fnVariantsEquivalentInMode(
         self: *Lowerer,
+        comptime mode: EquivalenceMode,
         lhs_span: Type.Span,
         rhs_span: Type.Span,
         visited: *std.AutoHashMap(u64, void),
@@ -7936,7 +7949,7 @@ const Lowerer = struct {
             if (lhs_variant.target != rhs_variant.target) return false;
             if (!std.meta.eql(lhs_variant.capture_ty, rhs_variant.capture_ty)) {
                 if (lhs_variant.capture_ty == null or rhs_variant.capture_ty == null) return false;
-                if (!try self.publicTypesEquivalent(lhs_variant.capture_ty.?, rhs_variant.capture_ty.?, visited)) return false;
+                if (!try self.typesEquivalentInMode(mode, lhs_variant.capture_ty.?, rhs_variant.capture_ty.?, visited)) return false;
             }
         }
         return true;
@@ -7965,6 +7978,7 @@ const Lowerer = struct {
 
         return switch (self.solved.types.get(root)) {
             .func, .lambda_set, .erased => true,
+            .mono => Common.invariant("callable scan saw an unfinalized lazy Monotype leaf"),
             .link, .unbound, .forall => Common.invariant("callable scan saw unresolved Lambda Solved type"),
             .primitive, .zst => false,
             .list => |elem| try self.solvedTypeContainsCallableInner(elem, visited),

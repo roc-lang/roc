@@ -545,6 +545,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Map from LIR local id to value location (register or stack slot)
         local_locations: std.AutoHashMap(u32, ValueLocation),
 
+        /// Exact reverse index for locals which currently live in vector registers.
+        /// Most locals are stack-resident, so call boundaries must never search the
+        /// full local table to find this bounded set.
+        vector_local_by_reg: std.enums.EnumArray(FloatReg, ?u32),
+        vector_local_mask: u32,
+
         /// Current proc argument span, used only for debug invariant reporting.
         current_proc_args: ?LocalSpan = null,
 
@@ -958,6 +964,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .float_nan_mode = float_nan_mode,
                 .static_data_symbol_names = .empty,
                 .local_locations = std.AutoHashMap(u32, ValueLocation).init(allocator),
+                .vector_local_by_reg = .initFill(null),
+                .vector_local_mask = 0,
                 .join_points = std.AutoHashMap(u32, usize).init(allocator),
                 .stmt_locations = std.AutoHashMap(u32, usize).init(allocator),
                 .line_entries = .empty,
@@ -1035,7 +1043,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         pub fn reset(self: *Self) void {
             self.codegen.reset();
             self.clearStaticDataSymbolNames();
-            self.local_locations.clearRetainingCapacity();
+            self.clearLocalLocationsRetainingCapacity();
             self.join_points.clearRetainingCapacity();
             self.stmt_locations.clearRetainingCapacity();
             self.proc_registry.clearRetainingCapacity();
@@ -1123,6 +1131,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         const StmtEnvSnapshot = struct {
             local_locations: std.AutoHashMap(u32, ValueLocation),
+            free_float: u32,
 
             fn deinit(self: *StmtEnvSnapshot) void {
                 self.local_locations.deinit();
@@ -1135,12 +1144,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.spillAllVectorLocals();
             return .{
                 .local_locations = try self.local_locations.clone(),
+                .free_float = self.codegen.free_float,
             };
         }
 
         fn restoreStmtEnv(self: *Self, snapshot: *const StmtEnvSnapshot) Allocator.Error!void {
             self.local_locations.deinit();
             self.local_locations = try snapshot.local_locations.clone();
+            self.clearVectorLocalResidency();
+            self.codegen.free_float = snapshot.free_float;
         }
 
         fn clearFunctionControlFlowState(self: *Self) void {
@@ -1172,7 +1184,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             tuple_len: usize,
         ) Allocator.Error!CodeResult {
             // Clear any leftover state from compileAllProcSpecs
-            self.local_locations.clearRetainingCapacity();
+            self.clearLocalLocationsRetainingCapacity();
             self.proc_debug_msg_slot = null;
             self.codegen.callee_saved_used = 0;
             self.uses_caller_stack_arg_base = false;
@@ -7514,6 +7526,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     );
                 }
                 try self.local_locations.put(key, value_loc);
+                self.trackVectorLocal(key, value_loc.vector_reg.reg);
                 return;
             }
 
@@ -7772,6 +7785,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             );
                         }
                         try self.codegen.emitMoveV128(destination.reg, source.reg);
+                        if (source.reg != destination.reg and !self.isPersistentVectorReg(source.reg)) {
+                            self.codegen.freeFloat(source.reg);
+                        }
                     },
                     .stack => |source| try self.codegen.emitLoadStackV128(destination.reg, source.offset),
                     else => std.debug.panic(
@@ -14610,11 +14626,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn spillVectorLocalEntry(
             self: *Self,
             local_key: u32,
-            value_ptr: *ValueLocation,
         ) Allocator.Error!void {
+            const value_ptr = self.local_locations.getPtr(local_key) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("LIR/codegen invariant violated: tracked vector local {d} is absent", .{local_key});
+                }
+                unreachable;
+            };
             const vector = switch (value_ptr.*) {
                 .vector_reg => |value| value,
-                else => return,
+                else => {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("LIR/codegen invariant violated: tracked vector local {d} is {s}", .{ local_key, @tagName(value_ptr.*) });
+                    }
+                    unreachable;
+                },
             };
             const local: LocalId = @enumFromInt(local_key);
             const layout_idx = self.localLayout(local);
@@ -14625,16 +14651,68 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .size = .qword,
                 .layout_idx = layout_idx,
             } };
+            self.untrackVectorLocal(local_key, vector.reg);
             self.codegen.freeFloat(vector.reg);
         }
 
+        fn clearVectorLocalResidency(self: *Self) void {
+            self.vector_local_by_reg = .initFill(null);
+            self.vector_local_mask = 0;
+        }
+
+        fn clearLocalLocationsRetainingCapacity(self: *Self) void {
+            var resident_mask = self.vector_local_mask;
+            while (resident_mask != 0) {
+                const reg_index: u5 = @intCast(@ctz(resident_mask));
+                self.codegen.freeFloat(@enumFromInt(reg_index));
+                resident_mask &= resident_mask - 1;
+            }
+            self.local_locations.clearRetainingCapacity();
+            self.clearVectorLocalResidency();
+        }
+
+        fn trackVectorLocal(self: *Self, local_key: u32, reg: FloatReg) void {
+            const slot = self.vector_local_by_reg.getPtr(reg);
+            if (slot.* != null or (self.vector_local_mask & floatRegMask(reg)) != 0) {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("LIR/codegen invariant violated: vector register {s} already has a resident local", .{@tagName(reg)});
+                }
+                unreachable;
+            }
+            slot.* = local_key;
+            self.vector_local_mask |= floatRegMask(reg);
+        }
+
+        fn untrackVectorLocal(self: *Self, local_key: u32, reg: FloatReg) void {
+            const slot = self.vector_local_by_reg.getPtr(reg);
+            if (slot.* != local_key or (self.vector_local_mask & floatRegMask(reg)) == 0) {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("LIR/codegen invariant violated: vector register {s} does not contain local {d}", .{ @tagName(reg), local_key });
+                }
+                unreachable;
+            }
+            slot.* = null;
+            self.vector_local_mask &= ~floatRegMask(reg);
+        }
+
+        fn isPersistentVectorReg(self: *const Self, reg: FloatReg) bool {
+            return (self.vector_local_mask & floatRegMask(reg)) != 0;
+        }
+
         /// Spill every persistent vector local at a control-flow or call ABI
-        /// boundary. Scalar floating-point temporaries use the same physical
-        /// mask but never persist in `local_locations`.
+        /// boundary. The reverse index makes this proportional to the number of
+        /// register-resident vector locals, independent of the total local count.
         fn spillAllVectorLocals(self: *Self) Allocator.Error!void {
-            var it = self.local_locations.iterator();
-            while (it.next()) |entry| {
-                try self.spillVectorLocalEntry(entry.key_ptr.*, entry.value_ptr);
+            while (self.vector_local_mask != 0) {
+                const reg_index: u5 = @intCast(@ctz(self.vector_local_mask));
+                const reg: FloatReg = @enumFromInt(reg_index);
+                const local_key = self.vector_local_by_reg.get(reg) orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("LIR/codegen invariant violated: active vector register {s} has no resident local", .{@tagName(reg)});
+                    }
+                    unreachable;
+                };
+                try self.spillVectorLocalEntry(local_key);
             }
         }
 
@@ -14645,14 +14723,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn allocTempVector(self: *Self, protected_mask: u32) Allocator.Error!FloatReg {
             if (self.codegen.allocFloat()) |reg| return reg;
 
-            var it = self.local_locations.iterator();
-            while (it.next()) |entry| {
-                const reg = switch (entry.value_ptr.*) {
-                    .vector_reg => |value| value.reg,
-                    else => continue,
+            const spillable = self.vector_local_mask & ~protected_mask;
+            if (spillable != 0) {
+                const reg_index: u5 = @intCast(@ctz(spillable));
+                const reg: FloatReg = @enumFromInt(reg_index);
+                const local_key = self.vector_local_by_reg.get(reg) orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("LIR/codegen invariant violated: active vector register {s} has no resident local", .{@tagName(reg)});
+                    }
+                    unreachable;
                 };
-                if ((protected_mask & floatRegMask(reg)) != 0) continue;
-                try self.spillVectorLocalEntry(entry.key_ptr.*, entry.value_ptr);
+                try self.spillVectorLocalEntry(local_key);
                 return self.codegen.allocFloat() orelse unreachable;
             }
 
@@ -14767,6 +14848,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     const slot = self.codegen.allocStackSlot(16);
                     try self.codegen.emitStoreStackV128(slot, vector.reg);
+                    if (!self.isPersistentVectorReg(vector.reg)) self.codegen.freeFloat(vector.reg);
                     break :blk slot;
                 },
                 .immediate_i64 => |val| blk: {
@@ -15650,6 +15732,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         );
                     }
                     try self.codegen.emitStoreStackV128(dest_offset, vector.reg);
+                    if (!self.isPersistentVectorReg(vector.reg)) self.codegen.freeFloat(vector.reg);
                 },
                 else => unreachable,
             }
@@ -16340,6 +16423,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_current_proc_args = self.current_proc_args;
             const saved_current_stmt_id = self.current_stmt_id;
             const saved_proc_debug_msg_slot = self.proc_debug_msg_slot;
+            const saved_vector_local_by_reg = self.vector_local_by_reg;
+            const saved_vector_local_mask = self.vector_local_mask;
             var saved_local_locations = self.local_locations.clone() catch return error.OutOfMemory;
             defer saved_local_locations.deinit();
             var saved_join_points = self.join_points.clone() catch return error.OutOfMemory;
@@ -16358,7 +16443,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer saved_loop_break_patches.deinit(self.allocator);
 
             // Clear state for procedure's scope
-            self.local_locations.clearRetainingCapacity();
+            self.clearLocalLocationsRetainingCapacity();
             self.clearFunctionControlFlowState();
             self.proc_debug_msg_slot = null;
             self.codegen.callee_saved_used = 0;
@@ -16436,6 +16521,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.current_proc_args = saved_current_proc_args;
                 self.current_stmt_id = saved_current_stmt_id;
                 self.proc_debug_msg_slot = saved_proc_debug_msg_slot;
+                self.vector_local_by_reg = saved_vector_local_by_reg;
+                self.vector_local_mask = saved_vector_local_mask;
                 // Restore the saved maps by swapping them back into place. This
                 // cannot allocate (so it is safe in an errdefer that cannot
                 // propagate errors): the mutated maps end up in the saved_*
@@ -16663,6 +16750,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.proc_debug_msg_slot = saved_proc_debug_msg_slot;
             self.local_locations.deinit();
             self.local_locations = saved_local_locations.clone() catch return error.OutOfMemory;
+            self.vector_local_by_reg = saved_vector_local_by_reg;
+            self.vector_local_mask = saved_vector_local_mask;
             self.join_points.deinit();
             self.join_points = saved_join_points.clone() catch return error.OutOfMemory;
             self.stmt_locations.deinit();
@@ -19346,7 +19435,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             var incoming_stack_copies = std.ArrayList(EntryStackCopy).empty;
             defer incoming_stack_copies.deinit(self.allocator);
 
-            self.local_locations.clearRetainingCapacity();
+            self.clearLocalLocationsRetainingCapacity();
             self.codegen.callee_saved_used = 0;
 
             if (arch == .aarch64 or arch == .aarch64_be) {
@@ -20631,6 +20720,41 @@ test "code generator initialization" {
 
     var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve);
     defer codegen.deinit();
+}
+
+test "vector spill residency is independent of scalar local count" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve);
+    defer codegen.deinit();
+
+    const vector_local = try addLocal(&store, .u8x16);
+    const vector_reg = codegen.codegen.allocFloat().?;
+    try codegen.local_locations.put(@intFromEnum(vector_local), .{ .vector_reg = .{
+        .reg = vector_reg,
+        .kind = .u8x16,
+    } });
+    codegen.trackVectorLocal(@intFromEnum(vector_local), vector_reg);
+
+    for (0..4096) |_| {
+        const scalar_local = try addLocal(&store, .u64);
+        try codegen.local_locations.put(@intFromEnum(scalar_local), .{ .immediate_i64 = 0 });
+    }
+
+    try codegen.spillAllVectorLocals();
+
+    try std.testing.expectEqual(@as(u32, 0), codegen.vector_local_mask);
+    try std.testing.expectEqual(@as(?u32, null), codegen.vector_local_by_reg.get(vector_reg));
+    try std.testing.expect((codegen.codegen.free_float & (@as(u32, 1) << @intFromEnum(vector_reg))) != 0);
+    try std.testing.expect(codegen.local_locations.get(@intFromEnum(vector_local)).? == .stack);
 }
 
 test "proc params and mutable list cells use distinct stack slots" {

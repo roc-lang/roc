@@ -1998,7 +1998,8 @@ test "unify order - resulting type is order-independent for recursive types" {
 
 test "unify order - deferred constraint origin var depends on operand order" {
     // While the resulting *type* is order-independent, two artifacts are NOT:
-    //   1. union_ makes the SECOND operand the surviving root (store.zig).
+    //   1. union_ makes the SECOND operand the checked representative, while
+    //      selecting its private storage root independently (store.zig).
     //   2. a deferred static-dispatch constraint is attached to `b`, the second
     //      operand (unify.zig recordDeferredConstraint / unresolved_b).
     // So unifying a constrained flex with a concrete type in opposite orders
