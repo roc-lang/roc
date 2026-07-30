@@ -709,12 +709,32 @@ pub fn listAppendRangeWithin(
     var dst = base + original_len * element_width;
     var available = (original_len - start) * element_width;
     var remaining = count * element_width;
-    while (remaining > 0) {
-        const chunk = @min(available, remaining);
-        @memcpy(dst[0..chunk], src[0..chunk]);
-        dst += chunk;
-        available += chunk;
-        remaining -= chunk;
+    if (available >= 8) {
+        // A word read at offset i touches src[i..i+8), all materialized once
+        // at least 8 bytes separate the read and write cursors. Typical
+        // ranges are a few bytes, so inline word copies beat memcpy calls.
+        var i: usize = 0;
+        while (i + 8 <= remaining) : (i += 8) {
+            dst[i..][0..8].* = src[i..][0..8].*;
+        }
+        while (i < remaining) : (i += 1) {
+            dst[i] = src[i];
+        }
+    } else if (remaining <= 64) {
+        // Cursors closer than a word: byte copies materialize the repeating
+        // prefix without a word read ever outrunning the write cursor.
+        var i: usize = 0;
+        while (i < remaining) : (i += 1) {
+            dst[i] = src[i];
+        }
+    } else {
+        while (remaining > 0) {
+            const chunk = @min(available, remaining);
+            @memcpy(dst[0..chunk], src[0..chunk]);
+            dst += chunk;
+            available += chunk;
+            remaining -= chunk;
+        }
     }
 
     if (elements_refcounted) {
