@@ -43576,6 +43576,7 @@ const BodyContext = struct {
             },
             .numeral_literal => |num| blk: {
                 const ty = try self.activeTypeFromNode(node);
+                self.measureSeamRead(pattern.ty, ty);
                 break :blk if (num.conversion) |conversion|
                     try self.bindLiteralGuardPattern(conversion, ty)
                 else
@@ -43583,6 +43584,7 @@ const BodyContext = struct {
             },
             .str_literal => |str| blk: {
                 const ty = try self.activeTypeFromNode(node);
+                self.measureSeamRead(pattern.ty, ty);
                 break :blk if (str.conversion) |conversion|
                     try self.bindLiteralGuardPattern(conversion, ty)
                 else
