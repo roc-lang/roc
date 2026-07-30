@@ -288,7 +288,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-import json.Parser exposing [Config]
+import json.Parser.Config
 import http.Client.Auth as HttpAuth
 import utils.String.Format exposing [padLeft]
 

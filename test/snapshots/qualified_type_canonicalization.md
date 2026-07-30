@@ -437,7 +437,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-import Basics exposing [Try]
+import Basics.Try
 import Color
 import ModA.ModB exposing [TypeC]
 import ExternalMod as ExtMod

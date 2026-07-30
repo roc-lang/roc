@@ -218,7 +218,6 @@ EXPECTED RECORD ACCESSOR - fuzz_crash_023.md:154:2:154:5
 EXPECTED RECORD FIELD - fuzz_crash_023.md:178:37:178:38
 UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_023.md:178:45:178:46
 EXPECTED FUNCTION ARROW - fuzz_crash_023.md:178:52:178:54
-NOT IMPLEMENTED - fuzz_crash_023.md:6:1:12:4
 MOD NOT FOUND - fuzz_crash_023.md:16:1:16:27
 MOD NOT FOUND - fuzz_crash_023.md:17:1:20:20
 UNDECLARED TYPE - fuzz_crash_023.md:36:8:36:11
@@ -356,24 +355,6 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
     I found `Ok` here.
     Names that start with uppercase letters are used for tags, type names, and
     mod names in Roc.
-
-
-┌─────────────────┐
-│ NOT IMPLEMENTED ├─ This feature is not yet implemented: malformed import ───┐
-└┬────────────────┘  mod name contains invalid control characters.         │
- │                                                                            │
- │  import # Comment after import keyword                                     │
- │      pf # Comment after qualifier                                          │
- │          .StdoutMultiline # Comment after ident                            │
- │          exposing [ # Comment after exposing open                          │
- │              line!, # Comment after exposed item                           │
- │              write!, # Another after exposed item                          │
- │          ] # Comment after exposing close                                  │
- │                                                                            │
- └───────────────────────────────────────────────────── fuzz_crash_023.md:6:1 ┘
-
-    This error doesn't have a proper diagnostic report yet. Let us know if you
-    want to help improve Roc's error messages!
 
 
 ┌──────────────────┐
@@ -2196,7 +2177,7 @@ expect {
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 1860) (dispatcher-var 374)
+						(e-interpolation (constraint-fn-var 1859) (dispatcher-var 373)
 							(first
 								(e-literal (string "Hello, ")))
 							(parts
@@ -2214,7 +2195,7 @@ expect {
 							(e-runtime-error (tag "erroneous_value_expr")))
 						(s-reassign
 							(p-assign (ident "number"))
-							(e-dispatch-call (method "plus") (constraint-fn-var 1942)
+							(e-dispatch-call (method "plus") (constraint-fn-var 1941)
 								(receiver
 									(e-runtime-error (tag "erroneous_value_use")))
 								(args
@@ -2239,7 +2220,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 2066)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 2065)
 									(receiver
 										(e-match
 											(match
@@ -2262,7 +2243,7 @@ expect {
 														(value
 															(e-num (value "12"))))))))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 2063)
+										(e-dispatch-call (method "times") (constraint-fn-var 2062)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -2277,18 +2258,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 2099)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 2098)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 2089)
+															(e-dispatch-call (method "plus") (constraint-fn-var 2088)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 2126)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 2125)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 2116)
+															(e-dispatch-call (method "minus") (constraint-fn-var 2115)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2303,11 +2284,11 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 2163)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 2162)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 2160)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 2159)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -2322,12 +2303,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 2221)
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 2220)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 2192)
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 2191)
 																			(receiver
 																				(e-match
 																					(match
@@ -2470,7 +2451,7 @@ expect {
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "write!") (wildcard false))))
-	(s-import (mod "#malformed_import_0")
+	(s-import (mod "pf.StdoutMultiline")
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "write!") (wildcard false))))
