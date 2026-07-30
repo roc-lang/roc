@@ -2287,6 +2287,29 @@ census was re-sited onto it before the argument could be redone.
    revisit as co-inductively grounded and traversing list and box elements
    the recursive form had omitted, the figure is 100%.
 
+2a-ii. **The seam, measured at the live exit.** Recording each node
+   `instNode` creates with its checked position AND the binding context it
+   was created under lets a read decide whether the binding it holds is the
+   one the node was built under. Wiring that into `activeTypeFromNode`
+   takes snapshot coverage from 1568 to **64801** reads, with 8339 declined
+   for a differing context, against 75113 live reads.
+
+   At that coverage `seam_direct_diverged` is **19**, having been 0 at
+   every earlier level — the earlier zeroes were a 0.25% slice, not a
+   property. All 19 are one shape and it is the shape the constraint census
+   already named: directed translation emits the empty tag union where the
+   graph carries a concrete type — `fn([],u8)->u64` against
+   `fn(str,u8)->u64`, `List<([],[])>` against `List<(str,dec)>`,
+   `Dict<[],[]>` against `Dict<str,dec>`. Every one is in `Builtin`'s
+   Dict/HashMap machinery under `binding=frame` or `binding=none`.
+
+   So the seam fails for exactly the reason the constraint sites do: a
+   binder whose value the checked data does not name at that position. The
+   two measurements are of one defect, and the seam is where it counts,
+   because the seam is what the flip keeps. Clause 1 and clause 2 of the
+   acceptance condition are therefore coupled — raising coverage exposes
+   more of the same gap rather than a different one.
+
 2b. **Re-measure the logical residual at the production seam.**
    `BodyContext.typeForChecked` compares directed translation against the
    graph at every read, holds the body-walk context the isolated operands
