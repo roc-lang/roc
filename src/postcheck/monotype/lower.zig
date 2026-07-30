@@ -12267,6 +12267,7 @@ const BodyContext = struct {
                 census.bump("graph_exit_read_names_checked");
             } else {
                 census.bump("graph_exit_read_derived");
+                self.graph.noteDerivedReadKind(node);
             }
         }
         return try self.graph.activeTypeViewForNode(node);

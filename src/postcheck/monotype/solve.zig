@@ -1382,6 +1382,26 @@ pub const InstGraph = struct {
         return false;
     }
 
+    /// Debug/probe-only: what a read that names no checked position actually
+    /// is. Naming the shapes says whether the remainder is the
+    /// compiler-generated content section 9.6 covers by declared rule, or
+    /// something the design has no account of (reunify.md 13.2 step 2a).
+    pub fn noteDerivedReadKind(self: *InstGraph, node: NodeId) void {
+        if (comptime !census.enabled) return;
+        switch (self.content(node)) {
+            .redirect => census.bump("derived_read_redirect"),
+            .unresolved => census.bump("derived_read_unresolved"),
+            .primitive => census.bump("derived_read_primitive"),
+            .list => census.bump("derived_read_list"),
+            .box => census.bump("derived_read_box"),
+            .tuple => census.bump("derived_read_tuple"),
+            .func => census.bump("derived_read_func"),
+            .tag_union => census.bump("derived_read_tag_union"),
+            .record => census.bump("derived_read_record"),
+            else => census.bump("derived_read_other"),
+        }
+    }
+
     /// Collision authority for open function-interface lookup buckets.
     pub fn sameFunctionInterface(self: *InstGraph, left: NodeId, right: NodeId) bool {
         const left_fn = switch (self.content(left)) {
@@ -3840,6 +3860,7 @@ pub const GraphTypeFinals = struct {
                     census.bump("graph_exit_read_names_checked");
                 } else {
                     census.bump("graph_exit_read_derived");
+                    self.graph.noteDerivedReadKind(raw_node);
                 }
             }
             census.bump("graph_exit_seal_node");

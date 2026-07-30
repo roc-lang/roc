@@ -420,6 +420,17 @@ pub const Census = struct {
     // names none, so no per-position measurement can ever cover it.
     graph_exit_read_names_checked: Counter = Counter.init(0),
     graph_exit_read_derived: Counter = Counter.init(0),
+    // What a read naming no checked position is, by node shape.
+    derived_read_redirect: Counter = Counter.init(0),
+    derived_read_unresolved: Counter = Counter.init(0),
+    derived_read_primitive: Counter = Counter.init(0),
+    derived_read_list: Counter = Counter.init(0),
+    derived_read_box: Counter = Counter.init(0),
+    derived_read_tuple: Counter = Counter.init(0),
+    derived_read_func: Counter = Counter.init(0),
+    derived_read_tag_union: Counter = Counter.init(0),
+    derived_read_record: Counter = Counter.init(0),
+    derived_read_other: Counter = Counter.init(0),
 
     // Whether a graph-built function node still carries the argument count the
     // checked function type recorded (reunify.md 15.1b). A contradiction names

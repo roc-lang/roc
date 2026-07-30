@@ -2249,6 +2249,35 @@ census was re-sited onto it before the argument could be redone.
    measurement is the denominator itself: count calls at both exits and
    compare against the 1568 currently measured.
 
+2a-i. **What the two exits actually read.** Counting both exits gives
+   75113 live reads and 553490 top-level seal entries — 628603, with the
+   roughly 539000 further `sealNode` calls excluded as sealing recursing
+   into children rather than a read a caller asked for. Against that, the
+   1568 measured reads are **0.25%**, not the multiple the earlier framing
+   implied.
+
+   Asking which of those reads can name a checked position took three
+   attempts, each of which would have supported a different conclusion.
+   Marking only the placeholder `instNode` memoizes reported 38% nameable;
+   also marking the content it unifies with reported 61%; asking whether
+   ANY member of the node's union class carries the mark reports **593171
+   of 628603, 94.4%**, with **35432 derived**. Unification makes
+   nameability a property of the class, not of the id an exit receives, so
+   the first two readings were artifacts of the instrument.
+
+   The 35432 are not what a §9.6 carve-out would predict. They are
+   composites — 13084 functions, 12493 named, 4416 tag unions, 3727
+   tuples, 1712 records — with **zero** unresolved variables, primitives,
+   lists, boxes or redirects. Nothing generated-looking dominates them.
+   The shape that fits is structural composition: a function node built
+   from argument and return nodes, a nominal built from its arguments,
+   where the parts may name checked positions and the composite does not.
+   If that holds, their correctness follows from their parts rather than
+   needing a declared rule, and the coverage identity is properly stated
+   over reads that name a position, with composites discharged by
+   construction. Whether their components carry provenance is the
+   measurement that decides it, and it has not been run.
+
 2b. **Re-measure the logical residual at the production seam.**
    `BodyContext.typeForChecked` compares directed translation against the
    graph at every read, holds the body-walk context the isolated operands
