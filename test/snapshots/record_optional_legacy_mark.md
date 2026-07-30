@@ -9,35 +9,37 @@ value : { x : U32, y :? U32, z : ? U32 }
 value = { x: 1 }
 ~~~
 # EXPECTED
-OLD OPTIONAL FIELD SYNTAX - record_optional_legacy_mark.md:1:23:1:24
-OLD OPTIONAL FIELD SYNTAX - record_optional_legacy_mark.md:1:34:1:35
+INVALID OPTIONAL FIELD SYNTAX - record_optional_legacy_mark.md:1:23:1:24
+INVALID OPTIONAL FIELD SYNTAX - record_optional_legacy_mark.md:1:34:1:35
 # PROBLEMS
 
-┌───────────────────────────┐
-│ OLD OPTIONAL FIELD SYNTAX ├─ I was parsing a record type, and this ─────────┐
-└┬──────────────────────────┘  optional field puts the `?` after the `:`.     │
+┌───────────────────────────────┐
+│ INVALID OPTIONAL FIELD SYNTAX ├─ I was parsing a record type, and this ─────┐
+└┬──────────────────────────────┘  optional field puts the `?` after the      │
+ │                                 `:`.                                       │
  │                                                                            │
  │  value : { x : U32, y :? U32, z : ? U32 }                                  │
  │                        ‾                                                   │
  └─────────────────────────────────────── record_optional_legacy_mark.md:1:23 ┘
 
-    Optional fields are now written with the `?` before the `:`: `?:` declares
-    the field optional.
+    Optional fields are written with the `?` before the `:`: `?:` declares the
+    field optional.
 
     For example:
         { name ?: Str }
 
 
-┌───────────────────────────┐
-│ OLD OPTIONAL FIELD SYNTAX ├─ I was parsing a record type, and this ─────────┐
-└┬──────────────────────────┘  optional field puts the `?` after the `:`.     │
+┌───────────────────────────────┐
+│ INVALID OPTIONAL FIELD SYNTAX ├─ I was parsing a record type, and this ─────┐
+└┬──────────────────────────────┘  optional field puts the `?` after the      │
+ │                                 `:`.                                       │
  │                                                                            │
  │  value : { x : U32, y :? U32, z : ? U32 }                                  │
  │                                   ‾                                        │
  └─────────────────────────────────────── record_optional_legacy_mark.md:1:34 ┘
 
-    Optional fields are now written with the `?` before the `:`: `?:` declares
-    the field optional.
+    Optional fields are written with the `?` before the `:`: `?:` declares the
+    field optional.
 
     For example:
         { name ?: Str }
