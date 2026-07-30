@@ -24638,6 +24638,23 @@ const BodyContext = struct {
         return fn_node;
     }
 
+    /// Debug/probe-only: whether one graph function node still carries the
+    /// argument count the checked function type at that position recorded
+    /// (reunify.md 15.1b). Reads the node's content without sealing it.
+    fn noteGraphArityAgainstChecked(self: *BodyContext, node: NodeId, checked_arity: usize) void {
+        if (comptime !census.enabled) return;
+        switch (self.graph.content(node)) {
+            .func => |derived| {
+                if (derived.args.len == checked_arity) {
+                    census.bump("graph_arity_matches_checked");
+                } else {
+                    census.bump("graph_arity_contradicts_checked");
+                }
+            },
+            else => census.bump("graph_arity_not_a_function_node"),
+        }
+    }
+
     fn instantiateTargetFromPlanNode(
         self: *BodyContext,
         source_fn_ty: checked.CheckedTypeId,
@@ -24651,6 +24668,17 @@ const BodyContext = struct {
         }
         const fn_node = try self.instNode(source_fn_ty);
         const plan_node = try plan_ctx.instNode(plan_fn_ty);
+        // Debug/probe-only (reunify.md 15.1b): the seam's own comparison is
+        // graph against directed and is symmetric, so it cannot say which side
+        // a disagreement belongs to. Checking is the authority on logical
+        // types, so ask the one question that is asymmetric — does the arity
+        // the GRAPH built still match the arity CHECKING recorded? Read through
+        // `content`, which does not seal, and ask only about arity, which no
+        // representation choice may alter.
+        if (comptime census.enabled) {
+            self.noteGraphArityAgainstChecked(fn_node, function.args.len);
+            plan_ctx.noteGraphArityAgainstChecked(plan_node, plan_function.args.len);
+        }
         self.measureUnifySite(
             .function_request_interface_target_to_plan,
             self.checkedUnifyOperand(source_fn_ty),

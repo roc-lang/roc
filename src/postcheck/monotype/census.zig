@@ -409,6 +409,13 @@ pub const Census = struct {
     // the checked data describes.
     seam_direct: Counter = Counter.init(0),
     seam_direct_absent: Counter = Counter.init(0),
+    // Whether a graph-built function node still carries the argument count the
+    // checked function type recorded (reunify.md 15.1b). A contradiction names
+    // a defect in the solver being deleted, not a gap in the data replacing it.
+    graph_arity_matches_checked: Counter = Counter.init(0),
+    graph_arity_contradicts_checked: Counter = Counter.init(0),
+    graph_arity_not_a_function_node: Counter = Counter.init(0),
+
     seam_direct_diverged: Counter = Counter.init(0),
 
     direct_probe_population: Counter = Counter.init(0),
