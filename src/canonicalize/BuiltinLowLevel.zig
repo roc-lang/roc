@@ -303,6 +303,9 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("list_append_sublist")) |ident| {
         try low_level_map.put(ident, .list_append_sublist);
     }
+    if (env.common.findIdent("list_append_le_bytes")) |ident| {
+        try low_level_map.put(ident, .list_append_le_bytes);
+    }
     if (env.common.findIdent("u8_list_reserve")) |ident| {
         try low_level_map.put(ident, .list_reserve);
     }

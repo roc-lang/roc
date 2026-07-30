@@ -5196,6 +5196,22 @@ pub const Interpreter = struct {
                 );
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
+            .list_append_le_bytes => blk: {
+                const list_val = self.valueToRocListForLayout(args[0], arg_layout);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                const result = builtins.list.listAppendLeBytes(
+                    list_val,
+                    args[1].read(u64),
+                    args[2].read(u64),
+                    1,
+                    updateModeForArg0(ll.unique_args),
+                    &self.roc_ops,
+                );
+                break :blk self.rocListToValue(result, ll.ret_layout);
+            },
             .list_append_sublist => blk: {
                 const info = self.listElemInfo(arg_layout);
                 const elems_rc = self.builtinListElemRc(arg_layout);

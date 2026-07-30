@@ -349,6 +349,7 @@ pub fn runWasmStrWithStats(
         env_imports.addHostFunction("roc_list_swap", &[_]bytebox.ValType{ .I32, .I32, .I32, .I64, .I64, .I32 }, &[_]bytebox.ValType{}, hostListSwap, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_append_range_within", &[_]bytebox.ValType{ .I32, .I32, .I32, .I64, .I64, .I32 }, &[_]bytebox.ValType{}, hostListAppendRangeWithin, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_append_sublist", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I64, .I64, .I32 }, &[_]bytebox.ValType{}, hostListAppendSublist, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_list_append_le_bytes", &[_]bytebox.ValType{ .I32, .I64, .I64, .I32 }, &[_]bytebox.ValType{}, hostListAppendLeBytes, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_builtins_simd_store_16", &[_]bytebox.ValType{ .I32, .I64, .I64, .I32, .I32, .I32, .I64, .I32, .I32 }, &[_]bytebox.ValType{}, hostSimdStore16, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_builtins_simd_append_16", &[_]bytebox.ValType{ .I32, .I64, .I64, .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostSimdAppend16, null) catch return error.WasmExecFailed;
 
@@ -2278,6 +2279,34 @@ fn hostListAppendRangeWithin(_: ?*anyopaque, module: *bytebox.ModuleInstance, pa
         while (b < elem_width) : (b += 1) {
             buffer[dst + b] = buffer[src + b];
         }
+    }
+
+    writeIntLittle(u32, buffer, result_ptr, @intCast(new_data));
+    writeIntLittle(u32, buffer, result_ptr + 4, @intCast(new_len));
+    writeIntLittle(u32, buffer, result_ptr + 8, encodeWasmListCapacity(new_len));
+}
+
+fn hostListAppendLeBytes(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    var buffer = module.store.getMemory(0).buffer();
+    const list_ptr: usize = @intCast(params[0].I32);
+    const value: u64 = @bitCast(params[1].I64);
+    const count: usize = @intCast(params[2].I64);
+    const result_ptr: usize = @intCast(params[3].I32);
+
+    const data_ptr: usize = @intCast(readIntLittle(u32, buffer, list_ptr));
+    const len: usize = @intCast(readIntLittle(u32, buffer, list_ptr + 4));
+    const new_len = len + count;
+
+    const new_data = allocWasmData(module, 1, new_len);
+    buffer = module.store.getMemory(0).buffer();
+    if (len != 0 and data_ptr != 0) {
+        @memcpy(buffer[new_data..][0..len], buffer[data_ptr..][0..len]);
+    }
+    var word = value;
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        buffer[new_data + len + i] = @truncate(word);
+        word >>= 8;
     }
 
     writeIntLittle(u32, buffer, result_ptr, @intCast(new_data));

@@ -2070,6 +2070,40 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
                 },
+                .list_append_le_bytes => {
+                    // list_append_le_bytes(list, value, count) -> List
+                    if (args.len != 3) unreachable;
+                    const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
+                    const value_loc = try self.emitValueLocal(GuardedList.at(args, 1));
+                    const count_loc = try self.emitValueLocal(GuardedList.at(args, 2));
+
+                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+
+                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+                    const value_off = try self.ensureOnStack(value_loc, 8);
+                    const count_off = try self.ensureOnStack(count_loc, 8);
+                    const result_offset = self.codegen.allocStackSlot(roc_str_size);
+
+                    {
+                        // wrap(out, list_bytes, list_len, list_cap, value, count, alignment, update_mode, roc_ops)
+                        const base_reg = frame_ptr;
+                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+
+                        try builder.addLeaArg(base_reg, result_offset);
+                        try builder.addMemArg(base_reg, list_off);
+                        try builder.addMemArg(base_reg, list_off + 8);
+                        try builder.addMemArg(base_reg, list_off + 16);
+                        try builder.addMemArg(base_reg, value_off);
+                        try builder.addMemArg(base_reg, count_off);
+                        try builder.addImmArg(1);
+                        try builder.addImmArg(if (ll.unique_args & 1 != 0) @as(usize, 1) else 0);
+                        try builder.addRegArg(roc_ops_reg);
+
+                        try self.callBuiltin(&builder, LowLevelBuiltins.listOp(.list_append_le_bytes));
+                    }
+
+                    return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
+                },
                 .list_append_sublist => {
                     // list_append_sublist(list, src, start, len) -> List
                     if (args.len != 4) unreachable;

@@ -62,6 +62,7 @@ pub const LowLevel = enum(u16) {
     list_concat,
     list_append_range_within,
     list_append_sublist,
+    list_append_le_bytes,
     list_with_capacity,
     list_drop_at,
     list_sublist,
@@ -884,6 +885,7 @@ pub const LowLevel = enum(u16) {
             // reads its source without consuming or retaining it.
             .list_append_range_within,
             .list_append_sublist,
+            .list_append_le_bytes,
             => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
             .list_first,

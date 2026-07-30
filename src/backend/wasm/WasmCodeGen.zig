@@ -471,6 +471,7 @@ list_append_unsafe_import: ?u32 = null,
 list_concat_import: ?u32 = null,
 list_append_range_within_import: ?u32 = null,
 list_append_sublist_import: ?u32 = null,
+list_append_le_bytes_import: ?u32 = null,
 list_drop_at_import: ?u32 = null,
 list_reserve_import: ?u32 = null,
 list_reverse_import: ?u32 = null,
@@ -765,6 +766,7 @@ fn hostBuiltinImports(self: *const Self) HostBuiltinImports {
             .list_concat => self.list_concat_import,
             .list_append_range_within => self.list_append_range_within_import,
             .list_append_sublist => self.list_append_sublist_import,
+            .list_append_le_bytes => self.list_append_le_bytes_import,
             .list_drop_at => self.list_drop_at_import,
             .list_reserve => self.list_reserve_import,
             .list_replace => self.list_replace_import,
@@ -1911,6 +1913,10 @@ fn registerHostImports(self: *Self) Allocator.Error!void {
     // roc_list_append_sublist(list_ptr, src_ptr, elem_width, alignment, start, len, result_ptr)
     const list_append_sublist_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32, .i64, .i64, .i32 }, &.{});
     self.list_append_sublist_import = try self.module.addImport("env", "roc_list_append_sublist", list_append_sublist_type);
+
+    // roc_list_append_le_bytes(list_ptr, value, count, result_ptr)
+    const list_append_le_bytes_type = try self.module.addFuncType(&.{ .i32, .i64, .i64, .i32 }, &.{});
+    self.list_append_le_bytes_import = try self.module.addImport("env", "roc_list_append_le_bytes", list_append_le_bytes_type);
 
     const list_drop_at_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32, .i32 }, &.{});
     self.list_drop_at_import = try self.module.addImport("env", "roc_list_drop_at", list_drop_at_type);
@@ -12048,6 +12054,10 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // list_append_sublist(list, src, start, len) -> extended list
             try self.generateLLListAppendSublist(args, ll.ret_layout, ll.unique_args);
         },
+        .list_append_le_bytes => {
+            // list_append_le_bytes(list, value, count) -> extended list
+            try self.generateLLListAppendLeBytes(args, ll.unique_args);
+        },
         .list_reverse => {
             // list_reverse(list) -> reversed list
             try self.generateLLListReverse(args, ll.ret_layout, ll.unique_args);
@@ -18425,6 +18435,41 @@ fn generateLLListAppendRangeWithin(self: *Self, args: anytype, ret_layout: layou
             try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_range_within)), null);
         },
         .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_append_range_within", .{}),
+    }
+    try self.emitFpOffset(result_offset);
+}
+
+/// Generate LowLevel list_append_le_bytes: append a value's low bytes.
+fn generateLLListAppendLeBytes(self: *Self, args: anytype, unique_args: u64) Allocator.Error!void {
+    try self.emitProcLocal(GuardedList.at(args, 0));
+    const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(list_ptr);
+
+    const value_local = try self.materializeListIndex(GuardedList.at(args, 1));
+    const count_local = try self.materializeListIndex(GuardedList.at(args, 2));
+
+    const result_offset = try self.allocStackMemory(12, 4);
+
+    switch (self.external_calls) {
+        .host_imports => {
+            try self.emitLocalGet(list_ptr);
+            try self.emitLocalGet(value_local);
+            try self.emitLocalGet(count_local);
+            try self.emitFpOffset(result_offset);
+            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_le_bytes)), self.list_append_le_bytes_import);
+        },
+        .builtin_relocs => {
+            const fields = try self.loadRocListFields(list_ptr);
+            try self.emitFpOffset(result_offset);
+            try self.emitRocListFields(fields);
+            try self.emitLocalGet(value_local);
+            try self.emitLocalGet(count_local);
+            try self.emitI32Const(1);
+            try self.emitI32Const(@intCast(unique_args & 1));
+            try self.emitLocalGet(self.roc_ops_local);
+            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_le_bytes)), null);
+        },
+        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_append_le_bytes", .{}),
     }
     try self.emitFpOffset(result_offset);
 }

@@ -11386,16 +11386,7 @@ Builtin :: [].{
 				if count > 8 {
 					Err(OutOfBounds)
 				} else {
-					# `$i` stays below `count`, so the shift amount stays
-					# below 64 and every append was reserved for.
-					var $bytes = List.reserve(bytes, count.to_u64())
-					var $i = 0.U8
-					while $i < count {
-						byte = value.shr_zf_wrap($i * 8).to_u8_wrap()
-						$bytes = list_append_unsafe($bytes, byte)
-						$i = $i + 1
-					}
-					Ok($bytes)
+					Ok(list_append_le_bytes(bytes, value, count.to_u64()))
 				}
 			}
 
@@ -22623,6 +22614,10 @@ list_append_range_within : List(item), U64, U64 -> List(item)
 # Implemented by the compiler. Appends len items of src beginning at start.
 # The caller has already clamped the range to src's length.
 list_append_sublist : List(item), List(item), U64, U64 -> List(item)
+
+# Implemented by the compiler. Appends the value's count lowest bytes, least
+# significant first. The caller has already verified count is at most 8.
+list_append_le_bytes : List(U8), U64, U64 -> List(U8)
 
 # Implemented by the compiler, trims unused list capacity
 list_release_excess_capacity : List(item) -> List(item)

@@ -782,6 +782,45 @@ pub fn listAppendSublist(
     return output;
 }
 
+/// Append the low `count` bytes of `value` to a byte list, least significant
+/// byte first. The caller has already verified `count <= 8`. One uniqueness
+/// and capacity check covers the whole write.
+pub fn listAppendLeBytes(
+    list: RocList,
+    value: u64,
+    count_u64: u64,
+    alignment: u32,
+    update_mode: UpdateMode,
+    roc_ops: *RocOps,
+) callconv(.c) RocList {
+    const count: usize = @intCast(count_u64);
+    if (count == 0) return list;
+    const original_len = list.len();
+
+    var output = listReserve(
+        list,
+        alignment,
+        count_u64,
+        1,
+        false,
+        null,
+        @ptrCast(&utils.rcNone),
+        null,
+        @ptrCast(&utils.rcNone),
+        update_mode,
+        roc_ops,
+    );
+    const base = output.bytes.?;
+    var i: usize = 0;
+    var word = value;
+    while (i < count) : (i += 1) {
+        base[original_len + i] = @truncate(word);
+        word >>= 8;
+    }
+    output.length = original_len + count;
+    return output;
+}
+
 /// Reduce memory usage by trimming unused capacity when list has shrunk significantly.
 pub fn listReleaseExcessCapacity(
     list: RocList,

@@ -210,6 +210,7 @@ const fromUtf8Lossy = str.fromUtf8Lossy;
 
 const listConcat = list.listConcat;
 const listAppendRangeWithin = list.listAppendRangeWithin;
+const listAppendLeBytes = list.listAppendLeBytes;
 const listAppendSublist = list.listAppendSublist;
 const listPrepend = list.listPrepend;
 const listSublist = list.listSublist;
@@ -774,6 +775,14 @@ pub fn roc_builtins_list_append_sublist(out: *RocList, list_bytes: ?[*]u8, list_
     } else {
         out.* = listAppendSublist(l, src, start, len, alignment, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), update_mode, roc_ops);
     }
+}
+
+/// Wrapper: listAppendLeBytes(RocList, value, count, alignment, ..., *RocOps) -> RocList.
+/// The update mode is forwarded to the builtin's uniqueness check; `.InPlace`
+/// skips it.
+pub fn roc_builtins_list_append_le_bytes(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, value: u64, count: u64, alignment: u32, update_mode: utils.UpdateMode, roc_ops: *RocOps) callconv(.c) void {
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    out.* = listAppendLeBytes(l, value, count, alignment, update_mode, roc_ops);
 }
 
 /// Wrapper: listPrepend(RocList, alignment, element, element_width, ..., *RocOps) -> RocList.
