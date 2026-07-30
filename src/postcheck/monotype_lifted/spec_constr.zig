@@ -4133,6 +4133,9 @@ const Cloner = struct {
     /// budget runs out the rewrite retains the plain shared join, which never
     /// re-clones arm bodies.
     let_case_shape_growth: CodeGrowthBudget,
+    /// Expression count of the program when this clone operation began;
+    /// inlining stops once `inline_expr_budget` expressions have been added.
+    start_expr_count: usize,
     /// Active let-of-case join rewrites, innermost last. Cloning a jump whose
     /// target belongs to one of these frames records the jump site's symbolic
     /// argument values for later parameter decomposition instead of cloning
@@ -4175,6 +4178,14 @@ const Cloner = struct {
 
     const case_of_case_work_budget: u32 = 256;
 
+    /// Total expressions one top-level clone operation may append through
+    /// call inlining. Inlining is demand-driven and transitively re-enters
+    /// callee bodies, so one specialization over deeply composed known-shape
+    /// values can otherwise multiply the whole reachable call graph into its
+    /// body. Once the budget is spent, remaining calls clone as plain calls,
+    /// which every shape matcher already treats as opaque.
+    const inline_expr_budget: usize = 50_000;
+
     fn init(pass: *Pass, source_fn: Ast.FnId, pattern: CallPattern) Cloner {
         return .{
             .pass = pass,
@@ -4187,6 +4198,7 @@ const Cloner = struct {
             .loop_exit_stack = .empty,
             .selected_loop_exit_tys = std.AutoHashMap(Ast.ExprId, Type.TypeId).init(pass.allocator),
             .join_stack = .empty,
+            .start_expr_count = pass.program.exprCount(),
             .let_case_shape_growth = .init(let_case_shape_arm_budget),
             .let_case_builds = .empty,
             .active_recursive_value_locals = std.AutoHashMap(Ast.LocalId, void).init(pass.allocator),
@@ -4217,6 +4229,7 @@ const Cloner = struct {
             .loop_exit_stack = .empty,
             .selected_loop_exit_tys = std.AutoHashMap(Ast.ExprId, Type.TypeId).init(pass.allocator),
             .join_stack = .empty,
+            .start_expr_count = pass.program.exprCount(),
             .let_case_shape_growth = .init(let_case_shape_arm_budget),
             .let_case_builds = .empty,
             .active_recursive_value_locals = std.AutoHashMap(Ast.LocalId, void).init(pass.allocator),
@@ -6620,7 +6633,9 @@ const Cloner = struct {
         const values = self.pass.program.exprSpan(continue_.values);
         const source_values = try GuardedList.dupe(self.pass.allocator, Ast.ExprId, values);
         defer self.pass.allocator.free(source_values);
-        if (source_values.len != loop.values.len) Common.invariant("continue value count differed from specialized loop pattern");
+        if (source_values.len != loop.values.len) {
+            Common.invariantFmt("continue value count differed from specialized loop pattern: continue has {d} values, {d} frames with innermost expecting {d}", .{ source_values.len, frame_count, loop.values.len });
+        }
 
         var new_values = std.ArrayList(Ast.ExprId).empty;
         defer new_values.deinit(self.pass.allocator);
@@ -7755,6 +7770,10 @@ const Cloner = struct {
         };
     }
 
+    fn inlineGrowthExhausted(self: *const Cloner) bool {
+        return self.pass.program.exprCount() - self.start_expr_count > inline_expr_budget;
+    }
+
     fn inlineCallableCallValue(
         self: *Cloner,
         ty: Type.TypeId,
@@ -7764,6 +7783,12 @@ const Cloner = struct {
         result_shape_demanded: bool,
         bindings: *BindingChain,
     ) Common.LowerError!Value {
+        if (self.inlineGrowthExhausted()) {
+            return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
+                .callee = try self.materialize(.{ .callable = callable }),
+                .args = try self.cloneExprSpan(args_span),
+            } } }) };
+        }
         var callable_call_size = ConstructorSize{ .exact = 0 };
         for (callable.captures) |capture| callable_call_size = callable_call_size.plus(self.knownConstructorSize(capture.value));
         callable_call_size = callable_call_size.plus(self.argsKnownConstructorSize(args_span));
@@ -7875,6 +7900,9 @@ const Cloner = struct {
         result_shape_demanded: bool,
         bindings: *BindingChain,
     ) Common.LowerError!Value {
+        if (self.inlineGrowthExhausted()) {
+            return .{ .expr = try self.cloneExprPlain(original_expr) };
+        }
         const direct_call_size = self.argsKnownConstructorSize(args_span).plus(self.captureOperandsKnownConstructorSize(captures_span));
         const exact_call_size = direct_call_size.exactValue() orelse return .{ .expr = try self.cloneExprPlain(original_expr) };
         for (self.inline_stack.items) |active| {

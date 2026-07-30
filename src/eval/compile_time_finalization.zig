@@ -57,6 +57,12 @@ pub const Timing = struct {
     code_generation_ns: TimingCounter = .{},
     execution_ns: TimingCounter = .{},
     store_results_ns: TimingCounter = .{},
+    /// Process footprint range observed at burst boundaries. Compile-time
+    /// evaluation runs as bursts interleaved with checking, so the progress
+    /// reporter cannot window-sample it; the brackets that already time each
+    /// burst fold a footprint reading at the same points.
+    mem_min: MemMinCounter = .{},
+    mem_max: MemMaxCounter = .{},
 
     pub fn init(std_io: std.Io) Timing {
         return .{
@@ -70,33 +76,49 @@ pub const Timing = struct {
         return .{
             .total_ns = self.total_ns.load(),
             .monotype_ns = lowering.monotype_ns,
-            .postcheck_to_lir_ns = lowering.postcheck_to_lir_ns,
-            .lir_passes_arc_ns = lowering.lir_passes_arc_ns,
+            .postcheck_to_lir_ns = lowering.lift_ns + lowering.spec_constr_ns + lowering.lambda_solve_ns + lowering.lir_gen_ns,
+            .lir_passes_ns = lowering.lir_passes_ns,
+            .arc_ns = lowering.arc_ns,
             .static_data_ns = self.static_data_ns.load(),
             .code_generation_ns = self.code_generation_ns.load(),
             .execution_ns = self.execution_ns.load(),
             .store_results_ns = self.store_results_ns.load(),
+            .mem_min = self.mem_min.load(),
+            .mem_max = self.mem_max.load(),
         };
     }
 
     pub fn addSnapshot(self: *Timing, snapshot_value: TimingSnapshot) void {
         self.lowering.addSnapshot(.{
             .monotype_ns = snapshot_value.monotype_ns,
-            .postcheck_to_lir_ns = snapshot_value.postcheck_to_lir_ns,
-            .lir_passes_arc_ns = snapshot_value.lir_passes_arc_ns,
+            // The compile-time evaluation report shows lowering as one
+            // category; re-attribute the merged span to its first stage.
+            .lift_ns = snapshot_value.postcheck_to_lir_ns,
+            .lir_passes_ns = snapshot_value.lir_passes_ns,
+            .arc_ns = snapshot_value.arc_ns,
         });
         self.total_ns.add(snapshot_value.total_ns);
         self.static_data_ns.add(snapshot_value.static_data_ns);
         self.code_generation_ns.add(snapshot_value.code_generation_ns);
         self.execution_ns.add(snapshot_value.execution_ns);
         self.store_results_ns.add(snapshot_value.store_results_ns);
+        if (snapshot_value.mem_min != std.math.maxInt(u64)) self.mem_min.fold(snapshot_value.mem_min);
+        self.mem_max.fold(snapshot_value.mem_max);
     }
 
-    fn start(self: *const Timing) i64 {
+    fn start(self: *Timing) i64 {
+        self.sampleMemory();
         return nowNs(self.std_io);
     }
 
+    fn sampleMemory(self: *Timing) void {
+        const bytes = base.process_memory.currentBytes() orelse return;
+        self.mem_min.fold(bytes);
+        self.mem_max.fold(bytes);
+    }
+
     fn finish(self: *Timing, started_ns: i64, phase: TimingPhase) void {
+        self.sampleMemory();
         const elapsed_ns: u64 = @intCast(@max(0, nowNs(self.std_io) - started_ns));
         switch (phase) {
             .total => self.total_ns.add(elapsed_ns),
@@ -104,6 +126,56 @@ pub const Timing = struct {
             .code_generation => self.code_generation_ns.add(elapsed_ns),
             .execution => self.execution_ns.add(elapsed_ns),
             .store_results => self.store_results_ns.add(elapsed_ns),
+        }
+    }
+};
+
+const MemMinCounter = if (base.parallel.is_freestanding or builtin.target.cpu.arch == .wasm32) struct {
+    value: u64 = std.math.maxInt(u64),
+
+    fn load(self: *const @This()) u64 {
+        return self.value;
+    }
+
+    fn fold(self: *@This(), sample: u64) void {
+        if (sample < self.value) self.value = sample;
+    }
+} else struct {
+    value: std.atomic.Value(u64) = std.atomic.Value(u64).init(std.math.maxInt(u64)),
+
+    fn load(self: *const @This()) u64 {
+        return self.value.load(.monotonic);
+    }
+
+    fn fold(self: *@This(), sample: u64) void {
+        var current = self.value.load(.monotonic);
+        while (sample < current) {
+            current = self.value.cmpxchgWeak(current, sample, .monotonic, .monotonic) orelse return;
+        }
+    }
+};
+
+const MemMaxCounter = if (base.parallel.is_freestanding or builtin.target.cpu.arch == .wasm32) struct {
+    value: u64 = 0,
+
+    fn load(self: *const @This()) u64 {
+        return self.value;
+    }
+
+    fn fold(self: *@This(), sample: u64) void {
+        if (sample > self.value) self.value = sample;
+    }
+} else struct {
+    value: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+
+    fn load(self: *const @This()) u64 {
+        return self.value.load(.monotonic);
+    }
+
+    fn fold(self: *@This(), sample: u64) void {
+        var current = self.value.load(.monotonic);
+        while (sample > current) {
+            current = self.value.cmpxchgWeak(current, sample, .monotonic, .monotonic) orelse return;
         }
     }
 };
@@ -135,11 +207,14 @@ pub const TimingSnapshot = struct {
     total_ns: u64 = 0,
     monotype_ns: u64 = 0,
     postcheck_to_lir_ns: u64 = 0,
-    lir_passes_arc_ns: u64 = 0,
+    lir_passes_ns: u64 = 0,
+    arc_ns: u64 = 0,
     static_data_ns: u64 = 0,
     code_generation_ns: u64 = 0,
     execution_ns: u64 = 0,
     store_results_ns: u64 = 0,
+    mem_min: u64 = std.math.maxInt(u64),
+    mem_max: u64 = 0,
 };
 
 const TimingPhase = enum {

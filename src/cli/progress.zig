@@ -17,6 +17,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const base = @import("base");
 const ansi = @import("ansi_term.zig");
 
 /// Whether the current target can spawn the background animation thread.
@@ -28,6 +29,10 @@ const ThreadHandle = if (supports_threads) std.Thread else void;
 
 /// How often the spinner/counter is redrawn while a phase is running.
 const tick_ns: u64 = 125 * std.time.ns_per_ms;
+
+/// How often memory is sampled when `--timings` is active. Sampling is paid
+/// only in that mode; the animation-only thread keeps the slower redraw tick.
+const mem_tick_ns: u64 = 10 * std.time.ns_per_ms;
 
 /// Operations slower than this show their breakdown even without `--timings`.
 const default_threshold_ns: u64 = std.time.ns_per_s;
@@ -59,6 +64,15 @@ const Phase = struct {
     sub: [8]SubTiming = undefined,
     sub_len: u8 = 0,
     show_parent_with_subs: bool = false,
+    /// Smallest and largest process footprint sampled while this phase was
+    /// active. `mem_max == 0` means no sample landed (sampling off, or the
+    /// phase was shorter than the sampling tick and the boundary reads
+    /// failed), and the row prints without a memory column.
+    mem_min: u64 = std.math.maxInt(u64),
+    mem_max: u64 = 0,
+    /// Per-sub memory ranges, filled only for sequential breakdowns by
+    /// slicing the sample buffer over each sub's reconstructed window.
+    sub_mem: [8]Reporter.MemRange = @splat(.{}),
 };
 
 /// Configuration for a `Reporter`.
@@ -86,6 +100,15 @@ pub const Reporter = struct {
     start_ts: std.Io.Timestamp,
 
     mutex: std.Io.Mutex = .init,
+    /// Timestamped footprint samples for slicing sequential breakdowns.
+    /// When full, every other sample is dropped and the stride doubles, so
+    /// resolution degrades gracefully on long operations.
+    samples: [4096]MemSample = undefined,
+    sample_len: u16 = 0,
+    sample_stride_ns: u64 = mem_tick_ns,
+    last_sample_ns: u64 = 0,
+    /// Largest footprint sampled over the whole operation.
+    peak_bytes: u64 = 0,
     phases: [max_phases]Phase = undefined,
     phase_count: usize = 0,
     active: ?usize = null,
@@ -112,10 +135,12 @@ pub const Reporter = struct {
         };
     }
 
-    /// Spawn the background animation thread (no-op when not animating).
+    /// Spawn the background thread. It animates when drawing to a terminal
+    /// and samples memory when `--timings` is active; with neither there is
+    /// nothing to do and no thread is spawned.
     pub fn start(self: *Reporter) void {
         if (comptime supports_threads) {
-            if (!self.animate) return;
+            if (!self.animate and !self.always) return;
             self.thread = std.Thread.spawn(.{}, bgLoop, .{self}) catch null;
         }
     }
@@ -130,6 +155,7 @@ pub const Reporter = struct {
         self.phases[idx] = .{ .name = name, .start_ns = self.elapsedNs() };
         self.active = idx;
         self.phase_count += 1;
+        self.sampleMemoryLocked();
         if (self.displaying) self.drawActiveLine();
     }
 
@@ -142,11 +168,46 @@ pub const Reporter = struct {
 
     /// End the active phase and record a sub-timing breakdown to display in its
     /// place (e.g. splitting "Type Checking" into its constituent phases).
+    /// The sub durations are per-category aggregates over interleaved work,
+    /// so no per-sub memory range can be attributed.
     pub fn endWithBreakdown(self: *Reporter, subs: []const SubTiming) void {
         self.mutex.lockUncancelable(self.std_io);
         defer self.mutex.unlock(self.std_io);
         self.endActiveLocked(subs);
     }
+
+    /// End the active phase with a breakdown whose subs ran once each, in
+    /// order. Each sub's window is reconstructed from the cumulative
+    /// durations and sliced from the sample buffer for a per-sub memory
+    /// range.
+    pub fn endWithBreakdownSequential(self: *Reporter, subs: []const SubTiming) void {
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
+        const idx = self.active orelse return;
+        self.sampleMemoryLocked();
+        if (self.always) {
+            var cursor = self.phases[idx].start_ns;
+            const n = @min(subs.len, self.phases[idx].sub_mem.len);
+            for (subs[0..n], 0..) |sub, i| {
+                self.phases[idx].sub_mem[i] = self.sampleRangeInWindow(cursor, cursor + sub.ns);
+                cursor += sub.ns;
+            }
+        }
+        self.endActiveLocked(subs);
+    }
+
+    /// A memory range observed by the producer of an externally timed phase.
+    /// The reporter cannot window-sample work that runs interleaved inside
+    /// another phase, so the producer supplies its own boundary readings.
+    pub const MemRange = struct {
+        min: u64 = std.math.maxInt(u64),
+        max: u64 = 0,
+    };
+
+    const MemSample = struct {
+        at_ns: u64,
+        bytes: u64,
+    };
 
     /// Append a phase that completed inside another synchronous operation.
     /// The parent row shows `duration_ns`, followed by indented sub-timings.
@@ -154,6 +215,7 @@ pub const Reporter = struct {
         self: *Reporter,
         name: []const u8,
         duration_ns: u64,
+        mem: MemRange,
         subs: []const SubTiming,
     ) void {
         self.mutex.lockUncancelable(self.std_io);
@@ -166,6 +228,8 @@ pub const Reporter = struct {
             .start_ns = 0,
             .end_ns = duration_ns,
             .show_parent_with_subs = true,
+            .mem_min = mem.min,
+            .mem_max = if (self.always) mem.max else 0,
         };
         const n = @min(subs.len, self.phases[idx].sub.len);
         for (subs[0..n], 0..) |sub, i| self.phases[idx].sub[i] = sub;
@@ -176,6 +240,7 @@ pub const Reporter = struct {
 
     fn endActiveLocked(self: *Reporter, subs: []const SubTiming) void {
         const idx = self.active orelse return;
+        self.sampleMemoryLocked();
         self.phases[idx].end_ns = self.elapsedNs();
         const n = @min(subs.len, self.phases[idx].sub.len);
         for (subs[0..n], 0..) |s, i| self.phases[idx].sub[i] = s;
@@ -198,6 +263,9 @@ pub const Reporter = struct {
         const threshold_reached = self.is_tty and self.elapsedNs() >= self.threshold_ns;
         if (!self.displaying and (self.always or threshold_reached)) {
             self.printStaticBreakdown();
+        } else if (self.displaying) {
+            var totals_buf: [64]u8 = undefined;
+            self.writer.print("{f}{s}\n", .{ padName(self.op_label), self.formatTotals(&totals_buf) }) catch {};
         }
         self.writer.flush() catch {};
     }
@@ -234,16 +302,61 @@ pub const Reporter = struct {
     }
 
     fn bgLoop(self: *Reporter) void {
+        const sleep_ns = if (self.always) mem_tick_ns else tick_ns;
+        const draws_every: u64 = if (self.always) tick_ns / mem_tick_ns else 1;
+        var wakeups: u64 = 0;
         while (true) {
-            self.std_io.sleep(std.Io.Duration.fromNanoseconds(tick_ns), .awake) catch {};
+            self.std_io.sleep(std.Io.Duration.fromNanoseconds(sleep_ns), .awake) catch {};
             self.mutex.lockUncancelable(self.std_io);
             if (self.stop) {
                 self.mutex.unlock(self.std_io);
                 break;
             }
-            self.tick();
+            if (self.always) self.sampleMemoryLocked();
+            wakeups += 1;
+            if (self.animate and wakeups % draws_every == 0) self.tick();
             self.mutex.unlock(self.std_io);
         }
+    }
+
+    /// Fold the current process footprint into the active phase's range and
+    /// the sample buffer. Caller holds the mutex. Only `--timings` runs pay
+    /// for the read.
+    fn sampleMemoryLocked(self: *Reporter) void {
+        if (!self.always) return;
+        const idx = self.active orelse return;
+        const bytes = base.process_memory.currentBytes() orelse return;
+        const p = &self.phases[idx];
+        if (bytes < p.mem_min) p.mem_min = bytes;
+        if (bytes > p.mem_max) p.mem_max = bytes;
+        if (bytes > self.peak_bytes) self.peak_bytes = bytes;
+
+        const now = self.elapsedNs();
+        if (self.sample_len > 0 and now - self.last_sample_ns < self.sample_stride_ns) return;
+        if (self.sample_len == self.samples.len) {
+            var write: u16 = 0;
+            var read: u16 = 0;
+            while (read < self.sample_len) : (read += 2) {
+                self.samples[write] = self.samples[read];
+                write += 1;
+            }
+            self.sample_len = write;
+            self.sample_stride_ns *= 2;
+        }
+        self.samples[self.sample_len] = .{ .at_ns = now, .bytes = bytes };
+        self.sample_len += 1;
+        self.last_sample_ns = now;
+    }
+
+    /// Smallest and largest buffered sample in `[from_ns, to_ns]`.
+    fn sampleRangeInWindow(self: *const Reporter, from_ns: u64, to_ns: u64) MemRange {
+        var range = MemRange{};
+        for (self.samples[0..self.sample_len]) |sample| {
+            if (sample.at_ns < from_ns or sample.at_ns > to_ns) continue;
+            if (sample.bytes < range.min) range.min = sample.bytes;
+            if (sample.bytes > range.max) range.max = sample.bytes;
+        }
+        return range;
     }
 
     /// One animation frame. Caller holds the mutex.
@@ -278,7 +391,8 @@ pub const Reporter = struct {
 
     /// Print the whole breakdown at once (no animation). Caller holds the mutex.
     fn printStaticBreakdown(self: *Reporter) void {
-        self.writer.print("{s}\n", .{self.op_label}) catch {};
+        var totals_buf: [64]u8 = undefined;
+        self.writer.print("{f}{s}\n", .{ padName(self.op_label), self.formatTotals(&totals_buf) }) catch {};
         var i: usize = 0;
         while (i < self.phase_count) : (i += 1) self.writeCommittedPhase(i);
     }
@@ -313,20 +427,29 @@ pub const Reporter = struct {
     fn writeCommittedPhase(self: *Reporter, idx: usize) void {
         const p = self.phases[idx];
         const check = if (self.is_tty) ansi.green ++ "\u{2713}" ++ ansi.reset else "\u{2713}";
+        var mem_buf: [48]u8 = undefined;
+        const mem = formatMemRange(&mem_buf, p.mem_min, p.mem_max);
         if (p.sub_len > 0) {
-            if (p.show_parent_with_subs) {
+            // A parent with a sampled memory range always gets its own row:
+            // sub-timings are per-category aggregates over interleaved work,
+            // so the range is only truthful on the parent's contiguous window.
+            const show_parent = p.show_parent_with_subs or mem.len > 0;
+            if (show_parent) {
                 var parent_buf: [32]u8 = undefined;
                 const total = (p.end_ns orelse self.elapsedNs()) - p.start_ns;
                 const parent_dur = formatDuration(&parent_buf, total, .final);
-                self.writer.print("  {s} {f} {s}\n", .{ check, padName(p.name), parent_dur }) catch {};
+                self.writer.print("  {s} {f} {s}{s}\n", .{ check, padName(p.name), parent_dur, mem }) catch {};
             }
-            for (p.sub[0..p.sub_len]) |s| {
+            for (p.sub[0..p.sub_len], 0..) |s, sub_index| {
                 var buf: [32]u8 = undefined;
                 const dur = formatDuration(&buf, s.ns, .final);
-                if (p.show_parent_with_subs) {
-                    self.writer.print("      {f} {s}\n", .{ padChildName(s.name), dur }) catch {};
+                var sub_mem_buf: [48]u8 = undefined;
+                const sub_range = p.sub_mem[sub_index];
+                const sub_mem = formatMemRange(&sub_mem_buf, sub_range.min, sub_range.max);
+                if (show_parent) {
+                    self.writer.print("      {f} {s}{s}\n", .{ padChildName(s.name), dur, sub_mem }) catch {};
                 } else {
-                    self.writer.print("  {s} {f} {s}\n", .{ check, padName(s.name), dur }) catch {};
+                    self.writer.print("  {s} {f} {s}{s}\n", .{ check, padName(s.name), dur, sub_mem }) catch {};
                 }
             }
             return;
@@ -334,13 +457,25 @@ pub const Reporter = struct {
         const total = (p.end_ns orelse self.elapsedNs()) - p.start_ns;
         var buf: [32]u8 = undefined;
         const dur = formatDuration(&buf, total, .final);
-        self.writer.print("  {s} {f} {s}\n", .{ check, padName(p.name), dur }) catch {};
+        self.writer.print("  {s} {f} {s}{s}\n", .{ check, padName(p.name), dur, mem }) catch {};
     }
 
     /// Return to the start of the current line and clear it. Caller holds mutex.
     fn clearLine(self: *Reporter) void {
         self.writer.writeAll("\r") catch {};
         ansi.clearFromCursorToLineEnd(self.writer) catch {};
+    }
+
+    /// "2m 25s, peak RSS 5.9GB" (the memory part only when sampled).
+    fn formatTotals(self: *Reporter, buf: []u8) []const u8 {
+        var dur_buf: [32]u8 = undefined;
+        const dur = formatDuration(&dur_buf, self.elapsedNs(), .final);
+        if (self.peak_bytes == 0) {
+            return std.fmt.bufPrint(buf, "{s}", .{dur}) catch buf[0..0];
+        }
+        var bytes_buf: [16]u8 = undefined;
+        const peak = formatBytes(&bytes_buf, self.peak_bytes);
+        return std.fmt.bufPrint(buf, "{s}, peak RSS {s}", .{ dur, peak }) catch buf[0..0];
     }
 
     fn elapsedNs(self: *Reporter) u64 {
@@ -416,7 +551,51 @@ fn formatDuration(buf: []u8, ns: u64, style: DurationStyle) []const u8 {
     }
 }
 
+/// Format `, RSS 123MB - 456MB` for a sampled range, or an empty string when
+/// no sample landed.
+fn formatMemRange(buf: []u8, mem_min: u64, mem_max: u64) []const u8 {
+    if (mem_max == 0) return buf[0..0];
+    var low_buf: [16]u8 = undefined;
+    var high_buf: [16]u8 = undefined;
+    const low = formatBytes(&low_buf, mem_min);
+    const high = formatBytes(&high_buf, mem_max);
+    if (std.mem.eql(u8, low, high)) {
+        return std.fmt.bufPrint(buf, ", RSS {s}", .{high}) catch buf[0..0];
+    }
+    return std.fmt.bufPrint(buf, ", RSS {s} - {s}", .{ low, high }) catch buf[0..0];
+}
+
+/// Format a byte count as KB below 1MB, whole MB below 1GB, and GB with one
+/// decimal above that.
+fn formatBytes(buf: []u8, bytes: u64) []const u8 {
+    const mb = 1024 * 1024;
+    const gb = 1024 * mb;
+    if (bytes < mb) {
+        return std.fmt.bufPrint(buf, "{d}KB", .{(bytes + 512) / 1024}) catch buf[0..0];
+    }
+    if (bytes < gb) {
+        return std.fmt.bufPrint(buf, "{d}MB", .{(bytes + mb / 2) / mb}) catch buf[0..0];
+    }
+    const gb_f = @as(f64, @floatFromInt(bytes)) / @as(f64, @floatFromInt(gb));
+    return std.fmt.bufPrint(buf, "{d:.1}GB", .{gb_f}) catch buf[0..0];
+}
+
 const testing = std.testing;
+
+test "formatBytes ranges" {
+    var buf: [16]u8 = undefined;
+    try testing.expectEqualStrings("512KB", formatBytes(&buf, 512 * 1024));
+    try testing.expectEqualStrings("123MB", formatBytes(&buf, 123 * 1024 * 1024));
+    try testing.expectEqualStrings("5.5GB", formatBytes(&buf, 5673 * 1024 * 1024));
+}
+
+test "formatMemRange collapses equal endpoints and skips missing samples" {
+    var buf: [48]u8 = undefined;
+    try testing.expectEqualStrings("", formatMemRange(&buf, std.math.maxInt(u64), 0));
+    const mb = 1024 * 1024;
+    try testing.expectEqualStrings(", RSS 123MB - 456MB", formatMemRange(&buf, 123 * mb, 456 * mb));
+    try testing.expectEqualStrings(", RSS 200MB", formatMemRange(&buf, 200 * mb, 200 * mb));
+}
 
 test "formatDuration live: whole seconds" {
     var buf: [32]u8 = undefined;
@@ -476,10 +655,11 @@ fn collectStatic(buf: *std.Io.Writer.Allocating, timings_flag: bool) void {
         .{ .name = "Name Resolution", .ns = 20 * std.time.ns_per_ms },
         .{ .name = "Type Inference", .ns = 30 * std.time.ns_per_ms },
     });
-    reporter.recordCompletedWithBreakdown("Compile-Time Evaluation", 70 * std.time.ns_per_ms, &.{
-        .{ .name = "Monotype Specialization", .ns = 40 * std.time.ns_per_ms },
-        .{ .name = "Post-Check to LIR", .ns = 10 * std.time.ns_per_ms },
-        .{ .name = "LIR Passes + ARC", .ns = 5 * std.time.ns_per_ms },
+    reporter.recordCompletedWithBreakdown("Compile-Time Evaluation", 70 * std.time.ns_per_ms, .{}, &.{
+        .{ .name = "Specialization", .ns = 40 * std.time.ns_per_ms },
+        .{ .name = "LIR Generation", .ns = 10 * std.time.ns_per_ms },
+        .{ .name = "LIR Passes", .ns = 3 * std.time.ns_per_ms },
+        .{ .name = "ARC", .ns = 2 * std.time.ns_per_ms },
         .{ .name = "Static Data", .ns = 5 * std.time.ns_per_ms },
         .{ .name = "x64 Instruction Generation", .ns = 5 * std.time.ns_per_ms },
         .{ .name = "Execution", .ns = 3 * std.time.ns_per_ms },
@@ -500,23 +680,31 @@ test "static breakdown lists every phase with the timings flag" {
     collectStatic(&buf, true);
 
     const out = buf.written();
-    try testing.expect(std.mem.find(u8, out, "roc build\n") != null);
+    try testing.expect(std.mem.startsWith(u8, out, "roc build"));
     try testing.expect(std.mem.find(u8, out, "Resolving Dependencies") != null);
     try testing.expect(std.mem.find(u8, out, "Parsing") != null);
     try testing.expect(std.mem.find(u8, out, "Name Resolution") != null);
     try testing.expect(std.mem.find(u8, out, "Type Inference") != null);
     try testing.expect(std.mem.find(u8, out, "Compile-Time Evaluation") != null);
-    try testing.expect(std.mem.find(u8, out, "Monotype Specialization") != null);
-    try testing.expect(std.mem.find(u8, out, "Monotype Specialization    40ms") != null);
-    try testing.expect(std.mem.find(u8, out, "LIR Passes + ARC") != null);
+    try testing.expect(std.mem.find(u8, out, "Specialization") != null);
+    try testing.expect(std.mem.find(u8, out, "40ms") != null);
+    try testing.expect(std.mem.find(u8, out, "LIR Passes") != null);
+    try testing.expect(std.mem.find(u8, out, "ARC") != null);
     try testing.expect(std.mem.find(u8, out, "Store Results") != null);
     try testing.expect(std.mem.find(u8, out, "x64 Instruction Generation") != null);
     try testing.expect(std.mem.find(u8, out, "LLVM IR Generation") != null);
     // The post-codegen backend phases each get their own aligned row.
     try testing.expect(std.mem.find(u8, out, "LLVM Optimize + Emit") != null);
     try testing.expect(std.mem.find(u8, out, "Linking") != null);
-    // Type Checking is replaced by its breakdown, not shown directly.
-    try testing.expect(std.mem.find(u8, out, "Type Checking") == null);
+    // With a sampled memory range the parent row shows above its breakdown
+    // (the range is only truthful on the parent's contiguous window); without
+    // sampling the breakdown replaces it entirely.
+    if (base.process_memory.currentBytes() != null) {
+        try testing.expect(std.mem.find(u8, out, "Type Checking") != null);
+        try testing.expect(std.mem.find(u8, out, ", RSS ") != null);
+    } else {
+        try testing.expect(std.mem.find(u8, out, "Type Checking") == null);
+    }
 }
 
 test "fast run without the timings flag prints nothing" {
