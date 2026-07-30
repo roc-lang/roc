@@ -698,11 +698,19 @@ test "Monotype match lowering relates patterns before specialization and project
     try expectNotContains(match_source, "lowerPatternAtType(entry.pattern.pattern");
 
     const relate = std.mem.find(u8, match_source, "try relateRequestComponent(").?;
+    const prepare_rebind = std.mem.find(u8, match_source, "try entry.ctx.rebindPreRegisteredPatternBindersAtNode").?;
+    const prepare_result = std.mem.find(u8, match_source, "try entry.ctx.prepareControlFlowResultSelection").?;
     const guards = std.mem.find(u8, match_source, "entry.ctx.runtime_demand_guard_frames =").?;
-    const rebind_pattern = std.mem.find(u8, match_source, "try entry.ctx.rebindPreRegisteredPatternBindersAtNode").?;
+    const rebind_pattern = guards + std.mem.find(
+        u8,
+        match_source[guards..],
+        "try entry.ctx.rebindPreRegisteredPatternBindersAtNode",
+    ).?;
     const lower_pattern = std.mem.find(u8, match_source, "try entry.ctx.lowerPatternAtNode").?;
     const lower_body = std.mem.find(u8, match_source, "try entry.ctx.lowerMatchBranchBody").?;
-    try std.testing.expect(relate < guards);
+    try std.testing.expect(relate < prepare_rebind);
+    try std.testing.expect(prepare_rebind < prepare_result);
+    try std.testing.expect(prepare_result < guards);
     try std.testing.expect(guards < rebind_pattern);
     try std.testing.expect(rebind_pattern < lower_body);
     try std.testing.expect(lower_body < lower_pattern);
