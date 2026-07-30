@@ -8355,10 +8355,10 @@ fn llvmOptimizationLevel(opt: cli_args.OptLevel) builder.OptimizationLevel {
     };
 }
 
-fn devCodeGenerationPhaseName(target_arch: std.Target.Cpu.Arch) []const u8 {
+fn devBackendPhaseName(target_arch: std.Target.Cpu.Arch) []const u8 {
     return switch (target_arch) {
-        .x86_64 => "x64 Instruction Generation",
-        .aarch64 => "arm64 Instruction Generation",
+        .x86_64 => "x64 Backend",
+        .aarch64 => "arm64 Backend",
         .wasm32 => "wasm32 Bytecode Generation",
         else => {
             if (builtin.mode == .Debug) {
@@ -8372,10 +8372,34 @@ fn devCodeGenerationPhaseName(target_arch: std.Target.Cpu.Arch) []const u8 {
     };
 }
 
-test "dev code-generation timing labels name the emitted instruction format" {
-    try std.testing.expectEqualStrings("x64 Instruction Generation", devCodeGenerationPhaseName(.x86_64));
-    try std.testing.expectEqualStrings("arm64 Instruction Generation", devCodeGenerationPhaseName(.aarch64));
-    try std.testing.expectEqualStrings("wasm32 Bytecode Generation", devCodeGenerationPhaseName(.wasm32));
+fn devInstructionGenerationPhaseName(target_arch: std.Target.Cpu.Arch) []const u8 {
+    return switch (target_arch) {
+        .x86_64 => "x64 Instruction Generation",
+        .aarch64 => "arm64 Instruction Generation",
+        .wasm32 => "wasm32 Bytecode Generation",
+        else => devBackendPhaseName(target_arch),
+    };
+}
+
+fn devBackendBreakdown(timing: backend.ObjectFileCompiler.TimingSnapshot) [8]progress.SubTiming {
+    return .{
+        .{ .name = "Backend Setup", .ns = timing.backend_setup_ns },
+        .{ .name = "Procedure Instructions", .ns = timing.procedure_instructions_ns },
+        .{ .name = "RC Helper Instructions", .ns = timing.rc_helper_instructions_ns },
+        .{ .name = "Entrypoint Instructions", .ns = timing.entrypoint_instructions_ns },
+        .{ .name = "Symbols + Relocations", .ns = timing.symbol_relocations_ns },
+        .{ .name = "DWARF Generation", .ns = timing.dwarf_ns },
+        .{ .name = "Object Encoding", .ns = timing.object_encoding_ns },
+        .{ .name = "Object File Write", .ns = timing.file_io_ns },
+    };
+}
+
+test "dev backend timing labels name the backend and emitted instruction format" {
+    try std.testing.expectEqualStrings("x64 Backend", devBackendPhaseName(.x86_64));
+    try std.testing.expectEqualStrings("arm64 Backend", devBackendPhaseName(.aarch64));
+    try std.testing.expectEqualStrings("wasm32 Bytecode Generation", devBackendPhaseName(.wasm32));
+    try std.testing.expectEqualStrings("x64 Instruction Generation", devInstructionGenerationPhaseName(.x86_64));
+    try std.testing.expectEqualStrings("arm64 Instruction Generation", devInstructionGenerationPhaseName(.aarch64));
 }
 
 fn noTargetLibcallsForLlvmBuild(target: RocTarget) bool {
@@ -8877,6 +8901,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
 
+    reporter.begin("Static Data");
     const static_data_exports = try compile.static_data_exports.buildStaticData(
         ctx.gpa,
         .{
@@ -8887,6 +8912,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         target,
         .{ .include_provided_exports = true },
     );
+    reporter.end();
     defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
 
     if (entrypoints.len == 0 and static_data_exports.len == 0) {
@@ -9132,7 +9158,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
             return error.UnsupportedTarget;
         },
     }
-    const code_generation_phase_name = devCodeGenerationPhaseName(target_arch);
+    const code_generation_phase_name = devBackendPhaseName(target_arch);
 
     const final_output_path = if (args.output != null)
         output_path
@@ -9189,6 +9215,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
 
+    reporter.begin("Static Data");
     const static_data_exports = try compile.static_data_exports.buildStaticData(
         ctx.gpa,
         .{
@@ -9199,6 +9226,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         target,
         .{ .include_provided_exports = true },
     );
+    reporter.end();
     defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
 
     if (target_arch == .wasm32) {
@@ -9242,6 +9270,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
 
     var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
     object_compiler.enable_default_platform_runtime = args.synthetic_default_platform;
+    var backend_timing = backend.ObjectFileCompiler.Timing.init(ctx.io.std_io);
+    object_compiler.timing = &backend_timing;
 
     const build_scratch_dir = createUniqueTempDir(ctx) catch |err| {
         return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
@@ -9267,7 +9297,9 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         std.log.err("Native compilation failed: {}", .{err});
         return error.NativeCompilationFailed;
     };
+    reporter.endWithBreakdown(&devBackendBreakdown(backend_timing.snapshot()));
 
+    reporter.begin("Linking");
     const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, resolved_targets_config, target, link_type);
 
     const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, BuiltinsObjects.filenameExtern(target) });
@@ -9285,9 +9317,6 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
             return error.UnsupportedTarget;
         }
     }
-    reporter.end();
-
-    reporter.begin("Linking");
     if (link_type == .archive) {
         try writeArchiveOutput(ctx, target, final_output_path, link_inputs, object_files.items);
     } else {
@@ -13856,7 +13885,7 @@ fn compileTimeEvaluationBreakdown(timing: anytype) [8]progress.SubTiming {
         .{ .name = "LIR Passes", .ns = timing.lir_passes_ns },
         .{ .name = "ARC", .ns = timing.arc_ns },
         .{ .name = "Static Data", .ns = timing.static_data_ns },
-        .{ .name = devCodeGenerationPhaseName(backend.dev.LirCodeGenMod.host_lir_codegen_target.toCpuArch()), .ns = timing.code_generation_ns },
+        .{ .name = devInstructionGenerationPhaseName(backend.dev.LirCodeGenMod.host_lir_codegen_target.toCpuArch()), .ns = timing.code_generation_ns },
         .{ .name = "Execution", .ns = timing.execution_ns },
         .{ .name = "Store Results", .ns = timing.store_results_ns },
     };
