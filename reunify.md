@@ -2691,6 +2691,34 @@ expose additional unpublished logical facts. Each finding is fixed at
 checking or publication — never reconstructed downstream. The Slice 0
 census sizes this tail before Slice 6 meets it.
 
+**15.1b The census cannot say which side of a disagreement is right.**
+Every measurement in §13.3 compares the graph against directed
+translation, and that comparison is symmetric: it reports that the two
+differ, never which one the program's meaning agrees with. The reading
+applied throughout — that a disagreement is directed translation lacking
+something — is argued only for the empty-tag-union population, where one
+side materializes the shape a position no value reached takes, which is
+never a plausible correct type. It is NOT argued for a disagreement where
+both sides carry real content, and the pre-emission census had those:
+differing heads, differing row widths, differing nominal identity. Those
+are at zero now, which was attributed to emission completing the directed
+side; it is equally consistent with emission removing a case where the
+graph was wrong. Since §6.9's premise is that postcheck re-derivation is a
+bug factory, a disagreement being a live defect in the current compiler is
+the project's own thesis rather than a remote possibility, and this
+project has already found such defects — the `reintern` call that dropped
+a named backing's authority is one.
+
+The comparison that resolves direction is different from the one being
+run: checking is the authority on logical types, so a postcheck-derived
+type that contradicts the checked data for its position is wrong
+regardless of what directed translation says. Measuring graph against
+CHECKED DATA, rather than graph against directed, is what would separate
+"the recorded substitution is incomplete" from "the solver being deleted
+is miscompiling". Note that a full corpus passing does not settle it: eval
+is 1787/0/0 on the current compiler, so any such defect is either outside
+the corpus or not observable in its output.
+
 **15.2 The groundness verdict could be worse than expected.** If callee-row
 widening routinely carries information the frozen types lack, the fix is a
 finalization change (fuller rows), which may grow the artifact and shift
