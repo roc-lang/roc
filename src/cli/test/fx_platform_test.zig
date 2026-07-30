@@ -1879,3 +1879,28 @@ test "default app resolves a sibling type module imported with exposing" {
 
     try testing.expectEqualStrings("", result.stdout);
 }
+
+test "directory-qualified local modules resolve from source subdirectories" {
+    const allocator = testing.allocator;
+
+    const app_result = try util.runRoc(
+        std.testing.io,
+        allocator,
+        &.{"--opt=interpreter"},
+        "test/fx/directory_qualified_local_module/main.roc",
+    );
+    defer allocator.free(app_result.stdout);
+    defer allocator.free(app_result.stderr);
+    try util.checkSuccess(app_result);
+    try testing.expectEqualStrings("directory-qualified local module\n", app_result.stdout);
+
+    const package_result = try util.runRoc(
+        std.testing.io,
+        allocator,
+        &.{ "check", "--no-cache" },
+        "test/fx/directory_qualified_local_module/package/main.roc",
+    );
+    defer allocator.free(package_result.stdout);
+    defer allocator.free(package_result.stderr);
+    try util.checkSuccess(package_result);
+}

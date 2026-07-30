@@ -45,7 +45,7 @@ fn rand_region(random: std.Random) AST.TokenizedRegion {
 /// Helper to create a `DataSpan` from raw start and length positions.
 fn rand_span(random: std.Random) base.DataSpan {
     const start = random.int(u32);
-    const len = random.int(u30); // Constrain len to fit within u30 (used by ImportRhs.num_exposes)
+    const len = random.int(u32);
     return base.DataSpan{
         .start = start,
         .len = len,
@@ -240,7 +240,7 @@ test "NodeStore round trip - Statement" {
             .qualifier_tok = rand_token_idx(random),
             .region = rand_region(random),
             .exposes = AST.ExposedItem.Span{ .span = rand_span(random) },
-            .nested_import = false,
+            .nested_import = true,
         },
     });
     // Import with both qualifier and alias

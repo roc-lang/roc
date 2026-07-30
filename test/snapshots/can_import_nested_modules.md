@@ -31,12 +31,12 @@ validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)
 validateAuth = |creds| HttpAuth.validate(creds)
 ~~~
 # EXPECTED
-MOD NOT IMPORTED - can_import_nested_mods.md:6:15:6:30
+MISSING NESTED TYPE - can_import_nested_mods.md:6:15:6:30
 DOES NOT EXIST - can_import_nested_mods.md:7:26:7:41
 MOD NOT FOUND - can_import_nested_mods.md:10:36:10:42
 NAME NOT IN SCOPE - can_import_nested_mods.md:11:29:11:43
-MOD NOT IMPORTED - can_import_nested_mods.md:14:15:14:37
-MOD NOT IMPORTED - can_import_nested_mods.md:14:55:14:74
+MISSING NESTED TYPE - can_import_nested_mods.md:14:15:14:37
+MISSING NESTED TYPE - can_import_nested_mods.md:14:55:14:74
 DOES NOT EXIST - can_import_nested_mods.md:16:5:16:37
 NAME NOT IN SCOPE - can_import_nested_mods.md:20:23:20:30
 DOES NOT EXIST - can_import_nested_mods.md:20:37:20:58
@@ -47,8 +47,8 @@ NAME NOT IN SCOPE - can_import_nested_mods.md:24:24:24:41
 # PROBLEMS
 
 ┌─────────────────────┐
-│ MOD NOT IMPORTED ├─ There is no mod with the name `Config` imported ──┐
-└┬────────────────────┘  into this Roc file.                                  │
+│ MISSING NESTED TYPE ├─ `Config` is in scope, but it doesn't have a nested ──┐
+└┬────────────────────┘  type named `Settings`.                               │
  │                                                                            │
  │  parseConfig : Config.Settings -> Str                                      │
  │                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                             │
@@ -64,11 +64,12 @@ NAME NOT IN SCOPE - can_import_nested_mods.md:24:24:24:41
  │                           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                  │
  └───────────────────────────────────────── can_import_nested_mods.md:7:26 ┘
 
+    `Config` is in scope, but it has no associated `toString`.
 
 
 ┌──────────────────┐
-│ MOD NOT FOUND ├─ This `Token` type is declared to be in `http.Client`, ──┐
-└┬─────────────────┘  which does not exist.                                   │
+│ MOD NOT FOUND ├─ This `Token` type is declared to be in ─────────────────┐
+└┬─────────────────┘  `http.Client.Auth`, which does not exist.               │
  │                                                                            │
  │  authenticate : Str, Str -> HttpAuth.Token                                 │
  │                                     ‾‾‾‾‾‾                                 │
@@ -88,8 +89,8 @@ NAME NOT IN SCOPE - can_import_nested_mods.md:24:24:24:41
 
 
 ┌─────────────────────┐
-│ MOD NOT IMPORTED ├─ There is no mod with the name `Config.Parser` ────┐
-└┬────────────────────┘  imported into this Roc file.                         │
+│ MISSING NESTED TYPE ├─ `Config` is in scope, but it doesn't have a nested ──┐
+└┬────────────────────┘  type named `Advanced`.                               │
  │                                                                            │
  │  processData : Config.Parser.Advanced, Str -> Try(Str, Config.Parser.Error)│
  │                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                      │
@@ -98,8 +99,8 @@ NAME NOT IN SCOPE - can_import_nested_mods.md:24:24:24:41
 
 
 ┌─────────────────────┐
-│ MOD NOT IMPORTED ├─ There is no mod with the name `Config.Parser` ────┐
-└┬────────────────────┘  imported into this Roc file.                         │
+│ MISSING NESTED TYPE ├─ `Config` is in scope, but it doesn't have a nested ──┐
+└┬────────────────────┘  type named `Error`.                                  │
  │                                                                            │
  │  processData : Config.Parser.Advanced, Str -> Try(Str, Config.Parser.Error)│
  │                                                        ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾ │
@@ -115,6 +116,7 @@ NAME NOT IN SCOPE - can_import_nested_mods.md:24:24:24:41
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                          │
  └───────────────────────────────────────── can_import_nested_mods.md:16:5 ┘
 
+    `Config.Parser.Advanced` is in scope, but it has no associated `parseWith`.
 
 
 ┌───────────────────┐
@@ -136,11 +138,12 @@ NAME NOT IN SCOPE - can_import_nested_mods.md:24:24:24:41
  │                                      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                 │
  └──────────────────────────────────────── can_import_nested_mods.md:20:37 ┘
 
+    `Config` is in scope, but it has no associated `defaultPadding`.
 
 
 ┌──────────────────┐
 │ MOD NOT FOUND ├─ This `Credentials` type is declared to be in ───────────┐
-└┬─────────────────┘  `http.Client`, which does not exist.                    │
+└┬─────────────────┘  `http.Client.Auth`, which does not exist.               │
  │                                                                            │
  │  validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)│
  │                         ‾‾‾‾‾‾‾‾‾‾‾‾                                       │
@@ -149,8 +152,8 @@ NAME NOT IN SCOPE - can_import_nested_mods.md:24:24:24:41
 
 
 ┌──────────────────┐
-│ MOD NOT FOUND ├─ This `Token` type is declared to be in `http.Client`, ──┐
-└┬─────────────────┘  which does not exist.                                   │
+│ MOD NOT FOUND ├─ This `Token` type is declared to be in ─────────────────┐
+└┬─────────────────┘  `http.Client.Auth`, which does not exist.               │
  │                                                                            │
  │  validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)│
  │                                                     ‾‾‾‾‾‾                 │
@@ -159,8 +162,8 @@ NAME NOT IN SCOPE - can_import_nested_mods.md:24:24:24:41
 
 
 ┌──────────────────┐
-│ MOD NOT FOUND ├─ This `Error` type is declared to be in `http.Client`, ──┐
-└┬─────────────────┘  which does not exist.                                   │
+│ MOD NOT FOUND ├─ This `Error` type is declared to be in ─────────────────┐
+└┬─────────────────┘  `http.Client.Auth`, which does not exist.               │
  │                                                                            │
  │  validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)│
  │                                                                     ‾‾‾‾‾‾ │
@@ -374,9 +377,9 @@ validateAuth = |creds| HttpAuth.validate(creds)
 	(s-import (mod "json.Parser")
 		(exposes
 			(exposed (name "Config") (wildcard false))))
-	(s-import (mod "http.Client")
+	(s-import (mod "http.Client.Auth")
 		(exposes))
-	(s-import (mod "utils.String")
+	(s-import (mod "utils.String.Format")
 		(exposes
 			(exposed (name "padLeft") (wildcard false)))))
 ~~~

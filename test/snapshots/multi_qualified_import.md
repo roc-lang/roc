@@ -219,7 +219,7 @@ data = .encode("hello")
 		(e-runtime-error (tag "expr_not_canonicalized"))
 		(annotation
 			(ty-malformed)))
-	(s-import (mod "json.Core")
+	(s-import (mod "json.Core.Utf8")
 		(exposes
 			(exposed (name "Encoder") (wildcard false)))))
 ~~~

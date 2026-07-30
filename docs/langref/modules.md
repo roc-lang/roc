@@ -234,6 +234,33 @@ import Color as CC
 import json.Parser as JP
 ```
 
+### Modules in subdirectories
+
+An uppercase dotted module path maps to source subdirectories when the import has
+an explicit `as` or `exposing` clause. For example:
+
+```roc
+import Src.Widget as Widget
+import Internal.Http.Client exposing [send]
+```
+
+These imports load `Src/Widget.roc` and `Internal/Http/Client.roc`,
+respectively. The source-visible module name is the final path segment, so
+`Src/Widget.roc` defines the nominal type `Widget`.
+
+The explicit clause disambiguates a directory path from a nested type import.
+Without one, `import Url.ParseErr` imports the nested `ParseErr` type from
+`Url.roc`; it does not load `Url/ParseErr.roc`.
+
+A package can expose a module stored in a subdirectory by naming its import
+alias in the package header:
+
+```roc
+package [Widget] {}
+
+import Src.Widget as Widget
+```
+
 ### Importing types from packages
 
 Packages contain a collection of modules that are imported by applications, platforms or packages. Package dependencies are specified in the module header:

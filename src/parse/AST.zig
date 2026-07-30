@@ -783,33 +783,13 @@ pub fn resolveQualifiedName(
     }
 }
 
-/// Resolves the full module path for an import statement.
-/// For auto-expose imports, module_name_tok points to the second-to-last token.
-/// For explicit clause imports, module_name_tok points to the first token and
-/// we iterate through consecutive uppercase tokens.
-pub fn resolveImportModulePath(self: *const AST, module_name_tok: Token.Idx, qualifier_tok: ?Token.Idx, exposes: ExposedItem.Span) []const u8 {
+/// Resolves the module path selected by the parser for an import statement.
+///
+/// A nested import such as `import Url.ParseErr` resolves to module `Url`.
+/// An import with an explicit clause, such as
+/// `import Src.Widget exposing [message]`, resolves to module `Src.Widget`.
+pub fn resolveImportModulePath(self: *const AST, module_name_tok: Token.Idx, qualifier_tok: ?Token.Idx, nested_import: bool) []const u8 {
     const tags = self.tokens.tokens.items(.tag);
-
-    // Check if this is auto-expose by seeing if the first exposed item's token
-    // immediately follows module_name_tok
-    var is_auto_expose = false;
-    if (exposes.span.len > 0) {
-        const exposed_slice = self.store.exposedItemSlice(exposes);
-        if (exposed_slice.len > 0) {
-            const first_exposed = self.store.getExposedItem(exposed_slice[0]);
-            const first_exposed_tok: ?Token.Idx = switch (first_exposed) {
-                .lower_ident => |i| i.ident,
-                .upper_ident => |i| i.ident,
-                .upper_ident_star => |i| i.ident,
-                .malformed => null,
-            };
-            if (first_exposed_tok) |tok| {
-                if (tok == module_name_tok + 1) {
-                    is_auto_expose = true;
-                }
-            }
-        }
-    }
 
     // Get start position (qualifier or first module segment)
     const start_offset: usize = if (qualifier_tok) |q|
@@ -819,8 +799,7 @@ pub fn resolveImportModulePath(self: *const AST, module_name_tok: Token.Idx, qua
 
     // Find the end token
     var end_tok = module_name_tok;
-    if (!is_auto_expose) {
-        // For explicit clauses, iterate through consecutive uppercase tokens
+    if (!nested_import) {
         var tok = module_name_tok + 1;
         while (tok < tags.len) {
             const tag = tags[tok];
@@ -845,8 +824,9 @@ pub const ImportRhs = packed struct {
     aliased: u1,
     /// 1 in case the import is qualified, e.g. `pf` in `import pf.Stdout ...`
     qualified: u1,
-    /// The number of things in the exposes list. e.g. 3 in `import SomeModule exposing [a1, a2, a3]`
-    num_exposes: u30,
+    /// 1 when the final uppercase segment is an auto-exposed nested type.
+    nested: u1,
+    reserved: u29 = 0,
 };
 
 // Check that all packed structs are 4 bytes size as they as cast to
@@ -1017,7 +997,7 @@ pub const Statement = union(enum) {
                 try ast.appendRegionInfoToSexprTree(env, tree, import.region);
 
                 // Reconstruct full qualified module name using the new helper
-                const full_module_name = ast.resolveImportModulePath(import.module_name_tok, import.qualifier_tok, import.exposes);
+                const full_module_name = ast.resolveImportModulePath(import.module_name_tok, import.qualifier_tok, import.nested_import);
                 try tree.pushStringPair("raw", full_module_name);
 
                 // alias e.g. `OUT` in `import pf.Stdout as OUT`

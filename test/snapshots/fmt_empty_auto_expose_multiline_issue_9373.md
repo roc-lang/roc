@@ -50,11 +50,11 @@ import A
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-import (mod "A")
+	(s-import (mod "A.B")
 		(exposes))
-	(s-import (mod "A")
+	(s-import (mod "A.B.C")
 		(exposes))
-	(s-import (mod "A")
+	(s-import (mod "A.B.C.D")
 		(exposes)))
 ~~~
 # TYPES

@@ -625,7 +625,8 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
             var rhs = AST.ImportRhs{
                 .aliased = 0,
                 .qualified = 0,
-                .num_exposes = @as(u30, @intCast(i.exposes.span.len)),
+                .nested = @intFromBool(i.nested_import),
+                .reserved = 0,
             };
 
             // Store all import data in a flat format:
@@ -1640,7 +1641,7 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
                     .start = exposes_start,
                     .len = exposes_len,
                 } },
-                .nested_import = false,
+                .nested_import = rhs.nested == 1,
                 .region = node.region,
             } };
         },

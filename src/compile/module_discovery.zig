@@ -38,6 +38,7 @@ pub fn extractImportsFromDeclIndex(
 
     // Modules listed in a `package [...]` header are auto-imported.
     for (parse_ast.decl_index.package_header_modules.items) |package_module| {
+        if (parse_ast.decl_index.hasExplicitUnqualifiedImport(package_module.module_name)) continue;
         try appendModuleName(gpa, &result, parse_ast.env.getIdent(package_module.module_name), false);
     }
 
@@ -120,6 +121,11 @@ test "module discovery consumes parser import inventory" {
         \\import Foo
         \\import Builtin
         \\import pf.Stdout
+        \\import Src.Widget as Widget
+        \\import Data.Codec exposing [decode]
+        \\import Nested.Type
+        \\import pf.IO.Stream as Stream
+        \\import Layout .Path as LayoutPath
         \\import lower
         \\
         \\main = {}
@@ -134,16 +140,44 @@ test "module discovery consumes parser import inventory" {
         for (local_imports) |item| gpa.free(item);
         gpa.free(local_imports);
     }
-    try std.testing.expectEqual(@as(usize, 3), local_imports.len);
+    try std.testing.expectEqual(@as(usize, 7), local_imports.len);
     try std.testing.expectEqualStrings("Auto", local_imports[0]);
     try std.testing.expectEqualStrings("Foo", local_imports[1]);
     try std.testing.expectEqualStrings("Builtin", local_imports[2]);
+    try std.testing.expectEqualStrings("Src.Widget", local_imports[3]);
+    try std.testing.expectEqualStrings("Data.Codec", local_imports[4]);
+    try std.testing.expectEqualStrings("Nested", local_imports[5]);
+    try std.testing.expectEqualStrings("Layout.Path", local_imports[6]);
 
     const qualified_imports = try extractQualifiedImportsFromDeclIndex(ast, gpa);
     defer {
         for (qualified_imports) |item| gpa.free(item);
         gpa.free(qualified_imports);
     }
-    try std.testing.expectEqual(@as(usize, 1), qualified_imports.len);
+    try std.testing.expectEqual(@as(usize, 2), qualified_imports.len);
     try std.testing.expectEqualStrings("pf.Stdout", qualified_imports[0]);
+    try std.testing.expectEqualStrings("pf.IO.Stream", qualified_imports[1]);
+}
+
+test "explicit directory import supplies a package-header module alias" {
+    const gpa = std.testing.allocator;
+    var env = try @import("base").CommonEnv.init(gpa,
+        \\package [Widget, Auto] {}
+        \\import Src.Widget as Widget
+        \\
+        \\main = {}
+    );
+    defer env.deinit(gpa);
+
+    const ast = try parse.file(gpa, &env);
+    defer ast.deinit();
+
+    const local_imports = try extractImportsFromDeclIndex(ast, gpa);
+    defer {
+        for (local_imports) |item| gpa.free(item);
+        gpa.free(local_imports);
+    }
+    try std.testing.expectEqual(@as(usize, 2), local_imports.len);
+    try std.testing.expectEqualStrings("Auto", local_imports[0]);
+    try std.testing.expectEqualStrings("Src.Widget", local_imports[1]);
 }
