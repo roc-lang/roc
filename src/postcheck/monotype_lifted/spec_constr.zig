@@ -5308,7 +5308,6 @@ const Cloner = struct {
             else => return null,
         }
         if (kept_indices.items.len == 0 or kept_indices.items.len == source_arity) return null;
-
         var selected_rest = let_.rest;
         if (aggregate_local) |local| {
             const source_tys = aggregate_tys orelse Common.invariant("loop exit selection had no source tuple types");
@@ -5377,11 +5376,7 @@ const Cloner = struct {
         } } });
 
         if (exit_sites.items.len == 0) return null;
-        // Inlining splices the continuation into the loop body at the exit
-        // site. A continuation carrying a `continue` or `break` of an
-        // enclosing loop cannot move inside this loop — the control would
-        // rebind to the wrong loop — so it stays outside as a join body.
-        if (exit_sites.items.len == 1 and !exprContainsUnenclosedLoopControl(self.pass.program, selected_rest)) {
+        if (exit_sites.items.len == 1 and !exprContainsFreeLoopControl(self.pass.program, selected_rest, 0)) {
             try self.inlineLoopExitAtSite(exit_sites.items[0], kept_params.items, selected_rest, target);
             return remainder;
         }
@@ -9964,11 +9959,11 @@ fn stmtContainsReturn(program: *const Ast.Program, stmt_id: Ast.StmtId) bool {
     };
 }
 
-/// Whether the expression contains a `continue` or `break` that binds to a
-/// loop enclosing the expression itself. Nested loops own their control
-/// expressions, so their bodies are not traversed — but their initial values
-/// evaluate in the enclosing scope and are.
-fn exprContainsUnenclosedLoopControl(program: *const Ast.Program, expr_id: Ast.ExprId) bool {
+/// Reports whether moving `expr_id` beneath another loop would change the
+/// target of a lexical `break` or `continue`. Monotype expression ownership is
+/// acyclic, so this structural recursion always terminates. A loop owns control
+/// transfers in its body, but not in its initial values.
+fn exprContainsFreeLoopControl(program: *const Ast.Program, expr_id: Ast.ExprId, loop_depth: usize) bool {
     return switch (program.getExpr(expr_id).data) {
         .@"unreachable",
         .local,
@@ -9987,45 +9982,44 @@ fn exprContainsUnenclosedLoopControl(program: *const Ast.Program, expr_id: Ast.E
         .def_ref,
         .fn_def,
         => false,
-        .fn_ref => |fn_ref| captureOperandSpanContainsUnenclosedLoopControl(program, fn_ref.captures),
-        .return_ => |ret| exprContainsUnenclosedLoopControl(program, ret.value),
-        .continue_, .break_ => true,
+        .fn_ref => |fn_ref| captureOperandSpanContainsFreeLoopControl(program, fn_ref.captures, loop_depth),
+        .return_ => |ret| exprContainsFreeLoopControl(program, ret.value, loop_depth),
         .list,
         .tuple,
-        => |items| exprSpanContainsUnenclosedLoopControl(program, items),
+        => |items| exprSpanContainsFreeLoopControl(program, items, loop_depth),
         .record => |fields| {
             const field_exprs = program.fieldExprSpan(fields);
             for (0..field_exprs.len) |index| {
                 const field = GuardedList.at(field_exprs, index);
-                if (exprContainsUnenclosedLoopControl(program, field.value)) return true;
+                if (exprContainsFreeLoopControl(program, field.value, loop_depth)) return true;
             }
             return false;
         },
-        .tag => |tag| exprSpanContainsUnenclosedLoopControl(program, tag.payloads),
-        .static_data_candidate => |candidate| exprContainsUnenclosedLoopControl(program, candidate.runtime_expr),
+        .tag => |tag| exprSpanContainsFreeLoopControl(program, tag.payloads, loop_depth),
+        .static_data_candidate => |candidate| exprContainsFreeLoopControl(program, candidate.runtime_expr, loop_depth),
         .nominal,
         .dbg,
         .expect,
-        => |child| exprContainsUnenclosedLoopControl(program, child),
-        .expect_err => |expect_err| exprContainsUnenclosedLoopControl(program, expect_err.msg),
-        .comptime_branch_taken => |taken| exprContainsUnenclosedLoopControl(program, taken.body),
-        .let_ => |let_| exprContainsUnenclosedLoopControl(program, let_.value) or exprContainsUnenclosedLoopControl(program, let_.rest),
-        .call_value => |call| exprContainsUnenclosedLoopControl(program, call.callee) or exprSpanContainsUnenclosedLoopControl(program, call.args),
-        .call_proc => |call| exprSpanContainsUnenclosedLoopControl(program, call.args) or captureOperandSpanContainsUnenclosedLoopControl(program, call.captures),
-        .low_level => |call| exprSpanContainsUnenclosedLoopControl(program, call.args),
-        .field_access => |field| exprContainsUnenclosedLoopControl(program, field.receiver),
-        .tuple_access => |access| exprContainsUnenclosedLoopControl(program, access.tuple),
-        .structural_eq => |eq| exprContainsUnenclosedLoopControl(program, eq.lhs) or exprContainsUnenclosedLoopControl(program, eq.rhs),
-        .structural_hash => |h| exprContainsUnenclosedLoopControl(program, h.value) or exprContainsUnenclosedLoopControl(program, h.hasher),
+        => |child| exprContainsFreeLoopControl(program, child, loop_depth),
+        .expect_err => |expect_err| exprContainsFreeLoopControl(program, expect_err.msg, loop_depth),
+        .comptime_branch_taken => |taken| exprContainsFreeLoopControl(program, taken.body, loop_depth),
+        .let_ => |let_| exprContainsFreeLoopControl(program, let_.value, loop_depth) or exprContainsFreeLoopControl(program, let_.rest, loop_depth),
+        .call_value => |call| exprContainsFreeLoopControl(program, call.callee, loop_depth) or exprSpanContainsFreeLoopControl(program, call.args, loop_depth),
+        .call_proc => |call| exprSpanContainsFreeLoopControl(program, call.args, loop_depth) or captureOperandSpanContainsFreeLoopControl(program, call.captures, loop_depth),
+        .low_level => |call| exprSpanContainsFreeLoopControl(program, call.args, loop_depth),
+        .field_access => |field| exprContainsFreeLoopControl(program, field.receiver, loop_depth),
+        .tuple_access => |access| exprContainsFreeLoopControl(program, access.tuple, loop_depth),
+        .structural_eq => |eq| exprContainsFreeLoopControl(program, eq.lhs, loop_depth) or exprContainsFreeLoopControl(program, eq.rhs, loop_depth),
+        .structural_hash => |h| exprContainsFreeLoopControl(program, h.value, loop_depth) or exprContainsFreeLoopControl(program, h.hasher, loop_depth),
         .match_ => |match| {
-            if (exprContainsUnenclosedLoopControl(program, match.scrutinee)) return true;
+            if (exprContainsFreeLoopControl(program, match.scrutinee, loop_depth)) return true;
             const branches = program.branchSpan(match.branches);
             for (0..branches.len) |index| {
                 const branch = GuardedList.at(branches, index);
                 if (branch.guard) |guard| {
-                    if (exprContainsUnenclosedLoopControl(program, guard)) return true;
+                    if (exprContainsFreeLoopControl(program, guard, loop_depth)) return true;
                 }
-                if (exprContainsUnenclosedLoopControl(program, branch.body)) return true;
+                if (exprContainsFreeLoopControl(program, branch.body, loop_depth)) return true;
             }
             return false;
         },
@@ -10033,56 +10027,61 @@ fn exprContainsUnenclosedLoopControl(program: *const Ast.Program, expr_id: Ast.E
             const branches = program.ifBranchSpan(if_.branches);
             for (0..branches.len) |index| {
                 const branch = GuardedList.at(branches, index);
-                if (exprContainsUnenclosedLoopControl(program, branch.cond)) return true;
-                if (exprContainsUnenclosedLoopControl(program, branch.body)) return true;
+                if (exprContainsFreeLoopControl(program, branch.cond, loop_depth)) return true;
+                if (exprContainsFreeLoopControl(program, branch.body, loop_depth)) return true;
             }
-            return exprContainsUnenclosedLoopControl(program, if_.final_else);
+            return exprContainsFreeLoopControl(program, if_.final_else, loop_depth);
         },
         .block => |block| {
             const statements = program.stmtSpan(block.statements);
             for (0..statements.len) |index| {
                 const stmt = GuardedList.at(statements, index);
-                if (stmtContainsUnenclosedLoopControl(program, stmt)) return true;
+                if (stmtContainsFreeLoopControl(program, stmt, loop_depth)) return true;
             }
-            return exprContainsUnenclosedLoopControl(program, block.final_expr);
+            return exprContainsFreeLoopControl(program, block.final_expr, loop_depth);
         },
-        .loop_ => |loop| exprSpanContainsUnenclosedLoopControl(program, loop.initial_values),
-        .join_point => |join_point| exprContainsUnenclosedLoopControl(program, join_point.body) or exprContainsUnenclosedLoopControl(program, join_point.remainder),
-        .jump => |jump| exprSpanContainsUnenclosedLoopControl(program, jump.args),
-        .if_initialized_payload => |payload_switch| exprContainsUnenclosedLoopControl(program, payload_switch.cond) or
-            exprContainsUnenclosedLoopControl(program, payload_switch.initialized) or
-            exprContainsUnenclosedLoopControl(program, payload_switch.uninitialized),
-        .try_sequence => |sequence| exprContainsUnenclosedLoopControl(program, sequence.try_expr) or exprContainsUnenclosedLoopControl(program, sequence.ok_body),
-        .try_record_sequence => |sequence| exprContainsUnenclosedLoopControl(program, sequence.try_expr) or exprContainsUnenclosedLoopControl(program, sequence.ok_body),
+        .loop_ => |loop| exprSpanContainsFreeLoopControl(program, loop.initial_values, loop_depth) or
+            exprContainsFreeLoopControl(program, loop.body, loop_depth + 1),
+        .break_ => |maybe| loop_depth == 0 or
+            (if (maybe) |value| exprContainsFreeLoopControl(program, value, loop_depth) else false),
+        .continue_ => |continue_| loop_depth == 0 or exprSpanContainsFreeLoopControl(program, continue_.values, loop_depth),
+        .join_point => |join_point| exprContainsFreeLoopControl(program, join_point.body, loop_depth) or
+            exprContainsFreeLoopControl(program, join_point.remainder, loop_depth),
+        .jump => |jump| exprSpanContainsFreeLoopControl(program, jump.args, loop_depth),
+        .if_initialized_payload => |payload_switch| exprContainsFreeLoopControl(program, payload_switch.cond, loop_depth) or
+            exprContainsFreeLoopControl(program, payload_switch.initialized, loop_depth) or
+            exprContainsFreeLoopControl(program, payload_switch.uninitialized, loop_depth),
+        .try_sequence => |sequence| exprContainsFreeLoopControl(program, sequence.try_expr, loop_depth) or
+            exprContainsFreeLoopControl(program, sequence.ok_body, loop_depth),
+        .try_record_sequence => |sequence| exprContainsFreeLoopControl(program, sequence.try_expr, loop_depth) or
+            exprContainsFreeLoopControl(program, sequence.ok_body, loop_depth),
     };
 }
 
-fn exprSpanContainsUnenclosedLoopControl(program: *const Ast.Program, span: Ast.Span(Ast.ExprId)) bool {
+fn exprSpanContainsFreeLoopControl(program: *const Ast.Program, span: Ast.Span(Ast.ExprId), loop_depth: usize) bool {
     const exprs = program.exprSpan(span);
     for (0..exprs.len) |index| {
-        const expr = GuardedList.at(exprs, index);
-        if (exprContainsUnenclosedLoopControl(program, expr)) return true;
+        if (exprContainsFreeLoopControl(program, GuardedList.at(exprs, index), loop_depth)) return true;
     }
     return false;
 }
 
-fn captureOperandSpanContainsUnenclosedLoopControl(program: *const Ast.Program, span: Ast.Span(Ast.CaptureOperand)) bool {
+fn captureOperandSpanContainsFreeLoopControl(program: *const Ast.Program, span: Ast.Span(Ast.CaptureOperand), loop_depth: usize) bool {
     const operands = program.captureOperandSpan(span);
     for (0..GuardedList.borrowLen(operands)) |index| {
-        const operand = GuardedList.at(operands, index);
-        if (exprContainsUnenclosedLoopControl(program, operand.value)) return true;
+        if (exprContainsFreeLoopControl(program, GuardedList.at(operands, index).value, loop_depth)) return true;
     }
     return false;
 }
 
-fn stmtContainsUnenclosedLoopControl(program: *const Ast.Program, stmt_id: Ast.StmtId) bool {
+fn stmtContainsFreeLoopControl(program: *const Ast.Program, stmt_id: Ast.StmtId, loop_depth: usize) bool {
     return switch (program.getStmt(stmt_id)) {
-        .return_ => |ret| exprContainsUnenclosedLoopControl(program, ret.value),
-        .let_ => |let_| exprContainsUnenclosedLoopControl(program, let_.value),
+        .return_ => |ret| exprContainsFreeLoopControl(program, ret.value, loop_depth),
+        .let_ => |let_| exprContainsFreeLoopControl(program, let_.value, loop_depth),
         .expr,
         .expect,
         .dbg,
-        => |expr| exprContainsUnenclosedLoopControl(program, expr),
+        => |expr| exprContainsFreeLoopControl(program, expr, loop_depth),
         .uninitialized,
         .crash,
         => false,

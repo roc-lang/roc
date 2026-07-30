@@ -53,7 +53,6 @@ pub const CacheStats = config.CacheStats;
 /// Cache cleanup utilities for managing temporary and persistent cache files.
 pub const CacheCleanup = cleanup;
 pub const CleanupStats = cleanup.CleanupStats;
-pub const PackageEnv = package.PackageEnv;
 pub const BuildEnv = build.BuildEnv;
 pub const CoreCtx = @import("ctx").CoreCtx;
 
@@ -106,7 +105,6 @@ test "compile tests" {
 
     std.testing.refAllDecls(@import("test/cache_test.zig"));
     std.testing.refAllDecls(@import("test/test_build_env.zig"));
-    std.testing.refAllDecls(@import("test/test_package_env.zig"));
     std.testing.refAllDecls(@import("test/module_env_test.zig"));
     std.testing.refAllDecls(@import("test/embedding_smoke.zig"));
     std.testing.refAllDecls(@import("test/hoisted_constants_test.zig"));

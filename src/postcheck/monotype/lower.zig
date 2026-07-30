@@ -2028,42 +2028,75 @@ const Builder = struct {
         procedure: checked.ProcedureUseTemplate,
     ) Allocator.Error!Ast.DefId {
         const view = moduleView(self.root_view);
-        const fn_ty = try self.lowerType(view, request.checked_type);
-        const fn_data = self.functionShape(fn_ty, "procedure use root had a non-function checked type");
-        const arg_tys = self.program.types.span(fn_data.args);
-        const args = try self.allocator.alloc(Ast.TypedLocal, arg_tys.len);
+        const template_ref = self.templateRefForProcedureUse(procedure);
+        const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
+        defer graph.destroy();
+        const saved_graph = self.active_graph;
+        const saved_body_draft = self.active_body_draft;
+        self.active_graph = graph;
+        defer self.active_graph = saved_graph;
+        var body_draft = BodyDraftStore.init(self.allocator);
+        self.active_body_draft = &body_draft;
+        defer self.active_body_draft = saved_body_draft;
+        defer body_draft.deinit();
+        var ctx = try BodyContext.init(self.allocator, self, view, template_ref, graph, &body_draft);
+        defer ctx.deinit();
+
+        const root_node = try ctx.instNode(request.checked_type);
+        const initial_fn = try graph.functionNodes(root_node);
+        const args = try self.allocator.alloc(DraftTypedLocal, initial_fn.args.len);
         defer self.allocator.free(args);
-        const arg_exprs = try self.allocator.alloc(Ast.ExprId, arg_tys.len);
+        const arg_exprs = try self.allocator.alloc(DraftExprId, initial_fn.args.len);
         defer self.allocator.free(arg_exprs);
 
-        for (0..GuardedList.borrowLen(arg_tys)) |i| {
-            const arg_ty = GuardedList.at(arg_tys, i);
-            const local = try self.program.addLocal(self.symbols.fresh(), arg_ty);
-            args[i] = .{ .local = local, .ty = arg_ty };
-            arg_exprs[i] = try self.program.addExpr(.{ .ty = arg_ty, .data = .{ .local = local } });
+        for (initial_fn.args, 0..) |arg_node, index| {
+            const arg_cell = DraftTypeCell.fromGraphNode(arg_node);
+            const local = try ctx.addLocalWithBinderCell(self.symbols.fresh(), arg_cell, null);
+            args[index] = .{ .local = local, .ty = arg_cell };
+            arg_exprs[index] = try ctx.addExprWithTypeCell(arg_cell, .{ .local = local });
         }
 
-        const callee = try self.fnDefForProcedureUseWithType(
-            view,
+        const draft = FinalBodyOutputGuard.begin(self);
+        const callee = try ctx.draftFnSlotForProcedureUseAtNode(
             procedure,
             request.checked_type,
+            procedure.source_fn_ty_template,
+            root_node,
+            &.{},
             request.root_evidence,
         );
-        const body = try self.program.addExpr(.{
-            .ty = fn_data.ret,
-            .data = .{ .call_proc = .{
-                .callee = Ast.procCalleeForSlot(callee),
-                .args = try self.program.addExprSpan(arg_exprs),
-            } },
+        const callee_fn_node = try ctx.draftFnSlotTypeNode(callee, root_node);
+        try relateFunctionRequestInterface(graph, root_node, callee_fn_node);
+        const completed_fn = try graph.functionNodes(root_node);
+        const ret_cell = DraftTypeCell.fromGraphNode(completed_fn.ret);
+        const body = try ctx.addExprWithTypeCell(ret_cell, .{
+            .call_proc = .{
+                .callee = draftProcCalleeForSlot(callee),
+                .args = try body_draft.addExprSpan(arg_exprs),
+            },
         });
-
-        return try self.program.addDef(.{
+        const root_def = try body_draft.reserveDef(.root);
+        body_draft.setDef(root_def, .{
             .symbol = self.symbols.fresh(),
             .fn_def = null,
-            .args = try self.program.addTypedLocalSpan(args),
+            .fn_id = null,
+            .args = try body_draft.addTypedLocalSpan(args),
             .body = .{ .roc = body },
-            .ret = fn_data.ret,
+            .ret = ret_cell,
         });
+        const draft_end = draft.end(self);
+        const sealed = try self.sealActiveBodyDraft(
+            graph,
+            &body_draft,
+            draft,
+            draft_end,
+            root_node,
+            null,
+            root_def,
+            null,
+        );
+        defer sealed.deinit(self.allocator);
+        return sealed.root_def orelse Common.invariant("procedure use root did not commit its wrapper definition");
     }
 
     fn lowerProcedureBindingRoot(
@@ -2281,6 +2314,18 @@ const Builder = struct {
             .nodes = try self.evidence_arena.allocator().dupe(check.ConstStore.ConstFnEvidence, nodes.items),
             .frames = try self.evidence_arena.allocator().dupe(check.ConstStore.ConstFnEvidenceFrame, frames.items),
             .head = parent,
+        };
+    }
+
+    fn retainStoredConstFnEvidence(
+        self: *Builder,
+        evidence: StoredConstFnEvidence,
+    ) Allocator.Error!StoredConstFnEvidence {
+        const arena = self.evidence_arena.allocator();
+        return .{
+            .nodes = try arena.dupe(check.ConstStore.ConstFnEvidence, evidence.nodes),
+            .frames = try arena.dupe(check.ConstStore.ConstFnEvidenceFrame, evidence.frames),
+            .head = evidence.head,
         };
     }
 
@@ -2883,6 +2928,15 @@ const Builder = struct {
         });
         const local_evidence_owner = specEvidenceLocalOwner(source_ctx.draft, evidence);
         const local_context_dependent = local_evidence_owner != null or structural_lexical_dependent;
+        // An unresolved procedure interface is not yet a valid durable
+        // specialization key. Its callee body must contribute all of its
+        // checked constraints before this graph applies row defaults, so the
+        // entire connected open dependency group lowers in this graph and
+        // seals together. A resolved interface remains eligible for the
+        // independent specialization-graph path below.
+        const open_group_member = resolved_request_ty == null and
+            !local_context_dependent and
+            template.target != .hosted;
         self.count("template_misses");
         const lexical_owner = local_evidence_owner orelse if (structural_lexical_dependent)
             source_ctx.draft.current_owner
@@ -2905,7 +2959,7 @@ const Builder = struct {
         const spec_index = source_ctx.draft.template_specs.items.len;
         const demand_boundary: u32 = @intCast(source_ctx.draft.runtime_value_demands.items.len);
         try source_ctx.draft.template_specs.append(self.allocator, .{
-            .state = if (local_context_dependent) .lowering else .deferred,
+            .state = if (local_context_dependent or open_group_member) .lowering else .deferred,
             .template_ref = template_ref,
             .method_scope = source_ctx.method_scope.key,
             .source_fn_ty = source_fn_ty,
@@ -2923,6 +2977,7 @@ const Builder = struct {
             .lexical = lexical,
             .lexical_context_key = lexical_context_key,
             .fn_id = fn_id,
+            .open_group_member = open_group_member,
         });
         lexical_needs_cleanup = false;
         var indexed_nodes = std.AutoHashMap(NodeId, void).init(self.allocator);
@@ -2958,7 +3013,11 @@ const Builder = struct {
         defer body_ctx.deinit();
         if (lexical) |captured| try body_ctx.restoreCodecLexicalContext(captured);
         const root_node = try body_ctx.instNode(template.checked_fn_root);
-        if (!local_context_dependent and signature_relation == .independent_roots) {
+        if (!local_context_dependent and
+            !open_group_member and
+            signature_relation == .independent_roots and
+            template.target != .hosted)
+        {
             const public_request = source_ctx.graph.requestSourceInterface(request_fn_node) orelse request_fn_node;
             try constrainDeferredTemplateTypeArguments(source_ctx.graph, root_node, public_request);
         } else {
@@ -2979,7 +3038,7 @@ const Builder = struct {
             }
         }
         try body_ctx.instantiateTemplateDispatchRelations(template, null);
-        if (!local_context_dependent) {
+        if (!local_context_dependent and !open_group_member) {
             return .{ .local = .{ .draft = fn_id } };
         }
         if (template.target == .hosted) {
@@ -3007,14 +3066,27 @@ const Builder = struct {
 
         var completed_template = source_ctx.draft.fns.items[@intFromEnum(fn_id)].source;
         completed_template.mono_fn_ty = DraftTypeCell.fromGraphNode(completed_fn_node);
-        _ = try source_ctx.draft.addNestedDef(.{
-            .symbol = symbol,
-            .fn_def = completed_template,
-            .fn_id = .{ .draft = fn_id },
-            .args = lowered.args,
-            .body = lowered.body,
-            .ret = completed_ret_cell,
-        });
+        if (open_group_member) {
+            const def_id = try source_ctx.draft.reserveDef(.{ .draft_fn = fn_id });
+            source_ctx.draft.setDef(def_id, .{
+                .symbol = symbol,
+                .fn_def = completed_template,
+                .fn_id = .{ .draft = fn_id },
+                .args = lowered.args,
+                .body = .{ .roc = lowered.body },
+                .ret = completed_ret_cell,
+            });
+            source_ctx.draft.template_specs.items[spec_index].root_def = def_id;
+        } else {
+            _ = try source_ctx.draft.addNestedDef(.{
+                .symbol = symbol,
+                .fn_def = completed_template,
+                .fn_id = .{ .draft = fn_id },
+                .args = lowered.args,
+                .body = lowered.body,
+                .ret = completed_ret_cell,
+            });
+        }
         source_ctx.draft.fns.items[@intFromEnum(fn_id)].source = completed_template;
         source_ctx.draft.template_specs.items[spec_index].request_fn_node = completed_fn_node;
         try registerTemplateSpecInterfaceLookups(
@@ -3178,20 +3250,6 @@ const Builder = struct {
         return switch (body) {
             .direct_template => |direct| self.fnDefForCallableTemplate(view, direct.template, source_fn_ty, source_fn_key, mono_fn_ty),
             .callable_eval_template => Common.invariant("callable eval template must be restored through ConstStore before Monotype lowering"),
-        };
-    }
-
-    fn fnDefForImportedBindingBody(
-        self: *Builder,
-        view: ModuleView,
-        body: checked.ImportedProcedureBindingBody,
-        source_fn_ty: checked.CheckedTypeId,
-        source_fn_key: names.TypeDigest,
-        mono_fn_ty: Type.TypeId,
-    ) Ast.FnTemplate {
-        return switch (body) {
-            .direct_template => |direct| self.fnDefForCallableTemplate(view, direct.template, source_fn_ty, source_fn_key, mono_fn_ty),
-            .callable_eval_template => Common.invariant("imported callable eval template must be restored through ConstStore before Monotype lowering"),
         };
     }
 
@@ -4093,46 +4151,53 @@ const Builder = struct {
         return false;
     }
 
-    fn fnDefForProcedureUseWithType(
+    fn templateRefForProcedureUse(
         self: *Builder,
-        source_ty_view: ModuleView,
         proc: checked.ProcedureUseTemplate,
-        source_fn_ty: checked.CheckedTypeId,
-        root_evidence: ?checked.CheckedEvidenceSpan,
-    ) Allocator.Error!Ast.FnSlot {
-        const mono_fn_ty = try self.lowerType(source_ty_view, source_fn_ty);
-        const source_fn_key = proc.source_fn_ty_template;
-        const fn_template = switch (proc.binding) {
+    ) names.ProcTemplate {
+        return switch (proc.binding) {
             .top_level => |top_level| blk: {
                 const view = self.moduleForId(checked.topLevelProcedureModuleId(top_level));
                 const binding = view.top_level_procedure_bindings.get(top_level.binding);
-                const binding_source = schemeRoot(view, binding.source_scheme, "top-level procedure binding source scheme was not output");
-                break :blk self.fnDefForProcedureBindingBody(view, binding.body, binding_source, view.types.rootKey(binding_source), mono_fn_ty);
+                break :blk switch (binding.body) {
+                    .direct_template => |direct| switch (direct.template) {
+                        .checked => |template| template,
+                        .lifted => Common.invariant("lifted direct target reached Monotype procedure use"),
+                        .synthetic => Common.invariant("synthetic direct target reached Monotype procedure use"),
+                    },
+                    .callable_eval_template => Common.invariant("callable-eval template reached Monotype procedure use"),
+                };
             },
             .imported => |imported| blk: {
                 const view = self.moduleForId(checked.importedProcedureModuleId(imported));
                 for (view.exported_procedure_bindings.bindings) |binding| {
                     if (binding.binding.def == imported.def and binding.binding.pattern == imported.pattern) {
-                        const binding_source = schemeRoot(view, binding.source_scheme, "imported procedure binding source scheme was not output");
-                        break :blk self.fnDefForImportedBindingBody(view, binding.body, binding_source, view.types.rootKey(binding_source), mono_fn_ty);
+                        break :blk switch (binding.body) {
+                            .direct_template => |direct| switch (direct.template) {
+                                .checked => |template| template,
+                                .lifted => Common.invariant("imported lifted target reached Monotype procedure use"),
+                                .synthetic => Common.invariant("imported synthetic target reached Monotype procedure use"),
+                            },
+                            .callable_eval_template => Common.invariant("imported callable-eval template reached Monotype procedure use"),
+                        };
                     }
                 }
                 Common.invariant("imported procedure binding was not exported by its checked module");
             },
-            .hosted => |hosted| blk: {
-                break :blk self.fnDefForTemplate(self.moduleForId(moduleIdFromDigest(names.procTemplateModuleDigest(hosted.template))), hosted.template, source_fn_ty, source_fn_key, mono_fn_ty);
-            },
+            .hosted => |hosted| hosted.template,
             .platform_required => |required| blk: {
-                const app_view = self.moduleForId(checked.requiredProcedureModuleId(required));
-                const binding = app_view.top_level_procedure_bindings.get(required.procedure_binding);
-                break :blk self.fnDefForProcedureBindingBody(app_view, binding.body, source_fn_ty, source_fn_key, mono_fn_ty);
+                const view = self.moduleForId(checked.requiredProcedureModuleId(required));
+                const binding = view.top_level_procedure_bindings.get(required.procedure_binding);
+                break :blk switch (binding.body) {
+                    .direct_template => |direct| switch (direct.template) {
+                        .checked => |template| template,
+                        .lifted => Common.invariant("platform lifted target reached Monotype procedure use"),
+                        .synthetic => Common.invariant("platform synthetic target reached Monotype procedure use"),
+                    },
+                    .callable_eval_template => Common.invariant("platform callable-eval template reached Monotype procedure use"),
+                };
             },
         };
-        const evidence = if (root_evidence) |evidence_ref|
-            try self.materializeRootProcedureEvidence(fn_template, evidence_ref)
-        else
-            &.{};
-        return try self.lowerFnTemplateCallTarget(source_ty_view, fn_template, evidence);
     }
 
     fn materializeRootProcedureEvidence(
@@ -4631,27 +4696,13 @@ const Builder = struct {
             );
         }
         const request_contains_generated_private = try nested_ctx.graph.containsGeneratedPrivate(request_fn_node);
-        if (signature_relation == .exact_graph) {
-            if (request_contains_generated_private) {
-                if (nested_ctx.graph.requestSourceInterface(request_fn_node)) |source_fn_node| {
-                    try relateFunctionRequestInterface(nested_ctx.graph, root_node, source_fn_node);
-                }
-                try relateFunctionRequestInterface(nested_ctx.graph, root_node, request_fn_node);
-            } else {
-                try constrainDeferredTemplateTypeArguments(nested_ctx.graph, root_node, request_fn_node);
-            }
-        } else if (request_contains_generated_private) {
+        if (request_contains_generated_private) {
             if (nested_ctx.graph.requestSourceInterface(request_fn_node)) |source_fn_node| {
                 try relateFunctionRequestInterface(nested_ctx.graph, root_node, source_fn_node);
             }
-            try relateFunctionRequestInterface(nested_ctx.graph, root_node, request_fn_node);
-        } else {
-            try constrainDeferredTemplateTypeArguments(nested_ctx.graph, root_node, request_fn_node);
         }
-        const body_fn_node = if (signature_relation == .exact_graph or request_contains_generated_private)
-            request_fn_node
-        else
-            root_node;
+        try relateFunctionRequestInterface(nested_ctx.graph, root_node, request_fn_node);
+        const body_fn_node = request_fn_node;
         const lowered = try nested_ctx.lowerNestedFunctionAtNode(expr_id, body_fn_node, capture_entry_guards);
         const completed_fn_node = try nested_ctx.completedFunctionNodeForLoweredRet(
             body_fn_node,
@@ -4809,6 +4860,7 @@ const Builder = struct {
 
     fn draftSpecIdentityEql(self: *Builder, left: Ast.SpecIdentity, right: Ast.SpecIdentity) Allocator.Error!bool {
         if (!std.meta.eql(left.callable, right.callable)) return false;
+        if (!std.mem.eql(u8, left.method_scope.bytes[0..], right.method_scope.bytes[0..])) return false;
         if (!std.mem.eql(u8, left.source_fn_ty_digest.bytes[0..], right.source_fn_ty_digest.bytes[0..])) return false;
         if (!std.meta.eql(left.evidence_digest, right.evidence_digest)) return false;
         if (!std.mem.eql(u8, left.request_fn_ty_digest.bytes[0..], right.request_fn_ty_digest.bytes[0..])) return false;
@@ -5807,6 +5859,7 @@ const Builder = struct {
             try graph.assertTypeHasNoActiveSnapshots(sealed);
             break :blk sealed;
         } else null;
+        try self.finalizeDraftTemplateSpecs(body_draft, body_ids);
         try self.markDraftNestedReady(body_draft, body_ids);
         verifyDraftTemplateSpecsResolved(body_draft);
         try self.finalizeDraftNestedSpecs(body_draft, body_ids);
@@ -5821,7 +5874,10 @@ const Builder = struct {
             .root_ty = sealed_root,
             .extra_ty = sealed_extra,
             .root_def = if (root_def) |draft_def| body_ids.def(draft_def) else null,
-            .root_fn = if (root_fn) |draft_fn| body_ids.fn_(draft_fn) else null,
+            .root_fn = if (root_fn) |draft_fn| switch (body_ids.fnSlot(draft_fn)) {
+                .local => |local| local,
+                .imported => null,
+            } else null,
             .core_maps = retained_core_maps,
         };
     }
@@ -5883,13 +5939,64 @@ const Builder = struct {
         }
     }
 
+    fn finalizeDraftTemplateSpecs(
+        self: *Builder,
+        body_draft: *const BodyDraftStore,
+        ids: FinalIdOffsets,
+    ) Allocator.Error!void {
+        for (body_draft.template_specs.items) |spec| {
+            if (spec.state != .lowered or spec.local_context_dependent) continue;
+            if (!spec.open_group_member) {
+                Common.invariant("context-free procedure body was lowered outside its open specialization group");
+            }
+            const root_def = spec.root_def orelse
+                Common.invariant("root-owned procedure specialization had no definition");
+            const fn_id = switch (ids.fnSlot(spec.fn_id)) {
+                .imported => continue,
+                .local => |local| local,
+            };
+            const fn_template = self.program.fnSource(fn_id);
+            const fn_ty = fn_template.mono_fn_ty;
+            const digest = self.specializationTypeDigest(fn_ty);
+            const evidence = programViewFnEvidence(self.program.view(), fn_template);
+            const identity = templateSpecIdentity(
+                spec.template_ref,
+                spec.method_scope,
+                spec.source_fn_key,
+                fn_template.evidence_digest,
+                fn_ty,
+                digest,
+            );
+            const existing = try self.spec_store.findLocal(identity, specializationEvidenceView(evidence));
+            if (existing != null) continue;
+            const def_id = ids.def(root_def);
+            const retained_evidence = try self.retainStoredConstFnEvidence(evidence);
+            const spec_id = try self.addTemplateSpecRecord(
+                spec.template_ref,
+                spec.method_scope,
+                spec.source_fn_key,
+                evidence,
+                fn_ty,
+                digest,
+                fn_id,
+                .lowering,
+            );
+            try self.lowered_templates.put(fn_id, .{
+                .def = def_id,
+                .spec = spec_id,
+                .evidence = spec.evidence,
+                .topology = retained_evidence,
+            });
+            try self.markTemplateReady(fn_id, fn_ty);
+        }
+    }
+
     fn verifyDraftTemplateSpecsResolved(body_draft: *const BodyDraftStore) void {
         for (body_draft.template_specs.items) |spec| {
             switch (spec.state) {
                 .resolved => {},
-                .lowered => if (!spec.local_context_dependent) {
-                    Common.invariant("context-free procedure body was lowered into its caller's draft");
-                },
+                .lowered => if (!spec.local_context_dependent and !spec.open_group_member)
+                    Common.invariant("context-free procedure body was lowered into its caller's draft"),
                 .deferred => Common.invariant("deferred template specialization reached commit before resolution"),
                 .lowering => Common.invariant("caller-owned template specialization reached commit before its body lowered"),
             }
@@ -8523,8 +8630,8 @@ const DraftSpecState = enum {
     /// The caller owns only this specialization's live request interface. Its
     /// body is lowered later in the procedure's own instantiation graph.
     deferred,
-    /// A caller-owned specialization body is currently being lowered. This is
-    /// reserved for lexical-context-dependent procedures and nested functions.
+    /// A specialization body is currently being lowered in the active graph.
+    /// This is used for lexical-context-dependent procedures and nested functions.
     lowering,
     /// A caller-owned specialization body finished lowering into this draft.
     lowered,
@@ -8897,6 +9004,10 @@ const DraftTemplateSpec = struct {
     lexical: ?DraftCodecLexicalContext = null,
     lexical_context_key: ?names.TypeDigest = null,
     fn_id: DraftFnId,
+    /// This context-free specialization joined its requester's live solve
+    /// group because its interface was not closed enough to be a durable key.
+    open_group_member: bool,
+    root_def: ?DraftDefId = null,
     resolved_slot: ?Ast.FnSlot = null,
 };
 
@@ -11371,7 +11482,7 @@ const BodyContext = struct {
     /// Loop-carried control locals for a derived list parser. In Counted mode
     /// the format declared the element count up front, so the driver reads
     /// exactly `remaining` more elements and never calls `parse_list_next` or
-    /// `parse_list_after_element`.
+    /// `parse_list_after_item`.
     /// How a dict entry ends: `uncounted` asks the format whether more entries
     /// follow, `counted` re-enters the loop with one fewer entry left.
     const DictEntryEndMode = enum { counted, uncounted };
@@ -16332,8 +16443,8 @@ const BodyContext = struct {
                 .imported_proc,
                 .hosted_proc,
                 .promoted_top_level_proc,
-                => |proc| return try self.lowerProcedureUseValueAtNode(proc, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr)),
-                .platform_required_proc => |proc| return try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr)),
+                => |proc| return try self.lowerProcedureUseValueAtNode(proc, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), null),
+                .platform_required_proc => |proc| return try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), proc.root_evidence),
                 else => {},
             }
         }
@@ -21562,7 +21673,7 @@ const BodyContext = struct {
         precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!DraftExprId {
         const ret_info = self.tryInfo(ret_ty);
-        const next_event_ty = try self.parseArrayEventType(state_ty, "Element", "Done");
+        const next_event_ty = try self.parseArrayEventType(state_ty, "Item", "Done");
         const next_try_ty = try self.tryTypeLike(ret_ty, next_event_ty, ret_info.err_ty);
         const next_try = try self.lowerParseFormatMethod(
             "parse_list_next",
@@ -21686,11 +21797,11 @@ const BodyContext = struct {
         ret_ty: Type.TypeId,
         precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!DraftExprId {
-        const element_tag = self.monoTagByText(event_ty, "Element");
+        const item_tag = self.monoTagByText(event_ty, "Item");
         const element_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
         const element_state_pat = try self.bindPat(element_state_local, state_ty);
         const element_pat = try self.addPat(.{ .ty = event_ty, .data = .{ .tag = .{
-            .name = element_tag.name,
+            .name = item_tag.name,
             .payloads = try self.addPatSpan(&[_]DraftPatId{element_state_pat}),
         } } });
         const element_body = try self.lowerParseListElement(
@@ -21764,14 +21875,14 @@ const BodyContext = struct {
         const after_event_ty = try self.parseArrayEventType(state_ty, "Continue", "Done");
         const after_try_ty = try self.tryTypeLike(ret_ty, after_event_ty, ret_info.err_ty);
         const after_try = try self.lowerParseFormatMethod(
-            "parse_list_after_element",
+            "parse_list_after_item",
             &.{ encoding_expr, try self.localExpr(rest_local, state_ty) },
             &.{ encoding_ty, state_ty },
             encoding_ty,
             after_try_ty,
         );
         const after_event_local = try self.addLocal(self.builder.symbols.fresh(), after_event_ty);
-        const after_body = try self.lowerParseListAfterElementEvent(
+        const after_body = try self.lowerParseListAfterItemEvent(
             elem_ty,
             list_ty,
             state_ty,
@@ -21786,7 +21897,7 @@ const BodyContext = struct {
         return try self.sequenceTryRecord(elem_parse, elem_parse_ret_ty, elem_local, value_name, rest_local, rest_name, sequenced_after, ret_ty);
     }
 
-    fn lowerParseListAfterElementEvent(
+    fn lowerParseListAfterItemEvent(
         self: *BodyContext,
         elem_ty: Type.TypeId,
         list_ty: Type.TypeId,
@@ -24134,49 +24245,7 @@ const BodyContext = struct {
         evidence: []const SpecEvidence,
         root_evidence: ?checked.CheckedEvidenceSpan,
     ) Allocator.Error!DraftFnSlot {
-        const template_ref = switch (proc.binding) {
-            .top_level => |top_level| blk: {
-                const view = self.builder.moduleForId(checked.topLevelProcedureModuleId(top_level));
-                const binding = view.top_level_procedure_bindings.get(top_level.binding);
-                break :blk switch (binding.body) {
-                    .direct_template => |direct| switch (direct.template) {
-                        .checked => |checked_template| checked_template,
-                        .lifted => Common.invariant("lifted direct target reached draft function-slot lowering"),
-                        .synthetic => Common.invariant("synthetic direct target reached draft function-slot lowering"),
-                    },
-                    .callable_eval_template => Common.invariant("callable-eval template reached node-native direct call lowering"),
-                };
-            },
-            .imported => |imported| blk: {
-                const view = self.builder.moduleForId(checked.importedProcedureModuleId(imported));
-                for (view.exported_procedure_bindings.bindings) |binding| {
-                    if (binding.binding.def == imported.def and binding.binding.pattern == imported.pattern) {
-                        break :blk switch (binding.body) {
-                            .direct_template => |direct| switch (direct.template) {
-                                .checked => |checked_template| checked_template,
-                                .lifted => Common.invariant("imported lifted target reached draft function-slot lowering"),
-                                .synthetic => Common.invariant("imported synthetic target reached draft function-slot lowering"),
-                            },
-                            .callable_eval_template => Common.invariant("imported callable-eval template reached node-native direct call lowering"),
-                        };
-                    }
-                }
-                Common.invariant("imported procedure binding was not exported by its checked module");
-            },
-            .hosted => |hosted| hosted.template,
-            .platform_required => |required| blk: {
-                const view = self.builder.moduleForId(checked.requiredProcedureModuleId(required));
-                const binding = view.top_level_procedure_bindings.get(required.procedure_binding);
-                break :blk switch (binding.body) {
-                    .direct_template => |direct| switch (direct.template) {
-                        .checked => |checked_template| checked_template,
-                        .lifted => Common.invariant("platform lifted target reached draft function-slot lowering"),
-                        .synthetic => Common.invariant("platform synthetic target reached draft function-slot lowering"),
-                    },
-                    .callable_eval_template => Common.invariant("platform callable-eval template reached node-native direct call lowering"),
-                };
-            },
-        };
+        const template_ref = self.builder.templateRefForProcedureUse(proc);
         const requested_evidence = if (root_evidence) |producer_evidence|
             try self.builder.materializeCheckedProcedureEvidence(template_ref, producer_evidence)
         else
@@ -24724,8 +24793,8 @@ const BodyContext = struct {
             .imported_proc,
             .hosted_proc,
             .promoted_top_level_proc,
-            => |proc| try self.lowerProcedureUseValueAtNode(proc, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr)),
-            .platform_required_proc => |proc| try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr)),
+            => |proc| try self.lowerProcedureUseValueAtNode(proc, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), null),
+            .platform_required_proc => |proc| try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), proc.root_evidence),
             .top_level_const,
             .imported_const,
             .platform_required_const,
@@ -24840,11 +24909,13 @@ const BodyContext = struct {
                 proc,
                 expected_node,
                 try self.evidenceForUseSite(record.expr),
+                null,
             ),
             .platform_required_proc => |proc| return try self.lowerProcedureUseValueAtNode(
                 proc.procedure,
                 expected_node,
                 try self.evidenceForUseSite(record.expr),
+                proc.root_evidence,
             ),
             // The required def failed checking, so its type never resolves;
             // crash at the use site instead of materializing the expected node.
@@ -24918,6 +24989,7 @@ const BodyContext = struct {
         proc: checked.ProcedureUseTemplate,
         request_fn_node: NodeId,
         evidence: []const SpecEvidence,
+        root_evidence: ?checked.CheckedEvidenceSpan,
     ) Allocator.Error!DraftExprId {
         if (self.callableEvalForProcedureUse(proc)) |callable_eval| {
             return try self.lowerCallableEvalBindingValueAtNode(
@@ -24935,7 +25007,7 @@ const BodyContext = struct {
             proc.source_fn_ty_template,
             request_fn_node,
             evidence,
-            null,
+            root_evidence,
         );
         const fn_id = try self.requireLocalDraftSlot(slot);
         const fn_node = try self.draftFnSlotTypeNode(slot, request_fn_node);
@@ -35296,7 +35368,7 @@ const BodyContext = struct {
             boundary_expr,
             shape_node,
             boundary_callable_node,
-            "parse_list_after_element",
+            "parse_list_after_item",
             false,
         ) or added;
         return added;
@@ -43642,10 +43714,6 @@ fn dispatchPlanForRuntimeExpr(view: ModuleView, expr_id: checked.CheckedExprId) 
     const plan_raw = @intFromEnum(plan_id);
     if (plan_raw >= view.static_dispatch_plans.plans.len) Common.invariant("stored serialization dispatch plan is outside plan table");
     return view.static_dispatch_plans.plans[plan_raw];
-}
-
-fn moduleIdFromDigest(ref: names.CheckedModuleDigest) checked.ModuleId {
-    return .{ .bytes = ref.bytes };
 }
 
 fn moduleDigestFromId(key: checked.ModuleId) names.CheckedModuleDigest {

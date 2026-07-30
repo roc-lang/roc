@@ -157,6 +157,25 @@ pub fn certifyStore(
     roots: []const LIR.LirProcSpecId,
     diag: *Diagnostic,
 ) CertifyError!void {
+    return certifyStoreWithWorkStats(allocator, store, layouts, sigs, roots, diag, null);
+}
+
+/// Deterministic work counters used by certifier complexity regression tests.
+/// Production certification passes no observer and performs no counter work.
+const CertifierWorkStats = struct {
+    work_items: usize = 0,
+    conditional_payload_splits: usize = 0,
+};
+
+fn certifyStoreWithWorkStats(
+    allocator: Allocator,
+    store: *const LirStore,
+    layouts: *const layout_mod.Store,
+    sigs: arc_sig.SigTable,
+    roots: []const LIR.LirProcSpecId,
+    diag: *Diagnostic,
+    work_stats: ?*CertifierWorkStats,
+) CertifyError!void {
     var rc_local = try allocator.alloc(bool, store.localCount());
     defer allocator.free(rc_local);
     for (0..store.localCount()) |index| {
@@ -180,6 +199,7 @@ pub fn certifyStore(
         .join_bodies = std.AutoHashMap(LIR.JoinPointId, LIR.CFStmtId).init(allocator),
         .reads_before_rebind_cache = std.AutoHashMap(LIR.CFStmtId, std.bit_set.DynamicBitSetUnmanaged).init(allocator),
         .diag = diag,
+        .work_stats = work_stats,
     };
     defer certifier.deinit();
 
@@ -1002,6 +1022,7 @@ const Certifier = struct {
     /// track the value count.
     value_walk_scratch: std.bit_set.DynamicBitSetUnmanaged = .{},
     diag: *Diagnostic,
+    work_stats: ?*CertifierWorkStats,
     /// Proc and statement being certified; written by `certifyProc` and
     /// `runSegment` before any read.
     current_proc: LIR.LirProcSpecId = undefined,
@@ -2705,6 +2726,7 @@ const Certifier = struct {
 
         try work.append(self.allocator, .{ .segment = .{ .cursor = body, .state = state } });
         while (work.pop()) |item| {
+            if (self.work_stats) |stats| stats.work_items += 1;
             switch (item) {
                 .segment => |segment| try self.runSegment(&work, segment),
                 .join_body => |walk| try self.scheduleJoinBody(&work, walk),
@@ -2920,6 +2942,8 @@ const Certifier = struct {
                                         .{ @intFromEnum(switch_stmt.cond), switch_stmt.cond_mask, @intFromEnum(switch_stmt.payload), @intFromEnum(condition.local), condition.mask },
                                     );
                                 }
+
+                                if (self.work_stats) |stats| stats.conditional_payload_splits += 1;
 
                                 var initialized_state = try state.clone();
                                 errdefer initialized_state.deinit();
@@ -3438,6 +3462,12 @@ const CertifyTest = struct {
         return certifyStore(self.allocator, &self.store, &self.layouts, arc_sig.SigTable.all_owned, &.{}, &self.diag);
     }
 
+    fn certifyAndMeasureWork(self: *CertifyTest) CertifyError!CertifierWorkStats {
+        var stats = CertifierWorkStats{};
+        try certifyStoreWithWorkStats(self.allocator, &self.store, &self.layouts, arc_sig.SigTable.all_owned, &.{}, &self.diag, &stats);
+        return stats;
+    }
+
     fn certifyWith(self: *CertifyTest, sigs: arc_sig.SigTable) CertifyError!void {
         return certifyStore(self.allocator, &self.store, &self.layouts, sigs, &.{}, &self.diag);
     }
@@ -3949,6 +3979,60 @@ test "certify promotes conditional payload on initialized switch edge" {
     // the stale conditional state also explores the unreachable uninitialized
     // edge, where the deliberately invalid release exposes the false path.
     try f.certify();
+}
+
+test "certify does not repeat conditional payload work after initialized edge" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const payload = try f.local(.str);
+    const presence = try f.local(.i64);
+    const result = try f.local(.i64);
+
+    const ret = try f.ret(result);
+    const release = try f.decrefStmt(payload, .str, ret);
+    var initialized_branch = try f.assignI64(result, release);
+    const uninitialized_branch = try f.assignI64(result, ret);
+
+    // Re-check one proven presence condition enough times that retained
+    // conditional state would deterministically exceed the structural work
+    // bound below. Wall-clock speed is deliberately irrelevant.
+    const repeated_checks = 32;
+    for (0..repeated_checks) |_| {
+        initialized_branch = try f.store.addCFStmt(.{ .switch_initialized_payload = .{
+            .cond = presence,
+            .payload = payload,
+            .initialized_branch = initialized_branch,
+            .uninitialized_branch = uninitialized_branch,
+        } });
+    }
+
+    const join_id = f.freshJoinPointId();
+    const jump_with_payload = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const jump_without_payload = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const release_before_jump = try f.decrefStmt(payload, .str, jump_without_payload);
+    const choose_presence = try f.store.addCFStmt(.{ .switch_stmt = .{
+        .cond = presence,
+        .branches = try f.store.addCFSwitchBranches(&[_]LIR.CFSwitchBranch{
+            .{ .value = 1, .body = jump_with_payload },
+        }),
+        .default_branch = release_before_jump,
+    } });
+    const join_stmt = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.store.addLocalSpan(&.{payload}),
+        .maybe_uninitialized_params = try f.store.addLocalSpan(&.{payload}),
+        .maybe_uninitialized_conditions = try f.store.addLocalSpan(&.{presence}),
+        .maybe_uninitialized_condition_masks = try f.store.addU64Span(&.{1}),
+        .body = initialized_branch,
+        .remainder = choose_presence,
+    } });
+    const presence_assign = try f.assignI64(presence, join_stmt);
+    const body = try f.assignStr(payload, presence_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    const stats = try f.certifyAndMeasureWork();
+    try testing.expectEqual(@as(usize, 1), stats.conditional_payload_splits);
+    try testing.expectEqual(@as(usize, repeated_checks + 6), stats.work_items);
 }
 
 test "certify rejects a mismatched conditional payload guard before refinement" {

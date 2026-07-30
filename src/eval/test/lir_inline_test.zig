@@ -847,6 +847,44 @@ fn liftModuleAfterSpecConstr(
     };
 }
 
+// Repro for https://github.com/roc-lang/roc/issues/10461: specializing a
+// constructor argument must preserve the distinct back edges of nested loops.
+test "issue 10461 SpecConstr preserves nested loop back-edge arities" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\run : { inner_limit : U64 }, U64 -> U64
+        \\run = |config, outer_limit| {
+        \\    var $outer = 0.U64
+        \\    var $total = 0.U64
+        \\    while $outer < outer_limit {
+        \\        var $inner = 0.U64
+        \\        var $discard_a = 0.U64
+        \\        var $discard_b = 0.U64
+        \\        while $inner < config.inner_limit {
+        \\            $inner = $inner + 1
+        \\            $discard_a = $discard_a + 1
+        \\            $discard_b = $discard_b + 1
+        \\        }
+        \\        $outer = $outer + 1
+        \\        $total = $total + $inner + $discard_a
+        \\    }
+        \\    $total
+        \\}
+        \\
+        \\main : Bool -> U64
+        \\main = |flag| {
+        \\    outer_limit = match flag {
+        \\        Bool.True => 2
+        \\        Bool.False => 3
+        \\    }
+        \\    run({ inner_limit: 1 }, outer_limit)
+        \\}
+    ;
+
+    var lifted = try liftModuleAfterSpecConstr(allocator, source);
+    defer lifted.deinit(allocator);
+}
+
 test "issue 10153 nested loops do not multiply SpecConstr callable functions" {
     const allocator = std.testing.allocator;
     // Repro for https://github.com/roc-lang/roc/issues/10153. Adding one fixed

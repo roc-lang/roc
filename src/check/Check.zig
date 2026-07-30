@@ -706,16 +706,20 @@ const DispatchTargetInstantiation = struct {
     method_var: Var,
 };
 
-fn isLiteralStaticDispatchOrigin(origin: StaticDispatchConstraint.Origin) bool {
-    return switch (origin) {
-        // This internal origin tag covers every literal conversion kind.
-        .from_literal => true,
-        .desugared_binop,
-        .desugared_unaryop,
-        .method_call,
-        .where_clause,
-        => false,
+fn literalMethodIdents(self: *const Self) literal_defaulting.LiteralMethodIdents {
+    return .{
+        .from_numeral = self.cir.idents.from_numeral,
+        .from_quote = self.cir.idents.from_quote,
+        .from_interpolation = self.cir.idents.from_interpolation,
     };
+}
+
+/// Whether this constraint carries literal-conversion provenance — a
+/// `from_literal` origin or a `where`-clause contract naming a
+/// literal-conversion hook. The kind decision lives in the defaulting oracle
+/// (src/types/literal_defaulting.zig).
+fn constraintIsLiteralConversion(self: *const Self, constraint: StaticDispatchConstraint) bool {
+    return literal_defaulting.constraintLiteralKind(self.literalMethodIdents(), constraint) != null;
 }
 
 const StaticDispatchUse = struct {
@@ -3864,7 +3868,7 @@ fn instantiateVarHelp(
                     var has_literal_constraint = false;
                     var has_other_constraint = false;
                     for (constraints) |c| {
-                        if (isLiteralStaticDispatchOrigin(c.origin)) {
+                        if (self.constraintIsLiteralConversion(c)) {
                             has_literal_constraint = true;
                         } else {
                             has_other_constraint = true;
@@ -4083,7 +4087,7 @@ const BuiltinParseSpecDecl = enum {
     null,
     list_start,
     list_next,
-    list_after_element,
+    list_after_item,
     tuple_start,
     tuple_next,
     tuple_end,
@@ -4254,7 +4258,7 @@ fn sourceDeclForBuiltinParseSpec(self: *const Self, decl: BuiltinParseSpecDecl) 
         const indices = self.builtin_ctx.builtin_indices.?;
         const stmt_idx = switch (decl) {
             .tag_union => indices.parse_tag_union_spec_type,
-            .bool, .str, .null, .list_start, .list_next, .list_after_element, .tuple_start, .tuple_next, .tuple_end, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_field, .record_after_field => {
+            .bool, .str, .null, .list_start, .list_next, .list_after_item, .tuple_start, .tuple_next, .tuple_end, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_field, .record_after_field => {
                 if (builtin.mode == .Debug) {
                     std.debug.panic("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
                 }
@@ -4275,7 +4279,7 @@ fn sourceDeclForBuiltinParseSpec(self: *const Self, decl: BuiltinParseSpecDecl) 
 
     const ident = switch (decl) {
         .tag_union => self.cir.idents.builtin_encoding_parse_tag_union_spec,
-        .bool, .str, .null, .list_start, .list_next, .list_after_element, .tuple_start, .tuple_next, .tuple_end, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_field, .record_after_field => {
+        .bool, .str, .null, .list_start, .list_next, .list_after_item, .tuple_start, .tuple_next, .tuple_end, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_field, .record_after_field => {
             if (builtin.mode == .Debug) {
                 std.debug.panic("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
             }
@@ -4638,17 +4642,20 @@ fn recordOpenLiteralVar(
 ) Allocator.Error!void {
     var has_literal = false;
     for (constraints) |constraint| {
+        if (self.constraintIsLiteralConversion(constraint)) {
+            has_literal = true;
+        }
+        // Exact-value range validation needs the numeral payload, which only a
+        // `from_literal` origin carries — a `where`-clause hook has no literal
+        // value to validate.
         switch (constraint.origin) {
-            .from_literal => |lit| {
-                has_literal = true;
-                switch (lit) {
-                    .numeral => try self.open_numeral_literals.append(self.gpa, .{
-                        .var_ = literal_var,
-                        .constraint = constraint,
-                        .source_node = source_node,
-                    }),
-                    .quote, .interpolation => {},
-                }
+            .from_literal => |lit| switch (lit) {
+                .numeral => try self.open_numeral_literals.append(self.gpa, .{
+                    .var_ = literal_var,
+                    .constraint = constraint,
+                    .source_node = source_node,
+                }),
+                .quote, .interpolation => {},
             },
             else => {},
         }
@@ -4937,7 +4944,7 @@ fn mkParseSpecVar(
 ) Allocator.Error!Var {
     const ident_idx = switch (decl) {
         .tag_union => self.cir.idents.builtin_encoding_parse_tag_union_spec,
-        .bool, .str, .null, .list_start, .list_next, .list_after_element, .tuple_start, .tuple_next, .tuple_end, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_field, .record_after_field => {
+        .bool, .str, .null, .list_start, .list_next, .list_after_item, .tuple_start, .tuple_next, .tuple_end, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_field, .record_after_field => {
             if (builtin.mode == .Debug) {
                 std.debug.panic("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
             }
@@ -6783,11 +6790,12 @@ const AmbiguitySelection = struct {
 ///   (issue 9657). A generalized all-`where` receiver from a discarded
 ///   `_ = ...` binding with a body-forced contract is also reported: the value
 ///   was thrown away, so no caller can ever supply the owner (issue 9819).
-/// - A receiver carrying any literal-conversion constraint is skipped:
-///   defaulting owns it (at finalize and at generalization boundaries), and a
-///   generalized literal resolves per instantiation. Essential for numeric
-///   helpers like `|x| x + y` whose receiver carries `desugared_binop` plus
-///   `from_numeral`.
+/// - A receiver carrying any literal-conversion constraint (a `from_literal`
+///   origin or a `where`-clause contract naming a literal-conversion hook) is
+///   skipped: defaulting owns it (at finalize and at generalization
+///   boundaries), and a generalized literal resolves per instantiation.
+///   Essential for numeric helpers like `|x| x + y` whose receiver carries
+///   `desugared_binop` plus `from_numeral`.
 /// - `is_eq` constraints are skipped: lowering compares structurally with no
 ///   owner needed, so a flex `is_eq` placeholder left by valid code
 ///   (`[1] == [1]`) is not a dead end. A genuinely ambiguous equality on a
@@ -6840,7 +6848,7 @@ fn selectAmbiguityConstraint(
             var has_literal_constraint = false;
             for (constraints) |c| {
                 if (self.rejected_static_dispatches.contains(c.fn_var)) continue;
-                if (isLiteralStaticDispatchOrigin(c.origin)) {
+                if (self.constraintIsLiteralConversion(c)) {
                     has_literal_constraint = true;
                 } else if (c.fn_name.eql(self.cir.idents.is_eq)) {
                     continue;
@@ -16975,7 +16983,7 @@ fn postProcessCopiedVars(self: *Self, region: Region) std.mem.Allocator.Error!vo
             if (fresh_content == .flex) {
                 const constraints = self.types.sliceStaticDispatchConstraints(fresh_content.flex.constraints);
                 for (constraints) |c| {
-                    if (c.origin == .from_literal) {
+                    if (self.constraintIsLiteralConversion(c)) {
                         try self.recordOpenLiteralVar(fresh_var, constraints, null);
                         break;
                     }
@@ -18511,7 +18519,7 @@ fn varLiteralKind(self: *Self, var_: Var) ?StaticDispatchConstraint.LiteralKind 
     const resolved = self.types.resolveVar(var_);
     if (resolved.desc.content != .flex) return null;
     const constraints = self.types.sliceStaticDispatchConstraints(resolved.desc.content.flex.constraints);
-    return literal_defaulting.dominantKind(constraints);
+    return literal_defaulting.dominantKind(self.literalMethodIdents(), constraints);
 }
 
 // --- Per-kind literal facts, each an exhaustive `switch (LiteralKind)` ---------
@@ -22396,7 +22404,7 @@ fn parseFormatMethodName(self: *Self, decl: BuiltinParseSpecDecl) Allocator.Erro
         .null => "parse_null",
         .list_start => "parse_list_start",
         .list_next => "parse_list_next",
-        .list_after_element => "parse_list_after_element",
+        .list_after_item => "parse_list_after_item",
         .tuple_start => "parse_tuple_start",
         .tuple_next => "parse_tuple_next",
         .tuple_end => "parse_tuple_end",
@@ -22668,14 +22676,14 @@ fn validateParseFormatMethod(
     const expected_ret = switch (spec_decl) {
         .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .tag_union => try self.freshParseResultTryVar(shape_var, state_var, err_var, env, region),
         .null, .tuple_start, .tuple_next, .tuple_end => try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region),
-        .list_next => try self.freshParseArrayEventTryVar(state_var, err_var, "Element", "Done", env, region),
-        .list_after_element => try self.freshParseArrayEventTryVar(state_var, err_var, "Continue", "Done", env, region),
+        .list_next => try self.freshParseArrayEventTryVar(state_var, err_var, "Item", "Done", env, region),
+        .list_after_item => try self.freshParseArrayEventTryVar(state_var, err_var, "Continue", "Done", env, region),
         .list_start, .record_start => try self.freshParseCountedStartTryVar(state_var, err_var, env, region),
         .record_field => try self.freshParseRecordFieldTryVar(shape_var, state_var, err_var, env, region),
         .record_after_field => try self.freshParseArrayEventTryVar(state_var, err_var, "Continue", "Done", env, region),
     };
     const expected_fn = switch (spec_decl) {
-        .bool, .str, .null, .list_start, .list_next, .list_after_element, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_after_field => try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, expected_ret), env, region),
+        .bool, .str, .null, .list_start, .list_next, .list_after_item, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_after_field => try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, expected_ret), env, region),
         // A tuple's arity is static, so the format is told the element count
         // and (for `parse_tuple_next`) which element is about to be read.
         .tuple_start, .tuple_end => blk: {
@@ -22750,12 +22758,12 @@ fn validateEncodeFormatMethod(
             const container_state_var = try self.fresh(env, region);
             const container_ret = try self.freshFromContent(try self.mkTryContent(container_state_var, err_var), env, region);
             const value_writer_var = try self.freshFromContent(try self.types.mkFuncUnbound(&.{state_var}, expected_ret), env, region);
-            const element_writer_var = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ container_state_var, value_writer_var }, container_ret), env, region);
-            const write_elements_var = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ container_state_var, element_writer_var }, container_ret), env, region);
+            const item_writer_var = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ container_state_var, value_writer_var }, container_ret), env, region);
+            const write_items_var = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ container_state_var, item_writer_var }, container_ret), env, region);
             const args: []const Var = if (spec_decl == .tag) blk_args: {
                 const str_var = try self.freshStr(env, region);
-                break :blk_args &[_]Var{ state_var, str_var, count_var, write_elements_var };
-            } else &[_]Var{ state_var, count_var, write_elements_var };
+                break :blk_args &[_]Var{ state_var, str_var, count_var, write_items_var };
+            } else &[_]Var{ state_var, count_var, write_items_var };
             break :blk try self.freshFromContent(try self.types.mkFuncUnbound(args, expected_ret), env, region);
         },
     };
@@ -23621,7 +23629,7 @@ fn validateDerivedParseListMethods(
         .ok => {},
         .unsupported, .reported_error => |result| return result,
     }
-    switch (try self.validateParseFormatMethod(encoding_var, state_var, list_var, .list_after_element, err_var, constraint, env, region)) {
+    switch (try self.validateParseFormatMethod(encoding_var, state_var, list_var, .list_after_item, err_var, constraint, env, region)) {
         .ok => {},
         .unsupported, .reported_error => |result| return result,
     }
@@ -23879,7 +23887,7 @@ fn checkFlexVarConstraintCompatibility(
             .div_trunc_by = self.cir.idents.div_trunc_by,
             .rem_by = self.cir.idents.rem_by,
             .negate = self.cir.idents.negate,
-        }, constraints) orelse return false;
+        }, self.literalMethodIdents(), constraints) orelse return false;
         break :blk literal_defaulting.defaultTargetForPhase(default_phase) orelse {
             std.debug.panic("checker flex compatibility received a checking-finalized default phase", .{});
         };
@@ -23887,7 +23895,7 @@ fn checkFlexVarConstraintCompatibility(
         // Ordinary flex compatibility is only for variables carrying literal
         // provenance. Arithmetic-only flexes remain polymorphic until a later
         // specialization explicitly materializes them.
-        const kind = literal_defaulting.dominantKind(constraints) orelse return false;
+        const kind = literal_defaulting.dominantKind(self.literalMethodIdents(), constraints) orelse return false;
         break :blk literal_defaulting.defaultTargetForKind(kind);
     };
 
