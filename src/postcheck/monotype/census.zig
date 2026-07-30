@@ -454,6 +454,12 @@ pub const Census = struct {
     divergence_site_at_request_edge: Counter = Counter.init(0),
     divergence_no_site_at_request_edge: Counter = Counter.init(0),
     divergence_no_request_edge: Counter = Counter.init(0),
+    // For an edgeless divergence, whether the checked data records its
+    // definition's instantiation anywhere in the position's module.
+    edgeless_owner_has_site_somewhere: Counter = Counter.init(0),
+    edgeless_owner_has_no_site_anywhere: Counter = Counter.init(0),
+    edgeless_no_free_variable: Counter = Counter.init(0),
+    edgeless_free_var_unowned: Counter = Counter.init(0),
     divergence_no_free_variable: Counter = Counter.init(0),
     divergence_free_var_unowned: Counter = Counter.init(0),
     // What a read naming no checked position is, by node shape.

@@ -1392,6 +1392,46 @@ pub const Rehearsal = struct {
     /// position entered through. The read's own use expression never carries
     /// that site; the edge's might, and that is the difference between building
     /// a level for the definition and having nothing to build it from.
+    /// Debug/probe-only: for a divergence that entered through no request edge,
+    /// whether any recorded site in the position's own module names the
+    /// definition its unbound variable belongs to (reunify.md 13.2 2a).
+    fn noteEdgelessDivergenceOwner(self: *Rehearsal, address: CheckedAddress, under_callee: bool) void {
+        if (comptime !census.enabled) return;
+        const cursor = self.lookup.cursor(address.module_bytes) orelse return;
+        var env: ?*const direct_translate.BindingEnvironment = null;
+        const callee = if (under_callee) self.innermostCallee(address.module_bytes) else null;
+        if (callee) |level| {
+            env = level.chain.innermost();
+        } else if (self.frameForModule(address.module_bytes)) |frame| {
+            env = frame.environment();
+        }
+        const free = self.firstFreeVariable(cursor.view, @enumFromInt(address.type_id), env) orelse {
+            census.bump("edgeless_no_free_variable");
+            return;
+        };
+        var owner_node: ?u32 = null;
+        for (cursor.view.schemes) |scheme| {
+            for (scheme.generalizedVars(cursor.view)) |binder| {
+                if (binder == free) {
+                    owner_node = scheme.owner_node;
+                    break;
+                }
+            }
+            if (owner_node != null) break;
+        }
+        const owner = owner_node orelse {
+            census.bump("edgeless_free_var_unowned");
+            return;
+        };
+        for (cursor.view.instantiationSites()) |site| {
+            if (site.scheme_owner_node == owner) {
+                census.bump("edgeless_owner_has_site_somewhere");
+                return;
+            }
+        }
+        census.bump("edgeless_owner_has_no_site_anywhere");
+    }
+
     pub fn noteDivergenceEdgeSite(
         self: *Rehearsal,
         address: CheckedAddress,
@@ -1402,6 +1442,12 @@ pub const Rehearsal = struct {
         if (self.disabled) return;
         const named = edge orelse {
             census.bump("divergence_no_request_edge");
+            // No entering edge names a site for this position. Ask whether the
+            // checked data records its definition's instantiation ANYWHERE in
+            // the module: if it does, the value exists and only the key that
+            // selects it is missing; if it does not, no recorded edge states
+            // it at all and closing this needs checking to record more.
+            self.noteEdgelessDivergenceOwner(address, under_callee);
             return;
         };
         const cursor = self.lookup.cursor(address.module_bytes) orelse return;
