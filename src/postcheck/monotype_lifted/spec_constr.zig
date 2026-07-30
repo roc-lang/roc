@@ -5110,6 +5110,19 @@ const Cloner = struct {
                 if (self.letCaseJoinFor(jump.target)) |join| {
                     return try self.captureLetCaseJump(expr.ty, join, jump);
                 }
+                if (self.selectedExitJumpSites(jump.target)) |sites| {
+                    // A loop-exit transfer site minted by an active selection is
+                    // being duplicated (an enclosing arm rewrite is re-cloning
+                    // the region). The target is already in this clone's id
+                    // space, and the selection must see every surviving copy of
+                    // its exit, so keep the target and register the duplicate.
+                    const duplicated = try self.addExpr(.{ .ty = expr.ty, .data = .{ .jump = .{
+                        .target = jump.target,
+                        .args = try self.cloneExprSpan(jump.args),
+                    } } });
+                    try sites.append(self.pass.allocator, duplicated);
+                    return duplicated;
+                }
                 break :blk .{ .jump = .{
                     .target = self.clonedJoinTarget(jump.target),
                     .args = try self.cloneExprSpan(jump.args),
@@ -5219,7 +5232,13 @@ const Cloner = struct {
             const join_point = self.join_stack.items[index];
             if (join_point.source == source) return join_point.target;
         }
-        Common.invariant("SpecConstr jump referenced a join point outside its lexical scope");
+        // Not being remapped: the join's definition encloses the region being
+        // cloned rather than sitting inside it. Rewrites re-clone regions of
+        // already-emitted output in place (arm transfers, loop exit
+        // selection), and a jump out of such a region must keep aiming at the
+        // enclosing definition. Join ids are minted from one pass-wide
+        // counter, so the id cannot collide with a different join.
+        return source;
     }
 
     fn cloneLetValue(self: *Cloner, let_: anytype, bindings: *BindingChain) Common.LowerError!Value {
@@ -5437,6 +5456,23 @@ const Cloner = struct {
         return self.loop_exit_stack.items[self.loop_exit_stack.items.len - 1];
     }
 
+    /// The live site list of the active selection that owns this jump target,
+    /// if any. Exit-transfer jumps are minted in the clone's own id space, so a
+    /// jump to a selection's target can only be one of that selection's sites
+    /// being cloned again.
+    fn selectedExitJumpSites(self: *Cloner, target: Ast.JoinPointId) ?*std.ArrayList(Ast.ExprId) {
+        var index = self.loop_exit_stack.items.len;
+        while (index > 0) {
+            index -= 1;
+            const selection = self.loop_exit_stack.items[index] orelse continue;
+            switch (selection.transfer) {
+                .break_value => {},
+                .jump => |jump_transfer| if (jump_transfer.target == target) return jump_transfer.sites,
+            }
+        }
+        return null;
+    }
+
     fn cloneSelectedLoopExit(
         self: *Cloner,
         break_ty: Type.TypeId,
@@ -5499,7 +5535,11 @@ const Cloner = struct {
         defer self.subst.restore(change_start);
         for (params, args) |param, arg| try self.subst.put(self.pass.program, param.local, .{ .expr = arg });
         const body = try self.cloneExpr(continuation);
-        self.pass.program.setExprData(site, self.pass.program.getExpr(body).data);
+        // The site is a diverging loop exit: lexically-following loop code is
+        // only dead while it stays one. Inlining the continuation bare would
+        // fall through into that code and discard the result, so the site
+        // becomes a break carrying the continuation's value out of the loop.
+        self.pass.program.setExprData(site, .{ .break_ = body });
     }
 
     /// Dissolve a binding while retaining every opaque leaf in the strict
