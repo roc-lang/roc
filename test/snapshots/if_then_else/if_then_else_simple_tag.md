@@ -8,9 +8,19 @@ type=expr
 if Bool.True Ok(0) else Err(1)
 ~~~
 # EXPECTED
-NIL
+UNCONDITIONAL CONDITION - if_then_else_simple_tag.md:1:4:1:13
 # PROBLEMS
-NIL
+
+┌─────────────────────────┐
+│ UNCONDITIONAL CONDITION ├─ This if condition is known at compile time, so ──┐
+└┬────────────────────────┘  this conditional will always make the same       │
+ │                           choice.                                          │
+ │                                                                            │
+ │  if Bool.True Ok(0) else Err(1)                                            │
+ │     ‾‾‾‾‾‾‾‾‾                                                              │
+ └──────────────────────────────────────────── if_then_else_simple_tag.md:1:4 ┘
+
+
 # TOKENS
 ~~~zig
 KwIf,UpperIdent,NoSpaceDotUpperIdent,UpperIdent,NoSpaceOpenRound,Int,CloseRound,KwElse,UpperIdent,NoSpaceOpenRound,Int,CloseRound,

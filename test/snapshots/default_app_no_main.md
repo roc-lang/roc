@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Error - type module with no main! or matching type
+description=Error - type mod with no main! or matching type
 type=file
 ~~~
 # SOURCE
@@ -19,7 +19,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "helper"))
@@ -42,7 +42,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "plus") (constraint-fn-var 46)
+			(e-dispatch-call (method "plus") (constraint-fn-var 204)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))

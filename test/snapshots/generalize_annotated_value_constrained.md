@@ -15,20 +15,18 @@ main! = |_| {}
 # EXPECTED
 POLYMORPHIC VALUE - generalize_annotated_value_constrained.md:4:1:4:6
 # PROBLEMS
-**POLYMORPHIC VALUE**
-This top-level value still has an unresolved polymorphic type:
-**generalize_annotated_value_constrained.md:4:1:4:6:**
-```roc
-items = []
-```
-^^^^^
 
+┌───────────────────┐
+│ POLYMORPHIC VALUE ├─ This top-level value still has an unresolved ──────────┐
+└┬──────────────────┘  polymorphic type.                                      │
+ │                                                                            │
+ │  items = []                                                                │
+ │  ‾‾‾‾‾                                                                     │
+ └───────────────────────────── generalize_annotated_value_constrained.md:4:1 ┘
 
-Its type is:
-```roc
-List(a) where [a.to_str : a -> Str]
-```
-Add an annotation or use this value in a way that fixes its concrete type.
+    Its type is:
+    List(a) where [a.to_str : a -> Str]
+    Add an annotation or use this value in a way that fixes its concrete type.
 
 # TOKENS
 ~~~zig
@@ -58,7 +56,7 @@ EndOfFile,
 				(ty (name "List"))
 				(ty-var (raw "a")))
 			(where
-				(method (module-of "a") (name "to_str")
+				(method (mod-of "a") (name "to_str")
 					(args
 						(ty-var (raw "a")))
 					(ty (name "Str")))))

@@ -15,9 +15,19 @@ type=expr
 }
 ~~~
 # EXPECTED
-NIL
+UNCONDITIONAL CONDITION - single_field_record_in_if_branch.md:3:5:3:9
 # PROBLEMS
-NIL
+
+┌─────────────────────────┐
+│ UNCONDITIONAL CONDITION ├─ This if condition is known at compile time, so ──┐
+└┬────────────────────────┘  this conditional will always make the same       │
+ │                           choice.                                          │
+ │                                                                            │
+ │  if True {                                                                 │
+ │     ‾‾‾‾                                                                   │
+ └─────────────────────────────────── single_field_record_in_if_branch.md:3:5 ┘
+
+
 # TOKENS
 ~~~zig
 OpenCurly,

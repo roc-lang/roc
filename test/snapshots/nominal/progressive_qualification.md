@@ -9,7 +9,7 @@ type=snippet
 # Test progressive qualification per can_plan.md
 #
 # The plan states:
-# - Module scope gets "Foo.Bar.baz" (user-facing fully qualified)
+# - Mod scope gets "Foo.Bar.baz" (user-facing fully qualified)
 # - Foo's scope gets "Bar.baz" (partially qualified)
 # - Bar's scope gets "baz" (unqualified)
 # ============================================================================
@@ -30,13 +30,13 @@ Outer := [O].{
     fromOuter = Inner.value
 }
 
-# From module scope: fully qualified access (Outer.Inner.value)
-fromModule = Outer.Inner.value
+# From mod scope: fully qualified access (Outer.Inner.value)
+fromMod = Outer.Inner.value
 
 # Verify all access patterns work
 test1_inner = Outer.Inner.fromInner     # Should be 42
 test1_outer = Outer.fromOuter           # Should be 42
-test1_module = fromModule               # Should be 42
+test1_mod = fromMod               # Should be 42
 
 # --------------------------------------------------------------------------
 # Test 2: Three-level nesting - access from each scope level
@@ -59,14 +59,14 @@ Level1 := [L1].{
     accessFromL1 = Level2.Level3.deepValue
 }
 
-# From module scope: full qualification (Level1.Level2.Level3.deepValue)
-accessFromModule = Level1.Level2.Level3.deepValue
+# From mod scope: full qualification (Level1.Level2.Level3.deepValue)
+accessFromMod = Level1.Level2.Level3.deepValue
 
 # Verify
 test2_l3 = Level1.Level2.Level3.accessFromL3    # 100
 test2_l2 = Level1.Level2.accessFromL2           # 100
 test2_l1 = Level1.accessFromL1                  # 100
-test2_mod = accessFromModule                    # 100
+test2_mod = accessFromMod                    # 100
 
 # --------------------------------------------------------------------------
 # Test 3: Cross-references between siblings at different nesting levels
@@ -250,7 +250,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "Outer")
@@ -276,7 +276,7 @@ EndOfFile,
 					(p-ident (raw "fromOuter"))
 					(e-ident (raw "Inner.value")))))
 		(s-decl
-			(p-ident (raw "fromModule"))
+			(p-ident (raw "fromMod"))
 			(e-ident (raw "Outer.Inner.value")))
 		(s-decl
 			(p-ident (raw "test1_inner"))
@@ -285,8 +285,8 @@ EndOfFile,
 			(p-ident (raw "test1_outer"))
 			(e-ident (raw "Outer.fromOuter")))
 		(s-decl
-			(p-ident (raw "test1_module"))
-			(e-ident (raw "fromModule")))
+			(p-ident (raw "test1_mod"))
+			(e-ident (raw "fromMod")))
 		(s-type-decl
 			(header (name "Level1")
 				(args))
@@ -321,7 +321,7 @@ EndOfFile,
 					(p-ident (raw "accessFromL1"))
 					(e-ident (raw "Level2.Level3.deepValue")))))
 		(s-decl
-			(p-ident (raw "accessFromModule"))
+			(p-ident (raw "accessFromMod"))
 			(e-ident (raw "Level1.Level2.Level3.deepValue")))
 		(s-decl
 			(p-ident (raw "test2_l3"))
@@ -334,7 +334,7 @@ EndOfFile,
 			(e-ident (raw "Level1.accessFromL1")))
 		(s-decl
 			(p-ident (raw "test2_mod"))
-			(e-ident (raw "accessFromModule")))
+			(e-ident (raw "accessFromMod")))
 		(s-type-decl
 			(header (name "Parent")
 				(args))
@@ -521,7 +521,7 @@ EndOfFile,
 # Test progressive qualification per can_plan.md
 #
 # The plan states:
-# - Module scope gets "Foo.Bar.baz" (user-facing fully qualified)
+# - Mod scope gets "Foo.Bar.baz" (user-facing fully qualified)
 # - Foo's scope gets "Bar.baz" (partially qualified)
 # - Bar's scope gets "baz" (unqualified)
 # ============================================================================
@@ -542,15 +542,15 @@ Outer := [O].{
 	fromOuter = Inner.value
 }
 
-# From module scope: fully qualified access (Outer.Inner.value)
-fromModule = Outer.Inner.value
+# From mod scope: fully qualified access (Outer.Inner.value)
+fromMod = Outer.Inner.value
 
 # Verify all access patterns work
 test1_inner = Outer.Inner.fromInner # Should be 42
 
 test1_outer = Outer.fromOuter # Should be 42
 
-test1_module = fromModule # Should be 42
+test1_mod = fromMod # Should be 42
 
 # --------------------------------------------------------------------------
 # Test 2: Three-level nesting - access from each scope level
@@ -573,8 +573,8 @@ Level1 := [L1].{
 	accessFromL1 = Level2.Level3.deepValue
 }
 
-# From module scope: full qualification (Level1.Level2.Level3.deepValue)
-accessFromModule = Level1.Level2.Level3.deepValue
+# From mod scope: full qualification (Level1.Level2.Level3.deepValue)
+accessFromMod = Level1.Level2.Level3.deepValue
 
 # Verify
 test2_l3 = Level1.Level2.Level3.accessFromL3 # 100
@@ -583,7 +583,7 @@ test2_l2 = Level1.Level2.accessFromL2 # 100
 
 test2_l1 = Level1.accessFromL1 # 100
 
-test2_mod = accessFromModule # 100
+test2_mod = accessFromMod # 100
 
 # --------------------------------------------------------------------------
 # Test 3: Cross-references between siblings at different nesting levels
@@ -700,7 +700,7 @@ test6_combined = Container.Nested.combined # 35
 		(e-lookup-local
 			(p-assign (ident "progressive_qualification.Outer.Inner.value"))))
 	(d-let
-		(p-assign (ident "fromModule"))
+		(p-assign (ident "fromMod"))
 		(e-lookup-local
 			(p-assign (ident "progressive_qualification.Outer.Inner.value"))))
 	(d-let
@@ -712,9 +712,9 @@ test6_combined = Container.Nested.combined # 35
 		(e-lookup-local
 			(p-assign (ident "progressive_qualification.Outer.fromOuter"))))
 	(d-let
-		(p-assign (ident "test1_module"))
+		(p-assign (ident "test1_mod"))
 		(e-lookup-local
-			(p-assign (ident "fromModule"))))
+			(p-assign (ident "fromMod"))))
 	(d-let
 		(p-assign (ident "progressive_qualification.Level1.Level2.Level3.deepValue"))
 		(e-num (value "100")))
@@ -731,7 +731,7 @@ test6_combined = Container.Nested.combined # 35
 		(e-lookup-local
 			(p-assign (ident "progressive_qualification.Level1.Level2.Level3.deepValue"))))
 	(d-let
-		(p-assign (ident "accessFromModule"))
+		(p-assign (ident "accessFromMod"))
 		(e-lookup-local
 			(p-assign (ident "progressive_qualification.Level1.Level2.Level3.deepValue"))))
 	(d-let
@@ -749,7 +749,7 @@ test6_combined = Container.Nested.combined # 35
 	(d-let
 		(p-assign (ident "test2_mod"))
 		(e-lookup-local
-			(p-assign (ident "accessFromModule"))))
+			(p-assign (ident "accessFromMod"))))
 	(d-let
 		(p-assign (ident "progressive_qualification.Parent.sharedVal"))
 		(e-num (value "999")))
@@ -773,7 +773,7 @@ test6_combined = Container.Nested.combined # 35
 			(p-assign (ident "progressive_qualification.Parent.sharedVal"))))
 	(d-let
 		(p-assign (ident "progressive_qualification.Parent.sumChildren"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 409)
+		(e-dispatch-call (method "plus") (constraint-fn-var 463)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "progressive_qualification.Parent.Child1.c1Val"))))
@@ -859,9 +859,9 @@ test6_combined = Container.Nested.combined # 35
 			(p-assign (ident "progressive_qualification.Container.outerB"))))
 	(d-let
 		(p-assign (ident "progressive_qualification.Container.Nested.combined"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 644)
+		(e-dispatch-call (method "plus") (constraint-fn-var 516)
 			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 642)
+				(e-dispatch-call (method "plus") (constraint-fn-var 514)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "progressive_qualification.Container.Nested.innerVal"))))

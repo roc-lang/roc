@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Import with module-qualified usage
+description=Import with mod-qualified usage
 type=snippet
 ~~~
 # SOURCE
@@ -10,18 +10,34 @@ import json.Json
 main = Json.utf8
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - can_import_json.md:3:8:3:17
+DUPLICATE DEFINITION - can_import_json.md:1:1:1:17
+NAME NOT IN SCOPE - can_import_json.md:3:8:3:17
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `utf8` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**can_import_json.md:3:8:3:17:**
-```roc
-main = Json.utf8
-```
-       ^^^^^^^^^
+┌──────────────────────┐
+│ DUPLICATE DEFINITION ├─ The name `Json` is being redeclared here. ──────────┐
+└┬─────────────────────┘                                                      │
+ │                                                                            │
+ │  import json.Json                                                          │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                          │
+ └──────────────────────────────────────────────────── can_import_json.md:1:1 ┘
 
+    In this scope, `Json` was already defined here:
+      ┌───────────────────────────────────────────────────────────────────────┐
+    1 │  import json.Json                                                     │
+      │  ‾                                                                    │
+      └─────────────────────────────────────────────── can_import_json.md:1:1 ┘
+
+
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `utf8` in this scope. ────────────────┐
+└┬──────────────────┘                                                         │
+ │                                                                            │
+ │  main = Json.utf8                                                          │
+ │         ‾‾‾‾‾‾‾‾‾                                                          │
+ └──────────────────────────────────────────────────── can_import_json.md:3:8 ┘
+
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig
@@ -32,7 +48,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "json.Json"))
 		(s-decl
@@ -49,7 +65,7 @@ NO CHANGE
 	(d-let
 		(p-assign (ident "main"))
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(s-import (module "json.Json")
+	(s-import (mod "json.Json")
 		(exposes)))
 ~~~
 # TYPES

@@ -1,15 +1,15 @@
 ParserMissingTagUnionMethod :: [].{}
 
 Format := [Default].{
-	parse_str : Format, State -> Try({ value : Str, rest : State }, [MissingRequired])
-	parse_str = |_| Err(MissingRequired)
+	parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError, ..])
+	parse_str = |_| Err(FormatError)
 }
 
 State := [Present(Str)]
 
-parse : Str -> Try(a, [MissingRequired])
+parse : Str -> Try(a, [FormatError, ..errs])
 	where [
-		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [MissingRequired])),
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError, ..errs])),
 	]
 parse = |input| {
 	Shape : a
@@ -18,5 +18,5 @@ parse = |input| {
 	Ok(parsed.value)
 }
 
-main : Try([One], [MissingRequired])
+main : Try([One], [FormatError])
 main = parse("One")

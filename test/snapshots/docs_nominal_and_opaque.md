@@ -35,7 +35,7 @@ main_for_host = main
 ~~~clojure
 (package-docs
   (name "test-app")
-  (module
+  (mod
     (name "app")
     (package "app")
     (kind app)
@@ -55,16 +55,6 @@ main_for_host = main
       (kind opaque)
       (type "Id :: " (type-ref (name "U64")))
       (doc "An opaque identifier.")
-    )
-  )
-  (module
-    (name "platform")
-    (package "pf")
-    (kind platform)
-    (entry
-      (name "main_for_host")
-      (kind value)
-      (type (type-ref (name "Str")))
     )
   )
 )

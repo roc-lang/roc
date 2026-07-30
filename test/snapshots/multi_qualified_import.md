@@ -19,174 +19,120 @@ data : json.Core.Utf8.EncodedData
 data = json.Core.Utf8.encode("hello")
 ~~~
 # EXPECTED
-PARSE ERROR - multi_qualified_import.md:12:12:12:17
-PARSE ERROR - multi_qualified_import.md:12:17:12:22
-PARSE ERROR - multi_qualified_import.md:12:22:12:29
-PARSE ERROR - multi_qualified_import.md:12:29:12:30
-PARSE ERROR - multi_qualified_import.md:12:30:12:31
-PARSE ERROR - multi_qualified_import.md:12:31:12:36
-PARSE ERROR - multi_qualified_import.md:12:36:12:37
-PARSE ERROR - multi_qualified_import.md:12:37:12:38
+EXPECTED RECORD ACCESSOR - multi_qualified_import.md:12:12:12:17
+EXPECTED RECORD ACCESSOR - multi_qualified_import.md:12:17:12:22
 UNDECLARED TYPE - multi_qualified_import.md:3:16:3:23
 DOES NOT EXIST - multi_qualified_import.md:4:16:4:45
-MODULE NOT IMPORTED - multi_qualified_import.md:7:11:7:33
+MOD NOT IMPORTED - multi_qualified_import.md:7:11:7:33
 UNUSED VARIABLE - multi_qualified_import.md:8:12:8:19
-MODULE NOT IMPORTED - multi_qualified_import.md:11:8:11:34
-UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
+MOD NOT IMPORTED - multi_qualified_import.md:11:8:11:34
+UNRECOGNIZED SYNTAX - multi_qualified_import.md:12:8:12:38
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
 
-**multi_qualified_import.md:12:12:12:17:**
-```roc
-data = json.Core.Utf8.encode("hello")
-```
-           ^^^^^
+┌──────────────────────────┐
+│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
+└┬─────────────────────────┘  expected a field name or tuple index.           │
+ │                                                                            │
+ │  data = json.Core.Utf8.encode("hello")                                     │
+ │             ‾‾‾‾‾                                                          │
+ └─────────────────────────────────────────── multi_qualified_import.md:12:12 ┘
 
+    Record access uses a lowercase field name like `.name`. Tuple access uses a
+    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+    valid accessors.
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+    For example:
+        person.name
+        pair.0
 
-**multi_qualified_import.md:12:17:12:22:**
-```roc
-data = json.Core.Utf8.encode("hello")
-```
-                ^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**multi_qualified_import.md:12:22:12:29:**
-```roc
-data = json.Core.Utf8.encode("hello")
-```
-                     ^^^^^^^
+    I found `.Core` here.
+    Names that start with uppercase letters are used for tags, type names, and
+    mod names in Roc.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌──────────────────────────┐
+│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
+└┬─────────────────────────┘  expected a field name or tuple index.           │
+ │                                                                            │
+ │  data = json.Core.Utf8.encode("hello")                                     │
+ │                  ‾‾‾‾‾                                                     │
+ └─────────────────────────────────────────── multi_qualified_import.md:12:17 ┘
 
-**multi_qualified_import.md:12:29:12:30:**
-```roc
-data = json.Core.Utf8.encode("hello")
-```
-                            ^
+    Record access uses a lowercase field name like `.name`. Tuple access uses a
+    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+    valid accessors.
 
+    For example:
+        person.name
+        pair.0
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**multi_qualified_import.md:12:30:12:31:**
-```roc
-data = json.Core.Utf8.encode("hello")
-```
-                             ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**multi_qualified_import.md:12:31:12:36:**
-```roc
-data = json.Core.Utf8.encode("hello")
-```
-                              ^^^^^
+    I found `.Utf8` here.
+    Names that start with uppercase letters are used for tags, type names, and
+    mod names in Roc.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**multi_qualified_import.md:12:36:12:37:**
-```roc
-data = json.Core.Utf8.encode("hello")
-```
-                                   ^
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Encoder` is not declared in this scope. ───────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  json_encoder : Encoder                                                    │
+ │                 ‾‾‾‾‾‾‾                                                    │
+ └──────────────────────────────────────────── multi_qualified_import.md:3:16 ┘
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
 
-**multi_qualified_import.md:12:37:12:38:**
-```roc
-data = json.Core.Utf8.encode("hello")
-```
-                                    ^
+┌────────────────┐
+│ DOES NOT EXIST ├─ `Json.defaultEncoder` does not exist. ────────────────────┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  json_encoder = Json.Core.Utf8.defaultEncoder                              │
+ │                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                              │
+ └──────────────────────────────────────────── multi_qualified_import.md:4:16 ┘
 
-
-**UNDECLARED TYPE**
-The type _Encoder_ is not declared in this scope.
-
-This type is referenced here:
-**multi_qualified_import.md:3:16:3:23:**
-```roc
-json_encoder : Encoder
-```
-               ^^^^^^^
+    `Json` is in scope, but it has no associated `defaultEncoder`.
 
 
-**DOES NOT EXIST**
-`Json.Core.Utf8.defaultEncoder` does not exist.
-
-**multi_qualified_import.md:4:16:4:45:**
-```roc
-json_encoder = Json.Core.Utf8.defaultEncoder
-```
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**MODULE NOT IMPORTED**
-There is no module with the name `json.Core.Utf8` imported into this Roc file.
-
-You're attempting to use this module here:
-**multi_qualified_import.md:7:11:7:33:**
-```roc
-process : json.Core.Utf8.Encoder -> Str
-```
-          ^^^^^^^^^^^^^^^^^^^^^^
+┌─────────────────────┐
+│ MOD NOT IMPORTED ├─ There is no mod with the name `json.Core.Utf8` ───┐
+└┬────────────────────┘  imported into this Roc file.                         │
+ │                                                                            │
+ │  process : json.Core.Utf8.Encoder -> Str                                   │
+ │            ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                          │
+ └──────────────────────────────────────────── multi_qualified_import.md:7:11 ┘
 
 
-**UNUSED VARIABLE**
-Variable `encoder` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_encoder` to suppress this warning.
-The unused variable is declared here:
-**multi_qualified_import.md:8:12:8:19:**
-```roc
-process = |encoder| "processing"
-```
-           ^^^^^^^
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `encoder` is defined here and then never used. ─┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  process = |encoder| "processing"                                          │
+ │             ‾‾‾‾‾‾‾                                                        │
+ └──────────────────────────────────────────── multi_qualified_import.md:8:12 ┘
 
-
-**MODULE NOT IMPORTED**
-There is no module with the name `json.Core.Utf8` imported into this Roc file.
-
-You're attempting to use this module here:
-**multi_qualified_import.md:11:8:11:34:**
-```roc
-data : json.Core.Utf8.EncodedData
-```
-       ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    If you don't need this variable, prefix it with an underscore like
+    `_encoder` to suppress this warning.
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `json` in this scope.
-Is there an `import` or `exposing` missing up-top?
+┌─────────────────────┐
+│ MOD NOT IMPORTED ├─ There is no mod with the name `json.Core.Utf8` ───┐
+└┬────────────────────┘  imported into this Roc file.                         │
+ │                                                                            │
+ │  data : json.Core.Utf8.EncodedData                                         │
+ │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
+ └──────────────────────────────────────────── multi_qualified_import.md:11:8 ┘
 
-**multi_qualified_import.md:12:8:12:12:**
-```roc
-data = json.Core.Utf8.encode("hello")
-```
-       ^^^^
 
+
+┌─────────────────────┐
+│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
+└┬────────────────────┘                                                       │
+ │                                                                            │
+ │  data = json.Core.Utf8.encode("hello")                                     │
+ │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                     │
+ └──────────────────────────────────────────── multi_qualified_import.md:12:8 ┘
+
+    This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig
@@ -202,7 +148,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "json.Core.Utf8")
 			(exposing
@@ -227,15 +173,12 @@ EndOfFile,
 			(ty (name "json.Core.Utf8.EncodedData")))
 		(s-decl
 			(p-ident (raw "data"))
-			(e-ident (raw "json")))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))))
+			(e-method-call (method ".encode")
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(args
+					(e-string
+						(e-string-part (raw "hello"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -250,14 +193,14 @@ process = |encoder| "processing"
 
 # Test with multiple qualifiers
 data : json.Core.Utf8.EncodedData
-data = json
+data = .encode("hello")
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(d-let
 		(p-assign (ident "json_encoder"))
-		(e-runtime-error (tag "qualified_ident_does_not_exist"))
+		(e-runtime-error (tag "nested_value_not_found"))
 		(annotation
 			(ty-malformed)))
 	(d-let
@@ -273,10 +216,10 @@ data = json
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "data"))
-		(e-runtime-error (tag "ident_not_in_scope"))
+		(e-runtime-error (tag "expr_not_canonicalized"))
 		(annotation
 			(ty-malformed)))
-	(s-import (module "json.Core")
+	(s-import (mod "json.Core")
 		(exposes
 			(exposed (name "Encoder") (wildcard false)))))
 ~~~

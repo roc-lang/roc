@@ -7,13 +7,13 @@ const std = @import("std");
 const can = @import("can");
 const check = @import("check");
 const collections = @import("collections");
+const ctx_mod = @import("ctx");
 
 const Constants = @import("cache_config.zig").Constants;
+const CoreCtx = ctx_mod.CoreCtx;
 
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
-
-const SERIALIZATION_ALIGNMENT = collections.SERIALIZATION_ALIGNMENT;
 
 /// Magic number for cache validation
 const CACHE_MAGIC: u32 = 0x524F4343; // "ROCC" in ASCII
@@ -29,7 +29,7 @@ fn computeVersionHash(comptime StructType: type, comptime cache_version: u32) [3
 }
 
 /// Version hash of ModuleEnv.Serialized computed at comptime
-const MODULE_ENV_VERSION_HASH: [32]u8 = computeVersionHash(ModuleEnv.Serialized, Constants.CACHE_VERSION);
+pub const MODULE_ENV_VERSION_HASH: [32]u8 = computeVersionHash(ModuleEnv.Serialized, Constants.CACHE_VERSION);
 
 /// Cache header that gets written to disk before the cached data
 pub const Header = struct {
@@ -88,6 +88,9 @@ pub const Header = struct {
 pub const CacheModule = struct {
     header: *const Header,
     data: []align(SERIALIZATION_ALIGNMENT.toByteUnits()) const u8,
+
+    /// The 16-byte alignment every serialized cache buffer requires.
+    pub const SERIALIZATION_ALIGNMENT = collections.SERIALIZATION_ALIGNMENT;
 
     /// Create a cache by serializing ModuleEnv and CIR data.
     /// The provided allocator is used for the returned cache data, while
@@ -176,7 +179,7 @@ pub const CacheModule = struct {
 
     /// Restore ModuleEnv from the cached data
     /// IMPORTANT: This expects source to remain valid for the lifetime of the restored ModuleEnv.
-    pub fn restore(self: *const CacheModule, allocator: Allocator, module_name: []const u8, source: []const u8) (Allocator.Error || error{BufferTooSmall})!*ModuleEnv {
+    pub fn restore(self: *const CacheModule, allocator: Allocator, module_name: []const u8, source: []const u8) (Allocator.Error || error{ BufferTooSmall, CorruptSerializedModuleEnv })!*ModuleEnv {
         // The entire data section contains the serialized ModuleEnv
         const serialized_data = self.data;
 
@@ -188,6 +191,7 @@ pub const CacheModule = struct {
 
         // Get pointer to the serialized ModuleEnv
         const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(@constCast(serialized_data.ptr))));
+        deserialized_ptr.validate(serialized_data.len) catch return error.CorruptSerializedModuleEnv;
 
         // Calculate the base address of the serialized data
         const base_addr = @intFromPtr(serialized_data.ptr);
@@ -232,47 +236,63 @@ pub const CacheModule = struct {
 
     /// Tagged union to represent cache data that can be either memory-mapped or heap-allocated
     pub const CacheData = union(enum) {
-        mapped: struct {
-            ptr: [*]align(SERIALIZATION_ALIGNMENT.toByteUnits()) const u8,
-            len: usize,
-            unaligned_ptr: [*]const u8,
-            unaligned_len: usize,
-        },
+        mapped: CoreCtx.MappedFile,
         allocated: []align(SERIALIZATION_ALIGNMENT.toByteUnits()) const u8,
 
         pub fn data(self: CacheData) []align(SERIALIZATION_ALIGNMENT.toByteUnits()) const u8 {
             return switch (self) {
-                .mapped => |m| m.ptr[0..m.len],
+                .mapped => |m| blk: {
+                    // Mappings are page-aligned, which satisfies the 16-byte
+                    // serialization alignment.
+                    comptime std.debug.assert(std.heap.page_size_min >= SERIALIZATION_ALIGNMENT.toByteUnits());
+                    break :blk @alignCast(m.bytes());
+                },
                 .allocated => |a| a,
             };
         }
 
         pub fn deinit(self: CacheData, allocator: Allocator) void {
             switch (self) {
-                .mapped => |m| {
-                    // Use the unaligned pointer for munmap
-                    if (comptime @hasDecl(std.posix, "munmap") and @import("builtin").target.os.tag != .windows and @import("builtin").target.os.tag != .freestanding) {
-                        const page_aligned_ptr = @as([*]align(std.heap.page_size_min) const u8, @alignCast(m.unaligned_ptr));
-                        std.posix.munmap(page_aligned_ptr[0..m.unaligned_len]);
-                    }
-                },
+                .mapped => |m| m.unmap(),
                 .allocated => |a| allocator.free(a),
             }
         }
     };
 
-    /// Read cache file using memory mapping for better performance when available.
+    /// Load a cache file, memory-mapping it when `roc_ctx` can map files and
+    /// reading it onto the heap otherwise.
     ///
-    /// Currently always uses regular file reading; the prior mmap fast path was
-    /// disabled and removed. The function signature is retained for call sites
-    /// that may want to reintroduce mmap behind a feature flag later.
+    /// The mapping is copy-on-write (`CoreCtx.mapFilePrivate`), so callers may
+    /// write into the returned bytes (for example, relocating serialized
+    /// pointers in place) without those writes ever reaching the cache file on
+    /// disk. If a caller keeps references into the mapped bytes, the mapping
+    /// must outlive them; free it through `CacheData.deinit`, which unmaps a
+    /// `.mapped` value and never routes it through the heap allocator.
+    ///
+    /// An empty file, a mapping error, or a `roc_ctx` that cannot map files (a
+    /// virtual filesystem, a target without `mmap`) uses the heap-read path via
+    /// `filesystem.readFile`, so a mapping failure never fails the load.
     pub fn readFromFileMapped(
         allocator: Allocator,
+        roc_ctx: CoreCtx,
         file_path: []const u8,
         filesystem: anytype,
     ) Allocator.Error!CacheData {
+        if (tryMapCacheFile(roc_ctx, file_path)) |mapped| {
+            return mapped;
+        }
+
         const data = try readFromFile(allocator, file_path, filesystem);
         return CacheData{ .allocated = data };
+    }
+
+    /// Copy-on-write map `file_path` into a `CacheData.mapped` value, or return
+    /// `null` when `roc_ctx` cannot map it (a virtual filesystem, a target without
+    /// `mmap`, or a missing, empty, or kernel-refused file). A `null` result is
+    /// the caller's cue to read the file onto the heap.
+    pub fn tryMapCacheFile(roc_ctx: CoreCtx, file_path: []const u8) ?CacheData {
+        const mapped = roc_ctx.mapFilePrivate(file_path) orelse return null;
+        return CacheData{ .mapped = mapped };
     }
 };
 
@@ -289,8 +309,76 @@ test "MODULE_ENV_VERSION_HASH golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x6D, 0x28, 0x0E, 0x0E, 0xC0, 0x30, 0xEC, 0x13, 0x44, 0xE6, 0xB1, 0x04, 0xCC, 0x9F, 0xFC, 0xFD,
-        0x83, 0xF0, 0x0A, 0x73, 0xCB, 0x86, 0x56, 0x94, 0xD6, 0x61, 0x17, 0x5C, 0x92, 0xA5, 0x50, 0x44,
+        0x64, 0x23, 0x61, 0xDA, 0xDF, 0x9E, 0x03, 0xC3, 0xE1, 0x46, 0xD0, 0x51, 0x3B, 0xB9, 0x0D, 0x21,
+        0xD8, 0x85, 0x97, 0x0D, 0xAF, 0xDD, 0x84, 0xED, 0x1E, 0xB8, 0xAC, 0x2F, 0x8A, 0x7B, 0x6F, 0x1F,
     };
     try std.testing.expectEqualSlices(u8, &golden, &MODULE_ENV_VERSION_HASH);
+}
+
+test "readFromFileMapped memory-maps a cache file copy-on-write" {
+    if (comptime !CoreCtx.can_map_files) return;
+
+    const testing = std.testing;
+    const roc_ctx = CoreCtx.default(testing.allocator, testing.allocator, testing.io);
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(tmp_path);
+    const path = try std.fs.path.join(testing.allocator, &.{ tmp_path, "mmap-roundtrip.bin" });
+    defer testing.allocator.free(path);
+
+    // A page of deterministic bytes so the mapped data spans the whole page.
+    var payload: [4096]u8 = undefined;
+    for (&payload, 0..) |*b, i| b.* = @truncate(i);
+    try roc_ctx.writeFile(path, &payload);
+
+    // A filesystem whose read errors, proving the heap-read path is not taken when
+    // the mapping succeeds.
+    const StubFs = struct {
+        fn readFile(_: @This(), _: []const u8, _: Allocator) Allocator.Error![]u8 {
+            return error.OutOfMemory;
+        }
+    };
+
+    const cache_data = try CacheModule.readFromFileMapped(testing.allocator, roc_ctx, path, StubFs{});
+    defer cache_data.deinit(testing.allocator);
+
+    try testing.expect(std.meta.activeTag(cache_data) == .mapped);
+    try testing.expectEqualSlices(u8, &payload, cache_data.data());
+
+    // Copy-on-write: mutating the mapping (as relocation does) must not reach disk.
+    const mutable: [*]u8 = @constCast(cache_data.data().ptr);
+    mutable[0] +%= 1;
+    mutable[payload.len - 1] +%= 1;
+
+    const reread = try roc_ctx.readFile(path, testing.allocator);
+    defer testing.allocator.free(reread);
+    try testing.expectEqualSlices(u8, &payload, reread);
+}
+
+test "readFromFileMapped heap-reads when the path is not a real on-disk file" {
+    const testing = std.testing;
+    const roc_ctx = CoreCtx.default(testing.allocator, testing.allocator, testing.io);
+
+    // Opening this path fails to map, so the load drops to the heap-read path;
+    // on targets that cannot map files, the heap-read path is the only path.
+    const HeapFs = struct {
+        payload: []const u8,
+        fn readFile(self: @This(), _: []const u8, allocator: Allocator) Allocator.Error![]u8 {
+            return allocator.dupe(u8, self.payload);
+        }
+    };
+
+    const payload = "roc cache heap-read payload bytes";
+    const cache_data = try CacheModule.readFromFileMapped(
+        testing.allocator,
+        roc_ctx,
+        "/roc-nonexistent/cache/entry.bin",
+        HeapFs{ .payload = payload },
+    );
+    defer cache_data.deinit(testing.allocator);
+
+    try testing.expect(std.meta.activeTag(cache_data) == .allocated);
+    try testing.expectEqualSlices(u8, payload, cache_data.data());
 }

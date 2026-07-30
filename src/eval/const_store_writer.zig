@@ -23,6 +23,18 @@ const RuntimeValueAddress = struct {
     layout: u32,
 };
 
+/// Runtime erased-callable identity decoded into the LIR proc and capture data.
+pub const ErasedCallableResolution = struct {
+    proc: lir.LIR.LirProcSpecId,
+    capture_ptr: [*]u8,
+};
+
+/// Resolves erased-callable runtime data for the active evaluator.
+pub const ErasedCallableResolver = struct {
+    context: ?*anyopaque = null,
+    resolve: *const fn (?*anyopaque, [*]u8) ErasedCallableResolution = interpreterErasedCallable,
+};
+
 const TagBase = struct {
     value: Value,
     layout_idx: layout.Idx,
@@ -40,6 +52,7 @@ pub const Writer = struct {
     program: *const LirProgram.Result,
     stored_values: std.AutoHashMap(RuntimeValueAddress, checked.ConstNodeId),
     str_backings: std.AutoHashMap(usize, StrBacking),
+    erased_callable_resolver: ErasedCallableResolver,
 
     pub fn init(
         allocator: Allocator,
@@ -52,7 +65,12 @@ pub const Writer = struct {
             .program = program,
             .stored_values = std.AutoHashMap(RuntimeValueAddress, checked.ConstNodeId).init(allocator),
             .str_backings = std.AutoHashMap(usize, StrBacking).init(allocator),
+            .erased_callable_resolver = .{},
         };
+    }
+
+    pub fn setErasedCallableResolver(self: *Writer, resolver: ErasedCallableResolver) void {
+        self.erased_callable_resolver = resolver;
     }
 
     pub fn deinit(self: *Writer) void {
@@ -84,6 +102,20 @@ pub const Writer = struct {
         };
     }
 
+    /// Preserve the exact producer-owned representation of a compile-time
+    /// root in the checked module's durable ConstStore type table.
+    pub fn storeRootType(
+        self: *Writer,
+        root: LirProgram.ConstRootPlan,
+    ) Allocator.Error!const_store.ConstTypeId {
+        return self.module.const_store.type_store.cloneTypeFromTranslated(
+            &self.program.const_types,
+            &self.program.const_type_names,
+            &self.module.canonical_names,
+            root.ret_type,
+        );
+    }
+
     fn storeValue(
         self: *Writer,
         plan_id: LirProgram.ConstPlanId,
@@ -107,6 +139,7 @@ pub const Writer = struct {
     ) Allocator.Error!checked.ConstNodeId {
         return switch (self.constPlan(plan_id)) {
             .pending => writerInvariant("pending const plan reached ConstStore writer"),
+            .layout_only => writerInvariant("layout-only const plan reached ConstStore writer"),
             .zst => try self.module.const_store.append(.zst),
             .scalar => try self.module.const_store.append(.{ .scalar = self.storeScalar(layout_idx, value) }),
             .str => try self.storeStr(value),
@@ -157,6 +190,7 @@ pub const Writer = struct {
                 .dec => .{ .dec_bits = value.read(builtins.dec.RocDec).num },
             },
             .opaque_ptr => writerInvariant("opaque pointer scalar layout reached scalar const plan"),
+            .vector => .{ .u128 = value.read(u128) },
         };
     }
 
@@ -283,12 +317,23 @@ pub const Writer = struct {
         layout_idx: layout.Idx,
         value: Value,
     ) Allocator.Error![]const checked.ConstNodeId {
-        const nodes = try self.module.const_store.allocator.alloc(checked.ConstNodeId, plans.len);
-        errdefer self.module.const_store.allocator.free(nodes);
-        if (plans.len == 0) return nodes;
+        if (plans.len == 0) return try self.module.const_store.allocator.alloc(checked.ConstNodeId, 0);
 
         const layout_value = self.program.layouts.getLayout(layout_idx);
+        if (layout_value.tag == .box) {
+            const ptr = self.readBoxDataPointer(value) orelse writerInvariant("boxed struct value had null payload pointer");
+            return try self.storeStructChildren(plans, layout_value.getIdx(), .{ .ptr = ptr });
+        }
+
+        const nodes = try self.module.const_store.allocator.alloc(checked.ConstNodeId, plans.len);
+        errdefer self.module.const_store.allocator.free(nodes);
         if (layout_value.tag == .zst) {
+            for (nodes, 0..) |*node, index| {
+                node.* = try self.storeValue(plans[index], .zst, Value.zst);
+            }
+            return nodes;
+        }
+        if (layout_value.tag == .box_of_zst) {
             for (nodes, 0..) |*node, index| {
                 node.* = try self.storeValue(plans[index], .zst, Value.zst);
             }
@@ -369,6 +414,9 @@ pub const Writer = struct {
             .source_fn_ty = variant.template.source_fn_ty,
             .source_fn_key = variant.template.source_fn_key,
             .captures = captures,
+            .evidence = variant.template.evidence,
+            .evidence_frames = variant.template.evidence_frames,
+            .evidence_frame_head = variant.template.evidence_frame_head,
         });
     }
 
@@ -379,17 +427,19 @@ pub const Writer = struct {
     ) Allocator.Error!checked.ConstFnId {
         const set = self.program.erased_fns.items[@intFromEnum(set_id)];
         const data_ptr = self.readErasedCallablePointer(value);
-        const proc = Interpreter.erasedCallableInterpreterProcId(data_ptr);
+        const resolved = self.erased_callable_resolver.resolve(self.erased_callable_resolver.context, data_ptr);
         for (set.entries) |entry| {
-            if (entry.entry != proc) continue;
-            const capture_ptr = Interpreter.erasedCallableInterpreterCaptureValuePtr(data_ptr);
-            const captures = try self.storeCaptures(entry.captures, entry.capture_layout, .{ .ptr = capture_ptr });
+            if (entry.entry != resolved.proc) continue;
+            const captures = try self.storeCaptures(entry.captures, entry.capture_layout, .{ .ptr = resolved.capture_ptr });
             defer self.module.const_store.allocator.free(captures);
             return try self.module.const_store.appendFn(.{
                 .fn_def = entry.template.fn_def,
                 .source_fn_ty = entry.template.source_fn_ty,
                 .source_fn_key = entry.template.source_fn_key,
                 .captures = captures,
+                .evidence = entry.template.evidence,
+                .evidence_frames = entry.template.evidence_frames,
+                .evidence_frame_head = entry.template.evidence_frame_head,
             });
         }
         writerInvariant("erased callable result did not match an explicit erased function entry");
@@ -410,7 +460,11 @@ pub const Writer = struct {
             for (slots, 0..) |slot, index| {
                 captures[index] = .{
                     .id = slot.id,
-                    .value = try self.storeValue(slot.plan, .zst, Value.zst),
+                    .ty = try self.cloneCaptureType(slot.ty),
+                    .value = if (slot.recursive_const)
+                        .recursive_const
+                    else
+                        .{ .node = try self.storeValue(slot.plan, .zst, Value.zst) },
                 };
             }
         } else if (layout_value.tag == .struct_) {
@@ -419,18 +473,35 @@ pub const Writer = struct {
                 const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(layout_value.getStruct().idx, slot.slot);
                 captures[index] = .{
                     .id = slot.id,
-                    .value = try self.storeValue(slot.plan, field_layout, payload_value.offset(offset)),
+                    .ty = try self.cloneCaptureType(slot.ty),
+                    .value = if (slot.recursive_const)
+                        .recursive_const
+                    else
+                        .{ .node = try self.storeValue(slot.plan, field_layout, payload_value.offset(offset)) },
                 };
             }
         } else if (slots.len == 1) {
             captures[0] = .{
                 .id = slots[0].id,
-                .value = try self.storeValue(slots[0].plan, payload_layout, payload_value),
+                .ty = try self.cloneCaptureType(slots[0].ty),
+                .value = if (slots[0].recursive_const)
+                    .recursive_const
+                else
+                    .{ .node = try self.storeValue(slots[0].plan, payload_layout, payload_value) },
             };
         } else {
             writerInvariant("multi-capture function did not use a struct capture layout");
         }
         return captures;
+    }
+
+    fn cloneCaptureType(self: *Writer, ty: const_store.ConstTypeId) Allocator.Error!const_store.ConstTypeId {
+        return self.module.const_store.type_store.cloneTypeFromTranslated(
+            &self.program.const_types,
+            &self.program.const_type_names,
+            &self.module.canonical_names,
+            ty,
+        );
     }
 
     fn collectStrBackings(
@@ -441,6 +512,7 @@ pub const Writer = struct {
     ) Allocator.Error!void {
         switch (self.constPlan(plan_id)) {
             .pending => writerInvariant("pending const plan reached string backing collection"),
+            .layout_only => writerInvariant("layout-only const plan reached string backing collection"),
             .zst,
             .scalar,
             => {},
@@ -534,6 +606,15 @@ pub const Writer = struct {
             for (plans) |plan| try self.collectStrBackings(plan, .zst, Value.zst);
             return;
         }
+        if (layout_value.tag == .box_of_zst) {
+            for (plans) |plan| try self.collectStrBackings(plan, .zst, Value.zst);
+            return;
+        }
+        if (layout_value.tag == .box) {
+            const ptr = self.readBoxDataPointer(value) orelse writerInvariant("boxed struct value had null payload pointer");
+            try self.collectStructStrBackings(plans, layout_value.getIdx(), .{ .ptr = ptr });
+            return;
+        }
         if (layout_value.tag != .struct_) writerInvariant("struct const plan had non-struct layout");
 
         for (plans, 0..) |plan, index| {
@@ -599,11 +680,10 @@ pub const Writer = struct {
     ) Allocator.Error!void {
         const set = self.program.erased_fns.items[@intFromEnum(set_id)];
         const data_ptr = self.readErasedCallablePointer(value);
-        const proc = Interpreter.erasedCallableInterpreterProcId(data_ptr);
+        const resolved = self.erased_callable_resolver.resolve(self.erased_callable_resolver.context, data_ptr);
         for (set.entries) |entry| {
-            if (entry.entry != proc) continue;
-            const capture_ptr = Interpreter.erasedCallableInterpreterCaptureValuePtr(data_ptr);
-            try self.collectCaptureStrBackings(entry.captures, entry.capture_layout, .{ .ptr = capture_ptr });
+            if (entry.entry != resolved.proc) continue;
+            try self.collectCaptureStrBackings(entry.captures, entry.capture_layout, .{ .ptr = resolved.capture_ptr });
             return;
         }
         writerInvariant("erased callable result did not match an explicit erased function entry");
@@ -618,15 +698,18 @@ pub const Writer = struct {
         if (slots.len == 0) return;
         const layout_value = self.program.layouts.getLayout(payload_layout);
         if (layout_value.tag == .zst) {
-            for (slots) |slot| try self.collectStrBackings(slot.plan, .zst, Value.zst);
+            for (slots) |slot| {
+                if (!slot.recursive_const) try self.collectStrBackings(slot.plan, .zst, Value.zst);
+            }
         } else if (layout_value.tag == .struct_) {
             for (slots) |slot| {
+                if (slot.recursive_const) continue;
                 const field_layout = self.program.layouts.getStructFieldLayoutByOriginalIndex(layout_value.getStruct().idx, slot.slot);
                 const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(layout_value.getStruct().idx, slot.slot);
                 try self.collectStrBackings(slot.plan, field_layout, payload_value.offset(offset));
             }
         } else if (slots.len == 1) {
-            try self.collectStrBackings(slots[0].plan, payload_layout, payload_value);
+            if (!slots[0].recursive_const) try self.collectStrBackings(slots[0].plan, payload_layout, payload_value);
         } else {
             writerInvariant("multi-capture function did not use a struct capture layout");
         }
@@ -663,7 +746,7 @@ pub const Writer = struct {
         const layout_value = self.program.layouts.getLayout(layout_idx);
         return switch (layout_value.tag) {
             .zst => 0,
-            .tag_union => self.program.layouts.getTagUnionData(layout_value.getTagUnion().idx).readDiscriminant(value.ptr),
+            .tag_union => self.program.layouts.getTagUnionData(layout_value.getTagUnion().idx).readDiscriminant(value.ptr, self.program.layouts.targetUsize()),
             else => writerInvariant("tag discriminant read had non-tag-union layout"),
         };
     }
@@ -754,6 +837,13 @@ pub const Writer = struct {
     }
 };
 
+fn interpreterErasedCallable(_: ?*anyopaque, data_ptr: [*]u8) ErasedCallableResolution {
+    return .{
+        .proc = Interpreter.erasedCallableInterpreterProcId(data_ptr),
+        .capture_ptr = Interpreter.erasedCallableInterpreterCaptureValuePtr(data_ptr),
+    };
+}
+
 fn checkedU32(value: usize, comptime message: []const u8) u32 {
     if (value > std.math.maxInt(u32)) writerInvariant(message);
     return @intCast(value);
@@ -807,6 +897,7 @@ test "const store writer pointer memoization is scoped to one root" {
         .interface_capabilities = .{},
         .compile_time_roots = .{},
         .top_level_values = .{},
+        .hoisted_constants = .{},
         .const_templates = .{},
         .const_store = const_store.ConstStore.init(testing.allocator),
     };
@@ -837,6 +928,7 @@ test "const store writer pointer memoization is scoped to one root" {
         },
         .proc = undefined, // storeRoot does not inspect the root procedure for stored values.
         .ret_layout = .str,
+        .ret_type = undefined, // storeRoot does not inspect root type evidence in this focused test.
         .plan = str_plan,
     };
 
@@ -861,8 +953,8 @@ test "const store writer pointer memoization is scoped to one root" {
 
     const first_value = artifact.const_store.get(first.const_node);
     const second_value = artifact.const_store.get(second.const_node);
-    try testing.expectEqual(.str, first_value);
-    try testing.expectEqual(.str, second_value);
+    try testing.expect(first_value == .str);
+    try testing.expect(second_value == .str);
     try testing.expectEqualStrings(first_bytes, artifact.const_store.strBytes(first_value.str));
     try testing.expectEqualStrings(second_bytes, artifact.const_store.strBytes(second_value.str));
 }

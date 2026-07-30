@@ -17,18 +17,18 @@ printName = |person| {
 main! = |_| {}
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - type_record_effectful.md:7:5:7:17
+NAME NOT IN SCOPE - type_record_effectful.md:7:5:7:17
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**type_record_effectful.md:7:5:7:17:**
-```roc
-    Stdout.line!(person.name)
-```
-    ^^^^^^^^^^^^
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
+ │                                                                            │
+ │  Stdout.line!(person.name)                                                 │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
+ └────────────────────────────────────────────── type_record_effectful.md:7:5 ┘
 
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig
@@ -112,12 +112,7 @@ main! = |_| {}
 				(p-assign (ident "person")))
 			(e-block
 				(s-expr
-					(e-call
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-field-access (field "name")
-							(receiver
-								(e-lookup-local
-									(p-assign (ident "person")))))))
+					(e-runtime-error (tag "erroneous_value_expr")))
 				(e-field-access (field "name")
 					(receiver
 						(e-lookup-local
@@ -136,7 +131,7 @@ main! = |_| {}
 			(args
 				(p-underscore))
 			(e-empty_record)))
-	(s-import (module "pf.Stdout")
+	(s-import (mod "pf.Stdout")
 		(exposes)))
 ~~~
 # TYPES

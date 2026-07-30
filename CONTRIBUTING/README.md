@@ -23,6 +23,22 @@ independent research, or just valuable projects to learn from and improve Roc wi
 
 Check [Building from source](../BUILDING_FROM_SOURCE.md) for instructions.
 
+## Glue Code Generation
+
+Roc platforms use generated glue to connect Roc values to host-language code in
+C, Zig, and Rust. The `roc glue` command compiles a platform, reads the checked
+type, layout, and ownership metadata emitted by the compiler, and runs a glue
+script such as `CGlue.roc`, `ZigGlue.roc`, or `RustGlue.roc` to generate the
+host-facing interface.
+
+Glue exists so platform authors can depend on generated, idiomatic helpers
+instead of hand-writing Roc ABI layout, ownership, and refcount logic. This also
+gives Roc a path to evolve the ABI: consumers regenerate glue rather than
+maintaining private bindings to compiler internals.
+
+For the glue architecture, generated-helper contract, and ABI risk register,
+see [src/glue/README.md](../src/glue/README.md).
+
 ## Build Step Names
 
 Build steps follow a build/run split:
@@ -48,6 +64,19 @@ MiniCI is the local orchestrator for the CI-shaped set of checks and tests. It
 first builds the inputs behind `build-ci`, then runs the leaf `run-check-*` and
 `run-test-*` jobs with separate logs and report entries. It actually runs the
 tests; it does not just build them.
+
+### Test prerequisites
+
+The `run-test-cli` job includes the glue test suite, which compiles generated
+Rust glue for the `wasm32` target. Install a Rust toolchain (via [rustup]) with
+the WebAssembly target so those cases can build:
+
+```sh
+rustup target add wasm32-unknown-unknown
+```
+
+Without it, the glue cases fail with `error[E0463]: can't find crate for std`
+(`the wasm32-unknown-unknown target may not be installed`).
 
 After each run, MiniCI writes a report directory:
 
@@ -141,5 +170,6 @@ If you already pushed unsigned commits, you may have to do a force push with `gi
 Feel free to open an issue if you think this document can be improved!
 
 [roc-zulip]: https://roc.zulipchat.com
+[rustup]: https://rustup.rs
 [good-first-issues]: https://github.com/roc-lang/roc/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22
 [project-ideas]: https://docs.google.com/document/d/1mMaxIi7vxyUyNAUCs98d68jYj6C9Fpq4JIZRU735Kwg/edit?usp=sharing

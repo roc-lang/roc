@@ -31,7 +31,42 @@ pub const Constants = struct {
     /// 6: merge with typed node/static-dispatch payload layout changes.
     /// 7: field-order layout metadata moved from nominal-only to general field-order.
     /// 8: ModuleEnv stores source-relative file-import dependency metadata.
-    pub const CACHE_VERSION = 8;
+    /// 9: ModuleEnv records runtime-prepared static builtin serialization state.
+    /// 10: ModuleEnv common identifiers include Crypto digest and hasher builtin names.
+    /// 11: Builtin indices and common identifiers changed for Encoding.Json and Encoding.HttpHeader.
+    /// 12: Builtin.Encoding.Json structural encode/parse support changed common identifiers.
+    /// 13: ModuleEnv stores deep content identity hashes.
+    /// 14: ModuleEnv also stores scheme instantiation evidence records.
+    /// 15: Checked encoder_for runtime representation changed serialized compiler state.
+    /// 16: Static dispatch constraints carry introducing-site provenance.
+    /// 17: Numeral literals carry materialization metadata.
+    /// 18: Exact-numeral pipeline: parser-owned numeral digit tables, the
+    ///     exact-numeral pattern node, and NumeralInfo constraint payloads.
+    /// 19: Annotation node payload records a precomputed `contains_underscore` flag.
+    /// 20: Static-data roots and iterator representation metadata changed serialized state.
+    /// 21: Nominal declaration table serialized with the type store.
+    /// 22: Checked function serialization no longer carries instantiation stamps.
+    /// 23: Stored nested functions carry durable local-procedure context identity.
+    /// 24: CommonIdents carries the range_exclusive/range_inclusive method idents.
+    /// 25: Canonical node storage records where-clause rigid ownership.
+    /// 26: ModuleEnv scheme instantiation evidence was renamed to scheme-use evidence.
+    /// 27: Empty-row provenance and checked iterator-step topology changed serialized state.
+    /// 28: Field access canonicalization no longer contains method or qualified-dispatch fallbacks.
+    /// 29: String interpolation constraint metadata moved into the type store.
+    /// 30: Checked interpolation nodes retain their explicit dispatcher type variable.
+    /// 31: Canonical expression storage includes compiler-derived method nodes.
+    /// 32: Builtin indices include width-specific f32 conversion and math wrappers.
+    /// 33: Builtin indices, identifiers, and checked layouts include integer SIMD vectors.
+    /// 34: Combined the empty-row and interpolation checked-artifact layouts.
+    /// 35: Platform requirement roots carry producer-authored dispatch evidence.
+    /// 36: Checked iterator procedure identity includes Str.iter_utf8.
+    /// 37: Nested procedure sites declare their producer-authored evidence source.
+    /// 38: Platform provides entries include their exact platform-local definition.
+    /// 39: ModuleEnv stores exact top-level demand dependencies.
+    /// 41: Encoding protocol names containers by Roc shape: list, tuple, record, dict.
+    /// 42: Checked modules store explicitly rejected static-dispatch obligations.
+    /// 43: Checked type stores persist representatives and structural union ranks.
+    pub const CACHE_VERSION = 43;
 };
 
 /// Configuration for the Roc cache system.

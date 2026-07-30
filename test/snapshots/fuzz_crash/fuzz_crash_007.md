@@ -8,42 +8,64 @@ type=file
 ff8.8.d
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_007.md:1:1:1:4
-PARSE ERROR - fuzz_crash_007.md:1:4:1:6
-PARSE ERROR - fuzz_crash_007.md:1:6:1:8
+UNEXPECTED STATEMENT - fuzz_crash_007.md:1:1:1:4
+UNEXPECTED STATEMENT - fuzz_crash_007.md:1:4:1:6
+UNEXPECTED STATEMENT - fuzz_crash_007.md:1:6:1:8
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_007.md:1:1:1:4:**
-```roc
-ff8.8.d
-```
-^^^
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  ff8.8.d                                                                   │
+ │  ‾‾‾                                                                       │
+ └───────────────────────────────────────────────────── fuzz_crash_007.md:1:1 ┘
 
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+    For example:
+        answer = 42
 
-**fuzz_crash_007.md:1:4:1:6:**
-```roc
-ff8.8.d
-```
-   ^^
+    I found `ff8` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  ff8.8.d                                                                   │
+ │     ‾‾                                                                     │
+ └───────────────────────────────────────────────────── fuzz_crash_007.md:1:4 ┘
 
-**fuzz_crash_007.md:1:6:1:8:**
-```roc
-ff8.8.d
-```
-     ^^
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
+    For example:
+        answer = 42
+
+    I found `.8` here.
+
+
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  ff8.8.d                                                                   │
+ │       ‾‾                                                                   │
+ └───────────────────────────────────────────────────── fuzz_crash_007.md:1:6 ┘
+
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `.d` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 # TOKENS
 ~~~zig
@@ -53,7 +75,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))

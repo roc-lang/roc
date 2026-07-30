@@ -15,30 +15,29 @@ match data {
 # EXPECTED
 POLYMORPHIC VALUE - mixed_pattern_scoping.md:1:1:6:2
 # PROBLEMS
-**POLYMORPHIC VALUE**
-This top-level value still has an unresolved polymorphic type:
-**mixed_pattern_scoping.md:1:1:6:2:**
-```roc
-match data {
-    Ok([x, y]) => x + y
-    Err(x) => x - 1
-    Ok([x]) => x * 2
-    Err(y) => y / 2
-}
-```
 
+┌───────────────────┐
+│ POLYMORPHIC VALUE ├─ This top-level value still has an unresolved ──────────┐
+└┬──────────────────┘  polymorphic type.                                      │
+ │                                                                            │
+ │  match data {                                                              │
+ │      Ok([x, y]) => x + y                                                   │
+ │      Err(x) => x - 1                                                       │
+ │      Ok([x]) => x * 2                                                      │
+ │      Err(y) => y / 2                                                       │
+ │  }                                                                         │
+ │                                                                            │
+ └────────────────────────────────────────────── mixed_pattern_scoping.md:1:1 ┘
 
-Its type is:
-```roc
-a
-  where [
-    a.div_by : a, Dec -> a,
-    a.minus : a, Dec -> a,
-    a.plus : a, a -> a,
-    a.times : a, Dec -> a,
-  ]
-```
-Add an annotation or use this value in a way that fixes its concrete type.
+    Its type is:
+    a
+      where [
+        a.div_by : a, Dec -> a,
+        a.minus : a, Dec -> a,
+        a.plus : a, a -> a,
+        a.times : a, Dec -> a,
+      ]
+    Add an annotation or use this value in a way that fixes its concrete type.
 
 # TOKENS
 ~~~zig
@@ -104,7 +103,7 @@ match data {
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 43)
+					(e-dispatch-call (method "plus") (constraint-fn-var 225)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))
@@ -116,7 +115,7 @@ match data {
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "minus") (constraint-fn-var 79)
+					(e-dispatch-call (method "minus") (constraint-fn-var 235)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))
@@ -127,7 +126,7 @@ match data {
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "times") (constraint-fn-var 117)
+					(e-dispatch-call (method "times") (constraint-fn-var 245)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))
@@ -138,7 +137,7 @@ match data {
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "div_by") (constraint-fn-var 153)
+					(e-dispatch-call (method "div_by") (constraint-fn-var 255)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "y"))))

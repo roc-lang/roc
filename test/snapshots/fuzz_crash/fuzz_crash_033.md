@@ -8,30 +8,26 @@ type=expr
 { i, Complete]
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_033.md:1:6:1:14
-PARSE ERROR - fuzz_crash_033.md:1:14:1:15
+EXPECTED RECORD FIELD - fuzz_crash_033.md:1:6:1:14
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `expected_expr_record_field_name`
-This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_033.md:1:6:1:14:**
-```roc
-{ i, Complete]
-```
-     ^^^^^^^^
+┌───────────────────────┐
+│ EXPECTED RECORD FIELD ├─ I was parsing a record expression, and I ──────────┐
+└┬──────────────────────┘  expected a lowercase field name.                   │
+ │                                                                            │
+ │  { i, Complete]                                                            │
+ │       ‾‾‾‾‾‾‾‾                                                             │
+ └───────────────────────────────────────────────────── fuzz_crash_033.md:1:6 ┘
 
+    Record fields start with lowercase names. After the name, either write `:
+    value` or omit the value to use field punning.
 
-**PARSE ERROR**
-A parsing error occurred: `expected_expr_close_curly_or_comma`
-This is an unexpected parsing error. Please check your syntax.
+    For example:
+        { name: "Ada", age }
 
-**fuzz_crash_033.md:1:14:1:15:**
-```roc
-{ i, Complete]
-```
-             ^
-
+    I found `Complete` here.
+    Names that start with uppercase letters are used for tags, type names, and
+    mod names in Roc.
 
 # TOKENS
 ~~~zig
@@ -40,7 +36,7 @@ EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed (reason "expected_expr_close_curly_or_comma"))
+(e-malformed (reason "expected_expr_record_field_name"))
 ~~~
 # FORMATTED
 ~~~roc

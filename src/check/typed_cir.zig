@@ -220,9 +220,13 @@ pub const Modules = struct {
 /// whole `Modules` graph) by the builtin and cache-hit load paths, which only need
 /// the env prepared.
 pub fn prepareRuntimeEnv(allocator: Allocator, env: *ModuleEnv) Allocator.Error!void {
+    if (env.runtime_prepared) return;
+
     try env.getIdentStore().enableRuntimeInserts(allocator);
+    try env.module_identities.enableRuntimeInserts(allocator);
     try ensureModuleNameIdents(env);
     env.finalizeMethodTables();
+    env.runtime_prepared = true;
 }
 
 fn ensureModuleNameIdents(env: *ModuleEnv) Allocator.Error!void {
@@ -378,26 +382,8 @@ pub const Module = struct {
         return ModuleEnv.varFrom(idx);
     }
 
-    pub fn exprNeedsInstantiation(self: @This(), idx: CIR.Expr.Idx) bool {
-        return self.typeStoreConst().needsInstantiation(self.exprType(idx));
-    }
-
     pub fn exprHasErrType(self: @This(), idx: CIR.Expr.Idx) bool {
         return self.typeStoreConst().resolveVar(self.exprType(idx)).desc.content == .err;
-    }
-
-    pub fn exprDefaultsToDec(self: @This(), idx: CIR.Expr.Idx) bool {
-        const resolved = self.typeStoreConst().resolveVar(self.exprType(idx));
-        return switch (resolved.desc.content) {
-            .flex => |flex| blk: {
-                const constraints = self.typeStoreConst().sliceStaticDispatchConstraints(flex.constraints);
-                for (constraints) |constraint| {
-                    if (constraint.origin == .from_literal) break :blk true;
-                }
-                break :blk false;
-            },
-            else => false,
-        };
     }
 
     /// Flatten a checked function type into its argument list and final return var.

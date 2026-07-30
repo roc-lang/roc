@@ -31,7 +31,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "main_for_host")
 			(ty-fn
@@ -74,7 +74,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-main_for_host : Try({}, [Exit(I32), ..]) -> Str
+main_for_host : Try({}, [Exit(I32), ..others]) -> Str
 main_for_host = |result|
 	match result {
 		Ok({}) => "ok"
@@ -108,7 +108,7 @@ main_for_host = |result|
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-call (constraint-fn-var 108)
+								(e-call (constraint-fn-var 279)
 									(e-lookup-external
 										(builtin))
 									(e-lookup-local
@@ -118,7 +118,7 @@ main_for_host = |result|
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-call (constraint-fn-var 140)
+								(e-call (constraint-fn-var 299)
 									(e-lookup-external
 										(builtin))
 									(e-lookup-local

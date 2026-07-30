@@ -12,83 +12,120 @@ type=file
 ~~~
 # EXPECTED
 LEADING ZERO - :0:0:0:0
-PARSE ERROR - fuzz_crash_015.md:1:1:1:4
-PARSE ERROR - fuzz_crash_015.md:1:4:1:6
-PARSE ERROR - fuzz_crash_015.md:2:1:2:4
-PARSE ERROR - fuzz_crash_015.md:3:1:3:4
-PARSE ERROR - fuzz_crash_015.md:3:4:3:6
-PARSE ERROR - fuzz_crash_015.md:4:1:4:3
+UNEXPECTED STATEMENT - fuzz_crash_015.md:1:1:1:4
+UNEXPECTED STATEMENT - fuzz_crash_015.md:1:4:1:6
+UNEXPECTED STATEMENT - fuzz_crash_015.md:2:1:2:4
+UNEXPECTED STATEMENT - fuzz_crash_015.md:3:1:3:4
+UNEXPECTED STATEMENT - fuzz_crash_015.md:3:4:3:6
+UNEXPECTED STATEMENT - fuzz_crash_015.md:4:1:4:3
 # PROBLEMS
-**LEADING ZERO**
+
+LEADING ZERO
+
 Numbers cannot have leading zeros.
 
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  0o0.0                                                                     │
+ │  ‾‾‾                                                                       │
+ └───────────────────────────────────────────────────── fuzz_crash_015.md:1:1 ┘
 
-**fuzz_crash_015.md:1:1:1:4:**
-```roc
-0o0.0
-```
-^^^
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
+    For example:
+        answer = 42
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_015.md:1:4:1:6:**
-```roc
-0o0.0
-```
-   ^^
+    I found `0o0` here.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  0o0.0                                                                     │
+ │     ‾‾                                                                     │
+ └───────────────────────────────────────────────────── fuzz_crash_015.md:1:4 ┘
 
-**fuzz_crash_015.md:2:1:2:4:**
-```roc
-0_0
-```
-^^^
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
+    For example:
+        answer = 42
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_015.md:3:1:3:4:**
-```roc
-0u8.0
-```
-^^^
+    I found `.0` here.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  0_0                                                                       │
+ │  ‾‾‾                                                                       │
+ └───────────────────────────────────────────────────── fuzz_crash_015.md:2:1 ┘
 
-**fuzz_crash_015.md:3:4:3:6:**
-```roc
-0u8.0
-```
-   ^^
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `0_0` here.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  0u8.0                                                                     │
+ │  ‾‾‾                                                                       │
+ └───────────────────────────────────────────────────── fuzz_crash_015.md:3:1 ┘
 
-**fuzz_crash_015.md:4:1:4:3:**
-```roc
-0_
-```
-^^
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
+    For example:
+        answer = 42
+
+    I found `0u8` here.
+
+
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  0u8.0                                                                     │
+ │     ‾‾                                                                     │
+ └───────────────────────────────────────────────────── fuzz_crash_015.md:3:4 ┘
+
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `.0` here.
+
+
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  0_                                                                        │
+ │  ‾‾                                                                        │
+ └───────────────────────────────────────────────────── fuzz_crash_015.md:4:1 ┘
+
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `0_` here.
 
 # TOKENS
 ~~~zig
@@ -101,7 +138,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))

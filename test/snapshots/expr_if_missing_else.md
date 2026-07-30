@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=
+description=if expression without an else branch produces a parse error
 type=snippet
 ~~~
 # SOURCE
@@ -8,31 +8,32 @@ type=snippet
 foo = if tru 0
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - expr_if_missing_else.md:1:10:1:13
+NAME NOT IN SCOPE - expr_if_missing_else.md:1:10:1:13
 MISSING METHOD - expr_if_missing_else.md:1:14:1:15
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `tru` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**expr_if_missing_else.md:1:10:1:13:**
-```roc
-foo = if tru 0
-```
-         ^^^
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `tru` in this scope. ─────────────────┐
+└┬──────────────────┘                                                         │
+ │                                                                            │
+ │  foo = if tru 0                                                            │
+ │           ‾‾‾                                                              │
+ └────────────────────────────────────────────── expr_if_missing_else.md:1:10 ┘
+
+    Is it misspelled, or is there an import missing?
 
 
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
-**expr_if_missing_else.md:1:14:1:15:**
-```roc
-foo = if tru 0
-```
-             ^
+┌────────────────┐
+│ MISSING METHOD ├─ This `from_numeral` method is being called on a value ────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  foo = if tru 0                                                            │
+ │               ‾                                                            │
+ └────────────────────────────────────────────── expr_if_missing_else.md:1:14 ┘
 
-The value's type, which does not have a method named **from_numeral**, is:
+    The value's type, which does not have a method named `from_numeral`, is:
 
-    {}
+        {}
 
 # TOKENS
 ~~~zig
@@ -42,7 +43,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "foo"))
@@ -63,7 +64,7 @@ NO CHANGE
 			(if-branches
 				(if-branch
 					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-num (value "0"))))
+					(e-runtime-error (tag "erroneous_value_expr"))))
 			(if-else
 				(e-empty_record)))))
 ~~~

@@ -7,7 +7,7 @@
 const std = @import("std");
 const completion_context = @import("lsp").completion;
 
-test "completion context detects after_record_dot for lowercase identifier" {
+test "completion context detects after_value_dot for lowercase identifier" {
     const source = "main = my_var.";
     const context = completion_context.detectCompletionContext(source, 0, 14);
     switch (context) {

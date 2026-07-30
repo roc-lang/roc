@@ -9,19 +9,29 @@ Foo := [A, B, C].{ x = 5
 x }
 ~~~
 # EXPECTED
-EXPRESSION IN ASSOCIATED ITEMS - nominal_associated_with_final_expression.md:2:1:2:2
+UNEXPECTED ASSOCIATED EXPRESSION - nominal_associated_with_final_expression.md:2:1:2:2
 # PROBLEMS
-**EXPRESSION IN ASSOCIATED ITEMS**
-Associated items (such as types or methods) can only have associated types and values, not plain expressions.
 
-To fix this, remove the expression at the very end.
+┌──────────────────────────────────┐
+│ UNEXPECTED ASSOCIATED EXPRESSION ├─ I was parsing associated items for a ───┐
+└┬─────────────────────────────────┘  nominal type, and I found a plain       │
+ │                                    final expression.                       │
+ │                                                                            │
+ │  x }                                                                       │
+ │  ‾                                                                         │
+ └─────────────────────────── nominal_associated_with_final_expression.md:2:1 ┘
 
-**nominal_associated_with_final_expression.md:2:1:2:2:**
-```roc
-x }
-```
-^
+    Associated item blocks can contain associated types and values. Remove the
+    trailing expression or turn it into a named associated value.
 
+    For example:
+        Id := U64 implements [
+            zero = @Id 0
+        ]
+
+    I found `x` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 # TOKENS
 ~~~zig
@@ -32,7 +42,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "Foo")

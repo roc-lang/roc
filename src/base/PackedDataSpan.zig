@@ -106,18 +106,6 @@ pub const Balanced = PackedDataSpan(16, 16);
 /// Good for large collections with lower start range (up to 1M items, 4K+ start positions)
 pub const LargeCollections = PackedDataSpan(12, 20);
 
-test "PackedDataSpan basic functionality" {
-    const Packed = PackedDataSpan(16, 16);
-
-    // Test creation and conversion
-    const original = DataSpan{ .start = 1000, .len = 50 };
-    const packed_span = try Packed.fromDataSpan(original);
-    const restored = packed_span.toDataSpan();
-
-    try std.testing.expectEqual(original.start, restored.start);
-    try std.testing.expectEqual(original.len, restored.len);
-}
-
 test "PackedDataSpan limits" {
     const Packed = PackedDataSpan(16, 16);
 

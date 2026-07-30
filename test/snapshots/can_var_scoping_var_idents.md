@@ -31,7 +31,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "testFunc"))
@@ -75,7 +75,7 @@ NO CHANGE
 						(p-assign (ident "input"))))
 				(s-var
 					(p-assign (ident "sum_"))
-					(e-dispatch-call (method "times") (constraint-fn-var 59)
+					(e-dispatch-call (method "times") (constraint-fn-var 217)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "input"))))
@@ -83,14 +83,14 @@ NO CHANGE
 							(e-num (value "2")))))
 				(s-reassign
 					(p-assign (ident "sum_"))
-					(e-dispatch-call (method "plus") (constraint-fn-var 61)
+					(e-dispatch-call (method "plus") (constraint-fn-var 219)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "sum_"))))
 						(args
 							(e-lookup-local
 								(p-assign (ident "sum"))))))
-				(e-dispatch-call (method "plus") (constraint-fn-var 63)
+				(e-dispatch-call (method "plus") (constraint-fn-var 221)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "sum"))))

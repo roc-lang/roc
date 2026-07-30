@@ -11,14 +11,14 @@ app[]{f:platform"",r:"
 # EXPECTED
 UNCLOSED STRING - fuzz_crash_058.md:1:22:1:23
 # PROBLEMS
-**UNCLOSED STRING**
-This string is missing a closing quote.
 
-**fuzz_crash_058.md:1:22:1:23:**
-```roc
-app[]{f:platform"",r:"
-```
-                     ^
+┌─────────────────┐
+│ UNCLOSED STRING ├─ This string is missing a closing quote. ─────────────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  app[]{f:platform"",r:"                                                    │
+ │                       ‾                                                    │
+ └──────────────────────────────────────────────────── fuzz_crash_058.md:1:22 ┘
 
 
 # TOKENS
@@ -46,10 +46,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-app [] {
-	f: platform "",
-	r: "",
-}
+app [] { f: platform "", r: "" }
 ~~~
 # CANONICALIZE
 ~~~clojure

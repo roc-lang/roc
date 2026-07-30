@@ -12,16 +12,18 @@ f = || {
 # EXPECTED
 CRASH EXPECTS STRING - fuzz_crash_067.md:1:8:3:2
 # PROBLEMS
-**CRASH EXPECTS STRING**
-The `crash` keyword expects a string literal as its argument.
-For example: `crash "Something went wrong"`
-**fuzz_crash_067.md:1:8:3:2:**
-```roc
-f = || {
-    crash 1
-}
-```
 
+┌──────────────────────┐
+│ CRASH EXPECTS STRING ├─ The `crash` keyword expects a string literal as ────┐
+└┬─────────────────────┘  its argument.                                       │
+ │                                                                            │
+ │  f = || {                                                                  │
+ │      crash 1                                                               │
+ │  }                                                                         │
+ │                                                                            │
+ └───────────────────────────────────────────────────── fuzz_crash_067.md:1:8 ┘
+
+    For example: `crash "Something went wrong"`
 
 # TOKENS
 ~~~zig
@@ -33,7 +35,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "f"))
@@ -55,10 +57,7 @@ f = || {
 (can-ir
 	(d-let
 		(p-assign (ident "f"))
-		(e-lambda
-			(args)
-			(e-block
-				(e-runtime-error (tag "crash_expects_string"))))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

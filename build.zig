@@ -39,7 +39,7 @@ const windows_cross_targets = [_]CrossTarget{
 const linux_cross_targets = musl_cross_targets ++ glibc_cross_targets;
 
 /// Test platform directories that need host libraries built
-const all_test_platform_dirs = [_][]const u8{ "str", "int", "fx", "fx-open", "dylib", "archive" };
+const all_test_platform_dirs = [_][]const u8{ "str", "int", "fx", "fx-open", "dylib", "archive", "alloc-count" };
 const glibc_test_platform_dirs = [_][]const u8{ "str", "int", "dylib", "archive" };
 
 fn mustUseLlvm(target: ResolvedTarget) bool {
@@ -181,9 +181,9 @@ const TestsSummaryStep = struct {
     has_filters: bool,
     test_filters: []const []const u8,
     forced_passes: u64,
-    run_prerequisite: ?*Step,
     serialize_runs: bool,
     last_run: ?*Step,
+    run_steps: std.ArrayList(*Step),
 
     fn create(
         b: *std.Build,
@@ -201,9 +201,9 @@ const TestsSummaryStep = struct {
             .has_filters = test_filters.len > 0,
             .test_filters = test_filters,
             .forced_passes = @intCast(forced_passes),
-            .run_prerequisite = null,
             .serialize_runs = false,
             .last_run = null,
+            .run_steps = .empty,
         };
         return self;
     }
@@ -212,10 +212,14 @@ const TestsSummaryStep = struct {
         self.serialize_runs = true;
     }
 
+    /// Registers `run_step` with the summary. When run serialization is
+    /// enabled, registered runs are chained so that test binaries start one at
+    /// a time. The build currently enables this on Windows. That chain is
+    /// private to the summary and must never be reachable from a public
+    /// `run-test-zig-*` step. Prefer `TestSuiteRegistry.register`, which
+    /// guarantees that by construction.
     fn addRun(self: *TestsSummaryStep, run_step: *Step) void {
-        if (self.run_prerequisite) |prerequisite| {
-            run_step.dependOn(prerequisite);
-        }
+        self.run_steps.append(self.step.owner.allocator, run_step) catch @panic("OOM");
         if (self.serialize_runs) {
             if (self.last_run) |last_run| {
                 run_step.dependOn(last_run);
@@ -252,7 +256,7 @@ const TestsSummaryStep = struct {
 
         var passed: u64 = 0;
 
-        for (step.dependencies.items) |dependency| {
+        for (self.run_steps.items) |dependency| {
             const module_pass_count = dependency.test_results.passCount();
             passed += @intCast(module_pass_count);
         }
@@ -272,7 +276,7 @@ const TestsSummaryStep = struct {
             var prev_module: []const u8 = "";
             var prev_name: []const u8 = "";
 
-            for (step.dependencies.items) |dependency| {
+            for (self.run_steps.items) |dependency| {
                 if (dependency.id != .run) continue;
                 const run: *std.Build.Step.Run = @fieldParentPtr("step", dependency);
                 const tm = run.cached_test_metadata orelse continue;
@@ -304,6 +308,132 @@ const TestsSummaryStep = struct {
         } else {
             std.debug.print("All {d} tests passed.\n", .{effective_passed});
         }
+    }
+};
+
+/// One environment variable, applied identically to both runs of a test suite.
+const TestSuiteEnv = struct {
+    key: []const u8,
+    value: []const u8,
+};
+
+/// Everything that differs between the Zig test suites registered with
+/// `TestsSummaryStep`. Anything not expressible here is applied uniformly by
+/// `TestSuiteRegistry.register`. If a suite ever needs a knob that is missing
+/// (a working directory, `has_side_effects`, ...), add a field here rather than
+/// hand-wiring that one suite at its call site -- see the note on `register`.
+const TestSuiteSpec = struct {
+    /// Suffix appended to `run-test-zig-`. This is also the MiniCI job name in
+    /// `src/build/minici.zig`, so it must stay stable.
+    step_suffix: []const u8,
+    /// Description for the public `run-test-zig-<step_suffix>` step.
+    description: []const u8,
+    /// The test binary. Both runs execute this one `Step.Compile`, so it is
+    /// compiled once no matter which step was asked for.
+    compile: *Step.Compile,
+    /// Extra edges both runs need: copied host libraries, installed prebuilt
+    /// apps, the `roc` CLI, and so on.
+    deps: []const *Step = &.{},
+    /// Environment variables both runs need.
+    env: []const TestSuiteEnv = &.{},
+    /// Whether a bare `zig build` should also build this test binary.
+    default_step: bool = false,
+};
+
+/// Configures Roc's registered Zig unit tests to use Zig's stock runner with
+/// stack-trace capture controlled by `-Ddebug-gpa-traces`.
+const UnitTestRunner = struct {
+    path: std.Build.LazyPath,
+    build_options: *std.Build.Module,
+    zig_default_test_runner: *std.Build.Module,
+
+    fn configure(self: UnitTestRunner, compile: *Step.Compile) void {
+        compile.root_module.addImport("build_options", self.build_options);
+        compile.root_module.addImport("zig_default_test_runner", self.zig_default_test_runner);
+        compile.test_runner = .{
+            .path = self.path,
+            .mode = runnerMode(compile),
+        };
+    }
+
+    /// Keep in sync with `std.Build.addRunArtifact` and Zig's stock test
+    /// runner. These backends use the simple exit-code protocol; all others
+    /// use `std.zig.Server`.
+    fn runnerMode(compile: *Step.Compile) @FieldType(Step.Compile.TestRunner, "mode") {
+        if (compile.use_llvm == false) {
+            return switch (compile.rootModuleTarget().cpu.arch) {
+                .aarch64,
+                .aarch64_be,
+                .powerpc,
+                .powerpcle,
+                .powerpc64,
+                .powerpc64le,
+                .riscv64,
+                => .simple,
+                else => .server,
+            };
+        }
+        return .server;
+    }
+};
+
+/// Owns every cross-cutting edge a Zig test suite needs, so that a suite is
+/// wired up in exactly one call.
+///
+/// The failure this type exists to prevent: on Windows `TestsSummaryStep`
+/// chains its registered runs (see `setRunSerialization`) so that test binaries
+/// start one at a time. If a granular `run-test-zig-<suite>` step is pointed at
+/// the *same* `Step.Run` that the chain owns, it inherits the entire prefix of
+/// that chain. `run-test-zig-minici` is a std-only suite of ~11 string-parsing
+/// tests; wired that way it re-ran 41 unrelated test binaries and took 441s
+/// instead of ~2s. MiniCI runs each granular step as its own `zig build`
+/// process, so it replayed that prefix once per affected job -- which is what
+/// pushed the Windows CI job past its two-hour limit.
+///
+/// `register` builds *both* runs from one spec, so the summary's run and the
+/// public step's run can neither be the same object nor drift apart in their
+/// configuration. `assertGranularTestStepsAreIsolated` re-checks the finished
+/// graph, in case a suite is ever wired by hand anyway.
+const TestSuiteRegistry = struct {
+    b: *std.Build,
+    summary: *TestsSummaryStep,
+    build_test_zig_step: *Step,
+    unit_test_runner: UnitTestRunner,
+    /// Non-null only while the test-wiring check is enumerating test binaries.
+    wiring_run: ?*Step.Run,
+    /// Args forwarded from `zig build -- <args>`, e.g. `--test-filter`.
+    run_args: []const []const u8,
+
+    fn register(self: TestSuiteRegistry, spec: TestSuiteSpec) void {
+        const b = self.b;
+
+        self.unit_test_runner.configure(spec.compile);
+
+        // Build-side wiring, uniform for every suite.
+        self.build_test_zig_step.dependOn(&spec.compile.step);
+        if (spec.default_step) b.default_step.dependOn(&spec.compile.step);
+        if (self.wiring_run) |wiring| wiring.addArtifactArg(spec.compile);
+
+        // Two runs over one compile. Only the summary's run joins the
+        // serialization chain (currently enabled only on Windows); the public
+        // step gets a run with no chain edges.
+        self.summary.addRun(&self.configuredRun(spec).step);
+
+        const public_step = b.step(
+            b.fmt("run-test-zig-{s}", .{spec.step_suffix}),
+            spec.description,
+        );
+        public_step.dependOn(&self.configuredRun(spec).step);
+    }
+
+    /// Both runs are produced by this one function from one spec, so there is
+    /// never a second copy of the configuration to fall out of sync.
+    fn configuredRun(self: TestSuiteRegistry, spec: TestSuiteSpec) *Step.Run {
+        const run = self.b.addRunArtifact(spec.compile);
+        if (self.run_args.len != 0) run.addArgs(self.run_args);
+        for (spec.env) |entry| run.setEnvironmentVariable(entry.key, entry.value);
+        for (spec.deps) |dep| run.step.dependOn(dep);
+        return run;
     }
 };
 
@@ -456,7 +586,6 @@ const CheckTypeCheckerPatternsStep = struct {
             if (std.mem.endsWith(u8, entry.path, "_test.zig")) continue;
             if (std.mem.find(u8, entry.path, "test/") != null) continue;
             if (std.mem.startsWith(u8, entry.path, "test")) continue;
-            if (std.mem.endsWith(u8, entry.path, "test_runner.zig")) continue;
 
             const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ path_prefix, entry.path });
 
@@ -914,6 +1043,121 @@ const CheckPostcheckArchitectureStep = struct {
                 return step.fail("ci/check_postcheck_architecture.pl terminated abnormally", .{});
             },
         }
+    }
+};
+
+const CheckWasmBuiltinRoutingStep = struct {
+    step: Step,
+
+    fn create(b: *std.Build) *CheckWasmBuiltinRoutingStep {
+        const self = b.allocator.create(CheckWasmBuiltinRoutingStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = Step.Id.custom,
+                .name = "check-wasm-builtin-routing",
+                .owner = b,
+                .makeFn = make,
+            }),
+        };
+        return self;
+    }
+
+    fn make(step: *Step, _: Step.MakeOptions) !void {
+        const b = step.owner;
+        if (builtin.os.tag == .windows) {
+            std.debug.print("Skipping WASM builtin routing check on Windows (perl not available)\n", .{});
+            return;
+        }
+
+        const io = b.graph.io;
+        var child = try std.process.spawn(io, .{
+            .argv = &.{ "perl", "ci/check_wasm_builtin_routing.pl" },
+            .environ_map = &b.graph.environ_map,
+        });
+        const term = try child.wait(io);
+        switch (term) {
+            .exited => |code| if (code != 0) {
+                return step.fail(
+                    "WASM builtin routing check failed. Run 'perl ci/check_wasm_builtin_routing.pl' to see details.",
+                    .{},
+                );
+            },
+            else => return step.fail("ci/check_wasm_builtin_routing.pl terminated abnormally", .{}),
+        }
+    }
+};
+
+/// Build step that fails when tracked snapshots differ from the freshly regenerated
+/// output. Detects whether the build root is backed by Git or JJ and invokes the
+/// matching diff command directly. This deliberately avoids shelling out through
+/// `sh -c`, which is not available on Windows (it fails to spawn with FileNotFound).
+const CheckSnapshotDiffStep = struct {
+    step: Step,
+
+    const regen_hint = "Tracked snapshots changed after regeneration. Run 'zig build run-snapshot-tool' and commit the result.\n{s}";
+
+    fn create(b: *std.Build) *CheckSnapshotDiffStep {
+        const self = b.allocator.create(CheckSnapshotDiffStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = Step.Id.custom,
+                .name = "check-snapshot-diff",
+                .owner = b,
+                .makeFn = make,
+            }),
+        };
+        return self;
+    }
+
+    fn make(step: *Step, _: Step.MakeOptions) !void {
+        const b = step.owner;
+        const io = b.graph.io;
+
+        // Prefer Git when the working directory is inside a Git work tree.
+        const in_git = blk: {
+            const probe = std.process.run(b.allocator, io, .{
+                .argv = &.{ "git", "rev-parse", "--is-inside-work-tree" },
+            }) catch break :blk false;
+            defer b.allocator.free(probe.stdout);
+            defer b.allocator.free(probe.stderr);
+            break :blk probe.term == .exited and probe.term.exited == 0 and
+                std.mem.eql(u8, std.mem.trim(u8, probe.stdout, " \n\r\t"), "true");
+        };
+
+        if (in_git) {
+            const result = try std.process.run(b.allocator, io, .{
+                .argv = &.{ "git", "diff", "--exit-code", "test/snapshots" },
+            });
+            defer b.allocator.free(result.stdout);
+            defer b.allocator.free(result.stderr);
+            if (!(result.term == .exited and result.term.exited == 0)) {
+                return step.fail(regen_hint, .{result.stdout});
+            }
+            return;
+        }
+
+        // Fall back to JJ for a standalone JJ workspace (no Git backing).
+        const in_jj = blk: {
+            std.Io.Dir.cwd().access(io, ".jj", .{}) catch break :blk false;
+            break :blk true;
+        };
+
+        if (in_jj) {
+            const result = try std.process.run(b.allocator, io, .{
+                .argv = &.{ "jj", "diff", "--summary", "test/snapshots" },
+            });
+            defer b.allocator.free(result.stdout);
+            defer b.allocator.free(result.stderr);
+            if (!(result.term == .exited and result.term.exited == 0)) {
+                return step.fail("jj diff --summary test/snapshots failed:\n{s}", .{result.stderr});
+            }
+            if (std.mem.trim(u8, result.stdout, " \n\r\t").len != 0) {
+                return step.fail(regen_hint, .{result.stdout});
+            }
+            return;
+        }
+
+        return step.fail("run-check-snapshots requires a Git or JJ workspace", .{});
     }
 };
 
@@ -1486,118 +1730,172 @@ const CoverageSummaryStep = struct {
     };
 };
 
-fn checkFxPlatformTestCoverage(step: *Step) !void {
-    const b = step.owner;
-    std.debug.print("---- checking fx platform test coverage ----\n", .{});
+const TestAssetCoverageDir = struct {
+    dir: []const u8,
+    spec_files: []const []const u8,
+};
 
-    const allocator = b.allocator;
-
-    // Get all .roc files in test/fx (excluding subdirectories)
-    const io = b.graph.io;
-    var fx_dir = try std.Io.Dir.cwd().openDir(io, "test/fx", .{ .iterate = true });
-    defer fx_dir.close(io);
-
-    var roc_files = std.ArrayList([]const u8).empty;
-    defer {
-        for (roc_files.items) |file| {
-            allocator.free(file);
-        }
-        roc_files.deinit(allocator);
-    }
-
-    var dir_iter = fx_dir.iterate();
-    while (try dir_iter.next(io)) |entry| {
-        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".roc")) {
-            const file_name = try allocator.dupe(u8, entry.name);
-            try roc_files.append(allocator, file_name);
-        }
-    }
-
-    // Sort the list for consistent output
-    std.mem.sort([]const u8, roc_files.items, {}, struct {
-        fn lessThan(_: void, lhs: []const u8, rhs: []const u8) bool {
-            return std.mem.order(u8, lhs, rhs) == .lt;
-        }
-    }.lessThan);
-
-    // Find all references to test/fx/*.roc files in test source files
-    var tested_files = std.StringHashMap(void).init(allocator);
-    defer {
-        var key_iter = tested_files.keyIterator();
-        while (key_iter.next()) |key| {
-            allocator.free(key.*);
-        }
-        tested_files.deinit();
-    }
-
-    // Scan both the test file and the shared specs file
-    const test_files_to_scan = [_][]const u8{
+// Every top-level app .roc file in these directories must be named by at least
+// one of its spec sources; otherwise it is dead test data no runner executes.
+// Module and platform .roc files are dependencies of apps, so only files whose
+// first non-comment line is an `app` header are required to be covered.
+const test_asset_coverage_dirs = [_]TestAssetCoverageDir{
+    .{ .dir = "test/fx", .spec_files = &.{
         "src/cli/test/fx_platform_test.zig",
         "src/cli/test/fx_test_specs.zig",
-    };
+        "src/cli/test/parallel_cli_runner.zig",
+    } },
+    .{ .dir = "test/fx-open", .spec_files = &.{
+        "src/cli/test/platform_config.zig",
+        "src/cli/test/parallel_cli_runner.zig",
+    } },
+    .{ .dir = "test/cli", .spec_files = &.{
+        "src/cli/test/parallel_cli_runner.zig",
+        "src/compile/test/embedding_smoke.zig",
+    } },
+    .{ .dir = "test/str", .spec_files = &.{
+        "src/cli/test/platform_config.zig",
+        "src/cli/test/parallel_cli_runner.zig",
+        "src/compile/coordinator.zig",
+    } },
+    .{ .dir = "test/echo", .spec_files = &.{
+        "src/cli/test/parallel_cli_runner.zig",
+        "src/eval/test/builtin_doc_tests.zig",
+    } },
+};
 
-    for (test_files_to_scan) |test_file_path| {
-        const test_file_contents = std.Io.Dir.cwd().readFileAlloc(io, test_file_path, allocator, .limited(1024 * 1024)) catch |err| {
-            std.debug.print("Warning: Could not read {s}: {}\n", .{ test_file_path, err });
-            continue;
-        };
-        defer allocator.free(test_file_contents);
-
-        var line_iter = std.mem.splitScalar(u8, test_file_contents, '\n');
-        while (line_iter.next()) |line| {
-            // Look for patterns like "test/fx/filename.roc"
-            var search_start: usize = 0;
-            while (std.mem.findPos(u8, line, search_start, "test/fx/")) |idx| {
-                const rest_of_line = line[idx..];
-                // Find the end of the filename
-                if (std.mem.find(u8, rest_of_line, ".roc")) |roc_pos| {
-                    const full_path = rest_of_line[0 .. roc_pos + 4]; // Include ".roc"
-                    // Extract just the filename (after "test/fx/")
-                    const filename = full_path["test/fx/".len..];
-                    // Only count files in test/fx (not subdirectories like test/fx/subdir/)
-                    if (std.mem.find(u8, filename, "/") == null) {
-                        // Dupe the filename since the source buffer will be freed
-                        const duped_filename = try allocator.dupe(u8, filename);
-                        try tested_files.put(duped_filename, {});
-                    }
-                }
-                search_start = idx + 1;
-            }
-        }
+fn isRocAppFile(contents: []const u8) bool {
+    var line_iter = std.mem.splitScalar(u8, contents, '\n');
+    while (line_iter.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, " \t\r");
+        if (line.len == 0) continue;
+        if (line[0] == '#') continue;
+        return std.mem.startsWith(u8, line, "app");
     }
-
-    // Find missing tests
-    var missing_tests = std.ArrayList([]const u8).empty;
-    defer missing_tests.deinit(allocator);
-
-    for (roc_files.items) |roc_file| {
-        if (!tested_files.contains(roc_file)) {
-            try missing_tests.append(allocator, roc_file);
-        }
-    }
-
-    // Report results
-    if (missing_tests.items.len > 0) {
-        std.debug.print("\nERROR: The following .roc files in test/fx/ do not have tests:\n", .{});
-        for (missing_tests.items) |missing_file| {
-            std.debug.print("  - {s}\n", .{missing_file});
-        }
-        std.debug.print("\nPlease add tests in fx_platform_test.zig or fx_test_specs.zig, or remove these files from test/fx/.\n", .{});
-        return step.fail("{d} .roc file(s) in test/fx/ are missing tests", .{missing_tests.items.len});
-    }
-
-    std.debug.print("All {d} .roc files in test/fx/ have tests.\n", .{roc_files.items.len});
+    return false;
 }
 
-const CheckFxStep = struct {
+fn checkTestAssetCoverage(step: *Step) !void {
+    const b = step.owner;
+    std.debug.print("---- checking test asset coverage ----\n", .{});
+
+    const allocator = b.allocator;
+    const io = b.graph.io;
+
+    var total_missing: usize = 0;
+    var total_checked: usize = 0;
+
+    for (test_asset_coverage_dirs) |cfg| {
+        var asset_dir = try std.Io.Dir.cwd().openDir(io, cfg.dir, .{ .iterate = true });
+        defer asset_dir.close(io);
+
+        var app_files = std.ArrayList([]const u8).empty;
+        defer {
+            for (app_files.items) |file| {
+                allocator.free(file);
+            }
+            app_files.deinit(allocator);
+        }
+
+        var dir_iter = asset_dir.iterate();
+        while (try dir_iter.next(io)) |entry| {
+            if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".roc")) continue;
+            const contents = try asset_dir.readFileAlloc(io, entry.name, allocator, .limited(1024 * 1024));
+            defer allocator.free(contents);
+            if (!isRocAppFile(contents)) continue;
+            try app_files.append(allocator, try allocator.dupe(u8, entry.name));
+        }
+
+        std.mem.sort([]const u8, app_files.items, {}, struct {
+            fn lessThan(_: void, lhs: []const u8, rhs: []const u8) bool {
+                return std.mem.order(u8, lhs, rhs) == .lt;
+            }
+        }.lessThan);
+
+        var tested_files = std.StringHashMap(void).init(allocator);
+        defer {
+            var key_iter = tested_files.keyIterator();
+            while (key_iter.next()) |key| {
+                allocator.free(key.*);
+            }
+            tested_files.deinit();
+        }
+
+        const dir_prefix = try std.fmt.allocPrint(allocator, "{s}/", .{cfg.dir});
+        defer allocator.free(dir_prefix);
+
+        for (cfg.spec_files) |spec_file_path| {
+            const spec_contents = std.Io.Dir.cwd().readFileAlloc(io, spec_file_path, allocator, .limited(4 * 1024 * 1024)) catch |err| {
+                return step.fail("could not read spec source {s}: {}", .{ spec_file_path, err });
+            };
+            defer allocator.free(spec_contents);
+
+            var line_iter = std.mem.splitScalar(u8, spec_contents, '\n');
+            while (line_iter.next()) |full_line| {
+                // A mention inside a `//` comment is not a live spec entry.
+                const line = if (std.mem.find(u8, full_line, "//")) |comment_idx|
+                    full_line[0..comment_idx]
+                else
+                    full_line;
+
+                var search_start: usize = 0;
+                while (std.mem.findPos(u8, line, search_start, dir_prefix)) |idx| {
+                    const rest_of_line = line[idx..];
+                    if (std.mem.find(u8, rest_of_line, ".roc")) |roc_pos| {
+                        const full_path = rest_of_line[0 .. roc_pos + 4];
+                        const filename = full_path[dir_prefix.len..];
+                        // Only count top-level files, not subdirectory paths.
+                        if (std.mem.find(u8, filename, "/") == null) {
+                            const duped_filename = try allocator.dupe(u8, filename);
+                            if (tested_files.contains(duped_filename)) {
+                                allocator.free(duped_filename);
+                            } else {
+                                try tested_files.put(duped_filename, {});
+                            }
+                        }
+                    }
+                    search_start = idx + 1;
+                }
+            }
+        }
+
+        var missing_count: usize = 0;
+        for (app_files.items) |app_file| {
+            total_checked += 1;
+            if (!tested_files.contains(app_file)) {
+                if (missing_count == 0) {
+                    std.debug.print("\nERROR: app .roc files in {s}/ with no spec entry:\n", .{cfg.dir});
+                }
+                std.debug.print("  - {s}/{s}\n", .{ cfg.dir, app_file });
+                missing_count += 1;
+            }
+        }
+        if (missing_count > 0) {
+            std.debug.print("Add a spec entry in one of:\n", .{});
+            for (cfg.spec_files) |spec_file_path| {
+                std.debug.print("  {s}\n", .{spec_file_path});
+            }
+            std.debug.print("or delete the unused file(s).\n", .{});
+        }
+        total_missing += missing_count;
+    }
+
+    if (total_missing > 0) {
+        return step.fail("{d} app .roc file(s) have no spec entry", .{total_missing});
+    }
+
+    std.debug.print("All {d} app .roc files across {d} asset directories are covered.\n", .{ total_checked, test_asset_coverage_dirs.len });
+}
+
+const CheckTestAssetCoverageStep = struct {
     step: Step,
 
-    fn create(b: *std.Build) *CheckFxStep {
-        const self = b.allocator.create(CheckFxStep) catch @panic("OOM");
+    fn create(b: *std.Build) *CheckTestAssetCoverageStep {
+        const self = b.allocator.create(CheckTestAssetCoverageStep) catch @panic("OOM");
         self.* = .{
             .step = Step.init(.{
                 .id = Step.Id.custom,
-                .name = "checkfx-inner",
+                .name = "check-test-asset-coverage-inner",
                 .owner = b,
                 .makeFn = make,
             }),
@@ -1607,14 +1905,14 @@ const CheckFxStep = struct {
 
     fn make(step: *Step, options: Step.MakeOptions) !void {
         _ = options;
-        try checkFxPlatformTestCoverage(step);
+        try checkTestAssetCoverage(step);
     }
 };
 
 const BuiltinCompilerRun = struct {
     run: *Step.Run,
     builtin_bin: std.Build.LazyPath,
-    builtin_indices_bin: std.Build.LazyPath,
+    builtin_indices_zig: std.Build.LazyPath,
     builtin_artifact_bin: std.Build.LazyPath,
 };
 
@@ -1655,21 +1953,6 @@ fn createAndRunBuiltinCompiler(
     builtin_compiler_exe.root_module.addImport("reporting", roc_modules.reporting);
     builtin_compiler_exe.root_module.addImport("builtins", roc_modules.builtins);
 
-    // The builtin compiler reloads the just-written Builtin.bin via the same
-    // loader the runtime uses, so the baked artifact pairs identically with the
-    // env that BuiltinModules.init will load. `builtin_loading` lives in the eval
-    // module, which imports `compiled_builtins` (this compiler's own output), so
-    // it is added here as a standalone module to avoid that import cycle.
-    builtin_compiler_exe.root_module.addImport("builtin_loading", b.createModule(.{
-        .root_source_file = b.path("src/eval/builtin_loading.zig"),
-        .target = b.graph.host,
-        .optimize = .Debug,
-        .imports = &.{
-            .{ .name = "can", .module = roc_modules.can },
-            .{ .name = "collections", .module = roc_modules.collections },
-        },
-    }));
-
     // The builtin compiler publishes the Builtin module to a CheckedModuleArtifact
     // and must run the same compile-time finalizer the runtime uses (Builtin has
     // compile-time roots that must be evaluated into its ConstStore). The finalizer
@@ -1685,11 +1968,15 @@ fn createAndRunBuiltinCompiler(
         .imports = &.{
             .{ .name = "base", .module = roc_modules.base },
             .{ .name = "build_options", .module = roc_modules.build_options },
+            .{ .name = "backend", .module = roc_modules.backend },
             .{ .name = "builtins", .module = roc_modules.builtins },
             .{ .name = "can", .module = roc_modules.can },
             .{ .name = "check", .module = roc_modules.check },
+            .{ .name = "collections", .module = roc_modules.collections },
             .{ .name = "layout", .module = roc_modules.layout },
             .{ .name = "lir", .module = roc_modules.lir },
+            .{ .name = "roc_target", .module = roc_modules.roc_target },
+            .{ .name = "static_data", .module = roc_modules.static_data },
             .{ .name = "sljmp", .module = roc_modules.sljmp },
         },
     });
@@ -1710,13 +1997,13 @@ fn createAndRunBuiltinCompiler(
     }
 
     const builtin_bin = run_builtin_compiler.addOutputFileArg("Builtin.bin");
-    const builtin_indices_bin = run_builtin_compiler.addOutputFileArg("builtin_indices.bin");
+    const builtin_indices_zig = run_builtin_compiler.addOutputFileArg("builtin_indices.zig");
     const builtin_artifact_bin = run_builtin_compiler.addOutputFileArg("Builtin.artifact.bin");
 
     return .{
         .run = run_builtin_compiler,
         .builtin_bin = builtin_bin,
-        .builtin_indices_bin = builtin_indices_bin,
+        .builtin_indices_zig = builtin_indices_zig,
         .builtin_artifact_bin = builtin_artifact_bin,
     };
 }
@@ -1763,6 +2050,7 @@ fn createTestPlatformHostLib(
     }
     lib.root_module.addImport("builtins", roc_modules.builtins);
     lib.root_module.addImport("build_options", roc_modules.build_options);
+    lib.root_module.addImport("host_alloc", roc_modules.host_alloc);
     lib.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
     lib.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
     lib.root_module.addImport("shim_io", b.addModule("shim_io", .{
@@ -1894,6 +2182,7 @@ fn buildAndCopyWasmHostObject(
     configureBackend(obj, target);
     obj.root_module.addImport("builtins", roc_modules.builtins);
     obj.root_module.addImport("build_options", roc_modules.build_options);
+    obj.root_module.addImport("host_alloc", roc_modules.host_alloc);
     // Per-function/data sections so wasm final-link DCE can strip unused host code.
     obj.link_function_sections = true;
     obj.link_data_sections = true;
@@ -2151,6 +2440,22 @@ fn setupTestPlatforms(
                 omit_frame_pointer,
             );
             clear_cache_step.dependOn(copy_step);
+
+            // test/alloc-count declares fx's musl runtime objects (crt1.o,
+            // libc.a) as link inputs; copy them alongside its host library
+            // rather than committing more copies of the same binaries.
+            if (std.mem.eql(u8, platform_dir, "alloc-count") and std.mem.endsWith(u8, cross_target.name, "musl")) {
+                const copy_musl_runtime = b.addUpdateSourceFiles();
+                copy_musl_runtime.addCopyFileToSource(
+                    b.path(b.pathJoin(&.{ "test/fx/platform/targets", cross_target.name, "crt1.o" })),
+                    b.pathJoin(&.{ "test/alloc-count/platform/targets", cross_target.name, "crt1.o" }),
+                );
+                copy_musl_runtime.addCopyFileToSource(
+                    b.path(b.pathJoin(&.{ "test/fx/platform/targets", cross_target.name, "libc.a" })),
+                    b.pathJoin(&.{ "test/alloc-count/platform/targets", cross_target.name, "libc.a" }),
+                );
+                clear_cache_step.dependOn(&copy_musl_runtime.step);
+            }
         }
     }
 
@@ -2264,16 +2569,20 @@ pub fn build(b: *std.Build) void {
     const run_check_zig_lints_step = b.step("run-check-zig-lints", "Run Zig lints");
     const run_check_tidy_step = b.step("run-check-tidy", "Run code tidiness checks");
     const run_check_git_lints_step = b.step("run-check-git-lints", "Run Git-backed code checks");
-    const run_check_fx_platform_test_coverage_step = b.step("run-check-fx-platform-test-coverage", "Check that every .roc file in test/fx has a corresponding test");
+    const run_check_test_asset_coverage_step = b.step("run-check-test-asset-coverage", "Check that every app .roc file in spec-driven test asset dirs has a spec entry");
     const run_check_type_checker_patterns_step = b.step("run-check-type-checker-patterns", "Check forbidden type-checker patterns");
     const run_check_enum_from_int_zero_step = b.step("run-check-enum-from-int-zero", "Check forbidden @enumFromInt(0) usage");
     const run_check_unused_suppression_step = b.step("run-check-unused-suppression", "Check unused-variable suppression patterns");
     const run_check_semantic_audit_step = b.step("run-check-semantic-audit", "Run the checked-data audit gate");
     const run_check_postcheck_architecture_step = b.step("run-check-postcheck-architecture", "Check that deleted post-check output/remapping APIs stay gone");
+    const run_check_wasm_builtin_routing_step = b.step("run-check-wasm-builtin-routing", "Check that WASM builtin calls use explicit host/relocation routing");
     const run_check_panic_step = b.step("run-check-panic", "Check forbidden panic usage in interpreter and builtins");
     const run_check_cli_global_stdio_step = b.step("run-check-cli-global-stdio", "Check forbidden global stdio usage in CLI code");
     const run_check_test_wiring_step = b.step("run-check-test-wiring", "Check test files are wired");
     const run_check_builtin_format_step = b.step("run-check-builtin-format", "Check Builtin.roc formatting");
+    const run_check_glue_abi_step = b.step("run-check-glue-abi", "Check generated Zig glue against the canonical host ABI");
+    const run_check_simd_codegen_step = b.step("run-check-simd-codegen", "Check that optimized x86-64 integer SIMD kernels select native instructions");
+    const run_check_match_extension_codegen_step = b.step("run-check-match-extension-codegen", "Check the pinned instruction counts for the match-extension loop");
     const build_snapshot_tool_step = b.step("build-snapshot-tool", "Build the snapshot tool");
     const run_check_snapshots_step = b.step("run-check-snapshots", "Regenerate snapshots and fail if tracked snapshots changed");
     const build_test_zig_step = b.step("build-test-zig", "Build Zig unit-test binaries");
@@ -2281,8 +2590,11 @@ pub fn build(b: *std.Build) void {
     const build_test_lsp_integration_runner_step = b.step("build-test-lsp-integration-runner", "Build LSP integration test harness");
     const build_test_eval_runner_step = b.step("build-test-eval-runner", "Build eval test runner");
     const run_test_eval_step = b.step("run-test-eval", "Run eval tests in parallel across enabled backends");
+    const run_test_simd_differential_step = b.step("run-test-simd-differential", "Run the exhaustive integer-SIMD oracle corpus through every compiler consumer");
     const build_test_eval_host_effects_runner_step = b.step("build-test-eval-host-effects-runner", "Build runtime host-effects eval test runner");
     const run_test_eval_host_effects_step = b.step("run-test-eval-host-effects", "Run runtime host-effects eval tests across supported backends");
+    const build_test_lambda_mono_differential_step = b.step("build-test-lambda-mono-differential", "Build the Lambda Mono differential harness");
+    const run_test_lambda_mono_differential_step = b.step("run-test-lambda-mono-differential", "Run the Lambda Mono body-lowering differential harness (Debug only)");
     const build_playground_step = b.step("build-playground", "Build the WASM playground");
     const build_test_playground_runner_step = b.step("build-test-playground-runner", "Build the integration test suite for the WASM playground");
     const run_test_playground_step = b.step("run-test-playground", "Run the integration test suite for the WASM playground");
@@ -2300,6 +2612,8 @@ pub fn build(b: *std.Build) void {
     const run_fmt_zig_step = b.step("run-fmt-zig", "Format all zig code");
     const run_snapshot_tool_step = b.step("run-snapshot-tool", "Run the snapshot tool to update snapshot files");
     const echo_wasm_step = b.step("build-echo-wasm", "Build the echo platform to zig-out/lib/echo.wasm");
+    const echo_wasm_archive_step = b.step("build-echo-wasm-archive", "Build echo.wasm and zstd-compress it to zig-out/lib/echo.wasm.zst");
+    const build_glue_release_step = b.step("build-glue-release", "Build release-ready glue specs");
 
     const build_test_hosts_step = b.step("build-test-hosts", "Build test platform host libraries");
     const build_release_step = b.step("build-release", "Build optimized release binary for distribution");
@@ -2329,6 +2643,8 @@ pub fn build(b: *std.Build) void {
     const cli_test_llvm = b.option(bool, "cli-test-llvm", "Include LLVM size/speed backend jobs in CLI platform tests") orelse false;
     const trace_build = b.option(bool, "trace-build", "Enable detailed build pipeline tracing") orelse false;
     const debug_gpa = b.option(bool, "debug-gpa", "Use the leak-checking DebugAllocator for the roc binary even when libc is linked (default: off, so libc's malloc and its ASan/Valgrind/LD_PRELOAD tooling are used)") orelse false;
+    const linker_warnings = b.option(bool, "linker-warnings", "Surface all embedded LLD linker warnings (default: off; suppressed with -w)") orelse false;
+    const debug_gpa_traces = b.option(bool, "debug-gpa-traces", "Capture DebugAllocator allocation sites and enable Zig unit-test stack traces (default: off, because capturing traces dominates Debug-build runtime; leaks are detected either way)") orelse false;
     const shared_memory_size = b.option(u64, "shared-memory-size", "Explicitly set shared-memory arena sizes in bytes");
     const print_trmc = b.option(bool, "print-trmc", "Print one line for each transformed TRMC/TCE proc") orelse false;
     const print_ir_after_trmc = b.option(bool, "print-ir-after-trmc", "Print full LIR for each proc transformed by TRMC/TCE") orelse false;
@@ -2339,6 +2655,13 @@ pub fn build(b: *std.Build) void {
     const test_progress_interval_ms = b.option(u64, "test-progress-interval-ms", "Print non-TTY parallel test progress every N milliseconds; 0 disables it") orelse 0;
     const eval_no_fork = b.option(bool, "eval-no-fork", "Run eval tests in-process instead of through fork isolation") orelse false;
     const eval_time_worker = b.option(bool, "eval-time-worker", "Print eval worker startup timing instrumentation") orelse false;
+    const glue_release_tag = b.option([]const u8, "glue-release-tag", "Nightly release tag used in generated glue release metadata");
+    const enable_valgrind = b.option(bool, "valgrind", "Emit Valgrind client request support") orelse false;
+    if (enable_valgrind and (builtin.target.os.tag != .linux or target.result.os.tag != .linux)) {
+        std.log.err("-Dvalgrind=true requires a Linux build host and Linux target", .{});
+        std.process.exit(1);
+    }
+    const valgrind_support = if (enable_valgrind) true else null;
     if (shared_memory_size) |size| {
         if (size == 0) {
             std.log.err("-Dshared-memory-size must be greater than 0", .{});
@@ -2381,6 +2704,8 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "trace_modules", trace_modules);
     build_options.addOption(bool, "trace_build", trace_build);
     build_options.addOption(bool, "debug_gpa", debug_gpa);
+    build_options.addOption(bool, "linker_warnings", linker_warnings);
+    build_options.addOption(bool, "debug_gpa_traces", debug_gpa_traces);
     build_options.addOption(bool, "has_shared_memory_size", shared_memory_size != null);
     build_options.addOption(u64, "shared_memory_size", shared_memory_size orelse 0);
     build_options.addOption(bool, "print_trmc", print_trmc);
@@ -2411,6 +2736,34 @@ pub fn build(b: *std.Build) void {
         \\    },
         \\    compiler_version_git,
         \\});
+        \\
+    ) catch @panic("OOM");
+    // Shared config for every first-party leak-checking DebugAllocator. Capturing a
+    // stack trace per allocation dominates Debug-build runtime (~80% of `roc test`
+    // wall time on macOS arm64), so traces are off unless -Ddebug-gpa-traces is
+    // passed; leaks are still detected without them. Lives in the generated
+    // build_options module because it is imported by everything that instantiates
+    // a DebugAllocator, including minimal test platform hosts.
+    build_options.contents.appendSlice(b.allocator,
+        \\
+        \\pub const debug_gpa_stack_trace_frames: usize =
+        \\    if (debug_gpa_traces and @import("std").debug.sys_can_stack_trace) 6 else 0;
+        \\
+        \\/// Appended to leak reports in traceless builds; empty when traces are on.
+        \\pub const debug_gpa_leak_hint: []const u8 = if (debug_gpa_stack_trace_frames == 0)
+        \\    "note: leak reports above have no allocation-site stack traces; rebuild with `-Ddebug-gpa-traces` to capture them\n"
+        \\else
+        \\    "";
+        \\
+        \\/// Deinit-check for leak-checking DebugAllocators: prints the
+        \\/// -Ddebug-gpa-traces hint when `check` reports a leak in a traceless
+        \\/// build, then returns whether the check passed.
+        \\pub fn debugGpaOk(check: @import("std").heap.Check) bool {
+        \\    if (check == .leak) {
+        \\        @import("std").debug.print("{s}", .{debug_gpa_leak_hint});
+        \\    }
+        \\    return check == .ok;
+        \\}
         \\
     ) catch @panic("OOM");
     build_options.addOption(bool, "enable_tracy_callstack", flag_tracy_callstack);
@@ -2462,6 +2815,14 @@ pub fn build(b: *std.Build) void {
     });
 
     const roc_modules = modules.RocModules.create(b, build_options, zstd);
+    const zig_unit_test_lib_path = b.fmt("{f}", .{b.graph.zig_lib_directory});
+    const unit_test_runner = UnitTestRunner{
+        .path = b.path("src/build/unit_test_runner.zig"),
+        .build_options = roc_modules.build_options,
+        .zig_default_test_runner = b.createModule(.{
+            .root_source_file = .{ .cwd_relative = b.pathJoin(&.{ zig_unit_test_lib_path, "compiler/test_runner.zig" }) },
+        }),
+    };
 
     // Build-time compiler for builtin .roc modules
     //
@@ -2488,24 +2849,29 @@ pub fn build(b: *std.Build) void {
         "Builtin.roc",
     );
 
-    // Copy builtin_indices.bin
-    _ = write_compiled_builtins.addCopyFile(
-        builtin_compiler.builtin_indices_bin,
-        "builtin_indices.bin",
-    );
-
     // Copy the baked CheckedModuleArtifact
     _ = write_compiled_builtins.addCopyFile(
         builtin_compiler.builtin_artifact_bin,
         "Builtin.artifact.bin",
     );
 
-    // Generate compiled_builtins.zig with hardcoded Builtin module
+    // Generate compiled_builtins.zig with hardcoded Builtin module.
+    // The embedded blobs are copied by Zig at compile time into 16-byte-aligned
+    // static storage, so runtime code can build views over them directly.
     const builtins_source_str =
-        \\pub const builtin_bin = @embedFile("Builtin.bin");
+        \\const generated_indices = @import("builtin_indices");
+        \\
+        \\const builtin_bin_raw = @embedFile("Builtin.bin");
+        \\pub var builtin_bin: [builtin_bin_raw.len]u8 align(16) = builtin_bin_raw.*;
         \\pub const builtin_source = @embedFile("Builtin.roc");
-        \\pub const builtin_indices_bin = @embedFile("builtin_indices.bin");
-        \\pub const builtin_artifact_bin = @embedFile("Builtin.artifact.bin");
+        \\const builtin_artifact_bin_raw = @embedFile("Builtin.artifact.bin");
+        \\pub var builtin_artifact_bin: [builtin_artifact_bin_raw.len]u8 align(16) = builtin_artifact_bin_raw.*;
+        \\pub const builtin_indices_raw = generated_indices.builtin_indices_raw;
+        \\pub fn builtinIndices(comptime CIR: type) CIR.BuiltinIndices {
+        \\    return generated_indices.builtinIndices(CIR);
+        \\}
+        \\pub const builtin_type_registry_hash = generated_indices.builtin_type_registry_hash;
+        \\pub const builtin_indices_layout_hash = generated_indices.builtin_indices_layout_hash;
         \\
     ;
 
@@ -2517,6 +2883,9 @@ pub fn build(b: *std.Build) void {
     const compiled_builtins_module = b.createModule(.{
         .root_source_file = compiled_builtins_source,
     });
+    compiled_builtins_module.addImport("builtin_indices", b.createModule(.{
+        .root_source_file = builtin_compiler.builtin_indices_zig,
+    }));
 
     const bytebox = b.dependency("bytebox", .{
         .target = target,
@@ -2555,6 +2924,7 @@ pub fn build(b: *std.Build) void {
             .optimize = .Debug,
         }),
     });
+    minici_exe.root_module.addImport("build_options", roc_modules.build_options);
 
     const install_zig_lints = b.addInstallArtifact(zig_lints_exe, .{});
     const install_tidy = b.addInstallArtifact(tidy_exe, .{});
@@ -2582,8 +2952,30 @@ pub fn build(b: *std.Build) void {
     run_test_wiring.step.dependOn(&install_test_wiring.step);
     run_check_test_wiring_step.dependOn(&run_test_wiring.step);
 
+    // The wiring check's semantic phase runs every Zig test binary with
+    // --listen=- to enumerate the tests each one actually contains (metadata
+    // only; no tests execute), then requires every named test decl in src/ to
+    // appear in some binary. The binary paths are appended as args at each
+    // b.addTest site below. They are only passed when the host can execute
+    // the configured target and no --test-filter trimmed the test set;
+    // otherwise the checker falls back to its import-level check alone.
+    const enumerate_tests_for_wiring_check = target_is_native and test_filters.len == 0;
+
     const run_minici = b.addRunArtifact(minici_exe);
     run_minici.addArg(b.graph.zig_exe);
+    for (b.search_prefixes.items) |search_prefix| {
+        run_minici.addArg("--search-prefix");
+        run_minici.addArg(search_prefix);
+    }
+    // MiniCI forwards these args to every child `zig build` it runs, so
+    // `zig build minici -Ddebug-gpa-traces` gives all child steps traced
+    // leak reports (CI re-runs failed leaky jobs this way).
+    if (debug_gpa_traces) {
+        run_minici.addArg("-Ddebug-gpa-traces");
+    }
+    if (run_args.len != 0) {
+        run_minici.addArgs(run_args);
+    }
     run_minici.step.dependOn(&install_minici.step);
     run_minici_step.dependOn(&run_minici.step);
 
@@ -2681,6 +3073,7 @@ pub fn build(b: *std.Build) void {
     const llvm_codegen_module = b.addModule("llvm_codegen", .{
         .root_source_file = b.path("src/backend/llvm/MonoLlvmCodeGen.zig"),
     });
+    llvm_codegen_module.addImport("base", roc_modules.base);
     llvm_codegen_module.addImport("layout", roc_modules.layout);
     llvm_codegen_module.addImport("lir", roc_modules.lir);
     llvm_codegen_module.addImport("ctx", roc_modules.ctx);
@@ -2689,7 +3082,8 @@ pub fn build(b: *std.Build) void {
     llvm_codegen_module.addImport("roc_target", roc_modules.roc_target);
     llvm_codegen_module.addImport("vendor_llvm_ir", roc_modules.vendor_llvm_ir);
 
-    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, llvm_codegen_module, flag_enable_tracy, true) orelse return;
+    const main_exe_result = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, llvm_codegen_module, flag_enable_tracy, test_filters, true, valgrind_support) orelse return;
+    const roc_exe = main_exe_result.exe;
     roc_modules.addAll(roc_exe);
     _ = install_and_run(b, no_bin, roc_exe, build_roc_step, run_roc_step, run_args);
 
@@ -2703,6 +3097,145 @@ pub fn build(b: *std.Build) void {
     run_builtin_format.step.dependOn(build_roc_step);
     run_check_builtin_format_step.dependOn(&run_builtin_format.step);
 
+    const run_simd_codegen_check = b.addSystemCommand(&.{ "bash", "ci/check_simd_codegen.sh" });
+    run_simd_codegen_check.addArtifactArg(roc_exe);
+    run_simd_codegen_check.step.dependOn(build_test_hosts_step);
+    run_check_simd_codegen_step.dependOn(&run_simd_codegen_check.step);
+
+    const run_match_extension_codegen_check = b.addSystemCommand(&.{ "bash", "ci/check_match_extension_codegen.sh" });
+    run_match_extension_codegen_check.addArtifactArg(roc_exe);
+    run_match_extension_codegen_check.step.dependOn(build_test_hosts_step);
+    run_check_match_extension_codegen_step.dependOn(&run_match_extension_codegen_check.step);
+
+    // Glue ABI locks compile the generated bindings themselves. Zig is checked
+    // for every native architecture/OS plus wasm, C is checked against the
+    // vector-heavy layout probe over the same matrix, and Rust is checked for
+    // the configured native target plus wasm (rustc requires an installed core
+    // library for each cross target). Native integration tests execute all
+    // three languages in both directions on each CI host OS/architecture.
+    {
+        const run_glue_abi = b.addRunArtifact(roc_exe);
+        run_glue_abi.addArgs(&.{ "glue", "--no-cache" });
+        run_glue_abi.addFileArg(b.path("src/glue/src/ZigGlue.roc"));
+        const glue_abi_dir = run_glue_abi.addOutputDirectoryArg("glue-zig-abi");
+        run_glue_abi.addFileArg(b.path("test/fx/platform/main.roc"));
+        // The spec and platform import sibling .roc files the run step cannot
+        // track as inputs, so always regenerate.
+        run_glue_abi.has_side_effects = true;
+
+        const lock_targets = [_]struct { name: []const u8, target: std.Build.ResolvedTarget }{
+            .{ .name = "x64_linux", .target = b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl }) },
+            .{ .name = "arm64_linux", .target = b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl }) },
+            .{ .name = "x64_macos", .target = b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .macos }) },
+            .{ .name = "arm64_macos", .target = b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .macos }) },
+            .{ .name = "x64_windows", .target = b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .msvc }) },
+            .{ .name = "arm64_windows", .target = b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .msvc }) },
+            .{ .name = "wasm32", .target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none }) },
+        };
+        for (lock_targets) |lock_target| {
+            const lock_obj = b.addObject(.{
+                .name = b.fmt("glue_zig_abi_lock_{s}", .{lock_target.name}),
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path("test/glue/zig_abi_lock.zig"),
+                    .target = lock_target.target,
+                    .optimize = optimize,
+                }),
+            });
+            lock_obj.root_module.addImport("builtins", roc_modules.builtins);
+            lock_obj.root_module.addAnonymousImport("glue_abi", .{
+                .root_source_file = glue_abi_dir.path(b, "roc_platform_abi.zig"),
+            });
+            run_check_glue_abi_step.dependOn(&lock_obj.step);
+        }
+
+        const run_c_glue_abi = b.addRunArtifact(roc_exe);
+        run_c_glue_abi.addArgs(&.{ "glue", "--no-cache" });
+        run_c_glue_abi.addFileArg(b.path("src/glue/src/CGlue.roc"));
+        const c_glue_abi_dir = run_c_glue_abi.addOutputDirectoryArg("glue-c-abi");
+        run_c_glue_abi.addFileArg(b.path("test/glue/layout-probe/main.roc"));
+        run_c_glue_abi.has_side_effects = true;
+
+        const c_lock_targets = [_]struct { name: []const u8, triple: []const u8, simd128: bool }{
+            .{ .name = "x64_linux", .triple = "x86_64-linux-musl", .simd128 = false },
+            .{ .name = "arm64_linux", .triple = "aarch64-linux-musl", .simd128 = false },
+            .{ .name = "x64_macos", .triple = "x86_64-macos", .simd128 = false },
+            .{ .name = "arm64_macos", .triple = "aarch64-macos", .simd128 = false },
+            .{ .name = "x64_windows", .triple = "x86_64-windows-msvc", .simd128 = false },
+            .{ .name = "arm64_windows", .triple = "aarch64-windows-msvc", .simd128 = false },
+            .{ .name = "wasm32", .triple = "wasm32-freestanding", .simd128 = true },
+        };
+        for (c_lock_targets) |lock_target| {
+            const compile_c_lock = b.addSystemCommand(&.{
+                "zig",
+                "cc",
+                "-target",
+                lock_target.triple,
+                "-std=c11",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-c",
+            });
+            if (lock_target.simd128) compile_c_lock.addArg("-msimd128");
+            compile_c_lock.addArg("-I");
+            compile_c_lock.addDirectoryArg(c_glue_abi_dir);
+            compile_c_lock.addFileArg(b.path("test/glue/c_abi_compile_lock.c"));
+            compile_c_lock.addArg("-o");
+            _ = compile_c_lock.addOutputFileArg(b.fmt("c-abi-lock-{s}.o", .{lock_target.name}));
+            run_check_glue_abi_step.dependOn(&compile_c_lock.step);
+        }
+
+        const run_rust_glue_abi = b.addRunArtifact(roc_exe);
+        run_rust_glue_abi.addArgs(&.{ "glue", "--no-cache" });
+        run_rust_glue_abi.addFileArg(b.path("src/glue/src/RustGlue.roc"));
+        const rust_glue_abi_dir = run_rust_glue_abi.addOutputDirectoryArg("glue-rust-abi");
+        run_rust_glue_abi.addFileArg(b.path("test/glue/layout-probe/main.roc"));
+        run_rust_glue_abi.has_side_effects = true;
+
+        const native_rust_target: ?[]const u8 = switch (target.result.os.tag) {
+            .linux => switch (target.result.cpu.arch) {
+                .x86_64 => "x86_64-unknown-linux-musl",
+                .aarch64 => "aarch64-unknown-linux-musl",
+                else => null,
+            },
+            .macos => switch (target.result.cpu.arch) {
+                .x86_64 => "x86_64-apple-darwin",
+                .aarch64 => "aarch64-apple-darwin",
+                else => null,
+            },
+            .windows => switch (target.result.cpu.arch) {
+                .x86_64 => "x86_64-pc-windows-msvc",
+                .aarch64 => "aarch64-pc-windows-msvc",
+                else => null,
+            },
+            else => null,
+        };
+        const rust_lock_targets = [_]?struct { name: []const u8, triple: []const u8, simd128: bool }{
+            if (native_rust_target) |triple| .{ .name = "native", .triple = triple, .simd128 = false } else null,
+            .{ .name = "wasm32", .triple = "wasm32-unknown-unknown", .simd128 = true },
+        };
+        for (rust_lock_targets) |maybe_lock_target| {
+            const lock_target = maybe_lock_target orelse continue;
+            const compile_rust_lock = b.addSystemCommand(&.{
+                "rustc",
+                "--edition=2021",
+                "-D",
+                "warnings",
+                "--crate-type=lib",
+                "--emit=metadata",
+                "--cfg",
+                "no_roc_std_helpers",
+                "--target",
+                lock_target.triple,
+            });
+            if (lock_target.simd128) compile_rust_lock.addArgs(&.{ "-C", "target-feature=+simd128" });
+            compile_rust_lock.addFileArg(rust_glue_abi_dir.path(b, "roc_platform_abi.rs"));
+            compile_rust_lock.addArg("-o");
+            _ = compile_rust_lock.addOutputFileArg(b.fmt("rust-abi-lock-{s}.rmeta", .{lock_target.name}));
+            run_check_glue_abi_step.dependOn(&compile_rust_lock.step);
+        }
+    }
+
     var release_exe_for_llvm_embedded: ?*Step.Compile = null;
 
     // Release build with platform-optimal settings
@@ -2713,7 +3246,7 @@ pub fn build(b: *std.Build) void {
             .target = release_target,
             .optimize = .ReleaseFast,
         });
-        const release_exe = addMainExe(
+        const release_exe_result = addMainExe(
             b,
             roc_modules,
             release_target,
@@ -2728,9 +3261,12 @@ pub fn build(b: *std.Build) void {
             write_compiled_builtins,
             llvm_codegen_module,
             null, // No tracy
+            test_filters,
             false,
+            valgrind_support,
         );
-        if (release_exe) |exe| {
+        if (release_exe_result) |result| {
+            const exe = result.exe;
             roc_modules.addAll(exe);
             exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
             exe.step.dependOn(&write_compiled_builtins.step);
@@ -2739,21 +3275,6 @@ pub fn build(b: *std.Build) void {
             build_release_step.dependOn(&install.step);
         }
     }
-
-    // Unified test platform runner (replaces fx_cross_runner and int_cross_runner)
-    const test_runner_exe = b.addExecutable(.{
-        .name = "test_runner",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/cli/test/test_runner.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{},
-            // runner_core.zig uses std.c.{timespec,clock_gettime,environ}; Zig 0.16 requires
-            // explicit libc linkage for any module that touches std.c.
-            .link_libc = true,
-        }),
-    });
-    b.installArtifact(test_runner_exe);
 
     // Store CLI runner step reference so we can add glue host dependency later.
     var run_cli_test_step: ?*std.Build.Step = null;
@@ -2773,6 +3294,10 @@ pub fn build(b: *std.Build) void {
                 .imports = &.{
                     .{ .name = "test_harness", .module = createTestHarnessModule(b, roc_modules) },
                     .{ .name = "collections", .module = roc_modules.collections },
+                    .{ .name = "backend", .module = roc_modules.backend },
+                    .{ .name = "builtins", .module = roc_modules.builtins },
+                    .{ .name = "bytebox", .module = bytebox.module("bytebox") },
+                    .{ .name = "build_options", .module = roc_modules.build_options },
                 },
             }),
         });
@@ -2837,10 +3362,10 @@ pub fn build(b: *std.Build) void {
             .{ .name = "vendor_llvm_compile_bindings", .module = roc_modules.vendor_llvm_compile_bindings },
             .{ .name = "build_options", .module = roc_modules.build_options },
             .{ .name = "roc_target", .module = roc_modules.roc_target },
+            .{ .name = "builtins", .module = roc_modules.builtins },
             .{ .name = "embedded_lld", .module = roc_modules.embedded_lld },
         },
     });
-
     const builtins64_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm64, .os_tag = .freestanding, .abi = .none });
     const builtins64_bc_obj = b.addObject(.{
         .name = "roc_builtins64_bc",
@@ -3110,7 +3635,7 @@ pub fn build(b: *std.Build) void {
         exe.root_module.addImport("llvm_embedded", llvm_embedded_module);
     }
 
-    roc_modules.eval.addAnonymousImport("llvm_compile", .{
+    const llvm_compile_module = b.createModule(.{
         .root_source_file = b.path("src/llvm_compile/mod.zig"),
         .imports = &.{
             .{ .name = "collections", .module = roc_modules.collections },
@@ -3121,10 +3646,13 @@ pub fn build(b: *std.Build) void {
             .{ .name = "vendor_llvm_compile_bindings", .module = roc_modules.vendor_llvm_compile_bindings },
             .{ .name = "build_options", .module = roc_modules.build_options },
             .{ .name = "roc_target", .module = roc_modules.roc_target },
+            .{ .name = "builtins", .module = roc_modules.builtins },
             .{ .name = "llvm_embedded", .module = llvm_embedded_module },
             .{ .name = "embedded_lld", .module = roc_modules.embedded_lld },
         },
     });
+    roc_modules.eval.addImport("llvm_compile", llvm_compile_module);
+    roc_modules.glue.addImport("llvm_compile", llvm_compile_module);
 
     // Add snapshot tool
     const snapshot_exe = b.addExecutable(.{
@@ -3134,6 +3662,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .link_libc = true,
+            .valgrind = valgrind_support,
         }),
     });
     configureBackend(snapshot_exe, target);
@@ -3166,11 +3695,14 @@ pub fn build(b: *std.Build) void {
         run_snapshot_tool_step,
         run_args,
     );
-    const check_snapshot_diff = b.addSystemCommand(&.{ "git", "diff", "--exit-code", "test/snapshots" });
+    const check_snapshot_diff = CheckSnapshotDiffStep.create(b);
     check_snapshot_diff.step.dependOn(run_snapshot_tool_step);
     run_check_snapshots_step.dependOn(&check_snapshot_diff.step);
 
     // Add parallel eval test runner
+    const simd_test_sources_module = b.createModule(.{
+        .root_source_file = b.path("test/simd/eval_sources.zig"),
+    });
     const eval_test_exe = b.addExecutable(.{
         .name = "eval-test-runner",
         .root_module = b.createModule(.{
@@ -3194,6 +3726,7 @@ pub fn build(b: *std.Build) void {
     eval_test_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
     eval_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
     eval_test_exe.root_module.addImport("test_harness", createTestHarnessModule(b, roc_modules));
+    eval_test_exe.root_module.addImport("simd_test_sources", simd_test_sources_module);
     eval_test_exe.step.dependOn(&write_compiled_builtins.step);
     try addLlvmSupportToStep(
         b,
@@ -3211,6 +3744,7 @@ pub fn build(b: *std.Build) void {
     {
         eval_test_exe.root_module.link_libcpp = true;
     }
+    add_tracy(b, roc_modules.build_options, eval_test_exe, target, true, flag_enable_tracy);
     // Build eval runner args: forward all --test-filter values as --filter args.
     const eval_run_args = if (test_filters.len > 0) blk: {
         var eval_args_list = std.ArrayList([]const u8).empty;
@@ -3231,6 +3765,17 @@ pub fn build(b: *std.Build) void {
         run_test_eval_step,
         eval_run_args,
     );
+
+    const run_simd_eval = b.addRunArtifact(eval_test_exe);
+    run_simd_eval.addArgs(&.{
+        "--filter",
+        "SIMD full differential corpus",
+        "--threads",
+        "1",
+        "--timeout",
+        "900000",
+        "--llvm",
+    });
 
     const eval_host_effects_exe = b.addExecutable(.{
         .name = "eval-host-effects-runner",
@@ -3282,6 +3827,110 @@ pub fn build(b: *std.Build) void {
         run_test_eval_host_effects_step,
         eval_host_effects_run_args,
     );
+
+    const lambda_mono_differential_exe = b.addExecutable(.{
+        .name = "lambda-mono-differential-runner",
+        // Linux compiler targets use musl so Roc-produced binaries are portable.
+        // Keep this host-executed test runner portable too instead of requiring
+        // the host to provide musl's dynamic loader. Other hosts retain their
+        // platform's ordinary executable linkage.
+        .linkage = if (target.result.os.tag == .linux and target.result.abi.isMusl()) .static else null,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/eval/test/lambda_mono_differential_runner.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    // The tree evaluator and the deepest eval corpus programs both recurse;
+    // match the eval runner's generous stack.
+    lambda_mono_differential_exe.stack_size = 64 * 1024 * 1024;
+    configureBackend(lambda_mono_differential_exe, target);
+    roc_modules.addAll(lambda_mono_differential_exe);
+    lambda_mono_differential_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    lambda_mono_differential_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
+    lambda_mono_differential_exe.root_module.addImport("test_harness", createTestHarnessModule(b, roc_modules));
+    lambda_mono_differential_exe.root_module.addImport("simd_test_sources", simd_test_sources_module);
+    lambda_mono_differential_exe.root_module.addOptions("coverage_options", blk: {
+        const opts = b.addOptions();
+        opts.addOption(bool, "coverage", false);
+        break :blk opts;
+    });
+    lambda_mono_differential_exe.step.dependOn(&write_compiled_builtins.step);
+    try addLlvmSupportToStep(
+        b,
+        lambda_mono_differential_exe,
+        target,
+        use_system_llvm,
+        user_llvm_path,
+        roc_modules,
+        llvm_codegen_module,
+        llvm_embedded_module,
+        zstd,
+    );
+    if (lambda_mono_differential_exe.root_module.resolved_target.?.result.os.tag != .windows or
+        lambda_mono_differential_exe.root_module.resolved_target.?.result.abi != .msvc)
+    {
+        lambda_mono_differential_exe.root_module.link_libcpp = true;
+    }
+    const lambda_mono_differential_run_args = if (test_filters.len > 0) blk: {
+        var lm_args_list = std.ArrayList([]const u8).empty;
+        for (run_args) |arg| {
+            lm_args_list.append(b.allocator, arg) catch @panic("OOM");
+        }
+        for (test_filters) |f| {
+            lm_args_list.append(b.allocator, "--filter") catch @panic("OOM");
+            lm_args_list.append(b.allocator, f) catch @panic("OOM");
+        }
+        break :blk lm_args_list.toOwnedSlice(b.allocator) catch @panic("OOM");
+    } else run_args;
+    const lambda_mono_differential_install = install_and_run(
+        b,
+        no_bin,
+        lambda_mono_differential_exe,
+        build_test_lambda_mono_differential_step,
+        run_test_lambda_mono_differential_step,
+        lambda_mono_differential_run_args,
+    );
+
+    // One explicitly expensive proof gate owns every execution lane. Keep the
+    // commands sequential: each corpus is intentionally large, and running
+    // several compiler instances concurrently obscures failures and wastes RAM.
+    const run_simd_runtime_dev = b.addRunArtifact(roc_exe);
+    run_simd_runtime_dev.addArgs(&.{ "--opt=dev", "--no-cache", "test/simd/differential.roc" });
+    run_simd_runtime_dev.step.dependOn(build_test_hosts_step);
+
+    const run_simd_runtime_speed = b.addRunArtifact(roc_exe);
+    run_simd_runtime_speed.addArgs(&.{ "--opt=speed", "--no-cache", "test/simd/differential.roc" });
+    run_simd_runtime_speed.step.dependOn(&run_simd_runtime_dev.step);
+
+    const run_simd_ctfe = b.addRunArtifact(roc_exe);
+    run_simd_ctfe.addArgs(&.{ "test", "--opt=speed", "--no-cache", "test/simd/differential.roc" });
+    run_simd_ctfe.step.dependOn(&run_simd_runtime_speed.step);
+
+    run_simd_eval.step.dependOn(&run_simd_ctfe.step);
+
+    if (lambda_mono_differential_install) |install| {
+        // Evaluator tests compile temporary Roc programs beneath `.zig-cache`.
+        // Run the installed Lambda Mono runner so this final gate does not
+        // depend on a cache artifact surviving the preceding evaluator.
+        const run_simd_lambda_mono = b.addSystemCommand(&.{b.getInstallPath(.bin, lambda_mono_differential_exe.out_filename)});
+        run_simd_lambda_mono.addArgs(&.{
+            "--filter",
+            "SIMD full differential corpus",
+            "--threads",
+            "1",
+            "--timeout",
+            "900000",
+            "corpus-only",
+        });
+        run_simd_lambda_mono.addArgs(run_args);
+        run_simd_lambda_mono.step.dependOn(&install.step);
+        run_simd_lambda_mono.step.dependOn(&run_simd_eval.step);
+        run_test_simd_differential_step.dependOn(&run_simd_lambda_mono.step);
+    } else {
+        run_test_simd_differential_step.dependOn(&lambda_mono_differential_exe.step);
+    }
 
     const playground_exe = b.addExecutable(.{
         .name = "playground",
@@ -3353,6 +4002,27 @@ pub fn build(b: *std.Build) void {
         build_playground_step.dependOn(&echo_wasm_install.step);
         echo_wasm_step.dependOn(&echo_wasm_install.step);
 
+        // build-echo-wasm-archive: compress echo.wasm into echo.wasm.zst using
+        // the same zstd streaming compressor as `roc bundle` (src/bundle/).
+        const echo_wasm_archive_exe = b.addExecutable(.{
+            .name = "echo_wasm_archive",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/echo_platform/echo_wasm_archive.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        configureBackend(echo_wasm_archive_exe, target);
+        echo_wasm_archive_exe.root_module.addImport("bundle", roc_modules.bundle);
+        echo_wasm_archive_exe.root_module.addImport("build_options", roc_modules.build_options);
+        echo_wasm_archive_exe.root_module.linkLibrary(zstd.artifact("zstd"));
+
+        const echo_wasm_archive_cmd = b.addRunArtifact(echo_wasm_archive_exe);
+        echo_wasm_archive_cmd.addFileArg(echo_wasm.getEmittedBin());
+        const echo_wasm_archive_out = echo_wasm_archive_cmd.addOutputFileArg("echo.wasm.zst");
+        const echo_wasm_archive_install = b.addInstallFileWithDir(echo_wasm_archive_out, .lib, "echo.wasm.zst");
+        echo_wasm_archive_step.dependOn(&echo_wasm_archive_install.step);
+
         // Copy the echo platform www files alongside echo.wasm
         inline for (.{ "index.html", "app.js" }) |filename| {
             const install_file = b.addInstallFile(b.path("src/echo_platform/www/" ++ filename), "lib/" ++ filename);
@@ -3376,6 +4046,7 @@ pub fn build(b: *std.Build) void {
             }),
         });
         configureBackend(echo_native_exe, target);
+        echo_native_exe.root_module.addImport("build_options", roc_modules.build_options);
         echo_native_exe.root_module.addImport("compile", roc_modules.compile);
         echo_native_exe.root_module.addImport("check", roc_modules.check);
         echo_native_exe.root_module.addImport("eval", roc_modules.eval);
@@ -3410,12 +4081,39 @@ pub fn build(b: *std.Build) void {
         });
         configureBackend(echo_wasm_test_exe, target);
         echo_wasm_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
+        echo_wasm_test_exe.root_module.addImport("build_options", roc_modules.build_options);
 
         const run_test_echo_wasm_step = b.step("run-test-echo-wasm", "Run echo.wasm tutorial example through bytebox");
         const run_echo_wasm_test = b.addRunArtifact(echo_wasm_test_exe);
         // Ensure the wasm is built before the test runs.
         run_echo_wasm_test.step.dependOn(&echo_wasm_install.step);
         run_test_echo_wasm_step.dependOn(&run_echo_wasm_test.step);
+    }
+
+    {
+        const glue_release_exe = b.addExecutable(.{
+            .name = "glue_release",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/build/glue_release.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        configureBackend(glue_release_exe, target);
+        glue_release_exe.root_module.addImport("build_options", roc_modules.build_options);
+
+        const glue_release_cmd = b.addRunArtifact(glue_release_exe);
+        glue_release_cmd.addArg(glue_release_tag orelse "nightly-local");
+        const glue_release_dir = glue_release_cmd.addOutputDirectoryArg("glue-release");
+
+        const glue_release_install = b.addInstallDirectory(.{
+            .source_dir = glue_release_dir,
+            .install_dir = .prefix,
+            .install_subdir = "glue-release",
+        });
+        const clean_glue_release_install = RemoveDirTreeStep.create(b, b.getInstallPath(.prefix, "glue-release"));
+        glue_release_install.step.dependOn(&clean_glue_release_install.step);
+        build_glue_release_step.dependOn(&glue_release_install.step);
     }
 
     // Build playground integration tests - now enabled for all optimization modes.
@@ -3546,6 +4244,17 @@ pub fn build(b: *std.Build) void {
         build_wasm_list_builtin_app.step.dependOn(build_test_hosts_step);
         build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_list_builtin_app.step);
 
+        const build_wasm_builtin_routing_app = b.addRunArtifact(roc_exe);
+        build_wasm_builtin_routing_app.addArgs(&.{
+            "build",
+            "test/wasm/builtin_routing_static_lib_app.roc",
+            "--opt=dev",
+            "--target=wasm32",
+            "--output=test/wasm/builtin_routing_static_lib_app.wasm.a",
+        });
+        build_wasm_builtin_routing_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_builtin_routing_app.step);
+
         const build_wasm_single_variant_hosted_app = b.addRunArtifact(roc_exe);
         build_wasm_single_variant_hosted_app.addArgs(&.{
             "build",
@@ -3567,6 +4276,72 @@ pub fn build(b: *std.Build) void {
         });
         build_wasm_str_concat_join_app.step.dependOn(build_test_hosts_step);
         build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_str_concat_join_app.step);
+
+        // End-to-end cart gate for the minted-iterator `for`-loop drive. The
+        // size build covers the LLVM cart path, and the dev build covers wasm
+        // composite loop-state rebinding for recursive generated iterators.
+        const build_wasm_iter_for_app = b.addRunArtifact(roc_exe);
+        build_wasm_iter_for_app.addArgs(&.{
+            "build",
+            "test/wasm/iter_for_static_lib_app.roc",
+            "--opt=size",
+            "--target=wasm32",
+            "--output=test/wasm/iter_for_static_lib_app.wasm",
+        });
+        build_wasm_iter_for_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_iter_for_app.step);
+
+        const build_wasm_iter_for_dev_app = b.addRunArtifact(roc_exe);
+        build_wasm_iter_for_dev_app.addArgs(&.{
+            "build",
+            "test/wasm/iter_for_static_lib_app.roc",
+            "--opt=dev",
+            "--target=wasm32",
+            "--output=test/wasm/iter_for_static_lib_app_dev.wasm",
+        });
+        build_wasm_iter_for_dev_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_iter_for_dev_app.step);
+
+        // Dev-mode recursive iterator construction must converge at the
+        // explicit forced-dynamic representation tier.
+        const build_wasm_iter_recursive_concat_app = b.addRunArtifact(roc_exe);
+        build_wasm_iter_recursive_concat_app.addArgs(&.{
+            "build",
+            "test/wasm/iter_recursive_concat_static_lib_app.roc",
+            "--opt=dev",
+            "--target=wasm32",
+            "--output=test/wasm/iter_recursive_concat_static_lib_app.wasm",
+        });
+        build_wasm_iter_recursive_concat_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_iter_recursive_concat_app.step);
+
+        // Static-data hoisting gate: a constant list literal consumed via
+        // `.iter()` must materialize as static data and allocate nothing, so the
+        // whole minted chain (base list included) is zero-alloc on the cart path.
+        const build_wasm_iter_list_hoist_app = b.addRunArtifact(roc_exe);
+        build_wasm_iter_list_hoist_app.addArgs(&.{
+            "build",
+            "test/wasm/iter_list_hoist_static_lib_app.roc",
+            "--opt=size",
+            "--target=wasm32",
+            "--output=test/wasm/iter_list_hoist_static_lib_app.wasm",
+        });
+        build_wasm_iter_list_hoist_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_iter_list_hoist_app.step);
+
+        // Noiter twin: the same sums over plain list literals. The runner prints
+        // each cart's byte size, so the iter build minus this baseline is the
+        // minted-adapter premium tracked in CI (the fusion pass's target).
+        const build_wasm_iter_noiter_app = b.addRunArtifact(roc_exe);
+        build_wasm_iter_noiter_app.addArgs(&.{
+            "build",
+            "test/wasm/iter_for_noiter_static_lib_app.roc",
+            "--opt=size",
+            "--target=wasm32",
+            "--output=test/wasm/iter_for_noiter_static_lib_app.wasm",
+        });
+        build_wasm_iter_noiter_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_iter_noiter_app.step);
 
         const build_wasm_rc_cleanup_app = b.addRunArtifact(roc_exe);
         build_wasm_rc_cleanup_app.addArgs(&.{
@@ -3590,6 +4365,17 @@ pub fn build(b: *std.Build) void {
         build_wasm_rc_cleanup_model_list_app.step.dependOn(build_test_hosts_step);
         build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_rc_cleanup_model_list_app.step);
 
+        const build_wasm_boxed_model_update_app = b.addRunArtifact(roc_exe);
+        build_wasm_boxed_model_update_app.addArgs(&.{
+            "build",
+            "test/wasm/boxed_model_update_static_lib_app.roc",
+            "--opt=dev",
+            "--target=wasm32",
+            "--output=test/wasm/boxed_model_update_static_lib_app.wasm",
+        });
+        build_wasm_boxed_model_update_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_boxed_model_update_app.step);
+
         const wasm_test_exe = b.addExecutable(.{
             .name = "wasm_static_lib_test",
             .root_module = b.createModule(.{
@@ -3600,6 +4386,7 @@ pub fn build(b: *std.Build) void {
         });
         configureBackend(wasm_test_exe, target);
         wasm_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
+        wasm_test_exe.root_module.addImport("build_options", roc_modules.build_options);
 
         const install = b.addInstallArtifact(wasm_test_exe, .{});
         build_test_wasm_static_lib_runner_step.dependOn(&install.step);
@@ -3665,6 +4452,81 @@ pub fn build(b: *std.Build) void {
             run_wasm_str_concat_join_test.step.dependOn(build_test_wasm_static_lib_runner_step);
             run_test_wasm_static_lib_step.dependOn(&run_wasm_str_concat_join_test.step);
 
+            // Boot-and-play the minted-iterator `for`-loop cart; "ok" means every
+            // inlined `for` over append/map/concat/chained minted chains ran to
+            // completion with correct sums (i.e. the drive advanced its inner
+            // iterators and terminated). `--assert-alloc-balanced` also catches a
+            // per-step allocate/free leak in the drive.
+            const run_wasm_iter_for_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_iter_for_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/iter_for_static_lib_app.wasm",
+                "--expected",
+                "ok",
+                "--assert-alloc-balanced",
+                // Absolute-size ceiling: the un-fused minted cart is ~48 KB
+                // (premium ~18 KB over the noiter twin). This catches a gross
+                // size blowup; the premium itself is read from the two printed
+                // sizes and is the fusion pass's target, not a hard gate pre-fusion.
+                "--max-bytes",
+                "65536",
+            });
+            run_wasm_iter_for_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_iter_for_test.step);
+
+            const run_wasm_iter_recursive_concat_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_iter_recursive_concat_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/iter_recursive_concat_static_lib_app.wasm",
+                "--expected",
+                "ok",
+                "--assert-alloc-balanced",
+                // The fixed cart is ~542 KB. The prior unbounded generated
+                // callable expansion exceeded 815 KB before failing to lower.
+                "--max-bytes",
+                "600000",
+            });
+            run_wasm_iter_recursive_concat_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_iter_recursive_concat_test.step);
+
+            // Static-data hoisting: the constant list literal is materialized as
+            // static data, so the whole chain allocates nothing. `--max-allocs 0`
+            // is a strictly stronger assertion than `--assert-alloc-balanced`.
+            const run_wasm_iter_list_hoist_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_iter_list_hoist_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/iter_list_hoist_static_lib_app.wasm",
+                "--expected",
+                "ok",
+                "--max-allocs",
+                "0",
+            });
+            run_wasm_iter_list_hoist_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_iter_list_hoist_test.step);
+
+            const run_wasm_iter_for_dev_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_iter_for_dev_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/iter_for_static_lib_app_dev.wasm",
+                "--expected",
+                "ok",
+                "--assert-alloc-balanced",
+            });
+            run_wasm_iter_for_dev_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_iter_for_dev_test.step);
+
+            // Noiter twin — asserts correctness and prints its size so CI logs
+            // carry both numbers for premium tracking.
+            const run_wasm_iter_noiter_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_iter_noiter_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/iter_for_noiter_static_lib_app.wasm",
+                "--expected",
+                "ok",
+            });
+            run_wasm_iter_noiter_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_iter_noiter_test.step);
+
             const run_wasm_rc_cleanup_test = b.addRunArtifact(wasm_test_exe);
             run_wasm_rc_cleanup_test.addArgs(&.{
                 "--wasm-path",
@@ -3690,6 +4552,16 @@ pub fn build(b: *std.Build) void {
             });
             run_wasm_rc_cleanup_model_list_test.step.dependOn(build_test_wasm_static_lib_runner_step);
             run_test_wasm_static_lib_step.dependOn(&run_wasm_rc_cleanup_model_list_test.step);
+
+            const run_wasm_boxed_model_update_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_boxed_model_update_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/boxed_model_update_static_lib_app.wasm",
+                "--expected",
+                "ok",
+            });
+            run_wasm_boxed_model_update_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_boxed_model_update_test.step);
         }
         run_wasm_test.step.dependOn(build_test_wasm_static_lib_runner_step);
         run_test_wasm_static_lib_step.dependOn(&run_wasm_test.step);
@@ -3843,8 +4715,8 @@ pub fn build(b: *std.Build) void {
     }
 
     // Check fx platform test coverage convenience step
-    const checkfx_inner = CheckFxStep.create(b);
-    run_check_fx_platform_test_coverage_step.dependOn(&checkfx_inner.step);
+    const check_test_asset_coverage_inner = CheckTestAssetCoverageStep.create(b);
+    run_check_test_asset_coverage_step.dependOn(&check_test_asset_coverage_inner.step);
 
     const stack_overflow_test_helper_exe = b.addExecutable(.{
         .name = "stack_overflow_test_helper",
@@ -3872,12 +4744,83 @@ pub fn build(b: *std.Build) void {
         // Zig 0.16's Windows test runner IPC can time out while many Roc test
         // binaries are starting at once. Keep the same tests, but start them
         // in a deterministic order.
+        //
+        // Only the summary's own runs are chained. The public run-test-zig-*
+        // steps get separate, unchained runs via `TestSuiteRegistry`, so asking
+        // for one suite never drags in the whole chain -- see the note there.
         tests_summary.setRunSerialization();
     }
 
+    const test_suites = TestSuiteRegistry{
+        .b = b,
+        .summary = tests_summary,
+        .build_test_zig_step = build_test_zig_step,
+        .unit_test_runner = unit_test_runner,
+        .wiring_run = if (enumerate_tests_for_wiring_check) run_test_wiring else null,
+        .run_args = run_args,
+    };
+
+    if (main_exe_result.machine_code_shim_test) |machine_code_shim_test| {
+        test_suites.register(.{
+            .step_suffix = "machine-code-shim",
+            .description = "Run machine-code shim Zig tests",
+            .compile = machine_code_shim_test,
+        });
+    }
+
+    const guarded_list_violation_exe = b.addExecutable(.{
+        .name = "guarded_list_violation_test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/collections/guarded_list_violation_test.zig"),
+            .target = target,
+            .optimize = .Debug,
+            .link_libc = true,
+        }),
+    });
+    guarded_list_violation_exe.root_module.addImport("collections", roc_modules.collections);
+    guarded_list_violation_exe.root_module.addImport("check", roc_modules.check);
+    guarded_list_violation_exe.root_module.addImport("layout", roc_modules.layout);
+    guarded_list_violation_exe.root_module.addImport("lir", roc_modules.lir);
+    guarded_list_violation_exe.root_module.addImport("postcheck", roc_modules.postcheck);
+
+    const run_guarded_list_violations_step = b.step(
+        "run-test-guarded-list-violations",
+        "Run guarded-list expected-failure checks",
+    );
+    const guarded_list_violation_cases = [_]struct {
+        name: []const u8,
+        list_name: []const u8,
+    }{
+        .{ .name = "span_append_move", .list_name = "guarded_list_violation_test.values" },
+        .{ .name = "ptr_append_move", .list_name = "guarded_list_violation_test.values" },
+        .{ .name = "span_ensure_move", .list_name = "guarded_list_violation_test.values" },
+        .{ .name = "span_append_slice_move", .list_name = "guarded_list_violation_test.values" },
+        .{ .name = "span_restore_below_range", .list_name = "guarded_list_violation_test.values" },
+        .{ .name = "ptr_restore_below_index", .list_name = "guarded_list_violation_test.values" },
+        .{ .name = "span_clear", .list_name = "guarded_list_violation_test.values" },
+        .{ .name = "span_ownership_transfer", .list_name = "guarded_list_violation_test.values" },
+        .{ .name = "lir_proc_specs", .list_name = "LirStore.proc_specs" },
+        .{ .name = "lir_local_span", .list_name = "LirStore.local_ids" },
+        .{ .name = "lifted_fns", .list_name = "monotype_lifted.Program.fns" },
+        .{ .name = "lifted_expr_ids", .list_name = "monotype_lifted.Program.expr_ids" },
+        .{ .name = "mono_exprs", .list_name = "monotype.Program.exprs" },
+        .{ .name = "mono_type_spans", .list_name = "monotype.Type.Store.spans" },
+        .{ .name = "mono_type_fields", .list_name = "monotype.Type.Store.fields" },
+        .{ .name = "lambda_mono_expr_ids", .list_name = "lambda_mono.Program.expr_ids" },
+        .{ .name = "lambda_mono_type_spans", .list_name = "lambda_mono.Type.Store.spans" },
+    };
+    for (guarded_list_violation_cases) |case| {
+        const run_violation = b.addRunArtifact(guarded_list_violation_exe);
+        run_violation.addArg(case.name);
+        run_violation.expectStdErrMatch(b.fmt("guarded list invalidated: {s}", .{case.list_name}));
+        run_guarded_list_violations_step.dependOn(&run_violation.step);
+    }
+    build_test_zig_step.dependOn(&guarded_list_violation_exe.step);
+    run_test_zig_step.dependOn(run_guarded_list_violations_step);
+
     for (module_tests_result.tests) |module_test| {
         // Add compiled builtins to tests that canonicalize ordinary modules.
-        if (std.mem.eql(u8, module_test.test_step.name, "can") or std.mem.eql(u8, module_test.test_step.name, "check") or std.mem.eql(u8, module_test.test_step.name, "eval") or std.mem.eql(u8, module_test.test_step.name, "compile") or std.mem.eql(u8, module_test.test_step.name, "lsp_unit") or std.mem.eql(u8, module_test.test_step.name, "lsp_integration")) {
+        if (std.mem.eql(u8, module_test.test_step.name, "can") or std.mem.eql(u8, module_test.test_step.name, "check") or std.mem.eql(u8, module_test.test_step.name, "eval") or std.mem.eql(u8, module_test.test_step.name, "compile") or std.mem.eql(u8, module_test.test_step.name, "lsp") or std.mem.eql(u8, module_test.test_step.name, "lsp_unit") or std.mem.eql(u8, module_test.test_step.name, "lsp_integration")) {
             module_test.test_step.root_module.addImport("compiled_builtins", compiled_builtins_module);
             module_test.test_step.step.dependOn(&write_compiled_builtins.step);
         }
@@ -3913,6 +4856,7 @@ pub fn build(b: *std.Build) void {
             compile_build_module.addImport("unbundle", roc_modules.unbundle);
             compile_build_module.addImport("roc_target", roc_modules.roc_target);
             compile_build_module.addImport("compiled_builtins", compiled_builtins_module);
+            compile_build_module.addImport("compiler_platform_sources", roc_modules.compiler_platform_sources);
             module_test.test_step.root_module.addImport("compile_build", compile_build_module);
             try addLlvmSupportToStep(
                 b,
@@ -3950,33 +4894,24 @@ pub fn build(b: *std.Build) void {
             );
         }
 
-        if (run_args.len != 0) {
-            module_test.run_step.addArgs(run_args);
-        }
-        if (std.mem.eql(u8, module_test.test_step.name, "base")) {
-            module_test.run_step.step.dependOn(&install_stack_overflow_test_helper.step);
-        }
-
-        // Create individual test step for this module
         const test_exe_name = module_test.test_step.name;
-        const run_module_test_step = b.step(
-            b.fmt("run-test-zig-module-{s}", .{test_exe_name}),
-            b.fmt("Run {s} Zig module tests", .{test_exe_name}),
-        );
 
-        // Create run step that accepts command line args (including --test-filter)
-        const individual_run = b.addRunArtifact(module_test.test_step);
-        if (run_args.len != 0) {
-            individual_run.addArgs(run_args);
-        }
-        if (std.mem.eql(u8, module_test.test_step.name, "base")) {
-            individual_run.step.dependOn(&install_stack_overflow_test_helper.step);
-        }
-        run_module_test_step.dependOn(&individual_run.step);
+        // The `base` module's tests exec a helper binary, so it must be
+        // installed first. Hoisted into an explicitly typed local because
+        // peer-type resolution on an inline conditional slice literal inside a
+        // struct literal field is fragile.
+        const module_deps: []const *Step = if (std.mem.eql(u8, test_exe_name, "base"))
+            &.{&install_stack_overflow_test_helper.step}
+        else
+            &.{};
 
-        b.default_step.dependOn(&module_test.test_step.step);
-        build_test_zig_step.dependOn(&module_test.test_step.step);
-        tests_summary.addRun(&module_test.run_step.step);
+        test_suites.register(.{
+            .step_suffix = b.fmt("module-{s}", .{test_exe_name}),
+            .description = b.fmt("Run {s} Zig module tests", .{test_exe_name}),
+            .compile = module_test.test_step,
+            .deps = module_deps,
+            .default_step = true,
+        });
     }
 
     const lsp_integration_test_harness_module = createTestHarnessModule(b, roc_modules);
@@ -3998,7 +4933,7 @@ pub fn build(b: *std.Build) void {
     build_test_lsp_integration_runner_step.dependOn(&lsp_integration_runner_exe.step);
 
     const run_lsp_integration = b.addRunArtifact(lsp_integration_runner_exe);
-    run_lsp_integration.expectExitCode(0);
+    run_lsp_integration.stdio = .inherit;
     for (test_filters) |filter| {
         run_lsp_integration.addArg("--filter");
         run_lsp_integration.addArg(filter);
@@ -4016,6 +4951,114 @@ pub fn build(b: *std.Build) void {
     b.default_step.dependOn(&lsp_integration_runner_exe.step);
     build_test_zig_step.dependOn(&lsp_integration_runner_exe.step);
     run_test_zig_step.dependOn(&run_lsp_integration.step);
+
+    // Build-helper unit tests: test_harness.zig and stack_probe.zig are only
+    // consumed as module imports by executables, so they need their own test root.
+    const build_helpers_test = b.addTest(.{
+        .name = "build_helpers",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/build/helpers_test_root.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{
+                .{ .name = "collections", .module = roc_modules.collections },
+                .{ .name = "build_options", .module = roc_modules.build_options },
+            },
+        }),
+        .filters = test_filters,
+    });
+    test_suites.register(.{
+        .step_suffix = "build-helpers",
+        .description = "Run build-helper Zig unit tests",
+        .compile = build_helpers_test,
+    });
+
+    // CLI runner unit tests: parallel_cli_runner.zig is an executable root, so
+    // its test decls are only collected by this dedicated test compile.
+    const cli_runner_unit_test = b.addTest(.{
+        .name = "cli_runner_unit",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/cli/test/parallel_cli_runner.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{
+                .{ .name = "test_harness", .module = createTestHarnessModule(b, roc_modules) },
+                .{ .name = "collections", .module = roc_modules.collections },
+                .{ .name = "backend", .module = roc_modules.backend },
+                .{ .name = "bytebox", .module = bytebox.module("bytebox") },
+                .{ .name = "build_options", .module = roc_modules.build_options },
+            },
+        }),
+        .filters = test_filters,
+    });
+    test_suites.register(.{
+        .step_suffix = "cli-runner-unit",
+        .description = "Run CLI runner Zig unit tests",
+        .compile = cli_runner_unit_test,
+    });
+
+    // Tidy unit tests: ci/tidy.zig is an executable root, so like
+    // parallel_cli_runner.zig above its test decls need a dedicated test compile.
+    const tidy_unit_test = b.addTest(.{
+        .name = "tidy_unit",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("ci/tidy.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .filters = test_filters,
+    });
+    test_suites.register(.{
+        .step_suffix = "tidy-unit",
+        .description = "Run tidy Zig unit tests",
+        .compile = tidy_unit_test,
+    });
+
+    // LLVM backend aggregator test: src/backend/llvm/mod.zig is not the root of
+    // the llvm_codegen module, so its refAllDecls compile coverage needs its own
+    // test compile.
+    const backend_llvm_test = b.addTest(.{
+        .name = "backend_llvm",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/backend/llvm/mod.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{
+                .{ .name = "layout", .module = roc_modules.layout },
+                .{ .name = "lir", .module = roc_modules.lir },
+                .{ .name = "ctx", .module = roc_modules.ctx },
+                .{ .name = "builtins", .module = roc_modules.builtins },
+                .{ .name = "build_options", .module = roc_modules.build_options },
+                .{ .name = "roc_target", .module = roc_modules.roc_target },
+                .{ .name = "vendor_llvm_ir", .module = roc_modules.vendor_llvm_ir },
+            },
+        }),
+        .filters = test_filters,
+    });
+    try addLlvmSupportToStep(
+        b,
+        backend_llvm_test,
+        target,
+        use_system_llvm,
+        user_llvm_path,
+        roc_modules,
+        llvm_codegen_module,
+        llvm_embedded_module,
+        zstd,
+    );
+    if (backend_llvm_test.root_module.resolved_target.?.result.os.tag != .windows or
+        backend_llvm_test.root_module.resolved_target.?.result.abi != .msvc)
+    {
+        backend_llvm_test.root_module.link_libcpp = true;
+    }
+    test_suites.register(.{
+        .step_suffix = "backend-llvm",
+        .description = "Run LLVM backend aggregator Zig tests",
+        .compile = backend_llvm_test,
+    });
 
     // Add snapshot tool test
     const enable_snapshot_tests = b.option(bool, "snapshot-tests", "Enable snapshot tests") orelse true;
@@ -4051,22 +5094,21 @@ pub fn build(b: *std.Build) void {
         }
 
         add_tracy(b, roc_modules.build_options, snapshot_test, target, true, flag_enable_tracy);
-        build_test_zig_step.dependOn(&snapshot_test.step);
 
-        const run_snapshot_test = b.addRunArtifact(snapshot_test);
-        if (snapshot_exe_install) |install| {
-            run_snapshot_test.step.dependOn(&install.step);
-        }
-        if (run_args.len != 0) {
-            run_snapshot_test.addArgs(run_args);
-        }
-        tests_summary.addRun(&run_snapshot_test.step);
+        // The install step is optional, so hoist the dep list into a local with
+        // an explicit type: peer-type resolution on an inline
+        // `if (c) &.{x} else &.{}` inside a struct literal field is fragile.
+        const snapshot_deps: []const *Step = if (snapshot_exe_install) |install|
+            &.{&install.step}
+        else
+            &.{};
 
-        const run_snapshot_tool_test_step = b.step(
-            "run-test-zig-snapshot-tool",
-            "Run snapshot tool Zig tests",
-        );
-        run_snapshot_tool_test_step.dependOn(&run_snapshot_test.step);
+        test_suites.register(.{
+            .step_suffix = "snapshot-tool",
+            .description = "Run snapshot tool Zig tests",
+            .compile = snapshot_test,
+            .deps = snapshot_deps,
+        });
     }
 
     // Add Builtin.roc doc code-block tests. Verifies every ```roc block in
@@ -4105,20 +5147,12 @@ pub fn build(b: *std.Build) void {
             builtin_doc_test.root_module.link_libcpp = true;
         }
         add_tracy(b, roc_modules.build_options, builtin_doc_test, target, true, flag_enable_tracy);
-        build_test_zig_step.dependOn(&builtin_doc_test.step);
 
-        const run_builtin_doc_test = b.addRunArtifact(builtin_doc_test);
-        if (run_args.len != 0) {
-            run_builtin_doc_test.addArgs(run_args);
-        }
-
-        tests_summary.addRun(&run_builtin_doc_test.step);
-
-        const run_builtin_doc_test_step = b.step(
-            "run-test-zig-builtin-doc",
-            "Run Builtin.roc doc code-block Zig tests",
-        );
-        run_builtin_doc_test_step.dependOn(&run_builtin_doc_test.step);
+        test_suites.register(.{
+            .step_suffix = "builtin-doc",
+            .description = "Run Builtin.roc doc code-block Zig tests",
+            .compile = builtin_doc_test,
+        });
     }
 
     const lir_inline_test = b.addTest(.{
@@ -4151,20 +5185,12 @@ pub fn build(b: *std.Build) void {
         lir_inline_test.root_module.link_libcpp = true;
     }
     add_tracy(b, roc_modules.build_options, lir_inline_test, target, true, flag_enable_tracy);
-    build_test_zig_step.dependOn(&lir_inline_test.step);
 
-    const run_lir_inline_test = b.addRunArtifact(lir_inline_test);
-    if (run_args.len != 0) {
-        run_lir_inline_test.addArgs(run_args);
-    }
-
-    tests_summary.addRun(&run_lir_inline_test.step);
-
-    const run_lir_inline_test_step = b.step(
-        "run-test-zig-lir-inline",
-        "Run LIR inline Zig tests",
-    );
-    run_lir_inline_test_step.dependOn(&run_lir_inline_test.step);
+    test_suites.register(.{
+        .step_suffix = "lir-inline",
+        .description = "Run LIR inline Zig tests",
+        .compile = lir_inline_test,
+    });
 
     const trmc_lir_test = b.addTest(.{
         .name = "trmc_lir_test",
@@ -4196,20 +5222,12 @@ pub fn build(b: *std.Build) void {
         trmc_lir_test.root_module.link_libcpp = true;
     }
     add_tracy(b, roc_modules.build_options, trmc_lir_test, target, true, flag_enable_tracy);
-    build_test_zig_step.dependOn(&trmc_lir_test.step);
 
-    const run_trmc_lir_test = b.addRunArtifact(trmc_lir_test);
-    if (run_args.len != 0) {
-        run_trmc_lir_test.addArgs(run_args);
-    }
-
-    tests_summary.addRun(&run_trmc_lir_test.step);
-
-    const run_trmc_lir_test_step = b.step(
-        "run-test-zig-trmc-lir",
-        "Run TRMC LIR Zig tests",
-    );
-    run_trmc_lir_test_step.dependOn(&run_trmc_lir_test.step);
+    test_suites.register(.{
+        .step_suffix = "trmc-lir",
+        .description = "Run TRMC LIR Zig tests",
+        .compile = trmc_lir_test,
+    });
 
     // Add CLI test
     const enable_cli_tests = b.option(bool, "cli-tests", "Enable cli tests") orelse true;
@@ -4246,19 +5264,12 @@ pub fn build(b: *std.Build) void {
         add_tracy(b, roc_modules.build_options, cli_test, target, true, flag_enable_tracy);
         cli_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
         cli_test.step.dependOn(&write_compiled_builtins.step);
-        build_test_zig_step.dependOn(&cli_test.step);
 
-        const run_cli_test = b.addRunArtifact(cli_test);
-        if (run_args.len != 0) {
-            run_cli_test.addArgs(run_args);
-        }
-        tests_summary.addRun(&run_cli_test.step);
-
-        const run_cli_main_test_step = b.step(
-            "run-test-zig-cli-main",
-            "Run roc CLI main Zig tests",
-        );
-        run_cli_main_test_step.dependOn(&run_cli_test.step);
+        test_suites.register(.{
+            .step_suffix = "cli-main",
+            .description = "Run roc CLI main Zig tests",
+            .compile = cli_test,
+        });
     }
 
     // Add watch tests
@@ -4280,20 +5291,30 @@ pub fn build(b: *std.Build) void {
         // Link platform-specific libraries for file watching
         linkWatchPlatformLibs(watch_test, target);
 
-        build_test_zig_step.dependOn(&watch_test.step);
-
-        const run_watch_test = b.addRunArtifact(watch_test);
-        if (run_args.len != 0) {
-            run_watch_test.addArgs(run_args);
-        }
-        tests_summary.addRun(&run_watch_test.step);
-
-        const run_watch_cli_test_step = b.step(
-            "run-test-zig-watch-cli",
-            "Run watch command Zig tests",
-        );
-        run_watch_cli_test_step.dependOn(&run_watch_test.step);
+        test_suites.register(.{
+            .step_suffix = "watch-cli",
+            .description = "Run watch command Zig tests",
+            .compile = watch_test,
+        });
     }
+
+    // MiniCI output-filter tests.
+    test_suites.register(.{
+        .step_suffix = "minici",
+        .description = "Run MiniCI output-filter Zig tests",
+        .compile = b.addTest(.{
+            .name = "minici_test",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/build/minici.zig"),
+                .target = b.graph.host,
+                .optimize = .Debug,
+                .imports = &.{
+                    .{ .name = "build_options", .module = roc_modules.build_options },
+                },
+            }),
+            .filters = test_filters,
+        }),
+    });
 
     // Add check for forbidden patterns in type checker code
     const check_patterns = CheckTypeCheckerPatternsStep.create(b);
@@ -4310,6 +5331,9 @@ pub fn build(b: *std.Build) void {
     // Add check that deleted post-check output/remapping APIs do not reappear
     const check_postcheck_architecture = CheckPostcheckArchitectureStep.create(b);
     run_check_postcheck_architecture_step.dependOn(&check_postcheck_architecture.step);
+
+    const check_wasm_builtin_routing = CheckWasmBuiltinRoutingStep.create(b);
+    run_check_wasm_builtin_routing_step.dependOn(&check_wasm_builtin_routing.step);
 
     // Add check that semantic compiler stages do not recover missing data.
     const run_semantic_audit = ci_steps.SemanticAuditStep.create(b);
@@ -4340,12 +5364,11 @@ pub fn build(b: *std.Build) void {
     run_check_zig_format_step.dependOn(&check_fmt.step);
 
     // Parser code coverage with kcov
-    // Only supported on Linux ARM64 and macOS (kcov doesn't work on Windows)
-    // TODO ZIG 16: re-check if DWARF bug is fixed — may be able to enable x86_64 coverage
-    // Linux x86_64 is NOT supported due to Zig 0.15.2 generating invalid DWARF .debug_line
-    // sections that cause kcov to fail (see CoverageSummaryStep comments for details)
-    const is_linux_x86_64 = target.result.os.tag == .linux and target.result.cpu.arch == .x86_64;
-    const is_coverage_supported = (target.result.os.tag == .linux or target.result.os.tag == .macos) and !is_linux_x86_64;
+    // Only supported on Linux ARM64, matching CI's coverage runner. Other local
+    // targets still keep the run-coverage-parser step, but it reports unsupported
+    // instead of invoking a kcov binary that cannot trace reliably on that host.
+    const is_linux_arm64 = target.result.os.tag == .linux and target.result.cpu.arch == .aarch64;
+    const is_coverage_supported = is_linux_arm64;
     if (is_coverage_supported and isNativeishOrMusl(target)) {
         // Get the kcov dependency and build it from source
         // lazyDependency returns null on first pass; Zig re-runs build() after fetching
@@ -4442,6 +5465,7 @@ pub fn build(b: *std.Build) void {
                 eval_coverage_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
                 eval_coverage_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
                 eval_coverage_exe.root_module.addImport("test_harness", createTestHarnessModule(b, roc_modules));
+                eval_coverage_exe.root_module.addImport("simd_test_sources", simd_test_sources_module);
                 eval_coverage_exe.step.dependOn(&write_compiled_builtins.step);
                 try addLlvmSupportToStep(
                     b,
@@ -4538,7 +5562,7 @@ pub fn build(b: *std.Build) void {
                     std.debug.print("=" ** 60 ++ "\n", .{});
                     std.debug.print("COVERAGE NOT SUPPORTED\n", .{});
                     std.debug.print("=" ** 60 ++ "\n\n", .{});
-                    std.debug.print("kcov parser coverage is currently enabled only on Linux ARM64 and macOS targets with supported Zig DWARF.\n", .{});
+                    std.debug.print("kcov parser coverage is currently enabled only on Linux ARM64.\n", .{});
                     std.debug.print("Current platform: {s}\n\n", .{@tagName(builtin.target.os.tag)});
                     std.debug.print("=" ** 60 ++ "\n", .{});
                 }
@@ -4669,27 +5693,23 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
                 // util.buildIsolatedTestEnvMap touches std.c (Zig 0.16 requires explicit link_libc).
                 .link_libc = true,
+                .imports = &.{.{ .name = "test_harness", .module = createTestHarnessModule(b, roc_modules) }},
             }),
             .filters = test_filters,
         });
 
-        const run_fx_platform_test = b.addRunArtifact(fx_platform_test);
-        if (run_args.len != 0) {
-            run_fx_platform_test.addArgs(run_args);
-        }
-        build_test_zig_step.dependOn(&fx_platform_test.step);
-        // Ensure host library is copied AND fixed before running the test
-        run_fx_platform_test.step.dependOn(final_fx_host_step);
-        run_fx_platform_test.step.dependOn(final_static_data_platform_step);
-        // Ensure roc binary is built before running the test (tests invoke roc CLI)
-        run_fx_platform_test.step.dependOn(build_roc_step);
-        tests_summary.addRun(&run_fx_platform_test.step);
-
-        const run_fx_platform_zig_test_step = b.step(
-            "run-test-zig-fx-platform",
-            "Run fx platform Zig tests",
-        );
-        run_fx_platform_zig_test_step.dependOn(&run_fx_platform_test.step);
+        test_suites.register(.{
+            .step_suffix = "fx-platform",
+            .description = "Run fx platform Zig tests",
+            .compile = fx_platform_test,
+            .deps = &.{
+                // The host library must be copied AND fixed before the test runs.
+                final_fx_host_step,
+                final_static_data_platform_step,
+                // The tests shell out to the roc CLI.
+                build_roc_step,
+            },
+        });
 
         const http_host_target, const http_host_target_dir: ?[]const u8 = switch (target.result.os.tag) {
             .linux => switch (target.result.cpu.arch) {
@@ -4752,7 +5772,6 @@ pub fn build(b: *std.Build) void {
             const http_app_output = build_http_app.addPrefixedOutputFileArg("--output=", http_app_exe_name);
             build_http_app.addFileArg(b.path("test/http-headers/app.roc"));
             build_http_app.addFileInput(b.path("test/http-headers/platform/main.roc"));
-            build_http_app.addFileInput(b.path("test/http-headers/platform/Headers.roc"));
             build_http_app.step.dependOn(final_http_host_step);
             build_http_app.step.dependOn(build_roc_step);
             const install_http_app = b.addInstallBinFile(http_app_output, http_app_exe_name);
@@ -4765,35 +5784,24 @@ pub fn build(b: *std.Build) void {
                     .target = target,
                     .optimize = optimize,
                     .link_libc = true,
+                    .imports = &.{.{ .name = "test_harness", .module = createTestHarnessModule(b, roc_modules) }},
                 }),
                 .filters = test_filters,
             });
 
-            const run_http_header_decoder_platform_test = b.addRunArtifact(http_header_decoder_platform_test);
-            run_http_header_decoder_platform_test.setEnvironmentVariable("ROC_HTTP_HEADER_DECODER_PREBUILT_EXE", http_app_installed_path);
-            if (run_args.len != 0) {
-                run_http_header_decoder_platform_test.addArgs(run_args);
-            }
-            build_test_zig_step.dependOn(&http_header_decoder_platform_test.step);
-            run_http_header_decoder_platform_test.step.dependOn(final_http_host_step);
-            run_http_header_decoder_platform_test.step.dependOn(&install_http_app.step);
-            run_http_header_decoder_platform_test.step.dependOn(build_roc_step);
-
-            const run_http_header_decoder_platform_test_for_summary = b.addRunArtifact(http_header_decoder_platform_test);
-            run_http_header_decoder_platform_test_for_summary.setEnvironmentVariable("ROC_HTTP_HEADER_DECODER_PREBUILT_EXE", http_app_installed_path);
-            if (run_args.len != 0) {
-                run_http_header_decoder_platform_test_for_summary.addArgs(run_args);
-            }
-            run_http_header_decoder_platform_test_for_summary.step.dependOn(final_http_host_step);
-            run_http_header_decoder_platform_test_for_summary.step.dependOn(&install_http_app.step);
-            run_http_header_decoder_platform_test_for_summary.step.dependOn(build_roc_step);
-            tests_summary.addRun(&run_http_header_decoder_platform_test_for_summary.step);
-
-            const run_http_header_decoder_platform_zig_test_step = b.step(
-                "run-test-zig-http-header-decoder-platform",
-                "Run HTTP header Decoder platform Zig test",
-            );
-            run_http_header_decoder_platform_zig_test_step.dependOn(&run_http_header_decoder_platform_test.step);
+            test_suites.register(.{
+                .step_suffix = "http-header-decoder-platform",
+                .description = "Run HTTP header Decoder platform Zig test",
+                .compile = http_header_decoder_platform_test,
+                .deps = &.{
+                    final_http_host_step,
+                    &install_http_app.step,
+                    build_roc_step,
+                },
+                .env = &.{
+                    .{ .key = "ROC_HTTP_HEADER_DECODER_PREBUILT_EXE", .value = http_app_installed_path },
+                },
+            });
 
             const json_decoder_host_lib = createTestPlatformHostLib(
                 b,
@@ -4836,7 +5844,6 @@ pub fn build(b: *std.Build) void {
             const json_app_output = build_json_app.addPrefixedOutputFileArg("--output=", json_app_exe_name);
             build_json_app.addFileArg(b.path("test/json-decoder/app.roc"));
             build_json_app.addFileInput(b.path("test/json-decoder/platform/main.roc"));
-            build_json_app.addFileInput(b.path("test/json-decoder/platform/Json.roc"));
             build_json_app.step.dependOn(final_json_host_step);
             build_json_app.step.dependOn(build_roc_step);
             const install_json_app = b.addInstallBinFile(json_app_output, json_app_exe_name);
@@ -4854,7 +5861,6 @@ pub fn build(b: *std.Build) void {
             const json_camel_app_output = build_json_camel_app.addPrefixedOutputFileArg("--output=", json_camel_app_exe_name);
             build_json_camel_app.addFileArg(b.path("test/json-decoder/camel_app.roc"));
             build_json_camel_app.addFileInput(b.path("test/json-decoder/platform/main.roc"));
-            build_json_camel_app.addFileInput(b.path("test/json-decoder/platform/Json.roc"));
             build_json_camel_app.step.dependOn(final_json_host_step);
             build_json_camel_app.step.dependOn(build_roc_step);
             const install_json_camel_app = b.addInstallBinFile(json_camel_app_output, json_camel_app_exe_name);
@@ -4872,7 +5878,6 @@ pub fn build(b: *std.Build) void {
             const json_camel_direct_app_output = build_json_camel_direct_app.addPrefixedOutputFileArg("--output=", json_camel_direct_app_exe_name);
             build_json_camel_direct_app.addFileArg(b.path("test/json-decoder/camel_direct_app.roc"));
             build_json_camel_direct_app.addFileInput(b.path("test/json-decoder/platform/main.roc"));
-            build_json_camel_direct_app.addFileInput(b.path("test/json-decoder/platform/Json.roc"));
             build_json_camel_direct_app.step.dependOn(final_json_host_step);
             build_json_camel_direct_app.step.dependOn(build_roc_step);
             const install_json_camel_direct_app = b.addInstallBinFile(json_camel_direct_app_output, json_camel_direct_app_exe_name);
@@ -4885,113 +5890,28 @@ pub fn build(b: *std.Build) void {
                     .target = target,
                     .optimize = optimize,
                     .link_libc = true,
+                    .imports = &.{.{ .name = "test_harness", .module = createTestHarnessModule(b, roc_modules) }},
                 }),
                 .filters = test_filters,
             });
 
-            const run_json_decoder_platform_test = b.addRunArtifact(json_decoder_platform_test);
-            run_json_decoder_platform_test.setEnvironmentVariable("ROC_JSON_DECODER_PREBUILT_EXE", json_app_installed_path);
-            run_json_decoder_platform_test.setEnvironmentVariable("ROC_JSON_DECODER_CAMEL_PREBUILT_EXE", json_camel_app_installed_path);
-            run_json_decoder_platform_test.setEnvironmentVariable("ROC_JSON_DECODER_CAMEL_DIRECT_PREBUILT_EXE", json_camel_direct_app_installed_path);
-            if (run_args.len != 0) {
-                run_json_decoder_platform_test.addArgs(run_args);
-            }
-            build_test_zig_step.dependOn(&json_decoder_platform_test.step);
-            run_json_decoder_platform_test.step.dependOn(final_json_host_step);
-            run_json_decoder_platform_test.step.dependOn(&install_json_app.step);
-            run_json_decoder_platform_test.step.dependOn(&install_json_camel_app.step);
-            run_json_decoder_platform_test.step.dependOn(&install_json_camel_direct_app.step);
-            run_json_decoder_platform_test.step.dependOn(build_roc_step);
-
-            const run_json_decoder_platform_test_for_summary = b.addRunArtifact(json_decoder_platform_test);
-            run_json_decoder_platform_test_for_summary.setEnvironmentVariable("ROC_JSON_DECODER_PREBUILT_EXE", json_app_installed_path);
-            run_json_decoder_platform_test_for_summary.setEnvironmentVariable("ROC_JSON_DECODER_CAMEL_PREBUILT_EXE", json_camel_app_installed_path);
-            run_json_decoder_platform_test_for_summary.setEnvironmentVariable("ROC_JSON_DECODER_CAMEL_DIRECT_PREBUILT_EXE", json_camel_direct_app_installed_path);
-            if (run_args.len != 0) {
-                run_json_decoder_platform_test_for_summary.addArgs(run_args);
-            }
-            run_json_decoder_platform_test_for_summary.step.dependOn(final_json_host_step);
-            run_json_decoder_platform_test_for_summary.step.dependOn(&install_json_app.step);
-            run_json_decoder_platform_test_for_summary.step.dependOn(&install_json_camel_app.step);
-            run_json_decoder_platform_test_for_summary.step.dependOn(&install_json_camel_direct_app.step);
-            run_json_decoder_platform_test_for_summary.step.dependOn(build_roc_step);
-            tests_summary.addRun(&run_json_decoder_platform_test_for_summary.step);
-
-            const run_json_decoder_platform_zig_test_step = b.step(
-                "run-test-zig-json-decoder-platform",
-                "Run JSON Decoder platform Zig test",
-            );
-            run_json_decoder_platform_zig_test_step.dependOn(&run_json_decoder_platform_test.step);
-        }
-    }
-
-    // Build glue platform host at runtime for the native platform.
-    if (run_cli_test_step != null) {
-        if (isNativeishOrMusl(target)) {
-            // Determine the appropriate target for the glue platform host library.
-            // On Linux, we need to use musl explicitly because the platform's
-            // findHostLibrary looks for targets/x64musl/libhost.a.
-            const glue_host_target, const glue_host_target_dir: ?[]const u8 = switch (target.result.os.tag) {
-                .linux => switch (target.result.cpu.arch) {
-                    .x86_64 => .{ b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl }), "x64musl" },
-                    .aarch64 => .{ b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl }), "arm64musl" },
-                    else => .{ target, null },
+            test_suites.register(.{
+                .step_suffix = "json-decoder-platform",
+                .description = "Run JSON Decoder platform Zig test",
+                .compile = json_decoder_platform_test,
+                .deps = &.{
+                    final_json_host_step,
+                    &install_json_app.step,
+                    &install_json_camel_app.step,
+                    &install_json_camel_direct_app.step,
+                    build_roc_step,
                 },
-                .windows => switch (target.result.cpu.arch) {
-                    .x86_64 => .{ target, "x64win" },
-                    .aarch64 => .{ target, "arm64win" },
-                    else => .{ target, null },
+                .env = &.{
+                    .{ .key = "ROC_JSON_DECODER_PREBUILT_EXE", .value = json_app_installed_path },
+                    .{ .key = "ROC_JSON_DECODER_CAMEL_PREBUILT_EXE", .value = json_camel_app_installed_path },
+                    .{ .key = "ROC_JSON_DECODER_CAMEL_DIRECT_PREBUILT_EXE", .value = json_camel_direct_app_installed_path },
                 },
-                .macos => switch (target.result.cpu.arch) {
-                    .x86_64 => .{ target, "x64mac" },
-                    .aarch64 => .{ target, "arm64mac" },
-                    else => .{ target, null },
-                },
-                else => .{ target, null },
-            };
-
-            if (glue_host_target_dir) |target_dir| {
-                const glue_platform_host_lib = createTestPlatformHostLib(
-                    b,
-                    "glue_platform_host_runtime",
-                    "src/glue/platform/host.zig",
-                    glue_host_target,
-                    optimize,
-                    roc_modules,
-                    strip,
-                    omit_frame_pointer,
-                    .{ .uses_stack_handler = true },
-                );
-
-                // Add compiler modules to glue platform host for type extraction
-                glue_platform_host_lib.root_module.addImport("can", roc_modules.can);
-                glue_platform_host_lib.root_module.addImport("types", roc_modules.types);
-                glue_platform_host_lib.root_module.addImport("layout", roc_modules.layout);
-                glue_platform_host_lib.root_module.addImport("eval", roc_modules.eval);
-                glue_platform_host_lib.root_module.addImport("collections", roc_modules.collections);
-
-                // Copy to the target-specific directory
-                const copy_glue_host = b.addUpdateSourceFiles();
-                const glue_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
-                const target_path = b.pathJoin(&.{ "src/glue/platform/targets", target_dir, glue_host_filename });
-
-                // Ensure the target directory exists
-                const dir_path = b.pathJoin(&.{ "src/glue/platform/targets", target_dir });
-                std.Io.Dir.cwd().createDirPath(b.graph.io, dir_path) catch {};
-
-                copy_glue_host.addCopyFileToSource(glue_platform_host_lib.getEmittedBin(), target_path);
-
-                // Apply archive padding fix for non-Windows targets
-                const final_step: *Step = if (target.result.os.tag != .windows) blk: {
-                    const fix_target = FixArchivePaddingStep.create(b, target_path);
-                    fix_target.step.dependOn(&copy_glue_host.step);
-                    break :blk &fix_target.step;
-                } else &copy_glue_host.step;
-
-                if (run_cli_test_step) |cli_test_step| {
-                    cli_test_step.dependOn(final_step);
-                }
-            }
+            });
         }
     }
 
@@ -5038,6 +5958,103 @@ pub fn build(b: *std.Build) void {
             name,
         );
     }
+
+    // Last, so that every top-level step exists -- including the ones created
+    // inside addMainExe.
+    assertGranularTestStepsAreIsolated(b);
+}
+
+/// Configure-time guard: a public `run-test-zig-*` step must pull exactly the
+/// explicitly declared number of Zig test binaries into its graph. That is one
+/// by default; custom executable-backed runners declare zero below.
+///
+/// On Windows `TestsSummaryStep` chains its registered runs so that test
+/// binaries start one at a time. Pointing a granular step at the *same*
+/// `Step.Run` that the chain owns makes that step inherit the whole chain
+/// prefix: `run-test-zig-minici` (~11 std-only string-parsing tests, ~2s) once
+/// re-ran 41 unrelated binaries and took 441s, and MiniCI replayed that prefix
+/// once per affected job. `TestSuiteRegistry.register` makes that shape
+/// unrepresentable; this re-checks the finished graph in case a suite is ever
+/// wired up by hand instead.
+///
+/// The aggregate step is named exactly "run-test-zig" (no trailing hyphen), so
+/// the prefix test excludes it without needing an allowlist.
+fn assertGranularTestStepsAreIsolated(b: *std.Build) void {
+    var visited: std.AutoHashMapUnmanaged(*Step, void) = .empty;
+    defer visited.deinit(b.allocator);
+
+    for (b.top_level_steps.keys(), b.top_level_steps.values()) |name, tls| {
+        if (!std.mem.startsWith(u8, name, "run-test-zig-")) continue;
+
+        visited.clearRetainingCapacity();
+        var found: [4][]const u8 = undefined;
+        var found_len: usize = 0;
+        collectTestRuns(b, &tls.step, &visited, &found, &found_len);
+
+        const expected_len = expectedGranularZigTestBinaries(name);
+        if (found_len == expected_len) continue;
+
+        if (found_len == 0) {
+            std.debug.panic(
+                "build.zig: step \"{s}\" runs no Zig test binary; granular test steps " ++
+                    "must run exactly one unless they are an explicitly declared custom " ++
+                    "executable-backed runner.",
+                .{name},
+            );
+        } else if (expected_len == 0) {
+            std.debug.panic(
+                "build.zig: custom executable-backed step \"{s}\" unexpectedly also " ++
+                    "runs {d} Zig test binaries (first: {s}); update its wiring or its " ++
+                    "explicit declaration.",
+                .{ name, found_len, found[0] },
+            );
+        } else {
+            std.debug.panic(
+                "build.zig: step \"{s}\" runs at least {d} test binaries ({s}, {s}, ...). " ++
+                    "A granular run-test-zig-* step must run exactly one; wire the suite " ++
+                    "through TestSuiteRegistry.register rather than handing the summary's " ++
+                    "Step.Run to b.step().",
+                .{ name, found_len, found[0], found[1] },
+            );
+        }
+    }
+}
+
+/// Expected `Step.Compile` test producers beneath a granular test step.
+///
+/// The LSP integration suite is intentionally an ordinary executable: its own
+/// process-pool harness discovers and runs the integration specs. Keeping that
+/// exception explicit means a newly orphaned `run-test-zig-*` step cannot pass
+/// configuration merely because it reaches zero Zig test binaries.
+fn expectedGranularZigTestBinaries(name: []const u8) usize {
+    if (std.mem.eql(u8, name, "run-test-zig-module-lsp_integration")) return 0;
+    return 1;
+}
+
+/// Walks `step`'s transitive dependencies, recording the names of the test
+/// binaries executed along the way. Stops recording at `found.len` names; the
+/// caller only needs to know "more than one" and two names for its message.
+fn collectTestRuns(
+    b: *std.Build,
+    step: *Step,
+    visited: *std.AutoHashMapUnmanaged(*Step, void),
+    found: *[4][]const u8,
+    found_len: *usize,
+) void {
+    const gop = visited.getOrPut(b.allocator, step) catch @panic("OOM");
+    if (gop.found_existing) return;
+
+    if (step.id == .run) {
+        const run: *Step.Run = @fieldParentPtr("step", step);
+        if (run.producer) |producer| {
+            if (producer.kind.isTest() and found_len.* < found.len) {
+                found[found_len.*] = producer.name;
+                found_len.* += 1;
+            }
+        }
+    }
+
+    for (step.dependencies.items) |dep| collectTestRuns(b, dep, visited, found, found_len);
 }
 
 fn discoverBuiltinRocFiles(b: *std.Build) ![]const []const u8 {
@@ -5116,6 +6133,7 @@ fn add_fuzz_target(
     });
     configureBackend(repro_exe, target);
     repro_exe.root_module.addImport("fuzz_test", fuzz_obj.root_module);
+    repro_exe.root_module.addImport("build_options", roc_modules.build_options);
 
     _ = install_and_run(b, no_bin, repro_exe, build_repro_step, run_repro_step, run_args);
 
@@ -5226,6 +6244,11 @@ fn addMacosAflFuzzExe(
     return exe.getEmittedBin();
 }
 
+const MainExeResult = struct {
+    exe: *Step.Compile,
+    machine_code_shim_test: ?*Step.Compile,
+};
+
 fn addMainExe(
     b: *std.Build,
     roc_modules: modules.RocModules,
@@ -5241,8 +6264,10 @@ fn addMainExe(
     write_compiled_builtins: *Step.WriteFile,
     llvm_codegen_module: *std.Build.Module,
     flag_enable_tracy: ?[]const u8,
+    test_filters: []const []const u8,
     add_machine_code_shim_test: bool,
-) ?*Step.Compile {
+    valgrind_support: ?bool,
+) ?MainExeResult {
     const exe = b.addExecutable(.{
         .name = "roc",
         .root_module = b.createModule(.{
@@ -5252,6 +6277,7 @@ fn addMainExe(
             .strip = strip,
             .omit_frame_pointer = omit_frame_pointer,
             .link_libc = true,
+            .valgrind = valgrind_support,
         }),
     });
     // The in-process interpreter (used by `--opt=interpreter`) recurses Zig stack
@@ -5445,6 +6471,7 @@ fn addMainExe(
     machine_code_shim_lib.root_module.addObjectFile(builtins_obj.getEmittedBin());
     machine_code_shim_lib.bundle_compiler_rt = true;
 
+    var machine_code_shim_test_for_registry: ?*Step.Compile = null;
     if (add_machine_code_shim_test) {
         const machine_code_shim_test = b.addTest(.{
             .name = "machine_code_shim",
@@ -5454,6 +6481,7 @@ fn addMainExe(
                 .optimize = optimize,
                 .link_libc = true,
             }),
+            .filters = test_filters,
         });
         configureBackend(machine_code_shim_test, target);
         roc_modules.addAll(machine_code_shim_test);
@@ -5479,13 +6507,7 @@ fn addMainExe(
         machine_code_shim_test.root_module.addObject(machine_code_shim_test_host);
         machine_code_shim_test.bundle_compiler_rt = true;
         add_tracy(b, roc_modules.build_options, machine_code_shim_test, b.graph.host, false, flag_enable_tracy);
-
-        const run_machine_code_shim_test = b.addRunArtifact(machine_code_shim_test);
-        const run_machine_code_shim_test_step = b.step(
-            "run-test-zig-machine-code-shim",
-            "Run machine-code shim Zig tests",
-        );
-        run_machine_code_shim_test_step.dependOn(&run_machine_code_shim_test.step);
+        machine_code_shim_test_for_registry = machine_code_shim_test;
     }
 
     const install_machine_code_shim = b.addInstallArtifact(machine_code_shim_lib, .{});
@@ -5650,6 +6672,8 @@ fn addMainExe(
                     .single_threaded = true,
                 }),
             });
+            default_platform_runtime_obj.root_module.addImport("roc_str_view", roc_modules.roc_str_view);
+            default_platform_runtime_obj.root_module.addImport("shim_symbols", roc_modules.shim_symbols);
             default_platform_runtime_obj.root_module.stack_check = false;
             default_platform_runtime_obj.root_module.link_libc = false;
             default_platform_runtime_obj.bundle_compiler_rt = false;
@@ -5665,21 +6689,30 @@ fn addMainExe(
         }
     }
 
+    const use_bundled_deps = !use_system_llvm and user_llvm_path == null;
+
     const config = b.addOptions();
     config.addOption(bool, "llvm", true);
+    config.addOption(bool, "binaryen", use_bundled_deps);
     exe.root_module.addOptions("config", config);
     exe.root_module.addAnonymousImport("legal_details", .{ .root_source_file = b.path("legal_details") });
 
     const llvm_paths_exe = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return null;
     exe.root_module.addLibraryPath(.{ .cwd_relative = llvm_paths_exe.lib });
     exe.root_module.addIncludePath(.{ .cwd_relative = llvm_paths_exe.include });
+    if (use_bundled_deps) {
+        addStaticBinaryenOptionsToModule(exe.root_module);
+    }
     try addStaticLlvmOptionsToModule(exe.root_module);
 
     add_tracy(b, roc_modules.build_options, exe, target, true, tracy);
 
     exe.root_module.linkLibrary(zstd.artifact("zstd"));
 
-    return exe;
+    return .{
+        .exe = exe,
+        .machine_code_shim_test = machine_code_shim_test_for_registry,
+    };
 }
 
 fn install_and_run(
@@ -5755,6 +6788,7 @@ fn addLlvmSupportToStep(
             .{ .name = "vendor_llvm_compile_bindings", .module = roc_modules.vendor_llvm_compile_bindings },
             .{ .name = "build_options", .module = roc_modules.build_options },
             .{ .name = "roc_target", .module = roc_modules.roc_target },
+            .{ .name = "builtins", .module = roc_modules.builtins },
             .{ .name = "llvm_embedded", .module = llvm_embedded_module },
             .{ .name = "embedded_lld", .module = roc_modules.embedded_lld },
         },
@@ -5969,6 +7003,18 @@ fn addStaticLlvmOptionsToModule(mod: *std.Build.Module) !void {
         mod.linkSystemLibrary("uuid", .{});
         mod.linkSystemLibrary("ole32", .{});
     }
+}
+
+fn addStaticBinaryenOptionsToModule(mod: *std.Build.Module) void {
+    const link_static = std.Build.Module.LinkSystemLibraryOptions{
+        .preferred_link_mode = .static,
+        .search_strategy = .mode_first,
+    };
+    mod.addCSourceFile(.{
+        .file = .{ .cwd_relative = "src/build/zig_binaryen.cpp" },
+        .flags = &exe_cflags,
+    });
+    mod.linkSystemLibrary("binaryen", link_static);
 }
 
 const cpp_sources = [_][]const u8{

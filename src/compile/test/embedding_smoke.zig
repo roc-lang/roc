@@ -90,7 +90,8 @@ test "embedding API: full canonical sequence on simple_success app" {
     }
     try std.testing.expect(!coord.hasUserErrors());
 
-    // 4. Finalize must succeed (no HasUserErrors).
+    // 4. Finalization always publishes executable artifacts; diagnostics do
+    // not form a separate failure outcome.
     try coord.finalizeExecutableArtifacts();
     try std.testing.expect(!coord.hasUserErrors());
 
@@ -134,17 +135,18 @@ test "embedding API: full canonical sequence on simple_success app" {
         runtime_buffer.ptr,
         runtime_fba.end_index,
         &lowered.lir_result,
-        lowered.target_usize,
         entrypoints,
     );
 
-    // 8. View the image. With the const-correctness fix from this branch,
-    //    viewMappedImage now accepts `[*]align(1) const u8` so no
-    //    @constCast is needed on the buffer pointer.
+    // 8. View the image for the width it was lowered for. The image is
+    //    pointer-width independent, so the consumer supplies the target;
+    //    viewMappedImage accepts `[*]align(1) const u8` so no @constCast is
+    //    needed on the buffer pointer.
     const view = try lir.LirImage.viewMappedImage(
         image_header,
         runtime_buffer.ptr,
         runtime_fba.end_index,
+        lowered.target_usize,
     );
 
     // 9. Wire RocOps with empty hosted_fns (simple_success has no hosted-fn
@@ -164,7 +166,7 @@ test "embedding API: full canonical sequence on simple_success app" {
     _ = &hosted_fns;
 
     // 10. Initialize the interpreter and run the entrypoint.
-    var interp = try eval.LirInterpreter.init(gpa, &view.store, &view.layouts, &roc_ops);
+    var interp = try eval.LirInterpreter.init(gpa, &view.store, &view.layouts, &roc_ops, .preserve);
     defer interp.deinit();
 
     // simple_success has main! : () => {} — no args, returns unit.

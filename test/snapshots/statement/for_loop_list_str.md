@@ -36,7 +36,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "count")
 			(ty (name "U64")))
@@ -94,7 +94,7 @@ NO CHANGE
 				(e-block
 					(s-reassign
 						(p-assign (ident "counter_"))
-						(e-dispatch-call (method "plus") (constraint-fn-var 286)
+						(e-dispatch-call (method "plus") (constraint-fn-var 307)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "counter_"))))

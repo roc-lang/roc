@@ -11,90 +11,124 @@ type=expr
 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:1:15:1:17
-UNEXPECTED TOKEN IN TYPE ANNOTATION - record_builder.md:2:8:2:9
-UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:2:9:2:10
-UNEXPECTED TOKEN IN TYPE ANNOTATION - record_builder.md:3:8:3:9
-UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:3:9:3:10
+UNEXPECTED EXPRESSION SYNTAX - record_builder.md:1:15:1:17
+UNEXPECTED TYPE SYNTAX - record_builder.md:2:8:2:9
+UNEXPECTED EXPRESSION SYNTAX - record_builder.md:2:9:2:10
+UNEXPECTED TYPE SYNTAX - record_builder.md:3:8:3:9
+UNEXPECTED EXPRESSION SYNTAX - record_builder.md:3:9:3:10
 DECLARATION HAS NO VALUE - record_builder.md:2:5:2:9
 DECLARATION HAS NO VALUE - record_builder.md:3:5:3:9
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **<-** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
 
-**record_builder.md:1:15:1:17:**
-```roc
-{ Foo.Bar.baz <-
-```
-              ^^
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  { Foo.Bar.baz <-                                                          │
+ │                ‾‾                                                          │
+ └──────────────────────────────────────────────────── record_builder.md:1:15 ┘
 
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
 
-**UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **5** is not expected in a type annotation.
-Type annotations should contain types like _Str_, _Num a_, or _List U64_.
+    For example:
+        add(1, 2)
 
-**record_builder.md:2:8:2:9:**
-```roc
-    x: 5,
-```
-       ^
+    I found `<-` here.
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **,** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+┌────────────────────────┐
+│ UNEXPECTED TYPE SYNTAX ├─ I was parsing a type annotation, and this token ──┐
+└┬───────────────────────┘  cannot start a type here.                         │
+ │                                                                            │
+ │  x: 5,                                                                     │
+ │     ‾                                                                      │
+ └───────────────────────────────────────────────────── record_builder.md:2:8 ┘
 
-**record_builder.md:2:9:2:10:**
-```roc
-    x: 5,
-```
-        ^
+    Types can be type variables, uppercase type names, function types, tuples,
+    records, or tag unions.
 
+    For example:
+        List(U64)
 
-**UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **0** is not expected in a type annotation.
-Type annotations should contain types like _Str_, _Num a_, or _List U64_.
-
-**record_builder.md:3:8:3:9:**
-```roc
-    y: 0,
-```
-       ^
+    I found `5` here.
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **,** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  x: 5,                                                                     │
+ │      ‾                                                                     │
+ └───────────────────────────────────────────────────── record_builder.md:2:9 ┘
 
-**record_builder.md:3:9:3:10:**
-```roc
-    y: 0,
-```
-        ^
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
 
+    For example:
+        add(1, 2)
 
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**record_builder.md:2:5:2:9:**
-```roc
-    x: 5,
-```
-    ^^^^
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+┌────────────────────────┐
+│ UNEXPECTED TYPE SYNTAX ├─ I was parsing a type annotation, and this token ──┐
+└┬───────────────────────┘  cannot start a type here.                         │
+ │                                                                            │
+ │  y: 0,                                                                     │
+ │     ‾                                                                      │
+ └───────────────────────────────────────────────────── record_builder.md:3:8 ┘
 
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**record_builder.md:3:5:3:9:**
-```roc
-    y: 0,
-```
-    ^^^^
+    Types can be type variables, uppercase type names, function types, tuples,
+    records, or tag unions.
+
+    For example:
+        List(U64)
+
+    I found `0` here.
 
 
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  y: 0,                                                                     │
+ │      ‾                                                                     │
+ └───────────────────────────────────────────────────── record_builder.md:3:9 ┘
+
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
+
+
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  x: 5,                                                                     │
+ │  ‾‾‾‾                                                                      │
+ └───────────────────────────────────────────────────── record_builder.md:2:5 ┘
+
+    Add a value body here, or put hosted functions in a platform type mod so
+    they are published through the host boundary.
+
+
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  y: 0,                                                                     │
+ │  ‾‾‾‾                                                                      │
+ └───────────────────────────────────────────────────── record_builder.md:3:5 ┘
+
+    Add a value body here, or put hosted functions in a platform type mod so
+    they are published through the host boundary.
 
 # TOKENS
 ~~~zig
@@ -122,9 +156,9 @@ EndOfFile,
 {
 	Foo.Bar.baz
 	
-	x : 
+	x :
 	
-	y : 
+	y :
 	
 }
 ~~~

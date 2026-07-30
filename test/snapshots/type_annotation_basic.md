@@ -36,17 +36,17 @@ main! = |_| {
 # EXPECTED
 UNUSED VARIABLE - type_annotation_basic.md:21:5:21:9
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `pair` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_pair` to suppress this warning.
-The unused variable is declared here:
-**type_annotation_basic.md:21:5:21:9:**
-```roc
-    pair = combine(num, text)
-```
-    ^^^^
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `pair` is defined here and then never used. ────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  pair = combine(num, text)                                                 │
+ │  ‾‾‾‾                                                                      │
+ └───────────────────────────────────────────── type_annotation_basic.md:21:5 ┘
 
+    If you don't need this variable, prefix it with an underscore like `_pair`
+    to suppress this warning.
 
 # TOKENS
 ~~~zig
@@ -218,7 +218,7 @@ main! = |_| {
 		(e-lambda
 			(args
 				(p-assign (ident "n")))
-			(e-dispatch-call (method "plus") (constraint-fn-var 123)
+			(e-dispatch-call (method "plus") (constraint-fn-var 282)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "n"))))
@@ -236,20 +236,20 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "num"))
-					(e-call (constraint-fn-var 238)
+					(e-call (constraint-fn-var 311)
 						(e-lookup-local
 							(p-assign (ident "identity")))
 						(e-num (value "42"))))
 				(s-let
 					(p-assign (ident "text"))
-					(e-call (constraint-fn-var 257)
+					(e-call (constraint-fn-var 322)
 						(e-lookup-local
 							(p-assign (ident "identity")))
 						(e-string
 							(e-literal (string "hello")))))
 				(s-let
 					(p-assign (ident "pair"))
-					(e-call (constraint-fn-var 262)
+					(e-call (constraint-fn-var 327)
 						(e-lookup-local
 							(p-assign (ident "combine")))
 						(e-lookup-local
@@ -258,7 +258,7 @@ main! = |_| {
 							(p-assign (ident "text")))))
 				(s-let
 					(p-assign (ident "result"))
-					(e-call (constraint-fn-var 296)
+					(e-call (constraint-fn-var 335)
 						(e-lookup-local
 							(p-assign (ident "addOne")))
 						(e-num (value "5"))))

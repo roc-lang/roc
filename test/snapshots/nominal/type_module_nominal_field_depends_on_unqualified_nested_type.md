@@ -1,11 +1,11 @@
 # META
 ~~~ini
-description=Nominal type module whose field depends on an unqualified nested associated type declared in the same type module. This covers issue #9486's associated-definition arrangement.
-type=file:ModuleType.roc
+description=Nominal type mod whose field depends on an unqualified nested associated type declared in the same type mod. This covers issue #9486's associated-definition arrangement.
+type=file:ModType.roc
 ~~~
 # SOURCE
 ~~~roc
-ModuleType := {
+ModType := {
     field : InternalType,
 }.{
     InternalType := [Some, Other]
@@ -27,10 +27,10 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
-			(header (name "ModuleType")
+			(header (name "ModType")
 				(args))
 			(ty-record
 				(anno-record-field (name "field")
@@ -46,7 +46,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-ModuleType := {
+ModType := {
 	field : InternalType,
 }.{
 	InternalType := [Some, Other]
@@ -56,12 +56,12 @@ ModuleType := {
 ~~~clojure
 (can-ir
 	(s-nominal-decl
-		(ty-header (name "ModuleType"))
+		(ty-header (name "ModType"))
 		(ty-record
 			(field (field "field")
 				(ty-lookup (name "InternalType") (local)))))
 	(s-nominal-decl
-		(ty-header (name "ModuleType.InternalType"))
+		(ty-header (name "ModType.InternalType"))
 		(ty-tag-union
 			(ty-tag-name (name "Some"))
 			(ty-tag-name (name "Other")))))
@@ -71,9 +71,9 @@ ModuleType := {
 (inferred-types
 	(defs)
 	(type_decls
-		(nominal (type "ModuleType")
-			(ty-header (name "ModuleType")))
-		(nominal (type "ModuleType.InternalType")
-			(ty-header (name "ModuleType.InternalType"))))
+		(nominal (type "ModType")
+			(ty-header (name "ModType")))
+		(nominal (type "ModType.InternalType")
+			(ty-header (name "ModType.InternalType"))))
 	(expressions))
 ~~~

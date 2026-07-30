@@ -376,6 +376,7 @@ pub const ScopeMap = struct {
             .e_crash,
             .e_ellipsis,
             .e_anno_only,
+            .e_derived_method,
             .e_break,
             .e_bytes_literal,
             => {},
@@ -485,6 +486,7 @@ pub const ScopeMap = struct {
             },
             // Literal and other patterns don't introduce bindings
             .num_literal,
+            .num_from_numeral_literal,
             .small_dec_literal,
             .dec_literal,
             .frac_f32_literal,

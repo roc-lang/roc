@@ -11,9 +11,19 @@ else
 	"false"
 ~~~
 # EXPECTED
-NIL
+UNCONDITIONAL CONDITION - if_then_else_multiline_no_curlies.md:1:4:1:13
 # PROBLEMS
-NIL
+
+┌─────────────────────────┐
+│ UNCONDITIONAL CONDITION ├─ This if condition is known at compile time, so ──┐
+└┬────────────────────────┘  this conditional will always make the same       │
+ │                           choice.                                          │
+ │                                                                            │
+ │  if Bool.True                                                              │
+ │     ‾‾‾‾‾‾‾‾‾                                                              │
+ └────────────────────────────────── if_then_else_multiline_no_curlies.md:1:4 ┘
+
+
 # TOKENS
 ~~~zig
 KwIf,UpperIdent,NoSpaceDotUpperIdent,

@@ -41,17 +41,17 @@ UNCLOSED SINGLE QUOTE - unicode_single_quotes.md:16:5:16:9
 UNCLOSED SINGLE QUOTE - unicode_single_quotes.md:19:5:19:7
 INVALID ESCAPE SEQUENCE - unicode_single_quotes.md:22:2:23:1
 UNCLOSED SINGLE QUOTE - unicode_single_quotes.md:22:1:22:3
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:5:5:5:9
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:6:5:6:10
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:7:5:7:10
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:8:5:8:11
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:10:5:10:17
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:11:5:11:12
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:14:5:14:7
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:15:5:15:11
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:16:5:16:9
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:19:5:19:7
-PARSE ERROR - unicode_single_quotes.md:22:1:22:3
+UNEXPECTED EXPRESSION SYNTAX - unicode_single_quotes.md:5:5:5:9
+UNEXPECTED EXPRESSION SYNTAX - unicode_single_quotes.md:6:5:6:10
+UNEXPECTED EXPRESSION SYNTAX - unicode_single_quotes.md:7:5:7:10
+UNEXPECTED EXPRESSION SYNTAX - unicode_single_quotes.md:8:5:8:11
+UNEXPECTED EXPRESSION SYNTAX - unicode_single_quotes.md:10:5:10:17
+UNEXPECTED EXPRESSION SYNTAX - unicode_single_quotes.md:11:5:11:12
+UNEXPECTED EXPRESSION SYNTAX - unicode_single_quotes.md:14:5:14:7
+UNEXPECTED EXPRESSION SYNTAX - unicode_single_quotes.md:15:5:15:11
+UNEXPECTED EXPRESSION SYNTAX - unicode_single_quotes.md:16:5:16:9
+UNEXPECTED EXPRESSION SYNTAX - unicode_single_quotes.md:19:5:19:7
+UNEXPECTED STATEMENT - unicode_single_quotes.md:22:1:22:3
 INVALID TUPLE ELEMENT - :0:0:0:0
 INVALID TUPLE ELEMENT - :0:0:0:0
 INVALID TUPLE ELEMENT - :0:0:0:0
@@ -63,284 +63,378 @@ INVALID TUPLE ELEMENT - :0:0:0:0
 INVALID TUPLE ELEMENT - :0:0:0:0
 UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 # PROBLEMS
-**INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
 
-**unicode_single_quotes.md:5:6:5:8:**
-```roc
-    '\u',
-```
-     ^^
+┌─────────────────────────────────┐
+│ INVALID UNICODE ESCAPE SEQUENCE ├─ This Unicode escape sequence is not ─────┐
+└┬────────────────────────────────┘  valid.                                   │
+ │                                                                            │
+ │  '\u',                                                                     │
+ │   ‾‾                                                                       │
+ └────────────────────────────────────────────── unicode_single_quotes.md:5:6 ┘
 
 
-**INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
 
-**unicode_single_quotes.md:6:6:6:8:**
-```roc
-    '\u)',
-```
-     ^^
+┌─────────────────────────────────┐
+│ INVALID UNICODE ESCAPE SEQUENCE ├─ This Unicode escape sequence is not ─────┐
+└┬────────────────────────────────┘  valid.                                   │
+ │                                                                            │
+ │  '\u)',                                                                    │
+ │   ‾‾                                                                       │
+ └────────────────────────────────────────────── unicode_single_quotes.md:6:6 ┘
 
 
-**INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
 
-**unicode_single_quotes.md:7:6:7:9:**
-```roc
-    '\u(',
-```
-     ^^^
+┌─────────────────────────────────┐
+│ INVALID UNICODE ESCAPE SEQUENCE ├─ This Unicode escape sequence is not ─────┐
+└┬────────────────────────────────┘  valid.                                   │
+ │                                                                            │
+ │  '\u(',                                                                    │
+ │   ‾‾‾                                                                      │
+ └────────────────────────────────────────────── unicode_single_quotes.md:7:6 ┘
 
 
-**INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
 
-**unicode_single_quotes.md:8:6:8:10:**
-```roc
-    '\u()',
-```
-     ^^^^
+┌─────────────────────────────────┐
+│ INVALID UNICODE ESCAPE SEQUENCE ├─ This Unicode escape sequence is not ─────┐
+└┬────────────────────────────────┘  valid.                                   │
+ │                                                                            │
+ │  '\u()',                                                                   │
+ │   ‾‾‾‾                                                                     │
+ └────────────────────────────────────────────── unicode_single_quotes.md:8:6 ┘
 
 
-**INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
 
-**unicode_single_quotes.md:10:6:10:16:**
-```roc
-    '\u(EDA0B5)'
-```
-     ^^^^^^^^^^
+┌─────────────────────────────────┐
+│ INVALID UNICODE ESCAPE SEQUENCE ├─ This Unicode escape sequence is not ─────┐
+└┬────────────────────────────────┘  valid.                                   │
+ │                                                                            │
+ │  '\u(EDA0B5)'                                                              │
+ │   ‾‾‾‾‾‾‾‾‾‾                                                               │
+ └───────────────────────────────────────────── unicode_single_quotes.md:10:6 ┘
 
 
-**INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
 
-**unicode_single_quotes.md:11:6:11:11:**
-```roc
-    '\u(K)',
-```
-     ^^^^^
+┌─────────────────────────────────┐
+│ INVALID UNICODE ESCAPE SEQUENCE ├─ This Unicode escape sequence is not ─────┐
+└┬────────────────────────────────┘  valid.                                   │
+ │                                                                            │
+ │  '\u(K)',                                                                  │
+ │   ‾‾‾‾‾                                                                    │
+ └───────────────────────────────────────────── unicode_single_quotes.md:11:6 ┘
 
 
-**SINGLE QUOTE EMPTY**
-Single-quoted literals must contain exactly one valid UTF-8 codepoint.
 
-**unicode_single_quotes.md:14:5:14:7:**
-```roc
-    '',
-```
-    ^^
+┌────────────────────┐
+│ SINGLE QUOTE EMPTY ├─ Single-quoted literals must contain exactly one ──────┐
+└┬───────────────────┘  valid UTF-8 codepoint.                                │
+ │                                                                            │
+ │  '',                                                                       │
+ │  ‾‾                                                                        │
+ └───────────────────────────────────────────── unicode_single_quotes.md:14:5 ┘
 
 
-**SINGLE QUOTE TOO LONG**
-Single-quoted literals must contain exactly one valid UTF-8 codepoint.
 
-**unicode_single_quotes.md:15:5:15:11:**
-```roc
-    'long',
-```
-    ^^^^^^
+┌───────────────────────┐
+│ SINGLE QUOTE TOO LONG ├─ Single-quoted literals must contain exactly one ───┐
+└┬──────────────────────┘  valid UTF-8 codepoint.                             │
+ │                                                                            │
+ │  'long',                                                                   │
+ │  ‾‾‾‾‾‾                                                                    │
+ └───────────────────────────────────────────── unicode_single_quotes.md:15:5 ┘
 
 
-**UNCLOSED SINGLE QUOTE**
-This single-quoted literal is missing a closing quote.
 
-**unicode_single_quotes.md:16:5:16:9:**
-```roc
-    '\',
-```
-    ^^^^
+┌───────────────────────┐
+│ UNCLOSED SINGLE QUOTE ├─ This single-quoted literal is missing a closing ───┐
+└┬──────────────────────┘  quote.                                             │
+ │                                                                            │
+ │  '\',                                                                      │
+ │  ‾‾‾‾                                                                      │
+ └───────────────────────────────────────────── unicode_single_quotes.md:16:5 ┘
 
 
-**UNCLOSED SINGLE QUOTE**
-This single-quoted literal is missing a closing quote.
 
-**unicode_single_quotes.md:19:5:19:7:**
-```roc
-y = 'u
-```
-    ^^
+┌───────────────────────┐
+│ UNCLOSED SINGLE QUOTE ├─ This single-quoted literal is missing a closing ───┐
+└┬──────────────────────┘  quote.                                             │
+ │                                                                            │
+ │  y = 'u                                                                    │
+ │      ‾‾                                                                    │
+ └───────────────────────────────────────────── unicode_single_quotes.md:19:5 ┘
 
 
-**INVALID ESCAPE SEQUENCE**
-This escape sequence is not recognized.
 
-**unicode_single_quotes.md:22:2:23:1:**
-```roc
-'\
+┌─────────────────────────┐
+│ INVALID ESCAPE SEQUENCE ├─ This escape sequence is not recognized. ─────────┐
+└┬────────────────────────┘                                                   │
+ │                                                                            │
+ │  '\                                                                        │
+ │                                                                            │
+ │                                                                            │
+ └───────────────────────────────────────────── unicode_single_quotes.md:22:2 ┘
 
-```
 
 
-**UNCLOSED SINGLE QUOTE**
-This single-quoted literal is missing a closing quote.
+┌───────────────────────┐
+│ UNCLOSED SINGLE QUOTE ├─ This single-quoted literal is missing a closing ───┐
+└┬──────────────────────┘  quote.                                             │
+ │                                                                            │
+ │  '\                                                                        │
+ │  ‾‾                                                                        │
+ └───────────────────────────────────────────── unicode_single_quotes.md:22:1 ┘
 
-**unicode_single_quotes.md:22:1:22:3:**
-```roc
-'\
-```
-^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **'\u'** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  '\u',                                                                     │
+ │  ‾‾‾‾                                                                      │
+ └────────────────────────────────────────────── unicode_single_quotes.md:5:5 ┘
 
-**unicode_single_quotes.md:5:5:5:9:**
-```roc
-    '\u',
-```
-    ^^^^
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
 
+    For example:
+        add(1, 2)
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **'\u)'** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+    I found `'\u'` here.
 
-**unicode_single_quotes.md:6:5:6:10:**
-```roc
-    '\u)',
-```
-    ^^^^^
 
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  '\u)',                                                                    │
+ │  ‾‾‾‾‾                                                                     │
+ └────────────────────────────────────────────── unicode_single_quotes.md:6:5 ┘
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **'\u('** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
 
-**unicode_single_quotes.md:7:5:7:10:**
-```roc
-    '\u(',
-```
-    ^^^^^
+    For example:
+        add(1, 2)
 
+    I found `'\u)'` here.
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **'\u()'** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
 
-**unicode_single_quotes.md:8:5:8:11:**
-```roc
-    '\u()',
-```
-    ^^^^^^
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  '\u(',                                                                    │
+ │  ‾‾‾‾‾                                                                     │
+ └────────────────────────────────────────────── unicode_single_quotes.md:7:5 ┘
 
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **'\u(EDA0B5)'** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+    For example:
+        add(1, 2)
 
-**unicode_single_quotes.md:10:5:10:17:**
-```roc
-    '\u(EDA0B5)'
-```
-    ^^^^^^^^^^^^
+    I found `'\u('` here.
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **'\u(K)'** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  '\u()',                                                                   │
+ │  ‾‾‾‾‾‾                                                                    │
+ └────────────────────────────────────────────── unicode_single_quotes.md:8:5 ┘
 
-**unicode_single_quotes.md:11:5:11:12:**
-```roc
-    '\u(K)',
-```
-    ^^^^^^^
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
 
+    For example:
+        add(1, 2)
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **''** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+    I found `'\u()'` here.
 
-**unicode_single_quotes.md:14:5:14:7:**
-```roc
-    '',
-```
-    ^^
 
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  '\u(EDA0B5)'                                                              │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
+ └───────────────────────────────────────────── unicode_single_quotes.md:10:5 ┘
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **'long'** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
 
-**unicode_single_quotes.md:15:5:15:11:**
-```roc
-    'long',
-```
-    ^^^^^^
+    For example:
+        add(1, 2)
 
+    I found `'\u(EDA0B5)'` here.
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **'\',** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
 
-**unicode_single_quotes.md:16:5:16:9:**
-```roc
-    '\',
-```
-    ^^^^
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  '\u(K)',                                                                  │
+ │  ‾‾‾‾‾‾‾                                                                   │
+ └───────────────────────────────────────────── unicode_single_quotes.md:11:5 ┘
 
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **'u** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+    For example:
+        add(1, 2)
 
-**unicode_single_quotes.md:19:5:19:7:**
-```roc
-y = 'u
-```
-    ^^
+    I found `'\u(K)'` here.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  '',                                                                       │
+ │  ‾‾                                                                        │
+ └───────────────────────────────────────────── unicode_single_quotes.md:14:5 ┘
 
-**unicode_single_quotes.md:22:1:22:3:**
-```roc
-'\
-```
-^^
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
 
+    For example:
+        add(1, 2)
 
-**INVALID TUPLE ELEMENT**
+    I found `''` here.
+
+
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  'long',                                                                   │
+ │  ‾‾‾‾‾‾                                                                    │
+ └───────────────────────────────────────────── unicode_single_quotes.md:15:5 ┘
+
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `'long'` here.
+
+
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  '\',                                                                      │
+ │  ‾‾‾‾                                                                      │
+ └───────────────────────────────────────────── unicode_single_quotes.md:16:5 ┘
+
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `'\',` here.
+
+
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  y = 'u                                                                    │
+ │      ‾‾                                                                    │
+ └───────────────────────────────────────────── unicode_single_quotes.md:19:5 ┘
+
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `'u` here.
+
+
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  '\                                                                        │
+ │  ‾‾                                                                        │
+ └───────────────────────────────────────────── unicode_single_quotes.md:22:1 ┘
+
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `'\` here.
+
+
+INVALID TUPLE ELEMENT
+
 This tuple element is malformed or contains invalid syntax.
 
-**INVALID TUPLE ELEMENT**
+
+
+INVALID TUPLE ELEMENT
+
 This tuple element is malformed or contains invalid syntax.
 
-**INVALID TUPLE ELEMENT**
+
+
+INVALID TUPLE ELEMENT
+
 This tuple element is malformed or contains invalid syntax.
 
-**INVALID TUPLE ELEMENT**
+
+
+INVALID TUPLE ELEMENT
+
 This tuple element is malformed or contains invalid syntax.
 
-**INVALID TUPLE ELEMENT**
+
+
+INVALID TUPLE ELEMENT
+
 This tuple element is malformed or contains invalid syntax.
 
-**INVALID TUPLE ELEMENT**
+
+
+INVALID TUPLE ELEMENT
+
 This tuple element is malformed or contains invalid syntax.
 
-**INVALID TUPLE ELEMENT**
+
+
+INVALID TUPLE ELEMENT
+
 This tuple element is malformed or contains invalid syntax.
 
-**INVALID TUPLE ELEMENT**
+
+
+INVALID TUPLE ELEMENT
+
 This tuple element is malformed or contains invalid syntax.
 
-**INVALID TUPLE ELEMENT**
+
+
+INVALID TUPLE ELEMENT
+
 This tuple element is malformed or contains invalid syntax.
 
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
 
-**unicode_single_quotes.md:19:5:19:7:**
-```roc
-y = 'u
-```
-    ^^
 
-This might be a syntax error, an unsupported language feature, or a typo.
+┌─────────────────────┐
+│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
+└┬────────────────────┘                                                       │
+ │                                                                            │
+ │  y = 'u                                                                    │
+ │      ‾‾                                                                    │
+ └───────────────────────────────────────────── unicode_single_quotes.md:19:5 ┘
+
+    This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig
@@ -368,7 +462,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "x"))
@@ -395,25 +489,9 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-x = (
-	'a',
-	'é',
-	'🚀',
-	,
-	,
-	,
-	,
-	'\u(1F680)',
-	,
-	,
-	'\\',
-	'\'',
-	,
-	,
-	,
-)
+x = ('a', 'é', '🚀', , , , , '\u(1F680)', , , '\\', '\'', , , )
 
-y = 
+y =
 
 # Test backslash before EOF
 ~~~
@@ -422,23 +500,7 @@ y =
 (can-ir
 	(d-let
 		(p-assign (ident "x"))
-		(e-tuple
-			(elems
-				(e-num (value "97"))
-				(e-num (value "233"))
-				(e-num (value "128640"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-num (value "128640"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-num (value "92"))
-				(e-num (value "39"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "y"))
 		(e-runtime-error (tag "expr_not_canonicalized"))))

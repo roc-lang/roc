@@ -15,17 +15,18 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - test_instantiated_arg_mismatch.md:5:14:5:21
 # PROBLEMS
-**TYPE MISMATCH**
-This string literal is being used where a non-string type is needed:
-**test_instantiated_arg_mismatch.md:5:14:5:21:**
-```roc
-    pair(42, "hello")
-```
-             ^^^^^^^
 
-The type was determined to be:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
+└┬──────────────┘  type is needed.                                            │
+ │                                                                            │
+ │  pair(42, "hello")                                                         │
+ │           ‾‾‾‾‾‾‾                                                          │
+ └──────────────────────────────────── test_instantiated_arg_mismatch.md:5:14 ┘
 
-    Dec
+    The type was determined to be:
+
+        Dec
 
 # TOKENS
 ~~~zig
@@ -86,12 +87,11 @@ EndOfFile,
 						(p-assign (ident "x")))
 					(e-lookup-local
 						(p-assign (ident "y")))))))
-	(e-call (constraint-fn-var 83)
+	(e-call (constraint-fn-var 233)
 		(e-lookup-local
 			(p-assign (ident "pair")))
 		(e-num (value "42"))
-		(e-string
-			(e-literal (string "hello")))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

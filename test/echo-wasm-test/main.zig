@@ -4,9 +4,10 @@
 //! functions that capture output into in-process buffers, and drives the
 //! exported API (init / allocateBuffer / addFile / compileAndRun) the same
 //! way `www/app.js` does. Validates that the tutorial example produces
-//! "Hello from the Greeting module!" as its single echo line.
+//! "Hello from the Greeting module!" as raw echo output.
 
 const std = @import("std");
+const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 const bytebox = @import("bytebox");
 
@@ -26,7 +27,6 @@ fn hostJsEcho(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const byteb
     const mem = memory_instance.buffer();
     if (@as(usize, ptr) + @as(usize, len) > mem.len) return;
     capture_ctx.echoed.appendSlice(capture_ctx.gpa, mem[ptr .. ptr + len]) catch return;
-    capture_ctx.echoed.append(capture_ctx.gpa, '\n') catch return;
 }
 
 fn hostJsStderr(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
@@ -54,11 +54,50 @@ fn writeBytesToWasm(instance: *bytebox.ModuleInstance, alloc_handle: bytebox.Fun
     return .{ .ptr = ptr, .len = @intCast(data.len) };
 }
 
+fn invokeInit(instance: *bytebox.ModuleInstance, init_handle: bytebox.FunctionHandle) anyerror!void {
+    var params = [_]bytebox.Val{};
+    var returns = [_]bytebox.Val{};
+    try instance.invoke(init_handle, &params, &returns, .{});
+}
+
+fn compileAndRunSource(
+    instance: *bytebox.ModuleInstance,
+    alloc_handle: bytebox.FunctionHandle,
+    run_handle: bytebox.FunctionHandle,
+    source: []const u8,
+) anyerror!u32 {
+    const main_buf = try writeBytesToWasm(instance, alloc_handle, source);
+    var run_params = [_]bytebox.Val{
+        .{ .I32 = @intCast(main_buf.ptr) },
+        .{ .I32 = @intCast(main_buf.len) },
+    };
+    var run_returns = [_]bytebox.Val{.{ .I32 = 0 }};
+    try instance.invoke(run_handle, &run_params, &run_returns, .{});
+    return @intCast(run_returns[0].I32);
+}
+
+fn resetCapturedOutput() void {
+    capture_ctx.echoed.clearRetainingCapacity();
+    capture_ctx.stderr.clearRetainingCapacity();
+}
+
+fn requireContains(haystack: []const u8, needle: []const u8, label: []const u8) void {
+    if (std.mem.find(u8, haystack, needle) != null) return;
+    std.debug.print("FAIL: expected {s} to contain {s}\n{s}\n", .{ label, needle, haystack });
+    std.process.exit(1);
+}
+
+fn requireNotContains(haystack: []const u8, needle: []const u8, label: []const u8) void {
+    if (std.mem.find(u8, haystack, needle) == null) return;
+    std.debug.print("FAIL: expected {s} not to contain {s}\n{s}\n", .{ label, needle, haystack });
+    std.process.exit(1);
+}
+
 pub fn main(init: std.process.Init) anyerror!void {
     const io = init.io;
 
-    var gpa_impl: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = gpa_impl.deinit();
+    var gpa_impl: std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }) = .init;
+    defer _ = build_options.debugGpaOk(gpa_impl.deinit());
     const gpa = gpa_impl.allocator();
 
     var arena_impl = std.heap.ArenaAllocator.init(gpa);
@@ -121,12 +160,7 @@ pub fn main(init: std.process.Init) anyerror!void {
     const addfile_handle = try module_instance.getFunctionHandle("addFile");
     const run_handle = try module_instance.getFunctionHandle("compileAndRun");
 
-    // init()
-    {
-        var params = [_]bytebox.Val{};
-        var returns = [_]bytebox.Val{};
-        try module_instance.invoke(init_handle, &params, &returns, .{});
-    }
+    try invokeInit(module_instance, init_handle);
 
     // addFile("Greeting", "<content>")
     const greeting_name = try writeBytesToWasm(module_instance, alloc_handle, "Greeting");
@@ -162,17 +196,9 @@ pub fn main(init: std.process.Init) anyerror!void {
         \\    Ok({})
         \\}
     ;
-    const main_buf = try writeBytesToWasm(module_instance, alloc_handle, main_src);
-    var run_params = [_]bytebox.Val{
-        .{ .I32 = @intCast(main_buf.ptr) },
-        .{ .I32 = @intCast(main_buf.len) },
-    };
-    var run_returns = [_]bytebox.Val{.{ .I32 = 0 }};
-    try module_instance.invoke(run_handle, &run_params, &run_returns, .{});
+    const exit_code = try compileAndRunSource(module_instance, alloc_handle, run_handle, main_src);
 
-    const exit_code: u32 = @intCast(run_returns[0].I32);
-
-    const expected_output = "Hello from the Greeting module!\n";
+    const expected_output = "Hello from the Greeting module!";
     const got_output = capture_ctx.echoed.items;
     const got_stderr = capture_ctx.stderr.items;
 
@@ -194,5 +220,56 @@ pub fn main(init: std.process.Init) anyerror!void {
         std.process.exit(1);
     }
 
-    std.debug.print("PASS: echo.wasm tutorial example produced expected output.\n", .{});
+    resetCapturedOutput();
+    try invokeInit(module_instance, init_handle);
+
+    const bad_src =
+        \\main! = |_| {
+        \\    todos = [
+        \\        { name: "Learn Roc", done: True },
+        \\        { label: "Call mom", done: False },
+        \\    ]
+        \\    Ok({})
+        \\}
+    ;
+    const bad_exit_code = try compileAndRunSource(module_instance, alloc_handle, run_handle, bad_src);
+    const bad_stderr = capture_ctx.stderr.items;
+
+    if (bad_exit_code != 255) {
+        std.debug.print("FAIL: bad source returned exit code {d}\n", .{bad_exit_code});
+        std.debug.print("stderr:\n{s}\n", .{bad_stderr});
+        std.process.exit(1);
+    }
+
+    requireContains(bad_stderr, "TYPE MISMATCH", "diagnostic stderr");
+    requireContains(bad_stderr, "\xE2\x94", "diagnostic stderr");
+    requireContains(bad_stderr, "main.roc", "diagnostic stderr");
+    requireNotContains(bad_stderr, "/app/main.roc", "diagnostic stderr");
+    requireNotContains(bad_stderr, "<div", "diagnostic stderr");
+    requireNotContains(bad_stderr, "<span", "diagnostic stderr");
+    requireNotContains(bad_stderr, "echo: step", "diagnostic stderr");
+
+    resetCapturedOutput();
+    try invokeInit(module_instance, init_handle);
+
+    const malformed_src =
+        \\main! = |_| {
+        \\    todo = { name "Call mom", done: False }
+        \\    Ok({})
+        \\}
+    ;
+    const malformed_exit_code = try compileAndRunSource(module_instance, alloc_handle, run_handle, malformed_src);
+    const malformed_stderr = capture_ctx.stderr.items;
+
+    if (malformed_exit_code != 255) {
+        std.debug.print("FAIL: malformed source returned exit code {d}\n", .{malformed_exit_code});
+        std.debug.print("stderr:\n{s}\n", .{malformed_stderr});
+        std.process.exit(1);
+    }
+
+    requireContains(malformed_stderr, "SYNTAX", "syntax diagnostic stderr");
+    requireContains(malformed_stderr, "main.roc", "syntax diagnostic stderr");
+    requireNotContains(malformed_stderr, "echo: step", "syntax diagnostic stderr");
+
+    std.debug.print("PASS: echo.wasm tutorial and diagnostic cases produced expected output.\n", .{});
 }

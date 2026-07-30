@@ -166,6 +166,91 @@ my @lowering_debug_print_forbidden = (
     [qr/\bstd\.debug\.print\b/, "semantic lowering stages must not contain committed debug prints"],
 );
 
+my @guarded_program_fields = qw(
+    specs imported_fns fns defs nested_defs exprs pats stmts locals expr_ids
+    pat_ids typed_locals stmt_ids field_exprs fn_def_captures capture_operands
+    record_destructs str_pattern_steps branches if_branches string_literals
+    roots layout_requests runtime_schema_requests comptime_sites source_files
+    expr_locs expr_regions stmt_locs stmt_regions local_names
+);
+
+my @guarded_lir_fields = qw(
+    cf_stmts cf_switch_branches str_match_steps str_match_arms join_points
+    locals local_ids u64s proc_specs patterns pattern_ids source_file_bytes
+    source_file_ends cf_stmt_locs cf_stmt_regions proc_locs proc_debug_names
+    local_names
+);
+
+sub alternation {
+    my (@values) = @_;
+    return join('|', map { quotemeta($_) } @values);
+}
+
+my $guarded_program_field_re = alternation(@guarded_program_fields);
+my $guarded_lir_field_re = alternation(@guarded_lir_fields);
+
+my @guarded_raw_items_checks = (
+    {
+        paths => {
+            'src/postcheck/monotype/lower.zig' => 1,
+            'src/postcheck/monotype/specialize.zig' => 1,
+            'src/postcheck/monotype_lifted/lift.zig' => 1,
+            'src/postcheck/monotype_lifted/spec_constr.zig' => 1,
+            'src/postcheck/lambda_mono/lower.zig' => 1,
+            'src/postcheck/solved_inline.zig' => 1,
+            'src/postcheck/solved_lir_lower.zig' => 1,
+        },
+        patterns => [
+            qr/\b(?:self\.program|self\.pass\.program|self\.output|program|lifted)\.(?:$guarded_program_field_re)\.items\b/,
+            qr/\b(?:solved\.lifted|self\.solved\.lifted|program\.lifted)\.(?:$guarded_program_field_re)\.items\b/,
+        ],
+        reason => "guarded Program storage must be accessed through store APIs, not raw .items",
+    },
+    {
+        path_prefix => 'src/lir/',
+        skip_paths => {
+            'src/lir/LirStore.zig' => 1,
+            'src/lir/lir_image.zig' => 1,
+        },
+        patterns => [
+            qr/\b(?:store|self\.store)\.(?:$guarded_lir_field_re)\.items\b/,
+        ],
+        reason => "guarded LirStore storage must be accessed through store APIs, not raw .items",
+    },
+);
+
+my @guarded_stale_write_checks = (
+    {
+        paths => {
+            'src/postcheck/monotype/lower.zig' => 1,
+            'src/postcheck/monotype/specialize.zig' => 1,
+            'src/postcheck/monotype_lifted/lift.zig' => 1,
+            'src/postcheck/monotype_lifted/spec_constr.zig' => 1,
+            'src/postcheck/lambda_mono/lower.zig' => 1,
+            'src/postcheck/solved_inline.zig' => 1,
+            'src/postcheck/solved_lir_lower.zig' => 1,
+        },
+        patterns => [
+            qr/\b(?:self\.program|self\.pass\.program|self\.output|program|lifted)\.(?:$guarded_program_field_re)\.items\s*\[[^\]]+\]\s*=.*\btry\b/,
+            qr/\b(?:self\.program|self\.pass\.program|self\.output|program|lifted)\.(?:$guarded_program_field_re)\.getPtrImmediate\([^)]*\)(?:\.[A-Za-z_][A-Za-z0-9_]*)+\s*=.*\btry\b/,
+        ],
+        reason => "guarded Program slot writes with fallible RHS work must use a setter/update after the RHS completes",
+    },
+    {
+        path_prefix => 'src/lir/',
+        skip_paths => {
+            'src/lir/LirStore.zig' => 1,
+            'src/lir/lir_image.zig' => 1,
+        },
+        patterns => [
+            qr/\b(?:store|self\.store)\.(?:$guarded_lir_field_re)\.items\s*\[[^\]]+\]\s*=.*\btry\b/,
+            qr/\b(?:store|self\.store)\.get(?:CFStmtPtr|ProcSpecPtr|LocalPtr)\([^)]*\)(?:\.[A-Za-z_][A-Za-z0-9_]*)+\s*=.*\btry\b/,
+            qr/\b(?:store|self\.store)\.get(?:CFStmtPtr|ProcSpecPtr|LocalPtr)\([^)]*\)\.\*\s*=.*\btry\b/,
+        ],
+        reason => "guarded LirStore slot writes with fallible RHS work must use a setter/update after the RHS completes",
+    },
+);
+
 my @postcheck_jargon_forbidden = (
     [qr/\b[A-Za-z0-9_]*[Bb]ridge[A-Za-z0-9_]*\b/, "banned vague post-check term; say the exact operation"],
     [qr/\b[A-Za-z0-9_]*[Pp]rojection[A-Za-z0-9_]*\b/, "banned vague post-check term; say field read, tag payload read, capture slot, or another exact operation"],
@@ -250,7 +335,67 @@ sub postcheck_jargon_allowed {
     return 0;
 }
 
+sub guarded_raw_items_reason {
+    my ($path, $line) = @_;
+
+    return "__guarded_backing is private to GuardedList" if
+        $path ne 'src/collections/GuardedList.zig' && $line =~ /\b__guarded_backing\b/;
+
+    for my $check (@guarded_raw_items_checks) {
+        next if exists $check->{paths} && !$check->{paths}{$path};
+        next if exists $check->{path_prefix} && index($path, $check->{path_prefix}) != 0;
+        next if exists $check->{skip_paths} && $check->{skip_paths}{$path};
+
+        for my $pattern (@{$check->{patterns}}) {
+            return $check->{reason} if $line =~ /$pattern/;
+        }
+    }
+
+    return undef;
+}
+
+sub guarded_stale_write_reason {
+    my ($path, $line) = @_;
+
+    for my $check (@guarded_stale_write_checks) {
+        next if exists $check->{paths} && !$check->{paths}{$path};
+        next if exists $check->{path_prefix} && index($path, $check->{path_prefix}) != 0;
+        next if exists $check->{skip_paths} && $check->{skip_paths}{$path};
+
+        for my $pattern (@{$check->{patterns}}) {
+            return $check->{reason} if $line =~ /$pattern/;
+        }
+    }
+
+    return undef;
+}
+
 my @violations;
+
+sub scan_snapshot_module_words {
+    my $root = 'test/snapshots';
+    return unless -d $root;
+
+    find({
+        wanted => sub {
+            my $path = $File::Find::name;
+            return unless -f $path;
+            return unless $path =~ /\.md$/;
+
+            open my $fh, '<', $path or die "failed to open $path: $!";
+            my $line_no = 0;
+            while (my $line = <$fh>) {
+                ++$line_no;
+                chomp $line;
+                if ($line =~ /module/i) {
+                    push @violations, [$path, $line_no, "snapshot contains forbidden text `module`; use `mod` in snapshots", $line];
+                }
+            }
+            close $fh;
+        },
+        no_chdir => 1,
+    }, $root);
+}
 
 for my $root (@roots) {
     next unless -d $root;
@@ -333,6 +478,14 @@ for my $root (@roots) {
                         }
                     }
                 }
+
+                if (my $guarded_reason = guarded_raw_items_reason($path, $line)) {
+                    push @violations, [$path, $line_no, $guarded_reason, $line];
+                }
+
+                if (my $guarded_reason = guarded_stale_write_reason($path, $line)) {
+                    push @violations, [$path, $line_no, $guarded_reason, $line];
+                }
             }
             close $fh;
         },
@@ -363,6 +516,8 @@ for my $path (@postcheck_design_docs) {
     }
     close $fh;
 }
+
+scan_snapshot_module_words();
 
 if (@violations) {
     print "\nSEMANTIC AUDIT FAILED\n\n";

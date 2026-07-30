@@ -30,25 +30,29 @@ VAR REASSIGNMENT ERROR - :0:0:0:0
 VAR REASSIGNMENT ERROR - :0:0:0:0
 UNUSED VARIABLE - can_var_scoping_regular_var.md:2:17:2:22
 # PROBLEMS
-**VAR REASSIGNMENT ERROR**
+
+VAR REASSIGNMENT ERROR
+
 Cannot reassign a `var` from outside the function where it was declared.
 Variables declared with `var` can only be reassigned within the same function scope.
 
-**VAR REASSIGNMENT ERROR**
+
+VAR REASSIGNMENT ERROR
+
 Cannot reassign a `var` from outside the function where it was declared.
 Variables declared with `var` can only be reassigned within the same function scope.
 
-**UNUSED VARIABLE**
-Variable `items` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
-The unused variable is declared here:
-**can_var_scoping_regular_var.md:2:17:2:22:**
-```roc
-processItems = |items| {
-```
-                ^^^^^
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `items` is defined here and then never used. ───┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  processItems = |items| {                                                  │
+ │                  ‾‾‾‾‾                                                     │
+ └─────────────────────────────────────── can_var_scoping_regular_var.md:2:17 ┘
 
+    If you don't need this variable, prefix it with an underscore like `_items`
+    to suppress this warning.
 
 # TOKENS
 ~~~zig
@@ -70,7 +74,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "processItems"))
@@ -129,62 +133,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "processItems"))
-		(e-lambda
-			(args
-				(p-assign (ident "items")))
-			(e-block
-				(s-var
-					(p-assign (ident "count_"))
-					(e-num (value "0")))
-				(s-var
-					(p-assign (ident "total_"))
-					(e-num (value "0")))
-				(s-reassign
-					(p-assign (ident "count_"))
-					(e-dispatch-call (method "plus") (constraint-fn-var 147)
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "count_"))))
-						(args
-							(e-num (value "1")))))
-				(s-reassign
-					(p-assign (ident "total_"))
-					(e-dispatch-call (method "plus") (constraint-fn-var 182)
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "total_"))))
-						(args
-							(e-num (value "10")))))
-				(s-let
-					(p-assign (ident "nestedFunc"))
-					(e-closure
-						(captures
-							(capture (ident "count_")))
-						(e-lambda
-							(args
-								(p-underscore))
-							(e-block
-								(s-reassign
-									(p-assign (ident "count_"))
-									(e-runtime-error (tag "var_across_function_boundary")))
-								(s-reassign
-									(p-assign (ident "total_"))
-									(e-runtime-error (tag "var_across_function_boundary")))
-								(e-lookup-local
-									(p-assign (ident "count_")))))))
-				(s-let
-					(p-assign (ident "result"))
-					(e-call (constraint-fn-var 186)
-						(e-lookup-local
-							(p-assign (ident "nestedFunc")))
-						(e-empty_record)))
-				(e-dispatch-call (method "plus") (constraint-fn-var 187)
-					(receiver
-						(e-lookup-local
-							(p-assign (ident "total_"))))
-					(args
-						(e-lookup-local
-							(p-assign (ident "result")))))))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

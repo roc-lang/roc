@@ -1,0 +1,13 @@
+diff --git a/src/postcheck/monotype_lifted/spec_constr.zig b/src/postcheck/monotype_lifted/spec_constr.zig
+index 3baa183212..6480521c64 100644
+--- a/src/postcheck/monotype_lifted/spec_constr.zig
++++ b/src/postcheck/monotype_lifted/spec_constr.zig
+@@ -7371,7 +7371,7 @@ const Cloner = struct {
+     /// as written.
+     fn resolvePending(self: *Cloner, start: usize, body: Value) Common.LowerError!Value {
+         if (self.pending.items.len <= start) return body;
+-        if (body != .expr and self.pendingChainDelegates(start)) {
++        if (false and body != .expr and self.pendingChainDelegates(start)) {
+             return body;
+         }
+         return .{ .expr = try self.flushPendingSince(start, try self.materialize(body)) };

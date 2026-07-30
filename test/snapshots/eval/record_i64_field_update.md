@@ -36,7 +36,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "Robot")
@@ -145,7 +145,7 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "y")
-						(e-dispatch-call (method "plus") (constraint-fn-var 167)
+						(e-dispatch-call (method "plus") (constraint-fn-var 347)
 							(receiver
 								(e-field-access (field "y")
 									(receiver
@@ -168,7 +168,7 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "y")
-						(e-dispatch-call (method "minus") (constraint-fn-var 325)
+						(e-dispatch-call (method "minus") (constraint-fn-var 403)
 							(receiver
 								(e-field-access (field "y")
 									(receiver
@@ -190,7 +190,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 475)
+				(e-call (constraint-fn-var 441)
 					(e-lookup-local
 						(p-assign (ident "advance")))
 					(e-record
@@ -209,7 +209,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 901)
+				(e-call (constraint-fn-var 533)
 					(e-lookup-local
 						(p-assign (ident "retreat")))
 					(e-record
@@ -228,10 +228,10 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 1468)
+				(e-call (constraint-fn-var 654)
 					(e-lookup-local
 						(p-assign (ident "advance")))
-					(e-call (constraint-fn-var 1327)
+					(e-call (constraint-fn-var 625)
 						(e-lookup-local
 							(p-assign (ident "retreat")))
 						(e-record

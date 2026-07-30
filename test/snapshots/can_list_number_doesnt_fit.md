@@ -10,17 +10,18 @@ type=expr
 # EXPECTED
 INVALID NUMBER - can_list_number_doesnt_fit.md:1:14:1:17
 # PROBLEMS
-**INVALID NUMBER**
-This number literal does not fit in the inferred type:
-**can_list_number_doesnt_fit.md:1:14:1:17:**
-```roc
-[1.U8, 2.U8, 300]
-```
-             ^^^
 
-The inferred type is:
+┌────────────────┐
+│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  [1.U8, 2.U8, 300]                                                         │
+ │               ‾‾‾                                                          │
+ └──────────────────────────────────────── can_list_number_doesnt_fit.md:1:14 ┘
 
-    U8
+    The inferred type is:
+
+        U8
 
 # TOKENS
 ~~~zig
@@ -42,7 +43,7 @@ NO CHANGE
 ~~~clojure
 (e-list
 	(elems
-		(e-typed-int (value "1") (type "U8"))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(e-typed-int (value "2") (type "U8"))
 		(e-num (value "300"))))
 ~~~

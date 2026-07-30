@@ -59,6 +59,26 @@ pub const RocStr = extern struct {
 
     pub const alignment = @alignOf(usize);
 
+    /// Number of pointer-sized words in a RocStr's in-memory layout. The layout
+    /// is target-width parameterized: its byte size is `word_count` times the
+    /// target pointer width. Sites that build a RocStr for a target of a
+    /// different width than the host multiply this by the target word size.
+    pub const word_count = 3;
+
+    /// The high bit of a RocStr's final byte marks the small-string
+    /// representation. The low seven bits of that byte hold the small-string
+    /// length.
+    pub const small_str_flag: u8 = 0b1000_0000;
+
+    /// Big-string capacities are stored shifted left by this many bits so the
+    /// low bit stays free for the seamless-slice tag.
+    pub const capacity_shift = 1;
+
+    comptime {
+        std.debug.assert(word_count * @sizeOf(usize) == @sizeOf(RocStr));
+        std.debug.assert(SMALL_STR_BIT == @as(usize, small_str_flag) << (@bitSizeOf(usize) - 8));
+    }
+
     pub inline fn empty() RocStr {
         return RocStr{
             .bytes = null,
@@ -67,12 +87,35 @@ pub const RocStr = extern struct {
         };
     }
 
+    fn encodeCapacityGeneric(comptime T: type, capacity: T) T {
+        return capacity << capacity_shift;
+    }
+
     pub inline fn encodeCapacity(capacity: usize) usize {
-        return capacity << 1;
+        return encodeCapacityGeneric(usize, capacity);
+    }
+
+    /// Encode a big-string capacity for a target whose pointer width may differ
+    /// from the host's. Applies the same shift as the host-width
+    /// `encodeCapacity`, but on a `u64` so it can hold any target word's value.
+    pub fn encodeCapacityForWidth(capacity: u64) u64 {
+        return encodeCapacityGeneric(u64, capacity);
     }
 
     pub inline fn decodeCapacity(encoded: usize) usize {
-        return encoded >> 1;
+        return encoded >> capacity_shift;
+    }
+
+    /// The final byte of a small RocStr: the small-string flag OR'd with the
+    /// small-string length. Target-width independent, since the flag and length
+    /// always live in the layout's final byte.
+    pub fn smallStrFlagByte(length: usize) u8 {
+        return @as(u8, @intCast(length)) | small_str_flag;
+    }
+
+    /// Recover the small-string length from a RocStr's final byte.
+    pub fn smallStrLenFromFlagByte(byte: u8) u8 {
+        return byte & ~small_str_flag;
     }
 
     pub inline fn encodeSliceAllocationPtr(ptr: [*]u8) usize {
@@ -107,7 +150,7 @@ pub const RocStr = extern struct {
                 .capacity_or_alloc_ptr = encodeSliceAllocationPtr(list_alloc_ptr),
                 .length = count,
             };
-        } else if (start == 0 and (update_mode == .InPlace or list.isUnique(roc_ops))) {
+        } else if (start == 0 and list.canReuseAllocation(update_mode, roc_ops)) {
             // Rare case, we can take over the original list.
             return RocStr{
                 .bytes = start_byte,
@@ -143,7 +186,7 @@ pub const RocStr = extern struct {
         std.debug.assert(slice.len < SMALL_STRING_SIZE);
         var result = RocStr.empty();
         @memcpy(result.asU8ptrMut()[0..slice.len], slice);
-        result.asU8ptrMut()[@sizeOf(RocStr) - 1] = @as(u8, @intCast(slice.len)) | 0b1000_0000;
+        result.asU8ptrMut()[@sizeOf(RocStr) - 1] = smallStrFlagByte(slice.len);
         return result;
     }
 
@@ -186,7 +229,7 @@ pub const RocStr = extern struct {
         } else {
             var string = RocStr.empty();
 
-            string.asU8ptrMut()[@sizeOf(RocStr) - 1] = @as(u8, @intCast(length)) | 0b1000_0000;
+            string.asU8ptrMut()[@sizeOf(RocStr) - 1] = smallStrFlagByte(length);
 
             return string;
         }
@@ -205,7 +248,7 @@ pub const RocStr = extern struct {
         } else {
             var string = RocStr.empty();
 
-            string.asU8ptrMut()[@sizeOf(RocStr) - 1] = @as(u8, @intCast(length)) | 0b1000_0000;
+            string.asU8ptrMut()[@sizeOf(RocStr) - 1] = smallStrFlagByte(length);
 
             return string;
         }
@@ -402,7 +445,7 @@ pub const RocStr = extern struct {
         const element_width = 1;
         const old_capacity = self.getCapacity();
 
-        if (self.isSmallStr() or self.isSeamlessSlice() or !(update_mode == .InPlace or self.isUnique())) {
+        if (!self.canReuseAllocation(update_mode)) {
             return self.reallocateFresh(new_length, roc_ops);
         }
 
@@ -460,7 +503,7 @@ pub const RocStr = extern struct {
             // I believe taking this reference on the stack here is important for correctness.
             // Doing it via a method call seemed to cause issues
             const dest_ptr = @as([*]u8, @ptrCast(&string));
-            dest_ptr[@sizeOf(RocStr) - 1] = @as(u8, @intCast(new_length)) | 0b1000_0000;
+            dest_ptr[@sizeOf(RocStr) - 1] = smallStrFlagByte(new_length);
 
             const source_ptr = self.asU8ptr();
 
@@ -490,7 +533,7 @@ pub const RocStr = extern struct {
 
     pub fn len(self: RocStr) usize {
         if (self.isSmallStr()) {
-            return self.asArray()[@sizeOf(RocStr) - 1] ^ 0b1000_0000;
+            return smallStrLenFromFlagByte(self.asArray()[@sizeOf(RocStr) - 1]);
         } else {
             return self.length;
         }
@@ -498,7 +541,7 @@ pub const RocStr = extern struct {
 
     pub fn setLen(self: *RocStr, length: usize) void {
         if (self.isSmallStr()) {
-            self.asU8ptrMut()[@sizeOf(RocStr) - 1] = @as(u8, @intCast(length)) | 0b1000_0000;
+            self.asU8ptrMut()[@sizeOf(RocStr) - 1] = smallStrFlagByte(length);
         } else {
             self.length = length;
         }
@@ -537,6 +580,23 @@ pub const RocStr = extern struct {
 
         // otherwise, check if the refcount is one
         return @call(.always_inline, RocStr.isRefcountOne, .{self});
+    }
+
+    /// Returns true when this value is the only live reference to its backing
+    /// bytes, either because the caller proved that statically (`.InPlace`) or
+    /// because the runtime refcount is 1. This permits consuming the value,
+    /// changing its visible length, and editing bytes inside its visible window.
+    /// It does not mean the heap allocation can be resized or reused wholesale:
+    /// seamless slices point into a larger allocation, and small strings have no
+    /// heap allocation at all.
+    pub inline fn isExclusive(self: RocStr, update_mode: UpdateMode) bool {
+        return update_mode == .InPlace or self.isUnique();
+    }
+
+    /// Returns true when this string owns a big-string allocation whose extent
+    /// matches the visible value, so allocation-resize/reuse paths are safe.
+    pub inline fn canReuseAllocation(self: RocStr, update_mode: UpdateMode) bool {
+        return !self.isSmallStr() and !self.isSeamlessSlice() and self.isExclusive(update_mode);
     }
 
     fn isRefcountOne(self: RocStr) bool {
@@ -842,6 +902,8 @@ test "floatToStrBytes emits stable shortest representations" {
     try expectFloatToStr(f32, std.math.inf(f32), "inf");
     try expectFloatToStr(f32, -std.math.inf(f32), "-inf");
     try expectFloatToStr(f32, std.math.nan(f32), "nan");
+    try expectFloatToStr(f32, @bitCast(@as(u32, 0xff80_0001)), "nan");
+    try expectFloatToStr(f32, @bitCast(@as(u32, 0xffc1_2345)), "nan");
 
     try expectFloatToStr(f64, @as(f64, 0.0), "0");
     try expectFloatToStr(f64, @as(f64, -0.0), "-0");
@@ -852,6 +914,8 @@ test "floatToStrBytes emits stable shortest representations" {
     try expectFloatToStr(f64, std.math.inf(f64), "inf");
     try expectFloatToStr(f64, -std.math.inf(f64), "-inf");
     try expectFloatToStr(f64, std.math.nan(f64), "nan");
+    try expectFloatToStr(f64, @bitCast(@as(u64, 0xfff0_0000_0000_0001)), "nan");
+    try expectFloatToStr(f64, @bitCast(@as(u64, 0xfff9_2345_6789_abcd)), "nan");
 }
 
 /// Format a Roc float into a RocStr using the same implementation used by
@@ -968,8 +1032,8 @@ pub fn substringUnsafeC(
     return substringUnsafe(string, start, length, roc_ops);
 }
 
-/// Result layout for `Str.find_first`.
-pub const FindFirstResult = struct {
+/// Result layout for `Str.split_first`.
+pub const SplitFirstResult = struct {
     before: RocStr,
     found: bool,
     after: RocStr,
@@ -998,7 +1062,7 @@ fn smallStringFromPtr(bytes: [*]const u8, length: usize) RocStr {
 }
 
 /// Find the first delimiter occurrence and return seamless slices around it.
-pub fn findFirst(source: RocStr, delimiter: RocStr, roc_ops: *RocOps) FindFirstResult {
+pub fn splitFirst(source: RocStr, delimiter: RocStr, roc_ops: *RocOps) SplitFirstResult {
     const source_bytes = source.asSlice();
     const delimiter_bytes = delimiter.asSlice();
 
@@ -1011,6 +1075,41 @@ pub fn findFirst(source: RocStr, delimiter: RocStr, roc_ops: *RocOps) FindFirstR
     }
 
     const index = std.mem.find(u8, source_bytes, delimiter_bytes) orelse {
+        return .{
+            .before = RocStr.empty(),
+            .found = false,
+            .after = RocStr.empty(),
+        };
+    };
+
+    return .{
+        .before = retainedSlice(source, 0, index, roc_ops),
+        .found = true,
+        .after = retainedSlice(source, index + delimiter_bytes.len, source_bytes.len - index - delimiter_bytes.len, roc_ops),
+    };
+}
+
+/// Result layout for `Str.split_last`.
+pub const SplitLastResult = struct {
+    before: RocStr,
+    found: bool,
+    after: RocStr,
+};
+
+/// Find the last delimiter occurrence and return seamless slices around it.
+pub fn splitLast(source: RocStr, delimiter: RocStr, roc_ops: *RocOps) SplitLastResult {
+    const source_bytes = source.asSlice();
+    const delimiter_bytes = delimiter.asSlice();
+
+    if (delimiter_bytes.len == 0) {
+        return .{
+            .before = retainedSlice(source, 0, source_bytes.len, roc_ops),
+            .found = true,
+            .after = RocStr.empty(),
+        };
+    }
+
+    const index = std.mem.findLast(u8, source_bytes, delimiter_bytes) orelse {
         return .{
             .before = RocStr.empty(),
             .found = false,
@@ -1041,7 +1140,7 @@ pub fn substringUnsafe(
         return smallStringFromPtr(string.asU8ptr() + start, length);
     }
     if (string.bytes) |source_ptr| {
-        if (start == 0 and string.isUnique()) {
+        if (start == 0 and string.canReuseAllocation(.Immutable)) {
             var output = string;
             output.setLen(length);
             return output;
@@ -1325,7 +1424,11 @@ pub fn strJoinWithC(
     // `.text`, so the element loop never runs and every heap element string
     // leaks (verified on x64win). Direct calls relocate correctly, and this
     // mirrors `RocList.decref`'s own element-teardown logic for `List Str`.
-    if (list.isUnique(roc_ops)) {
+    // Full teardown is slice-correct because getAllocationElementCount(true)
+    // returns the whole backing allocation length for seamless slices. This is
+    // intentionally kept as direct RocStr.decref calls rather than a callback
+    // into RocList.decref because COFF misresolved that callback on x64win.
+    if (list.isExclusive(.Immutable, roc_ops)) {
         if (list.getAllocationDataPtr(roc_ops)) |source| {
             const count = list.getAllocationElementCount(true, roc_ops);
             const elems: [*]RocStr = utils.alignedPtrCast([*]RocStr, source, @src());
@@ -1822,7 +1925,7 @@ pub fn strTrim(
         // Just create another small string of the correct bytes.
         // No need to decref because it is a small string.
         return smallStringFromPtr(string.asU8ptr() + leading_bytes, new_len);
-    } else if (leading_bytes == 0 and (update_mode == .InPlace or string.isUnique())) {
+    } else if (leading_bytes == 0 and string.canReuseAllocation(update_mode)) {
         // Big and unique with no leading bytes to remove.
         // Just take ownership and shrink the length.
         var new_string = string;
@@ -1888,7 +1991,7 @@ pub fn strTrimStart(
         // Just create another small string of the correct bytes.
         // No need to decref because it is a small string.
         return smallStringFromPtr(string.asU8ptr() + leading_bytes, new_len);
-    } else if (leading_bytes == 0 and (update_mode == .InPlace or string.isUnique())) {
+    } else if (leading_bytes == 0 and string.canReuseAllocation(update_mode)) {
         // Big and unique with no leading bytes to remove.
         // Just take ownership and shrink the length.
         var new_string = string;
@@ -1954,7 +2057,7 @@ pub fn strTrimEnd(
         // Just create another small string of the correct bytes.
         // No need to decref because it is a small string.
         return smallStringFromPtr(string.asU8ptr(), new_len);
-    } else if (update_mode == .InPlace or string.isUnique()) {
+    } else if (string.canReuseAllocation(update_mode)) {
         // Big and unique with no leading bytes to remove.
         // Just take ownership and shrink the length.
         var new_string = string;
@@ -2029,7 +2132,10 @@ pub fn strWithAsciiLowercased(
     update_mode: UpdateMode,
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
-    var new_str = if (update_mode == .InPlace or string.isUnique())
+    // Exclusive seamless slices may edit bytes inside their visible window: Str
+    // elements are plain bytes, and refcount 1 means no other value can observe
+    // the backing allocation. This is not an allocation-reuse decision.
+    var new_str = if (string.isExclusive(update_mode))
         string
     else blk: {
         string.decref(roc_ops);
@@ -2062,7 +2168,10 @@ pub fn strWithAsciiUppercased(
     update_mode: UpdateMode,
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
-    var new_str = if (update_mode == .InPlace or string.isUnique())
+    // Exclusive seamless slices may edit bytes inside their visible window: Str
+    // elements are plain bytes, and refcount 1 means no other value can observe
+    // the backing allocation. This is not an allocation-reuse decision.
+    var new_str = if (string.isExclusive(update_mode))
         string
     else blk: {
         string.decref(roc_ops);
@@ -2078,7 +2187,10 @@ pub fn strWithAsciiUppercased(
 
 /// TODO: Document strCaselessAsciiEquals.
 pub fn strCaselessAsciiEquals(self: RocStr, other: RocStr) callconv(.c) bool {
-    if (self.bytes == other.bytes and self.length == other.length) {
+    if (self.bytes == other.bytes and
+        self.capacity_or_alloc_ptr == other.capacity_or_alloc_ptr and
+        self.length == other.length)
+    {
         return true;
     }
 
@@ -2141,6 +2253,13 @@ inline fn wordCaselessAsciiEqual(left: u64, right: u64) bool {
 // bit 0x20?" We do not need to prove that exact-equal bytes are lowercase-safe.
 // That matters for field names such as "x_auth_token" and for UTF-8 bytes that
 // are identical on both sides.
+//
+// `MonoLlvmCodeGen.emitSwarCaselessAsciiEqualMasked` deliberately re-emits this
+// exact bit-twiddle as inline LLVM IR for static record-field dispatch rather
+// than calling this builtin. The two must agree byte-for-byte;
+// `swar_caseless_word_vectors` pins this Zig side, and the LLVM emitter is
+// pinned end-to-end through caseless field dispatch by
+// `src/cli/test/http_header_decoder_platform_test.zig`.
 const SWAR_ONES: u64 = 0x0101010101010101;
 const SWAR_LOW7: u64 = 0x7f7f7f7f7f7f7f7f;
 const SWAR_HIGHS: u64 = 0x8080808080808080;
@@ -2211,6 +2330,73 @@ inline fn wordCaselessAsciiEqualMasked(left: u64, right: u64, active: u64) bool 
     const left_lower = left | SWAR_ASCII_CASE;
     const left_alpha = swarByteInAsciiRange(left_lower, 'a', 'z') & active_highs;
     return (case_diff_bytes & ~left_alpha) == 0;
+}
+
+/// One shared caseless-ASCII-equality test vector. `left` and `right` are the
+/// eight bytes of each SWAR word (lane 0 first, little-endian); `active_len` is
+/// how many low lanes carry real string bytes — the remaining high lanes are
+/// ignored, exactly as a partial-word tail mask ignores them. `expected` is the
+/// caseless-ASCII-equal answer. This set drives `wordCaselessAsciiEqualMasked`
+/// here and documents the exact behavior the LLVM emitter
+/// (`MonoLlvmCodeGen.emitSwarCaselessAsciiEqualMasked`) must reproduce.
+pub const CaselessWordVector = struct {
+    left: [8]u8,
+    right: [8]u8,
+    active_len: u8,
+    expected: bool,
+};
+
+/// Word-at-a-time caseless-equality vectors covering equal bytes, ASCII letters
+/// differing by case in both directions, bytes differing only in the 0x20 bit
+/// that are NOT letters (must be unequal), high-bit bytes, embedded NULs, and
+/// partial-word masks. Both the Zig builtin and the inline LLVM emitter must
+/// agree with every row.
+pub const swar_caseless_word_vectors = [_]CaselessWordVector{
+    // Fully identical words are equal, punctuation and digits included.
+    .{ .left = "abcdefgh".*, .right = "abcdefgh".*, .active_len = 8, .expected = true },
+    .{ .left = "12_-+={}".*, .right = "12_-+={}".*, .active_len = 8, .expected = true },
+    // ASCII letters differing only by case fold in both directions per lane.
+    .{ .left = "aBcDeFgH".*, .right = "AbCdEfGh".*, .active_len = 8, .expected = true },
+    .{ .left = "Hello123".*, .right = "hELLO123".*, .active_len = 8, .expected = true },
+    // Case-fold at the alphabet boundaries a/z.
+    .{ .left = "azAZazAZ".*, .right = "AZazAZaz".*, .active_len = 8, .expected = true },
+    // Bytes differing by 0x20 that are NOT ASCII letters must be unequal:
+    // '[' (0x5B) vs '{' (0x7B) sit just outside the letter range.
+    .{ .left = "[bcdefgh".*, .right = "{bcdefgh".*, .active_len = 8, .expected = false },
+    // '@' (0x40) vs '`' (0x60): just below 'A'/'a'.
+    .{ .left = "@bcdefgh".*, .right = "`bcdefgh".*, .active_len = 8, .expected = false },
+    // '_' (0x5F) vs DEL (0x7F): differ by 0x20, neither a letter.
+    .{ .left = "_bcdefgh".*, .right = .{ 0x7F, 'b', 'c', 'd', 'e', 'f', 'g', 'h' }, .active_len = 8, .expected = false },
+    // A lane differing by something other than 0x20 is unequal.
+    .{ .left = "abcdefgh".*, .right = "abcdifgh".*, .active_len = 8, .expected = false },
+    // High-bit bytes: identical high-bit bytes are equal (exact-equal lanes
+    // accept anything), but high-bit bytes differing by 0x20 are not letters.
+    .{ .left = .{ 0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87 }, .right = .{ 0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87 }, .active_len = 8, .expected = true },
+    .{ .left = .{ 0x80, 'b', 'c', 'd', 'e', 'f', 'g', 'h' }, .right = .{ 0xA0, 'b', 'c', 'd', 'e', 'f', 'g', 'h' }, .active_len = 8, .expected = false },
+    // Embedded NULs: equal NUL lanes are equal; NUL (0x00) vs space (0x20)
+    // differ by 0x20 but are not letters, so unequal.
+    .{ .left = .{ 'a', 0x00, 'c', 0x00, 'e', 'f', 'g', 'h' }, .right = .{ 'a', 0x00, 'c', 0x00, 'e', 'f', 'g', 'h' }, .active_len = 8, .expected = true },
+    .{ .left = .{ 0x00, 'b', 'c', 'd', 'e', 'f', 'g', 'h' }, .right = .{ 0x20, 'b', 'c', 'd', 'e', 'f', 'g', 'h' }, .active_len = 8, .expected = false },
+    // Digit vs control byte differing by 0x20: '0' (0x30) vs DLE (0x10).
+    .{ .left = "0bcdefgh".*, .right = .{ 0x10, 'b', 'c', 'd', 'e', 'f', 'g', 'h' }, .active_len = 8, .expected = false },
+    // Partial-word masks: only the active low lanes participate. Here the
+    // inactive high lanes differ arbitrarily but must be ignored.
+    .{ .left = "abcABCDE".*, .right = "ABCzzzzz".*, .active_len = 3, .expected = true },
+    // A non-letter case-bit difference inside the active window is unequal even
+    // when the inactive lanes would match.
+    .{ .left = "ab[defgh".*, .right = "ab{defgh".*, .active_len = 4, .expected = false },
+    // Zero active lanes: nothing participates, so the words are equal even
+    // though every byte differs.
+    .{ .left = "abcdefgh".*, .right = "ABCDEFGH".*, .active_len = 0, .expected = true },
+    .{ .left = "abcdefgh".*, .right = "zzzzzzzz".*, .active_len = 0, .expected = true },
+};
+
+/// Build the `active` mask `wordCaselessAsciiEqualMasked` expects from a count
+/// of active low byte lanes: 0xff in each active lane, 0x00 above it.
+pub fn caselessActiveMask(active_len: u8) u64 {
+    if (active_len >= 8) return std.math.maxInt(u64);
+    if (active_len == 0) return 0;
+    return (@as(u64, 1) << @intCast(active_len * 8)) - 1;
 }
 
 inline fn readTailU64(bytes: [*]const u8, len: usize, index: usize, tail_len: usize) u64 {
@@ -2400,7 +2586,7 @@ pub fn strReleaseExcessCapacity(
     if (string.isSmallStr()) {
         // SmallStr has no excess capacity.
         return string;
-    } else if ((update_mode == .InPlace or string.isUnique()) and !string.isSeamlessSlice() and string.getCapacity() == old_length) {
+    } else if (string.canReuseAllocation(update_mode) and string.getCapacity() == old_length) {
         return string;
     } else if (old_length == 0) {
         string.decref(roc_ops);
@@ -2426,26 +2612,6 @@ test "isSmallStr: returns true for empty string" {
     try std.testing.expect(str.isSmallStr());
 }
 
-test "RocStr.eq: small, equal" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    const str1_len = 3;
-    var str1: [str1_len]u8 = "abc".*;
-    const str1_ptr: [*]u8 = &str1;
-    var roc_str1 = RocStr.init(str1_ptr, str1_len, test_env.getOps());
-
-    const str2_len = 3;
-    var str2: [str2_len]u8 = "abc".*;
-    const str2_ptr: [*]u8 = &str2;
-    var roc_str2 = RocStr.init(str2_ptr, str2_len, test_env.getOps());
-
-    try std.testing.expect(roc_str1.eql(roc_str2));
-
-    roc_str1.decref(test_env.getOps());
-    roc_str2.decref(test_env.getOps());
-}
-
 test "RocStr.eq: small, not equal, different length" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -2466,75 +2632,6 @@ test "RocStr.eq: small, not equal, different length" {
     }
 
     try std.testing.expect(!roc_str1.eql(roc_str2));
-}
-
-test "RocStr.eq: small, not equal, same length" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    const str1_len = 3;
-    var str1: [str1_len]u8 = "acb".*;
-    const str1_ptr: [*]u8 = &str1;
-    var roc_str1 = RocStr.init(str1_ptr, str1_len, test_env.getOps());
-
-    const str2_len = 3;
-    var str2: [str2_len]u8 = "abc".*;
-    const str2_ptr: [*]u8 = &str2;
-    var roc_str2 = RocStr.init(str2_ptr, str2_len, test_env.getOps());
-
-    defer {
-        roc_str1.decref(test_env.getOps());
-        roc_str2.decref(test_env.getOps());
-    }
-
-    try std.testing.expect(!roc_str1.eql(roc_str2));
-}
-
-test "RocStr.eq: small, exact u64 chunk" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    const roc_str1 = RocStr.init("abcdefgh", 8, test_env.getOps());
-    const roc_str2 = RocStr.init("abcdefgh", 8, test_env.getOps());
-
-    defer {
-        roc_str1.decref(test_env.getOps());
-        roc_str2.decref(test_env.getOps());
-    }
-
-    try std.testing.expect(roc_str1.isSmallStr());
-    try std.testing.expectEqual(@as(usize, 8), roc_str1.len());
-    try std.testing.expect(roc_str1.eql(roc_str2));
-}
-
-test "RocStr.eq: small, masked tail detects last byte difference" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    const equal_text = if (SMALL_STR_MAX_LENGTH >= 23)
-        "abcdefghijklmnopqrstuvw"
-    else
-        "abcdefghijk";
-    const different_text = if (SMALL_STR_MAX_LENGTH >= 23)
-        "abcdefghijklmnopqrstuvX"
-    else
-        "abcdefghijX";
-
-    const roc_str1 = RocStr.init(equal_text, equal_text.len, test_env.getOps());
-    const roc_str2 = RocStr.init(equal_text, equal_text.len, test_env.getOps());
-    const roc_str3 = RocStr.init(different_text, different_text.len, test_env.getOps());
-
-    defer {
-        roc_str1.decref(test_env.getOps());
-        roc_str2.decref(test_env.getOps());
-        roc_str3.decref(test_env.getOps());
-    }
-
-    try std.testing.expect(roc_str1.isSmallStr());
-    try std.testing.expect(roc_str2.isSmallStr());
-    try std.testing.expect(roc_str3.isSmallStr());
-    try std.testing.expect(roc_str1.eql(roc_str2));
-    try std.testing.expect(!roc_str1.eql(roc_str3));
 }
 
 test "RocStr.eq: all small lengths compare by bytes" {
@@ -2797,6 +2894,44 @@ test "RocStr.eq: utf8 content uses exact byte equality" {
     try std.testing.expect(!roc_str1.eql(roc_str3));
 }
 
+test "unchecked UTF-8 byte access reads SSO and heap strings" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const small = RocStr.fromSlice("A\x00\xc3\xa9", test_env.getOps());
+    const large = RocStr.fromSlice("012345678901234567890123456789\xf0\x9f\x8e\x89", test_env.getOps());
+    defer small.decref(test_env.getOps());
+    defer large.decref(test_env.getOps());
+
+    try std.testing.expect(small.isSmallStr());
+    try std.testing.expect(!large.isSmallStr());
+    try std.testing.expectEqual(@as(u8, 0), getUnsafeC(small, 1));
+    try std.testing.expectEqual(@as(u8, 0xc3), getUnsafeC(small, 2));
+    try std.testing.expectEqual(@as(u8, 0xf0), getUnsafeC(large, 30));
+    try std.testing.expectEqual(@as(u8, 0x89), getUnsafeC(large, 33));
+}
+
+test "unchecked substrings cover SSO and retained heap slices" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const small = RocStr.fromSlice("abcdef", test_env.getOps());
+    const small_middle = substringUnsafeC(small, 2, 3, test_env.getOps());
+    try std.testing.expect(small_middle.eqlSlice("cde"));
+    try std.testing.expect(small.eqlSlice("abcdef"));
+
+    const source = RocStr.fromSlice("012345678901234567890123456789", test_env.getOps());
+    source.incref(1, test_env.getOps());
+    const middle = substringUnsafeC(source, 5, 20, test_env.getOps());
+    try std.testing.expect(middle.isSeamlessSlice());
+    source.decref(test_env.getOps());
+    try std.testing.expect(middle.eqlSlice("56789012345678901234"));
+
+    const empty = substringUnsafeC(middle, middle.len(), 0, test_env.getOps());
+    try std.testing.expect(empty.isEmpty());
+    middle.decref(test_env.getOps());
+}
+
 test "RocStr.eq: boundary between small and heap strings" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -2847,22 +2982,6 @@ test "RocStr.eq: short seamless slice at allocation end" {
     try std.testing.expect(str1.isSeamlessSlice());
     try std.testing.expect(str1.eql(str2));
     try std.testing.expect(!str1.eql(str3));
-}
-
-test "RocStr.eq: large, equal" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    const content = "012345678901234567890123456789";
-    const roc_str1 = RocStr.init(content, content.len, test_env.getOps());
-    const roc_str2 = RocStr.init(content, content.len, test_env.getOps());
-
-    defer {
-        roc_str1.decref(test_env.getOps());
-        roc_str2.decref(test_env.getOps());
-    }
-
-    try std.testing.expect(roc_str1.eql(roc_str2));
 }
 
 test "RocStr.eq: large, different lengths, unequal" {
@@ -3237,36 +3356,6 @@ test "strSplitHelp: overlapping delimiter 1" {
     try std.testing.expect(array[1].eql(expected[1]));
 }
 
-test "strSplitHelp: overlapping delimiter 2" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    // Str.splitOn "aaa" "aa" == ["", "a"]
-    const str_arr = "aaaa";
-    const str = RocStr.init(str_arr, str_arr.len, test_env.getOps());
-
-    const delimiter_arr = "aa";
-    const delimiter = RocStr.init(delimiter_arr, delimiter_arr.len, test_env.getOps());
-
-    var array: [3]RocStr = undefined;
-    const array_ptr: [*]RocStr = &array;
-
-    strSplitOnHelp(array_ptr, str, delimiter, test_env.getOps());
-
-    const expected = [3]RocStr{
-        RocStr.empty(),
-        RocStr.empty(),
-        RocStr.empty(),
-    };
-
-    // strings are all small so we ignore freeing the memory
-
-    try std.testing.expectEqual(array.len, expected.len);
-    try std.testing.expect(array[0].eql(expected[0]));
-    try std.testing.expect(array[1].eql(expected[1]));
-    try std.testing.expect(array[2].eql(expected[2]));
-}
-
 test "countSegments: long delimiter" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -3363,19 +3452,6 @@ test "countSegments: overlapping delimiter 1" {
     try std.testing.expectEqual(segments_count, 2);
 }
 
-test "countSegments: overlapping delimiter 2" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    // Str.splitOn "aaa" "aa" == ["", "a"]
-    const segments_count = countSegments(
-        RocStr.init("aaaa", 4, test_env.getOps()),
-        RocStr.init("aa", 2, test_env.getOps()),
-    );
-
-    try std.testing.expectEqual(segments_count, 3);
-}
-
 test "substringUnsafe: start" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -3421,6 +3497,59 @@ test "substringUnsafe: end" {
     try std.testing.expect(RocStr.eql(actual, expected));
 }
 
+test "RocStr shrink operations keep unique seamless slices as slices" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const backing1 = RocStr.fromSlice("0123456789abcdefghijklmnopqrstuvwxyz", test_env.getOps());
+    const slice1 = substringUnsafe(backing1, 5, 20, test_env.getOps());
+    try std.testing.expect(slice1.isSeamlessSlice());
+    try std.testing.expect(slice1.isExclusive(.Immutable));
+    try std.testing.expect(!slice1.canReuseAllocation(.Immutable));
+
+    const slice1_bytes = slice1.bytes;
+    const slice1_alloc = slice1.capacity_or_alloc_ptr;
+    const shortened = substringUnsafe(slice1, 0, 12, test_env.getOps());
+    defer shortened.decref(test_env.getOps());
+
+    try std.testing.expect(shortened.isSeamlessSlice());
+    try std.testing.expect(shortened.bytes == slice1_bytes);
+    try std.testing.expectEqual(slice1_alloc, shortened.capacity_or_alloc_ptr);
+    try std.testing.expect(shortened.eqlSlice("56789abcdefg"));
+
+    const backing2 = RocStr.fromSlice("prefix   middle value suffix", test_env.getOps());
+    const slice2 = substringUnsafe(backing2, 6, "   middle value suffix".len, test_env.getOps());
+    const trimmed_start = strTrimStart(slice2, .Immutable, test_env.getOps());
+    defer trimmed_start.decref(test_env.getOps());
+
+    try std.testing.expect(trimmed_start.isSeamlessSlice());
+    try std.testing.expect(trimmed_start.eqlSlice("middle value suffix"));
+
+    const prefix3 = "012345678901234567890123456789";
+    const backing3 = RocStr.fromSlice(prefix3 ++ "middle value   yy", test_env.getOps());
+    const slice3 = substringUnsafe(backing3, prefix3.len, "middle value   ".len, test_env.getOps());
+    const slice3_bytes = slice3.bytes;
+    const slice3_alloc = slice3.capacity_or_alloc_ptr;
+    const trimmed_end = strTrimEnd(slice3, .Immutable, test_env.getOps());
+    defer trimmed_end.decref(test_env.getOps());
+
+    try std.testing.expect(trimmed_end.isSeamlessSlice());
+    try std.testing.expect(trimmed_end.bytes == slice3_bytes);
+    try std.testing.expectEqual(slice3_alloc, trimmed_end.capacity_or_alloc_ptr);
+    try std.testing.expect(trimmed_end.eqlSlice("middle value"));
+
+    const prefix4 = "abcdefghijklmnopqrstuvwx";
+    const backing4 = RocStr.fromSlice(prefix4 ++ "  middle value  yy", test_env.getOps());
+    const slice4 = substringUnsafe(backing4, prefix4.len, "  middle value  ".len, test_env.getOps());
+    const slice4_alloc = slice4.capacity_or_alloc_ptr;
+    const trimmed = strTrim(slice4, .Immutable, test_env.getOps());
+    defer trimmed.decref(test_env.getOps());
+
+    try std.testing.expect(trimmed.isSeamlessSlice());
+    try std.testing.expectEqual(slice4_alloc, trimmed.capacity_or_alloc_ptr);
+    try std.testing.expect(trimmed.eqlSlice("middle value"));
+}
+
 test "startsWith: food starts with foo" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -3428,27 +3557,6 @@ test "startsWith: food starts with foo" {
     const food = RocStr.fromSlice("food", test_env.getOps());
     const foo = RocStr.fromSlice("foo", test_env.getOps());
     try std.testing.expect(startsWith(food, foo));
-}
-
-test "startsWith: 123456789123456789 starts with 123456789123456789" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    const str = RocStr.fromSlice("123456789123456789", test_env.getOps());
-    defer str.decref(test_env.getOps());
-    try std.testing.expect(startsWith(str, str));
-}
-
-test "startsWith: 12345678912345678910 starts with 123456789123456789" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    const str = RocStr.fromSlice("12345678912345678910", test_env.getOps());
-    defer str.decref(test_env.getOps());
-    const prefix = RocStr.fromSlice("123456789123456789", test_env.getOps());
-    defer prefix.decref(test_env.getOps());
-
-    try std.testing.expect(startsWith(str, prefix));
 }
 
 test "endsWith: foo ends with oo" {
@@ -3461,39 +3569,6 @@ test "endsWith: foo ends with oo" {
     defer oo.decref(test_env.getOps());
 
     try std.testing.expect(endsWith(foo, oo));
-}
-
-test "endsWith: 123456789123456789 ends with 123456789123456789" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    const str = RocStr.init("123456789123456789", 18, test_env.getOps());
-    defer str.decref(test_env.getOps());
-    try std.testing.expect(endsWith(str, str));
-}
-
-test "endsWith: 12345678912345678910 ends with 345678912345678910" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    const str = RocStr.init("12345678912345678910", 20, test_env.getOps());
-    const suffix = RocStr.init("345678912345678910", 18, test_env.getOps());
-    defer str.decref(test_env.getOps());
-    defer suffix.decref(test_env.getOps());
-
-    try std.testing.expect(endsWith(str, suffix));
-}
-
-test "endsWith: hello world ends with world" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    const str = RocStr.init("hello world", 11, test_env.getOps());
-    const suffix = RocStr.init("world", 5, test_env.getOps());
-    defer str.decref(test_env.getOps());
-    defer suffix.decref(test_env.getOps());
-
-    try std.testing.expect(endsWith(str, suffix));
 }
 
 test "RocStr.concat: small concat small" {
@@ -4132,6 +4207,26 @@ test "withAsciiUppercased: seamless slice" {
     try std.testing.expect(str_result.eql(expected));
 }
 
+test "wordCaselessAsciiEqualMasked matches shared SWAR vectors" {
+    // These vectors are the shared contract between this builtin and the inline
+    // LLVM emitter `MonoLlvmCodeGen.emitSwarCaselessAsciiEqualMasked`. Driving
+    // them here pins the Zig side; a drift in either implementation against this
+    // table is a failing test.
+    for (swar_caseless_word_vectors, 0..) |vec, i| {
+        const left = std.mem.readInt(u64, &vec.left, .little);
+        const right = std.mem.readInt(u64, &vec.right, .little);
+        const active = caselessActiveMask(vec.active_len);
+        const got = wordCaselessAsciiEqualMasked(left, right, active);
+        std.testing.expectEqual(vec.expected, got) catch |err| {
+            std.debug.print(
+                "SWAR vector #{d} failed: left={s} right={s} active_len={d} expected={} got={}\n",
+                .{ i, &vec.left, &vec.right, vec.active_len, vec.expected, got },
+            );
+            return err;
+        };
+    }
+}
+
 test "caselessAsciiEquals: same str" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -4468,27 +4563,6 @@ test "strTrim: blank" {
     try std.testing.expect(trimmed.eql(RocStr.empty()));
 }
 
-test "strTrim: large to large" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    const original_bytes = " hello even more giant world ";
-    const original = RocStr.init(original_bytes, original_bytes.len, test_env.getOps());
-
-    try std.testing.expect(!original.isSmallStr());
-
-    const expected_bytes = "hello even more giant world";
-    const expected = RocStr.init(expected_bytes, expected_bytes.len, test_env.getOps());
-    defer expected.decref(test_env.getOps());
-
-    try std.testing.expect(!expected.isSmallStr());
-
-    const trimmed = strTrim(original, .Immutable, test_env.getOps());
-    defer trimmed.decref(test_env.getOps());
-
-    try std.testing.expect(trimmed.eql(expected));
-}
-
 test "strTrim: large to small sized slice" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -4556,27 +4630,6 @@ test "strTrimStart: blank" {
     try std.testing.expect(trimmed.eql(RocStr.empty()));
 }
 
-test "strTrimStart: large to large" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    const original_bytes = " hello even more giant world ";
-    const original = RocStr.init(original_bytes, original_bytes.len, test_env.getOps());
-    defer original.decref(test_env.getOps());
-
-    try std.testing.expect(!original.isSmallStr());
-
-    const expected_bytes = "hello even more giant world ";
-    const expected = RocStr.init(expected_bytes, expected_bytes.len, test_env.getOps());
-    defer expected.decref(test_env.getOps());
-
-    try std.testing.expect(!expected.isSmallStr());
-
-    const trimmed = strTrimStart(original, .Immutable, test_env.getOps());
-
-    try std.testing.expect(trimmed.eql(expected));
-}
-
 test "strTrimStart: large to small" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -4640,26 +4693,6 @@ test "strTrimEnd: blank" {
     const trimmed = strTrimEnd(original, .Immutable, test_env.getOps());
 
     try std.testing.expect(trimmed.eql(RocStr.empty()));
-}
-
-test "strTrimEnd: large to large" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-    const original_bytes = " hello even more giant world ";
-    const original = RocStr.init(original_bytes, original_bytes.len, test_env.getOps());
-    defer original.decref(test_env.getOps());
-
-    try std.testing.expect(!original.isSmallStr());
-
-    const expected_bytes = " hello even more giant world";
-    const expected = RocStr.init(expected_bytes, expected_bytes.len, test_env.getOps());
-    defer expected.decref(test_env.getOps());
-
-    try std.testing.expect(!expected.isSmallStr());
-
-    const trimmed = strTrimEnd(original, .Immutable, test_env.getOps());
-
-    try std.testing.expect(trimmed.eql(expected));
 }
 
 test "strTrimEnd: large to small" {
@@ -4804,4 +4837,24 @@ test "strConcat Immutable copies a shared big allocation" {
     try std.testing.expect(result.bytes != original_bytes);
     try std.testing.expect(std.mem.eql(u8, result.asSlice(), "a string long enough to be heap allocated!?"));
     try std.testing.expect(std.mem.eql(u8, base.asSlice(), "a string long enough to be heap allocated"));
+}
+
+test "default-platform RocStr view matches canonical RocStr layout" {
+    // The freestanding default-platform runtimes cannot import this module, so
+    // they read the RocStr encoding through `default_platform/roc_str_view.zig`.
+    // Assert that view's layout stays byte-for-byte identical to the canonical
+    // struct so the host boundary cannot silently drift.
+    const View = @import("roc_str_view").RocStr;
+
+    try std.testing.expectEqual(@sizeOf(RocStr), @sizeOf(View));
+    try std.testing.expectEqual(@alignOf(RocStr), @alignOf(View));
+
+    const canonical_fields = @typeInfo(RocStr).@"struct".fields;
+    const view_fields = @typeInfo(View).@"struct".fields;
+    try std.testing.expectEqual(canonical_fields.len, view_fields.len);
+    inline for (canonical_fields, view_fields) |cf, vf| {
+        try std.testing.expect(std.mem.eql(u8, cf.name, vf.name));
+        try std.testing.expectEqual(cf.type, vf.type);
+        try std.testing.expectEqual(@offsetOf(RocStr, cf.name), @offsetOf(View, vf.name));
+    }
 }

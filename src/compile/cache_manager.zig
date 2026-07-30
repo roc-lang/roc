@@ -21,6 +21,7 @@ pub const CacheManager = struct {
     roc_ctx: CoreCtx = undefined,
     allocator: Allocator,
     stats: CacheStats,
+    store_failure_warning_emitted: bool = false,
 
     const Self = @This();
 
@@ -29,6 +30,14 @@ pub const CacheManager = struct {
         var buf: [1024]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, fmt, args) catch return;
         self.roc_ctx.writeStderr(msg) catch {};
+    }
+
+    fn warnStoreFailureOnce(self: *Self) void {
+        if (self.store_failure_warning_emitted) return;
+        self.store_failure_warning_emitted = true;
+        self.roc_ctx.writeStderr(
+            "warning: Roc cache writes are failing; compilation will continue without updating the cache. Run with --verbose for details.\n",
+        ) catch {};
     }
 
     pub fn init(allocator: Allocator, config: CacheConfig, roc_ctx: CoreCtx) Self {
@@ -40,6 +49,11 @@ pub const CacheManager = struct {
             .allocator = allocator,
             .stats = CacheStats{},
         };
+    }
+
+    pub fn recordStoreFailure(self: *Self) void {
+        self.stats.recordStoreFailure();
+        self.warnStoreFailureOnce();
     }
 
     pub fn getCacheFilePath(self: *Self, cache_key: [32]u8) (Allocator.Error || error{NoHomeDirectory})![]u8 {
@@ -78,31 +92,31 @@ pub const CacheManager = struct {
 
         self.ensureCacheSubdirIn(cache_key, entries_dir) catch |err| {
             self.verboseLog("Failed to create cache subdirectory: {}\n", .{err});
-            self.stats.recordStoreFailure();
+            self.recordStoreFailure();
             return;
         };
 
         const cache_path = self.computeCacheFilePath(cache_key, entries_dir) catch {
-            self.stats.recordStoreFailure();
+            self.recordStoreFailure();
             return;
         };
         defer self.allocator.free(cache_path);
 
         const temp_path = std.fmt.allocPrint(self.allocator, "{s}.tmp", .{cache_path}) catch {
-            self.stats.recordStoreFailure();
+            self.recordStoreFailure();
             return;
         };
         defer self.allocator.free(temp_path);
 
         self.roc_ctx.writeFile(temp_path, data) catch |err| {
             self.verboseLog("Failed to write cache temp file {s}: {}\n", .{ temp_path, err });
-            self.stats.recordStoreFailure();
+            self.recordStoreFailure();
             return;
         };
 
         self.roc_ctx.rename(temp_path, cache_path) catch |err| {
             self.verboseLog("Failed to rename cache file {s} -> {s}: {}\n", .{ temp_path, cache_path, err });
-            self.stats.recordStoreFailure();
+            self.recordStoreFailure();
             return;
         };
 
@@ -131,6 +145,50 @@ pub const CacheManager = struct {
 
         self.stats.recordHit(data.len);
         return data;
+    }
+
+    /// Load a cache entry as a `CacheModule.CacheData`, memory-mapping the file on
+    /// POSIX targets and reading it onto the heap elsewhere. The returned value must
+    /// be released with `CacheData.deinit(self.allocator)`, which unmaps a mapped
+    /// entry and frees a heap-read entry. The caller must keep the entry alive for
+    /// as long as it reads from the returned bytes.
+    pub fn loadRawBytesMapped(self: *Self, cache_key: [32]u8, entries_dir: []const u8) ?CacheModule.CacheData {
+        if (!self.config.enabled) return null;
+
+        const cache_path = self.computeCacheFilePath(cache_key, entries_dir) catch {
+            self.stats.recordMiss();
+            return null;
+        };
+        defer self.allocator.free(cache_path);
+
+        if (!self.roc_ctx.fileExists(cache_path)) {
+            self.stats.recordMiss();
+            return null;
+        }
+
+        // Prefer a copy-on-write mapping of the file. A `roc_ctx` that cannot
+        // map files (a virtual filesystem, a target without `mmap`) yields
+        // `null` and reads onto the heap instead.
+        if (CacheModule.tryMapCacheFile(self.roc_ctx, cache_path)) |mapped| {
+            self.stats.recordHit(mapped.data().len);
+            return mapped;
+        }
+
+        const data = self.roc_ctx.readFile(cache_path, self.allocator) catch |err| {
+            self.verboseLog("Failed to read cache file {s}: {}\n", .{ cache_path, err });
+            self.stats.recordMiss();
+            return null;
+        };
+        defer self.allocator.free(data);
+
+        const buffer = self.allocator.alignedAlloc(u8, CacheModule.SERIALIZATION_ALIGNMENT, data.len) catch {
+            self.stats.recordMiss();
+            return null;
+        };
+        @memcpy(buffer, data);
+
+        self.stats.recordHit(buffer.len);
+        return CacheModule.CacheData{ .allocated = buffer };
     }
 
     pub fn getStats(self: *const Self) CacheStats {

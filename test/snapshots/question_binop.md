@@ -40,7 +40,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "question_with_err_tag")
 			(ty-fn
@@ -120,7 +120,7 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-dispatch-call (method "first") (constraint-fn-var 120)
+								(e-dispatch-call (method "first") (constraint-fn-var 282)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "strings"))))
@@ -171,7 +171,7 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-dispatch-call (method "first") (constraint-fn-var 202)
+								(e-dispatch-call (method "first") (constraint-fn-var 338)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "strings"))))
@@ -196,7 +196,7 @@ NO CHANGE
 												(builtin)
 												(e-tag (name "Err")
 													(args
-														(e-call (constraint-fn-var 249)
+														(e-call (constraint-fn-var 373)
 															(e-lambda
 																(args
 																	(p-assign (ident "e")))

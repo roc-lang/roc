@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=A simple module with no blanks
+description=A simple mod with no blanks
 type=snippet
 ~~~
 # SOURCE
@@ -11,18 +11,18 @@ hello! = Stdout.line!("Hello")
 world = "World"
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - simple_module_no_blanks.md:2:10:2:22
+NAME NOT IN SCOPE - simple_mod_no_blanks.md:2:10:2:22
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**simple_module_no_blanks.md:2:10:2:22:**
-```roc
-hello! = Stdout.line!("Hello")
-```
-         ^^^^^^^^^^^^
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
+ │                                                                            │
+ │  hello! = Stdout.line!("Hello")                                            │
+ │           ‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
+ └─────────────────────────────────────────── simple_mod_no_blanks.md:2:10 ┘
 
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig
@@ -34,7 +34,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "pf.Stdout"))
 		(s-decl
@@ -57,15 +57,12 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "hello!"))
-		(e-call
-			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-string
-				(e-literal (string "Hello")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "world"))
 		(e-string
 			(e-literal (string "World"))))
-	(s-import (module "pf.Stdout")
+	(s-import (mod "pf.Stdout")
 		(exposes)))
 ~~~
 # TYPES

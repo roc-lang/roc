@@ -300,7 +300,7 @@ fn applyRelocations(
         if (off + @sizeOf(macho.relocation_info) > obj_bytes.len) return SpliceError.UnexpectedEof;
         const reloc = std.mem.bytesToValue(macho.relocation_info, obj_bytes[off..][0..@sizeOf(macho.relocation_info)]);
 
-        // DWARF sections only carry absolute pointer-sized fixups.
+        // DWARF sections only carry absolute section-based fixups.
         if (reloc.r_pcrel != 0 or reloc.r_type != 0 or reloc.r_address < 0) {
             return SpliceError.UnsupportedRelocation;
         }

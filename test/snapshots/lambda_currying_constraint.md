@@ -23,21 +23,22 @@ addThreeTwice = |n| applyTwice(|x| x + 3, n)
 ~~~
 # EXPECTED
 MISSING METHOD - lambda_currying_constraint.md:3:21:3:26
-+ - :0:0:0:0
 # PROBLEMS
-**MISSING METHOD**
-The value before this **+** operator has a type that doesn't have a **plus** method:
-**lambda_currying_constraint.md:3:21:3:26:**
-```roc
-makeAdder = |x| |y| x + y
-```
-                    ^^^^^
 
-The value's type, which does not have a method named **plus**, is:
+┌────────────────┐
+│ MISSING METHOD ├─ The value before this `+` operator has a type that ───────┐
+└┬───────────────┘  doesn't have a `plus` method.                             │
+ │                                                                            │
+ │  makeAdder = |x| |y| x + y                                                 │
+ │                      ‾‾‾‾‾                                                 │
+ └──────────────────────────────────────── lambda_currying_constraint.md:3:21 ┘
 
-    a
+    The value's type, which does not have a method named `plus`, is:
 
-**Hint:** The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
+        a
+
+    Hint: The `+` operator calls a method named `plus` on the value preceding
+    it, passing the value after the operator as the one argument.
 
 # TOKENS
 ~~~zig
@@ -54,7 +55,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "makeAdder")
 			(ty-fn
@@ -131,7 +132,13 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+			(e-closure
+				(captures
+					(capture (ident "x")))
+				(e-lambda
+					(args
+						(p-assign (ident "y")))
+					(e-runtime-error (tag "erroneous_value_expr")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))
@@ -141,7 +148,7 @@ NO CHANGE
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
 	(d-let
 		(p-assign (ident "curriedAdd"))
-		(e-call (constraint-fn-var 122)
+		(e-call (constraint-fn-var 283)
 			(e-lookup-local
 				(p-assign (ident "makeAdder")))
 			(e-num (value "5")))
@@ -155,10 +162,10 @@ NO CHANGE
 			(args
 				(p-assign (ident "f"))
 				(p-assign (ident "x")))
-			(e-call (constraint-fn-var 198)
+			(e-call (constraint-fn-var 303)
 				(e-lookup-local
 					(p-assign (ident "f")))
-				(e-call (constraint-fn-var 197)
+				(e-call (constraint-fn-var 302)
 					(e-lookup-local
 						(p-assign (ident "f")))
 					(e-lookup-local
@@ -176,13 +183,13 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "n")))
-			(e-call (constraint-fn-var 249)
+			(e-call (constraint-fn-var 320)
 				(e-lookup-local
 					(p-assign (ident "applyTwice")))
 				(e-lambda
 					(args
 						(p-assign (ident "x")))
-					(e-dispatch-call (method "plus") (constraint-fn-var 247)
+					(e-dispatch-call (method "plus") (constraint-fn-var 318)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))

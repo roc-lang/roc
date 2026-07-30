@@ -10,17 +10,18 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - can_list_first_concrete.md:1:6:1:13
 # PROBLEMS
-**TYPE MISMATCH**
-This string literal is being used where a non-string type is needed:
-**can_list_first_concrete.md:1:6:1:13:**
-```roc
-[42, "world", 3.14]
-```
-     ^^^^^^^
 
-The type was determined to be:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
+└┬──────────────┘  type is needed.                                            │
+ │                                                                            │
+ │  [42, "world", 3.14]                                                       │
+ │       ‾‾‾‾‾‾‾                                                              │
+ └──────────────────────────────────────────── can_list_first_concrete.md:1:6 ┘
 
-    Dec
+    The type was determined to be:
+
+        Dec
 
 # TOKENS
 ~~~zig
@@ -44,8 +45,7 @@ NO CHANGE
 (e-list
 	(elems
 		(e-num (value "42"))
-		(e-string
-			(e-literal (string "world")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14"))))
 ~~~
 # TYPES

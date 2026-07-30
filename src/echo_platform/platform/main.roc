@@ -13,7 +13,7 @@ main_for_host! = |args|
         Ok(_) => 0
         Err(Exit(code)) => code
         Err(other) => {
-            Echo.line!("Program exited with error: ${Str.inspect(other)}")
+            Echo.line!("Program exited with error: ${Str.inspect(other)}\n")
             1
         }
     }

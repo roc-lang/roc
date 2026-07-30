@@ -25,15 +25,16 @@ pub const CoordinationError = error{
     AllocationFailed,
 };
 
-/// Read shared memory coordination info from platform-specific source
-/// On Windows: reads from command line arguments
-/// On POSIX: reads from a file next to the executable
+/// Read shared memory coordination info, written by the parent `roc` process
+/// as a file next to the executable's temp directory.
+///
+/// Windows used to receive this on the command line instead. That leaked the
+/// handle and size into the child's argv, where a platform host cannot
+/// distinguish them from the user's arguments and hands them to the Roc
+/// application -- so `roc --opt=interpreter app.roc` gave the app three args
+/// rather than one. Both platforms now use the same out-of-band file.
 pub fn readFdInfo(allocator: std.mem.Allocator, io: std.Io) CoordinationError!FdInfo {
-    if (comptime platform.is_windows) {
-        return readFdInfoFromCommandLine(allocator);
-    } else {
-        return readFdInfoFromFile(allocator, io);
-    }
+    return readFdInfoFromFile(allocator, io);
 }
 
 /// Parse platform-specific handle from string
@@ -51,49 +52,8 @@ pub fn parseHandle(handle_str: []const u8) CoordinationError!platform.Handle {
     }
 }
 
-/// Windows: Read handle and size from command line arguments
-fn readFdInfoFromCommandLine(allocator: std.mem.Allocator) CoordinationError!FdInfo {
-    // In Zig 0.16 `std.process.argsAlloc` was removed; on Windows we read the raw
-    // command line from the PEB and parse it with the standard library iterator.
-    // The shim entry point is not driven by Zig's `main(init: Init)`, so we cannot
-    // receive an `Args` value from the runtime.
-    const cmd_line_w = std.os.windows.peb().ProcessParameters.CommandLine.slice();
-    var iter = std.process.Args.Iterator.Windows.init(allocator, cmd_line_w) catch {
-        std.log.err("Failed to initialize command line iterator", .{});
-        return error.AllocationFailed;
-    };
-    defer iter.deinit();
-
-    // Skip argv[0] (program name).
-    _ = iter.next();
-
-    const handle_str = iter.next() orelse {
-        std.log.err("Invalid command line arguments: missing handle", .{});
-        return error.ArgumentsInvalid;
-    };
-    const size_str = iter.next() orelse {
-        std.log.err("Invalid command line arguments: missing size", .{});
-        return error.ArgumentsInvalid;
-    };
-
-    const fd_str = allocator.dupe(u8, handle_str) catch {
-        std.log.err("Failed to duplicate handle string", .{});
-        return error.AllocationFailed;
-    };
-
-    const size = std.fmt.parseInt(usize, size_str, 10) catch {
-        std.log.err("Failed to parse size from '{s}'", .{size_str});
-        allocator.free(fd_str);
-        return error.ArgumentsInvalid;
-    };
-
-    return FdInfo{
-        .fd_str = fd_str,
-        .size = size,
-    };
-}
-
-/// POSIX: Read fd and size from temporary file
+/// Read the fd/handle and size from the coordination file the parent wrote
+/// next to the executable's temp directory. Used on every platform.
 fn readFdInfoFromFile(allocator: std.mem.Allocator, io: std.Io) CoordinationError!FdInfo {
     // Get our own executable path
     const exe_path = std.process.executablePathAlloc(io, allocator) catch |err| switch (err) {
@@ -176,55 +136,4 @@ fn readFdInfoFromFile(allocator: std.mem.Allocator, io: std.Io) CoordinationErro
         .fd_str = fd_str,
         .size = size,
     };
-}
-
-/// Write shared memory coordination info for child process
-/// On Windows: returns command line arguments to pass
-/// On POSIX: writes a file next to the target executable
-pub fn writeFdInfo(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    handle: platform.Handle,
-    size: usize,
-    target_path: []const u8,
-) (std.mem.Allocator.Error || std.Io.File.OpenError || std.Io.File.Writer.Error || error{InvalidTargetPath})![]const u8 {
-    if (comptime platform.is_windows) {
-        // On Windows, return command line arguments
-        const handle_int = @intFromPtr(handle);
-        return std.fmt.allocPrint(allocator, "{} {}", .{ handle_int, size });
-    } else {
-        // On POSIX, write a coordination file
-        const fd = @as(c_int, @intCast(handle));
-
-        // Get the directory of the target executable
-        const target_dir = std.fs.path.dirname(target_path) orelse {
-            return error.InvalidTargetPath;
-        };
-
-        // Create the coordination file path
-        const coord_file_path = std.fmt.allocPrint(allocator, "{s}.txt", .{target_dir}) catch {
-            return error.OutOfMemory;
-        };
-        defer allocator.free(coord_file_path);
-
-        // Write the coordination file
-        const file = std.Io.Dir.cwd().createFile(io, coord_file_path, .{}) catch |err| {
-            std.log.err("Failed to create coordination file at '{s}': {}", .{ coord_file_path, err });
-            return err;
-        };
-        defer file.close(io);
-
-        const content = std.fmt.allocPrint(allocator, "{}\n{}\n", .{ fd, size }) catch {
-            return error.OutOfMemory;
-        };
-        defer allocator.free(content);
-
-        file.writeStreamingAll(io, content) catch |err| {
-            std.log.err("Failed to write coordination file: {}", .{err});
-            return err;
-        };
-
-        // Return empty string for POSIX (no command line args needed)
-        return "";
-    }
 }

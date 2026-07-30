@@ -15,34 +15,36 @@ wrong_type_function = |x| x * 3.14
 ~~~
 # EXPECTED
 MISSING METHOD - lambda_annotation_mismatch_error.md:3:23:3:29
-+ - :0:0:0:0
 INVALID NUMBER - lambda_annotation_mismatch_error.md:7:31:7:35
 # PROBLEMS
-**MISSING METHOD**
-The value before this **+** operator has a type that doesn't have a **plus** method:
-**lambda_annotation_mismatch_error.md:3:23:3:29:**
-```roc
-string_function = |x| x + 42
-```
-                      ^^^^^^
 
-The value's type, which does not have a method named **plus**, is:
+┌────────────────┐
+│ MISSING METHOD ├─ The value before this `+` operator has a type that ───────┐
+└┬───────────────┘  doesn't have a `plus` method.                             │
+ │                                                                            │
+ │  string_function = |x| x + 42                                              │
+ │                        ‾‾‾‾‾‾                                              │
+ └────────────────────────────────── lambda_annotation_mismatch_error.md:3:23 ┘
 
-    Str
+    The value's type, which does not have a method named `plus`, is:
 
-**Hint:** The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
+        Str
 
-**INVALID NUMBER**
-This number literal does not fit in the inferred type:
-**lambda_annotation_mismatch_error.md:7:31:7:35:**
-```roc
-wrong_type_function = |x| x * 3.14
-```
-                              ^^^^
+    Hint: The `+` operator calls a method named `plus` on the value preceding
+    it, passing the value after the operator as the one argument.
 
-The inferred type is:
 
-    I64
+┌────────────────┐
+│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  wrong_type_function = |x| x * 3.14                                        │
+ │                                ‾‾‾‾                                        │
+ └────────────────────────────────── lambda_annotation_mismatch_error.md:7:31 ┘
+
+    The inferred type is:
+
+        I64
 
 # TOKENS
 ~~~zig
@@ -55,7 +57,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "string_function")
 			(ty-fn
@@ -104,11 +106,11 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "times") (constraint-fn-var 199)
+			(e-dispatch-call (method "times") (constraint-fn-var 262)
 				(receiver
 					(e-runtime-error (tag "erroneous_value_use")))
 				(args
-					(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14")))))
+					(e-runtime-error (tag "erroneous_value_expr")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "I64") (builtin))

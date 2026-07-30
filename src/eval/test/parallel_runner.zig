@@ -58,6 +58,10 @@ const coverage_options = @import("coverage_options");
 const eval = @import("eval");
 const collections = @import("collections");
 const base = @import("base");
+const check = @import("check");
+const lir = @import("lir");
+const roc_target = @import("roc_target");
+const static_data = @import("static_data");
 
 /// When true (set via `zig build run-coverage-eval`), the runner:
 /// - Only builds/runs the interpreter backend (dev/wasm are DCE'd)
@@ -110,13 +114,20 @@ pub const TestCase = struct {
     imports: []const helpers.ModuleSource = &.{},
     expected: Expected,
     skip: Skip = .{},
-    /// Known compiler-bug repros are opt-in so ordinary `zig build run-test-eval`
-    /// stays green while still letting bug hunts use the eval pipeline directly.
-    known_bug: bool = false,
+    /// Expensive proof cases are excluded from an unfiltered run and are
+    /// selected explicitly by name by their dedicated build step.
+    opt_in: bool = false,
 
     pub const Expected = union(enum) {
         inspect_str: []const u8,
         allocations_at_most: AllocationExpectation,
+        /// Exact IEEE-754 bits stored in the checked module's ConstStore and in
+        /// the target-layout readonly bytes materialized from that store for
+        /// both 64-bit native and wasm32 targets.
+        comptime_f32_bits: u32,
+        comptime_f64_bits: u64,
+        comptime_f32_list_bits: []const u32,
+        comptime_f64_list_bits: []const u64,
         problem: void,
         crash: void,
         problem_and_crash: void,
@@ -125,6 +136,7 @@ pub const TestCase = struct {
             return switch (self) {
                 .inspect_str => |value| value,
                 .allocations_at_most => |value| value.output,
+                .comptime_f32_bits, .comptime_f64_bits, .comptime_f32_list_bits, .comptime_f64_list_bits => null,
                 .problem => null,
                 .crash => null,
                 .problem_and_crash => null,
@@ -135,6 +147,7 @@ pub const TestCase = struct {
     pub const AllocationExpectation = struct {
         output: []const u8,
         max_allocations: u32,
+        optimized: bool = false,
     };
 
     pub const Skip = packed struct {
@@ -681,8 +694,11 @@ fn runSingleTest(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout
                     .typecheck_ns = compiled.resources.typecheck_ns,
                 };
             },
-            .allocations_at_most => blk: {
-                var compiled = helpers.compileProgram(allocator, io, tc.source_kind, tc.source, tc.imports) catch {
+            .allocations_at_most => |expected| blk: {
+                var compiled = (if (expected.optimized)
+                    helpers.compileAllocationProgram(allocator, io, tc.source_kind, tc.source, tc.imports)
+                else
+                    helpers.compileProgram(allocator, io, tc.source_kind, tc.source, tc.imports)) catch {
                     return .{
                         .status = .fail,
                         .message = "INVALID_SYNTAX — skipped allocation test has parse/check/lower errors",
@@ -695,6 +711,22 @@ fn runSingleTest(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout
                     .parse_ns = compiled.resources.parse_ns,
                     .canonicalize_ns = compiled.resources.canonicalize_ns,
                     .typecheck_ns = compiled.resources.typecheck_ns,
+                };
+            },
+            .comptime_f32_bits, .comptime_f64_bits, .comptime_f32_list_bits, .comptime_f64_list_bits => blk: {
+                var resources = helpers.parseAndCanonicalizeProgram(allocator, tc.source_kind, tc.source, tc.imports) catch {
+                    return .{
+                        .status = .fail,
+                        .message = "INVALID_SYNTAX — skipped compile-time float-bits test has parse/check errors",
+                        .has_backend_details = false,
+                        .backends = undefined,
+                    };
+                };
+                defer resources.deinit(allocator);
+                break :blk EvalTimings{
+                    .parse_ns = resources.parse_ns,
+                    .canonicalize_ns = resources.canonicalize_ns,
+                    .typecheck_ns = resources.typecheck_ns,
                 };
             },
             .crash, .problem_and_crash => blk: {
@@ -817,10 +849,261 @@ fn runSingleTestInner(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, ti
     return switch (tc.expected) {
         .inspect_str => runInspectTest(io, allocator, tc.source_kind, tc.source, tc.imports, tc.expected, tc.skip, timeout_ms),
         .allocations_at_most => |expected| runAllocationTest(io, allocator, tc.source_kind, tc.source, tc.imports, expected, tc.skip),
+        .comptime_f32_bits, .comptime_f64_bits, .comptime_f32_list_bits, .comptime_f64_list_bits => runComptimeFloatBitsTest(allocator, tc.source_kind, tc.source, tc.imports, tc.expected),
         .problem => runTestProblem(allocator, tc.source_kind, tc.source, tc.imports),
         .crash => runCrashTest(io, allocator, tc.source_kind, tc.source, tc.imports, tc.skip, false, timeout_ms),
         .problem_and_crash => runCrashTest(io, allocator, tc.source_kind, tc.source, tc.imports, tc.skip, true, timeout_ms),
     };
+}
+
+fn runComptimeFloatBitsTest(
+    allocator: std.mem.Allocator,
+    source_kind: helpers.SourceKind,
+    src: []const u8,
+    imports: []const helpers.ModuleSource,
+    expected: TestCase.Expected,
+) RunnerError!TestOutcome {
+    var resources = try helpers.parseAndCanonicalizeProgram(allocator, source_kind, src, imports);
+    defer resources.deinit(allocator);
+
+    const timings = EvalTimings{
+        .parse_ns = resources.parse_ns,
+        .canonicalize_ns = resources.canonicalize_ns,
+        .typecheck_ns = resources.typecheck_ns,
+    };
+    const roots = resources.checked_artifact.compile_time_roots.roots;
+    if (roots.len != 1) {
+        return .{
+            .status = .fail,
+            .message = try std.fmt.allocPrint(allocator, "expected exactly one compile-time root, found {d}", .{roots.len}),
+            .timings = timings,
+            .has_backend_details = false,
+            .backends = undefined,
+        };
+    }
+
+    const node = switch (roots[0].payload) {
+        .const_node => |value| value,
+        .pending, .fn_value, .expect => {
+            return .{
+                .status = .fail,
+                .message = "compile-time float root did not produce a ConstStore node",
+                .timings = timings,
+                .has_backend_details = false,
+                .backends = undefined,
+            };
+        },
+    };
+    const stored = resources.checked_artifact.const_store.get(node);
+    const const_store = &resources.checked_artifact.const_store;
+
+    const matches = switch (expected) {
+        .comptime_f32_bits => |expected_bits| switch (stored) {
+            .scalar => |scalar| switch (scalar) {
+                .f32_bits => |actual_bits| actual_bits == expected_bits,
+                else => false,
+            },
+            else => false,
+        },
+        .comptime_f64_bits => |expected_bits| switch (stored) {
+            .scalar => |scalar| switch (scalar) {
+                .f64_bits => |actual_bits| actual_bits == expected_bits,
+                else => false,
+            },
+            else => false,
+        },
+        .comptime_f32_list_bits => |expected_bits| switch (stored) {
+            .list => |items| blk: {
+                if (items.len != expected_bits.len) break :blk false;
+                for (items, expected_bits) |item, bits| {
+                    const actual = switch (const_store.get(item)) {
+                        .scalar => |scalar| switch (scalar) {
+                            .f32_bits => |actual_bits| actual_bits,
+                            else => break :blk false,
+                        },
+                        else => break :blk false,
+                    };
+                    if (actual != bits) break :blk false;
+                }
+                break :blk true;
+            },
+            else => false,
+        },
+        .comptime_f64_list_bits => |expected_bits| switch (stored) {
+            .list => |items| blk: {
+                if (items.len != expected_bits.len) break :blk false;
+                for (items, expected_bits) |item, bits| {
+                    const actual = switch (const_store.get(item)) {
+                        .scalar => |scalar| switch (scalar) {
+                            .f64_bits => |actual_bits| actual_bits,
+                            else => break :blk false,
+                        },
+                        else => break :blk false,
+                    };
+                    if (actual != bits) break :blk false;
+                }
+                break :blk true;
+            },
+            else => false,
+        },
+        else => unreachable,
+    };
+    if (!matches) {
+        const message = switch (expected) {
+            .comptime_f32_bits => |expected_bits| switch (stored) {
+                .scalar => |scalar| switch (scalar) {
+                    .f32_bits => |actual_bits| try std.fmt.allocPrint(allocator, "ConstStore F32 bits: expected 0x{x:0>8}, got 0x{x:0>8}", .{ expected_bits, actual_bits }),
+                    else => "ConstStore root was not an F32 scalar",
+                },
+                else => "ConstStore root was not a scalar",
+            },
+            .comptime_f64_bits => |expected_bits| switch (stored) {
+                .scalar => |scalar| switch (scalar) {
+                    .f64_bits => |actual_bits| try std.fmt.allocPrint(allocator, "ConstStore F64 bits: expected 0x{x:0>16}, got 0x{x:0>16}", .{ expected_bits, actual_bits }),
+                    else => "ConstStore root was not an F64 scalar",
+                },
+                else => "ConstStore root was not a scalar",
+            },
+            .comptime_f32_list_bits => "ConstStore F32 list did not contain the expected exact element bits",
+            .comptime_f64_list_bits => "ConstStore F64 list did not contain the expected exact element bits",
+            else => unreachable,
+        };
+        return .{
+            .status = .fail,
+            .message = message,
+            .timings = timings,
+            .has_backend_details = false,
+            .backends = undefined,
+        };
+    }
+
+    inline for (.{ roc_target.RocTarget.x64linux, roc_target.RocTarget.wasm32 }) |target| {
+        const materialized_matches = materializedComptimeFloatBitsMatch(allocator, &resources, target, expected) catch |err| {
+            return .{
+                .status = .fail,
+                .message = try std.fmt.allocPrint(allocator, "failed to materialize compile-time float bytes for {s}: {s}", .{ @tagName(target), @errorName(err) }),
+                .timings = timings,
+                .has_backend_details = false,
+                .backends = undefined,
+            };
+        };
+        if (!materialized_matches) {
+            return .{
+                .status = .fail,
+                .message = try std.fmt.allocPrint(allocator, "materialized {s} static data did not contain the expected exact float bytes", .{@tagName(target)}),
+                .timings = timings,
+                .has_backend_details = false,
+                .backends = undefined,
+            };
+        }
+    }
+
+    return .{
+        .status = .pass,
+        .timings = timings,
+        .has_backend_details = false,
+        .backends = undefined,
+    };
+}
+
+fn materializedComptimeFloatBitsMatch(
+    allocator: std.mem.Allocator,
+    resources: *helpers.ParsedResources,
+    target: roc_target.RocTarget,
+    expected: TestCase.Expected,
+) (std.mem.Allocator.Error || error{UnsupportedTarget})!bool {
+    const compile_time_root = resources.checked_artifact.compile_time_roots.roots[0];
+    const pattern = compile_time_root.pattern orelse return false;
+    const top_level = resources.checked_artifact.top_level_values.lookupByPattern(pattern) orelse return false;
+    const const_locator = switch (top_level.value) {
+        .const_ref => |value| value,
+        .procedure_binding => return false,
+    };
+    const const_node = switch (compile_time_root.payload) {
+        .const_node => |value| value,
+        .pending, .fn_value, .expect => return false,
+    };
+    const static_request = lir.CheckedPipeline.StaticDataRequest{
+        .const_locator = const_locator,
+        .node = const_node,
+        .checked_type = compile_time_root.checked_type,
+    };
+
+    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, resources.import_artifacts.len);
+    defer allocator.free(import_views);
+    for (resources.import_artifacts, 0..) |*artifact, index| {
+        import_views[index] = check.CheckedArtifact.importedView(artifact);
+    }
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        allocator,
+        .{
+            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .imports = import_views,
+        },
+        .{
+            .requests = resources.checked_artifact.root_requests.runtime_requests,
+            .static_data_requests = &.{static_request},
+            .include_internal_static_data = true,
+        },
+        .{ .target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()) },
+    );
+    defer lowered.deinit();
+
+    const exports = try static_data.buildStaticData(
+        allocator,
+        .{
+            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .imports = import_views,
+        },
+        &lowered,
+        target,
+        .{ .include_requested_exports = true },
+    );
+    defer static_data.deinitStaticData(allocator, exports);
+
+    const root_export = findStaticDataExport(exports, "roc__requested_const_value_0") orelse return false;
+    return switch (expected) {
+        .comptime_f32_bits => |bits| bytesEqualIntegerAt(u32, root_export.bytes, root_export.symbol_offset, bits),
+        .comptime_f64_bits => |bits| bytesEqualIntegerAt(u64, root_export.bytes, root_export.symbol_offset, bits),
+        .comptime_f32_list_bits => |bits| materializedListBitsMatch(u32, exports, root_export, bits),
+        .comptime_f64_list_bits => |bits| materializedListBitsMatch(u64, exports, root_export, bits),
+        else => unreachable,
+    };
+}
+
+fn findStaticDataExport(exports: []const static_data.StaticDataExport, symbol_name: []const u8) ?*const static_data.StaticDataExport {
+    for (exports) |*data_export| {
+        if (std.mem.eql(u8, data_export.symbol_name, symbol_name)) return data_export;
+    }
+    return null;
+}
+
+fn bytesEqualIntegerAt(comptime Int: type, bytes: []const u8, offset: u64, expected: Int) bool {
+    if (offset > bytes.len or bytes.len - @as(usize, @intCast(offset)) < @sizeOf(Int)) return false;
+    const start: usize = @intCast(offset);
+    return std.mem.readInt(Int, bytes[start..][0..@sizeOf(Int)], .little) == expected;
+}
+
+fn materializedListBitsMatch(
+    comptime Int: type,
+    exports: []const static_data.StaticDataExport,
+    root_export: *const static_data.StaticDataExport,
+    expected: []const Int,
+) bool {
+    const root_start = root_export.symbol_offset;
+    const relocation = for (root_export.relocations) |candidate| {
+        if (candidate.kind == .address and candidate.offset == root_start) break candidate;
+    } else return false;
+    const allocation = findStaticDataExport(exports, relocation.target_symbol_name) orelse return false;
+    const signed_start = @as(i128, allocation.symbol_offset) + @as(i128, relocation.addend);
+    if (signed_start < 0 or signed_start > std.math.maxInt(u64)) return false;
+    var offset: u64 = @intCast(signed_start);
+    for (expected) |bits| {
+        if (!bytesEqualIntegerAt(Int, allocation.bytes, offset, bits)) return false;
+        offset += @sizeOf(Int);
+    }
+    return true;
 }
 
 fn runAllocationTest(
@@ -832,7 +1115,10 @@ fn runAllocationTest(
     expected: TestCase.AllocationExpectation,
     skip: TestCase.Skip,
 ) RunnerError!TestOutcome {
-    var compiled = try helpers.compileProgram(allocator, io, source_kind, src, imports);
+    var compiled = if (expected.optimized)
+        try helpers.compileAllocationProgram(allocator, io, source_kind, src, imports)
+    else
+        try helpers.compileProgram(allocator, io, source_kind, src, imports);
     defer compiled.deinit(allocator);
 
     const timings = EvalTimings{
@@ -844,13 +1130,13 @@ fn runAllocationTest(
     const skips = if (comptime coverage_mode)
         [NUM_BACKENDS]bool{ skip.interpreter, true, true, true }
     else
-        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, shouldSkipLlvm(skip.llvm) };
+        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, true };
 
     const eval_fns = [NUM_BACKENDS]BackendEvalWithStatsFn{
         helpers.lirInterpreterStrWithStats,
         helpers.devEvaluatorStrWithStats,
         helpers.wasmEvaluatorStrWithStats,
-        helpers.devEvaluatorStrWithStats, // llvm placeholder
+        helpers.devEvaluatorStrWithStats, // unused; LLVM allocation stats are not implemented
     };
 
     var backends: [NUM_BACKENDS]BackendDetail = undefined;
@@ -1021,6 +1307,7 @@ fn runInspectTest(
                 const expected_str = switch (expected) {
                     .inspect_str => |value| value,
                     .allocations_at_most => unreachable,
+                    .comptime_f32_bits, .comptime_f64_bits, .comptime_f32_list_bits, .comptime_f64_list_bits => unreachable,
                     .problem => unreachable,
                     .crash => unreachable,
                     .problem_and_crash => unreachable,
@@ -1397,8 +1684,7 @@ fn serializeOutcomeStreamed(fd: posix.fd_t, outcome: TestOutcome, duration_ns: u
     defer buf.deinit(base.defaultGpa());
     serializeOutcomeToBuffer(&buf, base.defaultGpa(), outcome, duration_ns) catch return;
 
-    const length: u32 = @intCast(buf.items.len);
-    harness.writeAll(fd, std.mem.asBytes(&length));
+    harness.writeFrameHeader(fd, buf.items.len);
     harness.writeAll(fd, buf.items);
 }
 
@@ -1482,36 +1768,6 @@ fn applyBackendIsolation(skip: *TestCase.Skip, name: []const u8) void {
     skip.dev = !std.mem.eql(u8, name, "dev");
     skip.wasm = !std.mem.eql(u8, name, "wasm");
     skip.llvm = !std.mem.eql(u8, name, "llvm");
-}
-
-/// Build argv used by the Windows ChildProcessPool to spawn worker copies of
-/// this runner. Starts with `selfExePath`, then preserves every original arg
-/// *except* `--worker N` / `--worker-backend NAME` (the harness appends those
-/// per-worker; we strip any pre-existing instance so we don't double-add).
-fn buildWorkerArgvTemplate(io: std.Io, arena: std.mem.Allocator, process_args: std.process.Args) RunnerError![]const []const u8 {
-    // std.fs.selfExePath was removed in Zig 0.16; use std.process.executablePathAlloc instead.
-    const self_path = try std.process.executablePathAlloc(io, arena);
-
-    const raw = try process_args.toSlice(arena);
-    const original_args: []const []const u8 = @ptrCast(raw);
-
-    var argv: std.ArrayListUnmanaged([]const u8) = .empty;
-    try argv.append(arena, self_path);
-
-    var i: usize = 1;
-    while (i < original_args.len) : (i += 1) {
-        const arg = original_args[i];
-        if (harness.workerTemplateArgConsumesValue(arg)) {
-            i += 1;
-            continue;
-        }
-        if (harness.workerTemplateDropsFlag(arg)) {
-            continue;
-        }
-        try argv.append(arena, arg);
-    }
-
-    return try argv.toOwnedSlice(arena);
 }
 
 /// Phase-2 retry: re-run each failing/crashing/timed-out test once per
@@ -1629,6 +1885,12 @@ fn getTestName(tc: TestCase) []const u8 {
     return tc.name;
 }
 
+/// Pool hook: restrict a spec to one named backend in `--worker` mode
+/// (Phase-2 crash attribution; see `retryFailedForAttribution`).
+fn applyWorkerBackendToSpec(tc: *TestCase, name: []const u8) void {
+    applyBackendIsolation(&tc.skip, name);
+}
+
 fn dupeOptional(gpa: std.mem.Allocator, value: ?[]const u8) ?[]const u8 {
     return if (value) |slice| gpa.dupe(u8, slice) catch null else null;
 }
@@ -1673,6 +1935,7 @@ const timeout_result: TestResult = .{
 const Pool = harness.ProcessPool(TestCase, TestResult, .{
     .runTest = &runTestForPool,
     .serialize = &serializeResultForPool,
+    .serializeStreamed = &serializeResultStreamed,
     .deserialize = &deserializeOutcome,
     .default_result = default_result,
     .timeout_result = timeout_result,
@@ -1684,6 +1947,7 @@ const Pool = harness.ProcessPool(TestCase, TestResult, .{
     // being killed at the same instant.
     .timeout_report_grace_ms = LLVM_BACKEND_TIMEOUT_MS + BACKEND_TIMEOUT_REPORT_GRACE_MS,
     .onTestStarted = &onTestStarted,
+    .applyWorkerBackend = &applyWorkerBackendToSpec,
 });
 
 //
@@ -1700,8 +1964,7 @@ fn collectTests() []const TestCase {
 
 // CLI parsing uses harness.parseStandardArgs for consistent flag handling.
 // The eval runner accepts the standard flags: --filter, --threads, --timeout, --verbose, --help,
-// plus `--llvm` and the positional marker `known-bugs` to include opt-in
-// compiler-bug repros.
+// plus `--llvm`.
 
 fn printHelp() void {
     const help =
@@ -1729,7 +1992,6 @@ fn printHelp() void {
         \\                        LLVM uses a separate 420000ms backend budget.
         \\                        LLVM eval lock slots match the worker count.
         \\  --llvm                Include the LLVM backend. Default: skip LLVM.
-        \\  known-bugs            Include opt-in known compiler-bug repro tests.
         \\
         \\COVERAGE:
         \\  Use `zig build run-coverage-eval` to build with coverage instrumentation.
@@ -1739,7 +2001,7 @@ fn printHelp() void {
         \\
         \\TIMING:
         \\  Every test is instrumented with per-phase monotonic timing (std.time.Timer):
-        \\    parse    - builtin loading + source parsing
+        \\    parse    - builtin view setup + source parsing
         \\    can      - canonicalization (CIR generation)
         \\    check    - type checking / constraint solving
         \\    interp   - interpreter evaluation
@@ -2159,21 +2421,14 @@ fn effectiveMaxChildren(cli: harness.StandardArgs, cpu_count: usize, test_count:
     return @max(1, requested);
 }
 
-fn hasPositionalArg(args: []const []const u8, target: []const u8) bool {
-    for (args) |arg| {
-        if (std.mem.eql(u8, arg, target)) return true;
-    }
-    return false;
-}
-
 /// Entry point for the parallel eval test runner.
 pub fn main(init: std.process.Init) RunnerError!void {
     const io = init.io;
     var trace_worker = WorkerTrace.init(io);
     trace_worker.stamp("main entry");
 
-    var gpa_impl: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = gpa_impl.deinit();
+    var gpa_impl: std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }) = .init;
+    defer _ = build_options.debugGpaOk(gpa_impl.deinit());
     const gpa = gpa_impl.allocator();
     trace_worker.stamp("gpa init");
 
@@ -2192,7 +2447,6 @@ pub fn main(init: std.process.Init) RunnerError!void {
 
     const all_tests = collectTests();
     trace_worker.stamp("collectTests");
-    const include_known_bugs = hasPositionalArg(cli.positional, "known-bugs");
 
     // Apply filters (support multiple --filter values)
     var filtered_buf: std.ArrayListUnmanaged(TestCase) = .empty;
@@ -2200,7 +2454,6 @@ pub fn main(init: std.process.Init) RunnerError!void {
 
     if (cli.filters.len > 0) {
         for (all_tests) |tc| {
-            if (tc.known_bug and !include_known_bugs) continue;
             for (cli.filters) |pattern| {
                 if (std.mem.find(u8, tc.name, pattern) != null or
                     std.mem.find(u8, tc.source, pattern) != null)
@@ -2212,7 +2465,7 @@ pub fn main(init: std.process.Init) RunnerError!void {
         }
     } else {
         for (all_tests) |tc| {
-            if (tc.known_bug and !include_known_bugs) continue;
+            if (tc.opt_in) continue;
             try filtered_buf.append(gpa, tc);
         }
     }
@@ -2230,84 +2483,15 @@ pub fn main(init: std.process.Init) RunnerError!void {
     const max_children: usize = effectiveMaxChildren(cli, cpu_count, tests.len);
     llvm_eval_slot_count = max_children;
 
-    // Worker mode: the parent spawned us with `--worker <idx>` (and optionally
-    // `--worker-backend <name>`) to run a single test, serialize the result to
-    // stdout, and exit. Used on Windows where the harness runs N worker
-    // processes in parallel instead of forking. The child re-applies the same
-    // filters so idx is stable between parent and child.
-    if (cli.worker_index) |idx| {
-        if (idx >= tests.len) std.process.exit(2);
-        var tc = tests[idx];
-        if (cli.worker_backend) |name| applyBackendIsolation(&tc.skip, name);
-        const worker_timeout_ms: u64 = if (cli.timeout_provided and cli.timeout_ms > 0) cli.timeout_ms else DEFAULT_EVAL_TIMEOUT_MS;
-
-        var arena = collections.SingleThreadArena.init(base.defaultGpa());
-        defer arena.deinit();
-
-        trace_worker.stamp("pre runSingleTest");
-        var timer = Timer.start() catch unreachable;
-        const outcome = runSingleTest(io, arena.allocator(), tc, worker_timeout_ms);
-        const duration = timer.read();
-        trace_worker.stamp("post runSingleTest");
-        var backends: [NUM_BACKENDS]BackendDetail = undefined;
-        if (outcome.has_backend_details) backends = outcome.backends;
-        const result = TestResult{
-            .status = outcome.status,
-            .message = outcome.message,
-            .duration_ns = duration,
-            .timings = outcome.timings,
-            .has_backend_details = outcome.has_backend_details,
-            .backends = backends,
-            .expected_str = outcome.expected_str,
-        };
-        serializeResultForPool(harness.stdoutFd(), result);
-        trace_worker.stamp("serialize done");
-        return;
-    }
-
-    // Persistent worker mode: read test indices from stdin (one decimal per
-    // line), run each, write a u32-length-prefixed result to stdout, loop
-    // until stdin EOFs. Amortizes the per-Child process-boot cost across
-    // many tests on the same worker.
-    if (cli.worker_stream) {
-        const worker_timeout_ms: u64 = if (cli.timeout_provided and cli.timeout_ms > 0) cli.timeout_ms else DEFAULT_EVAL_TIMEOUT_MS;
-        var arena = collections.SingleThreadArena.init(base.defaultGpa());
-        defer arena.deinit();
-
-        const stdout_handle = harness.stdoutFd();
-        const stdin_handle = harness.stdinFd();
-
-        var line_buf: [32]u8 = undefined;
-        outer: while (true) {
-            var line_len: usize = 0;
-            while (true) {
-                if (line_len >= line_buf.len) break :outer; // malformed
-                const n = harness.posixRead(stdin_handle, line_buf[line_len .. line_len + 1]) catch break :outer;
-                if (n == 0) break :outer; // EOF — parent done
-                if (line_buf[line_len] == '\n') break;
-                line_len += 1;
-            }
-            const idx = std.fmt.parseInt(usize, line_buf[0..line_len], 10) catch continue;
-            if (idx >= tests.len) continue;
-
-            _ = arena.reset(.retain_capacity);
-
-            var timer = Timer.start() catch unreachable;
-            const outcome = runSingleTest(io, arena.allocator(), tests[idx], worker_timeout_ms);
-            const duration = timer.read();
-            var backends: [NUM_BACKENDS]BackendDetail = undefined;
-            if (outcome.has_backend_details) backends = outcome.backends;
-            const result = TestResult{
-                .status = outcome.status,
-                .message = outcome.message,
-                .duration_ns = duration,
-                .timings = outcome.timings,
-                .has_backend_details = outcome.has_backend_details,
-                .backends = backends,
-                .expected_str = outcome.expected_str,
-            };
-            serializeResultStreamed(stdout_handle, result);
-        }
+    // Worker modes: on Windows the harness pool spawned this process with
+    // `--worker <idx>` (single test, optionally `--worker-backend <name>` for
+    // Phase-2 attribution) or `--worker-stream` (persistent: indices arrive
+    // on stdin, u32-length-prefixed results leave on stdout). The worker
+    // re-applied the same filters above, so indices stay aligned with the
+    // parent's test list.
+    trace_worker.stamp("pre worker mode");
+    if (Pool.runWorkerMode(io, cli, tests, effectiveHangTimeoutMs(cli))) {
+        trace_worker.stamp("worker mode done");
         return;
     }
 
@@ -2369,7 +2553,7 @@ pub fn main(init: std.process.Init) RunnerError!void {
     // Build a worker_argv_template so Windows can spawn `Child` workers that
     // re-invoke this binary with `--worker <idx>`. On POSIX the template is
     // unused (fork path doesn't re-exec) but we build it uniformly.
-    const worker_argv_template = try buildWorkerArgvTemplate(io, args_arena.allocator(), init.minimal.args);
+    const worker_argv_template = try harness.buildWorkerArgvTemplate(io, args_arena.allocator(), init.minimal.args);
 
     Pool.runWithSpans(io, tests, results, spans, max_children, hang_timeout_ms, gpa, worker_argv_template);
 

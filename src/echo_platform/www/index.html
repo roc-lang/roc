@@ -64,6 +64,13 @@
             #errors {
                 padding: 0.5em 0;
             }
+            #errors .terminal {
+                background: #111;
+                color: #ddd;
+                padding: 1em;
+                white-space: pre-wrap;
+                overflow-x: auto;
+            }
             button {
                 padding: 0.4em 1.2em;
                 font-size: 14px;
@@ -78,31 +85,65 @@
             #add-module {
                 margin-bottom: 0.5em;
             }
-            .report {
-                border-left: 3px solid #ccc;
-                padding: 0.5em 1em;
-                margin: 0.5em 0;
-                font-size: 13px;
+            .ansi-bold {
+                font-weight: 700;
             }
-            .report.error {
-                border-color: #e55;
-                background: #fee;
+            .ansi-dim {
+                opacity: 0.72;
             }
-            .report.warning {
-                border-color: #ea0;
-                background: #ffe;
+            .ansi-italic {
+                font-style: italic;
             }
-            .report.info {
-                border-color: #48f;
-                background: #eef;
+            .ansi-underline {
+                text-decoration: underline;
             }
-            .report h1 {
-                font-size: 14px;
-                margin: 0 0 0.25em;
+            .ansi-fg-black {
+                color: #282a36;
             }
-            .report pre {
-                margin: 0.25em 0;
-                white-space: pre-wrap;
+            .ansi-fg-red {
+                color: #ff6b6b;
+            }
+            .ansi-fg-green {
+                color: #62d68f;
+            }
+            .ansi-fg-yellow {
+                color: #f4d35e;
+            }
+            .ansi-fg-blue {
+                color: #74b9ff;
+            }
+            .ansi-fg-magenta {
+                color: #d59cff;
+            }
+            .ansi-fg-cyan {
+                color: #55e6d9;
+            }
+            .ansi-fg-white {
+                color: #f5f2ff;
+            }
+            .ansi-fg-bright-black {
+                color: #8b90a3;
+            }
+            .ansi-fg-bright-red {
+                color: #ff8a8a;
+            }
+            .ansi-fg-bright-green {
+                color: #7ee89f;
+            }
+            .ansi-fg-bright-yellow {
+                color: #ffea7a;
+            }
+            .ansi-fg-bright-blue {
+                color: #9ad4ff;
+            }
+            .ansi-fg-bright-magenta {
+                color: #e0b3ff;
+            }
+            .ansi-fg-bright-cyan {
+                color: #71fff1;
+            }
+            .ansi-fg-bright-white {
+                color: #fff;
             }
             .skip-notice {
                 color: #a60;

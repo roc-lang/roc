@@ -11,7 +11,7 @@ const builtin = @import("builtin");
 const collections = @import("collections");
 
 const CompactWriter = collections.CompactWriter;
-const core = @import("StringInternerCore.zig");
+const InternedBytes = @import("InternedBytes.zig");
 
 const SmallStringInterner = @This();
 
@@ -89,11 +89,13 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
     return self;
 }
 
-/// Id encoding for the shared `StringInternerCore`: the public `Idx` IS the byte
+const Index = InternedBytes.Index(Policy);
+
+/// Id encoding for the shared `InternedBytes`: the public `Idx` IS the byte
 /// offset of a null-terminated string in `bytes`, and is stored directly in each
 /// hash-table cell (`Idx.unused` == 0 marks an empty slot — offset 0 is the reserved
 /// leading byte, so it never names a real entry).
-const Encoding = struct {
+const Policy = struct {
     pub const Id = Idx;
     pub const Cell = Idx;
     pub const empty_cell: Cell = .unused;
@@ -103,6 +105,9 @@ const Encoding = struct {
     pub const initial_index_capacity: usize = 16;
 
     pub fn count(self: *const SmallStringInterner) u32 {
+        return self.entry_count;
+    }
+    pub fn entryCount(self: *const SmallStringInterner, _: *const Index) u32 {
         return self.entry_count;
     }
     pub fn cellForId(id: Id) Cell {
@@ -115,6 +120,7 @@ const Encoding = struct {
         return std.mem.sliceTo(self.bytes.items.items[@intFromEnum(id)..], 0);
     }
     pub fn appendEntry(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Id {
+        assertSupportsInserts(self.supports_inserts);
         const new_offset: Idx = @enumFromInt(self.bytes.len());
         {
             const expected_start = self.bytes.items.items.len;
@@ -129,7 +135,19 @@ const Encoding = struct {
         self.entry_count += 1;
         return new_offset;
     }
+    pub fn hash(string: []const u8) u64 {
+        return InternedBytes.hash(string);
+    }
 };
+
+fn assertSupportsInserts(supports_inserts: bool) void {
+    if (supports_inserts) return;
+
+    if (comptime builtin.mode == .Debug) {
+        std.debug.panic("SmallStringInterner invariant violated: attempted to insert into frozen interner", .{});
+    }
+    unreachable;
+}
 
 /// Enable inserts on a deserialized interner for runtime use.
 /// Normally deserialized interners are read-only, but the interpreter needs to
@@ -195,25 +213,33 @@ pub fn clone(self: *const SmallStringInterner, gpa: std.mem.Allocator) std.mem.A
 
 /// Find a string in the hash table using linear probing.
 /// Returns the Idx if found, or the slot index where it should be inserted if not found.
-pub fn findStringOrSlot(self: *const SmallStringInterner, string: []const u8) core.FindResult(Idx) {
-    return core.findStringOrSlot(Encoding, self, string);
+pub fn findStringOrSlot(self: *const SmallStringInterner, string: []const u8) InternedBytes.FindResult(Idx) {
+    const index = Index.fromCells(self.index, self.entry_count);
+    return index.findStringOrSlot(self, Policy.hash(string), string);
 }
 
 /// Add a string to this interner, returning a unique, serial index.
 pub fn insert(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Idx {
-    return core.insert(Encoding, self, gpa, string);
+    var index = Index.fromCells(self.index, self.entry_count);
+    defer {
+        self.index = index.cells;
+        self.entry_count = index.len;
+    }
+    return index.insert(self, gpa, string);
 }
 
 /// Check if a string is already interned in this interner, used for generating unique names.
 pub fn contains(self: *const SmallStringInterner, string: []const u8) bool {
-    return core.contains(Encoding, self, string);
+    const index = Index.fromCells(self.index, self.entry_count);
+    return index.contains(self, string);
 }
 
 /// Look up a string in this interner and return its index if found.
 /// Unlike insert, this never modifies the interner (no resize, no insertion).
 /// Useful for deserialized interners that cannot be grown.
 pub fn lookup(self: *const SmallStringInterner, string: []const u8) ?Idx {
-    return core.lookup(Encoding, self, string);
+    const index = Index.fromCells(self.index, self.entry_count);
+    return index.lookup(self, string);
 }
 
 /// Whether `idx` refers to an entry within this interner's data. Offset 0 is the
@@ -627,99 +653,150 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
     }
 }
 
-// TODO: CompactWriter doesn't support serializing multiple independent structures
-// This test needs to be redesigned to either use separate writers or a containing structure
-// test "SmallStringInterner multiple interners CompactWriter roundtrip" {
-//     const gpa = std.testing.allocator;
+fn roundTripSerialized(gpa: std.mem.Allocator, src: *const SmallStringInterner) (std.mem.Allocator.Error || error{BufferTooSmall})!struct { buffer: []align(16) u8, interner: SmallStringInterner } {
+    var arena = collections.SingleThreadArena.init(gpa);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
 
-//     // Create multiple interners to test alignment and offset handling
-//     var interner1 = try SmallStringInterner.initCapacity(gpa, 5);
-//     defer interner1.deinit(gpa);
+    var writer = CompactWriter.init();
+    const serialized = try writer.appendAlloc(arena_allocator, SmallStringInterner.Serialized);
+    try serialized.serialize(src, arena_allocator, &writer);
 
-//     var interner2 = try SmallStringInterner.initCapacity(gpa, 5);
-//     defer interner2.deinit(gpa);
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", writer.total_bytes);
+    _ = try writer.writeToBuffer(buffer);
 
-//     var interner3 = try SmallStringInterner.initCapacity(gpa, 5);
-//     defer interner3.deinit(gpa);
+    const serialized_ptr: *const SmallStringInterner.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    return .{ .buffer = buffer, .interner = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr)) };
+}
 
-//     // Populate with different strings
-//     const idx1_1 = try interner1.insert(gpa, "interner1_string1");
-//     const idx1_2 = try interner1.insert(gpa, "interner1_string2");
+test "SmallStringInterner lookup survives deserialize with no rebuild" {
+    const gpa = std.testing.allocator;
 
-//     const idx2_1 = try interner2.insert(gpa, "interner2_string1");
-//     const idx2_2 = try interner2.insert(gpa, "interner2_string2");
-//     const idx2_3 = try interner2.insert(gpa, "interner2_string3");
+    var original = try SmallStringInterner.initCapacity(gpa, 8);
+    defer original.deinit(gpa);
 
-//     const idx3_1 = try interner3.insert(gpa, "interner3_string1");
+    const alpha = try original.insert(gpa, "alpha");
+    const beta = try original.insert(gpa, "beta");
+    const gamma = try original.insert(gpa, "gamma");
 
-//     // Freeze the second one
-//     interner2.freeze();
+    var roundtrip = try roundTripSerialized(gpa, &original);
+    defer gpa.free(roundtrip.buffer);
 
-//     // Create a temp file
-//     var tmp_dir = std.testing.tmpDir(.{});
-//     defer tmp_dir.cleanup();
+    try std.testing.expect(!roundtrip.interner.supports_inserts);
+    try std.testing.expectEqual(alpha, roundtrip.interner.lookup("alpha").?);
+    try std.testing.expectEqual(beta, roundtrip.interner.lookup("beta").?);
+    try std.testing.expectEqual(gamma, roundtrip.interner.lookup("gamma").?);
+    try std.testing.expectEqual(@as(?Idx, null), roundtrip.interner.lookup("delta"));
+}
 
-//     const file = try tmp_dir.dir.createFile("test_multiple_interners.dat", .{ .read = true });
-//     defer file.close();
+test "SmallStringInterner enableRuntimeInserts copies frozen data and permits insertion" {
+    const gpa = std.testing.allocator;
 
-//     // Use arena allocator for serialization
-//     var arena = std.heap.ArenaAllocator.init(gpa);
-//     defer arena.deinit();
-//     const arena_allocator = arena.allocator();
+    var original = try SmallStringInterner.initCapacity(gpa, 4);
+    defer original.deinit(gpa);
 
-//     // Serialize all three
-//     var writer = CompactWriter{
-//         .iovecs = .{},
-//         .total_bytes = 0,
-//         .allocated_memory = .{},
-//     };
-//     defer writer.deinit(arena_allocator);
+    const alpha = try original.insert(gpa, "alpha");
 
-//     // Track where each interner starts in the serialized data
-//     const offset1: usize = 0; // First interner starts at 0
-//     _ = try interner1.serialize(arena_allocator, &writer);
-//     const offset1_end = writer.total_bytes;
+    var roundtrip = try roundTripSerialized(gpa, &original);
+    defer gpa.free(roundtrip.buffer);
 
-//     const offset2 = offset1_end; // Second interner starts where first ended
-//     _ = try interner2.serialize(arena_allocator, &writer);
-//     const offset2_end = writer.total_bytes;
+    try roundtrip.interner.enableRuntimeInserts(gpa);
+    defer roundtrip.interner.deinit(gpa);
 
-//     const offset3 = offset2_end; // Third interner starts where second ended
-//     _ = try interner3.serialize(arena_allocator, &writer);
+    try std.testing.expect(roundtrip.interner.supports_inserts);
+    try std.testing.expectEqual(alpha, roundtrip.interner.lookup("alpha").?);
 
-//     // Write to file
-//     try writer.writeGather(file);
+    const beta = try roundtrip.interner.insert(gpa, "beta");
+    try std.testing.expectEqual(beta, roundtrip.interner.lookup("beta").?);
+    try std.testing.expectEqualStrings("beta", roundtrip.interner.getText(beta));
+}
 
-//     // Read back
-//     try file.seekTo(0);
-//     const file_size = try file.getEndPos();
-//     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
-//     defer gpa.free(buffer);
+test "SmallStringInterner multiple interners CompactWriter roundtrip" {
+    const gpa = std.testing.allocator;
 
-//     _ = try file.read(buffer);
+    // Create multiple interners to test alignment and offset handling
+    var interner1 = try SmallStringInterner.initCapacity(gpa, 5);
+    defer interner1.deinit(gpa);
 
-//     // Cast and relocate all three
-//     const deserialized1 = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr + offset1)));
-//     deserialized1.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+    var interner2 = try SmallStringInterner.initCapacity(gpa, 5);
+    defer interner2.deinit(gpa);
 
-//     const deserialized2 = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr + offset2)));
-//     deserialized2.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+    var interner3 = try SmallStringInterner.initCapacity(gpa, 5);
+    defer interner3.deinit(gpa);
 
-//     const deserialized3 = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr + offset3)));
-//     deserialized3.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+    // Populate with different strings
+    const idx1_1 = try interner1.insert(gpa, "interner1_string1");
+    const idx1_2 = try interner1.insert(gpa, "interner1_string2");
 
-//     // Verify interner 1
-//     try std.testing.expectEqualStrings("interner1_string1", deserialized1.getText(idx1_1));
-//     try std.testing.expectEqualStrings("interner1_string2", deserialized1.getText(idx1_2));
-//     try std.testing.expectEqual(@as(u32, 2), deserialized1.entry_count);
+    const idx2_1 = try interner2.insert(gpa, "interner2_string1");
+    const idx2_2 = try interner2.insert(gpa, "interner2_string2");
+    const idx2_3 = try interner2.insert(gpa, "interner2_string3");
 
-//     // Verify interner 2
-//     try std.testing.expectEqualStrings("interner2_string1", deserialized2.getText(idx2_1));
-//     try std.testing.expectEqualStrings("interner2_string2", deserialized2.getText(idx2_2));
-//     try std.testing.expectEqualStrings("interner2_string3", deserialized2.getText(idx2_3));
-//     try std.testing.expectEqual(@as(u32, 3), deserialized2.entry_count);
+    const idx3_1 = try interner3.insert(gpa, "interner3_string1");
 
-//     // Verify interner 3
-//     try std.testing.expectEqualStrings("interner3_string1", deserialized3.getText(idx3_1));
-//     try std.testing.expectEqual(@as(u32, 1), deserialized3.entry_count);
-// } // End of commented test
+    // Create a temp file
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const io = std.testing.io;
+    const file = try tmp_dir.dir.createFile(io, "test_multiple_interners.dat", .{ .read = true });
+    defer file.close(io);
+
+    // Serialize using arena allocator
+    var arena = collections.SingleThreadArena.init(gpa);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    var writer = CompactWriter.init();
+    defer writer.deinit(arena_allocator);
+
+    // Serialize all three into one buffer, recording where each struct starts.
+    // appendAlloc pads to the struct's alignment before writing it, so pad first
+    // and then record the offset.
+    try writer.padToAlignment(arena_allocator, @alignOf(SmallStringInterner));
+    const offset1 = writer.total_bytes;
+    _ = try interner1.serialize(arena_allocator, &writer);
+
+    try writer.padToAlignment(arena_allocator, @alignOf(SmallStringInterner));
+    const offset2 = writer.total_bytes;
+    _ = try interner2.serialize(arena_allocator, &writer);
+
+    try writer.padToAlignment(arena_allocator, @alignOf(SmallStringInterner));
+    const offset3 = writer.total_bytes;
+    _ = try interner3.serialize(arena_allocator, &writer);
+
+    // Write to file
+    try writer.writeGather(file, io);
+
+    // Read back
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", writer.total_bytes);
+    defer gpa.free(buffer);
+
+    _ = try file.readPositionalAll(io, buffer, 0);
+
+    // Cast and relocate all three; every serialized pointer is an offset from the
+    // start of the whole buffer, so each root relocates by the same base address.
+    const deserialized1 = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr + offset1)));
+    deserialized1.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+    const deserialized2 = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr + offset2)));
+    deserialized2.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+    const deserialized3 = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr + offset3)));
+    deserialized3.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+    // Verify interner 1
+    try std.testing.expectEqualStrings("interner1_string1", deserialized1.getText(idx1_1));
+    try std.testing.expectEqualStrings("interner1_string2", deserialized1.getText(idx1_2));
+    try std.testing.expectEqual(@as(u32, 2), deserialized1.entry_count);
+
+    // Verify interner 2
+    try std.testing.expectEqualStrings("interner2_string1", deserialized2.getText(idx2_1));
+    try std.testing.expectEqualStrings("interner2_string2", deserialized2.getText(idx2_2));
+    try std.testing.expectEqualStrings("interner2_string3", deserialized2.getText(idx2_3));
+    try std.testing.expectEqual(@as(u32, 3), deserialized2.entry_count);
+
+    // Verify interner 3
+    try std.testing.expectEqualStrings("interner3_string1", deserialized3.getText(idx3_1));
+    try std.testing.expectEqual(@as(u32, 1), deserialized3.entry_count);
+}

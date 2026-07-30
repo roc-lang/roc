@@ -51,7 +51,8 @@ pub const Capture = struct {
     local: @import("../monotype_lifted/ast.zig").LocalId,
     symbol: Common.Symbol,
     binder: ?check.CheckedModule.PatternBinderId,
-    capture_id: ?u32 = null,
+    capture_id: ?check.CheckedModule.CaptureId = null,
+    checked_capture_id: ?check.CheckedModule.CaptureId = null,
     ty: TypeVarId,
 };
 
@@ -83,6 +84,7 @@ pub const Content = union(enum) {
         backing: ?struct {
             ty: TypeVarId,
             use: MonoType.BackingUse,
+            authority: MonoType.BackingAuthority = .checked_public,
         } = null,
         /// Declared field order for a nominal/opaque record backing; empty
         /// otherwise.
@@ -104,7 +106,42 @@ pub const Content = union(enum) {
         members: Span = .empty(),
     },
     zst,
+    /// Lazy leaf: this var's type is the referenced lifted Monotype, not yet
+    /// materialized in this store. The solver expands a leaf one level the
+    /// first time unification or a shape read touches it, and end-of-solve
+    /// finalization replaces every surviving leaf with a link to a
+    /// materialized clone, so program views never observe one. Each use still
+    /// gets its own leaf var: unification rewrites var contents in place, so
+    /// clones that can reach `unify` must own their vars.
+    mono: struct {
+        id: MonoType.TypeId,
+        /// Clone context tying recursive back-references within one lazily
+        /// materialized tree to their existing vars, exactly as an eager
+        /// clone's memo map did. `no_leaf_context` until first expansion.
+        ctx: u32 = no_leaf_context,
+    },
 };
+
+/// Sentinel for a lazy leaf that has not been reached by any expansion yet.
+pub const no_leaf_context: u32 = std.math.maxInt(u32);
+
+test "lambda solved named backing preserves generated-private authority" {
+    const content = Content{ .named = .{
+        .named_type = undefined,
+        .def = undefined,
+        .kind = .@"opaque",
+        .args = Span.empty(),
+        .backing = .{
+            .ty = @enumFromInt(1),
+            .use = .runtime_layout_only,
+            .authority = .generated_private,
+        },
+    } };
+    try std.testing.expectEqual(
+        MonoType.BackingAuthority.generated_private,
+        content.named.backing.?.authority,
+    );
+}
 
 /// Store for Lambda Solved type variables and their shared spans.
 pub const Store = struct {
@@ -166,6 +203,40 @@ pub const Store = struct {
 
     pub fn rootContent(self: *const Store, id: TypeVarId) Content {
         return self.get(self.root(id));
+    }
+
+    pub fn rootCompressed(self: *Store, id: TypeVarId) TypeVarId {
+        var current = id;
+        while (true) {
+            switch (self.get(current)) {
+                .link => |next| current = next,
+                else => break,
+            }
+        }
+
+        const root_id = current;
+        current = id;
+        while (current != root_id) {
+            switch (self.get(current)) {
+                .link => |next| {
+                    self.set(current, .{ .link = root_id });
+                    current = next;
+                },
+                else => break,
+            }
+        }
+
+        return root_id;
+    }
+
+    pub fn rootContentCompressed(self: *Store, id: TypeVarId) Content {
+        return self.get(self.rootCompressed(id));
+    }
+
+    pub fn compressAllRoots(self: *Store) void {
+        for (0..self.vars.items.len) |index| {
+            _ = self.rootCompressed(@enumFromInt(@as(u32, @intCast(index))));
+        }
     }
 
     pub fn addSpan(self: *Store, values: []const TypeVarId) std.mem.Allocator.Error!Span {
@@ -257,6 +328,70 @@ pub const Store = struct {
     pub fn memberItem(self: *const Store, span_: Span, index: usize) FnMember {
         if (index >= span_.count()) Common.invariant("Lambda Solved member span index out of bounds");
         return self.fn_members.items[@as(usize, span_.start) + index];
+    }
+
+    pub const View = struct {
+        vars: []const Content,
+        spans: []const TypeVarId,
+        fields: []const Field,
+        tags: []const Tag,
+        captures: []const Capture,
+        fn_members: []const FnMember,
+        declared_fields: []const DeclaredField,
+
+        pub fn get(self: View, id: TypeVarId) Content {
+            return self.vars[@intFromEnum(id)];
+        }
+
+        pub fn root(self: View, id: TypeVarId) TypeVarId {
+            var current = id;
+            while (true) {
+                switch (self.get(current)) {
+                    .link => |next| current = next,
+                    else => return current,
+                }
+            }
+        }
+
+        pub fn rootContent(self: View, id: TypeVarId) Content {
+            return self.get(self.root(id));
+        }
+
+        pub fn span(self: View, span_: Span) []const TypeVarId {
+            return self.spans[span_.start..][0..span_.len];
+        }
+
+        pub fn fieldSpan(self: View, span_: Span) []const Field {
+            return self.fields[span_.start..][0..span_.len];
+        }
+
+        pub fn tagSpan(self: View, span_: Span) []const Tag {
+            return self.tags[span_.start..][0..span_.len];
+        }
+
+        pub fn captureSpan(self: View, span_: Span) []const Capture {
+            return self.captures[span_.start..][0..span_.len];
+        }
+
+        pub fn memberSpan(self: View, span_: Span) []const FnMember {
+            return self.fn_members[span_.start..][0..span_.len];
+        }
+
+        pub fn declaredFieldSpan(self: View, span_: Span) []const DeclaredField {
+            return self.declared_fields[span_.start..][0..span_.len];
+        }
+    };
+
+    pub fn view(self: *const Store) View {
+        return .{
+            .vars = self.vars.items,
+            .spans = self.spans.items,
+            .fields = self.fields.items,
+            .tags = self.tags.items,
+            .captures = self.captures.items,
+            .fn_members = self.fn_members.items,
+            .declared_fields = self.declared_fields.items,
+        };
     }
 };
 

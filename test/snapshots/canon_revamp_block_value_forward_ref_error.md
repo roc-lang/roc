@@ -11,31 +11,31 @@ x = {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - canon_revamp_block_value_forward_ref_error.md:2:5:2:6
+NAME NOT IN SCOPE - canon_revamp_block_value_forward_ref_error.md:2:5:2:6
 UNUSED VARIABLE - canon_revamp_block_value_forward_ref_error.md:3:5:3:6
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `y` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**canon_revamp_block_value_forward_ref_error.md:2:5:2:6:**
-```roc
-    y + 1
-```
-    ^
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `y` in this scope. ───────────────────┐
+└┬──────────────────┘                                                         │
+ │                                                                            │
+ │  y + 1                                                                     │
+ │  ‾                                                                         │
+ └───────────────────────── canon_revamp_block_value_forward_ref_error.md:2:5 ┘
+
+    Is it misspelled, or is there an import missing?
 
 
-**UNUSED VARIABLE**
-Variable `y` is not used anywhere in your code.
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `y` is defined here and then never used. ───────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  y = 5                                                                     │
+ │  ‾                                                                         │
+ └───────────────────────── canon_revamp_block_value_forward_ref_error.md:3:5 ┘
 
-If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
-The unused variable is declared here:
-**canon_revamp_block_value_forward_ref_error.md:3:5:3:6:**
-```roc
-    y = 5
-```
-    ^
-
+    If you don't need this variable, prefix it with an underscore like `_y` to
+    suppress this warning.
 
 # TOKENS
 ~~~zig
@@ -48,7 +48,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "x"))
@@ -75,11 +75,7 @@ x = {
 		(p-assign (ident "x"))
 		(e-block
 			(s-expr
-				(e-dispatch-call (method "plus") (constraint-fn-var 52)
-					(receiver
-						(e-runtime-error (tag "ident_not_in_scope")))
-					(args
-						(e-num (value "1")))))
+				(e-runtime-error (tag "erroneous_value_expr")))
 			(s-let
 				(p-assign (ident "y"))
 				(e-num (value "5")))

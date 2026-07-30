@@ -3,6 +3,7 @@
 //! Adapted from the Zig compiler at https://codeberg.org/ziglang/zig and licensed under the MIT license. Thanks, Zig team!
 const std = @import("std");
 const str = @import("str.zig");
+const float_bits = @import("float_bits.zig");
 const mem = std.mem;
 
 /// TODO: Document wyhash.
@@ -249,16 +250,22 @@ pub fn hasher_write_u128(seed: u64, domain: u8, low: u64, high: u64) callconv(.c
     return hasherFeed(seed, domain, &buf);
 }
 
-/// Mix raw F32 bits into a builtin Hasher state after zero normalization.
+/// Mix F32 bits into a builtin Hasher state after normalizing both zero and NaN.
 pub fn hasher_write_f32_bits(seed: u64, bits: u32) callconv(.c) u64 {
-    const canonical = if ((bits & 0x7fff_ffff) == 0) 0 else bits;
-    return hasher_write_u64(seed, @intFromEnum(HasherDomain.f32), canonical, 4);
+    const normalized = if ((bits & 0x7fff_ffff) == 0)
+        0
+    else
+        float_bits.normalizeF32NanBits(bits);
+    return hasher_write_u64(seed, @intFromEnum(HasherDomain.f32), normalized, 4);
 }
 
-/// Mix raw F64 bits into a builtin Hasher state after zero normalization.
+/// Mix F64 bits into a builtin Hasher state after normalizing both zero and NaN.
 pub fn hasher_write_f64_bits(seed: u64, bits: u64) callconv(.c) u64 {
-    const canonical = if ((bits & 0x7fff_ffff_ffff_ffff) == 0) 0 else bits;
-    return hasher_write_u64(seed, @intFromEnum(HasherDomain.f64), canonical, 8);
+    const normalized = if ((bits & 0x7fff_ffff_ffff_ffff) == 0)
+        0
+    else
+        float_bits.normalizeF64NanBits(bits);
+    return hasher_write_u64(seed, @intFromEnum(HasherDomain.f64), normalized, 8);
 }
 
 /// Mix a byte slice into a builtin Hasher state.
@@ -273,6 +280,22 @@ pub fn hasher_write_bytes(seed: u64, domain: u8, bytes: ?[*]const u8, length: us
 /// Finalize a builtin Hasher state into a hash value.
 pub fn hasher_finish(seed: u64) callconv(.c) u64 {
     return hasherFeed(seed, @intFromEnum(HasherDomain.finish), &.{});
+}
+
+test "float hashing collapses signed zero and every NaN representation" {
+    const seed = 0x1234_5678_9abc_def0;
+
+    try std.testing.expectEqual(hasher_write_f32_bits(seed, 0), hasher_write_f32_bits(seed, 0x8000_0000));
+    const f32_nan_hash = hasher_write_f32_bits(seed, float_bits.normalized_f32_nan_bits);
+    for ([_]u32{ 0x7fc0_0001, 0xffc0_0001, 0x7f80_0001, 0xff80_0001 }) |bits| {
+        try std.testing.expectEqual(f32_nan_hash, hasher_write_f32_bits(seed, bits));
+    }
+
+    try std.testing.expectEqual(hasher_write_f64_bits(seed, 0), hasher_write_f64_bits(seed, 0x8000_0000_0000_0000));
+    const f64_nan_hash = hasher_write_f64_bits(seed, float_bits.normalized_f64_nan_bits);
+    for ([_]u64{ 0x7ff8_0000_0000_0001, 0xfff8_0000_0000_0001, 0x7ff0_0000_0000_0001, 0xfff0_0000_0000_0001 }) |bits| {
+        try std.testing.expectEqual(f64_nan_hash, hasher_write_f64_bits(seed, bits));
+    }
 }
 
 test "test vectors" {

@@ -126,6 +126,42 @@ pub fn readOpaquePtr(self: RocValue) usize {
     return readAligned(usize, raw_ptr);
 }
 
+/// Read all bits of a fixed-width vector without changing lane interpretation.
+pub fn readVectorBits(self: RocValue) u128 {
+    const raw_ptr = self.ptr orelse return 0;
+    return readAligned(u128, raw_ptr);
+}
+
+fn vectorName(kind: layout.Vector) []const u8 {
+    return switch (kind) {
+        .u8x16 => "U8x16",
+        .i8x16 => "I8x16",
+        .u16x8 => "U16x8",
+        .i16x8 => "I16x8",
+        .u32x4 => "U32x4",
+        .i32x4 => "I32x4",
+        .u64x2 => "U64x2",
+        .i64x2 => "I64x2",
+    };
+}
+
+fn vectorLane(bits: u128, kind: layout.Vector, lane_index: u8) u64 {
+    const lane_bits = kind.laneBits();
+    const shift: u7 = @intCast(@as(u16, lane_index) * lane_bits);
+    const mask: u128 = (@as(u128, 1) << @intCast(lane_bits)) - 1;
+    return @truncate((bits >> shift) & mask);
+}
+
+fn signedVectorLane(raw: u64, lane_bits: u8) i64 {
+    return switch (lane_bits) {
+        8 => @as(i8, @bitCast(@as(u8, @truncate(raw)))),
+        16 => @as(i16, @bitCast(@as(u16, @truncate(raw)))),
+        32 => @as(i32, @bitCast(@as(u32, @truncate(raw)))),
+        64 => @bitCast(raw),
+        else => unreachable,
+    };
+}
+
 /// Lightweight context for formatting values — carries only layout metadata.
 pub const FormatContext = struct {
     layout_store: *const layout.Store,
@@ -185,6 +221,26 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
                 };
             },
             .opaque_ptr => return try allocator.dupe(u8, "<opaque>"),
+            .vector => {
+                const kind = scalar.getVector();
+                const bits = self.readVectorBits();
+                var out = std.array_list.AlignedManaged(u8, null).init(allocator);
+                errdefer out.deinit();
+                try out.appendSlice(vectorName(kind));
+                try out.append('(');
+                for (0..kind.laneCount()) |lane_index| {
+                    const raw = vectorLane(bits, kind, @intCast(lane_index));
+                    const rendered = if (kind.isSigned())
+                        try std.fmt.allocPrint(allocator, "{d}", .{signedVectorLane(raw, kind.laneBits())})
+                    else
+                        try std.fmt.allocPrint(allocator, "{d}", .{raw});
+                    defer allocator.free(rendered);
+                    try out.appendSlice(rendered);
+                    if (lane_index + 1 < kind.laneCount()) try out.appendSlice(", ");
+                }
+                try out.append(')');
+                return out.toOwnedSlice();
+            },
         }
     }
 
@@ -345,6 +401,10 @@ pub fn equals(self: RocValue, other: RocValue, ctx: FormatContext) bool {
                     };
                 },
                 .opaque_ptr => return self.readOpaquePtr() == other.readOpaquePtr(),
+                .vector => {
+                    if (s_scalar.getVector() != o_scalar.getVector()) return false;
+                    return self.readVectorBits() == other.readVectorBits();
+                },
             };
         },
         .erased_callable => unreachable, // Function values are not equality-comparable Roc values.
@@ -473,6 +533,23 @@ test "format u64" {
     try std.testing.expectEqualStrings("42", result);
 }
 
+test "format vectors preserves lane kind and little-endian lane order" {
+    const allocator = std.testing.allocator;
+    const ctx = FormatContext{ .layout_store = undefined, .ident_store = null };
+
+    const unsigned_bits: u128 = 0x0f0e0d0c0b0a09080706050403020100;
+    const unsigned = RocValue{ .ptr = @ptrCast(&unsigned_bits), .lay = Layout.vector(.u8x16) };
+    const unsigned_result = try unsigned.format(allocator, ctx);
+    defer allocator.free(unsigned_result);
+    try std.testing.expectEqualStrings("U8x16(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)", unsigned_result);
+
+    const signed_bits: u128 = 0x0004fffd0002ffff7fff80000001fffe;
+    const signed = RocValue{ .ptr = @ptrCast(&signed_bits), .lay = Layout.vector(.i16x8) };
+    const signed_result = try signed.format(allocator, ctx);
+    defer allocator.free(signed_result);
+    try std.testing.expectEqualStrings("I16x8(-2, 1, -32768, 32767, -1, 2, -3, 4)", signed_result);
+}
+
 test "format dec with strip" {
     const allocator = std.testing.allocator;
     const dec_layout = Layout.frac(.dec);
@@ -551,6 +628,20 @@ test "equals f64" {
     const ctx = FormatContext{ .layout_store = undefined, .ident_store = null };
     try std.testing.expect(va.equals(vb, ctx));
     try std.testing.expect(!va.equals(vc, ctx));
+}
+
+test "equals vectors compares all bits and the lane kind" {
+    const bits: u128 = 0x00112233445566778899aabbccddeeff;
+    const other_bits = bits;
+    const different_bits = bits ^ 1;
+    const a = RocValue{ .ptr = @ptrCast(&bits), .lay = Layout.vector(.u8x16) };
+    const b = RocValue{ .ptr = @ptrCast(&other_bits), .lay = Layout.vector(.u8x16) };
+    const c = RocValue{ .ptr = @ptrCast(&different_bits), .lay = Layout.vector(.u8x16) };
+    const reinterpreted = RocValue{ .ptr = @ptrCast(&bits), .lay = Layout.vector(.i8x16) };
+    const ctx = FormatContext{ .layout_store = undefined, .ident_store = null };
+    try std.testing.expect(a.equals(b, ctx));
+    try std.testing.expect(!a.equals(c, ctx));
+    try std.testing.expect(!a.equals(reinterpreted, ctx));
 }
 
 test "equals dec" {

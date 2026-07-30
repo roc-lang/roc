@@ -69,6 +69,61 @@ pub const CompilationError = error{
 pub const ObjectFileCompiler = struct {
     allocator: Allocator,
     enable_default_platform_runtime: bool = false,
+    timing: ?*Timing = null,
+
+    pub const TimingSnapshot = struct {
+        backend_setup_ns: u64 = 0,
+        procedure_instructions_ns: u64 = 0,
+        rc_helper_instructions_ns: u64 = 0,
+        entrypoint_instructions_ns: u64 = 0,
+        symbol_relocations_ns: u64 = 0,
+        dwarf_ns: u64 = 0,
+        object_encoding_ns: u64 = 0,
+        file_io_ns: u64 = 0,
+    };
+
+    pub const Timing = struct {
+        std_io: std.Io,
+        snapshot_value: TimingSnapshot = .{},
+
+        const Phase = enum {
+            backend_setup,
+            procedure_instructions,
+            rc_helper_instructions,
+            entrypoint_instructions,
+            symbol_relocations,
+            dwarf,
+            object_encoding,
+            file_io,
+        };
+
+        pub fn init(std_io: std.Io) Timing {
+            return .{ .std_io = std_io };
+        }
+
+        pub fn snapshot(self: *const Timing) TimingSnapshot {
+            return self.snapshot_value;
+        }
+
+        fn start(self: *const Timing) i96 {
+            return std.Io.Timestamp.now(self.std_io, .awake).nanoseconds;
+        }
+
+        fn finish(self: *Timing, started_ns: i96, phase: Phase) void {
+            const finished_ns = std.Io.Timestamp.now(self.std_io, .awake).nanoseconds;
+            const elapsed_ns: u64 = @intCast(@max(0, finished_ns - started_ns));
+            switch (phase) {
+                .backend_setup => self.snapshot_value.backend_setup_ns += elapsed_ns,
+                .procedure_instructions => self.snapshot_value.procedure_instructions_ns += elapsed_ns,
+                .rc_helper_instructions => self.snapshot_value.rc_helper_instructions_ns += elapsed_ns,
+                .entrypoint_instructions => self.snapshot_value.entrypoint_instructions_ns += elapsed_ns,
+                .symbol_relocations => self.snapshot_value.symbol_relocations_ns += elapsed_ns,
+                .dwarf => self.snapshot_value.dwarf_ns += elapsed_ns,
+                .object_encoding => self.snapshot_value.object_encoding_ns += elapsed_ns,
+                .file_io => self.snapshot_value.file_io_ns += elapsed_ns,
+            }
+        }
+    };
 
     pub fn init(allocator: Allocator) ObjectFileCompiler {
         return .{ .allocator = allocator };
@@ -90,7 +145,7 @@ pub const ObjectFileCompiler = struct {
         proc_specs: []const LirProcSpec,
         target: RocTarget,
     ) CompilationError!CompilationResult {
-        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, target, self.enable_default_platform_runtime);
+        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, target, self.enable_default_platform_runtime, self.timing);
     }
 
     /// Compile to an object file and write it to a path.
@@ -118,10 +173,12 @@ pub const ObjectFileCompiler = struct {
         // Write to file. Use the AV-safe wrapper so a transient AccessDenied
         // from a Windows filter driver holding the just-created file open is
         // retried rather than failing the build.
+        const file_io_started_ns = if (self.timing) |timing| timing.start() else 0;
         writeFileWindowsAvSafe(roc_ctx.std_io, output_path, result.object_bytes) catch |err| {
             std.log.err("failed to write object file {s}: {}", .{ output_path, err });
             return CompilationError.ObjectGenerationFailed;
         };
+        if (self.timing) |timing| timing.finish(file_io_started_ns, .file_io);
     }
 
     /// Emit a data-only object from already materialized readonly exports.
@@ -186,11 +243,13 @@ fn compileWithCodeGen(
     proc_specs: []const LirProcSpec,
     target: RocTarget,
     enable_default_platform_runtime: bool,
+    timing: ?*ObjectFileCompiler.Timing,
 ) CompilationError!CompilationResult {
     if (entrypoints.len == 0 and static_data_exports.len == 0) {
         return CompilationError.NoEntrypoints;
     }
 
+    const backend_setup_started_ns = if (timing) |timings| timings.start() else 0;
     var static_strings = StaticStringData.build(allocator, lir_store, target) catch {
         return CompilationError.OutOfMemory;
     };
@@ -202,6 +261,7 @@ fn compileWithCodeGen(
         lir_store,
         layout_store,
         static_strings.entries,
+        .preserve,
     ) catch return CompilationError.OutOfMemory;
     defer codegen.deinit();
 
@@ -209,12 +269,25 @@ fn compileWithCodeGen(
     codegen.generation_mode = .object_file;
     codegen.enable_default_platform_runtime = enable_default_platform_runtime;
 
+    const static_rc_helpers = static_data_export.collectRequiredRcHelpers(allocator, static_data_exports) catch {
+        return CompilationError.OutOfMemory;
+    };
+    defer allocator.free(static_rc_helpers);
+    if (timing) |timings| timings.finish(backend_setup_started_ns, .backend_setup);
+
     // Compile all procedures first
+    const procedure_instructions_started_ns = if (timing) |timings| timings.start() else 0;
     if (proc_specs.len > 0) {
         codegen.compileAllProcSpecs(proc_specs) catch return CompilationError.OutOfMemory;
     }
+    if (timing) |timings| timings.finish(procedure_instructions_started_ns, .procedure_instructions);
+
+    const rc_helper_instructions_started_ns = if (timing) |timings| timings.start() else 0;
+    codegen.compileStaticDataRcHelpers(static_rc_helpers) catch return CompilationError.OutOfMemory;
+    if (timing) |timings| timings.finish(rc_helper_instructions_started_ns, .rc_helper_instructions);
 
     // Track symbols for object file generation
+    var symbol_relocations_started_ns = if (timing) |timings| timings.start() else 0;
     var symbols = std.ArrayList(ObjectWriter.Symbol).empty;
     defer symbols.deinit(allocator);
 
@@ -252,6 +325,7 @@ fn compileWithCodeGen(
     }
     for (proc_specs, 0..) |_, i| {
         const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(i)));
+        if (proc_specs[i].is_static_initializer) continue;
         const proc_symbol = codegen.compiledProcSymbol(proc_id) orelse {
             if (builtin.mode == .Debug) {
                 std.debug.panic("ObjectFileCompiler invariant violated: LIR proc {d} was not compiled before symbol publication", .{i});
@@ -285,12 +359,46 @@ fn compileWithCodeGen(
             .loc = lir_store.procLoc(proc_id),
         }) catch return CompilationError.OutOfMemory;
     }
+    for (static_rc_helpers) |helper_key| {
+        const helper = codegen.compiledStaticDataRcHelperInfo(helper_key) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "ObjectFileCompiler invariant violated: static RC helper {x} was not compiled before symbol publication",
+                    .{helper_key.encode()},
+                );
+            }
+            unreachable;
+        };
+        const symbol_name = static_data_export.atomicRcHelperSymbolName(allocator, helper_key) catch return CompilationError.OutOfMemory;
+        owned_proc_symbol_names.append(allocator, symbol_name) catch {
+            allocator.free(symbol_name);
+            return CompilationError.OutOfMemory;
+        };
+        symbols.append(allocator, .{
+            .name = symbol_name,
+            .offset = helper.start_offset,
+            .size = helper.end_offset - helper.start_offset,
+            .is_global = true,
+            .is_function = true,
+            .is_external = false,
+            .is_hidden = true,
+            .section = .text,
+            .prologue_size = helper.prologue_size,
+            .stack_alloc = helper.stack_alloc,
+            .frame_size = helper.frame_size,
+            .callee_saved_mask = helper.callee_saved_mask,
+            .epilogue_offset = helper.epilogue_offset,
+            .uses_frame_pointer = helper.uses_frame_pointer,
+        }) catch return CompilationError.OutOfMemory;
+    }
     for (static_data_symbols.items) |sym| {
         if (!sym.is_global) continue;
         symbols.append(allocator, sym) catch return CompilationError.OutOfMemory;
     }
+    if (timing) |timings| timings.finish(symbol_relocations_started_ns, .symbol_relocations);
 
     // Generate entrypoint wrappers
+    const entrypoint_instructions_started_ns = if (timing) |timings| timings.start() else 0;
     for (entrypoints) |entrypoint| {
         const export_info = codegen.generateEntrypointWrapper(
             entrypoint.symbol_name,
@@ -318,8 +426,10 @@ fn compileWithCodeGen(
             return CompilationError.OutOfMemory;
         };
     }
+    if (timing) |timings| timings.finish(entrypoint_instructions_started_ns, .entrypoint_instructions);
 
     // Get generated code and relocations
+    symbol_relocations_started_ns = if (timing) |timings| timings.start() else 0;
     const code = codegen.getGeneratedCode();
     const relocations = codegen.getRelocations();
 
@@ -397,9 +507,11 @@ fn compileWithCodeGen(
             };
         }
     }
+    if (timing) |timings| timings.finish(symbol_relocations_started_ns, .symbol_relocations);
 
     // Build DWARF debug sections from the line entries recorded during
     // code generation.
+    const dwarf_started_ns = if (timing) |timings| timings.start() else 0;
     const source_file_names = allocator.alloc([]const u8, lir_store.sourceFileCount()) catch {
         return CompilationError.OutOfMemory;
     };
@@ -416,8 +528,10 @@ fn compileWithCodeGen(
         code.len,
     ) catch return CompilationError.OutOfMemory;
     defer dwarf_sections.deinit(allocator);
+    if (timing) |timings| timings.finish(dwarf_started_ns, .dwarf);
 
     // Generate object file
+    const object_encoding_started_ns = if (timing) |timings| timings.start() else 0;
     var output = std.ArrayList(u8).empty;
     errdefer output.deinit(allocator);
 
@@ -442,10 +556,11 @@ fn compileWithCodeGen(
         error.UnsupportedTarget => return CompilationError.UnsupportedTarget,
     };
 
+    const object_bytes = output.toOwnedSlice(allocator) catch return CompilationError.OutOfMemory;
+    if (timing) |timings| timings.finish(object_encoding_started_ns, .object_encoding);
+
     return CompilationResult{
-        .object_bytes = output.toOwnedSlice(allocator) catch {
-            return CompilationError.OutOfMemory;
-        },
+        .object_bytes = object_bytes,
         .allocator = allocator,
     };
 }
@@ -481,6 +596,7 @@ fn appendStaticDataExport(
         .is_global = data_export.is_global,
         .is_function = false,
         .is_external = false,
+        .is_hidden = !data_export.is_exported,
         .section = .rodata,
     }) catch {
         return CompilationError.OutOfMemory;
@@ -586,6 +702,7 @@ fn crossCompileDispatch(
     proc_specs: []const LirProcSpec,
     target: RocTarget,
     enable_default_platform_runtime: bool,
+    timing: ?*ObjectFileCompiler.Timing,
 ) CompilationError!CompilationResult {
     const enum_info = @typeInfo(RocTarget).@"enum";
     inline for (enum_info.fields) |field| {
@@ -603,6 +720,7 @@ fn crossCompileDispatch(
                     proc_specs,
                     comptime_target,
                     enable_default_platform_runtime,
+                    timing,
                 );
             } else {
                 return CompilationError.UnsupportedTarget;

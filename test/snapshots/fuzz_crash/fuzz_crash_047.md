@@ -23,7 +23,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "person"))
@@ -45,10 +45,7 @@ EndOfFile,
 ~~~roc
 person = { name: "Alice", age: 30 }
 
-updated = {
-	..person,
-	age: 31,
-}
+updated = { ..person, age: 31 }
 ~~~
 # CANONICALIZE
 ~~~clojure

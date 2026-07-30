@@ -12,7 +12,6 @@ const EmitMod = @import("Emit.zig");
 const Registers = @import("Registers.zig");
 const Call = @import("Call.zig");
 const Relocation = @import("../Relocation.zig").Relocation;
-const ValueStorageMod = @import("../ValueStorage.zig");
 const FrameBuilderMod = @import("../FrameBuilder.zig");
 
 const GeneralReg = Registers.GeneralReg;
@@ -33,6 +32,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
 
     return struct {
         const Self = @This();
+        const nop_inst: u32 = 0xD503201F;
 
         /// The target this CodeGen was instantiated for
         pub const roc_target = target;
@@ -68,7 +68,6 @@ pub fn CodeGen(comptime target: RocTarget) type {
         allocator: Allocator,
         stack_offset: i32,
         relocations: std.ArrayList(Relocation),
-        locals: std.AutoHashMap(u32, ValueStorageMod.ValueLoc),
         free_general: u32,
         free_float: u32,
         callee_saved_used: u32, // Bitmask of callee-saved regs we used
@@ -76,43 +75,32 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Remaining callee-saved registers available (used after caller-saved exhausted)
         callee_saved_available: u32,
 
-        /// Reverse mapping: register index -> local that owns it (null if free)
-        general_owners: [NUM_GENERAL_REGS]?u32,
-        float_owners: [NUM_FLOAT_REGS]?u32,
-
         pub fn init(allocator: Allocator) Self {
             return Self{
                 .emit = Emit.init(allocator),
                 .allocator = allocator,
                 .stack_offset = 0,
                 .relocations = .empty,
-                .locals = std.AutoHashMap(u32, ValueStorageMod.ValueLoc).init(allocator),
                 .free_general = CC.CALLER_SAVED_GENERAL_MASK,
                 .free_float = CC.CALLER_SAVED_FLOAT_MASK,
                 .callee_saved_used = 0,
                 .callee_saved_available = CALLEE_SAVED_GENERAL_MASK,
-                .general_owners = [_]?u32{null} ** NUM_GENERAL_REGS,
-                .float_owners = [_]?u32{null} ** NUM_FLOAT_REGS,
             };
         }
 
         pub fn deinit(self: *Self) void {
             self.emit.deinit();
             self.relocations.deinit(self.allocator);
-            self.locals.deinit();
         }
 
         pub fn reset(self: *Self) void {
             self.emit.buf.clearRetainingCapacity();
             self.relocations.clearRetainingCapacity();
-            self.locals.clearRetainingCapacity();
             self.stack_offset = 0;
             self.free_general = CC.CALLER_SAVED_GENERAL_MASK;
             self.free_float = CC.CALLER_SAVED_FLOAT_MASK;
             self.callee_saved_used = 0;
             self.callee_saved_available = CALLEE_SAVED_GENERAL_MASK;
-            self.general_owners = [_]?u32{null} ** NUM_GENERAL_REGS;
-            self.float_owners = [_]?u32{null} ** NUM_FLOAT_REGS;
         }
 
         /// Get the generated code
@@ -125,51 +113,10 @@ pub fn CodeGen(comptime target: RocTarget) type {
             return self.emit.buf.items.len;
         }
 
-        // Register allocation with spilling support
+        // Register allocation. LirCodeGen keeps every semantic local in its
+        // authoritative stable-location table; these masks manage only bounded,
+        // short-lived instruction-selection temporaries.
 
-        /// Allocate a general-purpose register for a local variable.
-        /// This will try caller-saved registers first, then callee-saved,
-        /// and finally spill an existing register if all are in use.
-        ///
-        /// INVARIANT: Each local ID must map to at most ONE register. Using the same
-        /// local ID for multiple registers corrupts spill tracking. Use unique temp IDs
-        /// (starting at 0x8000_0000) for temporaries that don't correspond to real locals.
-        pub fn allocGeneralFor(self: *Self, local: u32) Allocator.Error!GeneralReg {
-            // 1. Try caller-saved registers first (preferred - no save/restore needed)
-            if (self.allocFromGeneralMask(&self.free_general)) |reg| {
-                // DEBUG: Verify no OTHER register already owns this local
-                if (std.debug.runtime_safety) {
-                    for (self.general_owners, 0..) |owner, i| {
-                        if (owner) |owned_local| {
-                            std.debug.assert(owned_local != local or i == @intFromEnum(reg));
-                        }
-                    }
-                }
-                self.general_owners[@intFromEnum(reg)] = local;
-                return reg;
-            }
-
-            // 2. Try callee-saved registers (will need save/restore in prologue/epilogue)
-            if (self.allocFromGeneralMask(&self.callee_saved_available)) |reg| {
-                self.callee_saved_used |= @as(u32, 1) << @intFromEnum(reg);
-                // DEBUG: Verify no OTHER register already owns this local
-                if (std.debug.runtime_safety) {
-                    for (self.general_owners, 0..) |owner, i| {
-                        if (owner) |owned_local| {
-                            std.debug.assert(owned_local != local or i == @intFromEnum(reg));
-                        }
-                    }
-                }
-                self.general_owners[@intFromEnum(reg)] = local;
-                return reg;
-            }
-
-            // 3. All registers in use — panic (spills are not supported)
-            return self.spillAndAllocGeneral();
-        }
-
-        /// Allocate a general-purpose register without associating it with a local.
-        /// Returns null if no registers available. Use allocGeneralFor for spill support.
         pub fn allocGeneral(self: *Self) ?GeneralReg {
             // Try caller-saved first
             if (self.allocFromGeneralMask(&self.free_general)) |reg| {
@@ -193,8 +140,6 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Free a general-purpose register, making it available for allocation.
         pub fn freeGeneral(self: *Self, reg: GeneralReg) void {
             const idx = @intFromEnum(reg);
-            // Clear ownership
-            self.general_owners[idx] = null;
             // Return to appropriate pool
             if ((CALLEE_SAVED_GENERAL_MASK & (@as(u32, 1) << idx)) != 0) {
                 self.callee_saved_available |= @as(u32, 1) << idx;
@@ -203,79 +148,12 @@ pub fn CodeGen(comptime target: RocTarget) type {
             }
         }
 
-        /// Mark a register as in use so it won't be allocated.
-        /// Used for return values from function calls that need to persist.
-        /// NOTE: Uses sentinel value 0 for ownership. Callers of allocGeneralFor must NOT use
-        /// local ID 0 - use unique temp IDs (starting at 0x8000_0000) for temporaries.
+        /// Mark a fixed ABI register as in use so it won't be allocated.
         pub fn markRegisterInUse(self: *Self, reg: GeneralReg) void {
             const idx = @intFromEnum(reg);
             // Remove from free pool (it's now in use)
             self.free_general &= ~(@as(u32, 1) << idx);
             self.callee_saved_available &= ~(@as(u32, 1) << idx);
-            // DEBUG: Verify no OTHER register already owns local 0 before assignment
-            if (std.debug.runtime_safety) {
-                for (self.general_owners, 0..) |owner, i| {
-                    if (owner) |owned_local| {
-                        std.debug.assert(owned_local != 0 or i == idx);
-                    }
-                }
-            }
-            // Set ownership to a sentinel value (0 = temporary)
-            self.general_owners[idx] = 0;
-        }
-
-        /// Spill a register to make room and allocate it for the given local.
-        /// WARNING: This function is fundamentally unsafe for LirCodeGen's usage pattern.
-        /// See the x86_64 version for the full explanation.
-        fn spillAndAllocGeneral(self: *Self) Allocator.Error!GeneralReg {
-            if (builtin.mode == .Debug) {
-                var owned_count: u32 = 0;
-                for (0..NUM_GENERAL_REGS) |i| {
-                    if (self.general_owners[i] != null) owned_count += 1;
-                }
-                std.debug.panic(
-                    "Register spill triggered: all {d} general registers are in use " ++
-                        "(free_general=0x{x}, callee_saved_available=0x{x}). " ++
-                        "LirCodeGen does not support spills — raw register references would become stale. " ++
-                        "Fix the caller to free registers before allocating new ones.",
-                    .{ owned_count, self.free_general, self.callee_saved_available },
-                );
-            }
-            unreachable;
-        }
-
-        /// Reload a spilled value back into a register.
-        /// Returns the register it was loaded into.
-        pub fn reloadLocal(self: *Self, local: u32) Allocator.Error!GeneralReg {
-            // Check if it's already in a register
-            if (self.locals.get(local)) |loc| {
-                switch (loc) {
-                    .general_reg => |r| return @enumFromInt(r),
-                    .stack => |slot| {
-                        // Allocate a register (might cause another spill)
-                        const reg = try self.allocGeneralFor(local);
-                        // Load from stack
-                        try self.emitLoadStack(.w64, reg, slot);
-                        // Update location
-                        try self.locals.put(local, .{ .general_reg = @intFromEnum(reg) });
-                        return reg;
-                    },
-                    else => return error.InvalidLocalLocation,
-                }
-            }
-            return error.LocalNotFound;
-        }
-
-        /// Allocate a floating-point register for a local variable.
-        pub fn allocFloatFor(self: *Self, local: u32) Allocator.Error!FloatReg {
-            // Float registers: try caller-saved first
-            if (self.allocFromFloatMask(&self.free_float)) |reg| {
-                self.float_owners[@intFromEnum(reg)] = local;
-                return reg;
-            }
-
-            // All registers in use - must spill one
-            return self.spillAndAllocFloat(local);
         }
 
         pub fn allocFloat(self: *Self) ?FloatReg {
@@ -285,86 +163,9 @@ pub fn CodeGen(comptime target: RocTarget) type {
             return @enumFromInt(bit);
         }
 
-        fn allocFromFloatMask(_: *Self, mask: *u32) ?FloatReg {
-            if (mask.* == 0) return null;
-            const bit: u5 = @intCast(@ctz(mask.*));
-            mask.* &= ~(@as(u32, 1) << bit);
-            return @enumFromInt(bit);
-        }
-
         pub fn freeFloat(self: *Self, reg: FloatReg) void {
             const idx = @intFromEnum(reg);
-            self.float_owners[idx] = null;
             self.free_float |= @as(u32, 1) << idx;
-        }
-
-        fn spillAndAllocFloat(self: *Self, local: u32) Allocator.Error!FloatReg {
-            // Find a float register to spill
-            var victim: ?FloatReg = null;
-            for (0..NUM_FLOAT_REGS) |i| {
-                if (self.float_owners[i] != null) {
-                    victim = @enumFromInt(i);
-                    break;
-                }
-            }
-
-            const reg = victim orelse unreachable;
-            const owner = self.float_owners[@intFromEnum(reg)].?;
-
-            // Allocate stack slot (8 bytes for f64)
-            const slot = self.allocStack(8);
-
-            // Emit store instruction
-            try self.emitStoreStackF64(slot, reg);
-
-            // Update the owner's location to stack
-            try self.locals.put(owner, .{ .stack = slot });
-
-            // Update ownership
-            self.float_owners[@intFromEnum(reg)] = local;
-
-            return reg;
-        }
-
-        /// Reload a spilled float value back into a register.
-        pub fn reloadFloatLocal(self: *Self, local: u32) Allocator.Error!FloatReg {
-            if (self.locals.get(local)) |loc| {
-                switch (loc) {
-                    .float_reg => |r| return @enumFromInt(r),
-                    .stack => |slot| {
-                        const reg = try self.allocFloatFor(local);
-                        try self.emitLoadStackF64(reg, slot);
-                        try self.locals.put(local, .{ .float_reg = @intFromEnum(reg) });
-                        return reg;
-                    },
-                    else => return error.InvalidLocalLocation,
-                }
-            }
-            return error.LocalNotFound;
-        }
-
-        /// Get the register holding a local, reloading if necessary.
-        pub fn getLocalReg(self: *Self, local: u32) Allocator.Error!GeneralReg {
-            if (self.locals.get(local)) |loc| {
-                switch (loc) {
-                    .general_reg => |r| return @enumFromInt(r),
-                    .stack => return self.reloadLocal(local),
-                    else => return error.InvalidLocalLocation,
-                }
-            }
-            return error.LocalNotFound;
-        }
-
-        /// Get the float register holding a local, reloading if necessary.
-        pub fn getLocalFloatReg(self: *Self, local: u32) Allocator.Error!FloatReg {
-            if (self.locals.get(local)) |loc| {
-                switch (loc) {
-                    .float_reg => |r| return @enumFromInt(r),
-                    .stack => return self.reloadFloatLocal(local),
-                    else => return error.InvalidLocalLocation,
-                }
-            }
-            return error.LocalNotFound;
         }
 
         // Stack management
@@ -546,6 +347,12 @@ pub fn CodeGen(comptime target: RocTarget) type {
             try self.emit.cset(.w64, dst, cond);
         }
 
+        /// Emit float32 compare and set: dst = (a cond b) ? 1 : 0
+        pub fn emitCmpF32(self: *Self, dst: GeneralReg, a: FloatReg, b: FloatReg, cond: Emit.Condition) Allocator.Error!void {
+            try self.emit.fcmpRegReg(.single, a, b);
+            try self.emit.cset(.w64, dst, cond);
+        }
+
         // Floating-point operations
 
         /// Emit float64 addition: dst = a + b
@@ -575,6 +382,10 @@ pub fn CodeGen(comptime target: RocTarget) type {
 
         pub fn emitAbsF64(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
             try self.emit.fabsRegReg(.double, dst, src);
+        }
+
+        pub fn emitAbsF32(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
+            try self.emit.fabsRegReg(.single, dst, src);
         }
 
         /// Emit float32 addition: dst = a + b
@@ -654,6 +465,26 @@ pub fn CodeGen(comptime target: RocTarget) type {
             try self.emit.fstrRegMemSoff(.single, src, .FP, offset);
         }
 
+        pub fn emitLoadStackV128(self: *Self, dst: FloatReg, offset: i32) Allocator.Error!void {
+            try self.emit.ldrQRegMemSoff(dst, .FP, offset);
+        }
+
+        pub fn emitStoreStackV128(self: *Self, offset: i32, src: FloatReg) Allocator.Error!void {
+            try self.emit.strQRegMemSoff(src, .FP, offset);
+        }
+
+        pub fn emitMoveV128(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
+            if (dst != src) try self.emit.movVectorRegReg(dst, src);
+        }
+
+        pub fn emitLoadV128(self: *Self, dst: FloatReg, base: GeneralReg, offset: i32) Allocator.Error!void {
+            try self.emit.ldrQRegMemSoff(dst, base, offset);
+        }
+
+        pub fn emitStoreV128(self: *Self, base: GeneralReg, offset: i32, src: FloatReg) Allocator.Error!void {
+            try self.emit.strQRegMemSoff(src, base, offset);
+        }
+
         // Immediate loading
 
         /// Load immediate value into register
@@ -694,13 +525,21 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Emit conditional jump (returns patch location for fixup)
         pub fn emitCondJump(self: *Self, cond: Emit.Condition) Allocator.Error!usize {
             const patch_loc = self.currentOffset();
-            try self.emit.bcond(cond, 0); // Placeholder offset
+            // Reserve enough space for either:
+            // - a short conditional branch plus nop, or
+            // - an inverted conditional branch over a long unconditional branch.
+            //
+            // AArch64 B.cond reaches only +/-1 MiB (imm19), while B reaches
+            // +/-128 MiB (imm26). The fixed-size placeholder keeps later code
+            // offsets stable when a conditional target turns out to be far away.
+            try self.emit.bcond(cond, 8);
+            try self.emit.b(4);
             return patch_loc;
         }
 
         /// Patch a jump target
         pub fn patchJump(self: *Self, patch_loc: usize, target_loc: usize) void {
-            const offset: i32 = @intCast(@as(i64, @intCast(target_loc)) - @as(i64, @intCast(patch_loc)));
+            const offset = branchByteOffset(patch_loc, target_loc);
             const offset_words = @divExact(offset, 4);
 
             // Read existing instruction
@@ -709,26 +548,94 @@ pub fn CodeGen(comptime target: RocTarget) type {
             // Determine instruction type and patch accordingly
             if ((inst >> 26) == 0b000101) {
                 // B (unconditional): imm26 in bits [25:0]
-                const imm26: u26 = @bitCast(@as(i26, @truncate(offset_words)));
-                inst = (inst & 0xFC000000) | imm26;
+                inst = encodeB(offset_words);
             } else if ((inst >> 24) == 0b01010100) {
                 // B.cond: imm19 in bits [23:5]
-                const imm19: u19 = @bitCast(@as(i19, @truncate(offset_words)));
-                inst = (inst & 0xFF00001F) | (@as(u32, imm19) << 5);
+                const cond: Emit.Condition = @enumFromInt(inst & 0xF);
+                if (hasReservedLongBranchSlot(self, patch_loc)) {
+                    if (fitsSignedBits(offset_words, 19)) {
+                        inst = encodeBCond(cond, offset_words);
+                        std.mem.writeInt(u32, self.emit.buf.items[patch_loc..][0..4], inst, .little);
+                        std.mem.writeInt(u32, self.emit.buf.items[patch_loc + 4 ..][0..4], nop_inst, .little);
+                        return;
+                    }
+
+                    const skip_words = @divExact(@as(i64, 8), 4);
+                    inst = encodeBCond(cond.invert(), skip_words);
+                    const long_offset = branchByteOffset(patch_loc + 4, target_loc);
+                    const long_offset_words = @divExact(long_offset, 4);
+                    const long_inst = encodeB(long_offset_words);
+                    std.mem.writeInt(u32, self.emit.buf.items[patch_loc..][0..4], inst, .little);
+                    std.mem.writeInt(u32, self.emit.buf.items[patch_loc + 4 ..][0..4], long_inst, .little);
+                    return;
+                }
+
+                inst = encodeBCond(cond, offset_words);
             } else if (((inst >> 24) & 0b01111111) == 0b0110100 or ((inst >> 24) & 0b01111111) == 0b0110101) {
                 // CBZ/CBNZ: sf 011010 x imm19 Rt
                 // imm19 is in bits [23:5]
-                const imm19: u19 = @bitCast(@as(i19, @truncate(offset_words)));
+                assertBranchFits(offset_words, 19, "CBZ/CBNZ");
+                const imm19: u19 = @bitCast(@as(i19, @intCast(offset_words)));
                 inst = (inst & 0xFF00001F) | (@as(u32, imm19) << 5);
+            } else {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("AArch64 patchJump called for non-branch instruction 0x{x} at 0x{x}", .{ inst, patch_loc });
+                }
+                unreachable;
             }
 
             std.mem.writeInt(u32, self.emit.buf.items[patch_loc..][0..4], inst, .little);
         }
 
+        fn branchByteOffset(from_loc: usize, target_loc: usize) i64 {
+            const offset = @as(i64, @intCast(target_loc)) - @as(i64, @intCast(from_loc));
+            std.debug.assert(@mod(offset, 4) == 0);
+            return offset;
+        }
+
+        fn fitsSignedBits(value: i64, comptime bits: u6) bool {
+            const min = -(@as(i64, 1) << (bits - 1));
+            const max = (@as(i64, 1) << (bits - 1)) - 1;
+            return value >= min and value <= max;
+        }
+
+        fn assertBranchFits(offset_words: i64, comptime bits: u6, comptime kind: []const u8) void {
+            if (fitsSignedBits(offset_words, bits)) return;
+
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "AArch64 {s} target out of range: word offset {d} does not fit in signed {d}-bit immediate",
+                    .{ kind, offset_words, bits },
+                );
+            }
+            unreachable;
+        }
+
+        fn encodeB(offset_words: i64) u32 {
+            assertBranchFits(offset_words, 26, "B");
+            const imm26: u26 = @bitCast(@as(i26, @intCast(offset_words)));
+            return (@as(u32, 0b000101) << 26) | imm26;
+        }
+
+        fn encodeBCond(cond: Emit.Condition, offset_words: i64) u32 {
+            assertBranchFits(offset_words, 19, "B.cond");
+            const imm19: u19 = @bitCast(@as(i19, @intCast(offset_words)));
+            return (@as(u32, 0b01010100) << 24) |
+                (@as(u32, imm19) << 5) |
+                @intFromEnum(cond);
+        }
+
+        fn hasReservedLongBranchSlot(self: *Self, patch_loc: usize) bool {
+            if (patch_loc + 8 > self.emit.buf.items.len) return false;
+            const next = std.mem.readInt(u32, self.emit.buf.items[patch_loc + 4 ..][0..4], .little);
+            return (next >> 26) == 0b000101;
+        }
+
         /// Patch a BL (branch with link) instruction to target a specific offset
         pub fn patchBL(self: *Self, patch_loc: usize, offset_words: i32) void {
             // BL uses imm26 encoding: 1 00101 imm26
-            const imm26: u26 = @bitCast(@as(i26, @truncate(offset_words)));
+            assertBranchFits(offset_words, 26, "BL");
+            const imm26: u26 = @bitCast(@as(i26, @intCast(offset_words)));
             const inst: u32 = (@as(u32, 0b100101) << 26) | imm26;
             std.mem.writeInt(u32, self.emit.buf.items[patch_loc..][0..4], inst, .little);
         }
@@ -792,12 +699,63 @@ test "float operations" {
     var cg = LinuxCodeGen.init(std.testing.allocator);
     defer cg.deinit();
 
+    try cg.emitAddF32(.V0, .V1, .V2);
+    try cg.emitSubF32(.V3, .V4, .V5);
+    try cg.emitMulF32(.V6, .V7, .V8);
+    try cg.emitDivF32(.V9, .V10, .V11);
     try cg.emitAddF64(.V0, .V1, .V2);
     try cg.emitSubF64(.V3, .V4, .V5);
     try cg.emitMulF64(.V6, .V7, .V8);
     try cg.emitDivF64(.V9, .V10, .V11);
 
     try std.testing.expect(cg.getCode().len > 0);
+}
+
+test "float allocation never relocates an allocated register" {
+    var cg = LinuxCodeGen.init(std.testing.allocator);
+    defer cg.deinit();
+
+    const count: usize = @popCount(LinuxCodeGen.INITIAL_FREE_FLOAT);
+    var regs: [LinuxCodeGen.NUM_FLOAT_REGS]FloatReg = undefined;
+    for (0..count) |i| {
+        regs[i] = cg.allocFloat().?;
+    }
+
+    const stack_offset = cg.stack_offset;
+    const code_len = cg.getCode().len;
+    try std.testing.expectEqual(@as(?FloatReg, null), cg.allocFloat());
+    try std.testing.expectEqual(stack_offset, cg.stack_offset);
+    try std.testing.expectEqual(code_len, cg.getCode().len);
+
+    for (regs[0..count]) |reg| cg.freeFloat(reg);
+}
+
+test "vector allocation excludes AAPCS64 partial-width callee-saved registers" {
+    var cg = LinuxCodeGen.init(std.testing.allocator);
+    defer cg.deinit();
+
+    const count: usize = @popCount(LinuxCodeGen.INITIAL_FREE_FLOAT);
+    for (0..count) |_| {
+        const reg = cg.allocFloat().?;
+        const index = @intFromEnum(reg);
+        try std.testing.expect(index <= 7 or index >= 16);
+    }
+    try std.testing.expectEqual(@as(?FloatReg, null), cg.allocFloat());
+}
+
+test "general allocation reports exhaustion after all allocatable registers" {
+    var cg = LinuxCodeGen.init(std.testing.allocator);
+    defer cg.deinit();
+
+    const count: usize = @popCount(LinuxCodeGen.INITIAL_FREE_GENERAL) +
+        @popCount(LinuxCodeGen.CALLEE_SAVED_GENERAL_MASK);
+    var regs: [LinuxCodeGen.NUM_GENERAL_REGS]GeneralReg = undefined;
+    for (0..count) |i| {
+        regs[i] = cg.allocGeneral().?;
+    }
+
+    try std.testing.expectEqual(@as(?GeneralReg, null), cg.allocGeneral());
+    for (regs[0..count]) |reg| cg.freeGeneral(reg);
 }
 
 test "CodeGen works for all aarch64 targets" {
@@ -809,4 +767,42 @@ test "CodeGen works for all aarch64 targets" {
     try std.testing.expectEqual(RocTarget.arm64linux, LinuxCodeGen.roc_target);
     try std.testing.expectEqual(RocTarget.arm64win, WinCodeGen.roc_target);
     try std.testing.expectEqual(RocTarget.arm64mac, MacCodeGen.roc_target);
+}
+
+test "patch conditional jump keeps near targets short" {
+    var cg = LinuxCodeGen.init(std.testing.allocator);
+    defer cg.deinit();
+
+    const patch = try cg.emitCondJump(.ne);
+    try cg.emit.movRegImm64(.X0, 1);
+    const target = cg.currentOffset();
+
+    cg.patchJump(patch, target);
+
+    const code = cg.getCode();
+    const cond_inst = std.mem.readInt(u32, code[patch..][0..4], .little);
+    const reserved_inst = std.mem.readInt(u32, code[patch + 4 ..][0..4], .little);
+
+    try std.testing.expectEqual(@as(u4, @intFromEnum(EmitMod.Emit(.arm64linux).Condition.ne)), @as(u4, @truncate(cond_inst)));
+    try std.testing.expectEqual(@as(u19, @intCast(@divExact(@as(i64, @intCast(target - patch)), 4))), @as(u19, @truncate(cond_inst >> 5)));
+    try std.testing.expectEqual(@as(u32, 0xD503201F), reserved_inst);
+}
+
+test "patch conditional jump expands far targets" {
+    var cg = LinuxCodeGen.init(std.testing.allocator);
+    defer cg.deinit();
+
+    const patch = try cg.emitCondJump(.ne);
+    const target = patch + 0x110000;
+
+    cg.patchJump(patch, target);
+
+    const code = cg.getCode();
+    const skip_inst = std.mem.readInt(u32, code[patch..][0..4], .little);
+    const branch_inst = std.mem.readInt(u32, code[patch + 4 ..][0..4], .little);
+
+    try std.testing.expectEqual(@as(u4, @intFromEnum(EmitMod.Emit(.arm64linux).Condition.eq)), @as(u4, @truncate(skip_inst)));
+    try std.testing.expectEqual(@as(u19, 2), @as(u19, @truncate(skip_inst >> 5)));
+    try std.testing.expectEqual(@as(u6, 0b000101), @as(u6, @truncate(branch_inst >> 26)));
+    try std.testing.expectEqual(@as(u26, @intCast(@divExact(@as(i64, @intCast(target - (patch + 4))), 4))), @as(u26, @truncate(branch_inst)));
 }

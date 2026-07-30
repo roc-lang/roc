@@ -8,114 +8,171 @@ type=file
 app[]{f:platform""}|(0,)|||0
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_041.md:1:20:1:21
-PARSE ERROR - fuzz_crash_041.md:1:21:1:22
-PARSE ERROR - fuzz_crash_041.md:1:22:1:23
-PARSE ERROR - fuzz_crash_041.md:1:23:1:24
-PARSE ERROR - fuzz_crash_041.md:1:24:1:25
-PARSE ERROR - fuzz_crash_041.md:1:25:1:26
-PARSE ERROR - fuzz_crash_041.md:1:26:1:27
-PARSE ERROR - fuzz_crash_041.md:1:27:1:28
-PARSE ERROR - fuzz_crash_041.md:1:28:1:29
+UNEXPECTED STATEMENT - fuzz_crash_041.md:1:20:1:21
+UNEXPECTED STATEMENT - fuzz_crash_041.md:1:21:1:22
+UNEXPECTED STATEMENT - fuzz_crash_041.md:1:22:1:23
+UNEXPECTED STATEMENT - fuzz_crash_041.md:1:23:1:24
+UNEXPECTED STATEMENT - fuzz_crash_041.md:1:24:1:25
+UNEXPECTED STATEMENT - fuzz_crash_041.md:1:25:1:26
+UNEXPECTED STATEMENT - fuzz_crash_041.md:1:26:1:27
+UNEXPECTED STATEMENT - fuzz_crash_041.md:1:27:1:28
+UNEXPECTED STATEMENT - fuzz_crash_041.md:1:28:1:29
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_041.md:1:20:1:21:**
-```roc
-app[]{f:platform""}|(0,)|||0
-```
-                   ^
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  app[]{f:platform""}|(0,)|||0                                              │
+ │                     ‾                                                      │
+ └──────────────────────────────────────────────────── fuzz_crash_041.md:1:20 ┘
 
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+    For example:
+        answer = 42
 
-**fuzz_crash_041.md:1:21:1:22:**
-```roc
-app[]{f:platform""}|(0,)|||0
-```
-                    ^
+    I found `|` here.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  app[]{f:platform""}|(0,)|||0                                              │
+ │                      ‾                                                     │
+ └──────────────────────────────────────────────────── fuzz_crash_041.md:1:21 ┘
 
-**fuzz_crash_041.md:1:22:1:23:**
-```roc
-app[]{f:platform""}|(0,)|||0
-```
-                     ^
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
+    For example:
+        answer = 42
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_041.md:1:23:1:24:**
-```roc
-app[]{f:platform""}|(0,)|||0
-```
-                      ^
+    I found `(` here.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  app[]{f:platform""}|(0,)|||0                                              │
+ │                       ‾                                                    │
+ └──────────────────────────────────────────────────── fuzz_crash_041.md:1:22 ┘
 
-**fuzz_crash_041.md:1:24:1:25:**
-```roc
-app[]{f:platform""}|(0,)|||0
-```
-                       ^
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
+    For example:
+        answer = 42
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_041.md:1:25:1:26:**
-```roc
-app[]{f:platform""}|(0,)|||0
-```
-                        ^
+    I found `0` here.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  app[]{f:platform""}|(0,)|||0                                              │
+ │                        ‾                                                   │
+ └──────────────────────────────────────────────────── fuzz_crash_041.md:1:23 ┘
 
-**fuzz_crash_041.md:1:26:1:27:**
-```roc
-app[]{f:platform""}|(0,)|||0
-```
-                         ^
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
+    For example:
+        answer = 42
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_041.md:1:27:1:28:**
-```roc
-app[]{f:platform""}|(0,)|||0
-```
-                          ^
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  app[]{f:platform""}|(0,)|||0                                              │
+ │                         ‾                                                  │
+ └──────────────────────────────────────────────────── fuzz_crash_041.md:1:24 ┘
 
-**fuzz_crash_041.md:1:28:1:29:**
-```roc
-app[]{f:platform""}|(0,)|||0
-```
-                           ^
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
+    For example:
+        answer = 42
+
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
+
+
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  app[]{f:platform""}|(0,)|||0                                              │
+ │                          ‾                                                 │
+ └──────────────────────────────────────────────────── fuzz_crash_041.md:1:25 ┘
+
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `|` here.
+
+
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  app[]{f:platform""}|(0,)|||0                                              │
+ │                           ‾                                                │
+ └──────────────────────────────────────────────────── fuzz_crash_041.md:1:26 ┘
+
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `|` here.
+
+
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  app[]{f:platform""}|(0,)|||0                                              │
+ │                            ‾                                               │
+ └──────────────────────────────────────────────────── fuzz_crash_041.md:1:27 ┘
+
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `|` here.
+
+
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  app[]{f:platform""}|(0,)|||0                                              │
+ │                             ‾                                              │
+ └──────────────────────────────────────────────────── fuzz_crash_041.md:1:28 ┘
+
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `0` here.
 
 # TOKENS
 ~~~zig

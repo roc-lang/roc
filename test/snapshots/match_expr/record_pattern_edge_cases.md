@@ -16,9 +16,18 @@ match ... {
 }
 ~~~
 # EXPECTED
-NIL
+UNCONDITIONAL CONDITION - record_pattern_edge_cases.md:1:7:1:10
 # PROBLEMS
-NIL
+
+┌─────────────────────────┐
+│ UNCONDITIONAL CONDITION ├─ This match value is known at compile time, so ───┐
+└┬────────────────────────┘  this match will always inspect the same value.   │
+ │                                                                            │
+ │  match ... {                                                               │
+ │        ‾‾‾                                                                 │
+ └────────────────────────────────────────── record_pattern_edge_cases.md:1:7 ┘
+
+
 # TOKENS
 ~~~zig
 KwMatch,TripleDot,OpenCurly,
@@ -154,7 +163,7 @@ match ... {
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "c"))))
-						(e-interpolation (constraint-fn-var 185)
+						(e-interpolation (constraint-fn-var 330) (dispatcher-var 15)
 							(first
 								(e-literal (string "deeply nested: ")))
 							(parts
@@ -179,7 +188,7 @@ match ... {
 							(p-assign (ident "#interp_1"))
 							(e-lookup-local
 								(p-assign (ident "x"))))
-						(e-interpolation (constraint-fn-var 243)
+						(e-interpolation (constraint-fn-var 350) (dispatcher-var 30)
 							(first
 								(e-literal (string "mixed with empty: ")))
 							(parts
@@ -211,7 +220,7 @@ match ... {
 							(p-assign (ident "#interp_3"))
 							(e-lookup-local
 								(p-assign (ident "simple"))))
-						(e-interpolation (constraint-fn-var 304)
+						(e-interpolation (constraint-fn-var 371) (dispatcher-var 52)
 							(first
 								(e-literal (string "mixed: ")))
 							(parts
@@ -250,7 +259,7 @@ match ... {
 							(p-assign (ident "#interp_5"))
 							(e-lookup-local
 								(p-assign (ident "d"))))
-						(e-interpolation (constraint-fn-var 366)
+						(e-interpolation (constraint-fn-var 393) (dispatcher-var 76)
 							(first
 								(e-literal (string "multiple nested: ")))
 							(parts
@@ -274,7 +283,7 @@ match ... {
 							(p-assign (ident "#interp_6"))
 							(e-lookup-local
 								(p-assign (ident "x"))))
-						(e-interpolation (constraint-fn-var 423)
+						(e-interpolation (constraint-fn-var 412) (dispatcher-var 89)
 							(first
 								(e-literal (string "renamed: ")))
 							(parts
@@ -304,12 +313,12 @@ match ... {
 								(p-assign (ident "firstName"))))
 						(s-let
 							(p-assign (ident "#interp_8"))
-							(e-dispatch-call (method "to_str") (constraint-fn-var 427)
+							(e-dispatch-call (method "to_str") (constraint-fn-var 416)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "userAge"))))
 								(args)))
-						(e-interpolation (constraint-fn-var 486)
+						(e-interpolation (constraint-fn-var 435) (dispatcher-var 112)
 							(first
 								(e-literal (string "renamed nested: ")))
 							(parts

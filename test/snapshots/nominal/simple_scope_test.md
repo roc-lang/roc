@@ -14,18 +14,18 @@ Outer := [A].{
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - simple_scope_test.md:6:17:6:26
+NAME NOT IN SCOPE - simple_scope_test.md:6:17:6:26
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `inner_val` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**simple_scope_test.md:6:17:6:26:**
-```roc
-    outer_val = inner_val
-```
-                ^^^^^^^^^
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `inner_val` in this scope. ───────────┐
+└┬──────────────────┘                                                         │
+ │                                                                            │
+ │  outer_val = inner_val                                                     │
+ │              ‾‾‾‾‾‾‾‾‾                                                     │
+ └───────────────────────────────────────────────── simple_scope_test.md:6:17 ┘
 
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig
@@ -40,7 +40,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "Outer")

@@ -4,6 +4,7 @@
 //! This runners makes a simple script to reproduce failures from the command line (stdin or file).
 
 const std = @import("std");
+const build_options = @import("build_options");
 const fuzz_test = @import("fuzz_test");
 
 // TODO: add a func zig_pretty_print or something to dump the test case in a pretty printed format.
@@ -28,9 +29,9 @@ const HELP =
 
 /// CLI entrypoint for fuzzing failure reproducer.
 pub fn main(init: std.process.Init) anyerror!void {
-    var gpa_impl = std.heap.DebugAllocator(.{}){};
+    var gpa_impl = std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
     defer {
-        _ = gpa_impl.deinit();
+        _ = build_options.debugGpaOk(gpa_impl.deinit());
     }
     const gpa = gpa_impl.allocator();
 

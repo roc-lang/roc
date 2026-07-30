@@ -8,10 +8,11 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const base58 = @import("base58");
 const zstd = std.compress.zstd;
+const format = @import("format.zig");
 
 // Constants
-const TAR_EXTENSION = ".tar.zst";
-const STREAM_BUFFER_SIZE: usize = 64 * 1024; // 64KB buffer for streaming operations
+const TAR_EXTENSION = format.TAR_EXTENSION;
+const STREAM_BUFFER_SIZE = format.STREAM_BUFFER_SIZE;
 // Buffer size for stdlib zstd decompressor: window_len + block_size_max for tar extraction
 const DECOMPRESS_BUFFER_SIZE: usize = zstd.default_window_len + zstd.block_size_max;
 // Max path bytes - use 4096 on WASM/freestanding, std.Io.Dir.max_path_bytes elsewhere
@@ -280,7 +281,9 @@ pub const PathValidationError = struct {
     reason: PathValidationReason,
 };
 
-const WINDOWS_RESERVED_NAMES = [_][]const u8{
+/// File and directory base names Windows reserves for devices; creating them
+/// misbehaves on Windows, so portable name validation rejects them everywhere.
+pub const WINDOWS_RESERVED_NAMES = [_][]const u8{
     "CON",  "PRN",  "AUX",  "NUL",
     "COM1", "COM2", "COM3", "COM4",
     "COM5", "COM6", "COM7", "COM8",

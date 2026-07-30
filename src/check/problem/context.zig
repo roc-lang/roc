@@ -44,6 +44,11 @@ pub const Context = union(enum) {
     // Data structure contexts
     /// Element in a list (0-indexed)
     list_entry: ListEntryContext,
+    /// Expression embedded in a string interpolation. This stores the source
+    /// region directly because an instantiated interpolation part has a fresh
+    /// type variable whose region may belong to the expression that produced
+    /// its value rather than this interpolation use site.
+    interpolation_part: base.Region,
 
     // Type annotation contexts
     /// From a type annotation
@@ -271,6 +276,8 @@ pub const Context = union(enum) {
     pub const PlatformRequirementContext = struct {
         /// The identifier that the platform requires
         required_ident: Ident.Idx,
+        /// Where the platform's requires clause declares this requirement.
+        platform_region: base.Region,
     };
 
     /// Context for method type mismatch (where clause)

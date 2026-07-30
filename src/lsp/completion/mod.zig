@@ -17,6 +17,7 @@ pub const CompletionBuilder = builder.CompletionBuilder;
 test {
     std.testing.refAllDecls(@import("context.zig"));
     std.testing.refAllDecls(@import("builtins.zig"));
+    std.testing.refAllDecls(@import("builder.zig"));
 }
 
 const std = @import("std");

@@ -34,6 +34,9 @@ const TermColor = struct {
 };
 
 pub fn main(init: std.process.Init) !void {
+    // This tool stays standalone (no build_options wiring), so unlike the
+    // first-party DebugAllocators behind -Ddebug-gpa-traces it keeps std's
+    // default allocation-site traces; it allocates too little to matter.
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
@@ -115,7 +118,7 @@ fn runTidy(gpa: Allocator, io: std.Io) !void {
         try tidyFile(gpa, &counter, source_file, &errors);
     }
 
-    try checkNoCommittedScratchFiles(gpa, io, &errors);
+    checkNoCommittedScratchFiles(paths, &errors);
 
     if (errors.count > 0) {
         std.debug.print("\n{s}[FAIL]{s} Found {d} tidy violations\n", .{ TermColor.red, TermColor.reset, errors.count });
@@ -131,22 +134,11 @@ fn runTidy(gpa: Allocator, io: std.Io) !void {
 /// git-tracked; an untracked scratch file in the working tree is fine. The
 /// pathspecs match across directories, so this is not limited to tidy's normal
 /// file set.
-fn checkNoCommittedScratchFiles(gpa: Allocator, io: std.Io, errors: *Errors) !void {
-    // `:(glob)**/plan.md` matches a file named exactly `plan.md` in any directory
-    // (including the repo root) without also catching e.g. `rollout_plan.md`.
-    const run_result = try std.process.run(gpa, io, .{
-        .argv = &.{ "git", "ls-files", "-z", "--", "*.mdtodo", ":(glob)**/plan.md" },
-    });
-    defer gpa.free(run_result.stdout);
-    defer gpa.free(run_result.stderr);
-
-    if (run_result.term != .exited or run_result.term.exited != 0) return error.GitFailed;
-
-    var lines = std.mem.splitScalar(u8, run_result.stdout, 0);
-    while (lines.next()) |line| {
-        if (line.len == 0) continue;
+fn checkNoCommittedScratchFiles(paths: []const []const u8, errors: *Errors) void {
+    for (paths) |line| {
+        if (!std.mem.endsWith(u8, line, ".mdtodo") and !std.mem.eql(u8, std.fs.path.basename(line), "plan.md")) continue;
         errors.emit(
-            "{s}: error: working/planning scratch files (plan.md, *.mdtodo) must not be checked in; keep it on the filesystem but `git rm --cached` it\n",
+            "{s}: error: working/planning scratch files (plan.md, *.mdtodo) must not be checked in; keep it on the filesystem but remove it from version control\n",
             .{line},
         );
     }
@@ -295,13 +287,21 @@ const Errors = struct {
         );
     }
 
+    pub fn addItemTerminology(errors: *Errors, file: SourceFile, offset: usize, word: []const u8) void {
+        errors.emit(
+            "{s}:{d}: error: '{s}' is banned here; the things in a collection are " ++
+                "consistently called items, so use 'item' (or 'items') in both prose and identifiers.\n",
+            .{ file.path, file.lineNumber(offset), word },
+        );
+    }
+
     pub fn addDisallowedBuiltinType(errors: *Errors, file: SourceFile, offset: usize, name: []const u8) void {
         errors.emit(
             "{s}:{d}: error: '{s}' is exposed as a top-level Builtin type. The only types allowed " ++
-                "directly under Builtin are: Str, Hasher, Iter, Stream, List, Bool, Box, Try, Dict, Set, Num. " ++
+                "directly under Builtin are: Str, Hasher, Iter, Stream, List, Bool, Box, Try, Dict, Set, Num, Encoding, Crypto. " ++
                 "Make '{s}' private by moving it below the exposed Builtin block (to the module's top level), " ++
                 "unless a user-facing method needs it and would break without it — in which case nest it under a " ++
-                "logical Builtin type instead (e.g. DictBucket under Dict, ParseTagUnionSpec under Str).\n",
+                "logical Builtin type instead (e.g. DictBucket under Dict, ParseTagUnionSpec under Encoding).\n",
             .{ file.path, file.lineNumber(offset), name, name },
         );
     }
@@ -360,6 +360,7 @@ fn tidyFile(
         tidyBannedGitDependency(file, errors);
     }
     tidyBuiltinExposedTypes(file, errors);
+    tidyItemTerminology(file, errors);
 }
 
 /// The only types allowed to be exposed directly under `Builtin` (i.e. declared at
@@ -367,7 +368,7 @@ fn tidyFile(
 /// type must either be private (declared below the exposed block, at the module's
 /// top level) or nested under one of these.
 const allowed_builtin_types = [_][]const u8{
-    "Str", "Hasher", "Iter", "Stream", "List", "Bool", "Box", "Try", "Dict", "Set", "Num",
+    "Str", "Hasher", "Iter", "Stream", "List", "Bool", "Box", "Try", "Dict", "Set", "Num", "Encoding", "Crypto",
 };
 
 fn isAllowedBuiltinType(name: []const u8) bool {
@@ -416,6 +417,110 @@ fn tidyBuiltinExposedTypes(file: SourceFile, errors: *Errors) void {
         if (line_end == file.text.len) break;
         line_start = line_end + 1;
     }
+}
+
+/// Ban "element"/"elem" in the files that define the language's own vocabulary.
+/// The things inside a collection are called items — `Iter(item)`, `encode_item`,
+/// `from_iter` — and a second word for the same concept makes the API and the design
+/// doc read as though the language had two of them. This covers prose and identifiers
+/// alike, including compound identifiers such as `write_elements` and
+/// `parse_list_after_element`, since a banned word buried in a name is exactly how the
+/// inconsistency crept in before.
+///
+/// Matching is word-aware rather than a plain substring search: a hit must be
+/// delimited by non-alphanumeric bytes on both sides, so a longer word that merely
+/// contains the letters (there are none today, but `telemetry` is the shape to worry
+/// about) stays legal. `_` is a DELIMITER rather than a word byte, which is what
+/// makes compound identifiers work: `write_elements` is caught because its `elements`
+/// segment sits between an underscore and the end of the name. Treating `_` as part
+/// of the word instead would silently miss every compound name — the exact case this
+/// check exists to catch.
+///
+/// Consequence worth knowing: these files cannot quote a Zig or C-ABI identifier that
+/// itself contains the banned word, such as the `elements_refcounted` field of a
+/// RocList. Describe it in item terms instead (design.md says "refcounted-items header
+/// shape"), or the check will reject the file.
+fn tidyItemTerminology(file: SourceFile, errors: *Errors) void {
+    if (!isItemTerminologyFile(file.path)) return;
+
+    for (banned_item_words) |word| {
+        var offset: usize = 0;
+        while (std.mem.findPos(u8, file.text, offset, word)) |index| {
+            offset = index + word.len;
+            if (isStandaloneWordAt(file.text, index, word)) {
+                errors.addItemTerminology(file, index, word);
+            }
+        }
+    }
+}
+
+/// The files whose vocabulary defines how the language talks about collections: the
+/// builtins users read as the standard library, and the design doc contributors read
+/// as the reference. Both are checked with repository-relative suffixes so the check
+/// works no matter where the repo is checked out.
+const item_terminology_files: []const []const u8 = &.{ "src/build/roc/Builtin.roc", "design.md" };
+
+fn isItemTerminologyFile(path: []const u8) bool {
+    for (item_terminology_files) |candidate| {
+        if (std.mem.endsWith(u8, path, candidate)) return true;
+    }
+    return false;
+}
+
+/// Longer words first so a hit is attributed to the whole word. The boundary test
+/// already prevents a shorter word from matching inside a longer one, so the order
+/// only affects which word the message names.
+const banned_item_words: []const []const u8 = &.{ "Elements", "elements", "Element", "element", "Elem", "elem" };
+
+/// Whether `word`, found at `index` in `text`, stands alone rather than being part
+/// of a longer word.
+fn isStandaloneWordAt(text: []const u8, index: usize, word: []const u8) bool {
+    const before_ok = index == 0 or !isWordByte(text[index - 1]);
+    const after_index = index + word.len;
+    const after_ok = after_index >= text.len or !isWordByte(text[after_index]);
+    return before_ok and after_ok;
+}
+
+/// Whether this byte continues a word for the boundary test in
+/// `tidyBuiltinItemTerminology`. Deliberately excludes `_` so that each
+/// underscore-separated segment of a compound identifier is tested on its own.
+fn isWordByte(c: u8) bool {
+    return std.ascii.isAlphanumeric(c);
+}
+
+test "item terminology is enforced in the vocabulary-defining files" {
+    try std.testing.expect(isItemTerminologyFile("src/build/roc/Builtin.roc"));
+    try std.testing.expect(isItemTerminologyFile("/abs/checkout/src/build/roc/Builtin.roc"));
+    try std.testing.expect(isItemTerminologyFile("design.md"));
+    try std.testing.expect(isItemTerminologyFile("/abs/checkout/design.md"));
+
+    // Every other file keeps using whatever word fits it — `elem_ty` in the Zig
+    // internals and user-defined HTML `Element` tags in test fixtures are fine.
+    try std.testing.expect(!isItemTerminologyFile("src/postcheck/monotype/lower.zig"));
+    try std.testing.expect(!isItemTerminologyFile("test/fx/platform/Element.roc"));
+    try std.testing.expect(!isItemTerminologyFile("README.md"));
+}
+
+test "banned item words are matched per underscore-separated segment" {
+    // The case this check exists for: a banned word buried in a compound identifier.
+    // Treating `_` as part of the word would silently miss every one of these.
+    try std.testing.expect(isStandaloneWordAt("write_elements", 6, "elements"));
+    try std.testing.expect(isStandaloneWordAt("new_elem", 4, "elem"));
+    try std.testing.expect(isStandaloneWordAt("parse_list_after_element", 17, "element"));
+    try std.testing.expect(isStandaloneWordAt("element_state", 0, "element"));
+
+    // Standalone in prose, at both the start and the end of the text.
+    try std.testing.expect(isStandaloneWordAt("the elements of a list", 4, "elements"));
+    try std.testing.expect(isStandaloneWordAt("elem", 0, "elem"));
+
+    // A longer word that merely contains the letters stays legal.
+    try std.testing.expect(!isStandaloneWordAt("telemetry", 2, "elem"));
+    try std.testing.expect(!isStandaloneWordAt("supplemental", 5, "element"));
+
+    // A shorter banned word never fires inside a longer banned word, so each
+    // occurrence is reported once, under its longest matching spelling.
+    try std.testing.expect(!isStandaloneWordAt("elements", 0, "element"));
+    try std.testing.expect(!isStandaloneWordAt("elements", 0, "elem"));
 }
 
 /// Ban `git+https://` dependency URLs in build.zig.zon. They make Zig fetch over
@@ -501,9 +606,7 @@ fn tidyBannedStdIo(file: SourceFile, errors: *Errors) void {
         "src/mir/",
         "src/lir/",
         "src/layout/",
-        "src/interpreter_layout/",
         "src/values/",
-        "src/interpreter_values/",
         "src/backend/",
         "src/target/",
         "src/eval/",
@@ -1066,6 +1169,11 @@ const DeadFilesDetector = struct {
             const path = result2[0];
             rest = result2[1];
             if (!std.mem.endsWith(u8, path, ".zig")) continue;
+            if (std.mem.eql(u8, path, "roc_platform_abi.zig")) {
+                // Glue runtime hosts import this generated ABI file from an
+                // isolated work directory after `roc glue` writes it.
+                continue;
+            }
             if (require_repo_path and
                 !std.mem.startsWith(u8, path, "src/") and
                 !std.mem.startsWith(u8, path, "test/"))
@@ -1121,7 +1229,11 @@ const DeadFilesDetector = struct {
     }
 };
 
-/// Lists all files in the repository using git ls-files.
+/// Lists all files in the repository.
+///
+/// Prefers `git ls-files` (matching CI, which runs in a git checkout). Falls
+/// back to `jj file list` so the check also runs in a non-colocated jj
+/// workspace, where there is no `.git` for git to use.
 fn listFilePaths(allocator: Allocator, io: std.Io) ![][]const u8 {
     var result: std.ArrayList([]const u8) = .empty;
     errdefer {
@@ -1131,26 +1243,46 @@ fn listFilePaths(allocator: Allocator, io: std.Io) ![][]const u8 {
         result.deinit(allocator);
     }
 
-    const run_result = try std.process.run(allocator, io, .{
-        .argv = &.{ "git", "ls-files", "-z" },
-    });
-    defer allocator.free(run_result.stdout);
+    // git ls-files -z: null-separated, exact CI behavior.
+    if (try runForStdout(allocator, io, &.{ "git", "ls-files", "-z" })) |stdout| {
+        defer allocator.free(stdout);
+        try appendListedPaths(allocator, &result, stdout, 0);
+        return result.toOwnedSlice(allocator);
+    }
+
+    // Fall back to jj for a non-colocated jj workspace: newline-separated.
+    if (try runForStdout(allocator, io, &.{ "jj", "file", "list" })) |stdout| {
+        defer allocator.free(stdout);
+        try appendListedPaths(allocator, &result, stdout, '\n');
+        return result.toOwnedSlice(allocator);
+    }
+
+    return error.GitFailed;
+}
+
+/// Runs `argv`, returning its stdout on success (caller owns it) or null if the
+/// command is missing or exits non-zero. Only allocation failures propagate.
+fn runForStdout(allocator: Allocator, io: std.Io, argv: []const []const u8) !?[]u8 {
+    const run_result = std.process.run(allocator, io, .{ .argv = argv }) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return null, // command not found / failed to spawn
+    };
     defer allocator.free(run_result.stderr);
+    if (run_result.term != .exited or run_result.term.exited != 0) {
+        allocator.free(run_result.stdout);
+        return null;
+    }
+    return run_result.stdout;
+}
 
-    const files = run_result.stdout;
-    if (run_result.term != .exited or run_result.term.exited != 0) return error.GitFailed;
-
-    if (files.len == 0) return result.toOwnedSlice(allocator);
-
-    // git ls-files -z outputs null-separated paths
-    var lines = std.mem.splitScalar(u8, files, 0);
+/// Splits `output` on `separator` and appends each non-skipped path to `result`.
+fn appendListedPaths(allocator: Allocator, result: *std.ArrayList([]const u8), output: []const u8, separator: u8) !void {
+    var lines = std.mem.splitScalar(u8, output, separator);
     while (lines.next()) |line| {
         if (line.len == 0) continue;
         if (shouldSkipListedFile(line)) continue;
         try result.append(allocator, try allocator.dupe(u8, line));
     }
-
-    return result.toOwnedSlice(allocator);
 }
 
 fn shouldSkipTopLevelDir(path: []const u8) bool {

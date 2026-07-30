@@ -29,48 +29,61 @@ EXPOSED BUT NOT DEFINED - platform.md:6:3:6:5
 EXPOSED BUT NOT DEFINED - platform.md:7:3:7:5
 INVALID HOSTED SECTION - :0:0:0:0
 # PROBLEMS
-**EXPOSED BUT NOT DEFINED**
-The module header says that `pr1` is exposed, but it is not defined anywhere in this module.
 
-**platform.md:14:3:14:29:**
-```roc
-		"roc_not implemented": pr1,
-```
-		^^^^^^^^^^^^^^^^^^^^^^^^^^
-You can fix this by either defining `pr1` in this module, or by removing it from the list of exposed values.
+┌─────────────────────────┐
+│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `pr1` is exposed, ───┐
+└┬────────────────────────┘  but it is not defined anywhere in this mod.   │
+ │                                                                            │
+ │  "roc_not implemented": pr1,                                               │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
+ └────────────────────────────────────────────────────────── platform.md:14:3 ┘
 
-**EXPOSED BUT NOT DEFINED**
-The module header says that `pr2` is exposed, but it is not defined anywhere in this module.
+    You can fix this by either defining `pr1` in this mod, or by removing it
+    from the list of exposed values.
 
-**platform.md:15:3:15:29:**
-```roc
-		"roc_not implemented": pr2,
-```
-		^^^^^^^^^^^^^^^^^^^^^^^^^^
-You can fix this by either defining `pr2` in this module, or by removing it from the list of exposed values.
 
-**EXPOSED BUT NOT DEFINED**
-The module header says that `E1` is exposed, but it is not defined anywhere in this module.
+┌─────────────────────────┐
+│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `pr2` is exposed, ───┐
+└┬────────────────────────┘  but it is not defined anywhere in this mod.   │
+ │                                                                            │
+ │  "roc_not implemented": pr2,                                               │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
+ └────────────────────────────────────────────────────────── platform.md:15:3 ┘
 
-**platform.md:6:3:6:5:**
-```roc
-		E1,
-```
-		^^
-You can fix this by either defining `E1` in this module, or by removing it from the list of exposed values.
+    You can fix this by either defining `pr2` in this mod, or by removing it
+    from the list of exposed values.
 
-**EXPOSED BUT NOT DEFINED**
-The module header says that `E2` is exposed, but it is not defined anywhere in this module.
 
-**platform.md:7:3:7:5:**
-```roc
-		E2,
-```
-		^^
-You can fix this by either defining `E2` in this module, or by removing it from the list of exposed values.
+┌─────────────────────────┐
+│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `E1` is exposed, ────┐
+└┬────────────────────────┘  but it is not defined anywhere in this mod.   │
+ │                                                                            │
+ │  E1,                                                                       │
+ │  ‾‾                                                                        │
+ └─────────────────────────────────────────────────────────── platform.md:6:3 ┘
 
-**INVALID HOSTED SECTION**
-The platform header maps more than one function to the linker symbol `roc_not implemented`. Each provides and hosted entry needs a distinct symbol.
+    You can fix this by either defining `E1` in this mod, or by removing it
+    from the list of exposed values.
+
+
+┌─────────────────────────┐
+│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `E2` is exposed, ────┐
+└┬────────────────────────┘  but it is not defined anywhere in this mod.   │
+ │                                                                            │
+ │  E2,                                                                       │
+ │  ‾‾                                                                        │
+ └─────────────────────────────────────────────────────────── platform.md:7:3 ┘
+
+    You can fix this by either defining `E2` in this mod, or by removing it
+    from the list of exposed values.
+
+
+INVALID HOSTED SECTION
+
+The platform header uses the linker symbol `roc_not implemented`, but linker
+symbols in platform headers must be valid C identifiers: start with a letter or
+underscore, followed by only letters, digits, and underscores.
+
 
 # TOKENS
 ~~~zig
@@ -122,19 +135,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-platform "pf"
-	requires {
-		[R1 : r1, R2 : r2] for main : R1 -> R2
-	}
-	exposes [
-		E1,
-		E2,
-	]
-	packages {
-		pa1: "pa1",
-		pa2: "pa2",
-	}
-	provides { "roc_not implemented": pr1, "roc_not implemented": pr2 }
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

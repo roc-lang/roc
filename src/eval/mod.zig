@@ -27,16 +27,20 @@ pub fn backendAvailable(backend_kind: EvalBackend) bool {
 
 /// Executable memory for running generated code (re-exported from backend module)
 pub const ExecutableMemory = backend.ExecutableMemory;
+/// Shared dynamic-library loader for LLVM-generated libraries.
+pub const DynLib = @import("dynlib.zig").DynLib;
 /// Layout module (re-exported for result type information)
 pub const layout = @import("layout");
 /// Utilities for loading compiled builtin modules
-pub const builtin_loading = @import("builtin_loading.zig");
+pub const builtin_static = @import("can").BuiltinStatic;
 /// Centralized loading and management of builtin modules
 pub const BuiltinModules = @import("BuiltinModules.zig").BuiltinModules;
 /// Checked-artifact compile-time evaluation finalizer
 pub const CompileTimeFinalization = @import("compile_time_finalization.zig");
 /// Compiler-owned RocOps environment for compile-time evaluation
 pub const CompilerHost = @import("compiler_host.zig");
+/// Dev-backend RocOps environment for native compile-time evaluation
+pub const CompileTimeHost = @import("compile_time_host.zig");
 /// Stores compile-time interpreter results in ConstStore
 pub const ConstStoreWriter = @import("const_store_writer.zig");
 /// Builtin types for type checking
@@ -70,6 +74,7 @@ pub const interpreter = if (builtin.target.os.tag == .freestanding) struct {
             _: *const @import("lir").LirStore,
             _: *const @import("layout").Store,
             _: *const @import("builtins").host_abi.RocOps,
+            _: @import("builtins").float_bits.NanMode,
         ) error{BackendUnavailable}!@This() {
             return error.BackendUnavailable;
         }
@@ -93,11 +98,11 @@ pub const wasm_runner = if (builtin.target.os.tag == .freestanding) struct {
         allocation_count: u32,
     };
 
-    pub fn runWasmStr(_: std.mem.Allocator, _: []const u8, _: bool) EvalError![]u8 {
+    pub fn runWasmStr(_: std.mem.Allocator, _: []const u8, _: u32, _: bool) EvalError![]u8 {
         return error.WasmExecFailed;
     }
 
-    pub fn runWasmStrWithStats(_: std.mem.Allocator, _: []const u8, _: bool) EvalError!RunWasmStrResult {
+    pub fn runWasmStrWithStats(_: std.mem.Allocator, _: []const u8, _: u32, _: bool) EvalError!RunWasmStrResult {
         return error.WasmExecFailed;
     }
 } else @import("wasm_runner.zig");
@@ -110,14 +115,15 @@ test "eval tests" {
     std.testing.refAllDecls(@import("builtins.zig"));
     std.testing.refAllDecls(@import("crash_context.zig"));
     std.testing.refAllDecls(@import("value.zig"));
-    std.testing.refAllDecls(@import("interpreter_values.zig"));
     std.testing.refAllDecls(@import("interpreter.zig"));
     std.testing.refAllDecls(@import("host_trampoline.zig"));
     std.testing.refAllDecls(@import("compile_time_finalization.zig"));
     std.testing.refAllDecls(@import("compiler_host.zig"));
+    std.testing.refAllDecls(@import("compile_time_host.zig"));
     std.testing.refAllDecls(@import("const_store_writer.zig"));
     std.testing.refAllDecls(@import("stack.zig"));
     std.testing.refAllDecls(@import("test_helpers.zig"));
+    std.testing.refAllDecls(@import("test/host_trampoline_assembly_test.zig"));
     std.testing.refAllDecls(@import("test/RuntimeHostEnv.zig"));
     std.testing.refAllDecls(@import("test/stack_test.zig"));
 }

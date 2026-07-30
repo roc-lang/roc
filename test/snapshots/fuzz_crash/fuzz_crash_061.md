@@ -10,52 +10,72 @@ requires{}{n:0[import S	exposing[
 ~~~
 # EXPECTED
 UNCLOSED STRING - fuzz_crash_061.md:1:9:1:10
-UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_061.md:2:14:2:15
-PARSE ERROR - fuzz_crash_061.md:1:1:1:9
-PARSE ERROR - fuzz_crash_061.md:2:16:2:22
+UNEXPECTED TYPE SYNTAX - fuzz_crash_061.md:2:14:2:15
+EXPECTED CLOSING BRACE - fuzz_crash_061.md:1:1:1:9
+EXPECTED CLOSING BRACKET - fuzz_crash_061.md:2:16:2:22
 # PROBLEMS
-**UNCLOSED STRING**
-This string is missing a closing quote.
 
-**fuzz_crash_061.md:1:9:1:10:**
-```roc
-platform"
-```
-        ^
-
-
-**UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **0** is not expected in a type annotation.
-Type annotations should contain types like _Str_, _Num a_, or _List U64_.
-
-**fuzz_crash_061.md:2:14:2:15:**
-```roc
-requires{}{n:0[import S	exposing[
-```
-             ^
+┌─────────────────┐
+│ UNCLOSED STRING ├─ This string is missing a closing quote. ─────────────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  platform"                                                                 │
+ │          ‾                                                                 │
+ └───────────────────────────────────────────────────── fuzz_crash_061.md:1:9 ┘
 
 
-**PARSE ERROR**
-A parsing error occurred: `expected_requires_signatures_close_curly`
-This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_061.md:1:1:1:9:**
-```roc
-platform"
-```
-^^^^^^^^
+┌────────────────────────┐
+│ UNEXPECTED TYPE SYNTAX ├─ I was parsing a type annotation, and this token ──┐
+└┬───────────────────────┘  cannot start a type here.                         │
+ │                                                                            │
+ │  requires{}{n:0[import S exposing[                                         │
+ │               ‾                                                            │
+ └──────────────────────────────────────────────────── fuzz_crash_061.md:2:14 ┘
+
+    Types can be type variables, uppercase type names, function types, tuples,
+    records, or tag unions.
+
+    For example:
+        List(U64)
+
+    I found `0` here.
 
 
-**PARSE ERROR**
-A parsing error occurred: `import_exposing_no_close`
-This is an unexpected parsing error. Please check your syntax.
+┌────────────────────────┐
+│ EXPECTED CLOSING BRACE ├─ I was parsing a `requires` section, and I ────────┐
+└┬───────────────────────┘  expected a closing `}`.                           │
+ │                                                                            │
+ │  platform"                                                                 │
+ │  ‾‾‾‾‾‾‾‾                                                                  │
+ └───────────────────────────────────────────────────── fuzz_crash_061.md:1:1 ┘
 
-**fuzz_crash_061.md:2:16:2:22:**
-```roc
-requires{}{n:0[import S	exposing[
-```
-               ^^^^^^
+    Close the requires record after the final entrypoint signature.
 
+    For example:
+        requires { main : {} => I32 }
+
+    I found `platform` here.
+    That word is reserved by Roc, so it cannot be used as a name in this
+    position.
+
+
+┌──────────────────────────┐
+│ EXPECTED CLOSING BRACKET ├─ I was parsing an import exposing clause, and ───┐
+└┬─────────────────────────┘  I expected a closing `]`.                       │
+ │                                                                            │
+ │  requires{}{n:0[import S exposing[                                         │
+ │                 ‾‾‾‾‾‾                                                     │
+ └──────────────────────────────────────────────────── fuzz_crash_061.md:2:16 ┘
+
+    Close the exposing list after the final imported name.
+
+    For example:
+        import Json exposing [decode, encode]
+
+    I found `import` here.
+    That word is reserved by Roc, so it cannot be used as a name in this
+    position.
 
 # TOKENS
 ~~~zig

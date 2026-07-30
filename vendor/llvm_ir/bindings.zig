@@ -222,11 +222,13 @@ pub const CodeGenOptLevel = enum(c_int) {
 pub const IrOptimizationLevel = enum(c_int) {
     Oz = 0,
     O3 = 1,
+    O0 = 2,
 
     pub fn toCodeGenOptLevel(self: IrOptimizationLevel) CodeGenOptLevel {
         return switch (self) {
             .Oz => .Default,
             .O3 => .Aggressive,
+            .O0 => .None,
         };
     }
 };

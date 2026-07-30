@@ -36,7 +36,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "f")
 			(ty-fn
@@ -124,7 +124,7 @@ g = |x| {
 				(e-if
 					(if-branches
 						(if-branch
-							(e-dispatch-call (method "is_lt") (constraint-fn-var 130)
+							(e-dispatch-call (method "is_lt") (constraint-fn-var 288)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "x"))))
@@ -159,7 +159,7 @@ g = |x| {
 							(e-match
 								(match
 									(cond
-										(e-call (constraint-fn-var 246)
+										(e-call (constraint-fn-var 330)
 											(e-lookup-local
 												(p-assign (ident "f")))
 											(e-lookup-local

@@ -30,65 +30,67 @@ UNUSED VARIABLE - lambda_multi_arg_mismatch.md:3:41:3:43
 MISSING METHOD - lambda_multi_arg_mismatch.md:13:5:13:9
 MISSING METHOD - lambda_multi_arg_mismatch.md:11:5:11:12
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `x3` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_x3` to suppress this warning.
-The unused variable is declared here:
-**lambda_multi_arg_mismatch.md:3:25:3:27:**
-```roc
-multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8| 
-```
-                        ^^
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `x3` is defined here and then never used. ──────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8|                           │
+ │                          ‾‾                                                │
+ └───────────────────────────────────────── lambda_multi_arg_mismatch.md:3:25 ┘
 
-
-**UNUSED VARIABLE**
-Variable `x5` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_x5` to suppress this warning.
-The unused variable is declared here:
-**lambda_multi_arg_mismatch.md:3:33:3:35:**
-```roc
-multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8| 
-```
-                                ^^
+    If you don't need this variable, prefix it with an underscore like `_x3` to
+    suppress this warning.
 
 
-**UNUSED VARIABLE**
-Variable `x7` is not used anywhere in your code.
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `x5` is defined here and then never used. ──────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8|                           │
+ │                                  ‾‾                                        │
+ └───────────────────────────────────────── lambda_multi_arg_mismatch.md:3:33 ┘
 
-If you don't need this variable, prefix it with an underscore like `_x7` to suppress this warning.
-The unused variable is declared here:
-**lambda_multi_arg_mismatch.md:3:41:3:43:**
-```roc
-multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8| 
-```
-                                        ^^
+    If you don't need this variable, prefix it with an underscore like `_x5` to
+    suppress this warning.
 
 
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
-**lambda_multi_arg_mismatch.md:13:5:13:9:**
-```roc
-    3.14,      # x5: F64 (should be 'a' = U64) - MISMATCH
-```
-    ^^^^
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `x7` is defined here and then never used. ──────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8|                           │
+ │                                          ‾‾                                │
+ └───────────────────────────────────────── lambda_multi_arg_mismatch.md:3:41 ┘
 
-The value's type, which does not have a method named **from_numeral**, is:
+    If you don't need this variable, prefix it with an underscore like `_x7` to
+    suppress this warning.
 
-    [True, ..]
 
-**MISSING METHOD**
-This **from_quote** method is being called on a value whose type doesn't have that method:
-**lambda_multi_arg_mismatch.md:11:5:11:12:**
-```roc
-    "world",   # x3: Str (should be 'a' = U64) - MISMATCH  
-```
-    ^^^^^^^
+┌────────────────┐
+│ MISSING METHOD ├─ This `from_numeral` method is being called on a value ────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  3.14,      # x5: F64 (should be 'a' = U64) - MISMATCH                     │
+ │  ‾‾‾‾                                                                      │
+ └───────────────────────────────────────── lambda_multi_arg_mismatch.md:13:5 ┘
 
-The value's type, which does not have a method named **from_quote**, is:
+    The value's type, which does not have a method named `from_numeral`, is:
 
-    [True, ..]
+        [True, ..]
+
+
+┌────────────────┐
+│ MISSING METHOD ├─ This `from_quote` method is being called on a value ──────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  "world",   # x3: Str (should be 'a' = U64) - MISMATCH                     │
+ │  ‾‾‾‾‾‾‾                                                                   │
+ └───────────────────────────────────────── lambda_multi_arg_mismatch.md:11:5 ┘
+
+    The value's type, which does not have a method named `from_quote`, is:
+
+        [True, ..]
 
 # TOKENS
 ~~~zig
@@ -110,7 +112,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "multi_arg_fn")
 			(ty-fn
@@ -176,7 +178,7 @@ multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8|
 result = multi_arg_fn(
 	42, # x1: U64 (type 'a')
 	"hello", # x2: Str (type 'b') - correct
-	"world", # x3: Str (should be 'a' = U64) - MISMATCH  
+	"world", # x3: Str (should be 'a' = U64) - MISMATCH
 	1.5, # x4: F64 (type 'c') - correct
 	3.14, # x5: F64 (should be 'a' = U64) - MISMATCH
 	[1, 2], # x6: List I64 (type 'd') - correct
@@ -229,14 +231,13 @@ result = multi_arg_fn(
 					(ty-rigid-var-lookup (ty-rigid-var (name "e")))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 290)
+		(e-call (constraint-fn-var 325)
 			(e-lookup-local
 				(p-assign (ident "multi_arg_fn")))
-			(e-num (value "42"))
+			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-string
 				(e-literal (string "hello")))
-			(e-string
-				(e-literal (string "world")))
+			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-dec-small (numerator "15") (denominator-power-of-ten "1") (value "1.5"))
 			(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14"))
 			(e-list

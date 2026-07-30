@@ -23,21 +23,22 @@ answer = composed([42])
 # EXPECTED
 TYPE MISMATCH - test_nested_instantiation_crash.md:12:16:12:41
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**test_nested_instantiation_crash.md:12:16:12:41:**
-```roc
-composed = |n| get_value(make_record(n))
-```
-               ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-It has the type:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  composed = |n| get_value(make_record(n))                                  │
+ │                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                  │
+ └────────────────────────────────── test_nested_instantiation_crash.md:12:16 ┘
 
-    List(a)
+    It has the type:
 
-But the annotation says it should be:
+        List(a)
 
-    Str
+    But the annotation says it should be:
+
+        Str
 
 # TOKENS
 ~~~zig
@@ -185,10 +186,10 @@ answer = composed([42])
 		(e-lambda
 			(args
 				(p-assign (ident "n")))
-			(e-call (constraint-fn-var 152)
+			(e-call (constraint-fn-var 317)
 				(e-lookup-local
 					(p-assign (ident "get_value")))
-				(e-call (constraint-fn-var 151)
+				(e-call (constraint-fn-var 316)
 					(e-lookup-local
 						(p-assign (ident "make_record")))
 					(e-runtime-error (tag "erroneous_value_use")))))
@@ -199,7 +200,7 @@ answer = composed([42])
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "answer"))
-		(e-call (constraint-fn-var 191)
+		(e-call (constraint-fn-var 328)
 			(e-lookup-local
 				(p-assign (ident "composed")))
 			(e-list

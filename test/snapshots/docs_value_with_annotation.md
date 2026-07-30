@@ -31,7 +31,7 @@ greet_for_host = greet
 ~~~clojure
 (package-docs
   (name "test-app")
-  (module
+  (mod
     (name "app")
     (package "app")
     (kind app)
@@ -40,16 +40,6 @@ greet_for_host = greet
       (kind value)
       (type (fn (type-ref (name "Str")) (type-ref (name "Str"))))
       (doc "Greets someone by name.")
-    )
-  )
-  (module
-    (name "platform")
-    (package "pf")
-    (kind platform)
-    (entry
-      (name "greet_for_host")
-      (kind value)
-      (type (fn (type-ref (name "Str")) (type-ref (name "Str"))))
     )
   )
 )

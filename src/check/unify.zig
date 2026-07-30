@@ -41,10 +41,12 @@
 //! subsequent unification runs.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const tracy = @import("tracy");
 const collections = @import("collections");
 const types_mod = @import("types");
+const instantiate_mod = types_mod.instantiate;
 const problem_mod = @import("problem.zig");
 const occurs = @import("occurs.zig");
 const snapshot_mod = @import("snapshot.zig");
@@ -53,7 +55,6 @@ const Ident = base.Ident;
 const MkSafeList = collections.SafeList;
 const Allocator = std.mem.Allocator;
 
-const ResolvedVarDesc = types_mod.ResolvedVarDesc;
 const ResolvedVarDescs = types_mod.ResolvedVarDescs;
 
 const Var = types_mod.Var;
@@ -85,6 +86,11 @@ const TwoTagsSafeList = TwoTags.SafeList;
 const Problem = problem_mod.Problem;
 const Context = problem_mod.Context;
 
+const NominalDirection = enum {
+    a_is_nominal,
+    b_is_nominal,
+};
+
 /// The result of unification
 pub const Result = union(enum) {
     const Self = @This();
@@ -115,7 +121,7 @@ pub const Env = struct {
     /// allocator that created the problem store (see `appendProblem` below).
     problems_gpa: Allocator,
     ident_store: *const Ident.Store,
-    qualified_module_ident: Ident.Idx,
+    self_module_identity: base.ModuleIdentity.Idx,
     types: *types_mod.Store,
     problems: *problem_mod.Store,
     snapshots: *snapshot_mod.Store,
@@ -137,10 +143,21 @@ pub const MismatchBehavior = enum {
     write_no_report,
 };
 
-/// Per-call options. Both axes default to the common case.
+/// The semantic relation applied to the initial pair of a unification call.
+/// Child pairs always use ordinary unification.
+pub const RootRelation = enum {
+    ordinary,
+    /// An explicit nominal constructor has already chosen its wrapper. Its
+    /// outer backing pair cannot be satisfied by lifting an already-nominal
+    /// actual value through an anonymous expected backing.
+    nominal_constructor_backing,
+};
+
+/// Per-call options. All axes default to the common case.
 pub const Options = struct {
     context: Context = .none,
     on_mismatch: MismatchBehavior = .poison_to_err,
+    root_relation: RootRelation = .ordinary,
 };
 
 /// Unify two type variables.
@@ -156,8 +173,11 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
     env.unify_scratch.reset();
 
     // Unify
-    var unifier = Unifier.init(env.ident_store, env.qualified_module_ident, env.types, env.unify_scratch, env.occurs_scratch);
-    unifier.unifyGuarded(a, b) catch |err| {
+    var unifier = Unifier.init(env.ident_store, env.self_module_identity, env.types, env.unify_scratch, env.occurs_scratch);
+    unifier.scheduleRootPair(a, b, opts.root_relation, .abort) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    unifier.runWorkLoop() catch |err| {
         switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.TypeMismatch => {},
@@ -178,7 +198,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
             .context = opts.context,
         } });
         // Only `poison_to_err` reaches here (`write_no_report` returned above).
-        try env.types.union_(a, b, .{ .content = .err, .rank = Rank.generalized });
+        try env.types.poisonOnMismatch(a, b);
         return Result{ .problem = problem_idx };
     };
 
@@ -207,7 +227,7 @@ const Unifier = struct {
     const Self = @This();
 
     ident_store: *const Ident.Store,
-    qualified_module_ident: Ident.Idx,
+    self_module_identity: base.ModuleIdentity.Idx,
     types_store: *types_mod.Store,
     scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
@@ -218,14 +238,14 @@ const Unifier = struct {
     /// Init unifier
     pub fn init(
         ident_store: *const Ident.Store,
-        qualified_module_ident: Ident.Idx,
+        self_module_identity: base.ModuleIdentity.Idx,
         types_store: *types_mod.Store,
         scratch: *Scratch,
         occurs_scratch: *occurs.Scratch,
     ) Unifier {
         return .{
             .ident_store = ident_store,
-            .qualified_module_ident = qualified_module_ident,
+            .self_module_identity = self_module_identity,
             .types_store = types_store,
             .scratch = scratch,
             .occurs_scratch = occurs_scratch,
@@ -242,10 +262,40 @@ const Unifier = struct {
     /// Link the variables & updated the content in the type_store
     /// In the old compiler, this function was called "merge"
     fn merge(self: *Self, vars: *const ResolvedVarDescs, new_content: Content) std.mem.Allocator.Error!void {
+        const content = try self.contentForMerge(vars, new_content);
         try self.types_store.union_(vars.a.var_, vars.b.var_, .{
-            .content = new_content,
+            .content = content,
             .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
         });
+    }
+
+    fn contentForMerge(self: *Self, vars: *const ResolvedVarDescs, content: Content) std.mem.Allocator.Error!Content {
+        // If a row extension reaches the merge destination, union_ would overwrite
+        // that destination and turn the extension into a self-cycle. Preserve the
+        // destination's current row meaning before the overwrite happens.
+        switch (content) {
+            .structure => |flat_type| {
+                switch (flat_type) {
+                    .record => |record| {
+                        return Content{ .structure = FlatType{ .record = try self.recordForMerge(vars, record) } };
+                    },
+                    .tag_union => |tag_union| {
+                        return Content{ .structure = FlatType{ .tag_union = try self.tagUnionForMerge(vars, tag_union) } };
+                    },
+                    .fn_pure => |func| {
+                        return Content{ .structure = FlatType{ .fn_pure = try self.funcForMerge(vars, func) } };
+                    },
+                    .fn_effectful => |func| {
+                        return Content{ .structure = FlatType{ .fn_effectful = try self.funcForMerge(vars, func) } };
+                    },
+                    .fn_unbound => |func| {
+                        return Content{ .structure = FlatType{ .fn_unbound = try self.funcForMerge(vars, func) } };
+                    },
+                    else => return content,
+                }
+            },
+            else => return content,
+        }
     }
 
     /// Create a new type variable *in this pool*
@@ -330,42 +380,169 @@ const Unifier = struct {
         TypeMismatch,
     };
 
-    const NominalDirection = enum {
-        a_is_nominal,
-        b_is_nominal,
-    };
+    fn scheduleGuardedPair(self: *Self, a_var: Var, b_var: Var, on_mismatch: MismatchHandling) std.mem.Allocator.Error!void {
+        _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .mismatch_handler = on_mismatch });
+        _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .guarded_pair = .{
+            .a = a_var,
+            .b = b_var,
+        } });
+    }
+
+    fn scheduleRootPair(
+        self: *Self,
+        a_var: Var,
+        b_var: Var,
+        relation: RootRelation,
+        on_mismatch: MismatchHandling,
+    ) std.mem.Allocator.Error!void {
+        _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .mismatch_handler = on_mismatch });
+        _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .root_pair = .{
+            .a = a_var,
+            .b = b_var,
+            .relation = relation,
+        } });
+    }
+
+    fn scheduleMerge(self: *Self, vars: ResolvedVarDescs, content: Content) std.mem.Allocator.Error!void {
+        _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .merge = .{
+            .vars = vars,
+            .content = content,
+        } });
+    }
+
+    fn newMismatchFlag(self: *Self) std.mem.Allocator.Error!u32 {
+        const flag_idx: u32 = @intCast(self.scratch.mismatch_flags.items.items.len);
+        _ = try self.scratch.mismatch_flags.append(self.scratch.gpa, false);
+        return flag_idx;
+    }
+
+    fn runWorkLoop(self: *Self) Error!void {
+        while (self.scratch.unify_work_stack.items.pop()) |frame| {
+            self.processFrame(frame) catch |err| switch (err) {
+                error.TypeMismatch => try self.handleTypeMismatch(),
+                error.OutOfMemory => return error.OutOfMemory,
+            };
+        }
+    }
+
+    fn processFrame(self: *Self, frame: WorkFrame) Error!void {
+        switch (frame) {
+            .mismatch_handler => {},
+            .root_pair => |pair| try self.processRootPair(pair.a, pair.b, pair.relation),
+            .guarded_pair => |pair| try self.processGuardedPair(pair.a, pair.b),
+            .guard_handler => |handler| {
+                self.scratch.visited_vars.items.items.len = handler.visited_vars_len;
+                self.unresolved_b = handler.saved_unresolved_b;
+            },
+            .unify_vars => |vars| try self.unifyVars(&vars),
+            .merge => |merge_frame| try self.merge(&merge_frame.vars, merge_frame.content),
+            .merge_to_nominal => |merge_frame| try self.mergeToNominal(&merge_frame.vars, merge_frame.direction),
+            .same_alias_after_args => |post| try self.processSameAliasAfterArgs(post),
+            .shared_fields_after_children => |post| try self.processSharedFieldsAfterChildren(post),
+            .shared_tags_after_children => |post| try self.processSharedTagsAfterChildren(post),
+        }
+    }
+
+    fn processRootPair(self: *Self, a_var: Var, b_var: Var, relation: RootRelation) Error!void {
+        if (relation == .nominal_constructor_backing and try self.constructorBackingWouldInverseLift(a_var, b_var)) {
+            return error.TypeMismatch;
+        }
+        try self.processGuardedPair(a_var, b_var);
+    }
+
+    fn contentThroughAliases(self: *Self, start: Var) Error!Content {
+        var current = start;
+        var remaining = self.types_store.len();
+        while (remaining > 0) : (remaining -= 1) {
+            const content = self.types_store.resolveVar(current).desc.content;
+            switch (content) {
+                .alias => |alias| current = self.types_store.getAliasBackingVar(alias),
+                else => return content,
+            }
+        }
+        return error.TypeMismatch;
+    }
+
+    /// Whether the root constructor-backing pair would use ordinary
+    /// structural-to-nominal lifting in the inverse direction: an anonymous
+    /// expected backing accepting an already-nominal actual operand.
+    fn constructorBackingWouldInverseLift(self: *Self, expected: Var, actual: Var) Error!bool {
+        const actual_content = try self.contentThroughAliases(actual);
+        const actual_nominal = switch (actual_content) {
+            .structure => |flat| switch (flat) {
+                .nominal_type => |nominal| nominal,
+                else => return false,
+            },
+            else => return false,
+        };
+        if (self.types_store.nominalDeclIsInvalid(actual_nominal)) return false;
+
+        return switch (try self.contentThroughAliases(expected)) {
+            .structure => |flat| flat != .nominal_type,
+            else => false,
+        };
+    }
+
+    fn processGuardedPair(self: *Self, a_var: Var, b_var: Var) Error!void {
+        switch (self.types_store.checkVarsEquiv(a_var, b_var)) {
+            .equiv => return,
+            .not_equiv => |vars| {
+                if (self.isPairVisited(a_var, b_var)) {
+                    return;
+                }
+
+                const visited_vars_len: u32 = @intCast(self.scratch.visited_vars.items.items.len);
+                _ = try self.scratch.visited_vars.append(self.scratch.gpa, a_var);
+                _ = try self.scratch.visited_vars.append(self.scratch.gpa, b_var);
+
+                const saved_unresolved_b = self.unresolved_b;
+                self.unresolved_b = b_var;
+
+                _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .guard_handler = .{
+                    .visited_vars_len = visited_vars_len,
+                    .saved_unresolved_b = saved_unresolved_b,
+                } });
+                _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .unify_vars = vars });
+            },
+        }
+    }
+
+    fn handleTypeMismatch(self: *Self) Error!void {
+        while (self.scratch.unify_work_stack.items.pop()) |frame| {
+            switch (frame) {
+                .guard_handler => |handler| {
+                    self.scratch.visited_vars.items.items.len = handler.visited_vars_len;
+                    self.unresolved_b = handler.saved_unresolved_b;
+                },
+                .mismatch_handler => |handler| {
+                    switch (handler) {
+                        .propagate => {},
+                        else => return try self.applyMismatchHandling(handler),
+                    }
+                },
+                else => {},
+            }
+        }
+
+        return error.TypeMismatch;
+    }
+
+    fn applyMismatchHandling(self: *Self, handling: MismatchHandling) Error!void {
+        switch (handling) {
+            .propagate => return error.TypeMismatch,
+            .abort => return error.TypeMismatch,
+            .ignore => return,
+            .set_flag => |flag_idx| {
+                self.scratch.mismatch_flags.items.items[flag_idx] = true;
+            },
+        }
+    }
 
     fn unifyGuarded(self: *Self, a_var: Var, b_var: Var) Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        switch (self.types_store.checkVarsEquiv(a_var, b_var)) {
-            .equiv => {
-                // this means that the vars point to the same exact type
-                // descriptor, so nothing needs to happen
-                return;
-            },
-            .not_equiv => |vars| {
-                // Check if we're already unifying this pair (recursion guard).
-                // This prevents infinite recursion on self-referential types.
-                if (self.isPairVisited(a_var, b_var)) {
-                    return;
-                }
-
-                // Track these vars as being unified
-                _ = try self.scratch.visited_vars.append(self.scratch.gpa, a_var);
-                _ = try self.scratch.visited_vars.append(self.scratch.gpa, b_var);
-                defer self.scratch.visited_vars.items.items.len -= 2;
-
-                // Save and set unresolved_b for deferred constraint origin tracking.
-                // This is restored after unifyVars to handle nested unifications correctly.
-                const saved_unresolved_b = self.unresolved_b;
-                self.unresolved_b = b_var;
-                defer self.unresolved_b = saved_unresolved_b;
-
-                try self.unifyVars(&vars);
-            },
-        }
+        try self.scheduleGuardedPair(a_var, b_var, .propagate);
     }
 
     /// Unify two vars
@@ -513,33 +690,14 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        var did_arg_error = false;
+        const did_arg_error_flag = try self.newMismatchFlag();
 
-        // Unify each pair of arguments
-        var a_args_iter = self.types_store.iterAliasArgs(a_alias);
-        var b_args_iter = self.types_store.iterAliasArgs(b_alias);
-        while (true) {
-            const mb_a_arg = a_args_iter.next();
-            const mb_b_arg = b_args_iter.next();
+        var a_args_range = a_alias.vars.nonempty;
+        a_args_range.dropFirstElem();
+        var b_args_range = b_alias.vars.nonempty;
+        b_args_range.dropFirstElem();
 
-            if (mb_a_arg != null and mb_b_arg != null) {
-                self.unifyGuarded(mb_a_arg.?, mb_b_arg.?) catch |err| switch (err) {
-                    error.TypeMismatch => {
-                        // Defer mismatch to check all args
-                        did_arg_error = true;
-                    },
-                    else => return err,
-                };
-            } else if (mb_a_arg == null and mb_b_arg == null) {
-                break;
-            } else {
-                did_arg_error = true;
-                break;
-            }
-        }
-
-        // If any field errored, then error
-        if (did_arg_error) {
+        if (a_args_range.len() != b_args_range.len()) {
             return error.TypeMismatch;
         }
 
@@ -547,14 +705,22 @@ const Unifier = struct {
         // Don't report real_var mismatches, because they must always be surfaced higher, from the argument types.
         const a_backing_var = self.types_store.getAliasBackingVar(a_alias);
         const b_backing_var = self.types_store.getAliasBackingVar(b_alias);
-        self.unifyGuarded(a_backing_var, b_backing_var) catch |err| switch (err) {
-            // Don't report backing-var mismatches; they are surfaced from the argument types.
-            error.TypeMismatch => {},
-            else => return err,
-        };
+        _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .same_alias_after_args = .{
+            .vars = vars.*,
+            .a_backing_var = a_backing_var,
+            .b_backing_var = b_backing_var,
+            .did_arg_error_flag = did_arg_error_flag,
+        } });
 
-        // Ensure the target variable has slots for the alias arguments
-        try self.merge(vars, vars.b.desc.content);
+        var i: u32 = a_args_range.len();
+        while (i > 0) {
+            i -= 1;
+            try self.scheduleGuardedPair(
+                self.types_store.getVarAt(a_args_range, i),
+                self.types_store.getVarAt(b_args_range, i),
+                .{ .set_flag = did_arg_error_flag },
+            );
+        }
     }
 
     // Unify structure //
@@ -609,22 +775,19 @@ const Unifier = struct {
                 }
             },
             .nominal_type => |a_type| {
-                // NOTE: this arm short-circuits err-backed nominals to a
-                // SUCCESSFUL `.err` merge; if that changes, revisit
+                // NOTE: this arm short-circuits applications of INVALID
+                // declarations to a SUCCESSFUL `.err` merge (the declaration
+                // error was already reported); if that changes, revisit
                 // `structurallyIncompatiblePair` (bottom of this module) — the
                 // defaulting pre-filter's soundness fence encodes it.
-                const a_backing_var = self.types_store.getNominalBackingVar(a_type);
-                const a_backing_resolved = self.types_store.resolveVar(a_backing_var);
-                if (a_backing_resolved.desc.content == .err) {
+                if (self.types_store.nominalDeclIsInvalid(a_type)) {
                     try self.merge(vars, .err);
                     return;
                 }
 
                 switch (b_flat_type) {
                     .nominal_type => |b_type| {
-                        const b_backing_var = self.types_store.getNominalBackingVar(b_type);
-                        const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
-                        if (b_backing_resolved.desc.content == .err) {
+                        if (self.types_store.nominalDeclIsInvalid(b_type)) {
                             try self.merge(vars, .err);
                             return;
                         }
@@ -633,43 +796,21 @@ const Unifier = struct {
                     },
                     .tag_union => |b_tag_union| {
                         // Try to unify nominal tag union (a) with anonymous tag union (b)
-                        try self.unifyTagUnionWithNominal(vars, a_type, a_backing_var, a_backing_resolved, b_tag_union, .a_is_nominal);
+                        try self.unifyTagUnionWithNominal(vars, a_type, b_tag_union, .a_is_nominal);
                     },
                     .empty_tag_union => {
-                        // If this nominal is opaque and we're not in the origin module, error
-                        if (!a_type.canLiftInner(self.qualified_module_ident)) {
-                            return error.TypeMismatch;
-                        }
-
-                        if (a_backing_resolved.desc.content == .structure and
-                            a_backing_resolved.desc.content.structure == .empty_tag_union)
-                        {
-                            try self.merge(vars, vars.a.desc.content);
-                        } else {
-                            return error.TypeMismatch;
-                        }
+                        try self.unifyEmptyWithNominal(vars, a_type, .empty_tag_union, .a_is_nominal, .enforce_opacity);
                     },
                     .record => |b_record| {
                         // Try to unify nominal record (a) with anonymous record (b)
-                        try self.unifyRecordWithNominal(vars, a_type, a_backing_var, a_backing_resolved, b_record.fields, .{ .ext = b_record.ext }, .a_is_nominal);
+                        try self.unifyRecordWithNominal(vars, a_type, b_record.fields, .{ .ext = b_record.ext }, .a_is_nominal);
                     },
                     .record_unbound => |b_fields| {
                         // Try to unify nominal record (a) with anonymous unbound record (b)
-                        try self.unifyRecordWithNominal(vars, a_type, a_backing_var, a_backing_resolved, b_fields, .unbound, .a_is_nominal);
+                        try self.unifyRecordWithNominal(vars, a_type, b_fields, .unbound, .a_is_nominal);
                     },
                     .empty_record => {
-                        // If this nominal is opaque and we're not in the origin module, error
-                        if (!a_type.canLiftInner(self.qualified_module_ident)) {
-                            return error.TypeMismatch;
-                        }
-
-                        if (a_backing_resolved.desc.content == .structure and
-                            a_backing_resolved.desc.content.structure == .empty_record)
-                        {
-                            try self.merge(vars, vars.a.desc.content);
-                        } else {
-                            return error.TypeMismatch;
-                        }
+                        try self.unifyEmptyWithNominal(vars, a_type, .empty_record, .a_is_nominal, .enforce_opacity);
                     },
                     else => return error.TypeMismatch,
                 }
@@ -677,13 +818,13 @@ const Unifier = struct {
             .fn_pure => |a_func| {
                 switch (b_flat_type) {
                     .fn_pure => |b_func| {
+                        try self.scheduleMerge(vars.*, vars.a.desc.content);
                         try self.unifyFunc(vars, a_func, b_func);
-                        try self.merge(vars, vars.a.desc.content);
                     },
                     .fn_unbound => |b_func| {
                         // pure unifies with unbound -> pure
+                        try self.scheduleMerge(vars.*, vars.a.desc.content);
                         try self.unifyFunc(vars, a_func, b_func);
-                        try self.merge(vars, vars.a.desc.content);
                     },
                     .fn_effectful => {
                         // pure cannot unify with effectful
@@ -695,13 +836,13 @@ const Unifier = struct {
             .fn_effectful => |a_func| {
                 switch (b_flat_type) {
                     .fn_effectful => |b_func| {
+                        try self.scheduleMerge(vars.*, vars.a.desc.content);
                         try self.unifyFunc(vars, a_func, b_func);
-                        try self.merge(vars, vars.a.desc.content);
                     },
                     .fn_unbound => |b_func| {
                         // effectful unifies with unbound -> effectful
+                        try self.scheduleMerge(vars.*, vars.a.desc.content);
                         try self.unifyFunc(vars, a_func, b_func);
-                        try self.merge(vars, vars.a.desc.content);
                     },
                     .fn_pure => {
                         // effectful cannot unify with pure
@@ -714,18 +855,18 @@ const Unifier = struct {
                 switch (b_flat_type) {
                     .fn_pure => |b_func| {
                         // unbound unifies with pure -> pure
+                        try self.scheduleMerge(vars.*, vars.b.desc.content);
                         try self.unifyFunc(vars, a_func, b_func);
-                        try self.merge(vars, vars.b.desc.content);
                     },
                     .fn_effectful => |b_func| {
                         // unbound unifies with effectful -> effectful
+                        try self.scheduleMerge(vars.*, vars.b.desc.content);
                         try self.unifyFunc(vars, a_func, b_func);
-                        try self.merge(vars, vars.b.desc.content);
                     },
                     .fn_unbound => |b_func| {
                         // unbound unifies with unbound -> unbound
+                        try self.scheduleMerge(vars.*, vars.a.desc.content);
                         try self.unifyFunc(vars, a_func, b_func);
-                        try self.merge(vars, vars.a.desc.content);
                     },
                     else => return error.TypeMismatch,
                 }
@@ -758,19 +899,12 @@ const Unifier = struct {
                         );
                     },
                     .nominal_type => |b_type| {
-                        // If this nominal is opaque and we're not in the origin module, error
-                        if (!b_type.canLiftInner(self.qualified_module_ident)) {
-                            return error.TypeMismatch;
-                        }
-
                         // Try to unify anonymous record (a) with nominal record (b)
-                        const b_backing_var = self.types_store.getNominalBackingVar(b_type);
-                        const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
-                        if (b_backing_resolved.desc.content == .err) {
+                        if (self.types_store.nominalDeclIsInvalid(b_type)) {
                             try self.merge(vars, .err);
                             return;
                         }
-                        try self.unifyRecordWithNominal(vars, b_type, b_backing_var, b_backing_resolved, a_record.fields, .{ .ext = a_record.ext }, .b_is_nominal);
+                        try self.unifyRecordWithNominal(vars, b_type, a_record.fields, .{ .ext = a_record.ext }, .b_is_nominal);
                     },
                     else => return error.TypeMismatch,
                 }
@@ -804,19 +938,12 @@ const Unifier = struct {
                         );
                     },
                     .nominal_type => |b_type| {
-                        // If this nominal is opaque and we're not in the origin module, error
-                        if (!b_type.canLiftInner(self.qualified_module_ident)) {
-                            return error.TypeMismatch;
-                        }
-
                         // Try to unify anonymous unbound record (a) with nominal record (b)
-                        const b_backing_var = self.types_store.getNominalBackingVar(b_type);
-                        const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
-                        if (b_backing_resolved.desc.content == .err) {
+                        if (self.types_store.nominalDeclIsInvalid(b_type)) {
                             try self.merge(vars, .err);
                             return;
                         }
-                        try self.unifyRecordWithNominal(vars, b_type, b_backing_var, b_backing_resolved, a_fields, .unbound, .b_is_nominal);
+                        try self.unifyRecordWithNominal(vars, b_type, a_fields, .unbound, .b_is_nominal);
                     },
                     else => return error.TypeMismatch,
                 }
@@ -843,31 +970,11 @@ const Unifier = struct {
                     },
                     .nominal_type => |b_type| {
                         // Try to unify empty record (a) with nominal record (b)
-                        const b_backing_var = self.types_store.getNominalBackingVar(b_type);
-                        const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
-                        if (b_backing_resolved.desc.content == .err) {
+                        if (self.types_store.nominalDeclIsInvalid(b_type)) {
                             try self.merge(vars, .err);
                             return;
                         }
-
-                        // Check if the nominal's backing is also an empty record (or record with 0 fields)
-                        const backing_is_empty = blk: {
-                            if (b_backing_resolved.desc.content != .structure) break :blk false;
-                            const backing_flat = b_backing_resolved.desc.content.structure;
-                            if (backing_flat == .empty_record) break :blk true;
-                            if (backing_flat == .record) {
-                                const fields = self.types_store.getRecordFieldsSlice(backing_flat.record.fields);
-                                if (fields.len == 0) break :blk true;
-                            }
-                            break :blk false;
-                        };
-                        if (backing_is_empty) {
-                            // Both are empty, unify with the nominal
-                            try self.merge(vars, vars.b.desc.content);
-                        } else {
-                            // Nominal has a non-empty backing, can't unify
-                            return error.TypeMismatch;
-                        }
+                        try self.unifyEmptyWithNominal(vars, b_type, .empty_record, .b_is_nominal, .skip_opacity);
                     },
                     else => return error.TypeMismatch,
                 }
@@ -885,19 +992,12 @@ const Unifier = struct {
                         try self.unifyTwoTagUnions(vars, a_tag_union, b_tag_union);
                     },
                     .nominal_type => |b_type| {
-                        // If this nominal is opaque and we're not in the origin module, error
-                        if (!b_type.canLiftInner(self.qualified_module_ident)) {
-                            return error.TypeMismatch;
-                        }
-
                         // Try to unify anonymous tag union (a) with nominal tag union (b)
-                        const b_backing_var = self.types_store.getNominalBackingVar(b_type);
-                        const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
-                        if (b_backing_resolved.desc.content == .err) {
+                        if (self.types_store.nominalDeclIsInvalid(b_type)) {
                             try self.merge(vars, .err);
                             return;
                         }
-                        try self.unifyTagUnionWithNominal(vars, b_type, b_backing_var, b_backing_resolved, a_tag_union, .b_is_nominal);
+                        try self.unifyTagUnionWithNominal(vars, b_type, a_tag_union, .b_is_nominal);
                     },
                     else => return error.TypeMismatch,
                 }
@@ -916,23 +1016,11 @@ const Unifier = struct {
                     },
                     .nominal_type => |b_type| {
                         // Try to unify empty tag union (a) with nominal tag union (b)
-                        const b_backing_var = self.types_store.getNominalBackingVar(b_type);
-                        const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
-                        if (b_backing_resolved.desc.content == .err) {
+                        if (self.types_store.nominalDeclIsInvalid(b_type)) {
                             try self.merge(vars, .err);
                             return;
                         }
-
-                        // Check if the nominal's backing is also an empty tag union
-                        if (b_backing_resolved.desc.content == .structure and
-                            b_backing_resolved.desc.content.structure == .empty_tag_union)
-                        {
-                            // Both are empty, unify with the nominal
-                            try self.merge(vars, vars.b.desc.content);
-                        } else {
-                            // Nominal has a non-empty backing, can't unify
-                            return error.TypeMismatch;
-                        }
+                        try self.unifyEmptyWithNominal(vars, b_type, .empty_tag_union, .b_is_nominal, .skip_opacity);
                     },
                     else => return error.TypeMismatch,
                 }
@@ -959,39 +1047,27 @@ const Unifier = struct {
         }
 
         // Unify element types first (recursion guard in unifyGuarded prevents infinite loops)
-        // Use iterators instead of slices because unifyGuarded may trigger reallocations
-        var a_elems_iter = self.types_store.iterVars(a_tuple.elems);
-        var b_elems_iter = self.types_store.iterVars(b_tuple.elems);
-        while (a_elems_iter.next()) |a_elem| {
-            const b_elem = b_elems_iter.next().?; // Safe: lengths verified equal
-            try self.unifyGuarded(a_elem, b_elem);
+        try self.scheduleMerge(vars.*, vars.b.desc.content);
+        var i: u32 = a_tuple.elems.len();
+        while (i > 0) {
+            i -= 1;
+            try self.scheduleGuardedPair(
+                self.types_store.getVarAt(a_tuple.elems, i),
+                self.types_store.getVarAt(b_tuple.elems, i),
+                .propagate,
+            );
         }
-
-        // Merge after all checks pass
-        try self.merge(vars, vars.b.desc.content);
     }
 
     // Unify nominal type //
 
-    /// Unify when `a` was a nominal type
+    /// Unify two nominal type applications: identity, arity, then actual
+    /// args pairwise. Backing types are never inspected here — nominal
+    /// identity is the whole contract (callers already short-circuited
+    /// applications of invalid declarations to `.err`).
     fn unifyNominalType(self: *Self, vars: *const ResolvedVarDescs, a_type: NominalType, b_type: NominalType) Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
-
-        // Check if either nominal type has an invalid backing variable.
-        // NOTE: if you change this err short-circuit (a SUCCESSFUL merge to
-        // `.err`, not a mismatch), revisit `structurallyIncompatiblePair`
-        // (bottom of this module) — the defaulting pre-filter's soundness fence
-        // encodes it.
-        const a_backing_var = self.types_store.getNominalBackingVar(a_type);
-        const a_backing_resolved = self.types_store.resolveVar(a_backing_var);
-        const b_backing_var = self.types_store.getNominalBackingVar(b_type);
-        const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
-        if (a_backing_resolved.desc.content == .err or b_backing_resolved.desc.content == .err) {
-            // Invalid nominal type - propagate the error
-            try self.merge(vars, .err);
-            return;
-        }
 
         // NOTE: if distinct nominal identities ever start unifying (e.g.
         // implicit numeric coercion), revisit `structurallyIncompatiblePair`
@@ -1001,38 +1077,449 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
-        if (a_type.vars.nonempty.count != b_type.vars.nonempty.count) {
+        if (a_type.args.count != b_type.args.count) {
             return error.TypeMismatch;
         }
 
-        // Unify each pair of arguments first (recursion guard in unifyGuarded prevents infinite loops)
-        // Use iterators instead of slices because unifyGuarded may trigger reallocations
-        var a_args_iter = self.types_store.iterNominalArgs(a_type);
-        var b_args_iter = self.types_store.iterNominalArgs(b_type);
-        while (a_args_iter.next()) |a_arg| {
-            const b_arg = b_args_iter.next().?; // Safe: lengths verified equal
-            try self.unifyGuarded(a_arg, b_arg);
+        try self.scheduleMerge(vars.*, vars.b.desc.content);
+        var i: u32 = a_type.args.len();
+        while (i > 0) {
+            i -= 1;
+            try self.scheduleGuardedPair(
+                self.types_store.getVarAt(a_type.args, i),
+                self.types_store.getVarAt(b_type.args, i),
+                .propagate,
+            );
+        }
+    }
+
+    /// The result of the unifier's declaration-backed opening operation.
+    const OpenedNominal = union(enum) {
+        /// The instantiated backing (template with actual args substituted).
+        opened: Var,
+        /// The application carries no source declaration, so there is no
+        /// declaration to open (possible only for hand-constructed types).
+        no_decl,
+    };
+
+    /// The explicit opening operation for the nominal-vs-structural lift
+    /// (issue #9983): resolve the application's declaration in this store's
+    /// declaration table and instantiate its backing template with the
+    /// application's actual args substituted for the declaration's formals.
+    /// Callers have already handled invalid declarations and enforced the
+    /// opacity capability (`canLiftInner`).
+    ///
+    /// Freshly minted vars are recorded in `scratch.fresh_vars` so the caller
+    /// of `unify` performs the same region/rank bookkeeping it does for every
+    /// other var unification creates.
+    fn openNominalBacking(self: *Self, vars: *const ResolvedVarDescs, nominal: NominalType) std.mem.Allocator.Error!OpenedNominal {
+        const decl_idx = self.types_store.lookupNominalDecl(nominal) orelse {
+            if (nominal.sourceDecl().present) {
+                // Invariant: every keyed nominal application in a store can
+                // resolve its declaration in that store.
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("unify invariant violated: nominal application has a source declaration but no declaration table entry", .{});
+                }
+                unreachable;
+            }
+            return .no_decl;
+        };
+        const decl = self.types_store.getNominalDecl(decl_idx);
+        std.debug.assert(decl.isValid());
+
+        const args = self.types_store.sliceNominalArgs(nominal);
+
+        // One opening per (declaration, resolved arg roots) per unify call:
+        // reusing the first instantiated backing keeps the graph FIXED, so
+        // the in-progress pair guard can terminate cyclic anonymous
+        // structures lifting into recursive nominals (see `opened_nominals`).
+        memo_check: for (self.scratch.opened_nominals.items) |memo| {
+            if (memo.decl != decl_idx) continue;
+            if (memo.args.count != args.len) continue;
+            const memo_args = self.scratch.opened_nominal_args.sliceRange(memo.args);
+            for (memo_args, args) |memo_arg, arg| {
+                if (self.types_store.resolveVar(memo_arg).var_ != self.types_store.resolveVar(arg).var_) {
+                    continue :memo_check;
+                }
+            }
+            return .{ .opened = memo.opened };
         }
 
-        // Merge after all checks pass.
-        // We intentionally do not unify backing vars here: nominal identity is
-        // defined by origin/name/args, and forcing backing vars to coincide at
-        // unification time over-constrains row-polymorphic nominals like Try.
-        // Lowering substitutes formal nominal params into backing types
-        // explicitly when it strips nominal wrappers.
-        // NOTE: if nominal-vs-nominal unification ever starts WRITING to
-        // backing vars, revisit `structurallyIncompatiblePair` (bottom of this
-        // module) — its soundness fence relies on backings only being READ (for
-        // the err short-circuit above) during a probe.
-        try self.merge(vars, vars.b.desc.content);
+        const memo_args_range = blk: {
+            const start: u32 = @intCast(self.scratch.opened_nominal_args.len());
+            for (args) |arg| {
+                _ = try self.scratch.opened_nominal_args.append(self.scratch.gpa, self.types_store.resolveVar(arg).var_);
+            }
+            break :blk VarSafeList.Range{ .start = @enumFromInt(start), .count = @intCast(args.len) };
+        };
+
+        const baseline: u32 = @intCast(self.types_store.len());
+        const opened = try instantiate_mod.instantiateNominalBacking(
+            self.types_store,
+            self.ident_store,
+            &self.scratch.open_var_map,
+            decl,
+            args,
+            Rank.min(vars.a.desc.rank, vars.b.desc.rank),
+        );
+
+        // Every var minted by the instantiation needs the caller's post-unify
+        // bookkeeping (regions, rank pools), exactly like `fresh()` vars.
+        const now: u32 = @intCast(self.types_store.len());
+        var fresh_int: u32 = baseline;
+        while (fresh_int < now) : (fresh_int += 1) {
+            _ = try self.scratch.fresh_vars.append(self.scratch.gpa, @enumFromInt(fresh_int));
+        }
+
+        try self.scratch.opened_nominals.append(self.scratch.gpa, .{
+            .decl = decl_idx,
+            .args = memo_args_range,
+            .opened = opened,
+        });
+
+        return .{ .opened = opened };
+    }
+
+    /// Which shape an empty anonymous side must find in the nominal's backing.
+    const EmptyShape = enum { empty_record, empty_tag_union };
+    const OpacityGate = enum { enforce_opacity, skip_opacity };
+
+    /// Unify an empty anonymous record/tag union with a nominal whose backing
+    /// is (an equivalent of) the same empty shape; the nominal wins.
+    fn unifyEmptyWithNominal(
+        self: *Self,
+        vars: *const ResolvedVarDescs,
+        nominal_type: NominalType,
+        comptime empty_shape: EmptyShape,
+        direction: NominalDirection,
+        comptime opacity: OpacityGate,
+    ) Error!void {
+        if (opacity == .enforce_opacity) {
+            // If this nominal is opaque and we're not in the origin module, error
+            if (!nominal_type.canLiftInner(self.self_module_identity)) {
+                return error.TypeMismatch;
+            }
+        }
+
+        const opened = switch (try self.openNominalBacking(vars, nominal_type)) {
+            .opened => |v| v,
+            .no_decl => return error.TypeMismatch,
+        };
+        const backing_content = self.types_store.resolveVar(opened).desc.content;
+        if (backing_content == .err) {
+            try self.merge(vars, .err);
+            return;
+        }
+
+        const backing_is_empty = blk: {
+            if (backing_content != .structure) break :blk false;
+            const backing_flat = backing_content.structure;
+            switch (empty_shape) {
+                .empty_record => {
+                    if (backing_flat == .empty_record) break :blk true;
+                    if (backing_flat == .record) {
+                        const fields = self.types_store.getRecordFieldsSlice(backing_flat.record.fields);
+                        if (fields.len == 0) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .empty_tag_union => {
+                    break :blk backing_flat == .empty_tag_union;
+                },
+            }
+        };
+        if (backing_is_empty) {
+            // Both are empty — merge to the NOMINAL side.
+            try self.mergeToNominal(vars, direction);
+        } else {
+            // Nominal has a non-empty backing, can't unify
+            return error.TypeMismatch;
+        }
+    }
+
+    /// After a structural value successfully unifies with a nominal's backing,
+    /// merge the result to the nominal side — the nominal "wins" over the
+    /// anonymous record/tag it lifted from.
+    fn mergeToNominal(self: *Self, vars: *const ResolvedVarDescs, direction: NominalDirection) Error!void {
+        switch (direction) {
+            .a_is_nominal => try self.merge(vars, vars.a.desc.content),
+            .b_is_nominal => try self.merge(vars, vars.b.desc.content),
+        }
+    }
+
+    fn processSameAliasAfterArgs(self: *Self, post: SameAliasAfterArgs) Error!void {
+        if (self.scratch.mismatch_flags.items.items[post.did_arg_error_flag]) {
+            return error.TypeMismatch;
+        }
+
+        try self.scheduleMerge(post.vars, post.vars.b.desc.content);
+        try self.scheduleGuardedPair(post.a_backing_var, post.b_backing_var, .ignore);
+    }
+
+    fn rowExtMergeTarget(self: *Self, vars: *const ResolvedVarDescs) types_mod.DescStoreIdx {
+        return self.types_store.resolveVar(vars.b.var_).desc_idx;
+    }
+
+    fn recordExtReachesDesc(self: *Self, ext: Var, target_desc: types_mod.DescStoreIdx) bool {
+        var ext_var = ext;
+        var guard = types_mod.debug.IterationGuard.init("recordExtReachesDesc");
+
+        while (true) {
+            guard.tick();
+
+            const resolved = self.types_store.resolveVar(ext_var);
+            if (resolved.desc_idx == target_desc) return true;
+
+            switch (resolved.desc.content) {
+                .alias => |alias| {
+                    ext_var = self.types_store.getAliasBackingVar(alias);
+                },
+                .structure => |flat_type| {
+                    switch (flat_type) {
+                        .record => |record| {
+                            ext_var = record.ext;
+                        },
+                        else => return false,
+                    }
+                },
+                else => return false,
+            }
+        }
+    }
+
+    fn tagExtReachesDesc(self: *Self, ext: Var, target_desc: types_mod.DescStoreIdx) bool {
+        var ext_var = ext;
+        var guard = types_mod.debug.IterationGuard.init("tagExtReachesDesc");
+
+        while (true) {
+            guard.tick();
+
+            const resolved = self.types_store.resolveVar(ext_var);
+            if (resolved.desc_idx == target_desc) return true;
+
+            switch (resolved.desc.content) {
+                .alias => |alias| {
+                    ext_var = self.types_store.getAliasBackingVar(alias);
+                },
+                .structure => |flat_type| {
+                    switch (flat_type) {
+                        .tag_union => |tag_union| {
+                            ext_var = tag_union.ext;
+                        },
+                        else => return false,
+                    }
+                },
+                else => return false,
+            }
+        }
+    }
+
+    fn mergeRecordFieldsIntoScratch(self: *Self, range: *RecordFieldSafeList.Range, fields: RecordFieldSafeMultiList.Range) std.mem.Allocator.Error!void {
+        const next_fields = self.types_store.record_fields.sliceRange(fields);
+        try self.scratch.mergeSortedExtensionFields(
+            range,
+            next_fields.items(.name),
+            next_fields.items(.var_),
+            self.ident_store,
+        );
+    }
+
+    fn mergeTagsIntoScratch(self: *Self, range: *TagSafeList.Range, tags: TagSafeMultiList.Range) std.mem.Allocator.Error!void {
+        const next_tags = self.types_store.tags.sliceRange(tags);
+        try self.scratch.mergeSortedExtensionTags(
+            range,
+            next_tags.items(.name),
+            next_tags.items(.args),
+            self.ident_store,
+        );
+    }
+
+    fn finishRecordForMerge(self: *Self, range: RecordFieldSafeList.Range, ext: Var) std.mem.Allocator.Error!types_mod.Record {
+        const fields = try self.types_store.appendRecordFields(self.scratch.gathered_fields.sliceRange(range));
+        return .{ .fields = fields, .ext = ext };
+    }
+
+    fn finishTagUnionForMerge(self: *Self, range: TagSafeList.Range, ext: Var) std.mem.Allocator.Error!TagUnion {
+        const tags = try self.types_store.appendTags(self.scratch.gathered_tags.sliceRange(range));
+        return .{ .tags = tags, .ext = ext };
+    }
+
+    fn recordForMerge(self: *Self, vars: *const ResolvedVarDescs, record: types_mod.Record) std.mem.Allocator.Error!types_mod.Record {
+        const target_desc = self.rowExtMergeTarget(vars);
+        if (!self.recordExtReachesDesc(record.ext, target_desc)) return record;
+
+        var range = try self.scratch.copyGatherFieldsFromMultiList(
+            &self.types_store.record_fields,
+            record.fields,
+        );
+        var ext_var = record.ext;
+        var spliced_target = false;
+        var guard = types_mod.debug.IterationGuard.init("recordForMerge");
+
+        while (true) {
+            guard.tick();
+
+            const resolved = self.types_store.resolveVar(ext_var);
+            if (resolved.desc_idx == target_desc) {
+                if (spliced_target) {
+                    return try self.finishRecordForMerge(range, try self.fresh(vars, resolved.desc.content));
+                }
+
+                spliced_target = true;
+                switch (resolved.desc.content) {
+                    .structure => |flat_type| {
+                        switch (flat_type) {
+                            .record => |target_record| {
+                                try self.mergeRecordFieldsIntoScratch(&range, target_record.fields);
+                                ext_var = target_record.ext;
+                            },
+                            .record_unbound => |fields| {
+                                try self.mergeRecordFieldsIntoScratch(&range, fields);
+                                return try self.finishRecordForMerge(range, try self.fresh(vars, resolved.desc.content));
+                            },
+                            else => return try self.finishRecordForMerge(range, try self.fresh(vars, resolved.desc.content)),
+                        }
+                    },
+                    else => return try self.finishRecordForMerge(range, try self.fresh(vars, resolved.desc.content)),
+                }
+                continue;
+            }
+
+            switch (resolved.desc.content) {
+                .alias => |alias| {
+                    ext_var = self.types_store.getAliasBackingVar(alias);
+                },
+                .structure => |flat_type| {
+                    switch (flat_type) {
+                        .record => |ext_record| {
+                            try self.mergeRecordFieldsIntoScratch(&range, ext_record.fields);
+                            ext_var = ext_record.ext;
+                        },
+                        else => return try self.finishRecordForMerge(range, ext_var),
+                    }
+                },
+                else => return try self.finishRecordForMerge(range, ext_var),
+            }
+        }
+    }
+
+    fn tagUnionForMerge(self: *Self, vars: *const ResolvedVarDescs, tag_union: TagUnion) std.mem.Allocator.Error!TagUnion {
+        const target_desc = self.rowExtMergeTarget(vars);
+        if (!self.tagExtReachesDesc(tag_union.ext, target_desc)) return tag_union;
+
+        var range = try self.scratch.copyGatherTagsFromMultiList(
+            &self.types_store.tags,
+            tag_union.tags,
+        );
+        var ext_var = tag_union.ext;
+        var spliced_target = false;
+        var guard = types_mod.debug.IterationGuard.init("tagUnionForMerge");
+
+        while (true) {
+            guard.tick();
+
+            const resolved = self.types_store.resolveVar(ext_var);
+            if (resolved.desc_idx == target_desc) {
+                if (spliced_target) {
+                    return try self.finishTagUnionForMerge(range, try self.fresh(vars, resolved.desc.content));
+                }
+
+                spliced_target = true;
+                switch (resolved.desc.content) {
+                    .structure => |flat_type| {
+                        switch (flat_type) {
+                            .tag_union => |target_tag_union| {
+                                try self.mergeTagsIntoScratch(&range, target_tag_union.tags);
+                                ext_var = target_tag_union.ext;
+                            },
+                            else => return try self.finishTagUnionForMerge(range, try self.fresh(vars, resolved.desc.content)),
+                        }
+                    },
+                    else => return try self.finishTagUnionForMerge(range, try self.fresh(vars, resolved.desc.content)),
+                }
+                continue;
+            }
+
+            switch (resolved.desc.content) {
+                .alias => |alias| {
+                    ext_var = self.types_store.getAliasBackingVar(alias);
+                },
+                .structure => |flat_type| {
+                    switch (flat_type) {
+                        .tag_union => |ext_tag_union| {
+                            try self.mergeTagsIntoScratch(&range, ext_tag_union.tags);
+                            ext_var = ext_tag_union.ext;
+                        },
+                        else => return try self.finishTagUnionForMerge(range, ext_var),
+                    }
+                },
+                else => return try self.finishTagUnionForMerge(range, ext_var),
+            }
+        }
+    }
+
+    fn processSharedFieldsAfterChildren(self: *Self, post: SharedFieldsAfterChildren) Error!void {
+        if (self.scratch.mismatch_flags.items.items[post.did_field_error_flag]) {
+            return error.TypeMismatch;
+        }
+
+        const range_start: u32 = @intCast(self.types_store.record_fields.len());
+
+        for (self.scratch.in_both_fields.sliceRange(post.shared_fields_range)) |shared| {
+            _ = try self.types_store.appendRecordFields(&[_]RecordField{.{
+                .name = shared.b.name,
+                .var_ = shared.b.var_,
+            }});
+        }
+
+        if (post.mb_a_extended_fields) |extended_fields| {
+            _ = try self.types_store.appendRecordFields(
+                self.scratch.only_in_a_fields.sliceRange(extended_fields),
+            );
+        }
+        if (post.mb_b_extended_fields) |extended_fields| {
+            _ = try self.types_store.appendRecordFields(
+                self.scratch.only_in_b_fields.sliceRange(extended_fields),
+            );
+        }
+
+        try self.merge(&post.vars, Content{ .structure = FlatType{ .record = .{
+            .fields = self.types_store.record_fields.rangeToEnd(range_start),
+            .ext = post.ext,
+        } } });
+    }
+
+    fn processSharedTagsAfterChildren(self: *Self, post: SharedTagsAfterChildren) Error!void {
+        const range_start: u32 = @intCast(self.types_store.tags.len());
+
+        for (self.scratch.in_both_tags.sliceRange(post.shared_tags_range)) |tags| {
+            _ = try self.types_store.appendTags(&[_]Tag{.{
+                .name = tags.b.name,
+                .args = tags.b.args,
+            }});
+        }
+
+        if (post.mb_a_extended_tags) |extended_tags| {
+            _ = try self.types_store.appendTags(
+                self.scratch.only_in_a_tags.sliceRange(extended_tags),
+            );
+        }
+        if (post.mb_b_extended_tags) |extended_tags| {
+            _ = try self.types_store.appendTags(
+                self.scratch.only_in_b_tags.sliceRange(extended_tags),
+            );
+        }
+
+        try self.merge(&post.vars, Content{ .structure = FlatType{ .tag_union = .{
+            .tags = self.types_store.tags.rangeToEnd(range_start),
+            .ext = post.ext,
+        } } });
     }
 
     fn unifyTagUnionWithNominal(
         self: *Self,
         vars: *const ResolvedVarDescs,
         nominal_type: NominalType,
-        nominal_backing_var: Var,
-        nominal_backing_resolved: ResolvedVarDesc,
         anon_tag_union: TagUnion,
         direction: NominalDirection,
     ) Error!void {
@@ -1040,12 +1527,24 @@ const Unifier = struct {
         defer trace.end();
 
         // If this nominal is opaque and we're not in the origin module, error
-        if (!nominal_type.canLiftInner(self.qualified_module_ident)) {
+        if (!nominal_type.canLiftInner(self.self_module_identity)) {
             return error.TypeMismatch;
         }
 
+        // Open the declaration: instantiate its backing template with this
+        // application's actual args.
+        const nominal_backing_var = switch (try self.openNominalBacking(vars, nominal_type)) {
+            .opened => |v| v,
+            .no_decl => return error.TypeMismatch,
+        };
+        const nominal_backing_resolved = self.types_store.resolveVar(nominal_backing_var);
+
         // Check if the nominal's backing type is a tag union (including empty)
         const nominal_backing_content = nominal_backing_resolved.desc.content;
+        if (nominal_backing_content == .err) {
+            try self.merge(vars, .err);
+            return;
+        }
         if (nominal_backing_content != .structure) {
             return error.TypeMismatch;
         }
@@ -1058,13 +1557,11 @@ const Unifier = struct {
             // The anon_tag_union should also be empty for unification to succeed
             if (anon_tag_union.tags.len() == 0) {
                 // Both are empty - unify the extension variables
+                _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .merge_to_nominal = .{
+                    .vars = vars.*,
+                    .direction = direction,
+                } });
                 try self.unifyGuarded(anon_tag_union.ext, nominal_backing_var);
-
-                // Merge to the NOMINAL type (not the tag union)
-                switch (direction) {
-                    .a_is_nominal => try self.merge(vars, vars.a.desc.content),
-                    .b_is_nominal => try self.merge(vars, vars.b.desc.content),
-                }
                 return;
             } else {
                 // Anon has tags but nominal is empty
@@ -1109,30 +1606,20 @@ const Unifier = struct {
             }
         }
 
+        // Unification succeeded — the nominal type wins.
+        _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .merge_to_nominal = .{
+            .vars = vars.*,
+            .direction = direction,
+        } });
+
         // Now safe to proceed with full unification.
         try self.unifyTwoTagUnions(vars, anon_tag_union, nominal_backing_tag_union);
-
-        // If we get here, unification succeeded!
-        // Merge to the NOMINAL type (not the tag union)
-        // This is the key: the nominal type "wins"
-        switch (direction) {
-            .a_is_nominal => {
-                // Merge to a (which is the nominal)
-                try self.merge(vars, vars.a.desc.content);
-            },
-            .b_is_nominal => {
-                // Merge to b (which is the nominal)
-                try self.merge(vars, vars.b.desc.content);
-            },
-        }
     }
 
     fn unifyRecordWithNominal(
         self: *Self,
         vars: *const ResolvedVarDescs,
         nominal_type: NominalType,
-        _: Var, // nominal_backing_var - unused for records
-        nominal_backing_resolved: ResolvedVarDesc,
         anon_record_fields: RecordField.SafeMultiList.Range,
         anon_record_ext: RecordExt,
         direction: NominalDirection,
@@ -1141,12 +1628,24 @@ const Unifier = struct {
         defer trace.end();
 
         // If this nominal is opaque and we're not in the origin module, error
-        if (!nominal_type.canLiftInner(self.qualified_module_ident)) {
+        if (!nominal_type.canLiftInner(self.self_module_identity)) {
             return error.TypeMismatch;
         }
 
+        // Open the declaration: instantiate its backing template with this
+        // application's actual args.
+        const opened_backing = switch (try self.openNominalBacking(vars, nominal_type)) {
+            .opened => |v| v,
+            .no_decl => return error.TypeMismatch,
+        };
+        const nominal_backing_resolved = self.types_store.resolveVar(opened_backing);
+
         // Check if the nominal's backing type is a record (including empty)
         const nominal_backing_content = nominal_backing_resolved.desc.content;
+        if (nominal_backing_content == .err) {
+            try self.merge(vars, .err);
+            return;
+        }
         if (nominal_backing_content != .structure) {
             return error.TypeMismatch;
         }
@@ -1158,11 +1657,8 @@ const Unifier = struct {
             // The nominal's backing is an empty record {}
             // The anon record should also be empty for unification to succeed
             if (anon_record_fields.len() == 0) {
-                // Both are empty - merge to the NOMINAL type
-                switch (direction) {
-                    .a_is_nominal => try self.merge(vars, vars.a.desc.content),
-                    .b_is_nominal => try self.merge(vars, vars.b.desc.content),
-                }
+                // Both are empty — merge to the NOMINAL type.
+                try self.mergeToNominal(vars, direction);
                 return;
             } else {
                 // Anon has fields but nominal is empty
@@ -1178,6 +1674,12 @@ const Unifier = struct {
 
         const nominal_backing_record = nominal_backing_flat.record;
 
+        // Unification succeeded — the nominal type wins.
+        _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .merge_to_nominal = .{
+            .vars = vars.*,
+            .direction = direction,
+        } });
+
         // Unify the record fields
         try self.unifyTwoRecords(
             vars,
@@ -1186,20 +1688,6 @@ const Unifier = struct {
             nominal_backing_record.fields,
             .{ .ext = nominal_backing_record.ext },
         );
-
-        // If we get here, unification succeeded!
-        // Merge to the NOMINAL type (not the record)
-        // This is the key: the nominal type "wins"
-        switch (direction) {
-            .a_is_nominal => {
-                // Merge to a (which is the nominal)
-                try self.merge(vars, vars.a.desc.content);
-            },
-            .b_is_nominal => {
-                // Merge to b (which is the nominal)
-                try self.merge(vars, vars.b.desc.content);
-            },
-        }
     }
 
     /// unify func
@@ -1221,15 +1709,16 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
-        // Use iterators instead of slices because unifyGuarded may trigger reallocations
-        var a_args_iter = self.types_store.iterVars(a_func.args);
-        var b_args_iter = self.types_store.iterVars(b_func.args);
-        while (a_args_iter.next()) |a_arg| {
-            const b_arg = b_args_iter.next().?; // Safe: lengths verified equal
-            try self.unifyGuarded(a_arg, b_arg);
+        try self.scheduleGuardedPair(a_func.ret, b_func.ret, .propagate);
+        var i: u32 = a_func.args.len();
+        while (i > 0) {
+            i -= 1;
+            try self.scheduleGuardedPair(
+                self.types_store.getVarAt(a_func.args, i),
+                self.types_store.getVarAt(b_func.args, i),
+                .propagate,
+            );
         }
-
-        try self.unifyGuarded(a_func.ret, b_func.ret);
     }
 
     /// Unify two extensible records.
@@ -1361,9 +1850,6 @@ const Unifier = struct {
         // Unify fields
         switch (fields_ext) {
             .exactly_the_same => {
-                // Unify exts
-                try self.unifyGuarded(a_gathered_ext, b_gathered_ext);
-
                 // Unify shared fields
                 // This copies fields from scratch into type_store
                 try self.unifySharedFields(
@@ -1373,6 +1859,9 @@ const Unifier = struct {
                     null,
                     a_gathered_ext,
                 );
+
+                // Unify exts
+                try self.unifyGuarded(a_gathered_ext, b_gathered_ext);
             },
             .a_extends_b => {
                 // Create a new variable of a record with only a's uniq fields
@@ -1385,9 +1874,6 @@ const Unifier = struct {
                     .ext = a_gathered_ext,
                 } } });
 
-                // Unify the sub record with b's ext
-                try self.unifyGuarded(only_in_a_var, b_gathered_ext);
-
                 // Unify shared fields
                 // This copies fields from scratch into type_store
                 try self.unifySharedFields(
@@ -1397,6 +1883,9 @@ const Unifier = struct {
                     null,
                     only_in_a_var,
                 );
+
+                // Unify the sub record with b's ext
+                try self.unifyGuarded(only_in_a_var, b_gathered_ext);
             },
             .b_extends_a => {
                 // Create a new variable of a record with only b's uniq fields
@@ -1409,9 +1898,6 @@ const Unifier = struct {
                     .ext = b_gathered_ext,
                 } } });
 
-                // Unify the sub record with a's ext
-                try self.unifyGuarded(a_gathered_ext, only_in_b_var);
-
                 // Unify shared fields
                 // This copies fields from scratch into type_store
                 try self.unifySharedFields(
@@ -1421,6 +1907,9 @@ const Unifier = struct {
                     null,
                     only_in_b_var,
                 );
+
+                // Unify the sub record with a's ext
+                try self.unifyGuarded(a_gathered_ext, only_in_b_var);
             },
             .both_extend => {
                 // Create a new ext var
@@ -1446,12 +1935,6 @@ const Unifier = struct {
                     .ext = new_ext_var,
                 } } });
 
-                // Unify the sub records with exts
-                // The order we unify is important! If these are flipped, then
-                // you can get into weird partial-merge states
-                try self.unifyGuarded(only_in_a_var, b_gathered_ext);
-                try self.unifyGuarded(a_gathered_ext, only_in_b_var);
-
                 // Unify shared fields
                 // This copies fields from scratch into type_store
                 try self.unifySharedFields(
@@ -1461,6 +1944,12 @@ const Unifier = struct {
                     partitioned.only_in_b,
                     new_ext_var,
                 );
+
+                // Unify the sub records with exts
+                // The order we unify is important! If these are flipped, then
+                // you can get into weird partial-merge states
+                try self.unifyGuarded(a_gathered_ext, only_in_b_var);
+                try self.unifyGuarded(only_in_a_var, b_gathered_ext);
             },
         }
     }
@@ -1648,6 +2137,43 @@ const Unifier = struct {
         };
     }
 
+    /// Preserve every directed effect dependency when two representations of
+    /// the same function type merge. Function argument and result types unify;
+    /// their effect dependencies form a union because either side may carry
+    /// body-derived information that the other side (for example an annotation)
+    /// does not contain.
+    fn funcForMerge(self: *Self, vars: *const ResolvedVarDescs, selected: Func) std.mem.Allocator.Error!Func {
+        const a_func = vars.a.desc.content.unwrapFunc() orelse return selected;
+        const b_func = vars.b.desc.content.unwrapFunc() orelse return selected;
+        const capacity = a_func.effect_deps.len() + b_func.effect_deps.len();
+        if (capacity == 0) return selected;
+
+        var deps_sfa = std.heap.stackFallback(8 * @sizeOf(Var), self.scratch.gpa);
+        const deps_alloc = deps_sfa.get();
+        var deps = try std.ArrayList(Var).initCapacity(deps_alloc, capacity);
+        defer deps.deinit(deps_alloc);
+
+        for ([_]Var.SafeList.Range{ a_func.effect_deps, b_func.effect_deps }) |range| {
+            var i: u32 = 0;
+            while (i < range.len()) : (i += 1) {
+                const dep = self.types_store.getVarAt(range, i);
+                const dep_root = self.types_store.resolveVar(dep).var_;
+                var seen = false;
+                for (deps.items) |existing| {
+                    if (self.types_store.resolveVar(existing).var_ == dep_root) {
+                        seen = true;
+                        break;
+                    }
+                }
+                if (!seen) deps.appendAssumeCapacity(dep_root);
+            }
+        }
+
+        var merged = selected;
+        merged.effect_deps = try self.types_store.appendVars(deps.items);
+        return merged;
+    }
+
     /// Given a list of shared fields & a list of extended fields, unify the shared
     /// Then merge a new record with both shared+extended fields
     fn unifySharedFields(
@@ -1661,60 +2187,23 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        var did_field_error = false;
-
-        // First, unify all field types. This may cause nested record unifications
-        // which will append their own fields to the store. We must NOT interleave
-        // our field appends with these nested calls.
-        //
-        // Additionally, we *must* use an iterator here, as recursive calls can
-        // cause `in_both_fields` to reallocate, invalidating the slice pointer.
-        var shared_fields_iter = self.scratch.in_both_fields.iterRange(shared_fields_range);
-        while (shared_fields_iter.next()) |shared| {
-            self.unifyGuarded(shared.a.var_, shared.b.var_) catch |err| switch (err) {
-                error.TypeMismatch => {
-                    // Defer mismatch to check all fields
-                    did_field_error = true;
-                },
-                else => return err,
-            };
-        }
-
-        // If any field errored, then error
-        if (did_field_error) {
-            return error.TypeMismatch;
-        }
-
-        // Now that all nested unifications are complete, append OUR fields.
-        // This ensures our fields form a contiguous range.
-        const range_start: u32 = self.types_store.record_fields.len();
-
-        // Here, it's safe to use a slice since appending fields cannot trigger
-        // any reallocation
-        for (self.scratch.in_both_fields.sliceRange(shared_fields_range)) |shared| {
-            _ = try self.types_store.appendRecordFields(&[_]RecordField{.{
-                .name = shared.b.name,
-                .var_ = shared.b.var_,
-            }});
-        }
-
-        // Append combined fields
-        if (mb_a_extended_fields) |extended_fields| {
-            _ = try self.types_store.appendRecordFields(
-                self.scratch.only_in_a_fields.sliceRange(extended_fields),
-            );
-        }
-        if (mb_b_extended_fields) |extended_fields| {
-            _ = try self.types_store.appendRecordFields(
-                self.scratch.only_in_b_fields.sliceRange(extended_fields),
-            );
-        }
-
-        // Merge vars - now the range correctly contains only THIS record's fields
-        try self.merge(vars, Content{ .structure = FlatType{ .record = .{
-            .fields = self.types_store.record_fields.rangeToEnd(range_start),
+        const did_field_error_flag = try self.newMismatchFlag();
+        _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .shared_fields_after_children = .{
+            .vars = vars.*,
+            .shared_fields_range = shared_fields_range,
+            .mb_a_extended_fields = mb_a_extended_fields,
+            .mb_b_extended_fields = mb_b_extended_fields,
             .ext = ext,
-        } } });
+            .did_field_error_flag = did_field_error_flag,
+        } });
+
+        var i: u32 = shared_fields_range.len();
+        while (i > 0) {
+            i -= 1;
+            const idx: TwoRecordFieldsSafeList.Idx = @enumFromInt(@intFromEnum(shared_fields_range.start) + i);
+            const shared = self.scratch.in_both_fields.get(idx).*;
+            try self.scheduleGuardedPair(shared.a.var_, shared.b.var_, .{ .set_flag = did_field_error_flag });
+        }
     }
 
     /// Unify two extensible tag union.
@@ -1855,9 +2344,6 @@ const Unifier = struct {
         // and unifySharedTags handles the final merge)
         switch (tags_ext) {
             .exactly_the_same => {
-                // Unify exts
-                try self.unifyGuarded(a_gathered_tags.ext, b_gathered_tags.ext);
-
                 // Unify shared tags
                 // This copies tags from scratch into type_store
                 try self.unifySharedTags(
@@ -1867,6 +2353,9 @@ const Unifier = struct {
                     null,
                     a_gathered_tags.ext,
                 );
+
+                // Unify exts
+                try self.unifyGuarded(a_gathered_tags.ext, b_gathered_tags.ext);
             },
             .a_extends_b => {
                 // Create a new variable of a tag_union with only a's uniq tags
@@ -1879,9 +2368,6 @@ const Unifier = struct {
                     .ext = a_gathered_tags.ext,
                 } } });
 
-                // Unify the sub tag_union with b's ext
-                try self.unifyGuarded(only_in_a_var, b_gathered_tags.ext);
-
                 // Unify shared tags
                 // This copies tags from scratch into type_store
                 try self.unifySharedTags(
@@ -1891,6 +2377,9 @@ const Unifier = struct {
                     null,
                     only_in_a_var,
                 );
+
+                // Unify the sub tag_union with b's ext
+                try self.unifyGuarded(only_in_a_var, b_gathered_tags.ext);
             },
             .b_extends_a => {
                 // Create a new variable of a tag_union with only b's uniq tags
@@ -1903,9 +2392,6 @@ const Unifier = struct {
                     .ext = b_gathered_tags.ext,
                 } } });
 
-                // Unify the sub tag_union with a's ext
-                try self.unifyGuarded(a_gathered_tags.ext, only_in_b_var);
-
                 // Unify shared tags
                 // This copies tags from scratch into type_store
                 try self.unifySharedTags(
@@ -1915,6 +2401,9 @@ const Unifier = struct {
                     null,
                     only_in_b_var,
                 );
+
+                // Unify the sub tag_union with a's ext
+                try self.unifyGuarded(a_gathered_tags.ext, only_in_b_var);
             },
             .both_extend => {
                 // Create a shared extension variable first
@@ -1942,10 +2431,6 @@ const Unifier = struct {
                     .ext = new_ext_var,
                 } } });
 
-                // Unify the sub tag_unions with exts
-                try self.unifyGuarded(a_gathered_tags.ext, only_in_b_var);
-                try self.unifyGuarded(only_in_a_var, b_gathered_tags.ext);
-
                 // Unify shared tags
                 // Include all tags in the merged type - both shared and unique
                 // The unique tags must be included because the merged type is what
@@ -1958,6 +2443,10 @@ const Unifier = struct {
                     partitioned.only_in_b,
                     new_ext_var,
                 );
+
+                // Unify the sub tag_unions with exts
+                try self.unifyGuarded(only_in_a_var, b_gathered_tags.ext);
+                try self.unifyGuarded(a_gathered_tags.ext, only_in_b_var);
             },
         }
     }
@@ -2127,58 +2616,31 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        // IMPORTANT: First unify all shared tag arguments BEFORE recording
-        // range_start. This is because unifyGuarded may trigger recursive
-        // unifications that also append tags to the global tags list. We need
-        // to record range_start AFTER all inner unifications complete, so we
-        // only capture this level's tags.
-        //
-        // Additionally, we *must* use an iterator here, as recursive calls can
-        // cause `in_both_tags` to reallocate, invalidating the slice pointer.
-        var shared_tags_iter = self.scratch.in_both_tags.iterRange(shared_tags_range);
-        while (shared_tags_iter.next()) |tags| {
+        _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .shared_tags_after_children = .{
+            .vars = vars.*,
+            .shared_tags_range = shared_tags_range,
+            .mb_a_extended_tags = mb_a_extended_tags,
+            .mb_b_extended_tags = mb_b_extended_tags,
+            .ext = ext,
+        } });
+
+        var shared_idx: u32 = shared_tags_range.len();
+        while (shared_idx > 0) {
+            shared_idx -= 1;
+            const idx: TwoTagsSafeList.Idx = @enumFromInt(@intFromEnum(shared_tags_range.start) + shared_idx);
+            const tags = self.scratch.in_both_tags.get(idx).*;
             if (tags.a.args.len() != tags.b.args.len()) return error.TypeMismatch;
 
-            // Use iterators instead of slices because unifyGuarded may trigger reallocations
-            var tag_a_args_iter = self.types_store.iterVars(tags.a.args);
-            var tag_b_args_iter = self.types_store.iterVars(tags.b.args);
-            while (tag_a_args_iter.next()) |a_arg| {
-                const b_arg = tag_b_args_iter.next().?; // Safe: lengths verified equal
-                try self.unifyGuarded(a_arg, b_arg);
+            var arg_idx: u32 = tags.a.args.len();
+            while (arg_idx > 0) {
+                arg_idx -= 1;
+                try self.scheduleGuardedPair(
+                    self.types_store.getVarAt(tags.a.args, arg_idx),
+                    self.types_store.getVarAt(tags.b.args, arg_idx),
+                    .propagate,
+                );
             }
         }
-
-        // NOW record range_start after all inner unifications are done
-        const range_start: u32 = self.types_store.tags.len();
-
-        // Append this level's shared tags
-        //
-        // Here, it's safe to use a slice since appending tags cannot trigger
-        // any reallocation
-        for (self.scratch.in_both_tags.sliceRange(shared_tags_range)) |tags| {
-            _ = try self.types_store.appendTags(&[_]Tag{.{
-                .name = tags.b.name,
-                .args = tags.b.args,
-            }});
-        }
-
-        // Append combined tags
-        if (mb_a_extended_tags) |extended_tags| {
-            _ = try self.types_store.appendTags(
-                self.scratch.only_in_a_tags.sliceRange(extended_tags),
-            );
-        }
-        if (mb_b_extended_tags) |extended_tags| {
-            _ = try self.types_store.appendTags(
-                self.scratch.only_in_b_tags.sliceRange(extended_tags),
-            );
-        }
-
-        // Merge vars (sorting happens in merge() for all tag unions)
-        try self.merge(vars, Content{ .structure = FlatType{ .tag_union = .{
-            .tags = self.types_store.tags.rangeToEnd(range_start),
-            .ext = ext,
-        } } });
     }
 
     // constraints //
@@ -2240,11 +2702,12 @@ const Unifier = struct {
             // Preserve a body-forced where-clause across unification. The bit only
             // exists on a `where_clause` origin, so it survives only by keeping that
             // origin — or by promoting a payload-less `method_call` to it (the gap the
-            // sweep would otherwise miss when a same-named direct call wins the merge).
-            // A `from_literal`/operator origin is left intact: its payload (numeral
-            // info, binop negation) is load-bearing for defaulting and reporting, and
-            // such a receiver is pinned by defaulting rather than flagged by the sweep,
-            // so dropping the bit there is correct (overwriting it breaks e.g. ranges).
+            // ambiguity judgment would otherwise miss when a same-named direct call
+            // wins the merge). A `from_literal`/operator origin is left intact: its
+            // payload (numeral info, binop negation) is load-bearing for defaulting
+            // and reporting, and such a receiver is pinned by defaulting rather than
+            // judged ambiguous, so dropping the bit there is correct (overwriting it
+            // breaks e.g. ranges).
             {
                 const a_forced = two_constraints.a.origin == .where_clause and two_constraints.a.origin.where_clause.body_required;
                 const b_forced = two_constraints.b.origin == .where_clause and two_constraints.b.origin.where_clause.body_required;
@@ -2255,6 +2718,20 @@ const Unifier = struct {
                         .from_literal, .desugared_binop, .desugared_unaryop => {},
                     }
                 }
+            }
+            // Provenance is metadata (excluded from constraint identity): merge it
+            // field-wise, keeping the winner's value and falling back to the other
+            // side's so an introducing site or expect region recorded on either
+            // constraint survives the merge — the old var-keyed side tables linked
+            // both unified vars to the same entry.
+            if (constraint.provenance.intro_expr == .none) {
+                constraint.provenance.intro_expr = two_constraints.a.provenance.intro_expr;
+            }
+            if (constraint.provenance.expect_region.get() == null) {
+                constraint.provenance.expect_region = two_constraints.a.provenance.expect_region;
+            }
+            if (!constraint.interpolation.isPresent()) {
+                constraint.interpolation = two_constraints.a.interpolation;
             }
             self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(constraint);
         }
@@ -2400,44 +2877,82 @@ fn mergeFromNumeralLiteralInfo(
 ) ?types_mod.NumeralInfo {
     const a_info = a orelse return b;
     const b_info = b orelse return a;
-
-    var merged = if (!numeralInfoFitsDec(a_info)) a_info else b_info;
-    merged.is_negative = a_info.is_negative or b_info.is_negative;
-    merged.is_fractional = a_info.is_fractional or b_info.is_fractional;
-    merged.fits_dec = mergeFitsDec(a_info.fits_dec, b_info.fits_dec);
-    merged.frac_requirements = mergeFracRequirements(a_info, b_info);
-    return merged;
-}
-
-fn mergeFitsDec(a: ?bool, b: ?bool) ?bool {
-    if (a == false or b == false) return false;
-    if (a == true or b == true) return true;
-    return null;
-}
-
-fn mergeFracRequirements(
-    a: types_mod.NumeralInfo,
-    b: types_mod.NumeralInfo,
-) ?types_mod.FracRequirements {
-    if (!a.is_fractional) return b.frac_requirements;
-    if (!b.is_fractional) return a.frac_requirements;
-
-    const a_req = a.frac_requirements orelse return null;
-    const b_req = b.frac_requirements orelse return null;
-    return a_req.unify(b_req);
-}
-
-fn numeralInfoFitsDec(info: types_mod.NumeralInfo) bool {
-    if (!info.is_fractional) return true;
-    if (info.fits_dec) |fits| return fits;
-    const requirements = info.frac_requirements orelse return false;
-    return requirements.fits_in_dec;
+    return types_mod.NumeralInfo.merged(a_info, b_info);
 }
 
 /// A list of constraint that should apply to concrete type
 pub const DeferredConstraintCheck = struct {
     var_: Var,
     constraints: StaticDispatchConstraint.SafeList.Range,
+    /// True when the constraint's method target resolved to an unchecked,
+    /// unannotated local def and the checker re-deferred it for resolution at
+    /// the enclosing binding group's generalization boundary. Such an entry is
+    /// not "resolvable" for the literal-defaulting cascade even though its
+    /// receiver is concrete — re-processing it before the target's group is
+    /// checked would just re-defer it again.
+    waiting_on_target_def: bool = false,
+
+    pub const SafeList = MkSafeList(@This());
+};
+
+const MismatchHandling = union(enum) {
+    propagate,
+    abort,
+    ignore,
+    set_flag: u32,
+};
+
+const SameAliasAfterArgs = struct {
+    vars: ResolvedVarDescs,
+    a_backing_var: Var,
+    b_backing_var: Var,
+    did_arg_error_flag: u32,
+};
+
+const SharedFieldsAfterChildren = struct {
+    vars: ResolvedVarDescs,
+    shared_fields_range: TwoRecordFieldsSafeList.Range,
+    mb_a_extended_fields: ?RecordFieldSafeList.Range,
+    mb_b_extended_fields: ?RecordFieldSafeList.Range,
+    ext: Var,
+    did_field_error_flag: u32,
+};
+
+const SharedTagsAfterChildren = struct {
+    vars: ResolvedVarDescs,
+    shared_tags_range: TwoTags.SafeList.Range,
+    mb_a_extended_tags: ?Tag.SafeList.Range,
+    mb_b_extended_tags: ?Tag.SafeList.Range,
+    ext: Var,
+};
+
+const WorkFrame = union(enum) {
+    mismatch_handler: MismatchHandling,
+    root_pair: struct {
+        a: Var,
+        b: Var,
+        relation: RootRelation,
+    },
+    guarded_pair: struct {
+        a: Var,
+        b: Var,
+    },
+    guard_handler: struct {
+        visited_vars_len: u32,
+        saved_unresolved_b: ?Var,
+    },
+    unify_vars: ResolvedVarDescs,
+    merge: struct {
+        vars: ResolvedVarDescs,
+        content: Content,
+    },
+    merge_to_nominal: struct {
+        vars: ResolvedVarDescs,
+        direction: NominalDirection,
+    },
+    same_alias_after_args: SameAliasAfterArgs,
+    shared_fields_after_children: SharedFieldsAfterChildren,
+    shared_tags_after_children: SharedTagsAfterChildren,
 
     pub const SafeList = MkSafeList(@This());
 };
@@ -2445,28 +2960,28 @@ pub const DeferredConstraintCheck = struct {
 /// Public helper functions for tests
 pub fn partitionFields(
     ident_store: *const Ident.Store,
-    qualified_module_ident: Ident.Idx,
+    self_module_identity: base.ModuleIdentity.Idx,
     types_store: *types_mod.Store,
     scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
     a_fields_range: RecordFieldSafeList.Range,
     b_fields_range: RecordFieldSafeList.Range,
 ) std.mem.Allocator.Error!Unifier.PartitionedRecordFields {
-    var unifier = Unifier.init(ident_store, qualified_module_ident, types_store, scratch, occurs_scratch);
+    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch);
     return try unifier.partitionFields(scratch, a_fields_range, b_fields_range);
 }
 
 /// Partitions tags from two tag ranges for unification.
 pub fn partitionTags(
     ident_store: *const Ident.Store,
-    qualified_module_ident: Ident.Idx,
+    self_module_identity: base.ModuleIdentity.Idx,
     types_store: *types_mod.Store,
     scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
     a_tags_range: TagSafeList.Range,
     b_tags_range: TagSafeList.Range,
 ) std.mem.Allocator.Error!Unifier.PartitionedTags {
-    var unifier = Unifier.init(ident_store, qualified_module_ident, types_store, scratch, occurs_scratch);
+    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch);
     return try unifier.partitionTags(scratch, a_tags_range, b_tags_range);
 }
 
@@ -2514,6 +3029,10 @@ pub const Scratch = struct {
     // used by caller of unify
     fresh_vars: VarSafeList,
 
+    // explicit unification work stack
+    unify_work_stack: WorkFrame.SafeList,
+    mismatch_flags: MkSafeList(bool),
+
     // records - used internal by unification
     gathered_fields: RecordFieldSafeList,
     only_in_a_fields: RecordFieldSafeList,
@@ -2538,8 +3057,29 @@ pub const Scratch = struct {
     // Vars currently being unified (recursion guard for self-referential types)
     visited_vars: VarSafeList,
 
+    // Reusable formal->actual substitution map for the nominal-vs-structural
+    // lift's declaration-backed opening operation.
+    open_var_map: std.AutoHashMap(types_mod.Var, types_mod.Var),
+
+    // Memo of declaration openings performed during the CURRENT unify call:
+    // one instantiated backing per (declaration, resolved arg roots). Without
+    // this, a cyclic anonymous structure unifying with a recursive nominal
+    // never converges — every lift would mint a fresh backing whose interior
+    // recursive application is a new var, so the in-progress pair guard never
+    // sees a repeat. Reusing the first opening restores the fixed graph the
+    // guard needs. Reset per unify call; savepoints bracket whole unify calls,
+    // so a rollback never leaves a memo entry dangling.
+    opened_nominals: std.ArrayListUnmanaged(OpenedNominalMemo),
+    opened_nominal_args: VarSafeList,
+
     // Constraint function vars currently being unified (separate from visited_vars to match legacy mark behavior)
     constraint_visited_vars: VarSafeList,
+
+    pub const OpenedNominalMemo = struct {
+        decl: types_mod.NominalDecl.Idx,
+        args: VarSafeList.Range,
+        opened: types_mod.Var,
+    };
 
     /// Init scratch
     pub fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!Self {
@@ -2551,6 +3091,8 @@ pub const Scratch = struct {
         return .{
             .gpa = gpa,
             .fresh_vars = try VarSafeList.initCapacity(gpa, 8),
+            .unify_work_stack = try WorkFrame.SafeList.initCapacity(gpa, 32),
+            .mismatch_flags = try MkSafeList(bool).initCapacity(gpa, 8),
             .gathered_fields = try RecordFieldSafeList.initCapacity(gpa, 32),
             .only_in_a_fields = try RecordFieldSafeList.initCapacity(gpa, 32),
             .only_in_b_fields = try RecordFieldSafeList.initCapacity(gpa, 32),
@@ -2565,6 +3107,9 @@ pub const Scratch = struct {
             .in_both_static_dispatch_constraints = try TwoStaticDispatchConstraints.SafeList.initCapacity(gpa, 32),
             .occurs_scratch = try occurs.Scratch.init(gpa),
             .visited_vars = try VarSafeList.initCapacity(gpa, 16),
+            .open_var_map = std.AutoHashMap(types_mod.Var, types_mod.Var).init(gpa),
+            .opened_nominals = .empty,
+            .opened_nominal_args = try VarSafeList.initCapacity(gpa, 8),
             .constraint_visited_vars = try VarSafeList.initCapacity(gpa, 16),
         };
     }
@@ -2572,6 +3117,8 @@ pub const Scratch = struct {
     /// Deinit scratch
     pub fn deinit(self: *Self) void {
         self.fresh_vars.deinit(self.gpa);
+        self.unify_work_stack.deinit(self.gpa);
+        self.mismatch_flags.deinit(self.gpa);
         self.gathered_fields.deinit(self.gpa);
         self.only_in_a_fields.deinit(self.gpa);
         self.only_in_b_fields.deinit(self.gpa);
@@ -2587,10 +3134,15 @@ pub const Scratch = struct {
         self.occurs_scratch.deinit();
         self.visited_vars.deinit(self.gpa);
         self.constraint_visited_vars.deinit(self.gpa);
+        self.open_var_map.deinit();
+        self.opened_nominals.deinit(self.gpa);
+        self.opened_nominal_args.deinit(self.gpa);
     }
 
     /// Reset the scratch arrays, retaining the allocated memory
     pub fn reset(self: *Scratch) void {
+        self.unify_work_stack.items.clearRetainingCapacity();
+        self.mismatch_flags.items.clearRetainingCapacity();
         self.gathered_fields.items.clearRetainingCapacity();
         self.only_in_a_fields.items.clearRetainingCapacity();
         self.only_in_b_fields.items.clearRetainingCapacity();
@@ -2607,6 +3159,8 @@ pub const Scratch = struct {
         self.occurs_scratch.reset();
         self.visited_vars.items.clearRetainingCapacity();
         self.constraint_visited_vars.items.clearRetainingCapacity();
+        self.opened_nominals.clearRetainingCapacity();
+        self.opened_nominal_args.items.clearRetainingCapacity();
     }
 
     // helpers //
@@ -2661,13 +3215,17 @@ pub const Scratch = struct {
         // Allocate space for merged result
         try self.gathered_fields.items.ensureUnusedCapacity(self.gpa, new_count);
 
+        // IMPORTANT: re-slice after the reserve — growing `gathered_fields`
+        // can reallocate its backing array, invalidating `current_fields`.
+        const current_fields_after = self.gathered_fields.sliceRange(.{ .start = range.start, .count = @intCast(current_len) });
+
         // We need to merge in-place. Strategy:
         // 1. Append all new (non-duplicate) extension fields to the end
         // 2. Then do an in-place merge of the two sorted regions
 
         // Append non-duplicate extension fields
         for (ext_names, ext_vars) |name, var_| {
-            const is_dup = for (current_fields) |existing| {
+            const is_dup = for (current_fields_after) |existing| {
                 if (existing.name.eql(name)) break true;
             } else false;
             if (!is_dup) {
@@ -2720,9 +3278,13 @@ pub const Scratch = struct {
         // Allocate space for merged result
         try self.gathered_tags.items.ensureUnusedCapacity(self.gpa, new_count);
 
+        // IMPORTANT: re-slice after the reserve — growing `gathered_tags` can
+        // reallocate its backing array, invalidating `current_tags`.
+        const current_tags_after = self.gathered_tags.sliceRange(.{ .start = range.start, .count = @intCast(current_len) });
+
         // Append non-duplicate extension tags
         for (ext_names, ext_args) |name, args| {
-            const is_dup = for (current_tags) |existing| {
+            const is_dup = for (current_tags_after) |existing| {
                 if (existing.name.eql(name)) break true;
             } else false;
             if (!is_dup) {
@@ -2770,8 +3332,19 @@ pub const Scratch = struct {
     }
 };
 
+// Identity equality is two integer comparisons with no ident-store access:
+// `origin_module` is an env-local index of the declaring module's deep
+// CONTENT identity (see `base.module_identity`), so the answer never depends
+// on which pipeline built an artifact, what the coordinator named a package,
+// or what directory the build ran in. The within-module discriminator is the
+// declaration: the packed source-decl statement when present (statement
+// indices are stable across checked modules because equal content identities
+// imply byte-identical module source), and the type ident only for
+// declaration-less synthetic nominals. The ident comparison cannot replace
+// the statement for decl-backed builtins, whose minted idents ("U8") and
+// declared relative names ("Num.U8") are spelled differently.
 fn sameAliasIdentity(a: Alias, b: Alias) bool {
-    if (!a.origin_module.eql(b.origin_module)) return false;
+    if (a.origin_module != b.origin_module) return false;
     if (a.source_decl.present or b.source_decl.present) {
         return a.source_decl.eql(b.source_decl);
     }
@@ -2779,7 +3352,7 @@ fn sameAliasIdentity(a: Alias, b: Alias) bool {
 }
 
 fn sameNominalIdentity(a: NominalType, b: NominalType) bool {
-    if (!a.origin_module.eql(b.origin_module)) return false;
+    if (a.origin_module != b.origin_module) return false;
     const a_source_decl = a.sourceDecl();
     const b_source_decl = b.sourceDecl();
     if (a_source_decl.present or b_source_decl.present) {
@@ -2870,20 +3443,19 @@ pub const StructuralPairInspection = enum {
 ///
 /// SOUNDNESS FENCE: the theorem is decisive only if no successful earlier
 /// unify in the probe can soften the mismatching pair by merging `.err` into
-/// either side (this module short-circuits err-backed nominals to a
-/// SUCCESSFUL err merge — see `unifyNominalType` and the `.nominal_type` arms
-/// of `unifyFlatType`). The method side is freshly instantiated per
+/// either side (this module short-circuits applications of INVALID
+/// declarations to a SUCCESSFUL err merge — see the `.nominal_type` arms of
+/// `unifyFlatType`). The method side is freshly instantiated per
 /// constraint, so its only err sources are its own positions; the constraint
 /// side shares vars across the range. Both are closed off by requiring, for
 /// every pair across the range, that
 ///   - every method position is exactly a builtin numeric nominal: builtin
 ///     origin, ZERO type args (so a same-identity merge unifies no argument
-///     pairs), and a backing whose root content is not `.err` (this closed
-///     world runs no lift path, and `unifyNominalType` never unifies
-///     backings, so backings are only ever READ for the err short-circuit —
-///     their root content cannot change mid-probe);
+///     pairs), and a VALID declaration (declaration validity is fixed before
+///     value checking begins and cannot change mid-probe; applications carry
+///     no backing at all, so nothing else about the position can soften);
 ///   - every constraint position resolves to a flex var, a rigid var, or a
-///     nominal whose backing root is not `.err` (terminal-or-failing shapes
+///     nominal whose declaration is valid (terminal-or-failing shapes
 ///     whose pairwise unifies either fail outright — which also fails the
 ///     probe, consistent with refutation — or merge without creating or
 ///     spreading err; flex-side dispatch constraints are deferred by
@@ -2913,8 +3485,7 @@ pub fn structurallyIncompatiblePair(
     if (!method_nominal.originIsBuiltin()) return .uninspectable;
     const method_decl = method_nominal.sourceDeclOptional() orelse return .uninspectable;
     if (method_types.sliceNominalArgs(method_nominal).len != 0) return .uninspectable;
-    const method_backing = method_types.resolveVar(method_types.getNominalBackingVar(method_nominal)).desc.content;
-    if (method_backing == .err) return .uninspectable;
+    if (method_types.nominalDeclIsInvalid(method_nominal)) return .uninspectable;
 
     // Whether this method position IS the dispatcher type C: source-decl
     // equality alone, no origin-module comparison. Both sides are
@@ -2941,10 +3512,10 @@ pub fn structurallyIncompatiblePair(
         .flex, .rigid => return .safe,
         .structure => |flat| switch (flat) {
             .nominal_type => |constraint_nominal| {
-                // An err-backed nominal unifies SUCCESSFULLY into `.err` and
-                // can contaminate shared vars — outside the closed world.
-                const constraint_backing = constraint_types.resolveVar(constraint_types.getNominalBackingVar(constraint_nominal)).desc.content;
-                if (constraint_backing == .err) return .uninspectable;
+                // An application of an invalid declaration unifies
+                // SUCCESSFULLY into `.err` and can contaminate shared vars —
+                // outside the closed world.
+                if (constraint_types.nominalDeclIsInvalid(constraint_nominal)) return .uninspectable;
                 if (!is_dispatcher_pos) return .safe;
                 if (!constraint_nominal.originIsBuiltin()) return .safe;
                 const constraint_decl = constraint_nominal.sourceDeclOptional() orelse return .safe;

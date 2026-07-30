@@ -8,66 +8,100 @@ type=snippet
 import json.Json [foo, BAR]
 ~~~
 # EXPECTED
-PARSE ERROR - stmt_import.md:1:18:1:19
-PARSE ERROR - stmt_import.md:1:19:1:22
-PARSE ERROR - stmt_import.md:1:22:1:23
-PARSE ERROR - stmt_import.md:1:27:1:28
+UNEXPECTED STATEMENT - stmt_import.md:1:18:1:19
+UNEXPECTED STATEMENT - stmt_import.md:1:19:1:22
+UNEXPECTED STATEMENT - stmt_import.md:1:22:1:23
+TYPE APPLICATION NEEDS PARENTHESES - stmt_import.md:1:27:1:28
+DUPLICATE DEFINITION - stmt_import.md:1:1:1:17
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
 
-**stmt_import.md:1:18:1:19:**
-```roc
-import json.Json [foo, BAR]
-```
-                 ^
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  import json.Json [foo, BAR]                                               │
+ │                   ‾                                                        │
+ └─────────────────────────────────────────────────────── stmt_import.md:1:18 ┘
 
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+    For example:
+        answer = 42
 
-**stmt_import.md:1:19:1:22:**
-```roc
-import json.Json [foo, BAR]
-```
-                  ^^^
+    I found `[` here.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  import json.Json [foo, BAR]                                               │
+ │                    ‾‾‾                                                     │
+ └─────────────────────────────────────────────────────── stmt_import.md:1:19 ┘
 
-**stmt_import.md:1:22:1:23:**
-```roc
-import json.Json [foo, BAR]
-```
-                     ^
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `foo` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  import json.Json [foo, BAR]                                               │
+ │                       ‾                                                    │
+ └─────────────────────────────────────────────────────── stmt_import.md:1:22 ┘
 
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
-Instead of:
-    **List U8**
+    For example:
+        answer = 42
 
-Use:
-    **List(U8)**
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
 
-**stmt_import.md:1:27:1:28:**
-```roc
-import json.Json [foo, BAR]
-```
-                          ^
+┌────────────────────────────────────┐
+│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
+└┬───────────────────────────────────┘  and I found a type argument without   │
+ │                                      parentheses.                          │
+ │                                                                            │
+ │  import json.Json [foo, BAR]                                               │
+ │                            ‾                                               │
+ └─────────────────────────────────────────────────────── stmt_import.md:1:27 ┘
 
+    Roc type applications use parentheses around their arguments. Write
+    `List(U8)`, not `List U8`.
+
+    For example:
+        List(U8)
+
+    I found `]` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
+
+
+┌──────────────────────┐
+│ DUPLICATE DEFINITION ├─ The name `Json` is being redeclared here. ──────────┐
+└┬─────────────────────┘                                                      │
+ │                                                                            │
+ │  import json.Json [foo, BAR]                                               │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                          │
+ └──────────────────────────────────────────────────────── stmt_import.md:1:1 ┘
+
+    In this scope, `Json` was already defined here:
+      ┌───────────────────────────────────────────────────────────────────────┐
+    1 │  import json.Json [foo, BAR]                                          │
+      │  ‾                                                                    │
+      └─────────────────────────────────────────────────── stmt_import.md:1:1 ┘
 
 # TOKENS
 ~~~zig
@@ -77,7 +111,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "json.Json"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -92,7 +126,7 @@ import json.Json
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-import (module "json.Json")
+	(s-import (mod "json.Json")
 		(exposes)))
 ~~~
 # TYPES

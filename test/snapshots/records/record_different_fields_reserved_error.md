@@ -9,230 +9,333 @@ type=expr
     if: "conditional",
     when: "pattern match",
     expect: "test assertion",
-    import: "module load",
+    import: "mod load",
     and: Bool.true,
     or: Bool.false,
 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:2:7:2:8
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:2:22:2:23
-UNEXPECTED TOKEN IN TYPE ANNOTATION - record_different_fields_reserved_error.md:3:11:3:12
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:3:12:3:25
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:3:25:3:26
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:3:26:3:27
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:4:11:4:12
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:4:29:4:30
+UNEXPECTED EXPRESSION SYNTAX - record_different_fields_reserved_error.md:2:7:2:8
+UNEXPECTED EXPRESSION SYNTAX - record_different_fields_reserved_error.md:2:22:2:23
+UNEXPECTED TYPE SYNTAX - record_different_fields_reserved_error.md:3:11:3:12
+UNEXPECTED EXPRESSION SYNTAX - record_different_fields_reserved_error.md:3:12:3:25
+UNEXPECTED EXPRESSION SYNTAX - record_different_fields_reserved_error.md:3:25:3:26
+UNEXPECTED EXPRESSION SYNTAX - record_different_fields_reserved_error.md:3:26:3:27
+UNEXPECTED EXPRESSION SYNTAX - record_different_fields_reserved_error.md:4:11:4:12
+UNEXPECTED EXPRESSION SYNTAX - record_different_fields_reserved_error.md:4:29:4:30
 IMPORT MUST BE TOP LEVEL - record_different_fields_reserved_error.md:5:5:5:11
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:5:11:5:12
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:5:26:5:27
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:6:5:6:8
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:6:19:6:20
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:5:7:7
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:19:7:20
+UNEXPECTED EXPRESSION SYNTAX - record_different_fields_reserved_error.md:5:11:5:12
+UNEXPECTED EXPRESSION SYNTAX - record_different_fields_reserved_error.md:5:23:5:24
+UNEXPECTED EXPRESSION SYNTAX - record_different_fields_reserved_error.md:6:5:6:8
+UNEXPECTED EXPRESSION SYNTAX - record_different_fields_reserved_error.md:6:19:6:20
+UNEXPECTED EXPRESSION SYNTAX - record_different_fields_reserved_error.md:7:5:7:7
+UNEXPECTED EXPRESSION SYNTAX - record_different_fields_reserved_error.md:7:19:7:20
 DECLARATION HAS NO VALUE - record_different_fields_reserved_error.md:3:5:3:12
 MISSING METHOD - record_different_fields_reserved_error.md:4:13:4:29
-MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:26
+MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:23
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **:** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
 
-**record_different_fields_reserved_error.md:2:7:2:8:**
-```roc
-    if: "conditional",
-```
-      ^
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  if: "conditional",                                                        │
+ │    ‾                                                                       │
+ └───────────────────────────── record_different_fields_reserved_error.md:2:7 ┘
 
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **,** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+    For example:
+        add(1, 2)
 
-**record_different_fields_reserved_error.md:2:22:2:23:**
-```roc
-    if: "conditional",
-```
-                     ^
+    I found `:` here.
 
 
-**UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **"** is not expected in a type annotation.
-Type annotations should contain types like _Str_, _Num a_, or _List U64_.
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  if: "conditional",                                                        │
+ │                   ‾                                                        │
+ └──────────────────────────── record_different_fields_reserved_error.md:2:22 ┘
 
-**record_different_fields_reserved_error.md:3:11:3:12:**
-```roc
-    when: "pattern match",
-```
-          ^
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
 
+    For example:
+        add(1, 2)
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **pattern match** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**record_different_fields_reserved_error.md:3:12:3:25:**
-```roc
-    when: "pattern match",
-```
-           ^^^^^^^^^^^^^
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **"** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+┌────────────────────────┐
+│ UNEXPECTED TYPE SYNTAX ├─ I was parsing a type annotation, and this token ──┐
+└┬───────────────────────┘  cannot start a type here.                         │
+ │                                                                            │
+ │  when: "pattern match",                                                    │
+ │        ‾                                                                   │
+ └──────────────────────────── record_different_fields_reserved_error.md:3:11 ┘
 
-**record_different_fields_reserved_error.md:3:25:3:26:**
-```roc
-    when: "pattern match",
-```
-                        ^
+    Types can be type variables, uppercase type names, function types, tuples,
+    records, or tag unions.
 
+    For example:
+        List(U64)
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **,** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**record_different_fields_reserved_error.md:3:26:3:27:**
-```roc
-    when: "pattern match",
-```
-                         ^
+    I found `"` here.
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **:** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  when: "pattern match",                                                    │
+ │         ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
+ └──────────────────────────── record_different_fields_reserved_error.md:3:12 ┘
 
-**record_different_fields_reserved_error.md:4:11:4:12:**
-```roc
-    expect: "test assertion",
-```
-          ^
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
 
+    For example:
+        add(1, 2)
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **,** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**record_different_fields_reserved_error.md:4:29:4:30:**
-```roc
-    expect: "test assertion",
-```
-                            ^
+    I found `pattern match` here.
 
 
-**IMPORT MUST BE TOP LEVEL**
-Import statements must appear at the top level of a module.
-Move this import to the top of the file, after the module header but before any definitions.
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  when: "pattern match",                                                    │
+ │                      ‾                                                     │
+ └──────────────────────────── record_different_fields_reserved_error.md:3:25 ┘
 
-**record_different_fields_reserved_error.md:5:5:5:11:**
-```roc
-    import: "module load",
-```
-    ^^^^^^
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
 
+    For example:
+        add(1, 2)
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **:** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**record_different_fields_reserved_error.md:5:11:5:12:**
-```roc
-    import: "module load",
-```
-          ^
+    I found `"` here.
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **,** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  when: "pattern match",                                                    │
+ │                       ‾                                                    │
+ └──────────────────────────── record_different_fields_reserved_error.md:3:26 ┘
 
-**record_different_fields_reserved_error.md:5:26:5:27:**
-```roc
-    import: "module load",
-```
-                         ^
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
 
+    For example:
+        add(1, 2)
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **and** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**record_different_fields_reserved_error.md:6:5:6:8:**
-```roc
-    and: Bool.true,
-```
-    ^^^
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **,** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  expect: "test assertion",                                                 │
+ │        ‾                                                                   │
+ └──────────────────────────── record_different_fields_reserved_error.md:4:11 ┘
 
-**record_different_fields_reserved_error.md:6:19:6:20:**
-```roc
-    and: Bool.true,
-```
-                  ^
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
 
+    For example:
+        add(1, 2)
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **or** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**record_different_fields_reserved_error.md:7:5:7:7:**
-```roc
-    or: Bool.false,
-```
-    ^^
+    I found `:` here.
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **,** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  expect: "test assertion",                                                 │
+ │                          ‾                                                 │
+ └──────────────────────────── record_different_fields_reserved_error.md:4:29 ┘
 
-**record_different_fields_reserved_error.md:7:19:7:20:**
-```roc
-    or: Bool.false,
-```
-                  ^
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
 
+    For example:
+        add(1, 2)
 
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**record_different_fields_reserved_error.md:3:5:3:12:**
-```roc
-    when: "pattern match",
-```
-    ^^^^^^^
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+┌──────────────────────────┐
+│ IMPORT MUST BE TOP LEVEL ├─ I was parsing an import, but imports are only ──┐
+└┬─────────────────────────┘  allowed at the top level.                       │
+ │                                                                            │
+ │  import: "mod load",                                                       │
+ │  ‾‾‾‾‾‾                                                                    │
+ └───────────────────────────── record_different_fields_reserved_error.md:5:5 ┘
 
-**MISSING METHOD**
-This **from_quote** method is being called on a value whose type doesn't have that method:
-**record_different_fields_reserved_error.md:4:13:4:29:**
-```roc
-    expect: "test assertion",
-```
-            ^^^^^^^^^^^^^^^^
+    Move this import after the mod header and before declarations or
+    executable statements.
 
-The value's type, which does not have a method named **from_quote**, is:
+    For example:
+        import Json
 
-    {}
+        main = 1
 
-**MISSING METHOD**
-This **from_quote** method is being called on a value whose type doesn't have that method:
-**record_different_fields_reserved_error.md:5:13:5:26:**
-```roc
-    import: "module load",
-```
-            ^^^^^^^^^^^^^
+    I found `import` here.
+    That word is reserved by Roc, so it cannot be used as a name in this
+    position.
 
-The value's type, which does not have a method named **from_quote**, is:
 
-    {}
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  import: "mod load",                                                       │
+ │        ‾                                                                   │
+ └──────────────────────────── record_different_fields_reserved_error.md:5:11 ┘
+
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `:` here.
+
+
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  import: "mod load",                                                       │
+ │                    ‾                                                       │
+ └──────────────────────────── record_different_fields_reserved_error.md:5:23 ┘
+
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
+
+
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  and: Bool.true,                                                           │
+ │  ‾‾‾                                                                       │
+ └───────────────────────────── record_different_fields_reserved_error.md:6:5 ┘
+
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `and` here.
+
+
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  and: Bool.true,                                                           │
+ │                ‾                                                           │
+ └──────────────────────────── record_different_fields_reserved_error.md:6:19 ┘
+
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
+
+
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  or: Bool.false,                                                           │
+ │  ‾‾                                                                        │
+ └───────────────────────────── record_different_fields_reserved_error.md:7:5 ┘
+
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `or` here.
+
+
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  or: Bool.false,                                                           │
+ │                ‾                                                           │
+ └──────────────────────────── record_different_fields_reserved_error.md:7:19 ┘
+
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
+
+
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  when: "pattern match",                                                    │
+ │  ‾‾‾‾‾‾‾                                                                   │
+ └───────────────────────────── record_different_fields_reserved_error.md:3:5 ┘
+
+    Add a value body here, or put hosted functions in a platform type mod so
+    they are published through the host boundary.
+
+
+┌────────────────┐
+│ MISSING METHOD ├─ This `from_quote` method is being called on a value ──────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  expect: "test assertion",                                                 │
+ │          ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
+ └──────────────────────────── record_different_fields_reserved_error.md:4:13 ┘
+
+    The value's type, which does not have a method named `from_quote`, is:
+
+        {}
+
+
+┌────────────────┐
+│ MISSING METHOD ├─ This `from_quote` method is being called on a value ──────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  import: "mod load",                                                       │
+ │          ‾‾‾‾‾‾‾‾‾‾                                                        │
+ └──────────────────────────── record_different_fields_reserved_error.md:5:13 ┘
+
+    The value's type, which does not have a method named `from_quote`, is:
+
+        {}
 
 # TOKENS
 ~~~zig
@@ -268,7 +371,7 @@ EndOfFile,
 		(s-malformed (tag "import_must_be_top_level"))
 		(e-malformed (reason "expr_unexpected_token"))
 		(e-string
-			(e-string-part (raw "module load")))
+			(e-string-part (raw "mod load")))
 		(e-malformed (reason "expr_unexpected_token"))
 		(e-malformed (reason "expr_unexpected_token"))
 		(e-ident (raw "Bool.true"))
@@ -282,12 +385,12 @@ EndOfFile,
 {
 	if  "conditional"
 	
-	when : 
+	when :
 			
-	expect 
+	expect
 	"test assertion"
 	
-			"module load"
+			"mod load"
 	
 		Bool.true
 	
@@ -314,15 +417,13 @@ EndOfFile,
 	(s-expect
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
-		(e-string
-			(e-literal (string "test assertion"))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
-		(e-string
-			(e-literal (string "module load"))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr

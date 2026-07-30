@@ -4,30 +4,35 @@ Format := [Default].{
 	rename_field : Format, Str -> Str
 	rename_field = |_, name| name
 
-	parse_record_field : Format, Str.FieldName.FieldNames(_shape), State -> Try(
+	parse_record_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [FormatError, ..])
+	parse_record_start = |_, state| Ok(Uncounted(state))
+
+	parse_record_field : Format,
+	Encoding.FieldName.FieldNames(_shape),
+	State -> Try(
 		[
-			Field({ field : Str.FieldName(_shape), rest : State }),
+			Field({ field : Encoding.FieldName(_shape), rest : State }),
 			TryField({ name : Str, rest : State }),
 			TryFieldCaseless({ name : Str, rest : State }),
-			Continue({ rest : State }),
-			Done({ rest : State }),
+			Continue(State),
+			Done(State),
 		],
-		[MissingRequired],
+		[FormatError, ..],
 	)
-	parse_record_field = |_, _, state| Ok(Done({ rest: state }))
+	parse_record_field = |_, _, state| Ok(Done(state))
 
-	skip_record_field : Format, State -> Try(State, [MissingRequired])
+	parse_record_after_field : Format, State -> Try([Continue(State), Done(State)], [FormatError, ..])
+	parse_record_after_field = |_, state| Ok(Continue(state))
+
+	skip_record_field : Format, State -> Try(State, [FormatError, ..])
 	skip_record_field = |_, state| Ok(state)
-
-	missing_record_field : Format, Str, State -> [MissingRequired]
-	missing_record_field = |_, _, _| MissingRequired
 }
 
 State := [Done]
 
-parse : State -> Try(a, [MissingRequired])
+parse : State -> Try(a, [FormatError, ..errs])
 	where [
-		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [MissingRequired])),
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError, ..errs])),
 	]
 parse = |input| {
 	Shape : a
@@ -36,5 +41,5 @@ parse = |input| {
 	Ok(parsed.value)
 }
 
-main : Try({ count : I64 }, [MissingRequired])
+main : Try({ count : I64 }, [FormatError, MissingRequiredField(Str)])
 main = parse(State.Done)

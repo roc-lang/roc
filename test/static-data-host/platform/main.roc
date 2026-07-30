@@ -21,6 +21,7 @@ platform ""
             ),
         ],
         boxed_add_one : Box((I64 -> I64)),
+        boxed_static_label : Box((I64 -> Str)),
         literal_long : Str,
         assembled_strings : (Str, Str, Str),
         intermediate_final : Str,
@@ -37,6 +38,7 @@ platform ""
         "roc_names": names_for_host,
         "roc_tree": tree_for_host,
         "roc_boxed_add_one": boxed_add_one_for_host,
+        "roc_boxed_static_label": boxed_static_label_for_host,
         "roc_literal_long": literal_long_for_host,
         "roc_assembled_strings": assembled_strings_for_host,
         "roc_intermediate_final": intermediate_final_for_host,
@@ -88,6 +90,9 @@ tree_for_host = tree
 
 boxed_add_one_for_host : Box((I64 -> I64))
 boxed_add_one_for_host = boxed_add_one
+
+boxed_static_label_for_host : Box((I64 -> Str))
+boxed_static_label_for_host = boxed_static_label
 
 literal_long_for_host : Str
 literal_long_for_host = literal_long

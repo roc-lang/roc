@@ -13,9 +13,23 @@ JsonValue : U64
 main = 42
 ~~~
 # EXPECTED
-NIL
+DUPLICATE DEFINITION - can_import_type_alias_conflict.md:1:1:1:38
 # PROBLEMS
-NIL
+
+┌──────────────────────┐
+│ DUPLICATE DEFINITION ├─ The name `Json` is being redeclared here. ──────────┐
+└┬─────────────────────┘                                                      │
+ │                                                                            │
+ │  import json.Json exposing [JsonValue]                                     │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                     │
+ └───────────────────────────────────── can_import_type_alias_conflict.md:1:1 ┘
+
+    In this scope, `Json` was already defined here:
+      ┌───────────────────────────────────────────────────────────────────────┐
+    1 │  import json.Json exposing [JsonValue]                                │
+      │  ‾                                                                    │
+      └──────────────────────────────── can_import_type_alias_conflict.md:1:1 ┘
+
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,
@@ -26,7 +40,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "json.Json")
 			(exposing
@@ -49,7 +63,7 @@ NO CHANGE
 	(d-let
 		(p-assign (ident "main"))
 		(e-num (value "42")))
-	(s-import (module "json.Json")
+	(s-import (mod "json.Json")
 		(exposes
 			(exposed (name "JsonValue") (wildcard false))))
 	(s-alias-decl

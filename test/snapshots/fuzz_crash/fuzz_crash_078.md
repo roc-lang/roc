@@ -8,18 +8,23 @@ type=snippet
 import#\
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_078.md:2:1:2:1
+INCOMPLETE IMPORT - fuzz_crash_078.md:2:1:2:1
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `incomplete_import`
-This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_078.md:2:1:2:1:**
-```roc
+┌───────────────────┐
+│ INCOMPLETE IMPORT ├─ I was parsing an import, and the mod path is ───────┐
+└┬──────────────────┘  incomplete.                                            │
+ │                                                                            │
+ │                                                                            │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────────────── fuzz_crash_078.md:2:1 ┘
 
-```
-^
+    Imports must name a mod, optionally with a qualifier and exposing list.
 
+    For example:
+        import Json.Decode exposing [decode]
+
+    I reached the end of the file before this construct was complete.
 
 # TOKENS
 ~~~zig
@@ -29,7 +34,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-malformed (tag "incomplete_import"))))
 ~~~

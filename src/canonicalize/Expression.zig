@@ -39,6 +39,17 @@ const TypeVar = types.Var;
 
 const Self = Expr;
 
+/// A compiler-generated implementation requested by an underscore annotation
+/// on one of the language's recognized associated methods.
+pub const DerivedMethodKind = enum(u8) {
+    equality,
+    hash,
+    parser,
+    encoder,
+    map,
+    map_effectful,
+};
+
 /// An expression in the Roc language.
 pub const Expr = union(enum) {
     /// An number literal with a specific value.
@@ -374,6 +385,7 @@ pub const Expr = union(enum) {
         method_name_region: base.Region,
         constraint_fn_var: ?TypeVar = null,
         step_fn_var: ?TypeVar = null,
+        dispatcher_var: ?TypeVar = null,
     },
     /// Structural equality chosen explicitly by the checker.
     ///
@@ -437,10 +449,10 @@ pub const Expr = union(enum) {
     /// Runtime error expression that crashes when executed.
     /// These are inserted during canonicalization when the compiler encounters
     /// semantic errors but continues compilation following the "inform don't block" philosophy.
-    /// Common causes include undefined variables, type mismatches, and invalid operations.
+    /// Common causes include names not in scope, type mismatches, and invalid operations.
     ///
     /// ```roc
-    /// # This generates e_runtime_error for undefined variable 'x'
+    /// # This generates e_runtime_error for name 'x' not being in scope
     /// y = x + 1
     ///
     /// # This generates e_runtime_error for type mismatch
@@ -508,6 +520,14 @@ pub const Expr = union(enum) {
     e_anno_only: struct {
         /// The identifier being defined (extracted from the pattern to avoid cross-module node index issues)
         ident: Ident.Idx,
+    },
+
+    /// An explicit request for a compiler-derived associated method.
+    /// Canonicalization records the exact method kind so later phases never
+    /// need to infer compiler intent from an annotation or identifier text.
+    e_derived_method: struct {
+        ident: Ident.Idx,
+        kind: DerivedMethodKind,
     },
 
     /// Early return expression that exits the enclosing function with a value.
@@ -664,6 +684,8 @@ pub const Expr = union(enum) {
             div_trunc, // //
             @"and", // and
             @"or", // or
+            range_exclusive, // ..<
+            range_inclusive, // ..=
         };
 
         pub fn init(op: Op, lhs: Expr.Idx, rhs: Expr.Idx) Binop {
@@ -755,7 +777,7 @@ pub const Expr = union(enum) {
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                const dec_value_f64: f64 = builtins.compiler_rt_128.i128_to_f64(e.value.num) / std.math.pow(f64, 10, 18);
+                const dec_value_f64: f64 = builtins.compiler_rt_128.i128_to_f64(e.value.num) / std.math.pow(f64, 10, @as(f64, @floatFromInt(RocDec.decimal_places)));
                 const value_begin = try tree.reserveStringBuffer(400);
                 errdefer tree.discardReservedStringBuffer(value_begin);
                 const value_str = builtins.compiler_rt_128.f64_to_str(tree.reservedStringBuffer(value_begin)[0..400], dec_value_f64);
@@ -1318,6 +1340,9 @@ pub const Expr = union(enum) {
                 if (e.constraint_fn_var) |constraint_fn_var| {
                     try tree.pushU64Pair("constraint-fn-var", @intFromEnum(constraint_fn_var));
                 }
+                if (e.dispatcher_var) |dispatcher_var| {
+                    try tree.pushU64Pair("dispatcher-var", @intFromEnum(dispatcher_var));
+                }
                 const attrs = tree.beginNode();
 
                 {
@@ -1484,6 +1509,15 @@ pub const Expr = union(enum) {
             .e_anno_only => {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-anno-only");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .e_derived_method => |derived| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-derived-method");
+                try tree.pushStringPair("kind", @tagName(derived.kind));
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();

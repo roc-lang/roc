@@ -13,26 +13,28 @@ describe = |rec| match rec {
 # EXPECTED
 TYPE MISMATCH - destructure_closed_match.md:2:18:2:18
 # PROBLEMS
-**TYPE MISMATCH**
-The first pattern in this `match` is incompatible:
-**destructure_closed_match.md:2:18:**
-```roc
-describe = |rec| match rec {
-    { x, y } => x + y
-}
-```
-    ^^^^^^^^
 
-The first pattern is trying to match:
+┌───────────────┐
+│ TYPE MISMATCH ├─ The first pattern in this `match` is incompatible. ────────┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  describe = |rec| match rec {                                              │
+ │      { x, y } => x + y                                                     │
+ │  }                                                                         │
+ │                                                                            │
+ └─────────────────────────────────────────── destructure_closed_match.md:2:5 ┘
 
-    { x: _field, y: _field2 }
+    The first pattern is trying to match:
 
-But the expression between the `match` parenthesis has the type:
+        { x: _field, y: U64 }
 
-    { x: U64, y: U64, z: U64 }
+    But the expression between the `match` parenthesis has the type:
 
-These can never match! Either the pattern or expression has a problem.
-**Hint:** This pattern doesn't bind the `z` field. Match it explicitly with `z: _`, or add `..` to match all the remaining fields.
+        { x: U64, y: U64, z: U64 }
+
+    These can never match! Either the pattern or expression has a problem.
+    Hint: This pattern doesn't bind the `z` field. Match it explicitly with `z:
+    _`, or add `..` to match all the remaining fields.
 
 # TOKENS
 ~~~zig
@@ -45,7 +47,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "describe")
 			(ty-fn
@@ -88,31 +90,7 @@ describe = |rec| match rec {
 		(e-lambda
 			(args
 				(p-assign (ident "rec")))
-			(e-match
-				(match
-					(cond
-						(e-lookup-local
-							(p-assign (ident "rec"))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-record-destructure
-										(destructs
-											(record-destruct (label "x") (ident "x")
-												(required
-													(p-assign (ident "x"))))
-											(record-destruct (label "y") (ident "y")
-												(required
-													(p-assign (ident "y"))))))))
-							(value
-								(e-dispatch-call (method "plus") (constraint-fn-var 60)
-									(receiver
-										(e-lookup-local
-											(p-assign (ident "x"))))
-									(args
-										(e-lookup-local
-											(p-assign (ident "y")))))))))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-record

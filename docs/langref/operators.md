@@ -2,15 +2,63 @@
 
 ## Desugaring
 
+Several operators are syntax for [well-known static-dispatch methods](static-dispatch#well-known-methods).
+The method is selected at compile time from the operand types.
+
+| Operator | Method |
+| --- | --- |
+| `+` | `plus` |
+| `-` | `minus` |
+| `*` | `times` |
+| `/` | `div_by` |
+| `//` | `div_trunc_by` |
+| `%` | `rem_by` |
+| `==` | `is_eq` |
+| `!=` | `is_eq`, then `Bool.not` |
+| `<` | `is_lt` |
+| `<=` | `is_lte` |
+| `>` | `is_gt` |
+| `>=` | `is_gte` |
+| `..<` | `range_exclusive` |
+| `..=` | `range_inclusive` |
+| `-x` | `negate` |
+| `!x` | `not` |
+
 ## Binary Infix Operations
 
 ### And
 
+TODO
+
 ### Or
+
+TODO
 
 ### Arithmetic Operators
 
+Arithmetic operators dispatch to methods on the left operand. Their result type
+is the left operand's type, but the right operand can have a different type if
+the method signature allows it. See [Operators](static-dispatch#operators)
+in the static dispatch page.
+
 ### Comparison Operators
+
+Comparison operators dispatch to methods that return `Bool`. Both operands must
+have the same type. See [Operators](static-dispatch#operators) in the static
+dispatch page.
+
+### Range Operators
+
+`start..<end` and `start..=end` build an [`Iter`](../Iter) over the
+numbers from `start` up to `end` — excluding `end` with `..<`, including it
+with `..=`. They dispatch to methods on the bound type: `..<` calls
+`range_exclusive` and `..=` calls `range_inclusive`. Both operands must have
+the same type, and the result is an `Iter` of that type. See
+[Ranges](numbers#ranges) in the numbers page.
+
+Range operators bind more loosely than the other binary operators, so
+`1..<n + 1` parses as `1..<(n + 1)`. They cannot be chained: `1..<5..<10` is
+an error.
 
 ### `??` (default value on `Err`)
 
@@ -24,8 +72,8 @@ This desugars to:
 
 ```roc
 value = match fallible_expr {
-    Ok(val) -> val
-    Err(_) -> default_value
+    Ok(val) => val
+    Err(_) => default_value
 }
 ```
 
@@ -42,10 +90,19 @@ Unlike the `?` operator which propagates errors via early return, `??` handles t
 
 ### `-` (`.negate()`)
 
+Unary `-x` dispatches to `x.negate()`. The operand and result have the same
+type.
+
 ### `!` (`.not()`)
+
+Unary `!x` dispatches to `x.not()`. The operand and result have the same type.
 
 ## Unary Postfix Operators
 
 ### `?` (unwrap if `Ok`; early `return` if `Err`)
 
+TODO
+
 ### `[…]` (subscript operator)
+
+TODO

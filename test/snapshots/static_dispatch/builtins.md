@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=
+description=Static dispatch to builtin-provided methods
 type=file
 ~~~
 # SOURCE
@@ -10,14 +10,14 @@ main! = |_| True.not()
 # EXPECTED
 DOES NOT EXIST - builtins.md:1:13:1:21
 # PROBLEMS
-**DOES NOT EXIST**
-`True.not` does not exist.
 
-**builtins.md:1:13:1:21:**
-```roc
-main! = |_| True.not()
-```
-            ^^^^^^^^
+┌────────────────┐
+│ DOES NOT EXIST ├─ `True.not` does not exist. ───────────────────────────────┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  main! = |_| True.not()                                                    │
+ │              ‾‾‾‾‾‾‾‾                                                      │
+ └────────────────────────────────────────────────────────── builtins.md:1:13 ┘
 
 
 # TOKENS
@@ -28,7 +28,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "main!"))
@@ -56,11 +56,7 @@ NO CHANGE
 				(ty-record))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-lambda
-			(args
-				(p-underscore))
-			(e-call
-				(e-runtime-error (tag "qualified_ident_does_not_exist"))))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

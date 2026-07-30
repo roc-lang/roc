@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Simple platform module with for-clause syntax
+description=Simple platform mod with for-clause syntax
 type=file
 ~~~
 # SOURCE

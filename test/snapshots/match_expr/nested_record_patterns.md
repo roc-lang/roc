@@ -14,9 +14,18 @@ match ... {
 }
 ~~~
 # EXPECTED
-NIL
+UNCONDITIONAL CONDITION - nested_record_patterns.md:1:7:1:10
 # PROBLEMS
-NIL
+
+┌─────────────────────────┐
+│ UNCONDITIONAL CONDITION ├─ This match value is known at compile time, so ───┐
+└┬────────────────────────┘  this match will always inspect the same value.   │
+ │                                                                            │
+ │  match ... {                                                               │
+ │        ‾‾‾                                                                 │
+ └───────────────────────────────────────────── nested_record_patterns.md:1:7 ┘
+
+
 # TOKENS
 ~~~zig
 KwMatch,TripleDot,OpenCurly,
@@ -140,7 +149,7 @@ match ... {
 							(p-assign (ident "#interp_2"))
 							(e-lookup-local
 								(p-assign (ident "country"))))
-						(e-interpolation (constraint-fn-var 167)
+						(e-interpolation (constraint-fn-var 308) (dispatcher-var 27)
 							(first
 								(e-literal (string "")))
 							(parts
@@ -183,7 +192,7 @@ match ... {
 								(p-assign (ident "name"))))
 						(s-let
 							(p-assign (ident "#interp_4"))
-							(e-dispatch-call (method "to_str") (constraint-fn-var 172)
+							(e-dispatch-call (method "to_str") (constraint-fn-var 313)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "age"))))
@@ -192,7 +201,7 @@ match ... {
 							(p-assign (ident "#interp_5"))
 							(e-lookup-local
 								(p-assign (ident "city"))))
-						(e-interpolation (constraint-fn-var 234)
+						(e-interpolation (constraint-fn-var 333) (dispatcher-var 59)
 							(first
 								(e-literal (string "")))
 							(parts
@@ -227,7 +236,7 @@ match ... {
 							(p-assign (ident "#interp_6"))
 							(e-lookup-local
 								(p-assign (ident "value"))))
-						(e-interpolation (constraint-fn-var 293)
+						(e-interpolation (constraint-fn-var 354) (dispatcher-var 76)
 							(first
 								(e-literal (string "Deep nested: ")))
 							(parts
@@ -248,7 +257,7 @@ match ... {
 							(p-assign (ident "#interp_7"))
 							(e-lookup-local
 								(p-assign (ident "simple"))))
-						(e-interpolation (constraint-fn-var 350)
+						(e-interpolation (constraint-fn-var 373) (dispatcher-var 89)
 							(first
 								(e-literal (string "Simple: ")))
 							(parts

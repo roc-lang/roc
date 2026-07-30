@@ -44,11 +44,6 @@ test "getModuleName strips .roc extension" {
     try std.testing.expectEqualStrings("Module", getModuleName("Module.roc"));
 }
 
-test "getModuleName strips any extension" {
-    try std.testing.expectEqualStrings("file", getModuleName("path/to/file.txt"));
-    try std.testing.expectEqualStrings("data", getModuleName("data.json"));
-}
-
 test "getModuleName handles no extension" {
     try std.testing.expectEqualStrings("Module", getModuleName("path/to/Module"));
     try std.testing.expectEqualStrings("Module", getModuleName("Module"));

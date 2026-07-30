@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Module scope must not resolve a nested associated item through only the nested type's bare name
+description=Mod scope must not resolve a nested associated item through only the nested type's bare name
 type=file:AliasLeak.roc
 ~~~
 # SOURCE
@@ -22,16 +22,16 @@ good1 = Parent1.Nested.val
 good2 = Parent2.Nested.val
 ~~~
 # EXPECTED
-DOES NOT EXIST - canon_revamp_nested_short_alias_not_module.md:13:7:13:17
+DOES NOT EXIST - canon_revamp_nested_short_alias_not_mod.md:13:7:13:17
 # PROBLEMS
-**DOES NOT EXIST**
-`Nested.val` does not exist.
 
-**canon_revamp_nested_short_alias_not_module.md:13:7:13:17:**
-```roc
-bad = Nested.val
-```
-      ^^^^^^^^^^
+┌────────────────┐
+│ DOES NOT EXIST ├─ `Nested.val` does not exist. ─────────────────────────────┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  bad = Nested.val                                                          │
+ │        ‾‾‾‾‾‾‾‾‾‾                                                          │
+ └──────────────────────── canon_revamp_nested_short_alias_not_mod.md:13:7 ┘
 
 
 # TOKENS
@@ -54,7 +54,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "Parent1")

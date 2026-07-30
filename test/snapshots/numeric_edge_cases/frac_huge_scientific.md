@@ -10,17 +10,18 @@ type=expr
 # EXPECTED
 INVALID NUMBER - frac_huge_scientific.md:1:1:1:8
 # PROBLEMS
-**INVALID NUMBER**
-This number literal does not fit in the inferred type:
-**frac_huge_scientific.md:1:1:1:8:**
-```roc
-1.0e100
-```
-^^^^^^^
 
-The inferred type is:
+┌────────────────┐
+│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  1.0e100                                                                   │
+ │  ‾‾‾‾‾‾‾                                                                   │
+ └─────────────────────────────────────────────── frac_huge_scientific.md:1:1 ┘
 
-    Dec
+    The inferred type is:
+
+        Dec
 
 # TOKENS
 ~~~zig
@@ -37,7 +38,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-num-from-numeral)
+(e-runtime-error (tag "erroneous_value_expr"))
 ~~~
 # TYPES
 ~~~clojure

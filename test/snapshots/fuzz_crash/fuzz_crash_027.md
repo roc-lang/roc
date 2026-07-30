@@ -168,28 +168,29 @@ expect {
 # EXPECTED
 LEADING ZERO - :0:0:0:0
 UNCLOSED STRING - fuzz_crash_027.md:118:8:118:22
-PARSE ERROR - fuzz_crash_027.md:40:5:40:6
-PARSE ERROR - fuzz_crash_027.md:40:7:40:8
-PARSE ERROR - fuzz_crash_027.md:40:9:40:10
-PARSE ERROR - fuzz_crash_027.md:41:1:41:2
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:124:3:124:4
-LIST NOT CLOSED - fuzz_crash_027.md:125:3:125:4
-PARSE ERROR - fuzz_crash_027.md:126:2:126:3
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:131:9:131:10
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:132:8:132:9
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:133:10:133:11
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:141:8:141:9
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:142:8:142:9
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:148:1:148:2
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:150:7:150:8
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:151:7:151:8
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:153:7:153:8
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:155:1:155:7
-LIST NOT CLOSED - fuzz_crash_027.md:160:1:160:1
-PARSE ERROR - fuzz_crash_027.md:160:1:160:1
-MODULE NOT FOUND - fuzz_crash_027.md:6:1:8:4
-MODULE NOT FOUND - fuzz_crash_027.md:12:1:12:19
-MODULE NOT FOUND - fuzz_crash_027.md:13:1:14:4
+TYPE APPLICATION NEEDS PARENTHESES - fuzz_crash_027.md:40:5:40:6
+UNEXPECTED STATEMENT - fuzz_crash_027.md:40:7:40:8
+UNEXPECTED STATEMENT - fuzz_crash_027.md:40:9:40:10
+UNEXPECTED STATEMENT - fuzz_crash_027.md:41:1:41:2
+EXPECTED RECORD ACCESSOR - fuzz_crash_027.md:110:2:110:5
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:124:3:124:4
+EXPECTED LIST SEPARATOR - fuzz_crash_027.md:125:3:125:4
+EXPECTED CALL ARGUMENT END - fuzz_crash_027.md:126:2:126:3
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:131:9:131:10
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:132:8:132:9
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:133:10:133:11
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:141:8:141:9
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:142:8:142:9
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:148:1:148:2
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:150:7:150:8
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:151:7:151:8
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:153:7:153:8
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:155:1:155:7
+EXPECTED LIST SEPARATOR - fuzz_crash_027.md:160:1:160:1
+EXPECTED CLOSING BRACE - fuzz_crash_027.md:160:1:160:1
+MOD NOT FOUND - fuzz_crash_027.md:6:1:8:4
+MOD NOT FOUND - fuzz_crash_027.md:12:1:12:19
+MOD NOT FOUND - fuzz_crash_027.md:13:1:14:4
 UNDECLARED TYPE - fuzz_crash_027.md:26:8:26:11
 UNDECLARED TYPE - fuzz_crash_027.md:26:13:26:16
 UNDECLARED TYPE - fuzz_crash_027.md:29:2:29:5
@@ -201,23 +202,25 @@ UNDECLARED TYPE - fuzz_crash_027.md:38:8:38:11
 UNDECLARED TYPE - fuzz_crash_027.md:43:11:43:16
 UNDECLARED TYPE - fuzz_crash_027.md:43:26:43:31
 EMPTY TUPLE NOT ALLOWED - fuzz_crash_027.md:52:1:52:3
-UNDEFINED VARIABLE - fuzz_crash_027.md:65:4:65:5
-UNDEFINED VARIABLE - fuzz_crash_027.md:65:6:65:7
-UNDEFINED VARIABLE - fuzz_crash_027.md:71:7:71:11
+NAME NOT IN SCOPE - fuzz_crash_027.md:65:4:65:5
+NAME NOT IN SCOPE - fuzz_crash_027.md:65:6:65:7
+NAME NOT IN SCOPE - fuzz_crash_027.md:71:7:71:11
 UNUSED VARIABLE - fuzz_crash_027.md:1:1:1:1
 NOT IMPLEMENTED - fuzz_crash_027.md:74:7:74:12
 UNUSED VARIABLE - fuzz_crash_027.md:1:1:1:1
 UNUSED VARIABLE - fuzz_crash_027.md:76:1:76:4
 NOT IMPLEMENTED - fuzz_crash_027.md:81:7:81:12
-UNDEFINED VARIABLE - fuzz_crash_027.md:82:37:82:40
+NAME NOT IN SCOPE - fuzz_crash_027.md:82:37:82:40
 UNUSED VARIABLE - fuzz_crash_027.md:82:21:82:27
 NOT IMPLEMENTED - fuzz_crash_027.md:89:18:89:23
 UNUSED VARIABLE - fuzz_crash_027.md:62:2:62:3
-UNDEFINED VARIABLE - fuzz_crash_027.md:97:2:97:6
+NAME NOT IN SCOPE - fuzz_crash_027.md:97:2:97:6
 UNDECLARED TYPE - fuzz_crash_027.md:99:14:99:20
-UNDEFINED VARIABLE - fuzz_crash_027.md:103:9:103:13
-UNDEFINED VARIABLE - fuzz_crash_027.md:114:2:114:11
+NAME NOT IN SCOPE - fuzz_crash_027.md:103:9:103:13
+UNRECOGNIZED SYNTAX - fuzz_crash_027.md:110:2:110:5
+NAME NOT IN SCOPE - fuzz_crash_027.md:114:2:114:11
 UNRECOGNIZED SYNTAX - fuzz_crash_027.md:1:1:1:1
+UNUSED VARIABLE - fuzz_crash_027.md:104:2:104:5
 UNUSED VARIABLE - fuzz_crash_027.md:119:2:119:10
 UNUSED VARIABLE - fuzz_crash_027.md:120:2:120:6
 UNUSED VARIABLE - fuzz_crash_027.md:121:2:121:6
@@ -229,825 +232,964 @@ MISSING METHOD - fuzz_crash_027.md:68:3:68:8
 MISSING METHOD - fuzz_crash_027.md:70:3:70:8
 TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
 TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
-TYPE MISMATCH - fuzz_crash_027.md:106:3:106:6
 # PROBLEMS
-**LEADING ZERO**
+
+LEADING ZERO
+
 Numbers cannot have leading zeros.
 
 
 
-**UNCLOSED STRING**
-This string is missing a closing quote.
+┌─────────────────┐
+│ UNCLOSED STRING ├─ This string is missing a closing quote. ─────────────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  crash "Unreachtement                                                      │
+ │        ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:118:8 ┘
 
-**fuzz_crash_027.md:118:8:118:22:**
-```roc
-	crash "Unreachtement
-```
-	      ^^^^^^^^^^^^^^
 
 
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
+┌────────────────────────────────────┐
+│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
+└┬───────────────────────────────────┘  and I found a type argument without   │
+ │                                      parentheses.                          │
+ │                                                                            │
+ │  Maya) : [ #                                                               │
+ │      ‾                                                                     │
+ └──────────────────────────────────────────────────── fuzz_crash_027.md:40:5 ┘
 
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    Roc type applications use parentheses around their arguments. Write
+    `List(U8)`, not `List U8`.
 
-Instead of:
-    **List U8**
+    For example:
+        List(U8)
 
-Use:
-    **List(U8)**
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
 
-**fuzz_crash_027.md:40:5:40:6:**
-```roc
-Maya) : [ #
-```
-    ^
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  Maya) : [ #                                                               │
+ │        ‾                                                                   │
+ └──────────────────────────────────────────────────── fuzz_crash_027.md:40:7 ┘
 
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+    For example:
+        answer = 42
 
-**fuzz_crash_027.md:40:7:40:8:**
-```roc
-Maya) : [ #
-```
-      ^
+    I found `:` here.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  Maya) : [ #                                                               │
+ │          ‾                                                                 │
+ └──────────────────────────────────────────────────── fuzz_crash_027.md:40:9 ┘
 
-**fuzz_crash_027.md:40:9:40:10:**
-```roc
-Maya) : [ #
-```
-        ^
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
+    For example:
+        answer = 42
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+    I found `[` here.
 
-**fuzz_crash_027.md:41:1:41:2:**
-```roc
-] #se
-```
-^
 
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  ] #se                                                                     │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────── fuzz_crash_027.md:41:1 ┘
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **,** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
-**fuzz_crash_027.md:124:3:124:4:**
-```roc
-e[, # afarg
-```
-  ^
+    For example:
+        answer = 42
 
+    I found `]` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
-**LIST NOT CLOSED**
-This list is missing a closing bracket or has a syntax error.
-Lists must be closed with **]** and list items must be separated by commas.
-For example:     [1, 2, 3]
 
-**fuzz_crash_027.md:125:3:125:4:**
-```roc
-		),	456, # ee
-```
-		^
+┌──────────────────────────┐
+│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
+└┬─────────────────────────┘  expected a field name or tuple index.           │
+ │                                                                            │
+ │  ...                                                                       │
+ │  ‾‾‾                                                                       │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:110:2 ┘
 
+    Record access uses a lowercase field name like `.name`. Tuple access uses a
+    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+    valid accessors.
 
-**PARSE ERROR**
-A parsing error occurred: `expected_expr_apply_close_round`
-This is an unexpected parsing error. Please check your syntax.
+    For example:
+        person.name
+        pair.0
 
-**fuzz_crash_027.md:126:2:126:3:**
-```roc
-	]
-```
-	^
+    I found `...` here.
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **=** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  e[, # afarg                                                               │
+ │    ‾                                                                       │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:124:3 ┘
 
-**fuzz_crash_027.md:131:9:131:10:**
-```roc
-	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
-```
-	       ^
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
 
+    For example:
+        add(1, 2)
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **=** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
-**fuzz_crash_027.md:132:8:132:9:**
-```roc
-	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
-```
-	      ^
 
+┌─────────────────────────┐
+│ EXPECTED LIST SEPARATOR ├─ I was parsing a list expression, and I ──────────┐
+└┬────────────────────────┘  expected `,` or `]`.                             │
+ │                                                                            │
+ │  ), 456, # ee                                                              │
+ │  ‾                                                                         │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:125:3 ┘
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **=** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+    Separate list elements with commas and close the list with `]`.
 
-**fuzz_crash_027.md:133:10:133:11:**
-```roc
-	m_tuple = (
-```
-	        ^
+    For example:
+        [1, 2, 3]
 
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **=** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
 
-**fuzz_crash_027.md:141:8:141:9:**
-```roc
-	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
-```
-	      ^
+┌────────────────────────────┐
+│ EXPECTED CALL ARGUMENT END ├─ I was parsing function or method call ────────┐
+└┬───────────────────────────┘  arguments, and I expected `)`.                │
+ │                                                                            │
+ │  ]                                                                         │
+ │  ‾                                                                         │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:126:2 ┘
 
+    Function call arguments go inside parentheses and are separated with commas.
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **=** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+    For example:
+        add(1, 2)
 
-**fuzz_crash_027.md:142:8:142:9:**
-```roc
-	stale = some_fn(arg1)?.statod()?.ned()?.recd?
-```
-	      ^
+    I found `]` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **}** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }     │
+ │         ‾                                                                  │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:131:9 ┘
 
-**fuzz_crash_027.md:148:1:148:2:**
-```roc
-} # Commenl decl
-```
-^
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
 
+    For example:
+        add(1, 2)
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **:** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+    I found `=` here.
 
-**fuzz_crash_027.md:150:7:150:8:**
-```roc
-empty : {}
-```
-      ^
 
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])        │
+ │        ‾                                                                   │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:132:8 ┘
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **=** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
 
-**fuzz_crash_027.md:151:7:151:8:**
-```roc
-empty = {}
-```
-      ^
+    For example:
+        add(1, 2)
 
+    I found `=` here.
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **:** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
 
-**fuzz_crash_027.md:153:7:153:8:**
-```roc
-tuple : Value((a, b, c))
-```
-      ^
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  m_tuple = (                                                               │
+ │          ‾                                                                 │
+ └────────────────────────────────────────────────── fuzz_crash_027.md:133:10 ┘
 
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **expect** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+    For example:
+        add(1, 2)
 
-**fuzz_crash_027.md:155:1:155:7:**
-```roc
-expect {
-```
-^^^^^^
+    I found `=` here.
 
 
-**LIST NOT CLOSED**
-This list is missing a closing bracket or has a syntax error.
-Lists must be closed with **]** and list items must be separated by commas.
-For example:     [1, 2, 3]
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3… │
+ │        ‾                                                                   │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:141:8 ┘
 
-**fuzz_crash_027.md:160:1:160:1:**
-```roc
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
 
-```
-^
+    For example:
+        add(1, 2)
 
+    I found `=` here.
 
-**PARSE ERROR**
-A parsing error occurred: `expected_expr_close_curly`
-This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_027.md:160:1:160:1:**
-```roc
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  stale = some_fn(arg1)?.statod()?.ned()?.recd?                             │
+ │        ‾                                                                   │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:142:8 ┘
 
-```
-^
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
 
+    For example:
+        add(1, 2)
 
-**MODULE NOT FOUND**
-The module `Stdot` was not found in this Roc project.
+    I found `=` here.
 
-You're attempting to use this module here:
-**fuzz_crash_027.md:6:1:8:4:**
-```roc
-import Stdot
-		exposing [ #tem
-		] # Cose
-```
 
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  } # Commenl decl                                                          │
+ │  ‾                                                                         │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:148:1 ┘
 
-**MODULE NOT FOUND**
-The module `Bae` was not found in this Roc project.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
 
-You're attempting to use this module here:
-**fuzz_crash_027.md:12:1:12:19:**
-```roc
-import Bae as Gooe
-```
-^^^^^^^^^^^^^^^^^^
+    For example:
+        add(1, 2)
 
+    I found `}` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
-**MODULE NOT FOUND**
-The module `Ba` was not found in this Roc project.
 
-You're attempting to use this module here:
-**fuzz_crash_027.md:13:1:14:4:**
-```roc
-import
-	Ba
-```
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  empty : {}                                                                │
+ │        ‾                                                                   │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:150:7 ┘
 
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
 
-**UNDECLARED TYPE**
-The type _Bar_ is not declared in this scope.
+    For example:
+        add(1, 2)
 
-This type is referenced here:
-**fuzz_crash_027.md:26:8:26:11:**
-```roc
-Foo : (Bar, Baz)
-```
-       ^^^
+    I found `:` here.
 
 
-**UNDECLARED TYPE**
-The type _Baz_ is not declared in this scope.
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  empty = {}                                                                │
+ │        ‾                                                                   │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:151:7 ┘
 
-This type is referenced here:
-**fuzz_crash_027.md:26:13:26:16:**
-```roc
-Foo : (Bar, Baz)
-```
-            ^^^
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
 
+    For example:
+        add(1, 2)
 
-**UNDECLARED TYPE**
-The type _Bar_ is not declared in this scope.
+    I found `=` here.
 
-This type is referenced here:
-**fuzz_crash_027.md:29:2:29:5:**
-```roc
-	Bar, #
-```
-	^^^
 
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  tuple : Value((a, b, c))                                                  │
+ │        ‾                                                                   │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:153:7 ┘
 
-**UNDECLARED TYPE**
-The type _Baz_ is not declared in this scope.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
 
-This type is referenced here:
-**fuzz_crash_027.md:30:2:30:5:**
-```roc
-	Baz, #m
-```
-	^^^
+    For example:
+        add(1, 2)
 
+    I found `:` here.
 
-**UNDECLARED TYPE**
-The type _Ok_ is not declared in this scope.
 
-This type is referenced here:
-**fuzz_crash_027.md:32:19:32:21:**
-```roc
-Some(a) : { foo : Ok(a), bar : g }
-```
-                  ^^
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  expect {                                                                  │
+ │  ‾‾‾‾‾‾                                                                    │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:155:1 ┘
 
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
 
-**UNDECLARED TYPE VARIABLE**
-The type variable _g_ is not declared in this scope.
+    For example:
+        add(1, 2)
 
-Type variables must be introduced in a type annotation before they can be used.
+    I found `expect` here.
+    That word is reserved by Roc, so it cannot be used as a name in this
+    position.
 
-This type variable is referenced here:
-**fuzz_crash_027.md:32:32:32:33:**
-```roc
-Some(a) : { foo : Ok(a), bar : g }
-```
-                               ^
 
+┌─────────────────────────┐
+│ EXPECTED LIST SEPARATOR ├─ I was parsing a list expression, and I ──────────┐
+└┬────────────────────────┘  expected `,` or `]`.                             │
+ │                                                                            │
+ │                                                                            │
+ │  ‾                                                                         │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:160:1 ┘
 
-**UNDECLARED TYPE**
-The type _Som_ is not declared in this scope.
+    Separate list elements with commas and close the list with `]`.
 
-This type is referenced here:
-**fuzz_crash_027.md:34:8:34:11:**
-```roc
-	bar : Som# Afld
-```
-	      ^^^
+    For example:
+        [1, 2, 3]
 
+    I reached the end of the file before this construct was complete.
 
-**UNDECLARED TYPE**
-The type _Som_ is not declared in this scope.
 
-This type is referenced here:
-**fuzz_crash_027.md:38:8:38:11:**
-```roc
-	bar : Som
-```
-	      ^^^
+┌────────────────────────┐
+│ EXPECTED CLOSING BRACE ├─ I was parsing a block expression, and I ──────────┐
+└┬───────────────────────┘  expected `}` before the file ended.               │
+ │                                                                            │
+ │                                                                            │
+ │  ‾                                                                         │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:160:1 ┘
 
+    Close the block after its final statement or expression.
 
-**UNDECLARED TYPE**
-The type _Maybe_ is not declared in this scope.
+    For example:
+        {
+            answer = 42
+            answer
+        }
 
-This type is referenced here:
-**fuzz_crash_027.md:43:11:43:16:**
-```roc
-Func(a) : Maybe(a), a -> Maybe(a)
-```
-          ^^^^^
+    I reached the end of the file before this construct was complete.
 
 
-**UNDECLARED TYPE**
-The type _Maybe_ is not declared in this scope.
+┌──────────────────┐
+│ MOD NOT FOUND ├─ The mod `Stdot` was not found in this Roc project. ──┐
+└┬─────────────────┘                                                          │
+ │                                                                            │
+ │  import Stdot                                                              │
+ │          exposing [ #tem                                                   │
+ │          ] # Cose                                                          │
+ │                                                                            │
+ └───────────────────────────────────────────────────── fuzz_crash_027.md:6:1 ┘
 
-This type is referenced here:
-**fuzz_crash_027.md:43:26:43:31:**
-```roc
-Func(a) : Maybe(a), a -> Maybe(a)
-```
-                         ^^^^^
 
 
-**EMPTY TUPLE NOT ALLOWED**
-I am part way through parsing this tuple, but it is empty:
-**fuzz_crash_027.md:52:1:52:3:**
-```roc
-() #r
-```
-^^
+┌──────────────────┐
+│ MOD NOT FOUND ├─ The mod `Bae` was not found in this Roc project. ────┐
+└┬─────────────────┘                                                          │
+ │                                                                            │
+ │  import Bae as Gooe                                                        │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
+ └──────────────────────────────────────────────────── fuzz_crash_027.md:12:1 ┘
 
-If you want to represent nothing, try using an empty record: `{}`.
 
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**fuzz_crash_027.md:65:4:65:5:**
-```roc
-			x x
-```
-			^
+┌──────────────────┐
+│ MOD NOT FOUND ├─ The mod `Ba` was not found in this Roc project. ─────┐
+└┬─────────────────┘                                                          │
+ │                                                                            │
+ │  import                                                                    │
+ │      Ba                                                                    │
+ │                                                                            │
+ └──────────────────────────────────────────────────── fuzz_crash_027.md:13:1 ┘
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**fuzz_crash_027.md:65:6:65:7:**
-```roc
-			x x
-```
-			  ^
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Bar` is not declared in this scope. ───────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  Foo : (Bar, Baz)                                                          │
+ │         ‾‾‾                                                                │
+ └──────────────────────────────────────────────────── fuzz_crash_027.md:26:8 ┘
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `ment` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**fuzz_crash_027.md:71:7:71:11:**
-```roc
-			=> ment
-```
-			   ^^^^
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Baz` is not declared in this scope. ───────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  Foo : (Bar, Baz)                                                          │
+ │              ‾‾‾                                                           │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:26:13 ┘
 
 
-**UNUSED VARIABLE**
-Variable `rest` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:1:1:1:1:**
-```roc
-# Thnt!
-```
-^
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Bar` is not declared in this scope. ───────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  Bar, #                                                                    │
+ │  ‾‾‾                                                                       │
+ └──────────────────────────────────────────────────── fuzz_crash_027.md:29:2 ┘
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: alternatives pattern outside match expression
 
-**fuzz_crash_027.md:74:7:74:12:**
-```roc
-		[1, 2 | 5, 3, .. as rest] => 123
-```
-		    ^^^^^
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Baz` is not declared in this scope. ───────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  Baz, #m                                                                   │
+ │  ‾‾‾                                                                       │
+ └──────────────────────────────────────────────────── fuzz_crash_027.md:30:2 ┘
 
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 
-**UNUSED VARIABLE**
-Variable `rest` is not used anywhere in your code.
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Ok` is not declared in this scope. ────────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  Some(a) : { foo : Ok(a), bar : g }                                        │
+ │                    ‾‾                                                      │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:32:19 ┘
 
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:1:1:1:1:**
-```roc
-# Thnt!
-```
-^
 
 
-**UNUSED VARIABLE**
-Variable `ist` is not used anywhere in your code.
+┌──────────────────────────┐
+│ UNDECLARED TYPE VARIABLE ├─ The type variable `g` is not declared in this ──┐
+└┬─────────────────────────┘  scope.                                          │
+ │                                                                            │
+ │  Some(a) : { foo : Ok(a), bar : g }                                        │
+ │                                 ‾                                          │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:32:32 ┘
 
-If you don't need this variable, prefix it with an underscore like `_ist` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:76:1:76:4:**
-```roc
-ist
-```
-^^^
+    Type variables must be introduced in a type annotation before they can be
+    used.
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: alternatives pattern outside match expression
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Som` is not declared in this scope. ───────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  bar : Som# Afld                                                           │
+ │        ‾‾‾                                                                 │
+ └──────────────────────────────────────────────────── fuzz_crash_027.md:34:8 ┘
 
-**fuzz_crash_027.md:81:7:81:12:**
-```roc
-		(1, 2 | 5, 3) => 123
-```
-		    ^^^^^
 
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Som` is not declared in this scope. ───────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  bar : Som                                                                 │
+ │        ‾‾‾                                                                 │
+ └──────────────────────────────────────────────────── fuzz_crash_027.md:38:8 ┘
 
-**UNDEFINED VARIABLE**
-Nothing is named `add` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**fuzz_crash_027.md:82:37:82:40:**
-```roc
-		{ foo: 1, bar: 2, ..rest } => 12->add(34)
-```
-		                                  ^^^
 
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Maybe` is not declared in this scope. ─────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  Func(a) : Maybe(a), a -> Maybe(a)                                         │
+ │            ‾‾‾‾‾                                                           │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:43:11 ┘
 
-**UNUSED VARIABLE**
-Variable `rest` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:82:21:82:27:**
-```roc
-		{ foo: 1, bar: 2, ..rest } => 12->add(34)
-```
-		                  ^^^^^^
 
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Maybe` is not declared in this scope. ─────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  Func(a) : Maybe(a), a -> Maybe(a)                                         │
+ │                           ‾‾‾‾‾                                            │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:43:26 ┘
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: alternatives pattern outside match expression
 
-**fuzz_crash_027.md:89:18:89:23:**
-```roc
-		{ foo: 1, bar: 2 | 7 } => 12
-```
-		               ^^^^^
 
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+┌─────────────────────────┐
+│ EMPTY TUPLE NOT ALLOWED ├─ I am part way through parsing this tuple, but ───┐
+└┬────────────────────────┘  it is empty.                                     │
+ │                                                                            │
+ │  () #r                                                                     │
+ │  ‾‾                                                                        │
+ └──────────────────────────────────────────────────── fuzz_crash_027.md:52:1 ┘
 
+    If you want to represent nothing, try using an empty record: `{}`.
 
-**UNUSED VARIABLE**
-Variable `b` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:62:2:62:3:**
-```roc
-	b,
-```
-	^
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `x` in this scope. ───────────────────┐
+└┬──────────────────┘                                                         │
+ │                                                                            │
+ │  x x                                                                       │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────── fuzz_crash_027.md:65:4 ┘
 
+    Is it misspelled, or is there an import missing?
 
-**UNDEFINED VARIABLE**
-Nothing is named `blah` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**fuzz_crash_027.md:97:2:97:6:**
-```roc
-	blah == 1 # Commnt
-```
-	^^^^
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `x` in this scope. ───────────────────┐
+└┬──────────────────┘                                                         │
+ │                                                                            │
+ │  x x                                                                       │
+ │    ‾                                                                       │
+ └──────────────────────────────────────────────────── fuzz_crash_027.md:65:6 ┘
 
+    Is it misspelled, or is there an import missing?
 
-**UNDECLARED TYPE**
-The type _String_ is not declared in this scope.
 
-This type is referenced here:
-**fuzz_crash_027.md:99:14:99:20:**
-```roc
-main! : List(String) -> Try({}, _)
-```
-             ^^^^^^
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `ment` in this scope. ────────────────┐
+└┬──────────────────┘                                                         │
+ │                                                                            │
+ │  => ment                                                                   │
+ │     ‾‾‾‾                                                                   │
+ └──────────────────────────────────────────────────── fuzz_crash_027.md:71:7 ┘
 
+    Is it misspelled, or is there an import missing?
 
-**UNDEFINED VARIABLE**
-Nothing is named `blah` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**fuzz_crash_027.md:103:9:103:13:**
-```roc
-	expect blah == 1
-```
-	       ^^^^
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  # Thnt!                                                                   │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────────────── fuzz_crash_027.md:1:1 ┘
 
+    If you don't need this variable, prefix it with an underscore like `_rest`
+    to suppress this warning.
 
-**UNDEFINED VARIABLE**
-Nothing is named `some_func` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**fuzz_crash_027.md:114:2:114:11:**
-```roc
-	some_func(
-```
-	^^^^^^^^^
+┌─────────────────┐
+│ NOT IMPLEMENTED ├─ This feature is not yet implemented: alternatives ───────┐
+└┬────────────────┘  pattern outside match expression.                        │
+ │                                                                            │
+ │  [1, 2 | 5, 3, .. as rest] => 123                                          │
+ │      ‾‾‾‾‾                                                                 │
+ └──────────────────────────────────────────────────── fuzz_crash_027.md:74:7 ┘
 
+    This error doesn't have a proper diagnostic report yet. Let us know if you
+    want to help improve Roc's error messages!
 
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
 
-**fuzz_crash_027.md:1:1:1:1:**
-```roc
-# Thnt!
-```
-^
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  # Thnt!                                                                   │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────────────── fuzz_crash_027.md:1:1 ┘
 
-This might be a syntax error, an unsupported language feature, or a typo.
+    If you don't need this variable, prefix it with an underscore like `_rest`
+    to suppress this warning.
 
-**UNUSED VARIABLE**
-Variable `tag_with` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_tag_with` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:119:2:119:10:**
-```roc
-	tag_with = Ok(number)
-```
-	^^^^^^^^
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `ist` is defined here and then never used. ─────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  ist                                                                       │
+ │  ‾‾‾                                                                       │
+ └──────────────────────────────────────────────────── fuzz_crash_027.md:76:1 ┘
 
+    If you don't need this variable, prefix it with an underscore like `_ist`
+    to suppress this warning.
 
-**UNUSED VARIABLE**
-Variable `ited` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_ited` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:120:2:120:6:**
-```roc
-	ited = "Hello, ${world}"
-```
-	^^^^
+┌─────────────────┐
+│ NOT IMPLEMENTED ├─ This feature is not yet implemented: alternatives ───────┐
+└┬────────────────┘  pattern outside match expression.                        │
+ │                                                                            │
+ │  (1, 2 | 5, 3) => 123                                                      │
+ │      ‾‾‾‾‾                                                                 │
+ └──────────────────────────────────────────────────── fuzz_crash_027.md:81:7 ┘
 
+    This error doesn't have a proper diagnostic report yet. Let us know if you
+    want to help improve Roc's error messages!
 
-**UNUSED VARIABLE**
-Variable `list` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:121:2:121:6:**
-```roc
-	list = [
-```
-	^^^^
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `add` in this scope. ─────────────────┐
+└┬──────────────────┘                                                         │
+ │                                                                            │
+ │  { foo: 1, bar: 2, ..rest } => 12->add(34)                                 │
+ │                                    ‾‾‾                                     │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:82:37 ┘
 
+    Is it misspelled, or is there an import missing?
 
-**TOO FEW ARGS**
-The type _List_ expects 1 argument, but got 0 instead.
-**fuzz_crash_027.md:21:3:22:4:**
-```roc
-		List( #rg
-		),
-```
 
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  { foo: 1, bar: 2, ..rest } => 12->add(34)                                 │
+ │                    ‾‾‾‾‾‾                                                  │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:82:21 ┘
 
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_027.md:28:1:31:2:**
-```roc
-line : ( # Cpen
-	Bar, #
-	Baz, #m
-) # Co
-```
+    If you don't need this variable, prefix it with an underscore like `_rest`
+    to suppress this warning.
 
 
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+┌─────────────────┐
+│ NOT IMPLEMENTED ├─ This feature is not yet implemented: alternatives ───────┐
+└┬────────────────┘  pattern outside match expression.                        │
+ │                                                                            │
+ │  { foo: 1, bar: 2 | 7 } => 12                                              │
+ │                 ‾‾‾‾‾                                                      │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:89:18 ┘
 
-**TYPE MISMATCH**
-This `if` condition must evaluate to a `Bool` – either `True` or `False`:
-**fuzz_crash_027.md:50:5:50:8:**
-```roc
-	if num {
-```
-	   ^^^
+    This error doesn't have a proper diagnostic report yet. Let us know if you
+    want to help improve Roc's error messages!
 
-It is:
 
-    U64
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `b` is defined here and then never used. ───────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  b,                                                                        │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────── fuzz_crash_027.md:62:2 ┘
 
-But I need this to be a `Bool` value.
+    If you don't need this variable, prefix it with an underscore like `_b` to
+    suppress this warning.
 
-**TYPE MISMATCH**
-The `lue` binding in the second pattern of the first branch of this `match` does not match the same binding in the first pattern:
-**fuzz_crash_027.md:64:2:**
-```roc
-	match a {lue | Red => {
-			x x
-		}
-		Blue		=> 1
-		"foo" => # ent
-00
-		"foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet
-			=> ment
 
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `blah` in this scope. ────────────────┐
+└┬──────────────────┘                                                         │
+ │                                                                            │
+ │  blah == 1 # Commnt                                                        │
+ │  ‾‾‾‾                                                                      │
+ └──────────────────────────────────────────────────── fuzz_crash_027.md:97:2 ┘
 
-		[1, 2 | 5, 3, .. as rest] => 123
-		[
-ist
-		] => 123
-		3.14 => 314
-		3.14 | 6.28 => 314
-		(1, 2, 3) => 123
-		(1, 2 | 5, 3) => 123
-		{ foo: 1, bar: 2, ..rest } => 12->add(34)
-		{ # Afrd open
-			foo #
-				: #ue
-					1, # Aftd field
-			bar: 2,
-			..} => 12
-		{ foo: 1, bar: 2 | 7 } => 12
-		{
-			foo: 1,
-			} => 12
-		Ok(123) => 121000
-	}
-```
-                ^^^
+    Is it misspelled, or is there an import missing?
 
-In the second pattern, `lue` is:
 
-    [Red, ..]
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `String` is not declared in this scope. ────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  main! : List(String) -> Try({}, _)                                        │
+ │               ‾‾‾‾‾‾                                                       │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:99:14 ┘
 
-But in the first pattern, `lue` is:
 
-    [Red, ..]
 
-A name shared across `|` patterns in the same `match` branch must have one compatible type.
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `blah` in this scope. ────────────────┐
+└┬──────────────────┘                                                         │
+ │                                                                            │
+ │  expect blah == 1                                                          │
+ │         ‾‾‾‾                                                               │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:103:9 ┘
 
-**MISSING METHOD**
-This **from_quote** method is being called on a value whose type doesn't have that method:
-**fuzz_crash_027.md:68:3:68:8:**
-```roc
-		"foo" => # ent
-```
-		^^^^^
+    Is it misspelled, or is there an import missing?
 
-The value's type, which does not have a method named **from_quote**, is:
 
-    [Blue, Red, ..]
+┌─────────────────────┐
+│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
+└┬────────────────────┘                                                       │
+ │                                                                            │
+ │  ...                                                                       │
+ │  ‾‾‾                                                                       │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:110:2 ┘
 
-**MISSING METHOD**
-This **from_quote** method is being called on a value whose type doesn't have that method:
-**fuzz_crash_027.md:70:3:70:8:**
-```roc
-		"foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet
-```
-		^^^^^
+    This might be a syntax error, an unsupported language feature, or a typo.
 
-The value's type, which does not have a method named **from_quote**, is:
 
-    [Blue, Red, ..]
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `some_func` in this scope. ───────────┐
+└┬──────────────────┘                                                         │
+ │                                                                            │
+ │  some_func(                                                                │
+ │  ‾‾‾‾‾‾‾‾‾                                                                 │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:114:2 ┘
 
-**TYPE MISMATCH**
-The fifth branch of this `match` does not match the previous ones:
-**fuzz_crash_027.md:64:2:**
-```roc
-	match a {lue | Red => {
-			x x
-		}
-		Blue		=> 1
-		"foo" => # ent
-00
-		"foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet
-			=> ment
+    Is it misspelled, or is there an import missing?
 
 
-		[1, 2 | 5, 3, .. as rest] => 123
-		[
-ist
-		] => 123
-		3.14 => 314
-		3.14 | 6.28 => 314
-		(1, 2, 3) => 123
-		(1, 2 | 5, 3) => 123
-		{ foo: 1, bar: 2, ..rest } => 12->add(34)
-		{ # Afrd open
-			foo #
-				: #ue
-					1, # Aftd field
-			bar: 2,
-			..} => 12
-		{ foo: 1, bar: 2 | 7 } => 12
-		{
-			foo: 1,
-			} => 12
-		Ok(123) => 121000
-	}
-```
-                     ^^^^^^^^^^^^^^^^^^^^^
+┌─────────────────────┐
+│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
+└┬────────────────────┘                                                       │
+ │                                                                            │
+ │  # Thnt!                                                                   │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────────────── fuzz_crash_027.md:1:1 ┘
 
-This fifth branch is trying to match:
+    This might be a syntax error, an unsupported language feature, or a typo.
 
-    List(d)
-      where [
-        d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
-        d.is_eq : d, d -> Bool,
-      ]
 
-But the expression between the `match` parenthesis has the type:
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `tag` is defined here and then never used. ─────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  tag = Blue                                                                │
+ │  ‾‾‾                                                                       │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:104:2 ┘
 
-    [Blue, Red, ..]
+    If you don't need this variable, prefix it with an underscore like `_tag`
+    to suppress this warning.
 
-These can never match! Either the pattern or expression has a problem.
 
-**TOO FEW ARGS**
-The `match_time` function expects 2 arguments, but it got 1 instead:
-**fuzz_crash_027.md:111:2:113:3:**
-```roc
-	match_time(
-		..., #
-	)
-```
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `tag_with` is defined here and then never ──────┐
+└┬────────────────┘  used.                                                    │
+ │                                                                            │
+ │  tag_with = Ok(number)                                                     │
+ │  ‾‾‾‾‾‾‾‾                                                                  │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:119:2 ┘
 
-The `match_time` function has the type:
+    If you don't need this variable, prefix it with an underscore like
+    `_tag_with` to suppress this warning.
 
-    [Blue, Red, ..], _arg -> Error
 
-Are there any missing commas?
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `ited` is defined here and then never used. ────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  ited = "Hello, ${world}"                                                  │
+ │  ‾‾‾‾                                                                      │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:120:2 ┘
 
-**TYPE MISMATCH**
-This `return` does not match the function's return type:
-**fuzz_crash_027.md:106:3:106:6:**
-```roc
-		tag
-```
-		^^^
+    If you don't need this variable, prefix it with an underscore like `_ited`
+    to suppress this warning.
 
-It has the type:
 
-    [Blue, ..]
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `list` is defined here and then never used. ────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  list = [                                                                  │
+ │  ‾‾‾‾                                                                      │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:121:2 ┘
 
-But the function's return type is:
+    If you don't need this variable, prefix it with an underscore like `_list`
+    to suppress this warning.
 
-    Try({}, _d)
 
-**Hint:** All `return` statements and the final expression in a function must have the same type.
+┌──────────────┐
+│ TOO FEW ARGS ├─ The type List expects 1 argument, but got 0 instead. ───────┐
+└┬─────────────┘                                                              │
+ │                                                                            │
+ │  List( #rg                                                                 │
+ │  ),                                                                        │
+ │                                                                            │
+ └──────────────────────────────────────────────────── fuzz_crash_027.md:21:3 ┘
+
+
+
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  line : ( # Cpen                                                           │
+ │      Bar, #                                                                │
+ │      Baz, #m                                                               │
+ │  ) # Co                                                                    │
+ │                                                                            │
+ └──────────────────────────────────────────────────── fuzz_crash_027.md:28:1 ┘
+
+    Add a value body here, or put hosted functions in a platform type mod so
+    they are published through the host boundary.
+
+
+┌───────────────┐
+│ TYPE MISMATCH ├─ This `if` condition must evaluate to a `Bool` – either ────┐
+└┬──────────────┘  `True` or `False`.                                         │
+ │                                                                            │
+ │  if num {                                                                  │
+ │     ‾‾‾                                                                    │
+ └──────────────────────────────────────────────────── fuzz_crash_027.md:50:5 ┘
+
+    It is:
+
+        U64
+
+    But I need this to be a `Bool` value.
+
+
+┌───────────────┐
+│ TYPE MISMATCH ├─ The `lue` binding in the second pattern of the first ──────┐
+└┬──────────────┘  branch of this `match` does not match the same binding     │
+ │                 in the first pattern.                                      │
+ │                                                                            │
+ │      match a {lue | Red => {                                               │
+ │              x x                                                           │
+ │          }                                                                 │
+ │          Blue  => 1                                                        │
+ │          "foo" => # ent                                                    │
+ │  00                                                                        │
+ │          "foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet                  │
+ │              => ment                                                       │
+ │                                                                            │
+ │                                                                            │
+ │          [1, 2 | 5, 3, .. as rest] => 123                                  │
+ │          [                                                                 │
+ │  ist                                                                       │
+ │          ] => 123                                                          │
+ │          3.14 => 314                                                       │
+ │          3.14 | 6.28 => 314                                                │
+ │          (1, 2, 3) => 123                                                  │
+ │          (1, 2 | 5, 3) => 123                                              │
+ │          { foo: 1, bar: 2, ..rest } => 12->add(34)                         │
+ │          { # Afrd open                                                     │
+ │              foo #                                                         │
+ │                  : #ue                                                     │
+ │                      1, # Aftd field                                       │
+ │              bar: 2,                                                       │
+ │              ..} => 12                                                     │
+ │          { foo: 1, bar: 2 | 7 } => 12                                      │
+ │          {                                                                 │
+ │              foo: 1,                                                       │
+ │              } => 12                                                       │
+ │          Ok(123) => 121000                                                 │
+ │      }                                                                     │
+ │                                                                            │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:64:17 ┘
+
+    In the second pattern, `lue` is:
+
+        [Red, ..]
+
+    But in the first pattern, `lue` is:
+
+        [Red, ..]
+
+    A name shared across `|` patterns in the same `match` branch must have one
+    compatible type.
+
+
+┌────────────────┐
+│ MISSING METHOD ├─ This `from_quote` method is being called on a value ──────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  "foo" => # ent                                                            │
+ │  ‾‾‾‾‾                                                                     │
+ └──────────────────────────────────────────────────── fuzz_crash_027.md:68:3 ┘
+
+    The value's type, which does not have a method named `from_quote`, is:
+
+        [Blue, Red, ..]
+
+
+┌────────────────┐
+│ MISSING METHOD ├─ This `from_quote` method is being called on a value ──────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  "foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet                          │
+ │  ‾‾‾‾‾                                                                     │
+ └──────────────────────────────────────────────────── fuzz_crash_027.md:70:3 ┘
+
+    The value's type, which does not have a method named `from_quote`, is:
+
+        [Blue, Red, ..]
+
+
+┌───────────────┐
+│ TYPE MISMATCH ├─ The fifth branch of this `match` does not match the ───────┐
+└┬──────────────┘  previous ones.                                             │
+ │                                                                            │
+ │      match a {lue | Red => {                                               │
+ │              x x                                                           │
+ │          }                                                                 │
+ │          Blue  => 1                                                        │
+ │          "foo" => # ent                                                    │
+ │  00                                                                        │
+ │          "foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet                  │
+ │              => ment                                                       │
+ │                                                                            │
+ │                                                                            │
+ │          [1, 2 | 5, 3, .. as rest] => 123                                  │
+ │          [                                                                 │
+ │  ist                                                                       │
+ │          ] => 123                                                          │
+ │          3.14 => 314                                                       │
+ │          3.14 | 6.28 => 314                                                │
+ │          (1, 2, 3) => 123                                                  │
+ │          (1, 2 | 5, 3) => 123                                              │
+ │          { foo: 1, bar: 2, ..rest } => 12->add(34)                         │
+ │          { # Afrd open                                                     │
+ │              foo #                                                         │
+ │                  : #ue                                                     │
+ │                      1, # Aftd field                                       │
+ │              bar: 2,                                                       │
+ │              ..} => 12                                                     │
+ │          { foo: 1, bar: 2 | 7 } => 12                                      │
+ │          {                                                                 │
+ │              foo: 1,                                                       │
+ │              } => 12                                                       │
+ │          Ok(123) => 121000                                                 │
+ │      }                                                                     │
+ │                                                                            │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:64:22 ┘
+
+    This fifth branch is trying to match:
+
+        List(d)
+          where [
+            d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
+            d.is_eq : d, d -> Bool,
+          ]
+
+    But the expression between the `match` parenthesis has the type:
+
+        [Blue, Red, ..]
+
+    These can never match! Either the pattern or expression has a problem.
+
+
+┌──────────────┐
+│ TOO FEW ARGS ├─ The `match_time` function expects 2 arguments, but it got ──┐
+└┬─────────────┘  1 instead.                                                  │
+ │                                                                            │
+ │  match_time(                                                               │
+ │      ..., #                                                                │
+ │  )                                                                         │
+ │                                                                            │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:111:2 ┘
+
+    The `match_time` function has the type:
+
+        [Blue, Red, ..], _arg -> Error
+
+    Are there any missing commas?
 
 # TOKENS
 ~~~zig
@@ -1480,8 +1622,7 @@ EndOfFile,
 							(p-ident (raw "tag"))
 							(e-tag (raw "Blue")))
 						(s-return
-							(e-ident (raw "tag")))
-						(e-ellipsis)
+							(e-malformed (reason "expr_dot_suffix_not_allowed")))
 						(e-apply
 							(e-ident (raw "match_time"))
 							(e-ellipsis))
@@ -1528,7 +1669,8 @@ MapML( # Cere
 	b,
 ) # Ag
 	: # Aon
-		List(),
+		List( # rg
+		),
 		(a -> b) -> # row
 			List(b) #
 
@@ -1585,9 +1727,7 @@ match_time = |
 			=> ment
 
 		[1, 2 | 5, 3, .. as rest] => 123
-		[
-			ist,
-		] => 123
+		[ist] => 123
 		3.14 => 314
 		3.14 | 6.28 => 314
 		(1, 2, 3) => 123
@@ -1616,12 +1756,11 @@ main! = |_| { # Yeah Ie
 	var number = 123
 	expect blah == 1
 	tag = Blue
-	return # Comd
-		tag
+	return
 
 	# Jusnt!
 
-	...
+		
 	match_time(
 		..., #
 	)
@@ -1632,7 +1771,7 @@ main! = |_| { # Yeah Ie
 	crash "Unreachtement"
 	tag_with = Ok(number)
 	ited = "Hello, ${world}"
-	list = 
+	list =
 		
 }
 ~~~
@@ -1671,8 +1810,7 @@ main! = |_| { # Yeah Ie
 				(e-if
 					(if-branches
 						(if-branch
-							(e-lookup-local
-								(p-assign (ident "num")))
+							(e-runtime-error (tag "erroneous_value_use"))
 							(e-block
 								(s-dbg
 									(e-runtime-error (tag "empty_tuple")))
@@ -1689,177 +1827,7 @@ main! = |_| { # Yeah Ie
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "match_time"))
-		(e-lambda
-			(args
-				(p-assign (ident "a"))
-				(p-assign (ident "b")))
-			(e-match
-				(match
-					(cond
-						(e-lookup-local
-							(p-assign (ident "a"))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-assign (ident "lue")))
-								(pattern (degenerate true)
-									(p-applied-tag)))
-							(value
-								(e-block
-									(s-expr
-										(e-runtime-error (tag "ident_not_in_scope")))
-									(e-runtime-error (tag "ident_not_in_scope")))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-num (value "1"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-str (text "foo"))))
-							(value
-								(e-num (value "0"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-str (text "foo")))
-								(pattern (degenerate false)
-									(p-str (text "bar"))))
-							(value
-								(e-num (value "20"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-list
-										(patterns
-											(p-num (value "1"))
-											(p-num (value "2"))
-											(p-num (value "3")))
-										(rest-at (index 3)
-											(p-assign (ident "rest"))))))
-							(value
-								(e-runtime-error (tag "ident_not_in_scope"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-list
-										(patterns
-											(p-num (value "1"))
-											(p-runtime-error (tag "not_implemented"))
-											(p-num (value "3")))
-										(rest-at (index 3)
-											(p-assign (ident "rest"))))))
-							(value
-								(e-num (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-list
-										(patterns
-											(p-assign (ident "ist"))))))
-							(value
-								(e-num (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-small-dec)))
-							(value
-								(e-num (value "314"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-small-dec))
-								(pattern (degenerate false)
-									(p-small-dec)))
-							(value
-								(e-num (value "314"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-tuple
-										(patterns
-											(p-num (value "1"))
-											(p-num (value "2"))
-											(p-num (value "3"))))))
-							(value
-								(e-num (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-tuple
-										(patterns
-											(p-num (value "1"))
-											(p-runtime-error (tag "not_implemented"))
-											(p-num (value "3"))))))
-							(value
-								(e-num (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-record-destructure
-										(destructs
-											(record-destruct (label "foo") (ident "foo")
-												(sub-pattern
-													(p-num (value "1"))))
-											(record-destruct (label "bar") (ident "bar")
-												(sub-pattern
-													(p-num (value "2"))))
-											(record-destruct (label "rest") (ident "rest")
-												(rest-pattern
-													(p-assign (ident "rest"))))))))
-							(value
-								(e-call
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-num (value "12"))
-									(e-num (value "34")))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-record-destructure
-										(destructs
-											(record-destruct (label "foo") (ident "foo")
-												(sub-pattern
-													(p-num (value "1"))))
-											(record-destruct (label "bar") (ident "bar")
-												(sub-pattern
-													(p-num (value "2"))))
-											(record-destruct (label "#others") (ident "#others")
-												(rest-pattern
-													(p-underscore)))))))
-							(value
-								(e-num (value "12"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-record-destructure
-										(destructs
-											(record-destruct (label "foo") (ident "foo")
-												(sub-pattern
-													(p-num (value "1"))))
-											(record-destruct (label "bar") (ident "bar")
-												(sub-pattern
-													(p-runtime-error (tag "not_implemented"))))))))
-							(value
-								(e-num (value "12"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-record-destructure
-										(destructs
-											(record-destruct (label "foo") (ident "foo")
-												(sub-pattern
-													(p-num (value "1"))))))))
-							(value
-								(e-num (value "12"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-num (value "121000")))))))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda
@@ -1883,20 +1851,11 @@ main! = |_| { # Yeah Ie
 					(p-assign (ident "tag"))
 					(e-tag (name "Blue")))
 				(s-return
-					(e-lookup-local
-						(p-assign (ident "tag"))))
+					(e-runtime-error (tag "expr_not_canonicalized")))
 				(s-expr
-					(e-not-implemented))
+					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-expr
-					(e-call (constraint-fn-var 3592)
-						(e-lookup-local
-							(p-assign (ident "match_time")))
-						(e-not-implemented)))
-				(s-expr
-					(e-call
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-dbg
-							(e-num (value "42")))))
+					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-crash (msg "Unreachtement"))
 				(s-let
 					(p-assign (ident "tag_with"))
@@ -1911,7 +1870,7 @@ main! = |_| { # Yeah Ie
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 3683)
+						(e-interpolation (constraint-fn-var 1407) (dispatcher-var 315)
 							(first
 								(e-literal (string "Hello, ")))
 							(parts
@@ -1929,19 +1888,19 @@ main! = |_| { # Yeah Ie
 				(ty-apply (name "Try") (builtin)
 					(ty-record)
 					(ty-underscore)))))
-	(s-import (module "pf.Stdout")
+	(s-import (mod "pf.Stdout")
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "e!") (wildcard false))))
-	(s-import (module "Stdot")
+	(s-import (mod "Stdot")
 		(exposes))
-	(s-import (module "pkg.S")
+	(s-import (mod "pkg.S")
 		(exposes
 			(exposed (name "func") (alias "fry") (wildcard false))
 			(exposed (name "Custom") (wildcard true))))
-	(s-import (module "Bae")
+	(s-import (mod "Bae")
 		(exposes))
-	(s-import (module "Ba")
+	(s-import (mod "Ba")
 		(exposes))
 	(s-alias-decl
 		(ty-header (name "Map")

@@ -12,18 +12,18 @@ import pf.Stdout
 main! = |_| Stdout.line!("Hello, world!")
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - hello_world.md:5:13:5:25
+NAME NOT IN SCOPE - hello_world.md:5:13:5:25
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**hello_world.md:5:13:5:25:**
-```roc
-main! = |_| Stdout.line!("Hello, world!")
-```
-            ^^^^^^^^^^^^
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
+ │                                                                            │
+ │  main! = |_| Stdout.line!("Hello, world!")                                 │
+ │              ‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
+ └─────────────────────────────────────────────────────── hello_world.md:5:13 ┘
 
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig
@@ -67,14 +67,8 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "main!"))
-		(e-lambda
-			(args
-				(p-underscore))
-			(e-call
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-string
-					(e-literal (string "Hello, world!"))))))
-	(s-import (module "pf.Stdout")
+		(e-runtime-error (tag "erroneous_value_expr")))
+	(s-import (mod "pf.Stdout")
 		(exposes)))
 ~~~
 # TYPES

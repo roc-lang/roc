@@ -9,64 +9,88 @@ type=file
 ~~~
 # EXPECTED
 UNCLOSED STRING - fuzz_crash_003.md:1:3:1:6
-PARSE ERROR - fuzz_crash_003.md:1:1:1:2
-PARSE ERROR - fuzz_crash_003.md:1:3:1:4
-PARSE ERROR - fuzz_crash_003.md:1:4:1:6
-PARSE ERROR - fuzz_crash_003.md:1:6:1:6
+UNEXPECTED STATEMENT - fuzz_crash_003.md:1:1:1:2
+UNEXPECTED STATEMENT - fuzz_crash_003.md:1:3:1:4
+UNEXPECTED STATEMENT - fuzz_crash_003.md:1:4:1:6
+UNEXPECTED STATEMENT - fuzz_crash_003.md:1:6:1:6
 # PROBLEMS
-**UNCLOSED STRING**
-This string is missing a closing quote.
 
-**fuzz_crash_003.md:1:3:1:6:**
-```roc
-= "te
-```
-  ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_003.md:1:1:1:2:**
-```roc
-= "te
-```
-^
+┌─────────────────┐
+│ UNCLOSED STRING ├─ This string is missing a closing quote. ─────────────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  = "te                                                                     │
+ │    ‾‾‾                                                                     │
+ └───────────────────────────────────────────────────── fuzz_crash_003.md:1:3 ┘
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_003.md:1:3:1:4:**
-```roc
-= "te
-```
-  ^
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  = "te                                                                     │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────────────── fuzz_crash_003.md:1:1 ┘
 
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+    For example:
+        answer = 42
 
-**fuzz_crash_003.md:1:4:1:6:**
-```roc
-= "te
-```
-   ^^
+    I found `=` here.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  = "te                                                                     │
+ │    ‾                                                                       │
+ └───────────────────────────────────────────────────── fuzz_crash_003.md:1:3 ┘
 
-**fuzz_crash_003.md:1:6:1:6:**
-```roc
-= "te
-```
-     ^
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
+    For example:
+        answer = 42
+
+    I found `"` here.
+
+
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  = "te                                                                     │
+ │     ‾‾                                                                     │
+ └───────────────────────────────────────────────────── fuzz_crash_003.md:1:4 ┘
+
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `te` here.
+
+
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  = "te                                                                     │
+ │       ‾                                                                    │
+ └───────────────────────────────────────────────────── fuzz_crash_003.md:1:6 ┘
+
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I reached the end of the file before this construct was complete.
 
 # TOKENS
 ~~~zig
@@ -76,7 +100,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))

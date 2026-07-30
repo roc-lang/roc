@@ -20,19 +20,22 @@ main = {
 # EXPECTED
 RECURSIVE DISPATCH - nested_try_interpolation_recursive_dispatch.md:9:11:9:34
 # PROBLEMS
-**RECURSIVE DISPATCH**
-This **from_interpolation** dispatch would have to call itself to satisfy its own type:
-**nested_try_interpolation_recursive_dispatch.md:9:11:9:34:**
-```roc
-    url = "https://${domain}.com"
-```
-          ^^^^^^^^^^^^^^^^^^^^^^^
 
-The dispatcher type is:
+┌────────────────────┐
+│ RECURSIVE DISPATCH ├─ This `from_interpolation` dispatch would have to ─────┐
+└┬───────────────────┘  call itself to satisfy its own type.                  │
+ │                                                                            │
+ │  url = "https://${domain}.com"                                             │
+ │        ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                             │
+ └─────────────────────── nested_try_interpolation_recursive_dispatch.md:9:11 ┘
 
-    Try(Url, [InvalidUrl])
+    The dispatcher type is:
 
-**Hint:** Use a more specific result type, or add an associated function whose **from_interpolation** implementation does not require the same dispatch on the same type.
+        Try(Url, [InvalidUrl])
+
+    Hint: Use a more specific result type, or add an associated function whose
+    `from_interpolation` implementation does not require the same dispatch on
+    the same type.
 
 # TOKENS
 ~~~zig
@@ -51,7 +54,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "Url")
@@ -162,7 +165,7 @@ main = {
 					(e-nominal (nominal "Url")
 						(e-tag (name "Url")
 							(args
-								(e-dispatch-call (method "fold") (constraint-fn-var 186)
+								(e-dispatch-call (method "fold") (constraint-fn-var 304)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "rest"))))
@@ -176,9 +179,9 @@ main = {
 													(patterns
 														(p-assign (ident "interpolated"))
 														(p-assign (ident "segment")))))
-											(e-dispatch-call (method "concat") (constraint-fn-var 184)
+											(e-dispatch-call (method "concat") (constraint-fn-var 302)
 												(receiver
-													(e-dispatch-call (method "concat") (constraint-fn-var 182)
+													(e-dispatch-call (method "concat") (constraint-fn-var 300)
 														(receiver
 															(e-lookup-local
 																(p-assign (ident "acc"))))
@@ -213,7 +216,7 @@ main = {
 						(p-assign (ident "#interp_0"))
 						(e-lookup-local
 							(p-assign (ident "domain"))))
-					(e-interpolation (constraint-fn-var 399)
+					(e-interpolation (constraint-fn-var 378) (dispatcher-var 361)
 						(first
 							(e-literal (string "https://")))
 						(parts

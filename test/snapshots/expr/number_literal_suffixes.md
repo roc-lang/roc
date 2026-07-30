@@ -47,65 +47,70 @@ INVALID NUMBER - number_literal_suffixes.md:15:12:15:20
 INVALID NUMBER - number_literal_suffixes.md:16:12:16:20
 INVALID NUMBER - number_literal_suffixes.md:17:12:17:21
 # PROBLEMS
-**INVALID NUMBER**
-This number literal does not fit in the inferred type:
-**number_literal_suffixes.md:13:12:13:19:**
-```roc
-  u8Neg:   -123.U8,
-```
-           ^^^^^^^
 
-The inferred type is:
+┌────────────────┐
+│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  u8Neg:   -123.U8,                                                         │
+ │           ‾‾‾‾‾‾‾                                                          │
+ └────────────────────────────────────────── number_literal_suffixes.md:13:12 ┘
 
-    U8
+    The inferred type is:
 
-**INVALID NUMBER**
-This number literal does not fit in the inferred type:
-**number_literal_suffixes.md:14:12:14:20:**
-```roc
-  u16Neg:  -123.U16,
-```
-           ^^^^^^^^
+        U8
 
-The inferred type is:
 
-    U16
+┌────────────────┐
+│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  u16Neg:  -123.U16,                                                        │
+ │           ‾‾‾‾‾‾‾‾                                                         │
+ └────────────────────────────────────────── number_literal_suffixes.md:14:12 ┘
 
-**INVALID NUMBER**
-This number literal does not fit in the inferred type:
-**number_literal_suffixes.md:15:12:15:20:**
-```roc
-  u32Neg:  -123.U32,
-```
-           ^^^^^^^^
+    The inferred type is:
 
-The inferred type is:
+        U16
 
-    U32
 
-**INVALID NUMBER**
-This number literal does not fit in the inferred type:
-**number_literal_suffixes.md:16:12:16:20:**
-```roc
-  u64Neg:  -123.U64,
-```
-           ^^^^^^^^
+┌────────────────┐
+│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  u32Neg:  -123.U32,                                                        │
+ │           ‾‾‾‾‾‾‾‾                                                         │
+ └────────────────────────────────────────── number_literal_suffixes.md:15:12 ┘
 
-The inferred type is:
+    The inferred type is:
 
-    U64
+        U32
 
-**INVALID NUMBER**
-This number literal does not fit in the inferred type:
-**number_literal_suffixes.md:17:12:17:21:**
-```roc
-  u128Neg: -123.U128,
-```
-           ^^^^^^^^^
 
-The inferred type is:
+┌────────────────┐
+│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  u64Neg:  -123.U64,                                                        │
+ │           ‾‾‾‾‾‾‾‾                                                         │
+ └────────────────────────────────────────── number_literal_suffixes.md:16:12 ┘
 
-    U128
+    The inferred type is:
+
+        U64
+
+
+┌────────────────┐
+│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  u128Neg: -123.U128,                                                       │
+ │           ‾‾‾‾‾‾‾‾‾                                                        │
+ └────────────────────────────────────────── number_literal_suffixes.md:17:12 ┘
+
+    The inferred type is:
+
+        U128
 
 # TOKENS
 ~~~zig

@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=
+description=dot-int tuple index access on a plain identifier
 type=snippet
 ~~~
 # SOURCE
@@ -8,18 +8,18 @@ type=snippet
 foo = asd.0
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - expr_no_space_dot_int.md:1:7:1:10
+NAME NOT IN SCOPE - expr_no_space_dot_int.md:1:7:1:10
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `asd` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**expr_no_space_dot_int.md:1:7:1:10:**
-```roc
-foo = asd.0
-```
-      ^^^
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `asd` in this scope. ─────────────────┐
+└┬──────────────────┘                                                         │
+ │                                                                            │
+ │  foo = asd.0                                                               │
+ │        ‾‾‾                                                                 │
+ └────────────────────────────────────────────── expr_no_space_dot_int.md:1:7 ┘
 
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig
@@ -29,7 +29,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "foo"))
@@ -46,8 +46,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "foo"))
-		(e-tuple-access (index "0")
-			(e-runtime-error (tag "ident_not_in_scope")))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

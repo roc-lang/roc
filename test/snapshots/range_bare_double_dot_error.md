@@ -11,26 +11,31 @@ r = 1..5
 NOT A RANGE OPERATOR - range_bare_double_dot_error.md:1:8:1:9
 UNRECOGNIZED SYNTAX - range_bare_double_dot_error.md:1:8:1:9
 # PROBLEMS
-**NOT A RANGE OPERATOR**
-`..` is not an operator. For an exclusive range use `..<`; for an inclusive range use `..=`.
 
-**range_bare_double_dot_error.md:1:8:1:9:**
-```roc
-r = 1..5
-```
-       ^
+┌──────────────────────┐
+│ NOT A RANGE OPERATOR ├─ I was parsing an expression, and `..` is not a ─────┐
+└┬─────────────────────┘  range operator.                                     │
+ │                                                                            │
+ │  r = 1..5                                                                  │
+ │         ‾                                                                  │
+ └──────────────────────────────────────── range_bare_double_dot_error.md:1:8 ┘
+
+    Use `..<` for an exclusive range or `..=` for an inclusive range.
+
+    For example:
+        1..<10
+        1..=10
 
 
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
+┌─────────────────────┐
+│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
+└┬────────────────────┘                                                       │
+ │                                                                            │
+ │  r = 1..5                                                                  │
+ │         ‾                                                                  │
+ └──────────────────────────────────────── range_bare_double_dot_error.md:1:8 ┘
 
-**range_bare_double_dot_error.md:1:8:1:9:**
-```roc
-r = 1..5
-```
-       ^
-
-This might be a syntax error, an unsupported language feature, or a typo.
+    This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig
@@ -40,7 +45,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "r"))
@@ -48,7 +53,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-r = 
+r =
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -12,29 +12,49 @@ foo = Json.parse(data)
 ~~~
 # EXPECTED
 FILE NOT FOUND - inline_ingested_file.md:1:1:1:34
-UNDEFINED VARIABLE - inline_ingested_file.md:4:7:4:17
+DUPLICATE DEFINITION - inline_ingested_file.md:2:1:2:12
+MISSING METHOD - inline_ingested_file.md:4:7:4:17
 # PROBLEMS
-**FILE NOT FOUND**
-The file **users.json** was not found.
 
-Make sure the file exists relative to your source file:
-**inline_ingested_file.md:1:1:1:34:**
-```roc
-import "users.json" as data : Str
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+┌────────────────┐
+│ FILE NOT FOUND ├─ The file users.json was not found. ───────────────────────┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  import "users.json" as data : Str                                         │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
+ └─────────────────────────────────────────────── inline_ingested_file.md:1:1 ┘
+
+    Make sure the file exists relative to your source file:
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `parse` in this scope.
-Is there an `import` or `exposing` missing up-top?
+┌──────────────────────┐
+│ DUPLICATE DEFINITION ├─ The name `Json` is being redeclared here. ──────────┐
+└┬─────────────────────┘                                                      │
+ │                                                                            │
+ │  import Json                                                               │
+ │  ‾‾‾‾‾‾‾‾‾‾‾                                                               │
+ └─────────────────────────────────────────────── inline_ingested_file.md:2:1 ┘
 
-**inline_ingested_file.md:4:7:4:17:**
-```roc
-foo = Json.parse(data)
-```
-      ^^^^^^^^^^
+    In this scope, `Json` was already defined here:
+      ┌───────────────────────────────────────────────────────────────────────┐
+    1 │  import "users.json" as data : Str                                    │
+      │  ‾                                                                    │
+      └────────────────────────────────────────── inline_ingested_file.md:1:1 ┘
 
+
+┌────────────────┐
+│ MISSING METHOD ├─ This is trying to dispatch a method named `parser_for` ───┐
+└┬───────────────┘  on an unresolved type variable, but unresolved type       │
+ │                  variables have no methods.                                │
+ │                                                                            │
+ │  foo = Json.parse(data)                                                    │
+ │        ‾‾‾‾‾‾‾‾‾‾                                                          │
+ └─────────────────────────────────────────────── inline_ingested_file.md:4:7 ┘
+
+    Hint: You can replace this static dispatch call with an ordinary function
+    call, or force the type variable to become more concrete—for example, by
+    adding a type annotation that narrows its type to something that actually
+    has methods.
 
 # TOKENS
 ~~~zig
@@ -46,7 +66,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-file-import
 			(path "users.json")
@@ -71,11 +91,8 @@ NO CHANGE
 		(e-runtime-error (tag "file_import_not_found")))
 	(d-let
 		(p-assign (ident "foo"))
-		(e-call
-			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-lookup-local
-				(p-assign (ident "data")))))
-	(s-import (module "Json")
+		(e-runtime-error (tag "erroneous_value_expr")))
+	(s-import (mod "Json")
 		(exposes)))
 ~~~
 # TYPES

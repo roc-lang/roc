@@ -13,6 +13,7 @@ const TypesStore = types_store.Store;
 const Var = types_mod.Var;
 const Flex = types_mod.Flex;
 const StaticDispatchConstraint = types_mod.StaticDispatchConstraint;
+const InterpolationPartMetadata = types_mod.InterpolationPartMetadata;
 const Rigid = types_mod.Rigid;
 const Content = types_mod.Content;
 const FlatType = types_mod.FlatType;
@@ -26,6 +27,71 @@ const NominalType = types_mod.NominalType;
 const Tuple = types_mod.Tuple;
 const Rank = types_mod.Rank;
 const Ident = base.Ident;
+
+/// The explicit declaration-backed opening operation (issue #9983): make a
+/// fresh copy of `decl`'s backing template with the application's actual
+/// `args` substituted for the declaration's formals, positionally.
+///
+/// `var_map` is caller-provided scratch; it is cleared, seeded with
+/// (resolved formal root -> actual arg), and afterwards holds every mapping
+/// the instantiation created. Callers own follow-up bookkeeping for the
+/// freshly minted vars (regions, rank pools), exactly as with any other
+/// instantiation; freshly minted vars are those `var_map` values not equal to
+/// a seeded arg.
+///
+/// The declaration must be valid and its arity must match `args` — callers
+/// check `NominalDecl.isValid` (and poison to err) before opening.
+pub fn instantiateNominalBacking(
+    store: *TypesStore,
+    idents: *const base.Ident.Store,
+    var_map: *std.AutoHashMap(Var, Var),
+    decl: types_mod.NominalDecl,
+    args: []const Var,
+    current_rank: Rank,
+) std.mem.Allocator.Error!Var {
+    const formals = store.sliceVars(decl.formals);
+    std.debug.assert(formals.len == args.len);
+
+    // Formals substitute both by variable root AND by rigid name. The name
+    // route matters for associated type references inside the template: an
+    // associated alias/nominal instance embedded there can carry rigids that
+    // resolve to different roots than the declaration's formal vars while
+    // still NAMING the same formals (the annotation-application path has
+    // always rebound such rigids by name, and the opening operation must
+    // agree with it).
+    var_map.clearRetainingCapacity();
+    var rigid_subs = std.AutoHashMapUnmanaged(Ident.Idx, Var){};
+    defer rigid_subs.deinit(store.gpa);
+    for (formals, args) |formal, arg| {
+        const formal_resolved = store.resolveVar(formal);
+        try var_map.put(formal_resolved.var_, arg);
+        // A malformed header arg (underscore/malformed anno) is err, not
+        // rigid; the template cannot reference it by name.
+        switch (formal_resolved.desc.content) {
+            .rigid => |rigid| try rigid_subs.put(store.gpa, rigid.name, arg),
+            else => {},
+        }
+    }
+
+    var instantiator = Instantiator{
+        .store = store,
+        .idents = idents,
+        .var_map = var_map,
+        .current_rank = current_rank,
+        // Rigids naming a formal take that formal's arg; any other rigid
+        // (impossible in a well-formed template) stays rigid rather than
+        // silently flexing.
+        .rigid_behavior = .{ .substitute_rigids_fresh = &rigid_subs },
+    };
+    const opened = try instantiator.instantiateVar(decl.backing);
+    if (instantiator.recursion_overflow) {
+        // Templates are acyclic (applications carry no backing), so this is
+        // only reachable through pathological static-dispatch constraints;
+        // yield err rather than a partial graph.
+        return try store.freshFromContentWithRank(.err, current_rank);
+    }
+    return opened;
+}
 
 /// Hard ceiling on instantiation recursion depth. Finite types never approach
 /// this; a self-referential static-dispatch `where` constraint (e.g.
@@ -47,7 +113,6 @@ pub const Instantiator = struct {
     store: *TypesStore,
     idents: *const base.Ident.Store,
     var_map: *std.AutoHashMap(Var, Var),
-    constraint_fn_var_map: ?*std.AutoHashMap(Var, Var) = null,
 
     current_rank: Rank,
     rigid_behavior: RigidBehavior,
@@ -84,6 +149,14 @@ pub const Instantiator = struct {
         /// If a rigid var is not in the map, then that variable will be set to
         /// `.err` & in debug mode it will error
         substitute_rigids: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
+
+        /// In this mode, rigids present in the provided map are substituted,
+        /// and any other rigids are instantiated as fresh rigid variables.
+        substitute_rigids_fresh: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
+
+        /// In this mode, rigids present in the provided map are substituted,
+        /// and any other rigids are instantiated as fresh flex variables.
+        substitute_rigids_fresh_flex: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
     };
 
     const Self = @This();
@@ -157,6 +230,20 @@ pub const Instantiator = struct {
 
                             return existing_var;
                         },
+                        .substitute_rigids_fresh => |rigid_subs| {
+                            if (rigid_subs.get(rigid.name)) |existing_var| {
+                                try self.var_map.put(resolved_var, existing_var);
+                                return existing_var;
+                            }
+                            break :blk .rigid;
+                        },
+                        .substitute_rigids_fresh_flex => |rigid_subs| {
+                            if (rigid_subs.get(rigid.name)) |existing_var| {
+                                try self.var_map.put(resolved_var, existing_var);
+                                return existing_var;
+                            }
+                            break :blk .flex;
+                        },
                     }
                 };
 
@@ -180,6 +267,7 @@ pub const Instantiator = struct {
                     .{
                         .content = fresh_content,
                         .rank = self.current_rank,
+                        .empty_tag_union_is_default = resolved.desc.empty_tag_union_is_default,
                     },
                 );
 
@@ -201,6 +289,7 @@ pub const Instantiator = struct {
                     .{
                         .content = fresh_content,
                         .rank = self.current_rank,
+                        .empty_tag_union_is_default = resolved.desc.empty_tag_union_is_default,
                     },
                 );
 
@@ -280,9 +369,10 @@ pub const Instantiator = struct {
     }
 
     fn instantiateNominalType(self: *Self, nominal: NominalType) std.mem.Allocator.Error!NominalType {
-        const backing_var = self.store.getNominalBackingVar(nominal);
-        const fresh_backing_var = try self.instantiateVar(backing_var);
-
+        // A nominal application instantiates its actual args only. The
+        // declaration's backing template is never touched here; it is
+        // instantiated exclusively by `instantiateNominalBacking` at the
+        // explicit opening operations.
         const arg_span = TypesStore.getNominalArgsRange(nominal);
         var fresh_vars_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.store.gpa);
         const fresh_vars_alloc = fresh_vars_sfa.get();
@@ -297,7 +387,6 @@ pub const Instantiator = struct {
 
         return (try self.store.mkNominalWithSourceDeclAndBuiltinOrigin(
             nominal.ident,
-            fresh_backing_var,
             fresh_vars.items,
             nominal.origin_module,
             nominal.sourceDeclOptional(),
@@ -341,11 +430,24 @@ pub const Instantiator = struct {
         }
 
         const fresh_ret = try self.instantiateVar(func.ret);
+
+        var fresh_effect_deps_sfa = std.heap.stackFallback(8 * @sizeOf(Var), self.store.gpa);
+        const fresh_effect_deps_alloc = fresh_effect_deps_sfa.get();
+        var fresh_effect_deps = try std.ArrayList(Var).initCapacity(fresh_effect_deps_alloc, func.effect_deps.count);
+        defer fresh_effect_deps.deinit(fresh_effect_deps_alloc);
+
+        const effect_deps_start: usize = @intFromEnum(func.effect_deps.start);
+        for (0..func.effect_deps.count) |i| {
+            const effect_dep = self.store.vars.items.items[effect_deps_start + i];
+            fresh_effect_deps.appendAssumeCapacity(try self.instantiateVar(effect_dep));
+        }
+
         const fresh_args_range = try self.store.appendVars(fresh_args.items);
+        const fresh_effect_deps_range = try self.store.appendVars(fresh_effect_deps.items);
         return Func{
             .args = fresh_args_range,
             .ret = fresh_ret,
-            .needs_instantiation = true,
+            .effect_deps = fresh_effect_deps_range,
         };
     }
 
@@ -510,9 +612,34 @@ pub const Instantiator = struct {
     fn instantiateStaticDispatchConstraint(self: *Self, constraint: StaticDispatchConstraint) std.mem.Allocator.Error!StaticDispatchConstraint {
         var result = constraint;
         result.fn_var = try self.instantiateVar(constraint.fn_var);
-        if (self.constraint_fn_var_map) |map| {
-            try map.put(constraint.fn_var, result.fn_var);
-        }
+        result.interpolation = try self.instantiateInterpolationMetadata(constraint.interpolation);
         return result;
+    }
+
+    fn instantiateInterpolationMetadata(
+        self: *Self,
+        metadata: StaticDispatchConstraint.InterpolationMetadata,
+    ) std.mem.Allocator.Error!StaticDispatchConstraint.InterpolationMetadata {
+        if (!metadata.isPresent()) return metadata;
+
+        const parts_len = metadata.interpolated_parts.len();
+        var fresh_parts_sfa = std.heap.stackFallback(8 * @sizeOf(InterpolationPartMetadata), self.store.gpa);
+        const fresh_parts_alloc = fresh_parts_sfa.get();
+        var fresh_parts = try std.ArrayList(InterpolationPartMetadata).initCapacity(fresh_parts_alloc, parts_len);
+        defer fresh_parts.deinit(fresh_parts_alloc);
+
+        for (0..parts_len) |i| {
+            const part = self.store.getInterpolationPartAt(metadata.interpolated_parts, @intCast(i));
+            fresh_parts.appendAssumeCapacity(.{
+                .var_ = try self.instantiateVar(part.var_),
+                .region = part.region,
+            });
+        }
+
+        return .{
+            .expr_region = metadata.expr_region,
+            .item_var = try self.instantiateVar(metadata.item_var),
+            .interpolated_parts = try self.store.appendInterpolationParts(fresh_parts.items),
+        };
     }
 };

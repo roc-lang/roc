@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Type mismatch showing nominal type origin from different module
+description=Type mismatch showing nominal type origin from different mod
 type=snippet
 ~~~
 # SOURCE
@@ -18,28 +18,27 @@ main =
 UNDECLARED TYPE - nominal_type_origin_mismatch.md:3:17:3:23
 UNUSED VARIABLE - nominal_type_origin_mismatch.md:4:18:4:19
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Person_ is not declared in this scope.
 
-This type is referenced here:
-**nominal_type_origin_mismatch.md:3:17:3:23:**
-```roc
-expectsPerson : Person -> Str
-```
-                ^^^^^^
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Person` is not declared in this scope. ────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  expectsPerson : Person -> Str                                             │
+ │                  ‾‾‾‾‾‾                                                    │
+ └────────────────────────────────────── nominal_type_origin_mismatch.md:3:17 ┘
 
 
-**UNUSED VARIABLE**
-Variable `p` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_p` to suppress this warning.
-The unused variable is declared here:
-**nominal_type_origin_mismatch.md:4:18:4:19:**
-```roc
-expectsPerson = |p| "Got a person"
-```
-                 ^
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `p` is defined here and then never used. ───────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  expectsPerson = |p| "Got a person"                                        │
+ │                   ‾                                                        │
+ └────────────────────────────────────── nominal_type_origin_mismatch.md:4:18 ┘
 
+    If you don't need this variable, prefix it with an underscore like `_p` to
+    suppress this warning.
 
 # TOKENS
 ~~~zig
@@ -53,7 +52,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "Data")
 			(exposing
@@ -83,7 +82,7 @@ import Data exposing [Person]
 expectsPerson : Person -> Str
 expectsPerson = |p| "Got a person"
 
-main = 
+main =
 # This will cause a type mismatch
 	expectsPerson("not a person")
 ~~~
@@ -103,12 +102,11 @@ main =
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 96)
-			(e-lookup-local
-				(p-assign (ident "expectsPerson")))
+		(e-call (constraint-fn-var 250)
+			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-string
 				(e-literal (string "not a person")))))
-	(s-import (module "Data")
+	(s-import (mod "Data")
 		(exposes
 			(exposed (name "Person") (wildcard false)))))
 ~~~

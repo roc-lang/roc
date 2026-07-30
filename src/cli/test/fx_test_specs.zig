@@ -15,6 +15,8 @@ pub const TestSpec = struct {
     roc_file: []const u8,
     /// IO spec for --test mode
     io_spec: []const u8,
+    /// Stderr substrings expected during build-only cross-compilation.
+    expected_build_stderr_contains: []const []const u8 = &.{},
     /// Optional description of what the test verifies
     description: []const u8 = "",
     /// Skip this test on Windows (usually due to dev backend limitations)
@@ -42,7 +44,7 @@ pub const io_spec_tests = [_]TestSpec{
     // Basic effectful function tests
     .{
         .roc_file = "test/fx/app.roc",
-        .io_spec = "1>Hello from stdout!|1>Line 1 to stdout|2>Line 2 to stderr|1>Line 3 to stdout|2>Error from stderr!",
+        .io_spec = "0<abc|1>Hello from stdout!|1>Line 1 to stdout|2>Line 2 to stderr|1>Line 3 to stdout|2>Error from stderr!|1>Crypto hashes ok",
         .description = "Basic effectful functions: Stdout.line!, Stderr.line!",
     },
     .{
@@ -107,8 +109,6 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/numeric_fold.roc",
         .io_spec = "1>Sum: 15.0",
         .description = "List.fold with numeric accumulators",
-        // TODO: Dec (i128) parameter passing in for-loop lambdas fails on Windows x86_64 dev backend
-        .skip_on_windows = true,
     },
     .{
         .roc_file = "test/fx/list_for_each.roc",
@@ -185,6 +185,16 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/dict_pseudo_seed_repro.roc",
         .io_spec = "1>b",
         .description = "Regression test: compiled Dict operations call the hasher builtins",
+    },
+    .{
+        .roc_file = "test/fx/issue_10038_top_level_dict.roc",
+        .io_spec = "0<a|1>b",
+        .description = "Regression test: runtime lookup honors a comptime Dict's deterministic seed",
+    },
+    .{
+        .roc_file = "test/fx/issue_10038_comptime_dict_transitions.roc",
+        .io_spec = "0<a|1>direct:A|1>insert-old:A|1>insert-new:C|1>update-new:D|1>release:A|1>keep:A|1>reserve:A|1>clear:refilled|1>map:A!|1>remove:B|1>nested:nested|1>runtime:runtime",
+        .description = "Regression test: comptime Dict lookup and runtime seed-domain transitions",
     },
     .{
         .roc_file = "test/fx/test_direct_string.roc",
@@ -368,6 +378,7 @@ pub const io_spec_tests = [_]TestSpec{
     .{
         .roc_file = "test/fx/dbg_corrupts_recursive_tag_union.roc",
         .io_spec = "1>Child is Text: hello",
+        .expected_build_stderr_contains = &.{"`DBG` IN OPTIMIZED BUILD"},
         .description = "Regression test: dbg on recursive tag union preserves variant discriminant (issue #8804)",
     },
     .{
@@ -524,6 +535,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Cross-module recursive nominal types with pattern matching",
     },
     .{
+        .roc_file = "test/fx/issue_10203/main.roc",
+        .io_spec = "1>done",
+        .description = "Regression test: boxed function values in cross-module recursive nominals lower to LIR",
+    },
+    .{
         .roc_file = "test/fx/transitive_import_nominal_equality/main.roc",
         .io_spec = "1>True",
         .description = "Regression test: transitive imports preserve nominal method owner environments for equality",
@@ -537,6 +553,11 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/keep_oks.roc",
         .io_spec = "1>done",
         .description = "Regression test: Monomorphize panic when callback always returns Ok but match expects Err tag",
+    },
+    .{
+        .roc_file = "test/fx/arc_certifier_large_tree.roc",
+        .io_spec = "1><!DOCTYPE html><html class=\"en\"><head><meta class=\"ct\"><title>T</title><link class=\"ss\"></head><body><div class=\"main\"><div class=\"navbar\"><ul><li class=\"nav-link\"><a class=\"x\">X</a></li><li class=\"nav-link\"><a class=\"y\">Y</a></li></ul></div><div class=\"article\">body</div></div></body></html>",
+        .description = "Regression test: large refcounted recursive tree passes ARC borrow certification",
     },
 
     // Leak regression tests for the address-taken element-decref callbacks in

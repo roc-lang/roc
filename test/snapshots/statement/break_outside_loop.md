@@ -16,14 +16,14 @@ result = {
 # EXPECTED
 BREAK OUTSIDE LOOP - break_outside_loop.md:4:2:4:7
 # PROBLEMS
-**BREAK OUTSIDE LOOP**
-The `break` statement can only be used inside loops like `while` or `for` to exit the loop early.
 
-**break_outside_loop.md:4:2:4:7:**
-```roc
-	break
-```
-	^^^^^
+┌────────────────────┐
+│ BREAK OUTSIDE LOOP ├─ The `break` statement can only be used inside loops ──┐
+└┬───────────────────┘  like `while` or `for` to exit the loop early.         │
+ │                                                                            │
+ │  break                                                                     │
+ │  ‾‾‾‾‾                                                                     │
+ └───────────────────────────────────────────────── break_outside_loop.md:4:2 ┘
 
 
 # TOKENS
@@ -40,7 +40,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "result")
 			(ty (name "Bool")))

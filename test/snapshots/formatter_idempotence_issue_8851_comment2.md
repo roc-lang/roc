@@ -9,28 +9,29 @@ a=()->b()()()
 ~~~
 # EXPECTED
 EMPTY TUPLE NOT ALLOWED - formatter_idempotence_issue_8851_comment2.md:1:3:1:5
-UNDEFINED VARIABLE - formatter_idempotence_issue_8851_comment2.md:1:7:1:8
+NAME NOT IN SCOPE - formatter_idempotence_issue_8851_comment2.md:1:7:1:8
 # PROBLEMS
-**EMPTY TUPLE NOT ALLOWED**
-I am part way through parsing this tuple, but it is empty:
-**formatter_idempotence_issue_8851_comment2.md:1:3:1:5:**
-```roc
-a=()->b()()()
-```
-  ^^
 
-If you want to represent nothing, try using an empty record: `{}`.
+┌─────────────────────────┐
+│ EMPTY TUPLE NOT ALLOWED ├─ I am part way through parsing this tuple, but ───┐
+└┬────────────────────────┘  it is empty.                                     │
+ │                                                                            │
+ │  a=()->b()()()                                                             │
+ │    ‾‾                                                                      │
+ └────────────────────────── formatter_idempotence_issue_8851_comment2.md:1:3 ┘
 
-**UNDEFINED VARIABLE**
-Nothing is named `b` in this scope.
-Is there an `import` or `exposing` missing up-top?
+    If you want to represent nothing, try using an empty record: `{}`.
 
-**formatter_idempotence_issue_8851_comment2.md:1:7:1:8:**
-```roc
-a=()->b()()()
-```
-      ^
 
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `b` in this scope. ───────────────────┐
+└┬──────────────────┘                                                         │
+ │                                                                            │
+ │  a=()->b()()()                                                             │
+ │        ‾                                                                   │
+ └────────────────────────── formatter_idempotence_issue_8851_comment2.md:1:7 ┘
+
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig
@@ -40,7 +41,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "a"))
@@ -53,18 +54,14 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-a = ()->b()()()
+a = ()->(b()())()
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(d-let
 		(p-assign (ident "a"))
-		(e-call
-			(e-call
-				(e-call
-					(e-runtime-error (tag "ident_not_in_scope"))))
-			(e-runtime-error (tag "empty_tuple")))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

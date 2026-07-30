@@ -210,6 +210,7 @@ pub const TargetMachine = opaque {
         bitcode_filename: ?[*:0]const u8,
         coverage: Coverage,
         no_target_libcalls: bool,
+        lower_memory_intrinsics_to_loops: bool,
 
         pub const LtoPhase = enum(c_int) {
             None,
@@ -297,11 +298,13 @@ pub const CodeGenOptLevel = enum(c_int) {
 pub const IrOptimizationLevel = enum(c_int) {
     Oz = 0,
     O3 = 1,
+    O0 = 2,
 
     pub fn toCodeGenOptLevel(self: IrOptimizationLevel) CodeGenOptLevel {
         return switch (self) {
             .Oz => .Default,
             .O3 => .Aggressive,
+            .O0 => .None,
         };
     }
 };
@@ -643,6 +646,7 @@ pub fn compileBitcodeToObject(
         .bitcode_filename = null,
         .coverage = default_coverage,
         .no_target_libcalls = false,
+        .lower_memory_intrinsics_to_loops = false,
     };
 
     // Emit object file

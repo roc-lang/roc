@@ -33,7 +33,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "foo")
 			(ty (name "U64")))
@@ -88,7 +88,7 @@ foo = {
 				(e-block
 					(s-reassign
 						(p-assign (ident "result"))
-						(e-dispatch-call (method "plus") (constraint-fn-var 297)
+						(e-dispatch-call (method "plus") (constraint-fn-var 290)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "result"))))

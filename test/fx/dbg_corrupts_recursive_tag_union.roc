@@ -1,6 +1,7 @@
 app [main!] { pf: platform "./platform/main.roc" }
 
 import pf.Stdout
+import pf.Host
 
 ## BUG: `dbg` corrupts recursive tag union variant discriminant
 ##
@@ -31,7 +32,9 @@ Node := [
 }
 
 main! = || {
-    text_node = Node.text("hello")
+    runtime = Host.get_greeting!(Host.new("node"))
+    content = if Str.count_utf8_bytes(runtime) > 0 { "hello" } else { "missing" }
+    text_node = Node.text(content)
     elem = Node.element("div", [text_node])
 
     match elem {
@@ -39,7 +42,7 @@ main! = || {
             match List.first(children) {
                 Ok(child) =>
                     match child {
-                        Text(content) => Stdout.line!("Child is Text: ${content}")
+                        Text(text) => Stdout.line!("Child is Text: ${text}")
                         Element(tag, _) => Stdout.line!("Child is Element: ${tag}")
                     }
                 Err(_) => Stdout.line!("No children")

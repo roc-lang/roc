@@ -13,10 +13,10 @@ match items {
 }
 ~~~
 # EXPECTED
-BAD LIST REST PATTERN SYNTAX - list_rest_invalid.md:2:13:2:19
-BAD LIST REST PATTERN SYNTAX - list_rest_invalid.md:3:6:3:12
-BAD LIST REST PATTERN SYNTAX - list_rest_invalid.md:4:9:4:15
-UNDEFINED VARIABLE - list_rest_invalid.md:1:7:1:12
+OLD LIST REST PATTERN - list_rest_invalid.md:2:13:2:19
+OLD LIST REST PATTERN - list_rest_invalid.md:3:6:3:12
+OLD LIST REST PATTERN - list_rest_invalid.md:4:9:4:15
+NAME NOT IN SCOPE - list_rest_invalid.md:1:7:1:12
 UNUSED VARIABLE - list_rest_invalid.md:2:6:2:11
 UNUSED VARIABLE - list_rest_invalid.md:2:15:2:15
 UNUSED VARIABLE - list_rest_invalid.md:3:8:3:8
@@ -25,133 +25,145 @@ UNUSED VARIABLE - list_rest_invalid.md:4:6:4:7
 UNUSED VARIABLE - list_rest_invalid.md:4:11:4:11
 UNUSED VARIABLE - list_rest_invalid.md:4:17:4:18
 # PROBLEMS
-**BAD LIST REST PATTERN SYNTAX**
-List rest patterns should use the `.. as name` syntax, not `..name`.
-For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
 
-**list_rest_invalid.md:2:13:2:19:**
-```roc
-    [first, ..rest] => 0 # invalid rest pattern should error
-```
-            ^^^^^^
+┌───────────────────────┐
+│ OLD LIST REST PATTERN ├─ I was parsing a list pattern, and this uses the ───┐
+└┬──────────────────────┘  old rest syntax.                                   │
+ │                                                                            │
+ │  [first, ..rest] => 0 # invalid rest pattern should error                  │
+ │          ‾‾‾‾‾‾                                                            │
+ └───────────────────────────────────────────────── list_rest_invalid.md:2:13 ┘
 
+    List rest patterns now use `.. as name`. The name is optional, but if it is
+    present it must come after `as`.
 
-**BAD LIST REST PATTERN SYNTAX**
-List rest patterns should use the `.. as name` syntax, not `..name`.
-For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
-
-**list_rest_invalid.md:3:6:3:12:**
-```roc
-    [..rest, last] => 1 # invalid rest pattern should error
-```
-     ^^^^^^
+    For example:
+        [first, .. as rest]
 
 
-**BAD LIST REST PATTERN SYNTAX**
-List rest patterns should use the `.. as name` syntax, not `..name`.
-For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
+┌───────────────────────┐
+│ OLD LIST REST PATTERN ├─ I was parsing a list pattern, and this uses the ───┐
+└┬──────────────────────┘  old rest syntax.                                   │
+ │                                                                            │
+ │  [..rest, last] => 1 # invalid rest pattern should error                   │
+ │   ‾‾‾‾‾‾                                                                   │
+ └────────────────────────────────────────────────── list_rest_invalid.md:3:6 ┘
 
-**list_rest_invalid.md:4:9:4:15:**
-```roc
-    [x, ..rest, y] => 2 # invalid rest pattern should error
-```
-        ^^^^^^
+    List rest patterns now use `.. as name`. The name is optional, but if it is
+    present it must come after `as`.
 
-
-**UNDEFINED VARIABLE**
-Nothing is named `items` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**list_rest_invalid.md:1:7:1:12:**
-```roc
-match items {
-```
-      ^^^^^
+    For example:
+        [first, .. as rest]
 
 
-**UNUSED VARIABLE**
-Variable `first` is not used anywhere in your code.
+┌───────────────────────┐
+│ OLD LIST REST PATTERN ├─ I was parsing a list pattern, and this uses the ───┐
+└┬──────────────────────┘  old rest syntax.                                   │
+ │                                                                            │
+ │  [x, ..rest, y] => 2 # invalid rest pattern should error                   │
+ │      ‾‾‾‾‾‾                                                                │
+ └────────────────────────────────────────────────── list_rest_invalid.md:4:9 ┘
 
-If you don't need this variable, prefix it with an underscore like `_first` to suppress this warning.
-The unused variable is declared here:
-**list_rest_invalid.md:2:6:2:11:**
-```roc
-    [first, ..rest] => 0 # invalid rest pattern should error
-```
-     ^^^^^
+    List rest patterns now use `.. as name`. The name is optional, but if it is
+    present it must come after `as`.
 
-
-**UNUSED VARIABLE**
-Variable `rest` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
-**list_rest_invalid.md:2:15:2:15:**
-```roc
-    [first, ..rest] => 0 # invalid rest pattern should error
-```
-              ^
+    For example:
+        [first, .. as rest]
 
 
-**UNUSED VARIABLE**
-Variable `rest` is not used anywhere in your code.
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `items` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
+ │                                                                            │
+ │  match items {                                                             │
+ │        ‾‾‾‾‾                                                               │
+ └────────────────────────────────────────────────── list_rest_invalid.md:1:7 ┘
 
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
-**list_rest_invalid.md:3:8:3:8:**
-```roc
-    [..rest, last] => 1 # invalid rest pattern should error
-```
-       ^
-
-
-**UNUSED VARIABLE**
-Variable `last` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_last` to suppress this warning.
-The unused variable is declared here:
-**list_rest_invalid.md:3:14:3:18:**
-```roc
-    [..rest, last] => 1 # invalid rest pattern should error
-```
-             ^^^^
+    Is it misspelled, or is there an import missing?
 
 
-**UNUSED VARIABLE**
-Variable `x` is not used anywhere in your code.
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `first` is defined here and then never used. ───┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  [first, ..rest] => 0 # invalid rest pattern should error                  │
+ │   ‾‾‾‾‾                                                                    │
+ └────────────────────────────────────────────────── list_rest_invalid.md:2:6 ┘
 
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
-**list_rest_invalid.md:4:6:4:7:**
-```roc
-    [x, ..rest, y] => 2 # invalid rest pattern should error
-```
-     ^
-
-
-**UNUSED VARIABLE**
-Variable `rest` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
-**list_rest_invalid.md:4:11:4:11:**
-```roc
-    [x, ..rest, y] => 2 # invalid rest pattern should error
-```
-          ^
+    If you don't need this variable, prefix it with an underscore like `_first`
+    to suppress this warning.
 
 
-**UNUSED VARIABLE**
-Variable `y` is not used anywhere in your code.
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  [first, ..rest] => 0 # invalid rest pattern should error                  │
+ │            ‾                                                               │
+ └───────────────────────────────────────────────── list_rest_invalid.md:2:15 ┘
 
-If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
-The unused variable is declared here:
-**list_rest_invalid.md:4:17:4:18:**
-```roc
-    [x, ..rest, y] => 2 # invalid rest pattern should error
-```
-                ^
+    If you don't need this variable, prefix it with an underscore like `_rest`
+    to suppress this warning.
 
+
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  [..rest, last] => 1 # invalid rest pattern should error                   │
+ │     ‾                                                                      │
+ └────────────────────────────────────────────────── list_rest_invalid.md:3:8 ┘
+
+    If you don't need this variable, prefix it with an underscore like `_rest`
+    to suppress this warning.
+
+
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `last` is defined here and then never used. ────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  [..rest, last] => 1 # invalid rest pattern should error                   │
+ │           ‾‾‾‾                                                             │
+ └───────────────────────────────────────────────── list_rest_invalid.md:3:14 ┘
+
+    If you don't need this variable, prefix it with an underscore like `_last`
+    to suppress this warning.
+
+
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `x` is defined here and then never used. ───────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  [x, ..rest, y] => 2 # invalid rest pattern should error                   │
+ │   ‾                                                                        │
+ └────────────────────────────────────────────────── list_rest_invalid.md:4:6 ┘
+
+    If you don't need this variable, prefix it with an underscore like `_x` to
+    suppress this warning.
+
+
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  [x, ..rest, y] => 2 # invalid rest pattern should error                   │
+ │        ‾                                                                   │
+ └───────────────────────────────────────────────── list_rest_invalid.md:4:11 ┘
+
+    If you don't need this variable, prefix it with an underscore like `_rest`
+    to suppress this warning.
+
+
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `y` is defined here and then never used. ───────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  [x, ..rest, y] => 2 # invalid rest pattern should error                   │
+ │              ‾                                                             │
+ └───────────────────────────────────────────────── list_rest_invalid.md:4:17 ┘
+
+    If you don't need this variable, prefix it with an underscore like `_y` to
+    suppress this warning.
 
 # TOKENS
 ~~~zig

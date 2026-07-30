@@ -14,6 +14,7 @@ const Allocation = struct {
 
 allocator: std.mem.Allocator,
 allocations: std.AutoHashMap(usize, Allocation),
+debug_messages: std.ArrayList([]u8) = .empty,
 roc_ops: ?RocOps = null,
 crash_message: ?[]u8 = null,
 expect_message: ?[]u8 = null,
@@ -27,6 +28,8 @@ pub fn init(allocator: std.mem.Allocator) CompilerHost {
 
 pub fn deinit(self: *CompilerHost) void {
     self.freeRemainingAllocations();
+    self.clearDebugMessages();
+    self.debug_messages.deinit(self.allocator);
     self.allocations.deinit();
     if (self.crash_message) |msg| self.allocator.free(msg);
     if (self.expect_message) |msg| self.allocator.free(msg);
@@ -48,6 +51,19 @@ pub fn ops(self: *CompilerHost) *RocOps {
         };
     }
     return &self.roc_ops.?;
+}
+
+/// Return `dbg` messages captured during the current interpreter evaluation.
+pub fn debugMessages(self: *const CompilerHost) []const []const u8 {
+    return self.debug_messages.items;
+}
+
+/// Free and clear all captured `dbg` messages.
+pub fn clearDebugMessages(self: *CompilerHost) void {
+    for (self.debug_messages.items) |msg| {
+        self.allocator.free(msg);
+    }
+    self.debug_messages.clearRetainingCapacity();
 }
 
 fn rocAlloc(roc_ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
@@ -95,7 +111,14 @@ fn rocRealloc(roc_ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: u
     return @ptrCast(new_ptr);
 }
 
-fn rocDbg(_: *RocOps, _: [*]const u8, _: usize) callconv(.c) void {}
+fn rocDbg(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    const self: *CompilerHost = @ptrCast(@alignCast(roc_ops.env));
+    const owned = self.allocator.dupe(u8, bytes[0..len]) catch return;
+    self.debug_messages.append(self.allocator, owned) catch {
+        self.allocator.free(owned);
+        return;
+    };
+}
 
 fn rocExpectFailed(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
     const self: *CompilerHost = @ptrCast(@alignCast(roc_ops.env));

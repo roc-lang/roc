@@ -74,21 +74,21 @@ match x {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error (tag "invalid_num_literal"))))
+						(p-num-from-numeral)))
 				(value
 					(e-string
 						(e-literal (string "very large number")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-small-dec)))
+						(p-num-from-numeral)))
 				(value
 					(e-string
 						(e-literal (string "very small number")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-runtime-error (tag "invalid_num_literal"))))
+						(p-num-from-numeral)))
 				(value
 					(e-string
 						(e-literal (string "near f64 max")))))

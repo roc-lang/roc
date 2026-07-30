@@ -41,7 +41,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "Foo")
@@ -127,7 +127,7 @@ result = Foo.transform(Foo.defaultBar)
 			(ty-lookup (name "Foo.Bar") (local))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 77)
+		(e-call (constraint-fn-var 253)
 			(e-lookup-local
 				(p-assign (ident "Foo.transform")))
 			(e-lookup-local

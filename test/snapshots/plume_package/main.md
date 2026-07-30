@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=main module from package
+description=main mod from package
 type=package
 ~~~
 # SOURCE
@@ -10,17 +10,16 @@ package [
 ] {}
 ~~~
 # EXPECTED
-MODULE NOT FOUND - main.md:2:5:2:10
+MOD NOT FOUND - main.md:2:5:2:10
 # PROBLEMS
-**MODULE NOT FOUND**
-The module `Color` was not found in this Roc project.
 
-You're attempting to use this module here:
-**main.md:2:5:2:10:**
-```roc
-    Color,
-```
-    ^^^^^
+┌──────────────────┐
+│ MOD NOT FOUND ├─ The mod `Color` was not found in this Roc project. ──┐
+└┬─────────────────┘                                                          │
+ │                                                                            │
+ │  Color,                                                                    │
+ │  ‾‾‾‾‾                                                                     │
+ └─────────────────────────────────────────────────────────────── main.md:2:5 ┘
 
 
 # TOKENS
@@ -50,7 +49,7 @@ package
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-import (module "Color")
+	(s-import (mod "Color")
 		(exposes)))
 ~~~
 # TYPES

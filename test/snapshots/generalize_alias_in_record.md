@@ -9,34 +9,35 @@ id = |x| x
 
 r = { f: id }
 
-main = (r.f(1), r.f("a"))
+main = ((r.f)(1), (r.f)("a"))
 ~~~
 # EXPECTED
-TYPE MISMATCH - generalize_alias_in_record.md:5:21:5:24
+TYPE MISMATCH - generalize_alias_in_record.md:5:25:5:28
 # PROBLEMS
-**TYPE MISMATCH**
-This string literal is being used where a non-string type is needed:
-**generalize_alias_in_record.md:5:21:5:24:**
-```roc
-main = (r.f(1), r.f("a"))
-```
-                    ^^^
 
-The type was determined to be:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
+└┬──────────────┘  type is needed.                                            │
+ │                                                                            │
+ │  main = ((r.f)(1), (r.f)("a"))                                             │
+ │                          ‾‾‾                                               │
+ └──────────────────────────────────────── generalize_alias_in_record.md:5:25 ┘
 
-    Dec
+    The type was determined to be:
+
+        Dec
 
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,
 LowerIdent,OpAssign,OpenCurly,LowerIdent,OpColon,LowerIdent,CloseCurly,
-LowerIdent,OpAssign,OpenRound,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,Int,CloseRound,Comma,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,StringStart,StringPart,StringEnd,CloseRound,CloseRound,
+LowerIdent,OpAssign,OpenRound,NoSpaceOpenRound,LowerIdent,NoSpaceDotLowerIdent,CloseRound,NoSpaceOpenRound,Int,CloseRound,Comma,OpenRound,LowerIdent,NoSpaceDotLowerIdent,CloseRound,NoSpaceOpenRound,StringStart,StringPart,StringEnd,CloseRound,CloseRound,
 EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "id"))
@@ -52,17 +53,19 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "main"))
 			(e-tuple
-				(e-method-call (method ".f")
-					(receiver
-						(e-ident (raw "r")))
-					(args
-						(e-int (raw "1"))))
-				(e-method-call (method ".f")
-					(receiver
-						(e-ident (raw "r")))
-					(args
-						(e-string
-							(e-string-part (raw "a")))))))))
+				(e-apply
+					(e-tuple
+						(e-field-access
+							(e-ident (raw "r"))
+							(e-ident (raw "f"))))
+					(e-int (raw "1")))
+				(e-apply
+					(e-tuple
+						(e-field-access
+							(e-ident (raw "r"))
+							(e-ident (raw "f"))))
+					(e-string
+						(e-string-part (raw "a"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -89,19 +92,18 @@ NO CHANGE
 		(p-assign (ident "main"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 67)
+				(e-call (constraint-fn-var 225)
 					(e-field-access (field "f")
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "r")))))
 					(e-num (value "1")))
-				(e-call (constraint-fn-var 87)
+				(e-call (constraint-fn-var 237)
 					(e-field-access (field "f")
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "r")))))
-					(e-string
-						(e-literal (string "a"))))))))
+					(e-runtime-error (tag "erroneous_value_expr")))))))
 ~~~
 # TYPES
 ~~~clojure

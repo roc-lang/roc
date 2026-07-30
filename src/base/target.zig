@@ -43,6 +43,17 @@ pub const TargetUsize = enum(u1) {
         return .{ .u32, .u64 };
     }
 
+    /// Maps a target pointer bit width (as returned by `RocTarget.ptrBitWidth`)
+    /// to its `TargetUsize`. Roc only supports 32-bit and 64-bit targets, so any
+    /// other width is unreachable.
+    pub fn fromPtrBitWidth(bits: u16) TargetUsize {
+        return switch (bits) {
+            32 => .u32,
+            64 => .u64,
+            else => unreachable,
+        };
+    }
+
     test "TargetUsize conversion to usize" {
         try std.testing.expectEqual(TargetUsize.u32.size(), 4);
         try std.testing.expectEqual(TargetUsize.u64.size(), 8);

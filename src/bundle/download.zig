@@ -18,6 +18,7 @@ pub const ParsedUrl = unbundle_mod.download.ParsedUrl;
 pub const DownloadError = error{
     InvalidUrl,
     InvalidVersion,
+    AmbiguousVersion,
     InvalidHash,
     HttpError,
     NoHashInUrl,
@@ -33,6 +34,7 @@ pub fn validateUrl(url: []const u8) DownloadError!ParsedUrl {
     return unbundle_mod.download.parseUrlPath(url) catch |err| switch (err) {
         error.InvalidUrl => error.InvalidUrl,
         error.InvalidVersion => error.InvalidVersion,
+        error.AmbiguousVersion => error.AmbiguousVersion,
         error.NoHashInUrl => error.NoHashInUrl,
     };
 }
@@ -41,8 +43,9 @@ pub fn validateUrl(url: []const u8) DownloadError!ParsedUrl {
 ///
 /// The URL must:
 /// - Start with "https://" or "http://127.0.0.1"
-/// - Optionally have a MAJOR.MINOR.PATCH path segment before the hash
-/// - Have the base58-encoded blake3 hash as the last path segment
+/// - Optionally have a MAJOR.MINOR.PATCH version anywhere before the hash
+/// - End with the base58-encoded blake3 hash, optionally behind a filename
+///   prefix such as "roc-thing-"
 /// - Point to a tar.zst file created with `roc bundle`
 pub fn download(
     allocator: *std.mem.Allocator,

@@ -33,45 +33,48 @@ TYPE MISMATCH - annotations.md:16:28:16:31
 TYPE MISMATCH - annotations.md:19:35:19:40
 INVALID NOMINAL TAG - annotations.md:22:24:22:39
 # PROBLEMS
-**TYPE MISMATCH**
-This string literal is being used where a non-string type is needed:
-**annotations.md:16:28:16:31:**
-```roc
-failPairDiffTypes = mkPair("1", 2)
-```
-                           ^^^
 
-The type was determined to be:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
+└┬──────────────┘  type is needed.                                            │
+ │                                                                            │
+ │  failPairDiffTypes = mkPair("1", 2)                                        │
+ │                             ‾‾‾                                            │
+ └────────────────────────────────────────────────────── annotations.md:16:28 ┘
 
-    U8
+    The type was determined to be:
 
-**TYPE MISMATCH**
-This string literal is being used where a non-string type is needed:
-**annotations.md:19:35:19:40:**
-```roc
-failPairDiffTypes2 = Pair.Pair(1, "str")
-```
-                                  ^^^^^
+        U8
 
-The type was determined to be:
 
-    U64
+┌───────────────┐
+│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
+└┬──────────────┘  type is needed.                                            │
+ │                                                                            │
+ │  failPairDiffTypes2 = Pair.Pair(1, "str")                                  │
+ │                                    ‾‾‾‾‾                                   │
+ └────────────────────────────────────────────────────── annotations.md:19:35 ┘
 
-**INVALID NOMINAL TAG**
-I'm having trouble with this nominal tag:
-**annotations.md:22:24:22:39:**
-```roc
-mkPairInvalid = |x, y| Pair.Pair(x, y)
-```
-                       ^^^^^^^^^^^^^^^
+    The type was determined to be:
 
-The tag is:
+        U64
 
-    Pair(a, b)
 
-But the nominal type needs it to be:
+┌─────────────────────┐
+│ INVALID NOMINAL TAG ├─ I'm having trouble with this nominal tag. ───────────┐
+└┬────────────────────┘                                                       │
+ │                                                                            │
+ │  mkPairInvalid = |x, y| Pair.Pair(x, y)                                    │
+ │                         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                    │
+ └────────────────────────────────────────────────────── annotations.md:22:24 ┘
 
-    Pair(a, a)
+    The tag is:
+
+        Pair(a, b)
+
+    But the nominal type needs it to be:
+
+        Pair(a, a)
 
 # TOKENS
 ~~~zig
@@ -95,7 +98,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "Pair")
@@ -246,7 +249,7 @@ NO CHANGE
 					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
 	(d-let
 		(p-assign (ident "succeedPairSameType"))
-		(e-call (constraint-fn-var 426)
+		(e-call (constraint-fn-var 422)
 			(e-lookup-local
 				(p-assign (ident "mkPair")))
 			(e-num (value "1"))
@@ -256,11 +259,10 @@ NO CHANGE
 				(ty-lookup (name "U8") (builtin)))))
 	(d-let
 		(p-assign (ident "failPairDiffTypes"))
-		(e-call (constraint-fn-var 562)
+		(e-call (constraint-fn-var 459)
 			(e-lookup-local
 				(p-assign (ident "mkPair")))
-			(e-string
-				(e-literal (string "1")))
+			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-num (value "2")))
 		(annotation
 			(ty-apply (name "Pair") (local)
@@ -271,8 +273,7 @@ NO CHANGE
 			(e-tag (name "Pair")
 				(args
 					(e-num (value "1"))
-					(e-string
-						(e-literal (string "str"))))))
+					(e-runtime-error (tag "erroneous_value_expr")))))
 		(annotation
 			(ty-apply (name "Pair") (local)
 				(ty-lookup (name "U64") (builtin)))))

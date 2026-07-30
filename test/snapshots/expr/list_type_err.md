@@ -10,17 +10,18 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - list_type_err.md:1:8:1:15
 # PROBLEMS
-**TYPE MISMATCH**
-This string literal is being used where a non-string type is needed:
-**list_type_err.md:1:8:1:15:**
-```roc
-[1, 2, "hello"]
-```
-       ^^^^^^^
 
-The type was determined to be:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
+└┬──────────────┘  type is needed.                                            │
+ │                                                                            │
+ │  [1, 2, "hello"]                                                           │
+ │         ‾‾‾‾‾‾‾                                                            │
+ └────────────────────────────────────────────────────── list_type_err.md:1:8 ┘
 
-    Dec
+    The type was determined to be:
+
+        Dec
 
 # TOKENS
 ~~~zig
@@ -45,8 +46,7 @@ NO CHANGE
 	(elems
 		(e-num (value "1"))
 		(e-num (value "2"))
-		(e-string
-			(e-literal (string "hello")))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

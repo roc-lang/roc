@@ -13,52 +13,71 @@ curry = |fn| |x| |y| fn(x, y)
 main! = |_| {}
 ~~~
 # EXPECTED
-PARSE ERROR - type_function_multi_arg.md:3:27:3:28
-PARSE ERROR - type_function_multi_arg.md:3:40:3:42
-PARSE ERROR - type_function_multi_arg.md:3:42:3:43
+EXPECTED CLOSING PARENTHESIS - type_function_multi_arg.md:3:27:3:28
+UNEXPECTED STATEMENT - type_function_multi_arg.md:3:40:3:42
+UNEXPECTED STATEMENT - type_function_multi_arg.md:3:42:3:43
 MALFORMED TYPE - type_function_multi_arg.md:3:27:3:39
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `expected_ty_anno_close_round`
-This is an unexpected parsing error. Please check your syntax.
 
-**type_function_multi_arg.md:3:27:3:28:**
-```roc
-curry : (_a, _b -> _c) -> (_a -> _b -> _c)
-```
-                          ^
+┌──────────────────────────────┐
+│ EXPECTED CLOSING PARENTHESIS ├─ I was parsing a parenthesized type, and I ──┐
+└┬─────────────────────────────┘  expected `)`.                               │
+ │                                                                            │
+ │  curry : (_a, _b -> _c) -> (_a -> _b -> _c)                                │
+ │                            ‾                                               │
+ └─────────────────────────────────────────── type_function_multi_arg.md:3:27 ┘
 
+    Close the parenthesized type after the final type expression.
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+    For example:
+        (Str -> U64)
 
-**type_function_multi_arg.md:3:40:3:42:**
-```roc
-curry : (_a, _b -> _c) -> (_a -> _b -> _c)
-```
-                                       ^^
+    I found `(` here.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  curry : (_a, _b -> _c) -> (_a -> _b -> _c)                                │
+ │                                         ‾‾                                 │
+ └─────────────────────────────────────────── type_function_multi_arg.md:3:40 ┘
 
-**type_function_multi_arg.md:3:42:3:43:**
-```roc
-curry : (_a, _b -> _c) -> (_a -> _b -> _c)
-```
-                                         ^
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `_c` here.
 
 
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  curry : (_a, _b -> _c) -> (_a -> _b -> _c)                                │
+ │                                           ‾                                │
+ └─────────────────────────────────────────── type_function_multi_arg.md:3:42 ┘
 
-**type_function_multi_arg.md:3:27:3:39:**
-```roc
-curry : (_a, _b -> _c) -> (_a -> _b -> _c)
-```
-                          ^^^^^^^^^^^^
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
+
+
+┌────────────────┐
+│ MALFORMED TYPE ├─ This type annotation is malformed or contains invalid ────┐
+└┬───────────────┘  syntax.                                                   │
+ │                                                                            │
+ │  curry : (_a, _b -> _c) -> (_a -> _b -> _c)                                │
+ │                            ‾‾‾‾‾‾‾‾‾‾‾‾                                    │
+ └─────────────────────────────────────────── type_function_multi_arg.md:3:27 ┘
 
 
 # TOKENS
@@ -119,7 +138,7 @@ EndOfFile,
 ~~~roc
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
-curry : (_a, _b -> _c) -> 
+curry : (_a, _b -> _c) ->
 
 curry = |fn| |x| |y| fn(x, y)
 
@@ -146,7 +165,7 @@ main! = |_| {}
 						(e-lambda
 							(args
 								(p-assign (ident "y")))
-							(e-call (constraint-fn-var 38)
+							(e-call (constraint-fn-var 222)
 								(e-lookup-local
 									(p-assign (ident "fn")))
 								(e-lookup-local

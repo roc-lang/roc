@@ -36,10 +36,12 @@ test "infers type for small nums" {
     }
 }
 
-test "exact num literals outside compact range still default to Dec" {
+test "exact num literals outside compact range default to Dec and report invalid number" {
     // Exact integer literals that are too big for the compact payload still
     // participate in `from_numeral`; without stronger evidence, they default
-    // to Dec like other unannotated numeric literals.
+    // to Dec like other unannotated numeric literals — and since none of these
+    // values fit Dec's range, the defaulted commit must report INVALID NUMBER
+    // rather than silently saturating.
     const test_cases = [_][]const u8{
         // Negative number slightly lower than i128 min
         "-170141183460469231731687303715884105729",
@@ -57,22 +59,7 @@ test "exact num literals outside compact range still default to Dec" {
         var test_env = try TestEnv.initExpr("Test", source);
         defer test_env.deinit();
 
-        try test_env.assertLastDefType("Dec");
-    }
-}
-
-test "infers type for zero" {
-    const test_cases = [_][]const u8{
-        "0",
-        "-0",
-    };
-
-    inline for (test_cases) |source| {
-        var test_env = try TestEnv.initExpr("Test", source);
-        defer test_env.deinit();
-
-        // Number literals resolve to Dec after finalization
-        try test_env.assertLastDefType("Dec");
+        try test_env.assertOneTypeError("Invalid Number");
     }
 }
 
@@ -267,4 +254,99 @@ test "method call on numeric literal infers return type as Dec" {
     defer test_env.deinit();
 
     try test_env.assertLastDefType("Dec");
+}
+
+test "mirror-image literal groups commit identical types" {
+    // Same literals, swapped operand order, must land on the same committed
+    // type: the defaulting oracle's answers cannot depend on which unify side
+    // each literal arrived on (the failure mode the old cross-module
+    // MUST-agree contract warned about).
+    //
+    // 1E80000's exact digits refute Dec and every integer candidate, and 1.5
+    // refutes the integers; F64 is the first candidate whose digit-fit accepts
+    // both, so the `plus` group commits F64 from either side.
+    {
+        var test_env = try TestEnv.init("Test", "x = 1E80000 + 1.5");
+        defer test_env.deinit();
+        try test_env.assertDefType("x", "F64");
+    }
+    {
+        var test_env = try TestEnv.init("Test", "x = 1.5 + 1E80000");
+        defer test_env.deinit();
+        try test_env.assertDefType("x", "F64");
+    }
+    // The canonical Dec default is likewise order-independent.
+    {
+        var test_env = try TestEnv.init("Test", "x = 1 + 2.5");
+        defer test_env.deinit();
+        try test_env.assertDefType("x", "Dec");
+    }
+    {
+        var test_env = try TestEnv.init("Test", "x = 2.5 + 1");
+        defer test_env.deinit();
+        try test_env.assertDefType("x", "Dec");
+    }
+}
+
+test "fractional scale beyond Dec precision is a check-time error, not a wrong value" {
+    // 1e-19 needs 19 fractional decimal places; Dec has 18. This used to slip
+    // through a small-dec fast path and silently evaluate to 1e-18.
+    const source =
+        \\bad : Dec
+        \\bad = 1e-19
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Invalid Number");
+}
+
+test "huge literal pinned to Dec by a concrete peer reports at the huge literal" {
+    // `1E80000 == max_dec` pins the huge literal to Dec (same as an
+    // annotation), so it must report INVALID NUMBER — anchored at the literal
+    // that does not fit, never at the valid Dec peer (per-literal validation
+    // from per-literal exact facts).
+    const source =
+        \\max_dec : Dec
+        \\max_dec = 170141183460469231731.687303715884105727
+        \\
+        \\check = 1E80000 == max_dec
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Invalid Number");
+}
+
+test "unpinned integer literal beyond Dec range is a check-time error, not silent saturation" {
+    // An unconstrained integer literal defaults to Dec. A value beyond Dec's
+    // range must report INVALID NUMBER like its fractional siblings — it used
+    // to commit the default silently and saturate to Dec max at lowering. The
+    // discarded use keeps the instantiated copy out of any signature, so it is
+    // the defaulted head commit (not probing) that must validate.
+    {
+        const source =
+            \\x = 200000000000000000000000
+            \\
+            \\main! = |_| {
+            \\    _ = x
+            \\    Ok({})
+            \\}
+        ;
+        var test_env = try TestEnv.init("Test", source);
+        defer test_env.deinit();
+        try test_env.assertOneTypeError("Invalid Number");
+    }
+    // Same value in integral scientific spelling.
+    {
+        const source =
+            \\x = 2e23
+            \\
+            \\main! = |_| {
+            \\    _ = x
+            \\    Ok({})
+            \\}
+        ;
+        var test_env = try TestEnv.init("Test", source);
+        defer test_env.deinit();
+        try test_env.assertOneTypeError("Invalid Number");
+    }
 }

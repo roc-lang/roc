@@ -30,8 +30,6 @@ const Ident = base.Ident;
 
 const TypeContext = enum {
     General,
-    NumContent,
-    ListContent,
     RecordExtension,
     TagUnionExtension,
     RecordFieldContent,
@@ -603,12 +601,17 @@ fn writeRecord(self: *TypeWriter, writer: *ByteWrite, record: Record, root_var: 
 
     try writer.writeAll("{ ");
 
-    for (gathered_fields, 0..) |field, i| {
+    for (0..num_fields) |i| {
+        // Re-read from the scratch list every iteration: the recursive
+        // writeVarWithContext below can append to (and reallocate)
+        // scratch_record_fields, which invalidates any slice held across
+        // iterations.
+        const field = self.scratch_record_fields.items[scratch_fields_top + i];
         try writer.writeAll(self.getIdent(field.name));
         try writer.writeAll(": ");
         try self.writeVarWithContext(writer, field.var_, .RecordFieldContent, root_var);
 
-        if (i != gathered_fields.len - 1) try writer.writeAll(", ");
+        if (i != num_fields - 1) try writer.writeAll(", ");
     }
 
     switch (ext) {
@@ -831,9 +834,13 @@ fn writeTagUnion(self: *TypeWriter, writer: *ByteWrite, tag_union: TagUnion, roo
 
     try writer.writeAll("[");
 
-    for (gathered_tags, 0..) |tag, i| {
+    for (0..num_tags) |i| {
+        // Re-read from the scratch list every iteration: the recursive
+        // writeTag below can append to (and reallocate) scratch_tags, which
+        // invalidates any slice held across iterations.
+        const tag = self.scratch_tags.items[scratch_tags_top + i];
         try self.writeTag(writer, tag, root_var);
-        if (i != gathered_tags.len - 1) try writer.writeAll(", ");
+        if (i != num_tags - 1) try writer.writeAll(", ");
     }
 
     switch (ext) {
@@ -1128,8 +1135,6 @@ pub fn stripBuiltinQualification(name: []const u8) []const u8 {
 
 fn generateContextualName(self: *TypeWriter, writer: *ByteWrite, context: TypeContext) error{ OutOfMemory, WriteFailed }!void {
     const base_name = switch (context) {
-        .NumContent => "size",
-        .ListContent => "elem",
         .RecordExtension => "others",
         .TagUnionExtension => "others",
         .RecordFieldContent => "field",

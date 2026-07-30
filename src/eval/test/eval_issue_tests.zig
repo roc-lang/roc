@@ -2,8 +2,182 @@
 
 const TestCase = @import("parallel_runner.zig").TestCase;
 
+const issue806RightmostField = "value.b.b.b.b.b.b.b.b.b.b.b.b";
+
+const issue806LargeAggregateSource =
+    \\R1 : { a : U64, b : U64 }
+    \\R2 : { a : R1, b : R1 }
+    \\R3 : { a : R2, b : R2 }
+    \\R4 : { a : R3, b : R3 }
+    \\R5 : { a : R4, b : R4 }
+    \\R6 : { a : R5, b : R5 }
+    \\R7 : { a : R6, b : R6 }
+    \\R8 : { a : R7, b : R7 }
+    \\R9 : { a : R8, b : R8 }
+    \\R10 : { a : R9, b : R9 }
+    \\R11 : { a : R10, b : R10 }
+    \\R12 : { a : R11, b : R11 }
+    \\
+    \\Wrapped := [Payload(R12)]
+    \\
+    \\make1 : U64 -> R1
+    \\make1 = |n| { a: n, b: n + 1 }
+    \\
+    \\make2 : U64 -> R2
+    \\make2 = |n| { a: make1(n), b: make1(n + 2) }
+    \\
+    \\make3 : U64 -> R3
+    \\make3 = |n| { a: make2(n), b: make2(n + 4) }
+    \\
+    \\make4 : U64 -> R4
+    \\make4 = |n| { a: make3(n), b: make3(n + 8) }
+    \\
+    \\make5 : U64 -> R5
+    \\make5 = |n| { a: make4(n), b: make4(n + 16) }
+    \\
+    \\make6 : U64 -> R6
+    \\make6 = |n| { a: make5(n), b: make5(n + 32) }
+    \\
+    \\make7 : U64 -> R7
+    \\make7 = |n| { a: make6(n), b: make6(n + 64) }
+    \\
+    \\make8 : U64 -> R8
+    \\make8 = |n| { a: make7(n), b: make7(n + 128) }
+    \\
+    \\make9 : U64 -> R9
+    \\make9 = |n| { a: make8(n), b: make8(n + 256) }
+    \\
+    \\make10 : U64 -> R10
+    \\make10 = |n| { a: make9(n), b: make9(n + 512) }
+    \\
+    \\make11 : U64 -> R11
+    \\make11 = |n| { a: make10(n), b: make10(n + 1024) }
+    \\
+    \\make12 : U64 -> R12
+    \\make12 = |n| { a: make11(n), b: make11(n + 2048) }
+    \\
+    \\wrap : U64 -> Wrapped
+    \\wrap = |n| Payload(make12(n))
+    \\
+    \\main = match wrap(1) {
+++ "    Payload(value) => " ++ issue806RightmostField ++ "\n" ++
+    \\}
+;
+
+// https://github.com/roc-lang/roc/issues/9658
+// A scanner loop carrying several refcounted mutable Str states whose alias
+// groups merge and re-split across iterations. The distinct
+// (alias-partition x balance) entry summaries at the loop join grow like
+// the Bell number of the state count, which overflowed the ARC borrow
+// certifier's old per-summary enumeration budget and left the procedure
+// unverified; the lattice-join fixpoint must certify it outright (debug
+// builds run the certifier on every backend compile in this suite).
+const issue9658ScannerSource =
+    \\scan : Str -> Str
+    \\scan = |raw| {
+    \\    var $remaining = Str.trim_start(raw)
+    \\    var $keys = ""
+    \\    var $vals = ""
+    \\    var $last_key = ""
+    \\    var $pending = ""
+    \\    var $keep = True
+    \\    var $valid = True
+    \\
+    \\    while $keep {
+    \\        if Str.starts_with($remaining, ";") {
+    \\            $remaining = Str.drop_prefix($remaining, ";")
+    \\            $keep = False
+    \\        } else if Str.starts_with($remaining, "k") {
+    \\            $pending = Str.concat($last_key, "k")
+    \\            $last_key = $pending
+    \\            $keys = Str.concat($keys, "k")
+    \\            $remaining = Str.drop_prefix($remaining, "k")
+    \\        } else if Str.starts_with($remaining, "v") {
+    \\            $vals = Str.concat($vals, $last_key)
+    \\            $pending = $vals
+    \\            $remaining = Str.drop_prefix($remaining, "v")
+    \\        } else if Str.starts_with($remaining, ",") {
+    \\            $last_key = $pending
+    \\            $remaining = Str.drop_prefix($remaining, ",")
+    \\        } else {
+    \\            $valid = False
+    \\            $keep = False
+    \\        }
+    \\    }
+    \\
+    \\    if $valid Str.concat($keys, $vals) else "invalid"
+    \\}
+    \\
+    \\main = scan("kkv,kv;")
+;
+
 /// Public value `tests`.
 pub const tests = [_]TestCase{
+    .{
+        .name = "issue 9658: scanner loop with merging mutable Str alias groups certifies and evaluates",
+        .source_kind = .module,
+        .source = issue9658ScannerSource,
+        .expected = .{ .inspect_str = "\"kkkkkkkk\"" },
+    },
+    .{
+        .name = "issue 806: large aggregate evaluates across interpreter dev wasm and llvm",
+        .source_kind = .module,
+        .source = issue806LargeAggregateSource,
+        .expected = .{ .inspect_str = "4096" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/9796
+        // Two passing top-level expects that both instantiate a parser result
+        // alias through a type module must finalize independently without
+        // corrupting the checked data consumed by the next expect root.
+        .name = "issue 9796: multiple parser expects with forward alias both finalize",
+        .source_kind = .module,
+        .source =
+        \\Parser(input, a) :: { fun : input -> Parser.ParseResult(input, a) }.{
+        \\    ParseResult(input, a) : Try({ val : a, input : input }, [ParsingFailure(Str)])
+        \\
+        \\    build_primitive_parser : (input -> ParseResult(input, a)) -> Parser(input, a)
+        \\    build_primitive_parser = |fun| { { fun } }
+        \\
+        \\    parse_partial : Parser(input, a), input -> ParseResult(input, a)
+        \\    parse_partial = |{ fun }, input| {
+        \\        fun(input)
+        \\    }
+        \\
+        \\    chomp_until : a -> Parser(List(a), List(a)) where [a.is_eq : a, a -> Bool]
+        \\    chomp_until = |char| {
+        \\        build_primitive_parser(
+        \\            |input| {
+        \\                match input.find_first_index(|x| { x == char }) {
+        \\                    Ok(index) => {
+        \\                        val = input.sublist({ start: 0, len: index })
+        \\                        Ok({ val, input: input.drop_first(index) })
+        \\                    }
+        \\                    Err(_) => Err(ParsingFailure("character not found"))
+        \\                }
+        \\            }
+        \\        )
+        \\    }
+        \\}
+        \\
+        \\expect {
+        \\    input = "# H\nR".to_utf8()
+        \\    result = Parser.parse_partial(Parser.chomp_until('\n'), input)
+        \\    result == Ok({ val: ['#', ' ', 'H'], input: ['\n', 'R'] })
+        \\}
+        \\
+        \\expect {
+        \\    match Parser.parse_partial(Parser.chomp_until('\n'), []) {
+        \\        Ok(_) => Bool.False
+        \\        Err(ParsingFailure(_)) => Bool.True
+        \\    }
+        \\}
+        \\
+        \\main : U8
+        \\main = 0
+        ,
+        .expected = .{ .inspect_str = "0" },
+    },
     .{
         // https://github.com/roc-lang/roc/issues/9686
         // A type alias (`Score : U64`) defined in an imported type module is used
@@ -202,18 +376,17 @@ pub const tests = [_]TestCase{
         .imports = &.{.{
             .name = "Acct",
             .source =
-            \\module [Account, sample]
+            \\Acct := { id : U8, balance : U32 }.{
+            \\    sample : Acct
+            \\    sample = { id : 7, balance : 99 }
+            \\}
             \\
-            \\Account := { id : U8, balance : U32 }
-            \\
-            \\sample : Account
-            \\sample = { id : 7, balance : 99 }
             ,
         }},
         .source =
-        \\import Acct exposing [Account]
+        \\import Acct exposing [Acct]
         \\
-        \\describe : Account -> U32
+        \\describe : Acct -> U32
         \\describe = |{ id, balance }| id.to_u32() * 1000 + balance
         \\
         \\main = describe(Acct.sample)
@@ -327,5 +500,306 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "Ok(22.0)" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10049
+        // Structural derivation must call a named component's exact equality
+        // and hash methods instead of inspecting its backing representation.
+        .name = "issue 10049: structural containers honor component equality and hash methods",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    d1 = Dict.from_list([("Bob", 3.1), ("John", 4.2)])
+        \\    d2 = Dict.from_list([("John", 4.2), ("Bob", 3.1)])
+        \\    records_equal = { owes: d1 } == { owes: d2 }
+        \\    tuples_equal = (d1, 0) == (d2, 0)
+        \\    tags_equal = Owes(d1) == Owes(d2)
+        \\    lists_equal = [d1] == [d2]
+        \\    sets_equal = { items: Set.from_list([1, 2]) } == { items: Set.from_list([2, 1]) }
+        \\    hash_round_trip = Dict.empty().insert({ owes: d1 }, "found").get({ owes: d2 }) == Ok("found")
+        \\    tuple_hash_round_trip = Dict.empty().insert((d1, 0), "found").get((d2, 0)) == Ok("found")
+        \\    tag_hash_round_trip = Dict.empty().insert(Owes(d1), "found").get(Owes(d2)) == Ok("found")
+        \\    set_hash_round_trip = Dict.empty().insert(Set.from_list([1, 2]), "found").get(Set.from_list([2, 1])) == Ok("found")
+        \\
+        \\    records_equal and tuples_equal and tags_equal and lists_equal and sets_equal and hash_round_trip and tuple_hash_round_trip and tag_hash_round_trip and set_hash_round_trip
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/9783
+        // The exact mathematical result is 16129, which does not fit in I8.
+        .name = "issue 9783: signed times crashes on overflow",
+        .source = "I8.times(I8.highest, I8.highest)",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/9812
+        // The exact mathematical result is 128, which does not fit in I8.
+        .name = "issue 9812: signed negate crashes on lowest value",
+        .source = "I8.negate(I8.lowest)",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/9813
+        // The exact mathematical result is 128, which does not fit in I8.
+        .name = "issue 9813: signed abs crashes on lowest value",
+        .source = "I8.abs(I8.lowest)",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/9814
+        // The exact mathematical result is 128, which does not fit in I8.
+        .name = "issue 9814: signed div_by crashes on lowest divided by negative one",
+        .source = "I8.div_by(I8.lowest, -1)",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        // The same signed division edge has a defined remainder of zero.
+        .name = "issue 9814: signed rem and mod by negative one return zero",
+        .source = "(I8.rem_by(I8.lowest, -1), I8.mod_by(I8.lowest, -1))",
+        .expected = .{ .inspect_str = "(0, 0)" },
+    },
+    .{
+        // I128 modulo carries the sign of the divisor: a negative dividend with a
+        // positive divisor yields a positive result, never the truncated
+        // remainder (-1). Exercises the dev and wasm backends' i128-width paths.
+        .name = "i128 mod_by: negative dividend, positive divisor",
+        .source = "I128.mod_by(-7, 3)",
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        // I128 modulo with a positive dividend and negative divisor yields a
+        // negative result (sign of the divisor).
+        .name = "i128 mod_by: positive dividend, negative divisor",
+        .source = "I128.mod_by(7, -3)",
+        .expected = .{ .inspect_str = "-2" },
+    },
+    .{
+        // A dividend larger in magnitude than 64 bits forces the true i128 path.
+        // -(2^64 + 1) mod 3 == 1 (truncated remainder -2, adjusted by +3).
+        .name = "i128 mod_by: magnitude exceeds 64 bits",
+        .source = "I128.mod_by(-18446744073709551617, 3)",
+        .expected = .{ .inspect_str = "1" },
+    },
+    .{
+        // Truncated remainder keeps the sign of the dividend on every backend,
+        // in contrast to modulo which carries the sign of the divisor.
+        .name = "i128 rem_by: negative dividend keeps dividend sign",
+        .source = "I128.rem_by(-7, 3)",
+        .expected = .{ .inspect_str = "-1" },
+    },
+    .{
+        .name = "i128 rem_by: magnitude exceeds 64 bits",
+        .source = "I128.rem_by(-18446744073709551617, 3)",
+        .expected = .{ .inspect_str = "-2" },
+    },
+    .{
+        // Dec truncated remainder keeps the sign of the dividend. Dec has no
+        // mod_by in the language surface, so Dec modulo cannot be exercised
+        // end-to-end; this pins the reachable Dec rem path.
+        .name = "dec rem_by: negative dividend keeps dividend sign",
+        .source = "Dec.rem_by(-7.5, 2.0)",
+        .expected = .{ .inspect_str = "-1.5" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10084
+        // `item` is bound only through `outer.get`'s return type. The call edge
+        // must carry both static-dispatch evidence entries into specialization.
+        .name = "issue 10084: constraint-only receiver evidence reaches nested dispatch",
+        .source_kind = .module,
+        .source =
+        \\Inner := [Inner(U64)].{
+        \\    get : Inner -> U64
+        \\    get = |Inner.Inner(value)| value
+        \\}
+        \\
+        \\Outer := [Outer(Inner)].{
+        \\    get : Outer -> Inner
+        \\    get = |Outer.Outer(value)| value
+        \\}
+        \\
+        \\nested_get : outer -> result where [outer.get : outer -> item, item.get : item -> result]
+        \\nested_get = |outer| outer.get().get()
+        \\
+        \\main = nested_get(Outer.Outer(Inner.Inner(42)))
+        ,
+        .expected = .{ .inspect_str = "42" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10210
+        .name = "issue 10210: Dec division by zero crashes on every executor",
+        .source =
+        \\{
+        \\    f = |a, b| a / b
+        \\    f(1.0.Dec, 0.0.Dec)
+        \\}
+        ,
+        .expected = .{ .crash = {} },
+    },
+    .{
+        .name = "issue 10210: Dec truncating division by zero crashes on every executor",
+        .source = "Dec.div_trunc_by(1.0, 0.0)",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10209
+        // A concrete-number lambda remains callable directly from its record field.
+        .name = "issue 10209: concrete-number function stored in record field remains callable",
+        .source =
+        \\{
+        \\    r = { op: |x| x * 11.I64 }
+        \\    (r.op)(4.I64)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "44" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10170
+        .name = "issue 10170: List fold can concatenate iterator accumulators",
+        .source =
+        \\{
+        \\    _ = [[].iter()].fold([].iter(), |a, b| a.concat(b))
+        \\    {}
+        \\}
+        ,
+        .expected = .{ .inspect_str = "{}" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10067
+        // A stored const keeps the exact generated iterator witness. Using the
+        // binding must consume that witness without merging it into the public
+        // Iter interface.
+        .name = "issue 10067: stored iterator witness survives lookup",
+        .source_kind = .module,
+        .source =
+        \\xs = [1.I64].iter()
+        \\
+        \\main : List(I64)
+        \\main = xs.collect()
+        ,
+        .expected = .{ .inspect_str = "[1]" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10067
+        .name = "issue 10067: stored iterator witness survives record field access",
+        .source_kind = .module,
+        .source =
+        \\holder : { it : Iter(I64) }
+        \\holder = { it: [1.I64].iter() }
+        \\
+        \\main : List(I64)
+        \\main = holder.it.collect()
+        ,
+        .expected = .{ .inspect_str = "[1]" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10067
+        .name = "issue 10067: stored iterator witness survives tuple item access",
+        .source_kind = .module,
+        .source =
+        \\pair : (Iter(I64), I64)
+        \\pair = ([1.I64].iter(), 0.I64)
+        \\
+        \\main : List(I64)
+        \\main = pair.0.collect()
+        ,
+        .expected = .{ .inspect_str = "[1]" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10301
+        .name = "issue 10301: for over an effect-produced runtime list folds correctly",
+        .source_kind = .module,
+        .source =
+        \\produce : U64 -> List(U64)
+        \\produce = |n| {
+        \\    dbg "produce"
+        \\    [n, 2, 3]
+        \\}
+        \\
+        \\main : U64
+        \\main = {
+        \\    var $sum = 0
+        \\    for byte in produce(1) {
+        \\        $sum = $sum * 31 + byte
+        \\    }
+        \\    $sum
+        \\}
+        ,
+        .expected = .{ .inspect_str = "1026" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10317
+        .name = "issue 10317: loop-carried reassignment under a branch keeps zero args",
+        .source_kind = .module,
+        .source =
+        \\main : I64
+        \\main = {
+        \\    var $x = 0
+        \\    var $y = 0
+        \\    for flag in [Bool.False] {
+        \\        $y = if flag {
+        \\            $x = 1
+        \\            0
+        \\        } else {
+        \\            0
+        \\        }
+        \\    }
+        \\    $x + $y
+        \\}
+        ,
+        .expected = .{ .inspect_str = "0" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10300
+        .name = "issue 10300: integer wrapping arithmetic is expressible",
+        .source = "(U8.plus_wrap(U8.highest, 1), U8.minus_wrap(0, 1), U8.times_wrap(128, 2))",
+        .expected = .{ .inspect_str = "(0, 255, 0)" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10321
+        .name = "issue 10321: generalized from_quote literal supports custom and builtin specializations",
+        .source_kind = .module,
+        .source =
+        \\Bar := [Text(Str), Empty].{
+        \\    from_quote : Str -> Try(Bar, [BadQuotedBytes(Str)])
+        \\    from_quote = |str| Ok(Text(str))
+        \\}
+        \\
+        \\bar_identity : Bar -> Bar
+        \\bar_identity = |bar| bar
+        \\
+        \\str_identity : Str -> Str
+        \\str_identity = |str| str
+        \\
+        \\go = |f| f("hello")
+        \\
+        \\main = (go(bar_identity), go(str_identity))
+        ,
+        .expected = .{ .inspect_str = "(Text(\"hello\"), \"hello\")" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10321
+        .name = "issue 10321: from_quote survives a function stored in a record",
+        .source_kind = .module,
+        .source =
+        \\Bar := [Text(Str), Empty].{
+        \\    from_quote : Str -> Try(Bar, [BadQuotedBytes(Str)])
+        \\    from_quote = |str| Ok(Text(str))
+        \\}
+        \\
+        \\identity : Bar -> Bar
+        \\identity = |bar| bar
+        \\
+        \\hooks = { mk: identity }
+        \\
+        \\use_hooks = |h| {
+        \\    mk = h.mk
+        \\    mk("hello")
+        \\}
+        \\
+        \\main = use_hooks(hooks)
+        ,
+        .expected = .{ .inspect_str = "Text(\"hello\")" },
     },
 };

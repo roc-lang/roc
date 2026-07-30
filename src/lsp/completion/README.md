@@ -17,7 +17,7 @@ All paths are relative to `src/lsp/`.
 | `completion/builtins.zig` | `BUILTIN_TYPES` list (21 entries: `Str`, `List`, `Dict`, …, `Num`) and `isBuiltinType()` helper. |
 | `completion/mod.zig` | Re-exports `CompletionContext`, `detectCompletionContext`, `computeOffset`, and `CompletionBuilder`. |
 | `scope_map.zig` | Reconstructs lexical scopes from CIR so the builder can answer "which local variables are visible at byte offset X?" |
-| `cir_queries.zig` | Offset-based CIR queries. `findDotReceiverTypeVar()` finds the type of the expression to the left of a dot. `findTypeAtOffset()` returns the type at an arbitrary offset. Used as a first-pass type resolver before falling back to name-based lookup. |
+| `cir_queries.zig` | Offset-based CIR queries. `findFieldAccessReceiverTypeVar()` finds the receiver type of an existing field-access node. `findTypeAtOffset()` returns the type at an arbitrary offset. Used as a first-pass type resolver before falling back to name-based lookup. |
 | `module_lookup.zig` | `findDefinitionByName()` — searches a `ModuleEnv`'s defs and statements for a name and returns its pattern index. Used when resolving access chains. |
 | `build_env_handle.zig` | Reference-counted wrapper around `BuildEnv`. Ensures a `BuildEnv` stays alive while snapshot or previous-build references exist. |
 | `build_session.zig` | `BuildSession` — manages a single build invocation (used at the top of `getCompletionsAtPosition`). |
@@ -27,7 +27,7 @@ All paths are relative to `src/lsp/`.
 | Module | Purpose in completions |
 |---|---|
 | `canonicalize/ModuleEnv.zig` | Per-module compilation state: CIR node store, type store, method idents, ident table, etc. |
-| `compile/BuildEnv` | Root compilation environment. Contains `schedulers` (one per package/job) each holding a list of `ModuleState`. Also holds `builtin_modules`. |
+| `compile/BuildEnv` | Root compilation environment. Its `Coordinator` owns per-package `ModuleState` lists. Also holds `builtin_modules`. |
 | `types/` | Type inference results: `Var`, `Content`, `TypeStore`, records, aliases, nominals, functions, static dispatch constraints. |
 | `can/` (CIR) | Canonical Intermediate Representation — `Statement`, `Def`, `Pattern`, `Expr`, `TypeAnno`. |
 
@@ -74,7 +74,7 @@ The system tries three sources for a `ModuleEnv`, in order:
 
 When a snapshot or previous env is used, the flag `used_snapshot` is set to
 `true`.  This matters because CIR byte offsets from a snapshot do not match the
-current source text, so CIR-based type lookups (`findDotReceiverTypeVar`) are
+current source text, so CIR-based type lookups (`findFieldAccessReceiverTypeVar`) are
 skipped in favour of name-based lookups.
 
 The `module_lookup_env` variable tracks which `BuildEnv` backs the chosen
@@ -108,7 +108,7 @@ pub const CompletionContext = union(enum) {
     after_value_dot: struct {
         access_chain: []const u8,              // e.g. "myrec.subrec"
         chain_start: u32,                      // byte offset of chain start
-        member_start: u32,                     // byte offset of segment before dot
+        receiver_segment_start: u32,           // byte offset of segment before dot
         dot_offset: u32,                       // byte offset of the '.'
     },
     after_receiver_dot: struct {
@@ -146,7 +146,7 @@ every kind of completion the system can produce, grouped by context.
 
 **CompletionItemKind:** `function`, `class`, `enum_member`
 
-### 2. Record Field & Method Completions — `after_value_dot`
+### 2. Incomplete Value-Dot Completions — `after_value_dot`
 
 **Trigger:** `myRecord.`, `myrec.subrec.`
 
@@ -155,30 +155,34 @@ every kind of completion the system can produce, grouped by context.
    `Module.value.subfield` by walking segment-by-segment through the type
    system.
 2. If that fails (common with snapshots), fall back:
-   - CIR-based: `cir_queries.findDotReceiverTypeVar()` or `findTypeAtOffset()`
-   - Name-based: `addRecordFieldCompletions(name, offset)` +
+   - CIR-based: `cir_queries.findFieldAccessReceiverTypeVar()` or `findTypeAtOffset()`
+   - Name-based: `addRecordFieldCompletions(name, offset)` and
      `addMethodCompletions(name, offset)`
 3. Once a `types.Var` is in hand:
    - `addFieldsFromTypeVar()` — unwraps aliases/nominals up to 8 levels, then
      iterates record fields. Each field gets a `detail` string showing its type.
-   - `addMethodsFromTypeVar()` — looks up the type's identity (alias ident or
-     nominal ident), then searches `method_idents` for matching
-     `(type_ident, method_ident)` pairs. Builtin types are routed through the
-     `builtin_module_env` so `Str.contains`, `List.map` etc. resolve correctly.
+   - `addMethodsFromTypeVar()` — independently looks up the type identity in
+     `method_idents`. It does not inspect record fields.
+
+At `value.` the source is incomplete: selecting a field and stopping produces
+`value.field`, while adding an argument list produces the distinct method syntax
+`value.method(args)`. Offering both completion kinds at this unfinished prefix
+does not merge their lookup or resolution.
 
 **CompletionItemKind:** `field`, `method`
 
-### 3. Receiver Dot Completions (call chaining) — `after_receiver_dot`
+### 3. Incomplete Receiver-Dot Completions — `after_receiver_dot`
 
 **Trigger:** `getValue().`, `Str.join(items).`, `testFunc("hi").`
 
 **What happens:**
-1. Try CIR-based lookup: `findDotReceiverTypeVar()` at `cursor_offset`, with
+1. Try CIR-based lookup: `findFieldAccessReceiverTypeVar()` at `cursor_offset`, with
    fallback to `findTypeAtOffset(dot_offset - 1)`.
 2. If using a snapshot or CIR failed, parse the `call_chain` textually and
    resolve via `resolveAccessChainTypeVar()`, then call
    `extractReturnType()` to unwrap the function return type.
-3. Add fields and methods from the resolved type.
+3. Run field completion and method completion independently for the resolved
+   receiver type.
 
 **CompletionItemKind:** `field`, `method`
 
@@ -194,7 +198,7 @@ every kind of completion the system can produce, grouped by context.
 3. `addTypeCompletionsFromEnv(env)` — same as (1) but across all modules
    in the `BuildEnv`.
 4. `addModuleNameCompletionsFromEnv(env)` — adds all module names from
-   `BuildEnv` schedulers **and** calls `addBuiltinModuleNameCompletions()`
+   `BuildEnv` coordinator packages **and** calls `addBuiltinModuleNameCompletions()`
    which adds every entry in `BUILTIN_TYPES`.
 
 This means typing `x : ` suggests: user-defined type aliases and nominals,
@@ -303,7 +307,7 @@ From `src/canonicalize/ModuleEnv.zig`. Fields used by completions:
 
 | Field | Purpose |
 |---|---|
-| `schedulers` | `HashMap<JobQueueId, Scheduler>` — each scheduler has a `.modules` list of `ModuleState` |
+| `coordinator.packages` | Package map whose entries each have a `.modules` list of `ModuleState` |
 | `builtin_modules.builtin_module.env` | The `ModuleEnv` for the Builtin module (Str, List, etc.) |
 
 ### ScopeMap and Binding
@@ -334,7 +338,7 @@ Every public `add*` method on `CompletionBuilder`:
 | Method | What it adds |
 |---|---|
 | `addItem(item)` | Core: appends one item with deduplication. Returns `true` if added. |
-| `addModuleNameCompletionsFromEnv(env)` | All module names from `BuildEnv` schedulers + `addBuiltinModuleNameCompletions()`. |
+| `addModuleNameCompletionsFromEnv(env)` | All module names from `BuildEnv` coordinator state + `addBuiltinModuleNameCompletions()`. |
 | `addModuleNameCompletions(module_env)` | Imported module aliases from `s_import` statements. |
 | `addModuleMemberCompletions(env, name, opt)` | Exposed items from a named module (handles builtins and imports). |
 | `addModuleMemberCompletionsFromModuleEnv(env, name)` | Exposed items from a specific `ModuleEnv`. |
@@ -409,7 +413,7 @@ Each test follows this pattern:
 
 | Test name | Source code | Position | Verifies |
 |---|---|---|---|
-| `returns module definitions` | `module []\n\nfoo = 42\nbar = \|x\| x + 1` | 3:0 | items array exists |
+| `returns local definitions` | `foo = 42\nbar = \|x\| x + 1` | 2:0 | items array exists |
 | `returns module members after dot` | `app [...]\nimport Str\nresult = Str.` | 2:13 | Str member completions |
 | `returns module names in expression context` | `app [...]\nimport Json\nresult = ` | 2:9 | `Json` appears |
 | `returns types after colon` | `app [...]\nMyList:List(Str)\nx : ` | 2:4 | `Str`, `U64`, `Bool` appear |

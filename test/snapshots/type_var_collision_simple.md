@@ -32,17 +32,17 @@ main! = |_| {
 # EXPECTED
 UNUSED VARIABLE - type_var_collision_simple.md:20:5:20:12
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `result3` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_result3` to suppress this warning.
-The unused variable is declared here:
-**type_var_collision_simple.md:20:5:20:12:**
-```roc
-    result3 = pair(result1, result2)
-```
-    ^^^^^^^
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `result3` is defined here and then never used. ─┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  result3 = pair(result1, result2)                                          │
+ │  ‾‾‾‾‾‾‾                                                                   │
+ └───────────────────────────────────────── type_var_collision_simple.md:20:5 ┘
 
+    If you don't need this variable, prefix it with an underscore like
+    `_result3` to suppress this warning.
 
 # TOKENS
 ~~~zig
@@ -210,29 +210,29 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "result1"))
-					(e-call (constraint-fn-var 195)
+					(e-call (constraint-fn-var 275)
 						(e-lookup-local
 							(p-assign (ident "identity")))
 						(e-num (value "42"))))
 				(s-let
 					(p-assign (ident "result2"))
-					(e-call (constraint-fn-var 214)
+					(e-call (constraint-fn-var 286)
 						(e-lookup-local
 							(p-assign (ident "identity2")))
 						(e-string
 							(e-literal (string "hello")))))
 				(s-let
 					(p-assign (ident "result3"))
-					(e-call (constraint-fn-var 219)
+					(e-call (constraint-fn-var 291)
 						(e-lookup-local
 							(p-assign (ident "pair")))
 						(e-lookup-local
 							(p-assign (ident "result1")))
 						(e-lookup-local
 							(p-assign (ident "result2")))))
-				(e-dispatch-call (method "plus") (constraint-fn-var 222)
+				(e-dispatch-call (method "plus") (constraint-fn-var 294)
 					(receiver
-						(e-dispatch-call (method "plus") (constraint-fn-var 220)
+						(e-dispatch-call (method "plus") (constraint-fn-var 292)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "a"))))

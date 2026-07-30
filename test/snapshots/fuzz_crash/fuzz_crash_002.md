@@ -8,161 +8,231 @@ type=file
 modu:;::::::::::::::le[%
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_002.md:1:6:1:7
-PARSE ERROR - fuzz_crash_002.md:1:7:1:9
-PARSE ERROR - fuzz_crash_002.md:1:9:1:11
-PARSE ERROR - fuzz_crash_002.md:1:11:1:13
-PARSE ERROR - fuzz_crash_002.md:1:13:1:15
-PARSE ERROR - fuzz_crash_002.md:1:15:1:17
-PARSE ERROR - fuzz_crash_002.md:1:17:1:19
-PARSE ERROR - fuzz_crash_002.md:1:19:1:21
-PARSE ERROR - fuzz_crash_002.md:1:21:1:23
-PARSE ERROR - fuzz_crash_002.md:1:23:1:24
-PARSE ERROR - fuzz_crash_002.md:1:24:1:25
+UNEXPECTED TYPE SYNTAX - fuzz_crash_002.md:1:6:1:7
+UNEXPECTED STATEMENT - fuzz_crash_002.md:1:7:1:9
+UNEXPECTED STATEMENT - fuzz_crash_002.md:1:9:1:11
+UNEXPECTED STATEMENT - fuzz_crash_002.md:1:11:1:13
+UNEXPECTED STATEMENT - fuzz_crash_002.md:1:13:1:15
+UNEXPECTED STATEMENT - fuzz_crash_002.md:1:15:1:17
+UNEXPECTED STATEMENT - fuzz_crash_002.md:1:17:1:19
+UNEXPECTED STATEMENT - fuzz_crash_002.md:1:19:1:21
+UNEXPECTED STATEMENT - fuzz_crash_002.md:1:21:1:23
+UNEXPECTED STATEMENT - fuzz_crash_002.md:1:23:1:24
+UNEXPECTED STATEMENT - fuzz_crash_002.md:1:24:1:25
 MALFORMED TYPE - fuzz_crash_002.md:1:6:1:7
 DECLARATION HAS NO VALUE - fuzz_crash_002.md:1:1:1:7
 # PROBLEMS
-**UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **;** is not expected in a type annotation.
-Type annotations should contain types like _Str_, _Num a_, or _List U64_.
 
-**fuzz_crash_002.md:1:6:1:7:**
-```roc
-modu:;::::::::::::::le[%
-```
-     ^
+┌────────────────────────┐
+│ UNEXPECTED TYPE SYNTAX ├─ I was parsing a type annotation, and this token ──┐
+└┬───────────────────────┘  cannot start a type here.                         │
+ │                                                                            │
+ │  modu:;::::::::::::::le[%                                                  │
+ │       ‾                                                                    │
+ └───────────────────────────────────────────────────── fuzz_crash_002.md:1:6 ┘
 
+    Types can be type variables, uppercase type names, function types, tuples,
+    records, or tag unions.
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+    For example:
+        List(U64)
 
-**fuzz_crash_002.md:1:7:1:9:**
-```roc
-modu:;::::::::::::::le[%
-```
-      ^^
+    I found `;` here.
+    This token is malformed, so it cannot be used as ordinary Roc syntax.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  modu:;::::::::::::::le[%                                                  │
+ │        ‾‾                                                                  │
+ └───────────────────────────────────────────────────── fuzz_crash_002.md:1:7 ┘
 
-**fuzz_crash_002.md:1:9:1:11:**
-```roc
-modu:;::::::::::::::le[%
-```
-        ^^
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
+    For example:
+        answer = 42
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_002.md:1:11:1:13:**
-```roc
-modu:;::::::::::::::le[%
-```
-          ^^
+    I found `::` here.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  modu:;::::::::::::::le[%                                                  │
+ │          ‾‾                                                                │
+ └───────────────────────────────────────────────────── fuzz_crash_002.md:1:9 ┘
 
-**fuzz_crash_002.md:1:13:1:15:**
-```roc
-modu:;::::::::::::::le[%
-```
-            ^^
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
+    For example:
+        answer = 42
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_002.md:1:15:1:17:**
-```roc
-modu:;::::::::::::::le[%
-```
-              ^^
+    I found `::` here.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  modu:;::::::::::::::le[%                                                  │
+ │            ‾‾                                                              │
+ └──────────────────────────────────────────────────── fuzz_crash_002.md:1:11 ┘
 
-**fuzz_crash_002.md:1:17:1:19:**
-```roc
-modu:;::::::::::::::le[%
-```
-                ^^
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
+    For example:
+        answer = 42
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_002.md:1:19:1:21:**
-```roc
-modu:;::::::::::::::le[%
-```
-                  ^^
+    I found `::` here.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  modu:;::::::::::::::le[%                                                  │
+ │              ‾‾                                                            │
+ └──────────────────────────────────────────────────── fuzz_crash_002.md:1:13 ┘
 
-**fuzz_crash_002.md:1:21:1:23:**
-```roc
-modu:;::::::::::::::le[%
-```
-                    ^^
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
+    For example:
+        answer = 42
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_002.md:1:23:1:24:**
-```roc
-modu:;::::::::::::::le[%
-```
-                      ^
+    I found `::` here.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  modu:;::::::::::::::le[%                                                  │
+ │                ‾‾                                                          │
+ └──────────────────────────────────────────────────── fuzz_crash_002.md:1:15 ┘
 
-**fuzz_crash_002.md:1:24:1:25:**
-```roc
-modu:;::::::::::::::le[%
-```
-                       ^
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
+    For example:
+        answer = 42
 
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**fuzz_crash_002.md:1:6:1:7:**
-```roc
-modu:;::::::::::::::le[%
-```
-     ^
+    I found `::` here.
 
 
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_002.md:1:1:1:7:**
-```roc
-modu:;::::::::::::::le[%
-```
-^^^^^^
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  modu:;::::::::::::::le[%                                                  │
+ │                  ‾‾                                                        │
+ └──────────────────────────────────────────────────── fuzz_crash_002.md:1:17 ┘
+
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `::` here.
 
 
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  modu:;::::::::::::::le[%                                                  │
+ │                    ‾‾                                                      │
+ └──────────────────────────────────────────────────── fuzz_crash_002.md:1:19 ┘
+
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `::` here.
+
+
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  modu:;::::::::::::::le[%                                                  │
+ │                      ‾‾                                                    │
+ └──────────────────────────────────────────────────── fuzz_crash_002.md:1:21 ┘
+
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `le` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
+
+
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  modu:;::::::::::::::le[%                                                  │
+ │                        ‾                                                   │
+ └──────────────────────────────────────────────────── fuzz_crash_002.md:1:23 ┘
+
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `[` here.
+
+
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  modu:;::::::::::::::le[%                                                  │
+ │                         ‾                                                  │
+ └──────────────────────────────────────────────────── fuzz_crash_002.md:1:24 ┘
+
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `%` here.
+
+
+┌────────────────┐
+│ MALFORMED TYPE ├─ This type annotation is malformed or contains invalid ────┐
+└┬───────────────┘  syntax.                                                   │
+ │                                                                            │
+ │  modu:;::::::::::::::le[%                                                  │
+ │       ‾                                                                    │
+ └───────────────────────────────────────────────────── fuzz_crash_002.md:1:6 ┘
+
+
+
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  modu:;::::::::::::::le[%                                                  │
+ │  ‾‾‾‾‾‾                                                                    │
+ └───────────────────────────────────────────────────── fuzz_crash_002.md:1:1 ┘
+
+    Add a value body here, or put hosted functions in a platform type mod so
+    they are published through the host boundary.
 
 # TOKENS
 ~~~zig
@@ -172,7 +242,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "modu")
 			(ty-malformed (tag "ty_anno_unexpected_token")))
@@ -189,7 +259,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-modu : 
+modu :
 ~~~
 # CANONICALIZE
 ~~~clojure

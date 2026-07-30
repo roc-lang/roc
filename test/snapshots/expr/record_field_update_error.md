@@ -8,42 +8,55 @@ type=expr
 { person & age: 31 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - record_field_update_error.md:1:10:1:11
-UNEXPECTED TOKEN IN TYPE ANNOTATION - record_field_update_error.md:1:17:1:19
+UNEXPECTED EXPRESSION SYNTAX - record_field_update_error.md:1:10:1:11
+UNEXPECTED TYPE SYNTAX - record_field_update_error.md:1:17:1:19
 DECLARATION HAS NO VALUE - record_field_update_error.md:1:12:1:19
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **&** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
 
-**record_field_update_error.md:1:10:1:11:**
-```roc
-{ person & age: 31 }
-```
-         ^
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  { person & age: 31 }                                                      │
+ │           ‾                                                                │
+ └───────────────────────────────────────── record_field_update_error.md:1:10 ┘
 
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
 
-**UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **31** is not expected in a type annotation.
-Type annotations should contain types like _Str_, _Num a_, or _List U64_.
+    For example:
+        add(1, 2)
 
-**record_field_update_error.md:1:17:1:19:**
-```roc
-{ person & age: 31 }
-```
-                ^^
+    I found `&` here.
 
 
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**record_field_update_error.md:1:12:1:19:**
-```roc
-{ person & age: 31 }
-```
-           ^^^^^^^
+┌────────────────────────┐
+│ UNEXPECTED TYPE SYNTAX ├─ I was parsing a type annotation, and this token ──┐
+└┬───────────────────────┘  cannot start a type here.                         │
+ │                                                                            │
+ │  { person & age: 31 }                                                      │
+ │                  ‾‾                                                        │
+ └───────────────────────────────────────── record_field_update_error.md:1:17 ┘
+
+    Types can be type variables, uppercase type names, function types, tuples,
+    records, or tag unions.
+
+    For example:
+        List(U64)
+
+    I found `31` here.
 
 
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  { person & age: 31 }                                                      │
+ │             ‾‾‾‾‾‾‾                                                        │
+ └───────────────────────────────────────── record_field_update_error.md:1:12 ┘
+
+    Add a value body here, or put hosted functions in a platform type mod so
+    they are published through the host boundary.
 
 # TOKENS
 ~~~zig
@@ -63,7 +76,7 @@ EndOfFile,
 ~~~roc
 {
 	person
-		age : 
+		age :
 }
 ~~~
 # CANONICALIZE

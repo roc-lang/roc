@@ -15,15 +15,14 @@ main! = |_| processNested([])
 # EXPECTED
 UNDECLARED TYPE - type_app_nested.md:3:31:3:34
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Err_ is not declared in this scope.
 
-This type is referenced here:
-**type_app_nested.md:3:31:3:34:**
-```roc
-processNested : List(Try(Str, Err)) -> List(Str)
-```
-                              ^^^
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Err` is not declared in this scope. ───────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  processNested : List(Try(Str, Err)) -> List(Str)                          │
+ │                                ‾‾‾                                         │
+ └─────────────────────────────────────────────────── type_app_nested.md:3:31 ┘
 
 
 # TOKENS
@@ -115,9 +114,8 @@ main! = |_| processNested([])
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call (constraint-fn-var 139)
-				(e-lookup-local
-					(p-assign (ident "processNested")))
+			(e-call (constraint-fn-var 276)
+				(e-runtime-error (tag "erroneous_value_expr"))
 				(e-empty_list)))))
 ~~~
 # TYPES

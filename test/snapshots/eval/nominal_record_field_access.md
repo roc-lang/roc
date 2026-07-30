@@ -41,7 +41,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "Wrapper")
@@ -165,7 +165,7 @@ expect getName(Wrapper.WithRecord({ name: "hello" })) == "hello"
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 184)
+				(e-call (constraint-fn-var 319)
 					(e-lookup-local
 						(p-assign (ident "getName")))
 					(e-nominal (nominal "Wrapper")
@@ -179,7 +179,7 @@ expect getName(Wrapper.WithRecord({ name: "hello" })) == "hello"
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 307)
+				(e-call (constraint-fn-var 380)
 					(e-lookup-local
 						(p-assign (ident "getName")))
 					(e-nominal (nominal "Wrapper")

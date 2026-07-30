@@ -11,17 +11,18 @@ x = 500
 # EXPECTED
 INVALID NUMBER - u8_annotation_large_value.md:2:5:2:8
 # PROBLEMS
-**INVALID NUMBER**
-This number literal does not fit in the inferred type:
-**u8_annotation_large_value.md:2:5:2:8:**
-```roc
-x = 500
-```
-    ^^^
 
-The inferred type is:
+┌────────────────┐
+│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  x = 500                                                                   │
+ │      ‾‾‾                                                                   │
+ └────────────────────────────────────────── u8_annotation_large_value.md:2:5 ┘
 
-    U8
+    The inferred type is:
+
+        U8
 
 # TOKENS
 ~~~zig
@@ -32,7 +33,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "x")
 			(ty (name "U8")))
@@ -49,7 +50,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "x"))
-		(e-num (value "500"))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "U8") (builtin)))))
 ~~~

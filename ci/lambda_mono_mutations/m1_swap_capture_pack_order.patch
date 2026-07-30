@@ -1,0 +1,12 @@
+diff --git a/src/postcheck/solved_lir_lower.zig b/src/postcheck/solved_lir_lower.zig
+index 269f5e573e..e9da282554 100644
+--- a/src/postcheck/solved_lir_lower.zig
++++ b/src/postcheck/solved_lir_lower.zig
+@@ -2456,6 +2456,7 @@ const Lowerer = struct {
+                 try self.addLocalForLayout(field_layout);
+         }
+ 
++        if (field_locals.len >= 2) std.mem.swap(LIR.LocalId, &field_locals[0], &field_locals[1]);
+         var current = if (target_is_zst)
+             try self.assignZst(target, next)
+         else

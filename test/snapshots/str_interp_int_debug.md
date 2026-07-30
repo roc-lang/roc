@@ -34,11 +34,11 @@ NO CHANGE
 (e-block
 	(s-let
 		(p-assign (ident "#interp_0"))
-		(e-call (constraint-fn-var 63)
+		(e-call (constraint-fn-var 213)
 			(e-lookup-external
 				(builtin))
 			(e-num (value "0"))))
-	(e-interpolation (constraint-fn-var 188)
+	(e-interpolation (constraint-fn-var 244) (dispatcher-var 8)
 		(first
 			(e-literal (string "zero: ")))
 		(parts

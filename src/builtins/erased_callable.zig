@@ -109,6 +109,50 @@ pub fn allocate(
     return data_ptr;
 }
 
+/// Prepare an erased callable allocation for a same-layout repack and write
+/// the new callable header/capture into it.
+///
+/// `reuse` may be reused only when the caller has already established that the
+/// old allocation has the same payload size and alignment as the new callable.
+/// If `update_mode` is `.InPlace`, the caller has proven uniqueness. Otherwise
+/// this helper performs the runtime uniqueness check and allocates a fresh
+/// callable when the old value is shared.
+pub fn repack(
+    reuse: ?[*]u8,
+    callable_fn_ptr: CallableFnPtr,
+    on_drop: ?OnDropFn,
+    capture_src: ?[*]const u8,
+    capture_size: usize,
+    update_mode: utils.UpdateMode,
+    roc_ops: *RocOps,
+) [*]u8 {
+    const data_ptr = if (reuse) |old_ptr| blk: {
+        if (update_mode == .InPlace or utils.isUnique(old_ptr, roc_ops)) {
+            const old_payload = payloadPtr(old_ptr);
+            if (old_payload.on_drop) |old_on_drop| {
+                old_on_drop(capturePtr(old_ptr), roc_ops);
+            }
+            break :blk old_ptr;
+        }
+
+        const fresh = allocate(callable_fn_ptr, on_drop, capture_size, roc_ops);
+        decref(old_ptr, roc_ops);
+        break :blk fresh;
+    } else allocate(callable_fn_ptr, on_drop, capture_size, roc_ops);
+
+    payloadPtr(data_ptr).* = .{
+        .callable_fn_ptr = callable_fn_ptr,
+        .on_drop = on_drop,
+    };
+
+    if (capture_size > 0) {
+        const src = capture_src orelse unreachable;
+        @memcpy(capturePtr(data_ptr)[0..capture_size], src[0..capture_size]);
+    }
+
+    return data_ptr;
+}
+
 /// Interpret a boxed-erased-callable data pointer as its payload header.
 pub fn payloadPtr(data_ptr: [*]u8) *Payload {
     return @ptrCast(@alignCast(data_ptr));
@@ -173,4 +217,93 @@ pub fn free(data_ptr: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
         }
     }
     utils.freeDataPtrC(data_ptr, payload_alignment, allocation_has_refcounted_children, roc_ops);
+}
+
+const RepackTestState = struct {
+    var old_drop_count: usize = 0;
+    var new_drop_count: usize = 0;
+    var old_drop_first_byte: u8 = 0;
+
+    fn reset() void {
+        old_drop_count = 0;
+        new_drop_count = 0;
+        old_drop_first_byte = 0;
+    }
+
+    fn callable(_: *RocOps, _: ?[*]u8, _: ?[*]const u8, _: ?[*]u8) callconv(.c) void {}
+
+    fn oldDrop(capture: ?[*]u8, _: *RocOps) callconv(.c) void {
+        old_drop_count += 1;
+        old_drop_first_byte = if (capture) |ptr| ptr[0] else 0;
+    }
+
+    fn newDrop(_: ?[*]u8, _: *RocOps) callconv(.c) void {
+        new_drop_count += 1;
+    }
+};
+
+test "erased callable repack reuses unique allocation and drops old capture" {
+    RepackTestState.reset();
+    var test_env = utils.TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const ops = test_env.getOps();
+
+    const old = allocate(&RepackTestState.callable, &RepackTestState.oldDrop, 4, ops);
+    capturePtr(old)[0..4].* = .{ 11, 12, 13, 14 };
+
+    var new_capture = [_]u8{ 21, 22, 23, 24 };
+    const result = repack(
+        old,
+        &RepackTestState.callable,
+        &RepackTestState.newDrop,
+        &new_capture,
+        new_capture.len,
+        .InPlace,
+        ops,
+    );
+
+    try std.testing.expectEqual(@intFromPtr(old), @intFromPtr(result));
+    try std.testing.expectEqual(@as(usize, 1), RepackTestState.old_drop_count);
+    try std.testing.expectEqual(@as(u8, 11), RepackTestState.old_drop_first_byte);
+    try std.testing.expectEqualSlices(u8, &new_capture, capturePtr(result)[0..new_capture.len]);
+
+    free(result, ops);
+    try std.testing.expectEqual(@as(usize, 1), RepackTestState.new_drop_count);
+    try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
+}
+
+test "erased callable repack copies shared allocation and preserves old capture" {
+    RepackTestState.reset();
+    var test_env = utils.TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const ops = test_env.getOps();
+
+    const old = allocate(&RepackTestState.callable, &RepackTestState.oldDrop, 4, ops);
+    capturePtr(old)[0..4].* = .{ 31, 32, 33, 34 };
+    incref(old, 1, ops);
+
+    var new_capture = [_]u8{ 41, 42, 43, 44 };
+    const result = repack(
+        old,
+        &RepackTestState.callable,
+        &RepackTestState.newDrop,
+        &new_capture,
+        new_capture.len,
+        .Immutable,
+        ops,
+    );
+
+    try std.testing.expect(@intFromPtr(old) != @intFromPtr(result));
+    try std.testing.expectEqual(@as(usize, 0), RepackTestState.old_drop_count);
+    try std.testing.expectEqual(@as(usize, 2), test_env.getAllocationCount());
+    try std.testing.expectEqualSlices(u8, &new_capture, capturePtr(result)[0..new_capture.len]);
+    try std.testing.expectEqualSlices(u8, &.{ 31, 32, 33, 34 }, capturePtr(old)[0..4]);
+
+    decref(old, ops);
+    try std.testing.expectEqual(@as(usize, 1), RepackTestState.old_drop_count);
+    try std.testing.expectEqual(@as(u8, 31), RepackTestState.old_drop_first_byte);
+
+    free(result, ops);
+    try std.testing.expectEqual(@as(usize, 1), RepackTestState.new_drop_count);
+    try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
 }

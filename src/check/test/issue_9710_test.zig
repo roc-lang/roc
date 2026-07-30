@@ -14,5 +14,5 @@ test "issue 9710: malformed derived is_eq arity reports an error" {
     var test_env = try TestEnv.init("Test", src);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("TOO MANY ARGS");
+    try test_env.assertOneTypeError("Too Many Args");
 }

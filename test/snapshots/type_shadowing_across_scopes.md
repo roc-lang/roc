@@ -11,102 +11,128 @@ processData : Str -> Str
 processData = |data|
     "processed"
 
-# In a nested module scope, redeclare Try
-InnerModule : {
+# In a nested mod scope, redeclare Try
+InnerMod : {
     Try : [Success, Failure]
 }
 ~~~
 # EXPECTED
-PARSE ERROR - type_shadowing_across_scopes.md:9:5:9:8
-PARSE ERROR - type_shadowing_across_scopes.md:9:21:9:28
-PARSE ERROR - type_shadowing_across_scopes.md:9:28:9:29
-PARSE ERROR - type_shadowing_across_scopes.md:10:1:10:2
-DUPLICATE DEFINITION - type_shadowing_across_scopes.md:1:1:1:28
+EXPECTED TYPE FIELD - type_shadowing_across_scopes.md:9:5:9:8
+EXPECTED RECORD TYPE SEPARATOR - type_shadowing_across_scopes.md:9:21:9:28
+UNEXPECTED STATEMENT - type_shadowing_across_scopes.md:9:28:9:29
+UNEXPECTED STATEMENT - type_shadowing_across_scopes.md:10:1:10:2
+BUILTIN TYPE SHADOWED - type_shadowing_across_scopes.md:1:1:1:28
 UNUSED VARIABLE - type_shadowing_across_scopes.md:4:16:4:20
 MALFORMED TYPE - type_shadowing_across_scopes.md:9:21:9:28
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `expected_type_field_name`
-This is an unexpected parsing error. Please check your syntax.
 
-**type_shadowing_across_scopes.md:9:5:9:8:**
-```roc
-    Try : [Success, Failure]
-```
-    ^^^
+┌─────────────────────┐
+│ EXPECTED TYPE FIELD ├─ I was parsing a record type, and I expected a ───────┐
+└┬────────────────────┘  field name.                                          │
+ │                                                                            │
+ │  Try : [Success, Failure]                                                  │
+ │  ‾‾‾                                                                       │
+ └─────────────────────────────────────── type_shadowing_across_scopes.md:9:5 ┘
 
+    Record type fields start with lowercase names, `_`, or named underscores,
+    followed by `:` and the field type.
 
-**PARSE ERROR**
-A parsing error occurred: `expected_ty_close_curly_or_comma`
-This is an unexpected parsing error. Please check your syntax.
+    For example:
+        { name : Str, age : U64 }
 
-**type_shadowing_across_scopes.md:9:21:9:28:**
-```roc
-    Try : [Success, Failure]
-```
-                    ^^^^^^^
+    I found `Try` here.
+    Names that start with uppercase letters are used for tags, type names, and
+    mod names in Roc.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌────────────────────────────────┐
+│ EXPECTED RECORD TYPE SEPARATOR ├─ I was parsing a record type, and I ───────┐
+└┬───────────────────────────────┘  expected `,` or `}`.                      │
+ │                                                                            │
+ │  Try : [Success, Failure]                                                  │
+ │                  ‾‾‾‾‾‾‾                                                   │
+ └────────────────────────────────────── type_shadowing_across_scopes.md:9:21 ┘
 
-**type_shadowing_across_scopes.md:9:28:9:29:**
-```roc
-    Try : [Success, Failure]
-```
-                           ^
+    Separate record type fields with commas and close the record type with `}`.
 
+    For example:
+        { name : Str, age : U64 }
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**type_shadowing_across_scopes.md:10:1:10:2:**
-```roc
-}
-```
-^
+    I found `Failure` here.
+    Names that start with uppercase letters are used for tags, type names, and
+    mod names in Roc.
 
 
-**DUPLICATE DEFINITION**
-The name `Try` is being redeclared in this scope.
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  Try : [Success, Failure]                                                  │
+ │                         ‾                                                  │
+ └────────────────────────────────────── type_shadowing_across_scopes.md:9:28 ┘
 
-The redeclaration is here:
-**type_shadowing_across_scopes.md:1:1:1:28:**
-```roc
-Try(a, b) : [Ok(a), Err(b)]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
-But `Try` was already defined here:
-**type_shadowing_across_scopes.md:1:1:1:1:**
-```roc
-Try(a, b) : [Ok(a), Err(b)]
-```
-^
+    For example:
+        answer = 42
 
-
-**UNUSED VARIABLE**
-Variable `data` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_data` to suppress this warning.
-The unused variable is declared here:
-**type_shadowing_across_scopes.md:4:16:4:20:**
-```roc
-processData = |data|
-```
-               ^^^^
+    I found `]` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  }                                                                         │
+ │  ‾                                                                         │
+ └────────────────────────────────────── type_shadowing_across_scopes.md:10:1 ┘
 
-**type_shadowing_across_scopes.md:9:21:9:28:**
-```roc
-    Try : [Success, Failure]
-```
-                    ^^^^^^^
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `}` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
+
+
+┌───────────────────────┐
+│ BUILTIN TYPE SHADOWED ├─ The type `Try` shadows a builtin type. ────────────┐
+└┬──────────────────────┘                                                     │
+ │                                                                            │
+ │  Try(a, b) : [Ok(a), Err(b)]                                               │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
+ └─────────────────────────────────────── type_shadowing_across_scopes.md:1:1 ┘
+
+    This may make the builtin type inaccessible in this scope.
+
+    The new declaration is here:
+
+
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `data` is defined here and then never used. ────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  processData = |data|                                                      │
+ │                 ‾‾‾‾                                                       │
+ └────────────────────────────────────── type_shadowing_across_scopes.md:4:16 ┘
+
+    If you don't need this variable, prefix it with an underscore like `_data`
+    to suppress this warning.
+
+
+┌────────────────┐
+│ MALFORMED TYPE ├─ This type annotation is malformed or contains invalid ────┐
+└┬───────────────┘  syntax.                                                   │
+ │                                                                            │
+ │  Try : [Success, Failure]                                                  │
+ │                  ‾‾‾‾‾‾‾                                                   │
+ └────────────────────────────────────── type_shadowing_across_scopes.md:9:21 ┘
 
 
 # TOKENS
@@ -123,7 +149,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "Try")
@@ -150,7 +176,7 @@ EndOfFile,
 				(e-string
 					(e-string-part (raw "processed")))))
 		(s-type-decl
-			(header (name "InnerModule")
+			(header (name "InnerMod")
 				(args))
 			(ty-malformed (tag "expected_ty_close_curly_or_comma")))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -164,8 +190,8 @@ processData : Str -> Str
 processData = |data|
 	"processed"
 
-# In a nested module scope, redeclare Try
-InnerModule : 
+# In a nested mod scope, redeclare Try
+InnerMod :
 
 ~~~
 # CANONICALIZE
@@ -193,7 +219,7 @@ InnerModule :
 			(ty-tag-name (name "Err")
 				(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))
 	(s-alias-decl
-		(ty-header (name "InnerModule"))
+		(ty-header (name "InnerMod"))
 		(ty-malformed)))
 ~~~
 # TYPES
@@ -207,8 +233,8 @@ InnerModule :
 				(ty-args
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "b")))))
-		(alias (type "InnerModule")
-			(ty-header (name "InnerModule"))))
+		(alias (type "InnerMod")
+			(ty-header (name "InnerMod"))))
 	(expressions
 		(expr (type "Str -> Str"))))
 ~~~

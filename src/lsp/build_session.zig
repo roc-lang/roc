@@ -40,7 +40,7 @@ pub const BuildSession = struct {
     /// This handles:
     /// - URI to path conversion
     /// - File override setup
-    /// - Building
+    /// - Building (with owning main.roc / workspace package aliases when needed)
     /// - Report draining
     pub fn init(
         allocator: Allocator,
@@ -48,6 +48,7 @@ pub const BuildSession = struct {
         env: *BuildEnv,
         uri: []const u8,
         override_text: ?[]const u8,
+        workspace_root: ?[]const u8,
     ) Allocator.Error!BuildSession {
         // Convert URI to path
         const path = try uri_util.uriToPath(allocator, uri);
@@ -59,7 +60,7 @@ pub const BuildSession = struct {
 
         // Set up file override if override text provided.
         // SAFETY: override lives on the stack and its address is stored in env.filesystem.
-        // This is safe because env.build() is synchronous and we restore the Io before returning.
+        // This is safe because env.buildResolvingMain() is synchronous and we restore the Io before returning.
         var override: CoreCtx.ReadFileOverride = undefined;
         const saved_io = env.filesystem;
         if (override_text) |text| {
@@ -67,9 +68,12 @@ pub const BuildSession = struct {
             env.filesystem = override.io();
         }
 
+        const preferred_main = try preferredMainFromWorkspace(allocator, env.filesystem, workspace_root);
+        defer if (preferred_main) |main_path| allocator.free(main_path);
+
         // Build
         const build_succeeded = blk: {
-            env.build(absolute_path) catch {
+            env.buildResolvingMain(absolute_path, preferred_main) catch {
                 break :blk false;
             };
             break :blk true;
@@ -91,6 +95,20 @@ pub const BuildSession = struct {
             .build_succeeded = build_succeeded,
             .drained_reports = drained_reports,
         };
+    }
+
+    /// If the LSP workspace root contains `main.roc`, prefer it as the package-alias root.
+    fn preferredMainFromWorkspace(allocator: Allocator, filesystem: CoreCtx, workspace_root: ?[]const u8) Allocator.Error!?[]u8 {
+        const root = workspace_root orelse return null;
+        const candidate = try std.fs.path.join(allocator, &.{ root, "main.roc" });
+        errdefer allocator.free(candidate);
+        if (!filesystem.fileExists(candidate)) {
+            allocator.free(candidate);
+            return null;
+        }
+        const abs = try std.fs.path.resolve(allocator, &.{candidate});
+        allocator.free(candidate);
+        return abs;
     }
 
     /// Clean up the build session and free allocated memory.
@@ -117,39 +135,33 @@ pub const BuildSession = struct {
             return null;
         }
 
-        // Try to find the module by path across all schedulers
-        var sched_it = self.env.schedulers.iterator();
-        while (sched_it.next()) |entry| {
-            const sched = entry.value_ptr.*;
-            for (sched.modules.items) |*module_state| {
-                if (std.mem.eql(u8, module_state.path, self.absolute_path)) {
-                    if (module_state.moduleEnv()) |mod_env| {
-                        self.cached_module_env = mod_env;
-                        return mod_env;
-                    }
+        if (self.env.findModuleByPath(self.absolute_path)) |module_state| {
+            if (module_state.moduleEnv()) |mod_env| {
+                self.cached_module_env = mod_env;
+                return mod_env;
+            }
+        }
+
+        // Fallback: try to get the discovered root module by its package identity.
+        if (self.env.discovered_pkg_name) |root_pkg_name| {
+            if (self.env.rootModule(root_pkg_name)) |root| {
+                if (root.moduleEnv()) |root_env| {
+                    self.cached_module_env = root_env;
+                    return root_env;
                 }
             }
         }
 
-        // Fallback: try to get root module from "app" scheduler
-        if (self.env.schedulers.get("app")) |sched| {
-            if (sched.getRootModule()) |rm| {
-                if (rm.moduleEnv()) |e| {
-                    self.cached_module_env = e;
-                    return e;
-                }
-            }
-        }
-
-        // Fallback: try to get root module from any scheduler
-        sched_it = self.env.schedulers.iterator();
-        while (sched_it.next()) |entry| {
-            const sched = entry.value_ptr.*;
-            if (sched.getRootModule()) |rm| {
-                if (rm.moduleEnv()) |e| {
-                    self.cached_module_env = e;
-                    return e;
-                }
+        // Fallback: try to get a root module from any coordinator package.
+        const coord = self.env.coordinator orelse return null;
+        var pkg_it = coord.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            const pkg = entry.value_ptr.*;
+            const root_id = pkg.root_module_id orelse continue;
+            const root = pkg.getModule(root_id) orelse continue;
+            if (root.moduleEnv()) |root_env| {
+                self.cached_module_env = root_env;
+                return root_env;
             }
         }
 

@@ -15,8 +15,8 @@ assigned `x`
 ---
 assigned `a`
 ---
-**TYPE MISMATCH**
-The first argument being passed to this function has the wrong type:
+**Type Mismatch**
+The first argument being passed to this function has the wrong type.
 **repl:3:16:3:17:**
 ```roc
 b = Dec.to_str(x)
@@ -31,9 +31,9 @@ But the function needs the first argument to be:
 
     Dec
 ---
-**UNDEFINED VARIABLE**
+**Name Not In Scope**
 Nothing is named `b` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Is it misspelled, or is there an import missing?
 
 **repl:3:22:3:23:**
 ```roc

@@ -8,18 +8,18 @@ type=snippet
 sumResult = fold([1, 2, 3, 4], 0, |acc, x| acc + x)
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - fold_closure.md:1:13:1:17
+NAME NOT IN SCOPE - fold_closure.md:1:13:1:17
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `fold` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**fold_closure.md:1:13:1:17:**
-```roc
-sumResult = fold([1, 2, 3, 4], 0, |acc, x| acc + x)
-```
-            ^^^^
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `fold` in this scope. ────────────────┐
+└┬──────────────────┘                                                         │
+ │                                                                            │
+ │  sumResult = fold([1, 2, 3, 4], 0, |acc, x| acc + x)                       │
+ │              ‾‾‾‾                                                          │
+ └────────────────────────────────────────────────────── fold_closure.md:1:13 ┘
 
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig
@@ -29,7 +29,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "sumResult"))
@@ -58,26 +58,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "sumResult"))
-		(e-call
-			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-list
-				(elems
-					(e-num (value "1"))
-					(e-num (value "2"))
-					(e-num (value "3"))
-					(e-num (value "4"))))
-			(e-num (value "0"))
-			(e-lambda
-				(args
-					(p-assign (ident "acc"))
-					(p-assign (ident "x")))
-				(e-dispatch-call (method "plus") (constraint-fn-var 190)
-					(receiver
-						(e-lookup-local
-							(p-assign (ident "acc"))))
-					(args
-						(e-lookup-local
-							(p-assign (ident "x")))))))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

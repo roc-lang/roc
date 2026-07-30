@@ -35,8 +35,8 @@ pub const RunEchoError = Allocator.Error ||
         EntrypointNotFound,
     };
 
-/// Diagnostic-emission interface. The wasm host renders HTML to `js_stderr`;
-/// the native host renders plain text to its real stderr.
+/// Diagnostic-emission interface. The browser wasm host writes terminal text
+/// to `js_stderr`; the native host writes terminal text to its real stderr.
 pub const Diagnostics = struct {
     ctx: ?*anyopaque,
     vtable: *const VTable,
@@ -72,6 +72,14 @@ pub const ExtraFile = struct {
     name: []const u8,
     content: []const u8,
 };
+
+fn countNewlines(bytes: []const u8) u32 {
+    var count: u32 = 0;
+    for (bytes) |byte| {
+        if (byte == '\n') count += 1;
+    }
+    return count;
+}
 
 /// Caller-controlled paths for the synthetic app & embedded platform files.
 /// Both the wasm and native flows generate a synthetic app whose `app [main!]`
@@ -162,16 +170,24 @@ pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
         return err;
     };
     defer build_env.deinit();
+    build_env.setSyntheticRootSourceMappingWithLineOffset(
+        std.fs.path.basename(opts.paths.app_abs),
+        opts.source,
+        header_str.len,
+        countNewlines(header_str),
+    );
     build_env.filesystem = echo_ctx.io();
 
     build_env.discoverDependencies(opts.paths.app_abs) catch |err| {
-        _ = try emitDiagnostics(&build_env, diag, allocator);
-        diag.step("discoverDependencies", err);
+        if (!try emitDiagnostics(&build_env, diag, allocator)) {
+            diag.step("discoverDependencies", err);
+        }
         return err;
     };
     build_env.compileDiscovered() catch |err| {
-        _ = try emitDiagnostics(&build_env, diag, allocator);
-        diag.step("compileDiscovered", err);
+        if (!try emitDiagnostics(&build_env, diag, allocator)) {
+            diag.step("compileDiscovered", err);
+        }
         return err;
     };
 
@@ -245,7 +261,6 @@ pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
         opts.runtime_fba.buffer.ptr,
         opts.runtime_fba.end_index,
         &lowered.lir_result,
-        lowered.target_usize,
         entrypoints,
     ) catch |err| {
         diag.step("LirImage.fillHeaderInBuffer", err);
@@ -256,6 +271,7 @@ pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
         image_header,
         opts.runtime_fba.buffer.ptr,
         opts.runtime_fba.end_index,
+        lowered.target_usize,
     ) catch |err| {
         diag.step("LirImage.viewMappedImage", err);
         return err;
@@ -291,6 +307,7 @@ fn runEchoView(
         &view.store,
         &view.layouts,
         &roc_ops,
+        .preserve,
     ) catch |err| {
         diag.step("LirInterpreter.init", err);
         return err;
@@ -458,6 +475,9 @@ fn echoReadStdin(ctx_ptr: ?*anyopaque, _: std.Io, buf: []u8) Io.StdioError!usize
 fn echoIsTty(ctx_ptr: ?*anyopaque, _: std.Io) bool {
     return echoGetCtx(ctx_ptr).fallback.isTty();
 }
+fn echoTerminalWidth(ctx_ptr: ?*anyopaque, _: std.Io) ?u16 {
+    return echoGetCtx(ctx_ptr).fallback.terminalWidth();
+}
 fn echoDeleteFile(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) Io.DeleteError!void {
     return echoGetCtx(ctx_ptr).fallback.deleteFile(path);
 }
@@ -502,4 +522,5 @@ const echo_vtable = Io.VTable{
     .writeStderr = &echoWriteStderr,
     .readStdin = &echoReadStdin,
     .isTty = &echoIsTty,
+    .terminalWidth = &echoTerminalWidth,
 };

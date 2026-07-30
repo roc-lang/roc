@@ -17,17 +17,18 @@ main = {
 # EXPECTED
 TYPE MISMATCH - generalize_alias_in_tuple.md:7:14:7:17
 # PROBLEMS
-**TYPE MISMATCH**
-This string literal is being used where a non-string type is needed:
-**generalize_alias_in_tuple.md:7:14:7:17:**
-```roc
-    (a(1), a("x"), b(2))
-```
-             ^^^
 
-The type was determined to be:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
+└┬──────────────┘  type is needed.                                            │
+ │                                                                            │
+ │  (a(1), a("x"), b(2))                                                      │
+ │           ‾‾‾                                                              │
+ └───────────────────────────────────────── generalize_alias_in_tuple.md:7:14 ┘
 
-    Dec
+    The type was determined to be:
+
+        Dec
 
 # TOKENS
 ~~~zig
@@ -42,7 +43,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "id"))
@@ -117,16 +118,15 @@ main = {
 					(p-assign (ident "t"))))
 			(e-tuple
 				(elems
-					(e-call (constraint-fn-var 72)
+					(e-call (constraint-fn-var 230)
 						(e-lookup-local
 							(p-assign (ident "a")))
 						(e-num (value "1")))
-					(e-call (constraint-fn-var 89)
+					(e-call (constraint-fn-var 239)
 						(e-lookup-local
 							(p-assign (ident "a")))
-						(e-string
-							(e-literal (string "x"))))
-					(e-call (constraint-fn-var 123)
+						(e-runtime-error (tag "erroneous_value_expr")))
+					(e-call (constraint-fn-var 247)
 						(e-lookup-local
 							(p-assign (ident "b")))
 						(e-num (value "2"))))))))

@@ -92,11 +92,7 @@ EndOfFile,
 ~~~roc
 platform ""
 	requires {
-		[Model : model] for main : {
-			init : model,
-			update : model, I64 -> Model,
-			render : model -> I64,
-		}
+		[Model : model] for main : { init : model, update : model, I64 -> Model, render : model -> I64 }
 	}
 	exposes []
 	packages {}
@@ -132,7 +128,7 @@ main = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{ init: model, render: model -> I64, update: model, I64 -> model }")))
+		(patt (type "{ init: Model, render: Model -> I64, update: Model, I64 -> Model }")))
 	(expressions
-		(expr (type "{ init: model, render: model -> I64, update: model, I64 -> model }"))))
+		(expr (type "{ init: Model, render: Model -> I64, update: Model, I64 -> Model }"))))
 ~~~

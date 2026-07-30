@@ -15,23 +15,24 @@ main = 123.Foo
 # EXPECTED
 TYPE MISMATCH - number_suffix_custom_type.md:6:8:6:15
 # PROBLEMS
-**TYPE MISMATCH**
-The `from_numeral` method on `Foo` has an incompatible type:
-**number_suffix_custom_type.md:6:8:6:15:**
-```roc
-main = 123.Foo
-```
-       ^^^^^^^
 
-The method `from_numeral` has the type:
+┌───────────────┐
+│ TYPE MISMATCH ├─ The `from_numeral` method on `Foo` has an incompatible ────┐
+└┬──────────────┘  type.                                                      │
+ │                                                                            │
+ │  main = 123.Foo                                                            │
+ │         ‾‾‾‾‾‾‾                                                            │
+ └────────────────────────────────────────── number_suffix_custom_type.md:6:8 ┘
 
-    I64, U8 -> Foo
+    The method `from_numeral` has the type:
 
-But I need it to have the type:
+        I64, U8 -> Foo
 
-    Numeral -> Try(Foo, [InvalidNumeral(Str)])
+    But I need it to have the type:
 
-**Hint:** This function expects 1 argument but got 2.
+        Numeral -> Try(Foo, [InvalidNumeral(Str)])
+
+    Hint: This function expects 1 argument but got 2.
 
 # TOKENS
 ~~~zig
@@ -45,7 +46,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "Foo")
@@ -104,7 +105,7 @@ main = 123.Foo
 				(ty-lookup (name "Foo") (local)))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-typed-int (value "123") (type "Foo")))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(s-nominal-decl
 		(ty-header (name "Foo"))
 		(ty-tag-union
@@ -116,11 +117,11 @@ main = 123.Foo
 (inferred-types
 	(defs
 		(patt (type "Error"))
-		(patt (type "Error")))
+		(patt (type "Foo")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo"))))
 	(expressions
 		(expr (type "I64, U8 -> Foo"))
-		(expr (type "Error"))))
+		(expr (type "Foo"))))
 ~~~

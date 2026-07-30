@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Type module import with multi-module compilation
+description=Type mod import with multi-mod compilation
 type=dev_object
 ~~~
 # SOURCE
@@ -10,30 +10,28 @@ app [main] { pf: platform "./platform.roc" }
 
 import Color
 
-main = Color.to_str(Color.red)
+main = Color.to_str(Color.red({}))
 ~~~
 ## Color.roc
 ~~~roc
-module [Color, red, green, blue, to_str]
+Color := [Red, Green, Blue].{
+    red : {} -> Color
+    red = |{}| Red
 
-Color : [Red, Green, Blue]
+    green : {} -> Color
+    green = |{}| Green
 
-red : Color
-red = Red
+    blue : {} -> Color
+    blue = |{}| Blue
 
-green : Color
-green = Green
-
-blue : Color
-blue = Blue
-
-to_str : Color -> Str
-to_str = |color|
-    match color {
-        Red => "red"
-        Green => "green"
-        Blue => "blue"
-    }
+    to_str : Color -> Str
+    to_str = |color|
+        match color {
+            Red => "red"
+            Green => "green"
+            Blue => "blue"
+        }
+}
 ~~~
 ## platform.roc
 ~~~roc
@@ -56,35 +54,35 @@ main_for_host = main
 main_for_host = <required>
 
 # Color
-red = Red
-green = Green
-blue = Blue
-to_str = |color| match color {
+Color.red = |{}| Red
+Color.green = |{}| Green
+Color.blue = |{}| Blue
+Color.to_str = |color| match color {
 	Red => "red"
 	Green => "green"
 	Blue => "blue"
 }
 
 # app
-main = to_str(red)
+main = to_str(red({}))
 
 ~~~
 # DEV OUTPUT
 ~~~ini
-x64mac=e4eb25a027a0bdc1eae1ef5ff2ef4b946ec4687acd1365a6f334b46f05deee55
-x64win=828583c59228a6062a44f2feb6d9e042fbfb728e04b548aba5f23c0866092bcb
-x64freebsd=7ec0c37040e09677b3d5f0eebac8a397a398b45a7c7c44591cd15b489fe74ef0
-x64openbsd=7ec0c37040e09677b3d5f0eebac8a397a398b45a7c7c44591cd15b489fe74ef0
-x64netbsd=7ec0c37040e09677b3d5f0eebac8a397a398b45a7c7c44591cd15b489fe74ef0
-x64musl=7ec0c37040e09677b3d5f0eebac8a397a398b45a7c7c44591cd15b489fe74ef0
-x64glibc=7ec0c37040e09677b3d5f0eebac8a397a398b45a7c7c44591cd15b489fe74ef0
-x64linux=7ec0c37040e09677b3d5f0eebac8a397a398b45a7c7c44591cd15b489fe74ef0
-x64elf=7ec0c37040e09677b3d5f0eebac8a397a398b45a7c7c44591cd15b489fe74ef0
-arm64mac=8c88d5fc4de2b7ec4970a668b74f179e2ea1d6235e9c93a185b105011013d84a
-arm64win=008c53d141d34720afdd3eb7edf190fd05b021584945bde81c957235de1faf13
-arm64linux=ec435cdcf1f72d992a2d6567d4cab36fb7ebf68ce7e79183a63bdd72964345b4
-arm64musl=ec435cdcf1f72d992a2d6567d4cab36fb7ebf68ce7e79183a63bdd72964345b4
-arm64glibc=ec435cdcf1f72d992a2d6567d4cab36fb7ebf68ce7e79183a63bdd72964345b4
+x64mac=81f7f653671613525582f81cdd708314e507cb9ff9f473ec40c8578376479852
+x64win=ad1650cf281a87d60d07117e2cc42b17d512412a69fbcc2fed3b7ece6852c0e9
+x64freebsd=2a151f45c19082462aa9117d0c19956a8028318602f446a30f1d185ccf83a716
+x64openbsd=2a151f45c19082462aa9117d0c19956a8028318602f446a30f1d185ccf83a716
+x64netbsd=2a151f45c19082462aa9117d0c19956a8028318602f446a30f1d185ccf83a716
+x64musl=2a151f45c19082462aa9117d0c19956a8028318602f446a30f1d185ccf83a716
+x64glibc=2a151f45c19082462aa9117d0c19956a8028318602f446a30f1d185ccf83a716
+x64linux=2a151f45c19082462aa9117d0c19956a8028318602f446a30f1d185ccf83a716
+x64elf=2a151f45c19082462aa9117d0c19956a8028318602f446a30f1d185ccf83a716
+arm64mac=30ab958b06ff3cad41f39f07ab5bb789a3c2c1f12ac10978d64a666f94e0f3cf
+arm64win=9fe5192b3d873234c5a6e0a27a66a3769bafcaaeac1cdd6df2c355639a5de0b6
+arm64linux=3a2f2903ba6ca687763e1d4bd8cc47c2c373b9ae00c51f4c7bd4a642840b37fd
+arm64musl=3a2f2903ba6ca687763e1d4bd8cc47c2c373b9ae00c51f4c7bd4a642840b37fd
+arm64glibc=3a2f2903ba6ca687763e1d4bd8cc47c2c373b9ae00c51f4c7bd4a642840b37fd
 arm32linux=NOT_IMPLEMENTED
 arm32musl=NOT_IMPLEMENTED
 wasm32=NOT_IMPLEMENTED

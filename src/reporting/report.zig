@@ -6,6 +6,7 @@
 //! Reports combine a title, severity level, and formatted document content.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 
 const Allocator = std.mem.Allocator;
@@ -20,22 +21,243 @@ const truncateUtf8 = @import("config.zig").truncateUtf8;
 /// Default maximum message size in bytes for truncation
 const DEFAULT_MAX_MESSAGE_BYTES: usize = 4096;
 
+/// True if `title` contains `needle` (which must be lowercase) as a substring,
+/// compared case-insensitively.
+fn titleContainsIgnoreCase(title: []const u8, needle: []const u8) bool {
+    if (needle.len == 0 or title.len < needle.len) return false;
+    var i: usize = 0;
+    while (i + needle.len <= title.len) : (i += 1) {
+        var matches = true;
+        for (needle, 0..) |nc, j| {
+            const tc = title[i + j];
+            const lowered = if (tc >= 'A' and tc <= 'Z') tc + ('a' - 'A') else tc;
+            if (lowered != nc) {
+                matches = false;
+                break;
+            }
+        }
+        if (matches) return true;
+    }
+    return false;
+}
+
+/// In debug builds, enforce the house style for error-report title/description
+/// text. These are compiled out of release builds.
+///
+/// A title must be:
+///   - all ASCII;
+///   - trimmed, with no newlines or consecutive spaces;
+///   - title case outside backticks: every non-minor word begins with a capital
+///     letter (or a digit), every word contains only alphanumeric characters,
+///     except for `UTF-` prefixed words such as `UTF-8`, and the title has at
+///     least one lowercase letter (so it reads as `Title Case`, not `ALL CAPS`
+///     — the box/HTML/LSP renderers shout it back to ALL CAPS, while markdown
+///     keeps the authored case);
+///   - allowed to contain backticked inline code spans, whose contents must be
+///     non-empty and trimmed, but are not title-cased;
+///   - free of the word "comptime", which is a Zig term, not a Roc one, and so
+///     must never reach user-facing text;
+///   - free of any pairing of "annotation" with "need" or "miss" — Roc never
+///     tells users they must annotate their types (see the panic below).
+fn isTrimmed(text: []const u8) bool {
+    return std.mem.eql(u8, text, std.mem.trim(u8, text, " \t\r\n"));
+}
+
+fn isAsciiLower(c: u8) bool {
+    return c >= 'a' and c <= 'z';
+}
+
+fn isAsciiUpper(c: u8) bool {
+    return c >= 'A' and c <= 'Z';
+}
+
+fn isAsciiDigit(c: u8) bool {
+    return c >= '0' and c <= '9';
+}
+
+fn isAsciiAlphaNum(c: u8) bool {
+    return isAsciiLower(c) or isAsciiUpper(c) or isAsciiDigit(c);
+}
+
+fn isUtfPrefixedTitleWord(word: []const u8) bool {
+    const prefix = "UTF-";
+    if (!std.mem.startsWith(u8, word, prefix)) return false;
+    if (word.len == prefix.len) return false;
+
+    for (word[prefix.len..]) |c| {
+        if (!isAsciiAlphaNum(c)) return false;
+    }
+
+    return true;
+}
+
+fn containsNewline(text: []const u8) bool {
+    return std.mem.findScalar(u8, text, '\n') != null or
+        std.mem.findScalar(u8, text, '\r') != null;
+}
+
+fn isLowercaseTitleParticle(word: []const u8) bool {
+    const particles = [_][]const u8{
+        "a",   "an",   "and",    "as",      "at",      "but", "by",
+        "for", "from", "in",     "into",    "nor",     "of",  "on",
+        "or",  "over", "per",    "the",     "through", "to",  "via",
+        "vs",  "with", "within", "without",
+    };
+    for (particles) |particle| {
+        if (std.mem.eql(u8, word, particle)) return true;
+    }
+    return false;
+}
+
+fn isValidTitleWord(word: []const u8, is_first: bool, is_last: bool, has_lower: *bool) bool {
+    if (word.len == 0) return false;
+
+    const utf_prefixed = isUtfPrefixedTitleWord(word);
+    for (word) |c| {
+        if (!isAsciiAlphaNum(c) and !(utf_prefixed and c == '-')) return false;
+        if (isAsciiLower(c)) has_lower.* = true;
+    }
+
+    if (isAsciiLower(word[0])) {
+        return !is_first and !is_last and isLowercaseTitleParticle(word);
+    }
+
+    return true;
+}
+
+fn countTitleTokens(title: []const u8) ?usize {
+    var count: usize = 0;
+    var i: usize = 0;
+    while (i < title.len) {
+        if (title[i] == ' ') {
+            i += 1;
+            continue;
+        }
+
+        if (title[i] == '`') {
+            const start = i + 1;
+            i = start;
+            while (i < title.len and title[i] != '`') : (i += 1) {}
+            if (i == title.len) return null;
+
+            const code = title[start..i];
+            if (code.len == 0 or !isTrimmed(code)) return null;
+
+            count += 1;
+            i += 1;
+        } else {
+            const start = i;
+            while (i < title.len and title[i] != ' ' and title[i] != '`') : (i += 1) {}
+            if (start == i) return null;
+
+            count += 1;
+        }
+
+        if (i < title.len and title[i] != ' ') return null;
+    }
+
+    return count;
+}
+
+fn validateTitleTokens(title: []const u8, token_count: usize) bool {
+    var token_index: usize = 0;
+    var has_lower = false;
+    var i: usize = 0;
+    while (i < title.len) {
+        if (title[i] == ' ') {
+            i += 1;
+            continue;
+        }
+
+        if (title[i] == '`') {
+            i += 1;
+            while (i < title.len and title[i] != '`') : (i += 1) {}
+            if (i == title.len) return false;
+            i += 1;
+            token_index += 1;
+            continue;
+        }
+
+        const start = i;
+        while (i < title.len and title[i] != ' ' and title[i] != '`') : (i += 1) {}
+        if (!isValidTitleWord(title[start..i], token_index == 0, token_index + 1 == token_count, &has_lower)) {
+            return false;
+        }
+        token_index += 1;
+    }
+
+    return token_index == token_count and has_lower;
+}
+
+fn isValidReportTitle(title: []const u8) bool {
+    if (title.len == 0 or !isTrimmed(title) or containsNewline(title)) return false;
+    if (std.mem.find(u8, title, "  ") != null) return false;
+
+    for (title) |c| {
+        if (c >= 0x80) return false;
+    }
+
+    const token_count = countTitleTokens(title) orelse return false;
+    if (token_count == 0) return false;
+
+    return validateTitleTokens(title, token_count);
+}
+
+fn isValidReportDescription(description: []const u8) bool {
+    return isTrimmed(description);
+}
+
+fn assertValidTitleAndDescription(title: []const u8, description: []const u8) void {
+    if (builtin.mode != .Debug) return;
+
+    std.debug.assert(isValidReportTitle(title));
+    std.debug.assert(isValidReportDescription(description));
+    std.debug.assert(!titleContainsIgnoreCase(title, "comptime"));
+
+    if (titleContainsIgnoreCase(title, "annotation") and
+        (titleContainsIgnoreCase(title, "need") or titleContainsIgnoreCase(title, "miss")))
+    {
+        @panic(
+            "Error-report title pairs \"annotation\" with \"need\"/\"miss\". Roc never tells " ++
+                "users they NEED to annotate their types: unlike many languages, type annotations " ++
+                "are never required as a matter of course, so no part of a diagnostic report should " ++
+                "say a type needs, or is missing, an annotation. When a type is ambiguous, explain " ++
+                "the ambiguity itself; at most, note that one way to make it unambiguous is to " ++
+                "introduce a type annotation somewhere. Reword this report's title, headline, and " ++
+                "body to describe the ambiguity rather than to demand an annotation.",
+        );
+    }
+}
+
 /// A structured report containing error information and formatted content.
 pub const Report = struct {
     title: []const u8,
+    /// One-sentence summary shown in the report's headline slot: the box's top
+    /// edge in the terminal/snapshot layout, or a line under the title in the
+    /// markdown/HTML/LSP renderers. Rich content, so inline code, type names,
+    /// and operators keep their styling. Builders with a plain headline pass it
+    /// as the `headline` string to `init`; builders that need inline styling
+    /// pass `""` and add to this document directly.
+    headline: Document,
     severity: Severity,
     document: Document,
     allocator: Allocator,
     owned_strings: std.array_list.Managed([]const u8),
 
-    pub fn init(allocator: Allocator, title: []const u8, severity: Severity) Report {
-        return Report{
+    pub fn init(allocator: Allocator, title: []const u8, headline: []const u8, severity: Severity) Allocator.Error!Report {
+        assertValidTitleAndDescription(title, headline);
+        var report = Report{
             .title = title,
+            .headline = Document.init(allocator),
             .severity = severity,
             .document = Document.init(allocator),
             .allocator = allocator,
             .owned_strings = std.array_list.Managed([]const u8).init(allocator),
         };
+        if (headline.len > 0) {
+            try report.headline.addReflowingText(headline);
+        }
+        return report;
     }
 
     pub fn deinit(self: *Report) void {
@@ -43,6 +265,7 @@ pub const Report = struct {
             self.allocator.free(@constCast(owned_string));
         }
         self.owned_strings.deinit();
+        self.headline.deinit();
         self.document.deinit();
     }
 
@@ -246,61 +469,41 @@ pub const Report = struct {
     }
 };
 
-/// Builder for creating reports with a fluent interface.
-pub const ReportBuilder = struct {
-    report: Report,
-
-    pub fn init(allocator: Allocator, title: []const u8, severity: Severity) ReportBuilder {
-        return ReportBuilder{
-            .report = Report.init(allocator, title, severity),
-        };
-    }
-
-    pub fn deinit(self: *ReportBuilder) void {
-        self.report.deinit();
-    }
-
-    pub fn header(self: *ReportBuilder, text: []const u8) std.mem.Allocator.Error!*ReportBuilder {
-        try self.report.addHeader(text);
-        return self;
-    }
-
-    pub fn message(self: *ReportBuilder, text: []const u8) std.mem.Allocator.Error!*ReportBuilder {
-        try self.report.document.addText(text);
-        try self.report.document.addLineBreak();
-        return self;
-    }
-
-    pub fn code(self: *ReportBuilder, code_text: []const u8) Allocator.Error!*ReportBuilder {
-        try self.report.addCodeSnippet(code_text, null);
-        return self;
-    }
-
-    pub fn suggestion(self: *ReportBuilder, text: []const u8) std.mem.Allocator.Error!*ReportBuilder {
-        try self.report.addSuggestion(text);
-        return self;
-    }
-
-    pub fn note(self: *ReportBuilder, text: []const u8) std.mem.Allocator.Error!*ReportBuilder {
-        try self.report.addNote(text);
-        return self;
-    }
-
-    pub fn typeComparison(self: *ReportBuilder, expected: []const u8, actual: []const u8) std.mem.Allocator.Error!*ReportBuilder {
-        try self.report.addTypeComparison(expected, actual);
-        return self;
-    }
-
-    pub fn build(self: *ReportBuilder) Report {
-        return self.report;
-    }
-};
-
 // Tests
 const testing = std.testing;
 
+test "Report title validation allows backticked code" {
+    try testing.expect(isValidReportTitle("`dbg` in Optimized Build"));
+    try testing.expect(isValidReportTitle("Type `main!` Should Take 1 Argument"));
+    try testing.expect(isValidReportTitle("Try Operator Outside Function"));
+    try testing.expect(isValidReportTitle("Invalid UTF-8"));
+}
+
+test "Report title validation rejects malformed titles" {
+    try testing.expect(!isValidReportTitle(" Debug Error"));
+    try testing.expect(!isValidReportTitle("Debug Error "));
+    try testing.expect(!isValidReportTitle("Debug\nError"));
+    try testing.expect(!isValidReportTitle("Debug  Error"));
+    try testing.expect(!isValidReportTitle("Debug-Error"));
+    try testing.expect(!isValidReportTitle("debug Error"));
+    try testing.expect(!isValidReportTitle("Debug in"));
+    try testing.expect(!isValidReportTitle("Debug ` dbg` Error"));
+    try testing.expect(!isValidReportTitle("Debug `dbg ` Error"));
+    try testing.expect(!isValidReportTitle("Debug `` Error"));
+    try testing.expect(!isValidReportTitle("Debug `dbg Error"));
+    try testing.expect(!isValidReportTitle("Debug UTF- Error"));
+    try testing.expect(!isValidReportTitle("Debug UTF-8-16 Error"));
+}
+
+test "Report description validation checks trimming" {
+    try testing.expect(isValidReportDescription(""));
+    try testing.expect(isValidReportDescription("Something went wrong."));
+    try testing.expect(!isValidReportDescription(" Something went wrong."));
+    try testing.expect(!isValidReportDescription("Something went wrong. "));
+}
+
 test "Report basic functionality" {
-    var report = Report.init(testing.allocator, "TEST ERROR", .runtime_error);
+    var report = try Report.init(testing.allocator, "Test Error", "Something went wrong in the test.", .runtime_error);
     defer report.deinit();
 
     try report.document.addText("This is a test error message.");

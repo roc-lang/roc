@@ -17,13 +17,13 @@ Green => LocalStatus-Complete
 }
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_032.md:1:24:1:25
-PARSE ERROR - fuzz_crash_032.md:1:26:1:27
-PARSE ERROR - fuzz_crash_032.md:1:34:1:35
-PARSE ERROR - fuzz_crash_032.md:1:44:1:45
+UNEXPECTED STATEMENT - fuzz_crash_032.md:1:24:1:25
+UNEXPECTED STATEMENT - fuzz_crash_032.md:1:26:1:27
+TYPE APPLICATION NEEDS PARENTHESES - fuzz_crash_032.md:1:34:1:35
+TYPE APPLICATION NEEDS PARENTHESES - fuzz_crash_032.md:1:44:1:45
 IMPORT MUST BE TOP LEVEL - fuzz_crash_032.md:4:18:4:24
-UNEXPECTED TOKEN IN PATTERN - fuzz_crash_032.md:7:21:7:22
-PARSE ERROR - fuzz_crash_032.md:7:22:7:22
+UNEXPECTED PATTERN SYNTAX - fuzz_crash_032.md:7:21:7:22
+MISSING MATCH ARROW - fuzz_crash_032.md:7:22:7:22
 UNDECLARED TYPE VARIABLE - fuzz_crash_032.md:1:14:1:17
 UNDECLARED TYPE - fuzz_crash_032.md:1:21:1:24
 UNDECLARED TYPE - fuzz_crash_032.md:4:25:4:30
@@ -33,201 +33,223 @@ UNDECLARED TYPE - fuzz_crash_032.md:8:3:8:4
 EXPECTED NOMINAL TYPE - fuzz_crash_032.md:8:13:8:24
 TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_032.md:1:24:1:25:**
-```roc
-LocalStatus :lue => Loc= [Pending, Complete]
-```
-                       ^
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  LocalStatus :lue => Loc= [Pending, Complete]                              │
+ │                         ‾                                                  │
+ └──────────────────────────────────────────────────── fuzz_crash_032.md:1:24 ┘
 
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+    For example:
+        answer = 42
 
-**fuzz_crash_032.md:1:26:1:27:**
-```roc
-LocalStatus :lue => Loc= [Pending, Complete]
-```
-                         ^
+    I found `=` here.
 
 
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  LocalStatus :lue => Loc= [Pending, Complete]                              │
+ │                           ‾                                                │
+ └──────────────────────────────────────────────────── fuzz_crash_032.md:1:26 ┘
 
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
-Instead of:
-    **List U8**
+    For example:
+        answer = 42
 
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**fuzz_crash_032.md:1:34:1:35:**
-```roc
-LocalStatus :lue => Loc= [Pending, Complete]
-```
-                                 ^
+    I found `[` here.
 
 
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
+┌────────────────────────────────────┐
+│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
+└┬───────────────────────────────────┘  and I found a type argument without   │
+ │                                      parentheses.                          │
+ │                                                                            │
+ │  LocalStatus :lue => Loc= [Pending, Complete]                              │
+ │                                   ‾                                        │
+ └──────────────────────────────────────────────────── fuzz_crash_032.md:1:34 ┘
 
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+    Roc type applications use parentheses around their arguments. Write
+    `List(U8)`, not `List U8`.
 
-Instead of:
-    **List U8**
+    For example:
+        List(U8)
 
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**fuzz_crash_032.md:1:44:1:45:**
-```roc
-LocalStatus :lue => Loc= [Pending, Complete]
-```
-                                           ^
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-**IMPORT MUST BE TOP LEVEL**
-Import statements must appear at the top level of a module.
-Move this import to the top of the file, after the module header but before any definitions.
+┌────────────────────────────────────┐
+│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
+└┬───────────────────────────────────┘  and I found a type argument without   │
+ │                                      parentheses.                          │
+ │                                                                            │
+ │  LocalStatus :lue => Loc= [Pending, Complete]                              │
+ │                                             ‾                              │
+ └──────────────────────────────────────────────────── fuzz_crash_032.md:1:44 ┘
 
-**fuzz_crash_032.md:4:18:4:24:**
-```roc
-olor = |color| { import Color.RGB
-```
-                 ^^^^^^
+    Roc type applications use parentheses around their arguments. Write
+    `List(U8)`, not `List U8`.
 
+    For example:
+        List(U8)
 
-**UNEXPECTED TOKEN IN PATTERN**
-The token **-** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-**fuzz_crash_032.md:7:21:7:22:**
-```roc
-Green => LocalStatus-Complete
-```
-                    ^
+    I found `]` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-**PARSE ERROR**
-A parsing error occurred: `match_branch_missing_arrow`
-This is an unexpected parsing error. Please check your syntax.
+┌──────────────────────────┐
+│ IMPORT MUST BE TOP LEVEL ├─ I was parsing an import, but imports are only ──┐
+└┬─────────────────────────┘  allowed at the top level.                       │
+ │                                                                            │
+ │  olor = |color| { import Color.RGB                                         │
+ │                   ‾‾‾‾‾‾                                                   │
+ └──────────────────────────────────────────────────── fuzz_crash_032.md:4:18 ┘
 
-**fuzz_crash_032.md:7:22:7:22:**
-```roc
-Green => LocalStatus-Complete
-```
-                     ^
+    Move this import after the mod header and before declarations or
+    executable statements.
 
+    For example:
+        import Json
 
-**UNDECLARED TYPE VARIABLE**
-The type variable _lue_ is not declared in this scope.
+        main = 1
 
-Type variables must be introduced in a type annotation before they can be used.
-
-This type variable is referenced here:
-**fuzz_crash_032.md:1:14:1:17:**
-```roc
-LocalStatus :lue => Loc= [Pending, Complete]
-```
-             ^^^
+    I found `import` here.
+    That word is reserved by Roc, so it cannot be used as a name in this
+    position.
 
 
-**UNDECLARED TYPE**
-The type _Loc_ is not declared in this scope.
+┌───────────────────────────┐
+│ UNEXPECTED PATTERN SYNTAX ├─ I was parsing a pattern, and this token ───────┐
+└┬──────────────────────────┘  cannot start a pattern here.                   │
+ │                                                                            │
+ │  Green => LocalStatus-Complete                                             │
+ │                      ‾                                                     │
+ └──────────────────────────────────────────────────── fuzz_crash_032.md:7:21 ┘
 
-This type is referenced here:
-**fuzz_crash_032.md:1:21:1:24:**
-```roc
-LocalStatus :lue => Loc= [Pending, Complete]
-```
-                    ^^^
+    Patterns can be lowercase names, tags, literals, lists, records, tuples,
+    underscores, or nested patterns.
 
+    For example:
+        { name, age }
 
-**UNDECLARED TYPE**
-The type _Color_ is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_032.md:4:25:4:30:**
-```roc
-olor = |color| { import Color.RGB
-```
-                        ^^^^^
+    I found `-` here.
 
 
-**EXPECTED NOMINAL TYPE**
-You are using the type _LocalStatus_ like a nominal type, but it is an alias.
+┌─────────────────────┐
+│ MISSING MATCH ARROW ├─ I was parsing a match branch, and I expected `=>` ───┐
+└┬────────────────────┘  before the branch body.                              │
+ │                                                                            │
+ │  Green => LocalStatus-Complete                                             │
+ │                       ‾                                                    │
+ └──────────────────────────────────────────────────── fuzz_crash_032.md:7:22 ┘
 
-This type is referenced here:
-**fuzz_crash_032.md:6:26:6:37:**
-```roc
-    match color { RGB => LocalStatus.Pending
-```
-                         ^^^^^^^^^^^
+    Add `=>` after the pattern or guard.
+
+    For example:
+        Err(msg) => crash msg
+
+    I reached the end of the file before this construct was complete.
 
 
-**Hint:** You can declare this type with `:=` to make it nominal.
+┌──────────────────────────┐
+│ UNDECLARED TYPE VARIABLE ├─ The type variable `lue` is not declared in ─────┐
+└┬─────────────────────────┘  this scope.                                     │
+ │                                                                            │
+ │  LocalStatus :lue => Loc= [Pending, Complete]                              │
+ │               ‾‾‾                                                          │
+ └──────────────────────────────────────────────────── fuzz_crash_032.md:1:14 ┘
 
-**INVALID PATTERN**
+    Type variables must be introduced in a type annotation before they can be
+    used.
+
+
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Loc` is not declared in this scope. ───────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  LocalStatus :lue => Loc= [Pending, Complete]                              │
+ │                      ‾‾‾                                                   │
+ └──────────────────────────────────────────────────── fuzz_crash_032.md:1:21 ┘
+
+
+
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Color` is not declared in this scope. ─────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  olor = |color| { import Color.RGB                                         │
+ │                          ‾‾‾‾‾                                             │
+ └──────────────────────────────────────────────────── fuzz_crash_032.md:4:25 ┘
+
+
+
+┌───────────────────────┐
+│ EXPECTED NOMINAL TYPE ├─ You are using the type `LocalStatus` like a ───────┐
+└┬──────────────────────┘  nominal type, but it is an alias.                  │
+ │                                                                            │
+ │  match color { RGB => LocalStatus.Pending                                  │
+ │                       ‾‾‾‾‾‾‾‾‾‾‾                                          │
+ └──────────────────────────────────────────────────── fuzz_crash_032.md:6:26 ┘
+
+    Hint: You can declare this type with `:=` to make it nominal.
+
+
+INVALID PATTERN
+
 This pattern contains invalid syntax or uses unsupported features.
 
-**UNDECLARED TYPE**
-The type _B_ is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_032.md:8:3:8:4:**
-```roc
-  B.Blue => LocalStatus.Pending
-```
-  ^
 
 
-**EXPECTED NOMINAL TYPE**
-You are using the type _LocalStatus_ like a nominal type, but it is an alias.
-
-This type is referenced here:
-**fuzz_crash_032.md:8:13:8:24:**
-```roc
-  B.Blue => LocalStatus.Pending
-```
-            ^^^^^^^^^^^
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `B` is not declared in this scope. ─────────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  B.Blue => LocalStatus.Pending                                             │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────────────── fuzz_crash_032.md:8:3 ┘
 
 
-**Hint:** You can declare this type with `:=` to make it nominal.
 
-**TYPE MISMATCH**
-The second branch of this `match` does not match the previous branches :
-**fuzz_crash_032.md:7:10:7:21:**
-```roc
-Green => LocalStatus-Complete
-```
-         ^^^^^^^^^^^
+┌───────────────────────┐
+│ EXPECTED NOMINAL TYPE ├─ You are using the type `LocalStatus` like a ───────┐
+└┬──────────────────────┘  nominal type, but it is an alias.                  │
+ │                                                                            │
+ │  B.Blue => LocalStatus.Pending                                             │
+ │            ‾‾‾‾‾‾‾‾‾‾‾                                                     │
+ └──────────────────────────────────────────────────── fuzz_crash_032.md:8:13 ┘
 
-The second branch is:
+    Hint: You can declare this type with `:=` to make it nominal.
 
-    [LocalStatus, ..]
 
-But the previous branches result in:
+┌───────────────┐
+│ TYPE MISMATCH ├─ The second branch of this `match` does not match the ──────┐
+└┬──────────────┘  previous branches .                                        │
+ │                                                                            │
+ │  Green => LocalStatus-Complete                                             │
+ │           ‾‾‾‾‾‾‾‾‾‾‾                                                      │
+ └──────────────────────────────────────────────────── fuzz_crash_032.md:7:10 ┘
 
-    tus
+    The second branch is:
 
-All branches in a `match` must have compatible types.
-__Note:__ You can wrap branches values in a tag to make them compatible.
-To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
+        [LocalStatus, ..]
+
+    But the previous branches result in:
+
+        tus
+
+    All branches in a `match` must have compatible types.
+    Note: You can wrap branches values in a tag to make them compatible.
+    To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
@@ -244,7 +266,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "LocalStatus")
@@ -310,39 +332,7 @@ olor = |color| {
 		(e-lambda
 			(args
 				(p-assign (ident "color")))
-			(e-block
-				(s-expr
-					(e-runtime-error (tag "undeclared_type")))
-				(e-match
-					(match
-						(cond
-							(e-lookup-local
-								(p-assign (ident "color"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-runtime-error (tag "type_alias_but_needed_nominal"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-tag (name "LocalStatus"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-runtime-error (tag "pattern_not_canonicalized"))))
-								(value
-									(e-tag (name "Complete"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-runtime-error (tag "undeclared_type"))))
-								(value
-									(e-runtime-error (tag "type_alias_but_needed_nominal")))))))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-underscore)

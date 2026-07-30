@@ -22,6 +22,7 @@ const parse = @import("parse");
 const reporting = @import("reporting");
 const eval = @import("eval");
 const lir = @import("lir");
+const GuardedList = lir.LirStore.GuardedList;
 const types = @import("types");
 const can = @import("can");
 const CoreCtx = can.CoreCtx;
@@ -39,7 +40,7 @@ const Can = can.Can;
 const Check = check.Check;
 const SExprTree = base.SExprTree;
 const ModuleEnv = can.ModuleEnv;
-const LoadedBuiltinModule = eval.builtin_loading.LoadedModule;
+const LoadedBuiltinModule = eval.builtin_static.BuiltinModuleView;
 const Allocator = std.mem.Allocator;
 const AST = parse.AST;
 
@@ -378,14 +379,6 @@ fn resetGlobalState() void {
         compiler_data = null;
     }
     cleanupReplState();
-    if (host_message_buffer) |buf| {
-        allocator.free(buf);
-        host_message_buffer = null;
-    }
-    if (host_response_buffer) |buf| {
-        allocator.free(buf);
-        host_response_buffer = null;
-    }
 }
 
 /// Writes a formatted string to the in-memory debug log.
@@ -415,8 +408,9 @@ fn logDebug(comptime format: []const u8, args: anytype) void {
         } else if (available_space > 0) {
             // Not even enough space for the full OOM message. Write what we can.
             const truncated_msg = "[OOM]";
-            @memcpy(target_slice[0..truncated_msg.len], truncated_msg);
-            debug_log_pos += truncated_msg.len;
+            const bytes_to_write = @min(available_space, truncated_msg.len);
+            @memcpy(target_slice[0..bytes_to_write], truncated_msg[0..bytes_to_write]);
+            debug_log_pos += bytes_to_write;
         }
         // If there's no space for even "[OOM]", we can't do anything.
         debug_log_oom = true;
@@ -455,16 +449,16 @@ export fn clearDebugLog() void {
     debug_log_oom = false;
 }
 
-fn getCachedBuiltinModule() (Allocator.Error || error{Internal})!*LoadedBuiltinModule {
+fn getCachedBuiltinModule() (Allocator.Error || error{ CorruptEmbeddedBuiltins, Internal })!*LoadedBuiltinModule {
     if (cached_builtin_module == null) {
-        logDebug("compileSource: Loading Builtin module\n", .{});
-        cached_builtin_module = try eval.builtin_loading.loadCompiledModule(
+        logDebug("compileSource: Creating Builtin module view\n", .{});
+        cached_builtin_module = try eval.builtin_static.moduleView(
             allocator,
-            compiled_builtins.builtin_bin,
+            compiled_builtins.builtin_bin[0..],
             "Builtin",
             compiled_builtins.builtin_source,
         );
-        logDebug("compileSource: Builtin module loaded\n", .{});
+        logDebug("compileSource: Builtin module view ready\n", .{});
     } else {
         logDebug("compileSource: Reusing cached Builtin module\n", .{});
     }
@@ -930,11 +924,6 @@ fn buildReplModuleSource(
     var source_writer: std.Io.Writer.Allocating = .init(allocator);
     errdefer source_writer.deinit();
 
-    // REPL snippets are evaluated as an internal module. Without an explicit
-    // header, production validation treats the synthetic source as a type
-    // module/default-app candidate and rejects ordinary REPL definitions like
-    // `x = 42`.
-    try source_writer.writer.writeAll("module []\n\n");
     try writeDefinitionsWithReplacement(&source_writer.writer, session, replacement, replacement_source);
     if (main_expr) |expr| {
         try source_writer.writer.print("main = {s}\n", .{expr});
@@ -984,10 +973,7 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
         &typed_cir_modules,
         1,
         .{
-            .module_env_storage = .{ .compiled_buffer = .{
-                .env = builtin_module.env,
-                .buffer = builtin_module.buffer,
-            } },
+            .module_env_storage = .{ .static_builtin = builtin_module.env },
             .compile_time_finalizer = eval.CompileTimeFinalization.finalizer(),
         },
     );
@@ -1041,7 +1027,7 @@ fn hasBlockingReports(reports: std.array_list.Managed(reporting.Report)) bool {
 }
 
 fn compileCheckedReplModuleSource(source: []const u8) PlaygroundCompileError!CompilerStageData {
-    var data = try compileSource(source, "main");
+    var data = try compileSourceWithValidation(source, "main", .explicit_roots);
     errdefer data.deinit();
 
     if (hasBlockingReports(data.tokenize_reports) or
@@ -1065,7 +1051,7 @@ fn replaceCompilerData(new_data: CompilerStageData) void {
 }
 
 fn replaceCompilerDataFromReplSource(source: []const u8) PlaygroundCompileError!void {
-    replaceCompilerData(try compileSource(source, "main"));
+    replaceCompilerData(try compileSourceWithValidation(source, "main", .explicit_roots));
 }
 
 fn writeReplStaticError(response_buffer: []u8, message: []const u8, stage: ReplErrorStage) ResponseWriteError!void {
@@ -1196,6 +1182,15 @@ fn runReplStep(session: *ReplSession, input: []const u8, response_buffer: []u8) 
 /// Compile source through all compiler stages.
 /// module_name should be the filename without the .roc extension (e.g., "Person" for "Person.roc")
 fn compileSource(source: []const u8, module_name: []const u8) PlaygroundCompileError!CompilerStageData {
+    return compileSourceWithValidation(source, module_name, .checking);
+}
+
+const SourceValidationMode = enum {
+    checking,
+    explicit_roots,
+};
+
+fn compileSourceWithValidation(source: []const u8, module_name: []const u8, validation_mode: SourceValidationMode) PlaygroundCompileError!CompilerStageData {
     // Handle empty input gracefully to prevent crashes
     if (source.len == 0) {
         // Return empty compiler stage data for completely empty input
@@ -1339,7 +1334,7 @@ fn compileSource(source: []const u8, module_name: []const u8) PlaygroundCompileE
     // compile consumes the same explicit Builtin module context.
 
     logDebug("compileSource: Loading builtin indices\n", .{});
-    const builtin_indices = try eval.builtin_loading.deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
+    const builtin_indices = compiled_builtins.builtinIndices(can.CIR);
     logDebug("compileSource: Builtin indices loaded, bool_type={}\n", .{@intFromEnum(builtin_indices.bool_type)});
 
     const builtin_module = try getCachedBuiltinModule();
@@ -1361,7 +1356,6 @@ fn compileSource(source: []const u8, module_name: []const u8) PlaygroundCompileE
     const str_stmt_in_builtin_module = builtin_indices.str_type;
 
     const module_builtin_ctx: Check.BuiltinContext = .{
-        .module_name = try module_env.insertIdent(base.Ident.for_text("main")),
         .bool_stmt = bool_stmt_in_builtin_module,
         .try_stmt = try_stmt_in_builtin_module,
         .str_stmt = str_stmt_in_builtin_module,
@@ -1386,10 +1380,16 @@ fn compileSource(source: []const u8, module_name: []const u8) PlaygroundCompileE
         return err;
     };
 
-    czer.validateForChecking() catch |err| {
-        logDebug("compileSource: validateForChecking failed: {}\n", .{err});
-        return err;
-    };
+    switch (validation_mode) {
+        .checking => czer.validateForChecking() catch |err| {
+            logDebug("compileSource: validateForChecking failed: {}\n", .{err});
+            return err;
+        },
+        .explicit_roots => czer.validateForExplicitRoots() catch |err| {
+            logDebug("compileSource: validateForExplicitRoots failed: {}\n", .{err});
+            return err;
+        },
+    }
     logDebug("compileSource: Canonicalization complete\n", .{});
 
     // Copy the modified AST back into the main result to ensure state consistency
@@ -1456,6 +1456,7 @@ fn compileSource(source: []const u8, module_name: []const u8) PlaygroundCompileE
             imported_envs,
             &solver.import_mapping,
             &solver.regions,
+            null,
         ) catch |err| {
             // On allocation failure, return result with current reports
             logDebug("compileSource: ReportBuilder.init failed: {}\n", .{err});
@@ -1820,7 +1821,8 @@ fn argLayoutsForProc(
     const arg_layouts = try alloc.alloc(layout.Idx, arg_ids.len);
     errdefer alloc.free(arg_layouts);
 
-    for (arg_ids, 0..) |local_id, i| {
+    for (0..arg_ids.len) |i| {
+        const local_id = GuardedList.at(arg_ids, i);
         arg_layouts[i] = store.getLocal(local_id).layout_idx;
     }
 
@@ -1877,6 +1879,7 @@ fn buildEvaluateTestsHtml(data: CompilerStageData) PlaygroundEvaluateTestsError!
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
         runtime_env.get_ops(),
+        .preserve,
     );
     defer interpreter.deinit();
 
@@ -2184,7 +2187,11 @@ fn extractDiagnosticsFromReports(
         {
             continue;
         }
-        const message = report.title;
+        // Titles are authored in title case; shout them to ALL CAPS here to
+        // match the box/HTML/LSP renderers. Owned by the report so the message
+        // lives as long as the borrowed title would have.
+        const message = try report.addOwnedString(report.title);
+        for (@constCast(message)) |*c| c.* = std.ascii.toUpper(c.*);
         const diagnostic_severity = switch (report.severity) {
             .info => DiagnosticSeverity.info,
             .warning => DiagnosticSeverity.warning,

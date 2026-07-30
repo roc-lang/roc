@@ -5,46 +5,43 @@ type=snippet
 ~~~
 # SOURCE
 ~~~roc
-import json.Json as MyModule
-import http.Client as MyModule
+import json.Json as MyMod
+import http.Client as MyMod
 
 main = {
-    x = MyModule.parse
+    x = MyMod.parse
     x
 }
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - can_import_aliased_conflicts.md:2:1:2:31
-UNDEFINED VARIABLE - can_import_aliased_conflicts.md:5:9:5:23
+DUPLICATE DEFINITION - can_import_aliased_conflicts.md:2:1:2:28
+NAME NOT IN SCOPE - can_import_aliased_conflicts.md:5:9:5:20
 # PROBLEMS
-**DUPLICATE DEFINITION**
-The name `MyModule` is being redeclared in this scope.
 
-The redeclaration is here:
-**can_import_aliased_conflicts.md:2:1:2:31:**
-```roc
-import http.Client as MyModule
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+┌──────────────────────┐
+│ DUPLICATE DEFINITION ├─ The name `MyMod` is being redeclared here. ─────────┐
+└┬─────────────────────┘                                                      │
+ │                                                                            │
+ │  import http.Client as MyMod                                               │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
+ └─────────────────────────────────────── can_import_aliased_conflicts.md:2:1 ┘
 
-But `MyModule` was already defined here:
-**can_import_aliased_conflicts.md:1:1:1:1:**
-```roc
-import json.Json as MyModule
-```
-^
+    In this scope, `MyMod` was already defined here:
+      ┌───────────────────────────────────────────────────────────────────────┐
+    1 │  import json.Json as MyMod                                            │
+      │  ‾                                                                    │
+      └────────────────────────────────── can_import_aliased_conflicts.md:1:1 ┘
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `parse` in this scope.
-Is there an `import` or `exposing` missing up-top?
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `parse` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
+ │                                                                            │
+ │  x = MyMod.parse                                                           │
+ │      ‾‾‾‾‾‾‾‾‾‾‾                                                           │
+ └─────────────────────────────────────── can_import_aliased_conflicts.md:5:9 ┘
 
-**can_import_aliased_conflicts.md:5:9:5:23:**
-```roc
-    x = MyModule.parse
-```
-        ^^^^^^^^^^^^^^
-
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig
@@ -59,26 +56,26 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
-		(s-import (raw "json.Json") (alias "MyModule"))
-		(s-import (raw "http.Client") (alias "MyModule"))
+		(s-import (raw "json.Json") (alias "MyMod"))
+		(s-import (raw "http.Client") (alias "MyMod"))
 		(s-decl
 			(p-ident (raw "main"))
 			(e-block
 				(statements
 					(s-decl
 						(p-ident (raw "x"))
-						(e-ident (raw "MyModule.parse")))
+						(e-ident (raw "MyMod.parse")))
 					(e-ident (raw "x")))))))
 ~~~
 # FORMATTED
 ~~~roc
-import json.Json as MyModule
-import http.Client as MyModule
+import json.Json as MyMod
+import http.Client as MyMod
 
 main = {
-	x = MyModule.parse
+	x = MyMod.parse
 	x
 }
 ~~~
@@ -87,15 +84,10 @@ main = {
 (can-ir
 	(d-let
 		(p-assign (ident "main"))
-		(e-block
-			(s-let
-				(p-assign (ident "x"))
-				(e-runtime-error (tag "ident_not_in_scope")))
-			(e-lookup-local
-				(p-assign (ident "x")))))
-	(s-import (module "json.Json")
+		(e-runtime-error (tag "erroneous_value_expr")))
+	(s-import (mod "json.Json")
 		(exposes))
-	(s-import (module "http.Client")
+	(s-import (mod "http.Client")
 		(exposes)))
 ~~~
 # TYPES

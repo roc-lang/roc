@@ -11,46 +11,42 @@ match person {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - pattern_destructure_with_rest.md:1:7:1:13
+NAME NOT IN SCOPE - pattern_destructure_with_rest.md:1:7:1:13
 DOES NOT EXIST - pattern_destructure_with_rest.md:2:33:2:40
 DOES NOT EXIST - pattern_destructure_with_rest.md:2:55:2:62
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `person` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**pattern_destructure_with_rest.md:1:7:1:13:**
-```roc
-match person {
-```
-      ^^^^^^
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `person` in this scope. ──────────────┐
+└┬──────────────────┘                                                         │
+ │                                                                            │
+ │  match person {                                                            │
+ │        ‾‾‾‾‾‾                                                              │
+ └────────────────────────────────────── pattern_destructure_with_rest.md:1:7 ┘
 
-
-**DOES NOT EXIST**
-`Str.len` does not exist.
-
-`Str` is in scope, but it has no associated `len`.
-
-It's referenced here:
-**pattern_destructure_with_rest.md:2:33:2:40:**
-```roc
-    { first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)
-```
-                                ^^^^^^^
+    Is it misspelled, or is there an import missing?
 
 
-**DOES NOT EXIST**
-`Str.len` does not exist.
+┌────────────────┐
+│ DOES NOT EXIST ├─ `Str.len` does not exist. ────────────────────────────────┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  …rs } => Str.len(first_name) > Str.len(others.last_name)                  │
+ │           ‾‾‾‾‾‾‾                                                          │
+ └───────────────────────────────────── pattern_destructure_with_rest.md:2:33 ┘
 
-`Str` is in scope, but it has no associated `len`.
+    `Str` is in scope, but it has no associated `len`.
 
-It's referenced here:
-**pattern_destructure_with_rest.md:2:55:2:62:**
-```roc
-    { first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)
-```
-                                                      ^^^^^^^
 
+┌────────────────┐
+│ DOES NOT EXIST ├─ `Str.len` does not exist. ────────────────────────────────┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  …name) > Str.len(others.last_name)                                        │
+ │           ‾‾‾‾‾‾‾                                                          │
+ └───────────────────────────────────── pattern_destructure_with_rest.md:2:55 ┘
+
+    `Str` is in scope, but it has no associated `len`.
 
 # TOKENS
 ~~~zig
@@ -103,7 +99,7 @@ match person {
 									(rest-pattern
 										(p-assign (ident "others"))))))))
 				(value
-					(e-dispatch-call (method "is_gt") (constraint-fn-var 32)
+					(e-dispatch-call (method "is_gt") (constraint-fn-var 214)
 						(receiver
 							(e-call
 								(e-runtime-error (tag "nested_value_not_found"))

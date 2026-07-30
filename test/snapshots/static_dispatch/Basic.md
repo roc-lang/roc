@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=
+description=Static dispatch on a nominal type with an annotated method
 type=file
 ~~~
 # SOURCE
@@ -50,7 +50,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "Basic")
@@ -90,7 +90,7 @@ EndOfFile,
 				(ty-var (raw "a"))
 				(ty-var (raw "b")))
 			(where
-				(method (module-of "a") (name "to_str")
+				(method (mod-of "a") (name "to_str")
 					(args
 						(ty-var (raw "a")))
 					(ty-var (raw "b")))))
@@ -108,7 +108,7 @@ EndOfFile,
 				(ty-var (raw "a"))
 				(ty-var (raw "b")))
 			(where
-				(method (module-of "a") (name "to_str2")
+				(method (mod-of "a") (name "to_str2")
 					(args
 						(ty-var (raw "a")))
 					(ty-var (raw "b")))))
@@ -185,7 +185,7 @@ main = (helper1(val), helper2(val))
 		(e-lambda
 			(args
 				(p-assign (ident "test")))
-			(e-dispatch-call (method "to_str") (constraint-fn-var 138)
+			(e-dispatch-call (method "to_str") (constraint-fn-var 312)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "test"))))
@@ -199,7 +199,7 @@ main = (helper1(val), helper2(val))
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "to_str") (constraint-fn-var 146)
+			(e-dispatch-call (method "to_str") (constraint-fn-var 320)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -218,7 +218,7 @@ main = (helper1(val), helper2(val))
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "to_str2") (constraint-fn-var 154)
+			(e-dispatch-call (method "to_str2") (constraint-fn-var 328)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -245,12 +245,12 @@ main = (helper1(val), helper2(val))
 		(p-assign (ident "main"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 234)
+				(e-call (constraint-fn-var 371)
 					(e-lookup-local
 						(p-assign (ident "helper1")))
 					(e-lookup-local
 						(p-assign (ident "val"))))
-				(e-call (constraint-fn-var 239)
+				(e-call (constraint-fn-var 376)
 					(e-lookup-local
 						(p-assign (ident "helper2")))
 					(e-lookup-local

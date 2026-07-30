@@ -8,6 +8,8 @@
 const std = @import("std");
 
 pub const types = @import("types.zig");
+pub const numeral = @import("numeral.zig");
+pub const literal_defaulting = @import("literal_defaulting.zig");
 pub const store = @import("store.zig");
 pub const instantiate = @import("instantiate.zig");
 pub const generalize = @import("generalize.zig");
@@ -26,6 +28,8 @@ pub const Content = types.Content;
 pub const FlatType = types.FlatType;
 pub const Func = types.Func;
 pub const NominalType = types.NominalType;
+pub const NominalDecl = types.NominalDecl;
+pub const SourceDecl = types.SourceDecl;
 pub const Record = types.Record;
 pub const RecordField = types.RecordField;
 pub const Tag = types.Tag;
@@ -41,11 +45,11 @@ pub const Mark = types.Mark;
 pub const TypeScope = types.TypeScope;
 pub const VarMap = types.VarMap;
 pub const StaticDispatchConstraint = types.StaticDispatchConstraint;
+pub const InterpolationPartMetadata = types.InterpolationPartMetadata;
+pub const DerivedMapPlan = types.DerivedMapPlan;
 pub const TwoStaticDispatchConstraints = types.TwoStaticDispatchConstraints;
 pub const Int = types.Int;
 pub const Frac = types.Frac;
-pub const IntRequirements = types.IntRequirements;
-pub const FracRequirements = types.FracRequirements;
 
 pub const Slot = store.Slot;
 pub const ResolvedVarDesc = store.ResolvedVarDesc;
@@ -58,4 +62,6 @@ pub const Polarity = types.Polarity;
 test {
     std.testing.refAllDecls(@import("test/test_rigid_instantiation.zig"));
     std.testing.refAllDecls(@import("generalize.zig"));
+    std.testing.refAllDecls(@import("numeral.zig"));
+    std.testing.refAllDecls(@import("literal_defaulting.zig"));
 }

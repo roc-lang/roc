@@ -21,6 +21,8 @@ const CommonEnv = @This();
 
 idents: Ident.Store,
 strings: StringLiteral.Store,
+string_builder: StringLiteral.BuilderState = .{},
+strings_insertable: bool = true,
 /// The items (a combination of types and values) that this module exposes
 exposed_items: ExposedItems,
 /// Line starts for error reporting. We retain only start and offset positions in the IR
@@ -34,6 +36,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
     return CommonEnv{
         .idents = try Ident.Store.initCapacity(gpa, 1024),
         .strings = try StringLiteral.Store.initCapacityBytes(gpa, 4096),
+        .string_builder = .{},
+        .strings_insertable = true,
         .exposed_items = ExposedItems.init(),
         .line_starts = try SafeList(u32).initCapacity(gpa, 256),
         .source = source,
@@ -42,6 +46,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
 
 pub fn deinit(self: *CommonEnv, gpa: std.mem.Allocator) void {
     self.idents.deinit(gpa);
+    self.string_builder.deinit(gpa);
     self.strings.deinit(gpa);
     self.exposed_items.deinit(gpa);
     self.line_starts.deinit(gpa);
@@ -50,11 +55,31 @@ pub fn deinit(self: *CommonEnv, gpa: std.mem.Allocator) void {
 
 /// Public function `clone`.
 pub fn clone(self: *const CommonEnv, gpa: std.mem.Allocator) std.mem.Allocator.Error!CommonEnv {
+    var idents = try self.idents.clone(gpa);
+    errdefer idents.deinit(gpa);
+
+    var strings = try self.strings.clone(gpa);
+    errdefer strings.deinit(gpa);
+
+    var string_builder = if (self.strings_insertable)
+        try self.string_builder.clone(gpa)
+    else
+        StringLiteral.BuilderState{};
+    errdefer string_builder.deinit(gpa);
+
+    var exposed_items = try self.exposed_items.clone(gpa);
+    errdefer exposed_items.deinit(gpa);
+
+    var line_starts = try self.line_starts.clone(gpa);
+    errdefer line_starts.deinit(gpa);
+
     return CommonEnv{
-        .idents = try self.idents.clone(gpa),
-        .strings = try self.strings.clone(gpa),
-        .exposed_items = try self.exposed_items.clone(gpa),
-        .line_starts = try self.line_starts.clone(gpa),
+        .idents = idents,
+        .strings = strings,
+        .string_builder = string_builder,
+        .strings_insertable = self.strings_insertable,
+        .exposed_items = exposed_items,
+        .line_starts = line_starts,
         .source = self.source,
     };
 }
@@ -93,6 +118,8 @@ pub fn serialize(
     offset_self.* = .{
         .idents = (try self.idents.serialize(allocator, writer)).*,
         .strings = (try self.strings.serialize(allocator, writer)).*,
+        .string_builder = .{},
+        .strings_insertable = false,
         .exposed_items = (try self.exposed_items.serialize(allocator, writer)).*,
         .line_starts = (try self.line_starts.serialize(allocator, writer)).*,
         .source = "", // Will be set when deserializing
@@ -138,6 +165,8 @@ pub const Serialized = extern struct {
         return CommonEnv{
             .idents = self.idents.deserializeInto(base_addr),
             .strings = self.strings.deserializeInto(base_addr),
+            .string_builder = .{},
+            .strings_insertable = false,
             .exposed_items = self.exposed_items.deserializeInto(base_addr),
             .line_starts = self.line_starts.deserializeInto(base_addr),
             .source = source,
@@ -179,7 +208,8 @@ pub fn getIdentStore(self: *const CommonEnv) *const Ident.Store {
 
 /// Inserts a string literal into the store and returns its index.
 pub fn insertString(self: *CommonEnv, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!StringLiteral.Idx {
-    return try self.strings.insert(gpa, string);
+    self.assertStringsInsertable();
+    return try self.string_builder.insert(&self.strings, gpa, string);
 }
 
 /// Retrieves a string literal by its index.
@@ -190,6 +220,15 @@ pub fn getString(self: *const CommonEnv, idx: StringLiteral.Idx) []const u8 {
 /// Returns a mutable reference to the string literal store.
 pub fn getStringStore(self: *CommonEnv) *StringLiteral.Store {
     return &self.strings;
+}
+
+fn assertStringsInsertable(self: *const CommonEnv) void {
+    if (self.strings_insertable) return;
+
+    if (comptime builtin.mode == .Debug) {
+        std.debug.panic("CommonEnv invariant violated: attempted to insert into frozen string literal store", .{});
+    }
+    unreachable;
 }
 
 /// Adds an identifier to the exposed items list by its index.

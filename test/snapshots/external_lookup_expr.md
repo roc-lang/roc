@@ -26,7 +26,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "qualified_ident_does_not_exist"))
+(e-runtime-error (tag "nested_value_not_found"))
 ~~~
 # TYPES
 ~~~clojure

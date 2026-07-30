@@ -10,7 +10,7 @@ A _tag_ is a name for one of the alternatives in a tag union. Tags can optionall
 - In `y = Foo(4)`, `Foo` is a tag with a payload of `4`.
 - In `y = Foo(4, 2)`, `Foo` is a tag with payloads of `4` and `2`.
 
-> **Note:** At runtime, Payloads optimize to the same thing as tuples. After optimizations, `Foo(4, 2)` and `Foo((4, 2))` compile to exactly the same thing.
+> **Note:** At runtime, payloads optimize to the same thing as tuples. After optimizations, `Foo(4, 2)` and `Foo((4, 2))` compile to exactly the same thing.
 
 Tag unions can't have multiple tags with the same name but different payload types. So for example,
 `Foo("a string")` and `Foo(1, 2)` couldn't go in the same tag union, because their tags have
@@ -21,11 +21,11 @@ the same name but their payloads are incompatible.
 _Structural_ tag unions are both structural and extensible.
 
 - **Structural** means that you don't have to choose a name for the type (or declare it in any way), and that two types are considered equivalent if they have the same structure.
-- **Extensible** means that the type can accumulate new tags based on how it's used, and also that you can use type variables to .
+- **Extensible** means that the type can accumulate new tags based on how it's used, and also that you can use type variables to represent additional tags the union might contain.
 
 In contrast, [_nominal_ tag unions](#nominal-tag-unions) are neither structural nor extensible.
 
-### Extending Structural Tag Unions 
+### Extending Structural Tag Unions
 
 Structural tag unions can be extended by having a conditional branch introduce a new tag:
 
@@ -62,7 +62,7 @@ You can use these type parameters in type aliases:
 Letters(others) : [A, B, ..others]
 ```
 
-If you match on a [catch-all underscore pattern](pattern-matching#underscore), 
+If you match on a [catch-all underscore pattern](pattern-matching#catch-all-patterns-_),
 you can accept a tag union containing _at least_ some tags, but also arbitrary others:
 
 ```roc
@@ -90,7 +90,7 @@ This is equivalent to writing `.._` but is more concise.
 
 ### Closed Tag Unions
 
-It's very rare, but occasionally useful to restrict a tag union's ability to be extended:
+It's very rare, but occasionally useful to restrict a tag union's ability to be extended. (Note: the `..[]` syntax shown here has not been implemented yet.)
 
 ```roc
 to_color : Str -> [Red, Green, Blue, Other, ..[]]
@@ -115,17 +115,17 @@ extended_color = if some_condition {
 
 This is rarely useful to application authors, but it is useful to platform authors.
 Platform authors can't send extensible types across the host boundary (as otherwise
-the host couldn't reliably know which tags map to which integer descriminants), 
-so this is a way to (for example) make a structural tag union for errors, and then 
+the host couldn't reliably know which tags map to which integer discriminants),
+so this is a way to (for example) make a structural tag union for errors, and then
 mark it as closed so that it can be sent across the host boundary.
 
 ### Limitations
 
-Structural tag unions are not allowed to be recursive. To make a recursive tag union, 
+Structural tag unions are not allowed to be recursive. To make a recursive tag union,
 use a [nominal tag union](#nominal-tag-unions) instead. (This used to be supported,
 but [was removed because of its nonobvious downsides](https://github.com/roc-lang/rfcs/pull/1).)
 
-Platform authors should note the previous section on [closed tag unions](#closed-tag-unions), 
+Platform authors should note the previous section on [closed tag unions](#closed-tag-unions),
 which explains why only closed tag unions can be sent across the host boundary.
 
 ## Nominal Tag Unions
@@ -140,7 +140,11 @@ structural tag unions do.
 
 ### Qualified Tags
 
+TODO
+
 ### Opaque Tag Unions
+
+TODO
 
 ### Structural-Nominal Compatibility
 
@@ -149,7 +153,7 @@ As a convenience, you can use structural tags to represent nominal tags with the
 For example, you can do this:
 
 ```roc
-
+TODO
 ```
 
 > **Note:** This does not get around opaque access boundaries.
@@ -160,3 +164,7 @@ Unlike structural tag unions, nominal tag unions can be recursive, and can alway
 across the host boundary.
 
 However, nominal tag unions are not extensible.
+
+## "Void" (Empty Tag Union) {#void}
+
+TODO

@@ -153,6 +153,19 @@ const PIo2 = [_]f64{
     2.16741683877804819444e-51, // 0x3569F31D, 0x00000000
 };
 
+fn floorNonnegativeBinary64(value: f64) f64 {
+    const bits: u64 = @bitCast(value);
+    const biased_exponent: u32 = @intCast((bits >> 52) & 0x7ff);
+    if (biased_exponent < 0x3ff) return 0.0;
+
+    const exponent = biased_exponent - 0x3ff;
+    if (exponent >= 52) return value;
+
+    const fractional_bits: u6 = @intCast(52 - exponent);
+    const fractional_mask = (@as(u64, 1) << fractional_bits) - 1;
+    return @bitCast(bits & ~fractional_mask);
+}
+
 /// Returns the last three digits of N with y = x - N*pi/2 so that |y| < pi/2.
 ///
 /// The method is to compute the integer (mod 8) and fraction parts of
@@ -329,7 +342,10 @@ pub fn rem_pio2_large(x: []const f64, y: []f64, e0: i32, nx: i32, prec: usize) i
 
         // compute n
         z = math.scalbn(z, q0); // actual value of z
-        z -= 8.0 * @floor(z * 0.125); // trim off integer >= 8
+        // z is nonnegative here, so binary truncation is exactly floor. Keep
+        // this operation explicit: lowering @floor can introduce a target-libm
+        // call, which would violate the deterministic builtin contract.
+        z -= 8.0 * floorNonnegativeBinary64(z * 0.125); // trim off integer >= 8
         n = @intFromFloat(z);
         z -= @floatFromInt(n);
         ih = 0;

@@ -17,29 +17,33 @@ decode_things # After member name
 UNSUPPORTED WHERE CLAUSE - where_clauses_10.md:7:6:7:14
 DECLARATION HAS NO VALUE - where_clauses_10.md:3:1:7:15
 # PROBLEMS
-**UNSUPPORTED WHERE CLAUSE**
-The where clause syntax _Decode_ is not supported:
-**where_clauses_10.md:7:6:7:14:**
-```roc
-				[a.Decode]
-```
-				 ^^^^^^^^
 
-This syntax was used for abilities, which have been removed from Roc. Use method constraints like `where [a.methodName(args) -> ret]` instead.
+┌──────────────────────────┐
+│ UNSUPPORTED WHERE CLAUSE ├─ The where clause syntax Decode is not ──────────┐
+└┬─────────────────────────┘  supported.                                      │
+ │                                                                            │
+ │  [a.Decode]                                                                │
+ │   ‾‾‾‾‾‾‾‾                                                                 │
+ └─────────────────────────────────────────────────── where_clauses_10.md:7:6 ┘
 
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**where_clauses_10.md:3:1:7:15:**
-```roc
-decode_things # After member name
-	: # After colon
-		List(List(U8)) -> List(a) # After anno
-			where # after where
-				[a.Decode]
-```
+    This syntax was used for abilities, which have been removed from Roc. Use
+    method constraints like `where [a.methodName(args) -> ret]` instead.
 
 
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  decode_things # After member name                                         │
+ │      : # After colon                                                       │
+ │          List(List(U8)) -> List(a) # After anno                            │
+ │              where # after where                                           │
+ │                  [a.Decode]                                                │
+ │                                                                            │
+ └─────────────────────────────────────────────────── where_clauses_10.md:3:1 ┘
+
+    Add a value body here, or put hosted functions in a platform type mod so
+    they are published through the host boundary.
 
 # TOKENS
 ~~~zig
@@ -54,7 +58,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "Decode")
 			(exposing
@@ -70,7 +74,7 @@ EndOfFile,
 					(ty (name "List"))
 					(ty-var (raw "a"))))
 			(where
-				(alias (module-of "a") (name "Decode"))))))
+				(alias (mod-of "a") (name "Decode"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -98,7 +102,7 @@ decode_things # After member name
 					(ty-rigid-var (name "a"))))
 			(where
 				(alias (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "Decode")))))
-	(s-import (module "Decode")
+	(s-import (mod "Decode")
 		(exposes
 			(exposed (name "Decode") (wildcard false)))))
 ~~~

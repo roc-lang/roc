@@ -14,27 +14,30 @@ compute = {
 # EXPECTED
 TYPE MISMATCH - destructure_closed_assignment.md:3:16:3:36
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**destructure_closed_assignment.md:3:16:3:36:**
-```roc
-    { x, y } = { x: 1, y: 2, z: 3 }
-```
-               ^^^^^^^^^^^^^^^^^^^^
 
-It has the type:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  { x, y } = { x: 1, y: 2, z: 3 }                                           │
+ │             ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                           │
+ └───────────────────────────────────── destructure_closed_assignment.md:3:16 ┘
 
-    { x: a, y: b, z: c }
-      where [
-        a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-        c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
-      ]
+    It has the type:
 
-But you are trying to use it as:
+        { x: a, y: b, z: c }
+          where [
+            a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+            b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+            c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
+          ]
 
-    { x: _field, y: _field2 }
-**Hint:** This pattern doesn't bind the `z` field. Match it explicitly with `z: _`, or add `..` to match all the remaining fields.
+    But you are trying to use it as:
+
+        { x: _field, y: a }
+          where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
+    Hint: This pattern doesn't bind the `z` field. Match it explicitly with `z:
+    _`, or add `..` to match all the remaining fields.
 
 # TOKENS
 ~~~zig
@@ -48,7 +51,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "compute")
 			(ty (name "U64")))
@@ -102,7 +105,7 @@ compute = {
 							(e-num (value "2")))
 						(field (name "z")
 							(e-num (value "3"))))))
-			(e-dispatch-call (method "plus") (constraint-fn-var 142)
+			(e-dispatch-call (method "plus") (constraint-fn-var 240)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))

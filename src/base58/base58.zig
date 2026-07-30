@@ -5,8 +5,11 @@
 
 const std = @import("std");
 
-// Base58 alphabet (no '0', 'O', 'I', or 'l' to deter visual similarity attacks.)
-const base58_alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+/// Base58 alphabet (no '0', 'O', 'I', or 'l' to deter visual similarity
+/// attacks). `base.url.isBase58Char` re-expresses this same set as character
+/// ranges because that module cannot import this one; a test in the `unbundle`
+/// module (which sees both) asserts the two agree on every byte value.
+pub const base58_alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
 // LUT: base58 char -> its index in the alphabet
 const base58_alphabet_reverse: [256]?u6 = blk: {

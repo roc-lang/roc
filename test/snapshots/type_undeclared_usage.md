@@ -12,57 +12,54 @@ processValue = |value| {
     "processed"
 }
 
-AnotherType : SomeModule.MissingType
+AnotherType : SomeMod.MissingType
 ~~~
 # EXPECTED
 UNDECLARED TYPE - type_undeclared_usage.md:1:10:1:21
 UNDECLARED TYPE - type_undeclared_usage.md:3:16:3:32
 UNUSED VARIABLE - type_undeclared_usage.md:4:17:4:22
-MODULE NOT IMPORTED - type_undeclared_usage.md:8:15:8:37
+MOD NOT IMPORTED - type_undeclared_usage.md:8:15:8:34
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _UnknownType_ is not declared in this scope.
 
-This type is referenced here:
-**type_undeclared_usage.md:1:10:1:21:**
-```roc
-MyType : UnknownType
-```
-         ^^^^^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _UndeclaredResult_ is not declared in this scope.
-
-This type is referenced here:
-**type_undeclared_usage.md:3:16:3:32:**
-```roc
-processValue : UndeclaredResult -> Str
-```
-               ^^^^^^^^^^^^^^^^
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `UnknownType` is not declared in this scope. ───┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  MyType : UnknownType                                                      │
+ │           ‾‾‾‾‾‾‾‾‾‾‾                                                      │
+ └───────────────────────────────────────────── type_undeclared_usage.md:1:10 ┘
 
 
-**UNUSED VARIABLE**
-Variable `value` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_value` to suppress this warning.
-The unused variable is declared here:
-**type_undeclared_usage.md:4:17:4:22:**
-```roc
-processValue = |value| {
-```
-                ^^^^^
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `UndeclaredResult` is not declared in this ─────┐
+└┬────────────────┘  scope.                                                   │
+ │                                                                            │
+ │  processValue : UndeclaredResult -> Str                                    │
+ │                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                           │
+ └───────────────────────────────────────────── type_undeclared_usage.md:3:16 ┘
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `SomeModule` imported into this Roc file.
 
-You're attempting to use this module here:
-**type_undeclared_usage.md:8:15:8:37:**
-```roc
-AnotherType : SomeModule.MissingType
-```
-              ^^^^^^^^^^^^^^^^^^^^^^
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `value` is defined here and then never used. ───┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  processValue = |value| {                                                  │
+ │                  ‾‾‾‾‾                                                     │
+ └───────────────────────────────────────────── type_undeclared_usage.md:4:17 ┘
+
+    If you don't need this variable, prefix it with an underscore like `_value`
+    to suppress this warning.
+
+
+┌─────────────────────┐
+│ MOD NOT IMPORTED ├─ There is no mod with the name `SomeMod` ──────────┐
+└┬────────────────────┘  imported into this Roc file.                         │
+ │                                                                            │
+ │  AnotherType : SomeMod.MissingType                                         │
+ │                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
+ └───────────────────────────────────────────── type_undeclared_usage.md:8:15 ┘
 
 
 # TOKENS
@@ -78,7 +75,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "MyType")
@@ -100,7 +97,7 @@ EndOfFile,
 		(s-type-decl
 			(header (name "AnotherType")
 				(args))
-			(ty (name "SomeModule.MissingType")))))
+			(ty (name "SomeMod.MissingType")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -111,7 +108,7 @@ processValue = |value| {
 	"processed"
 }
 
-AnotherType : SomeModule.MissingType
+AnotherType : SomeMod.MissingType
 ~~~
 # CANONICALIZE
 ~~~clojure

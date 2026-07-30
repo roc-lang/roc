@@ -21,3 +21,7 @@ nix develop ./src
 buildcmd
 ./zig-out/bin/roc version
 ```
+
+## Windows Notes
+
+Due to a [Zig bug](https://github.com/ziglang/zig/issues/17652) related to extracting dependencies from tarball files containing symlinks (which is not allowed by default on Windows), you might encounter permission denial issues. The workaround is to enable the `Developer Mode` option on Windows, which could be found under `Settings > System > Advanced`. If that does not work, please review the aforementioned bug for any additional clues.

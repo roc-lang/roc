@@ -9,6 +9,7 @@ pub const Monotype = struct {
     pub const Ast = @import("monotype/ast.zig");
     pub const Type = @import("monotype/type.zig");
     pub const Lower = @import("monotype/lower.zig");
+    pub const Serialize = @import("monotype/serialize.zig");
     pub const Solve = @import("monotype/solve.zig");
     pub const Specialize = @import("monotype/specialize.zig");
 };
@@ -30,13 +31,36 @@ pub const LambdaMono = struct {
     pub const Type = @import("lambda_mono/type.zig");
     pub const Lower = @import("lambda_mono/lower.zig");
     pub const Specialize = @import("lambda_mono/specialize.zig");
+    pub const Eval = @import("lambda_mono/eval.zig");
 };
-pub const LirLower = @import("lir_lower.zig");
+/// Decision-tree match compiler shared by both LIR lowerers.
+pub const MatchTree = @import("match_tree.zig");
 pub const SolvedInline = @import("solved_inline.zig");
 pub const SolvedLirLower = @import("solved_lir_lower.zig");
 pub const StructuralTest = @import("structural_test.zig");
 
 test "postcheck declarations are referenced" {
     std.testing.refAllDecls(@This());
+    std.testing.refAllDecls(@import("common.zig"));
+    std.testing.refAllDecls(@import("monotype/ast.zig"));
+    std.testing.refAllDecls(@import("monotype/type.zig"));
+    std.testing.refAllDecls(@import("monotype/lower.zig"));
+    std.testing.refAllDecls(@import("monotype/serialize.zig"));
     std.testing.refAllDecls(@import("monotype/solve.zig"));
+    std.testing.refAllDecls(@import("monotype/specialize.zig"));
+    std.testing.refAllDecls(@import("monotype_lifted/ast.zig"));
+    std.testing.refAllDecls(@import("monotype_lifted/lift.zig"));
+    std.testing.refAllDecls(@import("monotype_lifted/spec_constr.zig"));
+    std.testing.refAllDecls(@import("lambda_solved/ast.zig"));
+    std.testing.refAllDecls(@import("lambda_solved/type.zig"));
+    std.testing.refAllDecls(@import("lambda_solved/solve.zig"));
+    std.testing.refAllDecls(@import("lambda_mono/ast.zig"));
+    std.testing.refAllDecls(@import("lambda_mono/type.zig"));
+    std.testing.refAllDecls(@import("lambda_mono/lower.zig"));
+    std.testing.refAllDecls(@import("lambda_mono/specialize.zig"));
+    std.testing.refAllDecls(@import("lambda_mono/eval.zig"));
+    std.testing.refAllDecls(@import("match_tree.zig"));
+    std.testing.refAllDecls(@import("solved_inline.zig"));
+    std.testing.refAllDecls(@import("solved_lir_lower.zig"));
+    std.testing.refAllDecls(@import("structural_test.zig"));
 }

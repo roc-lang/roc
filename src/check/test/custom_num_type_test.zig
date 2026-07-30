@@ -116,7 +116,7 @@ test "Custom number type without from_numeral: integer literal does not unify" {
     defer test_env.deinit();
 
     // Should fail - MyType doesn't have from_numeral, so number literal can't be used
-    try test_env.assertOneTypeError("TYPE MISMATCH");
+    try test_env.assertOneTypeError("Type Mismatch");
 }
 
 test "Custom number type with negate: unary minus works" {
@@ -162,7 +162,7 @@ test "Custom number type without negate: unary minus fails" {
     defer test_env.deinit();
 
     // Should fail - MyNum doesn't have negate method
-    try test_env.assertOneTypeError("MISSING METHOD");
+    try test_env.assertOneTypeError("Missing Method");
 }
 
 test "Custom type with from_numeral and heterogeneous plus: literal + literal works" {
@@ -251,4 +251,22 @@ test "Flex lambda param plus concrete I64 rhs stays polymorphic" {
     // could be any nominal with `plus : a, I64 -> a`); `f` keeps the dispatch
     // constraint instead of collapsing to `I64 -> I64`.
     try test_env.assertDefType("f", "a -> a where [a.plus : a, I64 -> a]");
+}
+
+test "Discarded unpinned arithmetic specialization validates the default method type" {
+    const source =
+        \\run = || {
+        \\    my_u64 = 7.U64
+        \\    f = |x| x + my_u64
+        \\    _ = (f, |x| Str.inspect(x))
+        \\    {}
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // The bare use defaults f's arithmetic receiver to Dec. Dec.plus cannot
+    // discharge the resulting Dec, U64 -> Dec constraint, so checking owns
+    // the diagnostic instead of publishing incompatible dispatch evidence.
+    try test_env.assertOneTypeError("Type Mismatch");
 }

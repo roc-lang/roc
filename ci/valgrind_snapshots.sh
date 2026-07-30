@@ -21,6 +21,7 @@ if [ -z "$snapshot_bin" ]; then
   valgrind_shared_memory_size="${VALGRIND_SNAPSHOT_SHARED_MEMORY_SIZE:-268435456}"
   echo "Building snapshot tool for Valgrind with shared-memory arena size ${valgrind_shared_memory_size}"
   zig build \
+    -Dvalgrind=true \
     -Doptimize="${VALGRIND_SNAPSHOT_OPTIMIZE:-ReleaseFast}" \
     -Dstrip=false \
     -Dshared-memory-size="${valgrind_shared_memory_size}" \

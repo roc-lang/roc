@@ -5,19 +5,225 @@
 //! produced by the post-check pipeline.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
+const backend = @import("backend");
+const builtins = @import("builtins");
 const check = @import("check");
+const collections = @import("collections");
 const lir = @import("lir");
+const roc_target = @import("roc_target");
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedArtifact;
 const canonical = check.CanonicalNames;
 const CompilerHost = @import("compiler_host.zig");
 const ConstStoreWriter = @import("const_store_writer.zig");
+const CompileTimeHost = @import("compile_time_host.zig");
 const interpreter_mod = @import("interpreter.zig");
+const static_data_exports = @import("static_data");
 const Interpreter = interpreter_mod.Interpreter;
 const ExpectFailure = interpreter_mod.ExpectFailure;
 const FinalizeError = checked.CompileTimeFinalizer.Error;
+const LirProgram = lir.Program;
+
+/// Runtime options for compile-time finalization.
+pub const Options = struct {
+    pub const StderrWriter = struct {
+        context: ?*anyopaque = null,
+        write: *const fn (?*anyopaque, []const u8) void = noop,
+
+        fn noop(_: ?*anyopaque, _: []const u8) void {}
+
+        fn writeAll(self: StderrWriter, bytes: []const u8) void {
+            self.write(self.context, bytes);
+        }
+    };
+
+    max_threads: usize = 0,
+    stderr: ?StderrWriter = null,
+    std_io: ?std.Io = null,
+    slow_root_threshold_ns: u64 = 3 * std.time.ns_per_s,
+    slow_root_period_ns: u64 = std.time.ns_per_s,
+    timing: ?*Timing = null,
+};
+
+/// Thread-safe timing totals accumulated across compile-time root batches.
+pub const Timing = struct {
+    std_io: std.Io,
+    lowering: lir.CheckedPipeline.Timing,
+    total_ns: TimingCounter = .{},
+    static_data_ns: TimingCounter = .{},
+    code_generation_ns: TimingCounter = .{},
+    execution_ns: TimingCounter = .{},
+    store_results_ns: TimingCounter = .{},
+    /// Process footprint range observed at burst boundaries. Compile-time
+    /// evaluation runs as bursts interleaved with checking, so the progress
+    /// reporter cannot window-sample it; the brackets that already time each
+    /// burst fold a footprint reading at the same points.
+    mem_min: MemMinCounter = .{},
+    mem_max: MemMaxCounter = .{},
+
+    pub fn init(std_io: std.Io) Timing {
+        return .{
+            .std_io = std_io,
+            .lowering = lir.CheckedPipeline.Timing.init(std_io),
+        };
+    }
+
+    pub fn snapshot(self: *const Timing) TimingSnapshot {
+        const lowering = self.lowering.snapshot();
+        return .{
+            .total_ns = self.total_ns.load(),
+            .monotype_ns = lowering.monotype_ns,
+            .postcheck_to_lir_ns = lowering.lift_ns + lowering.spec_constr_ns + lowering.lambda_solve_ns + lowering.lir_gen_ns,
+            .lir_passes_ns = lowering.lir_passes_ns,
+            .arc_ns = lowering.arc_ns,
+            .static_data_ns = self.static_data_ns.load(),
+            .code_generation_ns = self.code_generation_ns.load(),
+            .execution_ns = self.execution_ns.load(),
+            .store_results_ns = self.store_results_ns.load(),
+            .mem_min = self.mem_min.load(),
+            .mem_max = self.mem_max.load(),
+        };
+    }
+
+    pub fn addSnapshot(self: *Timing, snapshot_value: TimingSnapshot) void {
+        self.lowering.addSnapshot(.{
+            .monotype_ns = snapshot_value.monotype_ns,
+            // The compile-time evaluation report shows lowering as one
+            // category; re-attribute the merged span to its first stage.
+            .lift_ns = snapshot_value.postcheck_to_lir_ns,
+            .lir_passes_ns = snapshot_value.lir_passes_ns,
+            .arc_ns = snapshot_value.arc_ns,
+        });
+        self.total_ns.add(snapshot_value.total_ns);
+        self.static_data_ns.add(snapshot_value.static_data_ns);
+        self.code_generation_ns.add(snapshot_value.code_generation_ns);
+        self.execution_ns.add(snapshot_value.execution_ns);
+        self.store_results_ns.add(snapshot_value.store_results_ns);
+        if (snapshot_value.mem_min != std.math.maxInt(u64)) self.mem_min.fold(snapshot_value.mem_min);
+        self.mem_max.fold(snapshot_value.mem_max);
+    }
+
+    fn start(self: *Timing) i64 {
+        self.sampleMemory();
+        return nowNs(self.std_io);
+    }
+
+    fn sampleMemory(self: *Timing) void {
+        const bytes = base.process_memory.currentBytes() orelse return;
+        self.mem_min.fold(bytes);
+        self.mem_max.fold(bytes);
+    }
+
+    fn finish(self: *Timing, started_ns: i64, phase: TimingPhase) void {
+        self.sampleMemory();
+        const elapsed_ns: u64 = @intCast(@max(0, nowNs(self.std_io) - started_ns));
+        switch (phase) {
+            .total => self.total_ns.add(elapsed_ns),
+            .static_data => self.static_data_ns.add(elapsed_ns),
+            .code_generation => self.code_generation_ns.add(elapsed_ns),
+            .execution => self.execution_ns.add(elapsed_ns),
+            .store_results => self.store_results_ns.add(elapsed_ns),
+        }
+    }
+};
+
+const MemMinCounter = if (base.parallel.is_freestanding or builtin.target.cpu.arch == .wasm32) struct {
+    value: u64 = std.math.maxInt(u64),
+
+    fn load(self: *const @This()) u64 {
+        return self.value;
+    }
+
+    fn fold(self: *@This(), sample: u64) void {
+        if (sample < self.value) self.value = sample;
+    }
+} else struct {
+    value: std.atomic.Value(u64) = std.atomic.Value(u64).init(std.math.maxInt(u64)),
+
+    fn load(self: *const @This()) u64 {
+        return self.value.load(.monotonic);
+    }
+
+    fn fold(self: *@This(), sample: u64) void {
+        var current = self.value.load(.monotonic);
+        while (sample < current) {
+            current = self.value.cmpxchgWeak(current, sample, .monotonic, .monotonic) orelse return;
+        }
+    }
+};
+
+const MemMaxCounter = if (base.parallel.is_freestanding or builtin.target.cpu.arch == .wasm32) struct {
+    value: u64 = 0,
+
+    fn load(self: *const @This()) u64 {
+        return self.value;
+    }
+
+    fn fold(self: *@This(), sample: u64) void {
+        if (sample > self.value) self.value = sample;
+    }
+} else struct {
+    value: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+
+    fn load(self: *const @This()) u64 {
+        return self.value.load(.monotonic);
+    }
+
+    fn fold(self: *@This(), sample: u64) void {
+        var current = self.value.load(.monotonic);
+        while (sample > current) {
+            current = self.value.cmpxchgWeak(current, sample, .monotonic, .monotonic) orelse return;
+        }
+    }
+};
+
+const TimingCounter = if (base.parallel.is_freestanding or builtin.target.cpu.arch == .wasm32) struct {
+    value: u64 = 0,
+
+    fn load(self: *const @This()) u64 {
+        return self.value;
+    }
+
+    fn add(self: *@This(), value: u64) void {
+        self.value +%= value;
+    }
+} else struct {
+    value: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+
+    fn load(self: *const @This()) u64 {
+        return self.value.load(.monotonic);
+    }
+
+    fn add(self: *@This(), value: u64) void {
+        _ = self.value.fetchAdd(value, .monotonic);
+    }
+};
+
+/// Immutable compile-time finalization timings for progress reporting.
+pub const TimingSnapshot = struct {
+    total_ns: u64 = 0,
+    monotype_ns: u64 = 0,
+    postcheck_to_lir_ns: u64 = 0,
+    lir_passes_ns: u64 = 0,
+    arc_ns: u64 = 0,
+    static_data_ns: u64 = 0,
+    code_generation_ns: u64 = 0,
+    execution_ns: u64 = 0,
+    store_results_ns: u64 = 0,
+    mem_min: u64 = std.math.maxInt(u64),
+    mem_max: u64 = 0,
+};
+
+const TimingPhase = enum {
+    total,
+    static_data,
+    code_generation,
+    execution,
+    store_results,
+};
 
 const ComptimeCoverage = struct {
     allocator: Allocator,
@@ -105,8 +311,16 @@ pub fn finalizer() checked.CompileTimeFinalizer {
     return .{ .finalize = finalize };
 }
 
+/// Return a checking finalizer configured with caller-provided CTFE options.
+pub fn finalizerWithOptions(options: *const Options) checked.CompileTimeFinalizer {
+    return .{
+        .context = @ptrCast(@constCast(options)),
+        .finalize = finalize,
+    };
+}
+
 fn finalize(
-    _: ?*anyopaque,
+    context: ?*anyopaque,
     allocator: Allocator,
     module: *checked.CheckedModuleArtifact,
     imports: []const checked.PublishImportArtifact,
@@ -114,9 +328,12 @@ fn finalize(
     relation_modules: []const checked.ImportedModuleView,
     problem_store: ?*check.problem.Store,
 ) FinalizeError!void {
+    const options: Options = if (context) |raw|
+        @as(*const Options, @ptrCast(@alignCast(raw))).*
+    else
+        .{};
     const requests = module.root_requests.compile_time_requests;
-    var had_problem = false;
-
+    const total_started_ns = if (requests.len != 0) if (options.timing) |timing| timing.start() else 0 else 0;
     if (requests.len != 0) {
         var coverage = ComptimeCoverage.init(allocator);
         defer coverage.deinit();
@@ -138,7 +355,7 @@ fn finalize(
                 if (batch_requests.items.len == 0) {
                     finalizationInvariant("compile-time root request order referenced an unfinished dependency");
                 }
-                if (try lowerEvalAndFinishRoots(
+                _ = try lowerEvalAndFinishRoots(
                     allocator,
                     module,
                     lowering_imports,
@@ -148,7 +365,8 @@ fn finalize(
                     &state,
                     problem_store,
                     &coverage,
-                )) had_problem = true;
+                    options,
+                );
                 batch_requests.clearRetainingCapacity();
                 batch_root_ids.clearRetainingCapacity();
 
@@ -161,7 +379,7 @@ fn finalize(
         }
 
         if (batch_requests.items.len != 0) {
-            if (try lowerEvalAndFinishRoots(
+            _ = try lowerEvalAndFinishRoots(
                 allocator,
                 module,
                 lowering_imports,
@@ -171,20 +389,21 @@ fn finalize(
                 &state,
                 problem_store,
                 &coverage,
-            )) had_problem = true;
+                options,
+            );
         }
 
         try coverage.reportUnusedBranches(allocator, problem_store);
     }
 
     if (problem_store) |store| {
-        if (try store.flushPendingStaticExhaustiveness(allocator) != 0) {
-            return error.CompileTimeProblem;
-        }
+        _ = try store.flushPendingStaticExhaustiveness(allocator);
     }
 
     try module.const_store.verifyComplete();
-    if (had_problem) return error.CompileTimeProblem;
+    if (requests.len != 0) {
+        if (options.timing) |timing| timing.finish(total_started_ns, .total);
+    }
 }
 
 const RootStatus = enum {
@@ -341,6 +560,7 @@ const RootCompletionState = struct {
             .imported_proc,
             .hosted_proc,
             .platform_required_declaration,
+            .platform_required_checked_error,
             => true,
         };
     }
@@ -350,12 +570,32 @@ const RootCompletionState = struct {
         const_use: checked.ConstUseTemplate,
     ) bool {
         const root_id = self.rootForConstRef(const_use.const_ref) orelse return true;
-        const own_hoisted_root = switch (const_use.const_ref.owner) {
-            .hoisted_expr => true,
-            .top_level_binding => false,
+        return self.rootDependencyComplete(root_id);
+    }
+
+    fn rootDependencyComplete(
+        self: *const RootCompletionState,
+        dependency_root_id: checked.ComptimeRootId,
+    ) bool {
+        const dependent_root_id = self.current_root_id orelse
+            finalizationInvariant("compile-time dependency checked outside a root request");
+        if (dependency_root_id == dependent_root_id) return true;
+
+        const dependent = self.module.compile_time_roots.root(dependent_root_id);
+        const dependency = self.module.compile_time_roots.root(dependency_root_id);
+        const is_strict = switch (dependent.source) {
+            .def => |dependent_def| switch (dependency.source) {
+                .def => |dependency_def| self.module.moduleEnvConst().hasTopLevelDemandDependency(
+                    dependent_def,
+                    dependency_def,
+                ),
+                else => true,
+            },
+            else => true,
         };
-        if (self.current_root_id != null and root_id == self.current_root_id.? and own_hoisted_root) return true;
-        return !self.requested_roots[@intFromEnum(root_id)] or self.isDone(root_id);
+        if (!is_strict) return true;
+
+        return !self.requested_roots[@intFromEnum(dependency_root_id)] or self.isDone(dependency_root_id);
     }
 
     fn rootForConstRef(
@@ -407,7 +647,7 @@ const RootCompletionState = struct {
             .direct_template => |direct| self.callableTemplateDependenciesComplete(direct.template),
             .callable_eval_template => |template_id| blk: {
                 const template = self.module.callable_eval_templates.get(template_id);
-                break :blk !self.requested_roots[@intFromEnum(template.root)] or self.isDone(template.root);
+                break :blk self.rootDependencyComplete(template.root);
             },
         };
     }
@@ -446,9 +686,26 @@ fn lowerEvalAndFinishRoots(
     state: *RootCompletionState,
     problem_store: ?*check.problem.Store,
     coverage: *ComptimeCoverage,
+    options: Options,
 ) FinalizeError!bool {
     if (requests.len != root_ids.len) {
         finalizationInvariant("compile-time finalization request/root-id batch length mismatch");
+    }
+
+    if (!compilerHostMustUseInterpreterForCtfe()) {
+        if (comptime !backend.host_lir_codegen_available) return error.UnsupportedPlatform;
+        return lowerDevEvalAndFinishRoots(
+            allocator,
+            module,
+            lowering_imports,
+            relation_modules,
+            requests,
+            root_ids,
+            state,
+            problem_store,
+            coverage,
+            options,
+        );
     }
 
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
@@ -461,9 +718,104 @@ fn lowerEvalAndFinishRoots(
         .{
             .target_usize = base.target.TargetUsize.native,
             .checked_module_state = .checking_finalization,
+            .timing = if (options.timing) |timing| &timing.lowering else null,
         },
     );
     defer lowered.deinit();
+
+    const static_data_started_ns = if (options.timing) |timing| timing.start() else 0;
+    const materialized_static_data = static_data_exports.buildStaticData(
+        allocator,
+        .{
+            .root = checked.loweringViewWithRelations(module, relation_modules),
+            .imports = lowering_imports,
+        },
+        &lowered,
+        roc_target.RocTarget.detectNative(),
+        .{},
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.UnsupportedTarget => return error.UnsupportedPlatform,
+    };
+    defer static_data_exports.deinitStaticData(allocator, materialized_static_data);
+
+    var static_data_image = backend.StaticDataImage.init(allocator, materialized_static_data) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.DuplicateStaticDataSymbol,
+        error.InvalidStaticDataAlignment,
+        error.InvalidStaticDataRelocation,
+        error.MissingStaticDataSymbol,
+        error.UnresolvedStaticFunction,
+        => finalizationInvariant("invalid interpreter static-data image during compile-time finalization"),
+    };
+    defer static_data_image.deinit();
+
+    const interpreter_static_data = static_data_image.lirValueAddresses(
+        allocator,
+        lowered.lir_result.static_data_values.items.len,
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.DuplicateStaticDataSymbol,
+        error.InvalidStaticDataAlignment,
+        error.InvalidStaticDataRelocation,
+        error.MissingStaticDataSymbol,
+        error.UnresolvedStaticFunction,
+        => finalizationInvariant("materialized interpreter static data omitted an LIR static-data symbol"),
+    };
+    defer allocator.free(interpreter_static_data);
+
+    var static_erased_callable_count: usize = 0;
+    for (materialized_static_data) |static_export| {
+        for (static_export.relocations) |relocation| {
+            if (relocation.callable_capture_offset != null) static_erased_callable_count += 1;
+        }
+    }
+    const static_erased_callables = try allocator.alloc(Interpreter.StaticErasedCallable, static_erased_callable_count);
+    defer allocator.free(static_erased_callables);
+    var static_erased_callable_index: usize = 0;
+    for (materialized_static_data) |static_export| {
+        const symbol_address = static_data_image.symbolAddress(static_export.symbol_name) orelse
+            finalizationInvariant("interpreter static-data image omitted a materialized export symbol");
+        const allocation_address = std.math.sub(usize, symbol_address, static_export.symbol_offset) catch
+            finalizationInvariant("interpreter static-data symbol offset exceeded its allocation address");
+        for (static_export.relocations) |relocation| {
+            const capture_offset = relocation.callable_capture_offset orelse continue;
+            if (relocation.kind != .function_pointer or relocation.rc_helper != null) {
+                finalizationInvariant("interpreter static callable relocation had inconsistent function metadata");
+            }
+            const callable_address = std.math.add(usize, allocation_address, @intCast(relocation.offset)) catch
+                finalizationInvariant("interpreter static callable address overflowed");
+            const capture_address = std.math.add(usize, callable_address, capture_offset) catch
+                finalizationInvariant("interpreter static callable capture address overflowed");
+            static_erased_callables[static_erased_callable_index] = .{
+                .capture_ptr = @ptrFromInt(capture_address),
+                .proc_id = relocation.procedure orelse
+                    finalizationInvariant("interpreter static callable relocation omitted its LIR procedure"),
+            };
+            static_erased_callable_index += 1;
+        }
+    }
+
+    const InterpreterStaticFunctionResolver = struct {
+        fn resolve(_: ?*anyopaque, relocation: backend.StaticDataRelocation) ?usize {
+            if (relocation.rc_helper != null) return Interpreter.staticErasedCallableOnDropAddress();
+            if (relocation.callable_capture_offset == null) return null;
+            _ = relocation.procedure orelse return null;
+            return Interpreter.staticErasedCallableTrampolineAddress();
+        }
+    };
+    static_data_image.resolveFunctionRelocations(.{
+        .resolve = InterpreterStaticFunctionResolver.resolve,
+    }) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.DuplicateStaticDataSymbol,
+        error.InvalidStaticDataAlignment,
+        error.InvalidStaticDataRelocation,
+        error.MissingStaticDataSymbol,
+        error.UnresolvedStaticFunction,
+        => finalizationInvariant("interpreter static data referenced an unresolved LIR procedure"),
+    };
+    if (options.timing) |timing| timing.finish(static_data_started_ns, .static_data);
 
     var host = CompilerHost.init(allocator);
     defer host.deinit();
@@ -473,12 +825,15 @@ fn lowerEvalAndFinishRoots(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
         host.ops(),
+        .normalize,
     );
     defer interpreter.deinit();
+    interpreter.setStaticData(interpreter_static_data, static_erased_callables);
 
     var writer = ConstStoreWriter.Writer.init(allocator, module, &lowered.lir_result);
     defer writer.deinit();
 
+    const execution_started_ns = if (options.timing) |timing| timing.start() else 0;
     var had_problem = false;
     if (lowered.lir_result.const_roots.items.len != requests.len) {
         finalizationInvariant("LIR lowering returned a different number of compile-time roots than requested");
@@ -517,8 +872,13 @@ fn lowerEvalAndFinishRoots(
 
             const eval_result = try evalCompileTimeRoot(allocator, &interpreter, problem_store, module, compile_time_root, &lowered.lir_result, root.proc, root.ret_layout);
             try recordComptimeSiteHits(problem_store, coverage, module, compile_time_root, &lowered.lir_result, interpreter.getComptimeBranchHits(), root.proc);
-            defer interpreter.dropValue(eval_result.value, root.ret_layout);
-            break :blk try writer.storeRoot(root, eval_result.value);
+            switch (eval_result) {
+                .value => |value| {
+                    defer interpreter.dropValue(value.value, root.ret_layout);
+                    break :blk try writer.storeRoot(root, value.value);
+                },
+                .failed => |failed_payload| break :blk failed_payload,
+            }
         };
 
         if (try reportCompileTimeExpectFailures(
@@ -537,16 +897,816 @@ fn lowerEvalAndFinishRoots(
         }
 
         module.compile_time_roots.fillPayload(root_id, payload);
-        finishConstRoot(module, compile_time_root, payload);
+        const stored_root_type = switch (compile_time_root.kind) {
+            .constant, .hoisted_constant => try writer.storeRootType(root),
+            .callable_binding,
+            .expect,
+            .numeral_conversion,
+            .quote_conversion,
+            => null,
+        };
+        finishConstRoot(module, compile_time_root, payload, stored_root_type);
         state.markDone(root_id);
     }
+    if (options.timing) |timing| timing.finish(execution_started_ns, .execution);
 
+    return had_problem;
+}
+
+fn compilerHostMustUseInterpreterForCtfe() bool {
+    return builtin.target.os.tag == .freestanding or
+        builtin.target.cpu.arch == .wasm32;
+}
+
+const DevRootProgressState = enum(u8) {
+    pending,
+    running,
+    done,
+};
+
+const ProgressMillis = usize;
+
+const DevRootResult = enum {
+    pending,
+    success,
+    crashed,
+    comptime_exhaustiveness,
+    host_oom,
+};
+
+const ThreadSafeAllocator = struct {
+    child: Allocator,
+    mutex: std.atomic.Mutex = .unlocked,
+
+    fn init(child: Allocator) ThreadSafeAllocator {
+        return .{ .child = child };
+    }
+
+    fn allocator(self: *ThreadSafeAllocator) Allocator {
+        return .{
+            .ptr = self,
+            .vtable = &.{
+                .alloc = alloc,
+                .resize = resize,
+                .remap = remap,
+                .free = free,
+            },
+        };
+    }
+
+    fn lock(self: *ThreadSafeAllocator) void {
+        while (!self.mutex.tryLock()) {
+            std.atomic.spinLoopHint();
+        }
+    }
+
+    fn unlock(self: *ThreadSafeAllocator) void {
+        self.mutex.unlock();
+    }
+
+    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+        const self: *ThreadSafeAllocator = @ptrCast(@alignCast(ctx));
+        self.lock();
+        defer self.unlock();
+        return self.child.rawAlloc(len, alignment, ret_addr);
+    }
+
+    fn resize(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
+        const self: *ThreadSafeAllocator = @ptrCast(@alignCast(ctx));
+        self.lock();
+        defer self.unlock();
+        return self.child.rawResize(memory, alignment, new_len, ret_addr);
+    }
+
+    fn remap(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+        const self: *ThreadSafeAllocator = @ptrCast(@alignCast(ctx));
+        self.lock();
+        defer self.unlock();
+        return self.child.rawRemap(memory, alignment, new_len, ret_addr);
+    }
+
+    fn free(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+        const self: *ThreadSafeAllocator = @ptrCast(@alignCast(ctx));
+        self.lock();
+        defer self.unlock();
+        self.child.rawFree(memory, alignment, ret_addr);
+    }
+};
+
+const DevRootLabel = struct {
+    module_name: []const u8,
+    snippet: []u8,
+    line: u32,
+    column: u32,
+
+    fn deinit(self: *DevRootLabel, allocator: Allocator) void {
+        allocator.free(self.snippet);
+    }
+};
+
+const DevRootJob = struct {
+    root: LirProgram.ConstRootPlan,
+    root_id: checked.ComptimeRootId,
+    compile_time_root: checked.CompileTimeRoot,
+    entry_offset: usize,
+    ret_buf: []align(collections.max_roc_alignment.toByteUnits()) u8,
+    host: CompileTimeHost,
+    result: DevRootResult = .pending,
+    progress: std.atomic.Value(u8) = std.atomic.Value(u8).init(@intFromEnum(DevRootProgressState.pending)),
+    start_ms: std.atomic.Value(ProgressMillis) = std.atomic.Value(ProgressMillis).init(0),
+    last_progress_ms: std.atomic.Value(ProgressMillis) = std.atomic.Value(ProgressMillis).init(0),
+    label: DevRootLabel,
+
+    fn deinit(self: *DevRootJob, allocator: Allocator) void {
+        self.host.deinit();
+        allocator.free(self.ret_buf);
+        self.label.deinit(allocator);
+    }
+};
+
+const DevRunContext = struct {
+    executable: *const backend.ExecutableMemory,
+    jobs: []DevRootJob,
+    std_io: ?std.Io,
+    progress_reporter: ?*DevProgressReporter,
+    had_oom: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+};
+
+const DevProgressThread = if (base.parallel.is_freestanding) struct {} else std.Thread;
+
+const DevProgressReporter = struct {
+    options: Options,
+    jobs: []DevRootJob,
+    stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    wake_epoch: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    thread: ?DevProgressThread = null,
+
+    fn init(options: Options, jobs: []DevRootJob) DevProgressReporter {
+        return .{
+            .options = options,
+            .jobs = jobs,
+        };
+    }
+
+    fn deinit(self: *DevProgressReporter) void {
+        self.finish();
+        self.* = undefined;
+    }
+
+    fn start(self: *DevProgressReporter) std.Thread.SpawnError!void {
+        if (comptime base.parallel.is_freestanding) return;
+        if (self.options.stderr == null) return;
+        if (self.options.std_io == null) return;
+        if (self.jobs.len == 0) return;
+        if (self.options.slow_root_threshold_ns == 0) return;
+        if (self.options.slow_root_period_ns == 0) return;
+        self.thread = try std.Thread.spawn(.{}, progressThreadMain, .{self});
+    }
+
+    fn finish(self: *DevProgressReporter) void {
+        if (comptime base.parallel.is_freestanding) return;
+        const thread = self.thread orelse return;
+        self.stop.store(true, .release);
+        self.wake();
+        thread.join();
+        self.thread = null;
+    }
+
+    fn rootStarted(self: *DevProgressReporter) void {
+        if (comptime base.parallel.is_freestanding) return;
+        if (self.thread == null) return;
+        self.wake();
+    }
+
+    fn wake(self: *DevProgressReporter) void {
+        const io = self.options.std_io orelse return;
+        _ = self.wake_epoch.fetchAdd(1, .acq_rel);
+        std.Io.futexWake(io, u32, &self.wake_epoch.raw, 1);
+    }
+
+    fn progressThreadMain(self: *DevProgressReporter) void {
+        const io = self.options.std_io orelse return;
+        while (!self.stop.load(.acquire)) {
+            const epoch = self.wake_epoch.load(.acquire);
+            const now = nowMs(io);
+            self.reportDue(now);
+            const next_wait_ms = self.nextWaitMs(now);
+            if (self.stop.load(.acquire)) break;
+            if (next_wait_ms) |wait_ms| {
+                if (wait_ms == 0) continue;
+                self.waitForWake(io, epoch, .{ .duration = .{
+                    .raw = std.Io.Duration.fromMilliseconds(std.math.cast(i64, wait_ms) orelse std.math.maxInt(i64)),
+                    .clock = .awake,
+                } });
+            } else {
+                self.waitForWake(io, epoch, .none);
+            }
+        }
+    }
+
+    fn waitForWake(self: *DevProgressReporter, io: std.Io, epoch: u32, timeout: std.Io.Timeout) void {
+        std.Io.futexWaitTimeout(io, u32, &self.wake_epoch.raw, epoch, timeout) catch {};
+    }
+
+    fn reportDue(self: *DevProgressReporter, now: ProgressMillis) void {
+        const stderr = self.options.stderr orelse return;
+        const threshold = progressDurationMs(self.options.slow_root_threshold_ns);
+        const period = progressDurationMs(self.options.slow_root_period_ns);
+        const spinner = spinnerByte(now / 250);
+
+        for (self.jobs) |*job| {
+            const progress: DevRootProgressState = @enumFromInt(job.progress.load(.acquire));
+            if (progress != .running) continue;
+            const started_at = job.start_ms.load(.acquire);
+            const elapsed_since_start = elapsedMs(now, started_at) orelse continue;
+            if (elapsed_since_start < threshold) continue;
+            const last = job.last_progress_ms.load(.acquire);
+            if (last != 0) {
+                const elapsed_since_last = elapsedMs(now, last) orelse continue;
+                if (elapsed_since_last < period) continue;
+            }
+            if (job.last_progress_ms.cmpxchgStrong(last, now, .acq_rel, .acquire) != null) continue;
+            const elapsed_s = elapsed_since_start / std.time.ms_per_s;
+            var line_buf: [4096]u8 = undefined;
+            const line = progressLine(&line_buf, spinner, job.label, @intCast(elapsed_s)) catch return;
+            stderr.writeAll(line);
+        }
+    }
+
+    fn nextWaitMs(self: *DevProgressReporter, now: ProgressMillis) ?ProgressMillis {
+        const threshold = progressDurationMs(self.options.slow_root_threshold_ns);
+        const period = progressDurationMs(self.options.slow_root_period_ns);
+        var next: ?ProgressMillis = null;
+
+        for (self.jobs) |*job| {
+            const progress: DevRootProgressState = @enumFromInt(job.progress.load(.acquire));
+            if (progress != .running) continue;
+            const started_at = job.start_ms.load(.acquire);
+            if (started_at == 0) continue;
+            const wait = blk: {
+                const threshold_wait = msUntilElapsed(now, started_at, threshold);
+                if (threshold_wait != 0) break :blk threshold_wait;
+                const last = job.last_progress_ms.load(.acquire);
+                if (last == 0) break :blk 0;
+                break :blk msUntilElapsed(now, last, period);
+            };
+            if (next == null or wait < next.?) next = wait;
+        }
+
+        return next;
+    }
+
+    fn progressLine(
+        buf: []u8,
+        spinner: u8,
+        label: DevRootLabel,
+        elapsed_s: u64,
+    ) std.fmt.BufPrintError![]u8 {
+        return std.fmt.bufPrint(
+            buf,
+            "{c} Evaluating `{s}` at compile time in {s}:{d}:{d} ({d}s)\n",
+            .{
+                spinner,
+                label.snippet,
+                label.module_name,
+                label.line,
+                label.column,
+                elapsed_s,
+            },
+        );
+    }
+};
+
+fn lowerDevEvalAndFinishRoots(
+    allocator: Allocator,
+    module: *checked.CheckedModuleArtifact,
+    lowering_imports: []const checked.ImportedModuleView,
+    relation_modules: []const checked.ImportedModuleView,
+    requests: []const checked.RootRequest,
+    root_ids: []const checked.ComptimeRootId,
+    state: *RootCompletionState,
+    problem_store: ?*check.problem.Store,
+    coverage: *ComptimeCoverage,
+    options: Options,
+) FinalizeError!bool {
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        allocator,
+        .{
+            .root = checked.loweringViewWithRelations(module, relation_modules),
+            .imports = lowering_imports,
+        },
+        .{ .requests = requests },
+        .{
+            .target_usize = base.target.TargetUsize.native,
+            .checked_module_state = .checking_finalization,
+            .timing = if (options.timing) |timing| &timing.lowering else null,
+        },
+    );
+    defer lowered.deinit();
+
+    if (lowered.lir_result.const_roots.items.len != requests.len) {
+        finalizationInvariant("LIR lowering returned a different number of compile-time roots than requested");
+    }
+    const static_data_started_ns = if (options.timing) |timing| timing.start() else 0;
+    var static_strings = try backend.StaticStringData.build(allocator, &lowered.lir_result.store, backend.dev.LirCodeGenMod.host_lir_codegen_target);
+    defer static_strings.deinit();
+
+    const materialized_static_data = static_data_exports.buildStaticData(
+        allocator,
+        .{
+            .root = checked.loweringViewWithRelations(module, relation_modules),
+            .imports = lowering_imports,
+        },
+        &lowered,
+        backend.dev.LirCodeGenMod.host_lir_codegen_target,
+        .{},
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.UnsupportedTarget => return error.UnsupportedPlatform,
+    };
+    defer static_data_exports.deinitStaticData(allocator, materialized_static_data);
+
+    var static_data_image = backend.StaticDataImage.init(allocator, materialized_static_data) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.DuplicateStaticDataSymbol,
+        error.InvalidStaticDataAlignment,
+        error.InvalidStaticDataRelocation,
+        error.MissingStaticDataSymbol,
+        error.UnresolvedStaticFunction,
+        => finalizationInvariant("invalid native static-data image during compile-time finalization"),
+    };
+    defer static_data_image.deinit();
+
+    const native_static_data = static_data_image.lirValueAddresses(
+        allocator,
+        lowered.lir_result.static_data_values.items.len,
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.DuplicateStaticDataSymbol,
+        error.InvalidStaticDataAlignment,
+        error.InvalidStaticDataRelocation,
+        error.MissingStaticDataSymbol,
+        error.UnresolvedStaticFunction,
+        => finalizationInvariant("materialized compile-time static data omitted an LIR static-data symbol"),
+    };
+    defer allocator.free(native_static_data);
+    if (options.timing) |timing| timing.finish(static_data_started_ns, .static_data);
+
+    const code_generation_started_ns = if (options.timing) |timing| timing.start() else 0;
+    var codegen = try backend.HostLirCodeGen.init(
+        allocator,
+        &lowered.lir_result.store,
+        &lowered.lir_result.layouts,
+        static_strings.entries,
+        .normalize,
+    );
+    defer codegen.deinit();
+    codegen.setNativeStaticData(native_static_data);
+    codegen.setComptimeHooks(.{
+        .branch_taken = CompileTimeHost.rocComptimeBranchTaken,
+        .exhaustiveness_failed = CompileTimeHost.rocComptimeExhaustivenessFailed,
+        .failure_region = CompileTimeHost.rocComptimeFailureRegion,
+        .call_enter = CompileTimeHost.rocComptimeCallEnter,
+        .call_exit = CompileTimeHost.rocComptimeCallExit,
+    });
+    try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
+    const static_rc_helpers = try static_data_exports.collectRequiredRcHelpers(allocator, materialized_static_data);
+    defer allocator.free(static_rc_helpers);
+    try codegen.compileStaticDataRcHelpers(static_rc_helpers);
+
+    var host_allocator_impl = ThreadSafeAllocator.init(allocator);
+    const host_allocator = host_allocator_impl.allocator();
+
+    var jobs = try allocator.alloc(DevRootJob, lowered.lir_result.const_roots.items.len);
+    var jobs_len: usize = 0;
+    {
+        errdefer {
+            for (jobs[0..jobs_len]) |*job| job.deinit(allocator);
+            allocator.free(jobs);
+        }
+
+        for (lowered.lir_result.const_roots.items, 0..) |root, i| {
+            if (!std.meta.eql(root.request, requests[i])) {
+                finalizationInvariant("LIR lowering changed compile-time root request order");
+            }
+
+            var name_buf: [64]u8 = undefined;
+            const symbol_name = std.fmt.bufPrint(&name_buf, "roc_ctfe_root_{d}", .{i}) catch unreachable;
+            const entrypoint = try codegen.generateEntrypointWrapper(
+                symbol_name,
+                root.proc,
+                &.{},
+                root.ret_layout,
+            );
+
+            const size_align = lowered.lir_result.layouts.layoutSizeAlign(lowered.lir_result.layouts.getLayout(root.ret_layout));
+            const ret_buf = try allocator.alignedAlloc(u8, collections.max_roc_alignment, @max(size_align.size, 1));
+            errdefer allocator.free(ret_buf);
+            @memset(ret_buf, 0);
+
+            const root_id = root_ids[i];
+            const compile_time_root = module.compile_time_roots.root(root_id);
+            const label = try devRootLabel(allocator, module, compile_time_root);
+            errdefer {
+                var owned = label;
+                owned.deinit(allocator);
+            }
+
+            jobs[i] = .{
+                .root = root,
+                .root_id = root_id,
+                .compile_time_root = compile_time_root,
+                .entry_offset = entrypoint.offset,
+                .ret_buf = ret_buf,
+                .host = CompileTimeHost.init(host_allocator),
+                .label = label,
+            };
+            jobs_len += 1;
+        }
+    }
+    defer {
+        for (jobs[0..jobs_len]) |*job| job.deinit(allocator);
+        allocator.free(jobs);
+    }
+
+    var executable = try backend.ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
+        codegen.getGeneratedCode(),
+        0,
+        codegen.getUnwindFunctions(),
+    );
+    defer executable.deinit();
+
+    const StaticFunctionResolver = struct {
+        codegen: *const backend.HostLirCodeGen,
+        executable: *const backend.ExecutableMemory,
+
+        fn resolve(raw: ?*anyopaque, relocation: backend.StaticDataRelocation) ?usize {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            if (relocation.rc_helper) |helper| {
+                const offset = self.codegen.compiledStaticDataRcHelperOffset(helper) orelse return null;
+                return @intFromPtr(self.executable.codePtr() + offset);
+            }
+            if (relocation.callable_capture_offset == null) return null;
+            const proc_id = relocation.procedure orelse return null;
+            const compiled = self.codegen.compiledProcSymbol(proc_id) orelse return null;
+            return @intFromPtr(self.executable.codePtr() + compiled.code_start);
+        }
+    };
+    var static_function_resolver = StaticFunctionResolver{
+        .codegen = &codegen,
+        .executable = &executable,
+    };
+    static_data_image.resolveFunctionRelocations(.{
+        .context = @ptrCast(&static_function_resolver),
+        .resolve = StaticFunctionResolver.resolve,
+    }) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.DuplicateStaticDataSymbol,
+        error.InvalidStaticDataAlignment,
+        error.InvalidStaticDataRelocation,
+        error.MissingStaticDataSymbol,
+        error.UnresolvedStaticFunction,
+        => finalizationInvariant("compile-time static data referenced an unresolved generated function"),
+    };
+    if (options.timing) |timing| timing.finish(code_generation_started_ns, .code_generation);
+
+    const execution_started_ns = if (options.timing) |timing| timing.start() else 0;
+    var progress = DevProgressReporter.init(options, jobs[0..jobs_len]);
+    defer progress.deinit();
+    try progress.start();
+    var run_context = DevRunContext{
+        .executable = &executable,
+        .jobs = jobs[0..jobs_len],
+        .std_io = options.std_io,
+        .progress_reporter = if (progress.thread == null) null else &progress,
+    };
+    const max_threads = if (options.max_threads == 0)
+        0
+    else
+        @max(options.max_threads, 1);
+    try base.parallel.process(
+        DevRunContext,
+        &run_context,
+        devRootWorker,
+        host_allocator,
+        jobs_len,
+        .{
+            .max_threads = max_threads,
+            .use_per_thread_arenas = false,
+        },
+    );
+    progress.finish();
+    if (options.timing) |timing| timing.finish(execution_started_ns, .execution);
+
+    if (run_context.had_oom.load(.acquire)) return error.OutOfMemory;
+
+    const DevResolver = struct {
+        codegen: *const backend.HostLirCodeGen,
+        store: *const lir.LirStore,
+        executable: *const backend.ExecutableMemory,
+
+        fn resolve(raw: ?*anyopaque, data_ptr: [*]u8) ConstStoreWriter.ErasedCallableResolution {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            const payload = builtins.erased_callable.payloadPtr(data_ptr);
+            const runtime_addr = @intFromPtr(payload.callable_fn_ptr);
+            for (self.store.getProcSpecs(), 0..) |_, proc_index| {
+                const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(proc_index);
+                const symbol = self.codegen.compiledProcSymbol(proc_id) orelse continue;
+                const compiled_addr = @intFromPtr(self.executable.codePtr() + symbol.code_start);
+                if (compiled_addr == runtime_addr) {
+                    return .{
+                        .proc = proc_id,
+                        .capture_ptr = builtins.erased_callable.capturePtr(data_ptr),
+                    };
+                }
+            }
+            finalizationInvariant("dev backend erased callable result did not map to a compiled proc");
+        }
+    };
+
+    var resolver = DevResolver{
+        .codegen = &codegen,
+        .store = &lowered.lir_result.store,
+        .executable = &executable,
+    };
+
+    const store_results_started_ns = if (options.timing) |timing| timing.start() else 0;
+    var writer = ConstStoreWriter.Writer.init(allocator, module, &lowered.lir_result);
+    defer writer.deinit();
+    writer.setErasedCallableResolver(.{
+        .context = @ptrCast(&resolver),
+        .resolve = DevResolver.resolve,
+    });
+
+    var had_problem = false;
+    for (jobs[0..jobs_len]) |*job| {
+        var payload: checked.CompileTimeRootPayload = switch (job.result) {
+            .pending => finalizationInvariant("dev backend compile-time root was not evaluated"),
+            .host_oom => return error.OutOfMemory,
+            .comptime_exhaustiveness => try devComptimeExhaustivenessRootPayload(
+                allocator,
+                problem_store,
+                module,
+                job.compile_time_root,
+                &lowered.lir_result,
+                job.root.proc,
+                job.host.comptime_failed_site orelse finalizationInvariant("dev backend CTFE exhaustiveness failure had no site"),
+                job.root.request,
+                &had_problem,
+            ),
+            .crashed => try devCrashedRootPayload(
+                allocator,
+                problem_store,
+                module,
+                job.compile_time_root,
+                job.root.request,
+                job.host.crashMessage() orelse "Roc crashed",
+                job.host.failed_region,
+                &had_problem,
+            ),
+            .success => try writer.storeRoot(job.root, .{ .ptr = job.ret_buf.ptr }),
+        };
+
+        try recordComptimeSiteHits(problem_store, coverage, module, job.compile_time_root, &lowered.lir_result, job.host.comptime_branch_hits.items, job.root.proc);
+
+        if (try reportDevHostEvents(allocator, options.stderr, problem_store, module, job.compile_time_root, job.host.events.items)) {
+            had_problem = true;
+        }
+
+        switch (job.compile_time_root.kind) {
+            .numeral_conversion, .quote_conversion => {
+                const conversion = try finishLiteralConversionRootDetailed(allocator, module, problem_store, job.compile_time_root, payload);
+                payload = conversion.payload;
+                if (conversion.had_problem) had_problem = true;
+            },
+            else => {},
+        }
+
+        module.compile_time_roots.fillPayload(job.root_id, payload);
+        const stored_root_type = switch (job.compile_time_root.kind) {
+            .constant, .hoisted_constant => try writer.storeRootType(job.root),
+            .callable_binding,
+            .expect,
+            .numeral_conversion,
+            .quote_conversion,
+            => null,
+        };
+        finishConstRoot(module, job.compile_time_root, payload, stored_root_type);
+        state.markDone(job.root_id);
+    }
+    if (options.timing) |timing| timing.finish(store_results_started_ns, .store_results);
+
+    return had_problem;
+}
+
+fn devRootWorker(_: Allocator, context: *DevRunContext, item_id: usize) void {
+    const job = &context.jobs[item_id];
+    job.host.resetForRun();
+    job.start_ms.store(if (context.std_io) |io| nowMs(io) else 0, .release);
+    job.last_progress_ms.store(0, .release);
+    job.progress.store(@intFromEnum(DevRootProgressState.running), .release);
+    if (context.progress_reporter) |progress| progress.rootStarted();
+
+    var crash_boundary = job.host.enterCrashBoundary();
+    const sj = crash_boundary.set();
+    if (sj == 0) {
+        context.executable.callRocABIAt(
+            job.entry_offset,
+            @ptrCast(job.host.ops()),
+            @ptrCast(job.ret_buf.ptr),
+            null,
+        );
+    }
+    crash_boundary.deinit();
+
+    job.result = switch (job.host.termination) {
+        .returned => .success,
+        .crashed => .crashed,
+        .comptime_exhaustiveness => .comptime_exhaustiveness,
+        .host_oom => blk: {
+            context.had_oom.store(true, .release);
+            break :blk .host_oom;
+        },
+    };
+    job.progress.store(@intFromEnum(DevRootProgressState.done), .release);
+}
+
+fn nowNs(io: std.Io) i64 {
+    return @intCast(@max(0, std.Io.Timestamp.now(io, .awake).nanoseconds));
+}
+
+fn nowMs(io: std.Io) ProgressMillis {
+    const ns: u64 = @intCast(nowNs(io));
+    return @truncate(ns / std.time.ns_per_ms);
+}
+
+fn elapsedMs(now: ProgressMillis, since: ProgressMillis) ?ProgressMillis {
+    if (since == 0 or now < since) return null;
+    return now - since;
+}
+
+fn msUntilElapsed(now: ProgressMillis, since: ProgressMillis, target: ProgressMillis) ProgressMillis {
+    if (since == 0) return target;
+    if (now < since) return saturatingAddMs(since - now, target);
+    const elapsed = now - since;
+    return if (elapsed < target) target - elapsed else 0;
+}
+
+fn saturatingAddMs(a: ProgressMillis, b: ProgressMillis) ProgressMillis {
+    return std.math.add(ProgressMillis, a, b) catch std.math.maxInt(ProgressMillis);
+}
+
+fn progressDurationMs(ns: u64) ProgressMillis {
+    const ms = ns / std.time.ns_per_ms;
+    return @intCast(@min(ms, std.math.maxInt(ProgressMillis)));
+}
+
+fn spinnerByte(tick: usize) u8 {
+    const frames = "|/-\\";
+    return frames[tick % frames.len];
+}
+
+fn devRootLabel(
+    allocator: Allocator,
+    module: *const checked.CheckedModuleArtifact,
+    root: checked.CompileTimeRoot,
+) Allocator.Error!DevRootLabel {
+    const env = module.moduleEnvConst();
+    const region = devRootSourceRegion(module, root);
+    const info = env.calcRegionInfo(region);
+    const source = env.getSourceAll();
+    const line_starts = env.getLineStartsAll();
+    const raw_line = base.RegionInfo.getLineText(source, line_starts, info.start_line_idx, info.start_line_idx);
+    const snippet = try truncateSnippet(allocator, raw_line, 96);
+    return .{
+        .module_name = env.module_name,
+        .snippet = snippet,
+        .line = info.start_line_idx + 1,
+        .column = info.start_col_idx + 1,
+    };
+}
+
+fn devRootSourceRegion(
+    module: *const checked.CheckedModuleArtifact,
+    root: checked.CompileTimeRoot,
+) base.Region {
+    const env = module.moduleEnvConst();
+    return switch (root.source) {
+        .def => |def_idx| blk: {
+            const def = env.store.getDef(def_idx);
+            break :blk env.store.getPatternRegion(def.pattern);
+        },
+        .expr => |expr_idx| env.store.getExprRegion(expr_idx),
+        .statement => |stmt_idx| env.store.getStatementRegion(stmt_idx),
+        .hoisted => |hoisted| env.store.getExprRegion(hoisted.expr),
+        .required_binding => module.checked_bodies.expr(root.expr).source_region,
+    };
+}
+
+fn truncateSnippet(allocator: Allocator, bytes: []const u8, max_bytes: usize) Allocator.Error![]u8 {
+    const ellipsis = "…";
+    if (bytes.len <= max_bytes) return try allocator.dupe(u8, bytes);
+    if (max_bytes <= ellipsis.len) return try allocator.dupe(u8, ellipsis);
+    const prefix_len = validUtf8PrefixLen(bytes, max_bytes - ellipsis.len);
+    return try std.fmt.allocPrint(allocator, "{s}{s}", .{ bytes[0..prefix_len], ellipsis });
+}
+
+fn validUtf8PrefixLen(bytes: []const u8, max_bytes: usize) usize {
+    var end = @min(bytes.len, max_bytes);
+    while (end > 0 and !std.unicode.utf8ValidateSlice(bytes[0..end])) {
+        end -= 1;
+    }
+    return end;
+}
+
+fn devComptimeExhaustivenessRootPayload(
+    allocator: Allocator,
+    problem_store: ?*check.problem.Store,
+    module: *checked.CheckedModuleArtifact,
+    root: checked.CompileTimeRoot,
+    lir_result: *const lir.Program.Result,
+    root_proc: lir.LIR.LirProcSpecId,
+    site_id: lir.LIR.ComptimeSiteId,
+    request: checked.RootRequest,
+    had_problem: *bool,
+) FinalizeError!checked.CompileTimeRootPayload {
+    if (request.kind == .compile_time_constant and problem_store == null) {
+        return .{ .const_node = try appendCrashConst(module, "compile-time exhaustiveness failure") };
+    }
+
+    const store = problem_store orelse {
+        finalizationInvariant("compile-time root reached an empirical exhaustiveness failure without a checking problem store");
+    };
+    try appendCompileTimeExhaustivenessProblem(allocator, store, module, root, lir_result, root_proc, site_id);
+    had_problem.* = true;
+    return try failedRootPayload(module, root, "compile-time exhaustiveness failure");
+}
+
+fn devCrashedRootPayload(
+    allocator: Allocator,
+    problem_store: ?*check.problem.Store,
+    module: *checked.CheckedModuleArtifact,
+    root: checked.CompileTimeRoot,
+    request: checked.RootRequest,
+    message: []const u8,
+    failed_region: ?base.Region,
+    had_problem: *bool,
+) FinalizeError!checked.CompileTimeRootPayload {
+    if (request.kind == .compile_time_constant and problem_store == null) {
+        return .{ .const_node = try appendCrashConst(module, message) };
+    }
+    const store = problem_store orelse {
+        finalizationInvariant("compile-time root crashed without a checking problem store");
+    };
+    const message_idx = try store.putExtraString(message);
+    const region = failed_region orelse devRootSourceRegion(module, root);
+    _ = try store.appendProblem(allocator, .{ .comptime_crash = .{
+        .message = message_idx,
+        .region = region,
+    } });
+    had_problem.* = true;
+    return try failedRootPayload(module, root, message);
+}
+
+fn reportDevHostEvents(
+    allocator: Allocator,
+    stderr: ?Options.StderrWriter,
+    maybe_problem_store: ?*check.problem.Store,
+    module: *const checked.CheckedModuleArtifact,
+    root: checked.CompileTimeRoot,
+    events: []const CompileTimeHost.HostEvent,
+) FinalizeError!bool {
+    var had_problem = false;
+    const region = module.checked_bodies.expr(root.expr).source_region;
+    for (events) |event| {
+        switch (event) {
+            .dbg => |msg| if (stderr) |writer| {
+                const line = try std.fmt.allocPrint(allocator, "[dbg] {s}\n", .{msg});
+                defer allocator.free(line);
+                writer.writeAll(line);
+            },
+            .expect_failed => |msg| if (maybe_problem_store) |store| {
+                const message_idx = try store.putExtraString(msg);
+                _ = try store.appendProblem(allocator, .{ .comptime_expect_failed = .{
+                    .message = message_idx,
+                    .region = region,
+                } });
+                had_problem = true;
+            },
+            .crashed => {},
+        }
+    }
     return had_problem;
 }
 
 /// Unwrap the `Try` value a literal-conversion root evaluated to. `Ok` payloads
 /// become the stored constant; `Err(InvalidNumeral(msg))` / `Err(BadQuotedBytes(msg))`
 /// becomes a checking problem carrying the implementation's message.
+const LiteralConversionFinish = struct {
+    payload: checked.CompileTimeRootPayload,
+    had_problem: bool,
+};
+
 fn finishLiteralConversionRoot(
     allocator: Allocator,
     module: *checked.CheckedModuleArtifact,
@@ -554,6 +1714,17 @@ fn finishLiteralConversionRoot(
     root: checked.CompileTimeRoot,
     payload: checked.CompileTimeRootPayload,
 ) FinalizeError!checked.CompileTimeRootPayload {
+    const result = try finishLiteralConversionRootDetailed(allocator, module, problem_store, root, payload);
+    return result.payload;
+}
+
+fn finishLiteralConversionRootDetailed(
+    allocator: Allocator,
+    module: *checked.CheckedModuleArtifact,
+    problem_store: ?*check.problem.Store,
+    root: checked.CompileTimeRoot,
+    payload: checked.CompileTimeRootPayload,
+) FinalizeError!LiteralConversionFinish {
     const try_node = switch (payload) {
         .const_node => |node| node,
         else => finalizationInvariant("numeral conversion root did not store a constant"),
@@ -561,13 +1732,13 @@ fn finishLiteralConversionRoot(
     switch (module.const_store.get(try_node)) {
         // The from_numeral implementation itself crashed; that crash was
         // already stored (and reported when a problem store exists).
-        .crash => return payload,
+        .crash => return .{ .payload = payload, .had_problem = false },
         else => {},
     }
     const try_tag = constTagValue(module, try_node);
     if (constTagNameIs(try_tag.tag_name, "Ok")) {
         if (try_tag.payloads.len != 1) finalizationInvariant("numeral conversion Ok did not carry one payload");
-        return .{ .const_node = try_tag.payloads[0] };
+        return .{ .payload = .{ .const_node = try_tag.payloads[0] }, .had_problem = false };
     }
     if (!constTagNameIs(try_tag.tag_name, "Err")) {
         finalizationInvariant("numeral conversion result was neither Ok nor Err");
@@ -594,9 +1765,12 @@ fn finishLiteralConversionRoot(
             } }),
             else => finalizationInvariant("non literal-conversion root reported a conversion problem"),
         }
-        return error.CompileTimeProblem;
+        return .{
+            .payload = .{ .const_node = try appendCrashConst(module, message) },
+            .had_problem = true,
+        };
     }
-    return .{ .const_node = try appendCrashConst(module, message) };
+    return .{ .payload = .{ .const_node = try appendCrashConst(module, message) }, .had_problem = false };
 }
 
 fn constTagValue(
@@ -653,36 +1827,42 @@ fn reportCompileTimeExpectFailures(
     return true;
 }
 
+const CompileTimeEvalResult = union(enum) {
+    value: Interpreter.EvalResult,
+    failed: checked.CompileTimeRootPayload,
+};
+
 fn evalCompileTimeRoot(
     allocator: Allocator,
     interpreter: *Interpreter,
     problem_store: ?*check.problem.Store,
-    module: *const checked.CheckedModuleArtifact,
+    module: *checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
     lir_result: *const lir.Program.Result,
     proc: lir.LIR.LirProcSpecId,
     ret_layout: @import("layout").Idx,
-) FinalizeError!Interpreter.EvalResult {
-    return interpreter.eval(.{
+) FinalizeError!CompileTimeEvalResult {
+    const result = interpreter.eval(.{
         .proc_id = proc,
         .ret_layout = ret_layout,
     }) catch |err| switch (err) {
-        error.OutOfMemory => error.OutOfMemory,
-        error.RuntimeError => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, interpreter.getRuntimeErrorMessage() orelse "compile-time evaluation failed"),
-        error.ComptimeExhaustiveness => try reportCompileTimeExhaustiveness(allocator, problem_store, module, root, lir_result, interpreter, proc),
-        error.DivisionByZero => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, interpreter.getRuntimeErrorMessage() orelse "Division by zero"),
-        error.Crash => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, interpreter.getCrashMessage() orelse "Roc crashed"),
+        error.OutOfMemory => return error.OutOfMemory,
+        error.RuntimeError => return .{ .failed = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, interpreter.getRuntimeErrorMessage() orelse "compile-time evaluation failed") },
+        error.ComptimeExhaustiveness => return .{ .failed = try reportCompileTimeExhaustiveness(allocator, problem_store, module, root, lir_result, interpreter, proc) },
+        error.DivisionByZero => return .{ .failed = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, interpreter.getRuntimeErrorMessage() orelse "Division by zero") },
+        error.Crash => return .{ .failed = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, interpreter.getCrashMessage() orelse "Roc crashed") },
         error.ExpectErr => finalizationInvariant("compile-time root reached an expect_err statement"),
     };
+    return .{ .value = result };
 }
 
 fn recordComptimeSiteHits(
     maybe_problem_store: ?*check.problem.Store,
     coverage: *ComptimeCoverage,
-    module: *const checked.CheckedModuleArtifact,
+    module: *checked.CheckedModuleArtifact,
     compile_time_root: checked.CompileTimeRoot,
     lir_result: *const lir.Program.Result,
-    hits: []const Interpreter.ComptimeBranchHit,
+    hits: anytype,
     root_proc: lir.LIR.LirProcSpecId,
 ) Allocator.Error!void {
     const problem_store = maybe_problem_store orelse return;
@@ -716,18 +1896,31 @@ fn reportsUnusedBranches(kind: checked.CompileTimeRootKind) bool {
 fn reportCompileTimeExhaustiveness(
     allocator: Allocator,
     maybe_problem_store: ?*check.problem.Store,
-    module: *const checked.CheckedModuleArtifact,
+    module: *checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
     lir_result: *const lir.Program.Result,
     interpreter: *const Interpreter,
     root_proc: lir.LIR.LirProcSpecId,
-) FinalizeError!Interpreter.EvalResult {
+) FinalizeError!checked.CompileTimeRootPayload {
     const problem_store = maybe_problem_store orelse {
         finalizationInvariant("compile-time root reached an empirical exhaustiveness failure without a checking problem store");
     };
     const site_id = interpreter.getComptimeFailedSite() orelse {
         finalizationInvariant("compile-time root reported empirical exhaustiveness failure without a site");
     };
+    try appendCompileTimeExhaustivenessProblem(allocator, problem_store, module, root, lir_result, root_proc, site_id);
+    return try failedRootPayload(module, root, "compile-time exhaustiveness failure");
+}
+
+fn appendCompileTimeExhaustivenessProblem(
+    allocator: Allocator,
+    problem_store: *check.problem.Store,
+    module: *const checked.CheckedModuleArtifact,
+    root: checked.CompileTimeRoot,
+    lir_result: *const lir.Program.Result,
+    root_proc: lir.LIR.LirProcSpecId,
+    site_id: lir.LIR.ComptimeSiteId,
+) Allocator.Error!void {
     const site = lir_result.comptime_sites.items[@intFromEnum(site_id)];
     _ = comptimeSiteEmpiricalKind(site.kind) orelse switch (site.kind) {
         .if_ => finalizationInvariant("if expression reached empirical exhaustiveness failure"),
@@ -751,7 +1944,6 @@ fn reportCompileTimeExhaustiveness(
     if (!matched) {
         finalizationInvariant("empirical exhaustiveness failure had no pending static diagnostic");
     }
-    return error.CompileTimeProblem;
 }
 
 fn discardUnreachedRootComptimeSites(
@@ -808,11 +2000,11 @@ fn comptimeSiteEmpiricalKind(
 fn reportCompileTimeCrash(
     allocator: Allocator,
     maybe_problem_store: ?*check.problem.Store,
-    module: *const checked.CheckedModuleArtifact,
+    module: *checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
     interpreter: *const Interpreter,
     message: []const u8,
-) FinalizeError!Interpreter.EvalResult {
+) FinalizeError!checked.CompileTimeRootPayload {
     const problem_store = maybe_problem_store orelse {
         finalizationInvariant("compile-time root crashed without a checking problem store");
     };
@@ -822,7 +2014,23 @@ fn reportCompileTimeCrash(
         .message = message_idx,
         .region = region,
     } });
-    return error.CompileTimeProblem;
+    return try failedRootPayload(module, root, message);
+}
+
+fn failedRootPayload(
+    module: *checked.CheckedModuleArtifact,
+    root: checked.CompileTimeRoot,
+    message: []const u8,
+) Allocator.Error!checked.CompileTimeRootPayload {
+    return switch (root.kind) {
+        .expect => .expect,
+        .constant,
+        .hoisted_constant,
+        .callable_binding,
+        .numeral_conversion,
+        .quote_conversion,
+        => .{ .const_node = try appendCrashConst(module, message) },
+    };
 }
 
 fn compileTimeCrashRegion(
@@ -901,6 +2109,7 @@ fn finishConstRoot(
     module: *checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
     payload: checked.CompileTimeRootPayload,
+    root_type: ?check.ConstStore.ConstTypeId,
 ) void {
     if (root.kind != .constant and root.kind != .hoisted_constant) return;
     const node = switch (payload) {
@@ -931,7 +2140,10 @@ fn finishConstRoot(
         .quote_conversion,
         => unreachable,
     };
-    const stored = checked.StoredConstTemplate{ .node = node };
+    const stored = checked.StoredConstTemplate{
+        .node = node,
+        .root_type = root_type orelse finalizationInvariant("constant root finalized without exact Monotype representation evidence"),
+    };
     module.const_templates.fillStoredConst(const_ref, stored);
     if (root.kind == .constant) {
         module.exported_const_templates.fillStoredConst(const_ref, stored);
@@ -958,6 +2170,20 @@ fn finalizationInvariant(comptime message: []const u8) noreturn {
         std.debug.panic("compile-time finalization invariant violated: {s}", .{message});
     }
     unreachable;
+}
+
+test "compile-time progress elapsed rejects unset and future timestamps" {
+    try std.testing.expectEqual(@as(?ProgressMillis, null), elapsedMs(10, 0));
+    try std.testing.expectEqual(@as(?ProgressMillis, null), elapsedMs(10, 11));
+    try std.testing.expectEqual(@as(?ProgressMillis, 7), elapsedMs(18, 11));
+}
+
+test "compile-time progress wait avoids timestamp wraparound" {
+    try std.testing.expectEqual(@as(ProgressMillis, 3007), msUntilElapsed(10, 17, 3000));
+    try std.testing.expectEqual(@as(ProgressMillis, 2500), msUntilElapsed(500, 0, 2500));
+    try std.testing.expectEqual(@as(ProgressMillis, 4), msUntilElapsed(16, 10, 10));
+    try std.testing.expectEqual(@as(ProgressMillis, 0), msUntilElapsed(20, 10, 10));
+    try std.testing.expectEqual(std.math.maxInt(ProgressMillis), msUntilElapsed(0, std.math.maxInt(ProgressMillis), 1));
 }
 
 test "compile-time finalization declarations are referenced" {

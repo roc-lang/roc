@@ -19,8 +19,12 @@ const const_store = check.ConstStore;
 pub const RequestedLayout = struct {
     ty: names.TypeDigest,
     checked_type: checked.CheckedTypeId,
+    const_locator: ?checked.ConstLocator = null,
     layout_idx: layout.Idx,
     plan: ConstPlanId,
+    /// Closed LIR procedure that constructs the exact target representation for
+    /// a provided static data export. Plain layout-only requests leave this null.
+    initializer: ?LIR.LirProcSpecId = null,
 };
 
 /// Identifier for a finite callable set in the LIR program.
@@ -41,13 +45,23 @@ pub const FnTemplate = struct {
     fn_def: const_store.FnDef,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
+    evidence: []const const_store.ConstFnEvidence = &.{},
+    evidence_frames: []const const_store.ConstFnEvidenceFrame = &.{},
+    evidence_frame_head: ?u32 = null,
 };
 
-/// Capture field copied from a checked binder into a callable payload.
+/// Capture field copied from a checked binding into a callable payload. `id`
+/// is checked-stage provenance for storing a compile-time result in
+/// `ConstStore`; runtime capture joining was completed before LIR.
 pub const CaptureSlot = struct {
     id: const_store.CaptureId,
     slot: u32,
+    ty: const_store.ConstTypeId,
     plan: ConstPlanId,
+    /// This slot is the boxed runtime back-edge of an explicit recursive
+    /// constant binding. ConstStore records the checked identity instead of
+    /// traversing the runtime value back into itself.
+    recursive_const: bool = false,
 };
 
 /// One runtime tag variant for a finite callable value.
@@ -94,6 +108,9 @@ pub const ConstTagVariant = struct {
 /// Shape plan used to store an interpreted compile-time result in ConstStore.
 pub const ConstPlan = union(enum) {
     pending,
+    /// Layout-only request. This plan has no ConstStore materialization shape;
+    /// consumers must use it only for requested layout metadata.
+    layout_only,
     zst,
     scalar,
     str,
@@ -116,8 +133,22 @@ pub const ConstRootPlan = struct {
     request: check.CheckedModule.RootRequest,
     proc: LIR.LirProcSpecId,
     ret_layout: layout.Idx,
+    /// Exact producer-owned Monotype representation of the evaluated root.
+    /// ConstStore restoration consumes this instead of reconstructing
+    /// representation evidence from the public checked type.
+    ret_type: const_store.ConstTypeId,
     plan: ConstPlanId,
 };
+
+/// One exact LIR value construction that is frozen as readonly target data.
+pub const StaticDataValue = struct {
+    initializer: LIR.LirProcSpecId,
+};
+
+/// Deterministic symbol name for an internal static-data value.
+pub fn staticDataSymbolName(allocator: Allocator, id: LIR.StaticDataId) Allocator.Error![]u8 {
+    return try std.fmt.allocPrint(allocator, "roc__static_const_value_{d}", .{@intFromEnum(id)});
+}
 
 /// Complete LIR program and side data consumed by ARC, backends, and eval.
 pub const Result = struct {
@@ -126,10 +157,13 @@ pub const Result = struct {
     root_procs: std.ArrayList(LIR.LirProcSpecId),
     root_metadata: std.ArrayList(root.RootMetadata),
     requested_layouts: std.ArrayList(RequestedLayout),
+    const_types: const_store.ConstTypeStore,
+    const_type_names: names.NameStore,
     fn_sets: std.ArrayList(FnSet),
     erased_fns: std.ArrayList(ErasedFns),
     const_plans: std.ArrayList(ConstPlan),
     const_roots: std.ArrayList(ConstRootPlan),
+    static_data_values: std.ArrayList(StaticDataValue),
     comptime_sites: std.ArrayList(LIR.ComptimeSite),
 
     pub fn init(allocator: Allocator, target_usize: @import("base").target.TargetUsize) Allocator.Error!Result {
@@ -139,10 +173,13 @@ pub const Result = struct {
             .root_procs = .empty,
             .root_metadata = .empty,
             .requested_layouts = .empty,
+            .const_types = const_store.ConstTypeStore.init(allocator),
+            .const_type_names = names.NameStore.init(allocator),
             .fn_sets = .empty,
             .erased_fns = .empty,
             .const_plans = .empty,
             .const_roots = .empty,
+            .static_data_values = .empty,
             .comptime_sites = .empty,
         };
     }
@@ -153,6 +190,7 @@ pub const Result = struct {
             allocator.free(site.branch_regions);
         }
         self.comptime_sites.deinit(allocator);
+        self.static_data_values.deinit(allocator);
         deinitConstPlans(allocator, self.const_plans.items);
         self.const_roots.deinit(allocator);
         self.const_plans.deinit(allocator);
@@ -160,6 +198,8 @@ pub const Result = struct {
         deinitErasedFns(allocator, self.erased_fns.items);
         self.erased_fns.deinit(allocator);
         self.fn_sets.deinit(allocator);
+        self.const_type_names.deinit();
+        self.const_types.deinit();
         self.requested_layouts.deinit(allocator);
         self.root_metadata.deinit(allocator);
         self.root_procs.deinit(allocator);
@@ -210,6 +250,7 @@ pub fn deinitConstPlans(allocator: Allocator, plans: []const ConstPlan) void {
                 allocator.free(variants);
             },
             .zst,
+            .layout_only,
             .pending,
             .scalar,
             .str,
@@ -229,6 +270,8 @@ pub fn deinitFnSets(allocator: Allocator, fn_sets: []const FnSet) void {
     for (fn_sets) |fn_set| {
         for (fn_set.variants) |variant| {
             if (variant.captures.len > 0) allocator.free(variant.captures);
+            if (variant.template.evidence.len > 0) allocator.free(variant.template.evidence);
+            if (variant.template.evidence_frames.len > 0) allocator.free(variant.template.evidence_frames);
         }
         if (fn_set.variants.len > 0) allocator.free(fn_set.variants);
     }
@@ -239,6 +282,8 @@ pub fn deinitErasedFns(allocator: Allocator, erased_fns: []const ErasedFns) void
     for (erased_fns) |set| {
         for (set.entries) |entry| {
             if (entry.captures.len > 0) allocator.free(entry.captures);
+            if (entry.template.evidence.len > 0) allocator.free(entry.template.evidence);
+            if (entry.template.evidence_frames.len > 0) allocator.free(entry.template.evidence_frames);
         }
         if (set.entries.len > 0) allocator.free(set.entries);
     }

@@ -31,10 +31,11 @@ test "ModuleEnv.Serialized roundtrip" {
     original.ensureExposedSorted(gpa);
 
     try original.common.calcLineStarts(gpa);
+    try original.recordRejectedStaticDispatch(@enumFromInt(1234));
 
-    const import_json = try original.imports.getOrPut(gpa, &original.common.strings, "json.Json");
-    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(try original.imports.getOrPut(gpa, &original.common.strings, "core.List")));
-    const import_json_duplicate = try original.imports.getOrPut(gpa, &original.common.strings, "json.Json");
+    const import_json = try original.imports.getOrPut(gpa, &original.common, "json.Json");
+    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(try original.imports.getOrPut(gpa, &original.common, "core.List")));
+    const import_json_duplicate = try original.imports.getOrPut(gpa, &original.common, "json.Json");
     try std.testing.expectEqual(import_json, import_json_duplicate);
     try std.testing.expectEqual(@as(usize, 2), original.imports.imports.len());
 
@@ -63,6 +64,11 @@ test "ModuleEnv.Serialized roundtrip" {
     _ = try tmp_file.readPositionalAll(std.testing.io, buffer, 0);
 
     const deserialized_ptr: *ModuleEnv.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    try deserialized_ptr.validate(buffer.len);
+    var corrupt_serialized = deserialized_ptr.*;
+    corrupt_serialized.common.idents.interner.bytes.len = std.math.maxInt(u64);
+    try std.testing.expectError(error.CorruptArtifact, corrupt_serialized.validate(buffer.len));
+
     const env = try deserialized_ptr.deserializeWithMutableTypes(@intFromPtr(buffer.ptr), gpa, source, "TestModule");
     defer {
         env.deinitCachedModule();
@@ -88,6 +94,8 @@ test "ModuleEnv.Serialized roundtrip" {
     try std.testing.expectEqualStrings("json.Json", env.common.strings.get(env.imports.imports.items.items[0]));
     try std.testing.expectEqualStrings("core.List", env.common.strings.get(env.imports.imports.items.items[1]));
     try std.testing.expectEqual(@as(usize, 2), env.imports.map.count());
+    try std.testing.expectEqual(@as(usize, 1), env.rejectedStaticDispatches().len);
+    try std.testing.expectEqual(@as(types.Var, @enumFromInt(1234)), env.rejectedStaticDispatches()[0].fnVar());
 
     // Verify original data before serialization was correct
     // initCIRFields inserts the module name ("TestModule") into the interner, so we have 3 total: hello, world, TestModule
@@ -104,17 +112,16 @@ test "ModuleEnv.Serialized roundtrip" {
     // Plus 1 synthetic identifier for .. implicit rigids in open tag unions or records
     // Plus 2 numeric method identifiers: abs, abs_diff
     // Plus 1 inspect method identifier: to_inspect
-    // Plus 15 unqualified builtin type names: Num, Bool, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec
+    // Plus 23 unqualified builtin type names: Num, Bool, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec,
+    // and the eight integer SIMD vector types.
     // Plus 2 fully qualified builtin type names: Builtin.List, Builtin.Box
     // Plus 2 fully qualified Box intrinsic method names: Builtin.Box.box, Builtin.Box.unbox
     // Plus 1 fully qualified Bool type name: Builtin.Bool
-    // Count reflects the merged builtin set: origin/main's identifiers
-    // (Str.find_first, parser_for, encode_to, structural parser field metadata)
-    // plus this branch's `to_hash` method name used for structural hash
-    // derivation. Ranges desugar to the generic Iter.exclusive_range /
-    // inclusive_range constructors, so no per-type range method identifiers are
-    // interned.
-    try testing.expectEqual(@as(u32, 98), original.common.idents.interner.entry_count);
+    // Plus 4 fully qualified Crypto builtin type names: SHA256/BLAKE3 Digest and Hasher
+    // Plus 2 range method identifiers: range_exclusive, range_inclusive
+    // Count reflects the merged builtin set, including structural parser/encoder
+    // method identifiers, Builtin.Json.Encoding's parse/encode helpers, and Crypto.
+    try testing.expectEqual(@as(u32, 118), original.common.idents.interner.entry_count);
     try testing.expectEqualStrings("hello", original.getIdent(hello_idx));
     try testing.expectEqualStrings("world", original.getIdent(world_idx));
 
@@ -125,7 +132,7 @@ test "ModuleEnv.Serialized roundtrip" {
     // First verify that the CommonEnv data was preserved after deserialization
     // Should have same identifiers as original, including the builtin structural method identifiers.
     // (Note: "Try" is now shared with well-known identifiers, reducing total by 1)
-    try testing.expectEqual(@as(u32, 98), env.common.idents.interner.entry_count);
+    try testing.expectEqual(@as(u32, 118), env.common.idents.interner.entry_count);
 
     try testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
     try testing.expectEqual(@as(?u32, 42), env.common.exposed_items.getValueNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
@@ -159,7 +166,7 @@ test "ModuleEnv.Serialized roundtrip" {
     defer test_arena.deinit();
     const test_alloc = test_arena.allocator();
 
-    const import4 = try env.imports.getOrPut(test_alloc, &env.common.strings, "json.Json");
+    const import4 = try env.imports.getOrPut(test_alloc, &env.common, "json.Json");
 
     // Should find existing json.Json (deduplication)
     try testing.expectEqual(@as(u32, 0), @intFromEnum(import4));
@@ -168,7 +175,7 @@ test "ModuleEnv.Serialized roundtrip" {
 
 test "ModuleEnv.Serialized finalizes method metadata tables before writing" {
     const gpa = std.testing.allocator;
-    const source = "module []\n";
+    const source = "";
 
     var original = try ModuleEnv.init(gpa, source);
     defer original.deinit();
@@ -215,7 +222,7 @@ test "ModuleEnv.Serialized finalizes method metadata tables before writing" {
 
 test "ModuleEnv.Serialized roundtrip preserves file dependency states" {
     const gpa = std.testing.allocator;
-    const source = "module []\n";
+    const source = "";
 
     var original = try ModuleEnv.init(gpa, source);
     defer original.deinit();
@@ -275,7 +282,7 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
 
     const str_literal_idx = try env.insertString("hello");
     const str_ident = try env.insertIdent(Ident.for_text("Str"));
-    const builtin_ident = try env.insertIdent(Ident.for_text("Builtin"));
+    const builtin_ident = try env.internModuleIdentity(&([_]u8{0x66} ** 32), Ident.Idx.NONE);
 
     const segment_idx = try env.addExpr(.{ .e_str_segment = .{ .literal = str_literal_idx } }, base.Region.from_raw_offsets(0, 5));
     const expr_idx = try env.addExpr(.{ .e_str = .{ .span = Expr.Span{ .span = base.DataSpan{ .start = @intFromEnum(segment_idx), .len = 1 } } } }, base.Region.from_raw_offsets(0, 5));
@@ -286,10 +293,8 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
     const expr_var = try env.types.freshFromContent(.err);
     try std.testing.expectEqual(ModuleEnv.varFrom(expr_idx), expr_var);
 
-    const str_backing_var = try env.types.freshFromContent(.{ .structure = .empty_record });
     const str_content = try env.types.mkNominal(
         types.TypeIdent{ .ident_idx = str_ident },
-        str_backing_var,
         &.{},
         builtin_ident,
         false,

@@ -28,7 +28,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "extract_age")
 			(ty-fn
@@ -87,9 +87,9 @@ extract_age = |person| {
 									(p-assign (ident "age"))))))
 					(e-lookup-local
 						(p-assign (ident "person"))))
-				(e-dispatch-call (method "minus") (constraint-fn-var 203)
+				(e-dispatch-call (method "minus") (constraint-fn-var 273)
 					(receiver
-						(e-dispatch-call (method "plus") (constraint-fn-var 86)
+						(e-dispatch-call (method "plus") (constraint-fn-var 242)
 							(receiver
 								(e-field-access (field "a")
 									(receiver

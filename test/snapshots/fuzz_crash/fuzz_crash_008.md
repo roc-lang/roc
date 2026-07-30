@@ -9,47 +9,66 @@ type=file
 ~~~
 # EXPECTED
 ASCII CONTROL CHARACTER - :0:0:0:0
-PARSE ERROR - fuzz_crash_008.md:1:1:1:2
-PARSE ERROR - fuzz_crash_008.md:1:3:1:4
-PARSE ERROR - fuzz_crash_008.md:1:4:1:5
+UNEXPECTED STATEMENT - fuzz_crash_008.md:1:1:1:2
+UNEXPECTED STATEMENT - fuzz_crash_008.md:1:3:1:4
+UNEXPECTED STATEMENT - fuzz_crash_008.md:1:4:1:5
 # PROBLEMS
-**ASCII CONTROL CHARACTER**
+
+ASCII CONTROL CHARACTER
+
 ASCII control characters are not allowed in Roc source code.
 
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  ||1                                                                      │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────────────── fuzz_crash_008.md:1:1 ┘
 
-**fuzz_crash_008.md:1:1:1:2:**
-```roc
-||1
-```
-^
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
+    For example:
+        answer = 42
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_008.md:1:3:1:4:**
-```roc
-||1
-```
-  ^
+    I found `|` here.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  ||1                                                                      │
+ │    ‾                                                                       │
+ └───────────────────────────────────────────────────── fuzz_crash_008.md:1:3 ┘
 
-**fuzz_crash_008.md:1:4:1:5:**
-```roc
-||1
-```
-   ^
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
+    For example:
+        answer = 42
+
+    I found `|` here.
+
+
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  ||1                                                                      │
+ │     ‾                                                                      │
+ └───────────────────────────────────────────────────── fuzz_crash_008.md:1:4 ┘
+
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `1` here.
 
 # TOKENS
 ~~~zig
@@ -59,7 +78,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))

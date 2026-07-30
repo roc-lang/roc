@@ -8,9 +8,21 @@ type=expr
 170141183460469231731687303715884105727
 ~~~
 # EXPECTED
-NIL
+INVALID NUMBER - int_i128_max.md:1:1:1:40
 # PROBLEMS
-NIL
+
+┌────────────────┐
+│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  170141183460469231731687303715884105727                                   │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                   │
+ └─────────────────────────────────────────────────────── int_i128_max.md:1:1 ┘
+
+    The inferred type is:
+
+        Dec
+
 # TOKENS
 ~~~zig
 Int,
@@ -26,9 +38,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-num (value "170141183460469231731687303715884105727"))
+(e-runtime-error (tag "erroneous_value_expr"))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Dec"))
+(expr (type "Error"))
 ~~~

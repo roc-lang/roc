@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=
+description=Static dispatch through chained and nested method calls
 type=file
 ~~~
 # SOURCE
@@ -48,45 +48,50 @@ TYPE MISMATCH - Adv.md:17:28:17:31
 MISSING METHOD - Adv.md:23:17:23:28
 MISSING METHOD - Adv.md:28:21:28:27
 # PROBLEMS
-**TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**Adv.md:17:28:17:31:**
-```roc
-	next_val = val.update_str(100)
-```
-	                          ^^^
 
-Other code expects this to have the type:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This number is being used where a non-number type is ──────┐
+└┬──────────────┘  needed.                                                    │
+ │                                                                            │
+ │  next_val = val.update_str(100)                                            │
+ │                            ‾‾‾                                             │
+ └────────────────────────────────────────────────────────────── Adv.md:17:28 ┘
 
-    Str
+    Other code expects this to have the type:
 
-**MISSING METHOD**
-This **update_strr** method is being called on a value whose type doesn't have that method:
-**Adv.md:23:17:23:28:**
-```roc
-	next_val = val.update_strr(100)
-```
-	               ^^^^^^^^^^^
+        Str
 
-The value's type, which does not have a method named **update_strr**, is:
 
-    Adv
+┌────────────────┐
+│ MISSING METHOD ├─ This `update_strr` method is being called on a value ─────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  next_val = val.update_strr(100)                                           │
+ │                 ‾‾‾‾‾‾‾‾‾‾‾                                                │
+ └────────────────────────────────────────────────────────────── Adv.md:23:17 ┘
 
-**Hint:** For this to work, the type would need to have a method named **update_strr** associated with it in the type's declaration.
+    The value's type, which does not have a method named `update_strr`, is:
 
-**MISSING METHOD**
-This **update** method is being called on a value whose type doesn't have that method:
-**Adv.md:28:21:28:27:**
-```roc
-	next_val = "Hello".update(100)
-```
-	                   ^^^^^^
+        Adv
 
-The value's type, which does not have a method named **update**, is:
+    Hint: For this to work, the type would need to have a method named
+    `update_strr` associated with it in the type's declaration.
 
-    Str
 
-**Hint:** For this to work, the type would need to have a method named **update** associated with it in the type's declaration.
+┌────────────────┐
+│ MISSING METHOD ├─ This `update` method is being called on a value whose ────┐
+└┬───────────────┘  type doesn't have that method.                            │
+ │                                                                            │
+ │  next_val = "Hello".update(100)                                            │
+ │                     ‾‾‾‾‾‾                                                 │
+ └────────────────────────────────────────────────────────────── Adv.md:28:21 ┘
+
+    The value's type, which does not have a method named `update`, is:
+
+        Str
+
+    Hint: For this to work, the type would need to have a method named `update`
+    associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
@@ -125,7 +130,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "Adv")
@@ -401,29 +406,37 @@ main = {
 								(e-literal (string "hello")))))))
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-dispatch-call (method "update_str") (constraint-fn-var 539)
+				(e-dispatch-call (method "update_str") (constraint-fn-var 480)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "val"))))
 					(args
-						(e-num (value "100")))))
+						(e-runtime-error (tag "erroneous_value_expr")))))
 			(e-lookup-local
 				(p-assign (ident "next_val")))))
 	(d-let
 		(p-assign (ident "mismatch2"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-block
+			(s-let
+				(p-assign (ident "val"))
+				(e-nominal (nominal "Adv")
+					(e-tag (name "Val")
+						(args
+							(e-num (value "10"))
+							(e-string
+								(e-literal (string "hello")))))))
+			(s-let
+				(p-assign (ident "next_val"))
+				(e-runtime-error (tag "erroneous_value_expr")))
+			(e-runtime-error (tag "erroneous_value_use"))))
 	(d-let
 		(p-assign (ident "mismatch3"))
 		(e-block
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-dispatch-call (method "update") (constraint-fn-var 780)
-					(receiver
-						(e-string
-							(e-literal (string "Hello"))))
-					(args
-						(e-num (value "100")))))
-			(e-runtime-error (tag "erroneous_value_use"))))
+				(e-runtime-error (tag "erroneous_value_expr")))
+			(e-lookup-local
+				(p-assign (ident "next_val")))))
 	(d-let
 		(p-assign (ident "main"))
 		(e-block
@@ -437,9 +450,9 @@ main = {
 								(e-literal (string "hello")))))))
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-dispatch-call (method "update_u64") (constraint-fn-var 1023)
+				(e-dispatch-call (method "update_u64") (constraint-fn-var 644)
 					(receiver
-						(e-dispatch-call (method "update_str") (constraint-fn-var 964)
+						(e-dispatch-call (method "update_str") (constraint-fn-var 623)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "val"))))
@@ -450,12 +463,12 @@ main = {
 						(e-num (value "20")))))
 			(e-tuple
 				(elems
-					(e-dispatch-call (method "to_str") (constraint-fn-var 1110)
+					(e-dispatch-call (method "to_str") (constraint-fn-var 664)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "next_val"))))
 						(args))
-					(e-dispatch-call (method "to_u64") (constraint-fn-var 1112)
+					(e-dispatch-call (method "to_u64") (constraint-fn-var 666)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "next_val"))))
@@ -480,8 +493,8 @@ main = {
 		(patt (type "Adv, Str -> Adv"))
 		(patt (type "Adv, U64 -> Adv"))
 		(patt (type "Adv"))
-		(patt (type "Error"))
-		(patt (type "Error"))
+		(patt (type "_a"))
+		(patt (type "_a"))
 		(patt (type "(Str, U64)")))
 	(type_decls
 		(nominal (type "Adv")
@@ -492,7 +505,7 @@ main = {
 		(expr (type "Adv, Str -> Adv"))
 		(expr (type "Adv, U64 -> Adv"))
 		(expr (type "Adv"))
-		(expr (type "Error"))
-		(expr (type "Error"))
+		(expr (type "_a"))
+		(expr (type "_a"))
 		(expr (type "(Str, U64)"))))
 ~~~

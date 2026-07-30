@@ -1,6 +1,7 @@
 app [main!] { pf: platform "./platform/main.roc" }
 
 import pf.Stdout
+import pf.Host
 
 zstValue : { inner : [Outer({ nested : { one_field : [OneTag({})] } })] }
 zstValue =
@@ -15,7 +16,14 @@ nonZstValueB =
     { inner: Outer({ nested: { one_field: OneTag({ n: 2 }) } }) }
 
 main! = || {
-    zstList = List.append(List.append([zstValue], zstValue), zstValue)
+    runtime = Host.get_greeting!(Host.new("zst"))
+    hasRuntime = Str.count_utf8_bytes(runtime) > 0
+
+    zstList = if hasRuntime {
+        List.append(List.append([zstValue], zstValue), zstValue)
+    } else {
+        []
+    }
     zstRepeat = List.repeat(zstValue, 3)
 
     match List.first(zstList) {
@@ -53,9 +61,14 @@ main! = || {
         _ => Stdout.line!("zst pattern bad")
     }
 
-    nonZstList = [nonZstValueA, nonZstValueB, nonZstValueA]
+    nonZstList = if hasRuntime {
+        [nonZstValueA, nonZstValueB, nonZstValueA]
+    } else {
+        []
+    }
+    firstNonZst = List.first(nonZstList).ok_or(nonZstValueB)
 
-    if nonZstValueA != nonZstValueB {
+    if firstNonZst != nonZstValueB {
         Stdout.line!("non-zst distinct ok")
     } else {
         Stdout.line!("non-zst distinct bad")

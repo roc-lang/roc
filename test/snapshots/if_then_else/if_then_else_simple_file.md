@@ -15,29 +15,31 @@ foo = if 1 A
 TYPE MISMATCH - if_then_else_simple_file.md:1:10:1:11
 MISSING METHOD - if_then_else_simple_file.md:4:2:4:9
 # PROBLEMS
-**TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**if_then_else_simple_file.md:1:10:1:11:**
-```roc
-foo = if 1 A
-```
-         ^
 
-Other code expects this to have the type:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This number is being used where a non-number type is ──────┐
+└┬──────────────┘  needed.                                                    │
+ │                                                                            │
+ │  foo = if 1 A                                                              │
+ │           ‾                                                                │
+ └────────────────────────────────────────── if_then_else_simple_file.md:1:10 ┘
 
-    Bool
+    Other code expects this to have the type:
 
-**MISSING METHOD**
-This **from_quote** method is being called on a value whose type doesn't have that method:
-**if_then_else_simple_file.md:4:2:4:9:**
-```roc
-	"hello"
-```
-	^^^^^^^
+        Bool
 
-The value's type, which does not have a method named **from_quote**, is:
 
-    [A, ..]
+┌────────────────┐
+│ MISSING METHOD ├─ This `from_quote` method is being called on a value ──────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  "hello"                                                                   │
+ │  ‾‾‾‾‾‾‾                                                                   │
+ └─────────────────────────────────────────── if_then_else_simple_file.md:4:2 ┘
+
+    The value's type, which does not have a method named `from_quote`, is:
+
+        [A, ..]
 
 # TOKENS
 ~~~zig
@@ -50,7 +52,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "foo"))
@@ -78,12 +80,11 @@ foo = if 1 A
 		(e-if
 			(if-branches
 				(if-branch
-					(e-num (value "1"))
+					(e-runtime-error (tag "erroneous_value_expr"))
 					(e-tag (name "A"))))
 			(if-else
 				(e-block
-					(e-string
-						(e-literal (string "hello"))))))))
+					(e-runtime-error (tag "erroneous_value_expr")))))))
 ~~~
 # TYPES
 ~~~clojure

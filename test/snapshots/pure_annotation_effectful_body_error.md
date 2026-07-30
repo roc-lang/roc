@@ -16,18 +16,18 @@ bad_function = |msg| Stdout.line!(msg)
 main! = bad_function("This should fail")
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - pure_annotation_effectful_body_error.md:7:22:7:34
+NAME NOT IN SCOPE - pure_annotation_effectful_body_error.md:7:22:7:34
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**pure_annotation_effectful_body_error.md:7:22:7:34:**
-```roc
-bad_function = |msg| Stdout.line!(msg)
-```
-                     ^^^^^^^^^^^^
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
+ │                                                                            │
+ │  bad_function = |msg| Stdout.line!(msg)                                    │
+ │                       ‾‾‾‾‾‾‾‾‾‾‾‾                                         │
+ └────────────────────────────── pure_annotation_effectful_body_error.md:7:22 ┘
 
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig
@@ -85,22 +85,19 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "msg")))
-			(e-call
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-lookup-local
-					(p-assign (ident "msg")))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
 				(ty-record))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-call (constraint-fn-var 55)
+		(e-call (constraint-fn-var 231)
 			(e-lookup-local
 				(p-assign (ident "bad_function")))
 			(e-string
 				(e-literal (string "This should fail")))))
-	(s-import (module "pf.Stdout")
+	(s-import (mod "pf.Stdout")
 		(exposes)))
 ~~~
 # TYPES

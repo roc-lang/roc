@@ -1,5 +1,6 @@
 //! Regression tests for specific bug fixes.
 
+const std = @import("std");
 const TestEnv = @import("./TestEnv.zig");
 
 test "check - repro - issue 8764" {
@@ -216,6 +217,33 @@ test "check - repro - issue 9129 - control no closure" {
     try test_env.assertNoErrors();
 }
 
+test "check - repro - issue 9817 - delayed top-level parser recursion" {
+    const src =
+        \\Parser(a) : { run : {} -> a }
+        \\
+        \\lazy : ({} -> Parser(a)) -> Parser(a)
+        \\lazy = |thunk| {
+        \\    { run: |_| (thunk({}).run)({}) }
+        \\}
+        \\
+        \\map : Parser(a) -> Parser(a)
+        \\map = |parser| {
+        \\    { run: |_| (parser.run)({}) }
+        \\}
+        \\
+        \\p : Parser(I64)
+        \\p = lazy(|_| q)
+        \\
+        \\q : Parser(I64)
+        \\q = map(p)
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
 test "check - repro - issue 9693 - polymorphic helper method constraints are not defaulted at def site" {
     const src =
         \\is_valid : Str -> U64
@@ -342,6 +370,67 @@ test "check - repro - issue 8848" {
     // regression we're guarding against
 }
 
+test "check - repro - issue 9827 - nested effectful decoder lambda with try" {
+    const sqlite_src =
+        \\Stmt := [Stmt]
+        \\
+        \\Sqlite := [Sqlite].{
+        \\    str : Str -> (List(Str) -> (Stmt => Try(Str, [DbErr, ..err])))
+        \\    str = |_name| |_cols| |_stmt| Ok("todo")
+        \\
+        \\    nullable_i64 : Str -> (List(Str) -> (Stmt => Try([NotNull(I64), Null], [DbErr, ..err])))
+        \\    nullable_i64 = |_name| |_cols| |_stmt| Ok(NotNull(1))
+        \\
+        \\    query_many! : { path : Str, query : Str, bindings : List({}), rows : List(Str) -> (Stmt => Try(row, [DbErr, ..err])) } => Try(List(row), [DbErr, ..err])
+        \\    query_many! = |_config| Ok([])
+        \\}
+    ;
+
+    var sqlite_module = try TestEnv.init("Sqlite", sqlite_src);
+    defer sqlite_module.deinit();
+
+    const src =
+        \\import Sqlite
+        \\
+        \\main! : List(Str) => Try({}, _)
+        \\main! = |_args| {
+        \\    _rows = Sqlite.query_many!({
+        \\        path: "x.db",
+        \\        query: "SELECT * FROM todos;",
+        \\        bindings: [],
+        \\        rows: decode,
+        \\    })?
+        \\    Ok({})
+        \\}
+        \\
+        \\decode = |cols|
+        \\    |stmt| {
+        \\        status_str = Sqlite.str("status")(cols)(stmt)?
+        \\        status = decode_status(status_str)?
+        \\        edited_raw = Sqlite.nullable_i64("edited")(cols)(stmt)?
+        \\        edited = decode_edited(edited_raw)
+        \\        Ok({ status, edited })
+        \\    }
+        \\
+        \\decode_status = |s|
+        \\    match s {
+        \\        "todo" => Ok(Todo)
+        \\        _ => Err(ParseError("x"))
+        \\    }
+        \\
+        \\decode_edited = |e|
+        \\    match e {
+        \\        NotNull(1) => Edited
+        \\        _ => Unknown
+        \\    }
+    ;
+
+    var test_env = try TestEnv.initWithImport("Test", src, "Sqlite", &sqlite_module);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
 test "check - repro - bad return branch mismatch after utf8 empty guard" {
     const src =
         \\main! = |_| {}
@@ -423,121 +512,6 @@ test "check - repro - using dbg in a function does not make it effectful" {
     ;
     var test_env = try TestEnv.init("Test", src);
     defer test_env.deinit();
-    try test_env.assertNoErrors();
-}
-
-test "check - repro - issue 9500 - equality on tag-union alias" {
-    const src =
-        \\Color : [Red, Green, Blue]
-        \\
-        \\pick : U8 -> Color
-        \\pick = |n| match n {
-        \\    0 => Red
-        \\    1 => Green
-        \\    _ => Blue
-        \\}
-        \\
-        \\is_red : Bool
-        \\is_red = pick(0) == Red
-    ;
-    var test_env = try TestEnv.init("Test", src);
-    defer test_env.deinit();
-    try test_env.assertNoErrors();
-}
-
-test "check - repro - issue 9500 - inequality on tag-union alias" {
-    const src =
-        \\Color : [Red, Green, Blue]
-        \\
-        \\pick : U8 -> Color
-        \\pick = |n| match n {
-        \\    0 => Red
-        \\    1 => Green
-        \\    _ => Blue
-        \\}
-        \\
-        \\not_red : Bool
-        \\not_red = pick(0) != Red
-    ;
-    var test_env = try TestEnv.init("Test", src);
-    defer test_env.deinit();
-    try test_env.assertNoErrors();
-}
-
-test "check - repro - issue 9500 - equality on record alias" {
-    const src =
-        \\Point : { x : U8, y : U8 }
-        \\
-        \\origin : Point
-        \\origin = { x: 0, y: 0 }
-        \\
-        \\is_origin : Bool
-        \\is_origin = origin == { x: 0, y: 0 }
-    ;
-    var test_env = try TestEnv.init("Test", src);
-    defer test_env.deinit();
-    try test_env.assertNoErrors();
-}
-
-test "check - repro - issue 9500 - equality on record alias of tag-union aliases" {
-    const src =
-        \\Palette : [None, Color1, Color2, Color3, Color4]
-        \\
-        \\DrawColors : {
-        \\    primary : Palette,
-        \\    secondary : Palette,
-        \\}
-        \\
-        \\from_flags : U8 -> DrawColors
-        \\from_flags = |flags| match flags {
-        \\    0 => { primary: None, secondary: None }
-        \\    _ => { primary: Color2, secondary: Color4 }
-        \\}
-        \\
-        \\is_match : Bool
-        \\is_match = from_flags(1) == { primary: Color2, secondary: Color4 }
-    ;
-    var test_env = try TestEnv.init("Test", src);
-    defer test_env.deinit();
-    try test_env.assertNoErrors();
-}
-
-test "check - repro - issue 9491 - local recursive def generalizes rigid type param" {
-    // A local, self-recursive annotated function on a parametric recursive
-    // nominal type, called through a separate annotated local helper, used to
-    // produce a spurious `RBTree(k)` != `RBTree(k)` mismatch because the
-    // recursive function's rigid type parameter was never generalized.
-    const src =
-        \\main! = |_args| {}
-        \\
-        \\RBTree(k) := [
-        \\    Empty,
-        \\    Node(RBTree(k)),
-        \\].{
-        \\    delete = |tree| {
-        \\        delRBTree : RBTree(k) -> RBTree(k)
-        \\        delRBTree = |inner| {
-        \\            match inner {
-        \\                RBTree.Node(Empty) => Empty
-        \\                RBTree.Node(RBTree.Node(x)) => RBTree.Node(x)->delRBTree()
-        \\                Empty => Empty
-        \\            }
-        \\        }
-        \\        delCurr : RBTree(k) -> RBTree(k)
-        \\        delCurr = |t| {
-        \\            match t {
-        \\                RBTree.Node(inner) => inner->delRBTree()
-        \\                _ => t
-        \\            }
-        \\        }
-        \\        tree->delCurr()
-        \\    }
-        \\}
-    ;
-
-    var test_env = try TestEnv.init("Test", src);
-    defer test_env.deinit();
-
     try test_env.assertNoErrors();
 }
 
@@ -642,11 +616,10 @@ test "check - repro - issue 9491 - nested self-recursive local fns generalize" {
 
 test "check - repro - self-recursive local fn after early return in enclosing body" {
     // An early `return` in the enclosing function body records an early-return
-    // constraint that `processReturnConstraints` later compacts out of the
-    // shared constraint list while checking the local def's lambda. The local
-    // def's recursive reference is tracked in a dedicated stack (NOT that shared
-    // list), so the compaction cannot affect its validation. Well-typed: no
-    // spurious errors.
+    // constraint owned by that lambda's return frame. The local def's recursive
+    // reference is tracked in its own dedicated stack, so processing return flow
+    // cannot affect recursive-reference validation. Well-typed: no spurious
+    // errors.
     const src =
         \\main! = |_args| {
         \\    f : U64 -> U64
@@ -673,7 +646,7 @@ test "check - repro - self-recursive local fn after early return in enclosing bo
 test "check - repro - self-recursive local fn recursive use still type-checked after early return" {
     // Companion to the well-typed case above: the self-recursive local def's
     // recursive reference must STILL be validated after the early-return
-    // compaction, so an ill-typed recursive use is caught. Here the recursive
+    // processing, so an ill-typed recursive use is caught. Here the recursive
     // call result is forced to `Str`, contradicting the rigid `a` in
     // `loop : a -> a`. If the reference were dropped, no error would be reported.
     const src =
@@ -703,7 +676,7 @@ test "check - repro - self-recursive local fn recursive use still type-checked a
     var test_env = try TestEnv.init("Test", src);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("TYPE MISMATCH");
+    try test_env.assertOneTypeError("Type Mismatch");
 }
 
 test "check - repro - issue 9670 - typed local binding of parametric fn result" {
@@ -765,6 +738,26 @@ test "check - repro - issue 9670 - minimal: multi-param alias, passthrough + wra
     try test_env.assertNoErrors();
 }
 
+test "check - effect dependency resolved after a pure annotation reports a mismatch" {
+    const src =
+        \\effect! : () => I64
+        \\effect! = || 42.I64
+        \\
+        \\first : U64, (() => I64) -> I64
+        \\first = |n, effect_arg!| {
+        \\    if n == 0.U64 0.I64 else second!(n - 1.U64, effect_arg!)
+        \\}
+        \\second! = |n, effect_arg!| {
+        \\    if n == 0.U64 effect_arg!() else first(n - 1.U64, effect_arg!)
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Type Mismatch");
+}
+
 test "check - repro - issue 9491 follow-up - top-level mutually recursive parametric fns" {
     // Mutually recursive functions over a parametric recursive nominal type must
     // type-check: each cross-call instantiates the callee, so the two members'
@@ -792,4 +785,28 @@ test "check - repro - issue 9491 follow-up - top-level mutually recursive parame
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
+}
+
+test "check - repro - B092 - ambiguous List.sum on empty list is rejected" {
+    const src =
+        \\main = || (List.sum([]))
+    ;
+    var test_env = try TestEnv.initWithExecutableRootNames("Test", src, &.{"main"});
+    defer test_env.deinit();
+
+    try std.testing.expect(test_env.checker.problems.problems.items.len > 0);
+}
+
+test "check - repro - issue 10184 - tag syntax for value-backed nominal reports an error" {
+    // Repro for https://github.com/roc-lang/roc/issues/10184: using tag
+    // construction syntax for a value-backed nominal must produce a diagnostic.
+    const src =
+        \\T := I64
+        \\value = T.I64(42)
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Invalid Nominal Tag");
 }

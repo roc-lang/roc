@@ -8,9 +8,19 @@ type=expr
 if True 1 else 2
 ~~~
 # EXPECTED
-NIL
+UNCONDITIONAL CONDITION - if_true_literal.md:1:4:1:8
 # PROBLEMS
-NIL
+
+┌─────────────────────────┐
+│ UNCONDITIONAL CONDITION ├─ This if condition is known at compile time, so ──┐
+└┬────────────────────────┘  this conditional will always make the same       │
+ │                           choice.                                          │
+ │                                                                            │
+ │  if True 1 else 2                                                          │
+ │     ‾‾‾‾                                                                   │
+ └──────────────────────────────────────────────────── if_true_literal.md:1:4 ┘
+
+
 # TOKENS
 ~~~zig
 KwIf,UpperIdent,Int,KwElse,Int,

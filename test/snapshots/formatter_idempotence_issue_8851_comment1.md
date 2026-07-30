@@ -9,18 +9,18 @@ a=0->b
       .c()
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - formatter_idempotence_issue_8851_comment1.md:1:6:1:7
+NAME NOT IN SCOPE - formatter_idempotence_issue_8851_comment1.md:1:6:1:7
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `b` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**formatter_idempotence_issue_8851_comment1.md:1:6:1:7:**
-```roc
-a=0->b
-```
-     ^
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `b` in this scope. ───────────────────┐
+└┬──────────────────┘                                                         │
+ │                                                                            │
+ │  a=0->b                                                                    │
+ │       ‾                                                                    │
+ └────────────────────────── formatter_idempotence_issue_8851_comment1.md:1:6 ┘
 
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig
@@ -31,7 +31,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "a"))
@@ -44,20 +44,14 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-a = 0->b()
-	.c()
+a = (0->b()).c()
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(d-let
 		(p-assign (ident "a"))
-		(e-method-call (method "c")
-			(receiver
-				(e-call
-					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-num (value "0"))))
-			(args))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

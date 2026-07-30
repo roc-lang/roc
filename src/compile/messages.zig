@@ -11,6 +11,7 @@ const can = @import("can");
 const check = @import("check");
 const parse = @import("parse");
 const reporting = @import("reporting");
+const eval = @import("eval");
 const watch_inputs = @import("watch_inputs.zig");
 
 const ModuleEnv = can.ModuleEnv;
@@ -94,6 +95,9 @@ pub const CanonicalizeTask = struct {
     cached_ast: *AST,
     /// Real imported semantic envs available to canonicalization
     imported_modules: []const CanonicalizeImport,
+    /// Validate this module as an explicitly requested checked-artifact root
+    /// instead of as a standalone `roc check` root.
+    validate_as_explicit_roots: bool,
 };
 
 /// Task to type-check a canonicalized module
@@ -114,8 +118,34 @@ pub const TypeCheckTask = struct {
     imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
     /// Published checked artifacts currently available for exact-key lookup during checking finalization
     available_artifacts: []const CheckedArtifact.ImportedModuleView,
+    /// Platform requirement surface for app-root checking, carrying both the
+    /// checker's input and the cache-identity component so the two can never
+    /// be set independently.
+    platform_requirements: ?PlatformRequirementSurface = null,
     /// Additional checked roots requested by package-level metadata.
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
+    /// True when this module is the platform root of an app build: its
+    /// check-time publication is skipped so finalization publishes the
+    /// relation-bearing platform root exactly once.
+    defer_publication: bool = false,
+};
+
+/// The platform root's requirement surface, borrowed from its completed
+/// type check: the checked platform ModuleEnv (stable once the module is
+/// Done), the cache-identity context derived from its published artifact,
+/// and the platform path for diagnostics. Plain borrowed data — nothing here
+/// is owned, so copies are free and there is nothing to deinit.
+pub const PlatformRequirementSurface = struct {
+    env: *const ModuleEnv,
+    context: CheckedArtifact.PlatformRequirementContextKey,
+    path: []const u8,
+
+    pub fn checkerInput(self: *const PlatformRequirementSurface) check.Check.PlatformRequirementInput {
+        return .{
+            .env = self.env,
+            .path = self.path,
+        };
+    }
 };
 
 /// Task sent to workers - contains ALL inputs needed for the operation
@@ -202,13 +232,26 @@ pub const CanonicalizedResult = struct {
     canonicalize_diagnostics_ns: u64,
 };
 
-/// Result of successfully type-checking a module
+/// Worker-owned checked-module output transferred to the coordinator.
+pub const TypeCheckedPublication = union(enum) {
+    published: CheckedArtifact.CheckedModuleArtifact,
+    deferred: *DeferredPublicationState,
+};
+
+/// Result of successfully type-checking a module.
+/// User diagnostics do not alter this outcome: publication is either complete
+/// or explicitly deferred until platform/app relation finalization.
 pub const OwnedSemanticModuleData = struct {
     module_env: *ModuleEnv,
-    checked_artifact: ?CheckedArtifact.CheckedModuleArtifact = null,
+    publication: TypeCheckedPublication,
+    publication_owned: bool = true,
 
     pub fn deinit(self: *OwnedSemanticModuleData) void {
-        if (self.checked_artifact) |*artifact| artifact.deinit(artifact.canonical_names.allocator);
+        if (!self.publication_owned) return;
+        switch (self.publication) {
+            .published => |*artifact| artifact.deinit(artifact.canonical_names.allocator),
+            .deferred => |state| state.deinit(),
+        }
     }
 };
 
@@ -230,6 +273,25 @@ pub const TypeCheckedResult = struct {
     type_check_ns: u64,
     /// Timing: nanoseconds spent on diagnostics
     check_diagnostics_ns: u64,
+};
+
+/// Complete checker-owned continuation for a module whose checked artifact is
+/// intentionally published during executable finalization.
+pub const DeferredPublicationState = struct {
+    allocator: Allocator,
+    checker: check.Check,
+    /// Stable copy of the imported-env pointer slice needed to render any
+    /// diagnostics produced during deferred compile-time finalization.
+    imported_envs: []const *ModuleEnv,
+    ctfe_options: eval.CompileTimeFinalization.Options,
+    requirement_context: check.CheckedArtifact.PlatformRequirementContextKey,
+    reported_problem_count: usize,
+
+    pub fn deinit(self: *DeferredPublicationState) void {
+        self.checker.deinit();
+        self.allocator.free(self.imported_envs);
+        self.allocator.destroy(self);
+    }
 };
 
 /// Result when parsing fails (but we still return partial info)

@@ -284,6 +284,31 @@ test "extractSemanticTokens simple expression" {
     try std.testing.expect(found_number);
 }
 
+test "extractSemanticTokens keeps field access and method calls distinct" {
+    const allocator = std.testing.allocator;
+    const source = "field = value.field\nmethod = value.method()";
+
+    var info = try LineInfo.init(allocator, source);
+    defer info.deinit();
+
+    const tokens = try semantic_tokens.extractSemanticTokens(allocator, source, &info);
+    defer allocator.free(tokens);
+
+    var found_field = false;
+    var found_method = false;
+    for (tokens) |token| {
+        if (token.line == 0 and token.token_type == @intFromEnum(SemanticType.property)) {
+            found_field = true;
+        }
+        if (token.line == 1 and token.token_type == @intFromEnum(SemanticType.function)) {
+            found_method = true;
+        }
+    }
+
+    try std.testing.expect(found_field);
+    try std.testing.expect(found_method);
+}
+
 test "extractSemanticTokens multiline" {
     const allocator = std.testing.allocator;
     const source = "x = 1\ny = 2";

@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Example of importing a nominal tag union from another module
+description=Example of importing a nominal tag union from another mod
 type=snippet
 ~~~
 # SOURCE
@@ -11,29 +11,27 @@ red : Color.RGB
 red = Color.RGB.Red
 ~~~
 # EXPECTED
-MODULE NOT FOUND - nominal_import_type.md:3:12:3:16
-MODULE NOT FOUND - nominal_import_type.md:4:12:4:16
+MOD NOT FOUND - nominal_import_type.md:3:12:3:16
+MOD NOT FOUND - nominal_import_type.md:4:12:4:16
 # PROBLEMS
-**MODULE NOT FOUND**
-The type `RGB` is qualified by the module `Color`, but that module was not found in this Roc project.
 
-You're attempting to use this type here:
-**nominal_import_type.md:3:12:3:16:**
-```roc
-red : Color.RGB
-```
-           ^^^^
+┌──────────────────┐
+│ MOD NOT FOUND ├─ This `RGB` type is declared to be in `Color`, which ────┐
+└┬─────────────────┘  does not exist.                                         │
+ │                                                                            │
+ │  red : Color.RGB                                                           │
+ │             ‾‾‾‾                                                           │
+ └─────────────────────────────────────────────── nominal_import_type.md:3:12 ┘
 
 
-**MODULE NOT FOUND**
-The type `RGB` is qualified by the module `Color`, but that module was not found in this Roc project.
 
-You're attempting to use this type here:
-**nominal_import_type.md:4:12:4:16:**
-```roc
-red = Color.RGB.Red
-```
-           ^^^^
+┌──────────────────┐
+│ MOD NOT FOUND ├─ This `RGB` type is declared to be in `Color`, which ────┐
+└┬─────────────────┘  does not exist.                                         │
+ │                                                                            │
+ │  red = Color.RGB.Red                                                       │
+ │             ‾‾‾‾                                                           │
+ └─────────────────────────────────────────────── nominal_import_type.md:4:12 ┘
 
 
 # TOKENS
@@ -46,7 +44,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "Color"))
 		(s-type-anno (name "red")
@@ -64,10 +62,10 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "red"))
-		(e-runtime-error (tag "type_from_missing_module"))
+		(e-runtime-error (tag "type_from_missing_mod"))
 		(annotation
 			(ty-malformed)))
-	(s-import (module "Color")
+	(s-import (mod "Color")
 		(exposes)))
 ~~~
 # TYPES

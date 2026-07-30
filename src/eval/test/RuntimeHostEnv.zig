@@ -58,6 +58,19 @@ pub const HostEvent = union(enum) {
     }
 };
 
+/// Borrowed host event payload delivered to a live observer during test execution.
+pub const HostEventView = union(enum) {
+    dbg: []const u8,
+    expect_failed: []const u8,
+    crashed: []const u8,
+};
+
+/// Callback used to publish root-local host events as soon as they are recorded.
+pub const EventCallback = struct {
+    context: *anyopaque,
+    notify: *const fn (*anyopaque, HostEventView) void,
+};
+
 /// Public struct `RecordedRun`.
 pub const RecordedRun = struct {
     events: []HostEvent,
@@ -107,13 +120,11 @@ events: std.ArrayListUnmanaged(HostEvent) = .empty,
 allocation_tracker: std.AutoHashMap(usize, AllocationInfo),
 allocation_call_count: u32 = 0,
 longjmp_on_crash: bool = true,
+event_callback: ?EventCallback = null,
 
 pub fn init(allocator: std.mem.Allocator) RuntimeHostEnv {
-    // The allocation_tracker grows from inside rocAllocFn, which on Windows
-    // is invoked from JIT'd dev-backend code. Stack-capturing allocators
-    // (testing.allocator) crash inside walkStackWindows when unwinding
-    // through JIT memory that lacks Windows unwind data, so the tracker
-    // uses a non-tracing allocator regardless of what was passed in.
+    // Runtime byte leak checking is handled by allocation_tracker itself, so
+    // keep the tracker's backing allocations out of the caller's leak reports.
     return .{
         .allocator = allocator,
         .allocation_tracker = std.AutoHashMap(usize, AllocationInfo).init(runtime_bytes_allocator),
@@ -154,6 +165,11 @@ pub fn allocationCallCount(self: *const RuntimeHostEnv) u32 {
 /// Controls whether the crash callback exits through the active crash boundary.
 pub fn setLongjmpOnCrash(self: *RuntimeHostEnv, enabled: bool) void {
     self.longjmp_on_crash = enabled;
+}
+
+/// Install or clear the live host-event observer for this runtime environment.
+pub fn setEventCallback(self: *RuntimeHostEnv, callback: ?EventCallback) void {
+    self.event_callback = callback;
 }
 
 /// Public function `get_ops`.
@@ -247,6 +263,9 @@ fn appendEvent(
         self.allocator.free(owned);
         std.debug.panic("RuntimeHostEnv: failed to append host event", .{});
     };
+    if (self.event_callback) |callback| {
+        callback.notify(callback.context, @unionInit(HostEventView, @tagName(tag), bytes));
+    }
 }
 
 fn rocDbgFn(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
@@ -325,12 +344,9 @@ fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usi
     return @ptrCast(new_base_ptr);
 }
 
-// Use a non-tracing allocator for Roc runtime bytes. On Windows the
-// dev-backend JIT emits code without unwind data, so a stack-capturing
-// allocator (e.g. DebugAllocator/testing.allocator) crashes inside
-// walkStackWindows when an alloc happens from JIT'd code. RuntimeHostEnv
-// owns its own allocation_tracker for leak detection, so we don't need the
-// underlying allocator to track.
+// Use a non-tracing allocator for Roc runtime bytes. RuntimeHostEnv owns the
+// allocation_tracker that powers these tests' leak checks, so the underlying
+// allocator does not need to track the same bytes a second time.
 const runtime_bytes_allocator: std.mem.Allocator = if (@import("builtin").target.os.tag == .freestanding)
     std.heap.wasm_allocator
 else

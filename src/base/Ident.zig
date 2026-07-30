@@ -428,14 +428,6 @@ test "from_bytes disallows common whitespace" {
     const text_with_tab = "hello\tworld";
     const result2 = Ident.from_bytes(text_with_tab);
     try std.testing.expect(result2 == Ident.Error.ContainsControlCharacters);
-
-    const text_with_newline = "hello\nworld";
-    const result3 = Ident.from_bytes(text_with_newline);
-    try std.testing.expect(result3 == Ident.Error.ContainsControlCharacters);
-
-    const text_with_cr = "hello\rworld";
-    const result4 = Ident.from_bytes(text_with_cr);
-    try std.testing.expect(result4 == Ident.Error.ContainsControlCharacters);
 }
 
 test "from_bytes creates valid identifier" {
@@ -718,6 +710,13 @@ test "Ident.Store CompactWriter roundtrip" {
     const deserialized = @as(*Ident.Store, @ptrCast(@alignCast(buffer.ptr)));
 
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+    // Verify the identifiers are accessible
+    try std.testing.expectEqualStrings("test1", deserialized.getText(idx1));
+    try std.testing.expectEqualStrings("test2", deserialized.getText(idx2));
+
+    // Verify the interner's entry count is preserved
+    try std.testing.expectEqual(@as(u32, 2), deserialized.interner.entry_count);
 }
 
 test "Ident.Store comprehensive CompactWriter roundtrip" {

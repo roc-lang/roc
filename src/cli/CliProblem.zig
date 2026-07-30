@@ -259,6 +259,12 @@ pub const CliProblem = union(enum) {
         reason: []const u8,
     },
 
+    /// `roc bump` could not compare the packages
+    bump_failed: struct {
+        title: []const u8,
+        message: []const u8,
+    },
+
     /// Download failed
     download_failed: struct {
         url: []const u8,
@@ -269,6 +275,49 @@ pub const CliProblem = union(enum) {
     package_cache_error: struct {
         package: []const u8,
         reason: []const u8,
+    },
+
+    // Install Problems
+
+    /// `roc install` was given an invalid shorthand name
+    invalid_shorthand: struct {
+        name: []const u8,
+    },
+
+    /// The shorthand is already installed from a different URL
+    shorthand_conflict: struct {
+        name: []const u8,
+        existing_url: []const u8,
+        new_url: []const u8,
+    },
+
+    /// No installation exists under this shorthand for this compiler version
+    unknown_shorthand: struct {
+        name: []const u8,
+    },
+
+    /// An installed entry exists but its contents are missing or invalid
+    install_entry_corrupt: struct {
+        name: []const u8,
+        path: []const u8,
+        reason: []const u8,
+    },
+
+    /// The persistent install directory could not be determined
+    install_dir_unavailable: struct {
+        reason: []const u8,
+    },
+
+    /// The downloaded bundle has no main.roc at its root
+    install_bundle_missing_main: struct {
+        url: []const u8,
+        searched_path: []const u8,
+    },
+
+    /// Publishing a completed installation into place failed
+    install_publish_failed: struct {
+        name: []const u8,
+        err: ReportedError,
     },
 
     // Process/Runtime Problems
@@ -360,8 +409,16 @@ pub const CliProblem = union(enum) {
             .object_compilation_failed,
             .shim_generation_failed,
             .invalid_url,
+            .bump_failed,
             .download_failed,
             .package_cache_error,
+            .invalid_shorthand,
+            .shorthand_conflict,
+            .unknown_shorthand,
+            .install_entry_corrupt,
+            .install_dir_unavailable,
+            .install_bundle_missing_main,
+            .install_publish_failed,
             .child_process_spawn_failed,
             .child_process_failed,
             .child_process_signaled,
@@ -402,8 +459,16 @@ pub const CliProblem = union(enum) {
             .object_compilation_failed => |info| try createObjectCompilationFailedReport(allocator, info),
             .shim_generation_failed => |info| try createShimGenerationFailedReport(allocator, info),
             .invalid_url => |info| try createInvalidUrlReport(allocator, info),
+            .bump_failed => |info| try createBumpFailedReport(allocator, info),
             .download_failed => |info| try createDownloadFailedReport(allocator, info),
             .package_cache_error => |info| try createPackageCacheErrorReport(allocator, info),
+            .invalid_shorthand => |info| try createInvalidShorthandReport(allocator, info),
+            .shorthand_conflict => |info| try createShorthandConflictReport(allocator, info),
+            .unknown_shorthand => |info| try createUnknownShorthandReport(allocator, info),
+            .install_entry_corrupt => |info| try createInstallEntryCorruptReport(allocator, info),
+            .install_dir_unavailable => |info| try createInstallDirUnavailableReport(allocator, info),
+            .install_bundle_missing_main => |info| try createInstallBundleMissingMainReport(allocator, info),
+            .install_publish_failed => |info| try createInstallPublishFailedReport(allocator, info),
             .child_process_spawn_failed => |info| try createChildProcessSpawnFailedReport(allocator, info),
             .child_process_failed => |info| try createChildProcessFailedReport(allocator, info),
             .child_process_signaled => |info| try createChildProcessSignaledReport(allocator, info),
@@ -441,12 +506,10 @@ pub const FileContext = enum {
 // Report Generation Functions
 
 fn createFileNotFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "FILE NOT FOUND", .fatal);
+    const headline = try std.fmt.allocPrint(allocator, "I could not find the {s}.", .{info.context.description()});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "File Not Found", headline, .fatal);
 
-    try report.document.addText("I could not find the ");
-    try report.document.addText(info.context.description());
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
     try report.document.addText("    ");
     try report.document.addAnnotated(info.path, .path);
     try report.document.addLineBreak();
@@ -457,12 +520,10 @@ fn createFileNotFoundReport(allocator: Allocator, info: anytype) Allocator.Error
 }
 
 fn createFileReadFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "FILE READ FAILED", .runtime_error);
+    const headline = try std.fmt.allocPrint(allocator, "I could not read the file {s}.", .{info.path});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "File Read Failed", headline, .runtime_error);
 
-    try report.document.addText("I could not read the file ");
-    try report.document.addAnnotated(info.path, .path);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
     try report.document.addText("Error: ");
     try report.document.addText(@errorName(info.err));
 
@@ -470,12 +531,10 @@ fn createFileReadFailedReport(allocator: Allocator, info: anytype) Allocator.Err
 }
 
 fn createFileWriteFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "FILE WRITE FAILED", .runtime_error);
+    const headline = try std.fmt.allocPrint(allocator, "I could not write to the file {s}.", .{info.path});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "File Write Failed", headline, .runtime_error);
 
-    try report.document.addText("I could not write to the file ");
-    try report.document.addAnnotated(info.path, .path);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
     try report.document.addText("Error: ");
     try report.document.addText(@errorName(info.err));
 
@@ -483,12 +542,10 @@ fn createFileWriteFailedReport(allocator: Allocator, info: anytype) Allocator.Er
 }
 
 fn createDirectoryCreateFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "DIRECTORY CREATE FAILED", .runtime_error);
+    const headline = try std.fmt.allocPrint(allocator, "I could not create the directory {s}.", .{info.path});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Directory Create Failed", headline, .runtime_error);
 
-    try report.document.addText("I could not create the directory ");
-    try report.document.addAnnotated(info.path, .path);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
     try report.document.addText("Error: ");
     try report.document.addText(@errorName(info.err));
 
@@ -496,11 +553,8 @@ fn createDirectoryCreateFailedReport(allocator: Allocator, info: anytype) Alloca
 }
 
 fn createDirectoryNotFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "DIRECTORY NOT FOUND", .runtime_error);
+    var report = try Report.init(allocator, "Directory Not Found", "The directory does not exist.", .runtime_error);
 
-    try report.document.addText("The directory does not exist: ");
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
     try report.document.addText("    ");
     try report.document.addAnnotated(info.path, .path);
 
@@ -508,11 +562,8 @@ fn createDirectoryNotFoundReport(allocator: Allocator, info: anytype) Allocator.
 }
 
 fn createTempDirFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "TEMPORARY DIRECTORY FAILED", .runtime_error);
+    var report = try Report.init(allocator, "Temporary Directory Failed", "I could not create a temporary directory.", .runtime_error);
 
-    try report.document.addText("I could not create a temporary directory.");
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
     try report.document.addText("Error: ");
     try report.document.addText(@errorName(info.err));
 
@@ -520,11 +571,8 @@ fn createTempDirFailedReport(allocator: Allocator, info: anytype) Allocator.Erro
 }
 
 fn createCacheDirUnavailableReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "CACHE DIRECTORY UNAVAILABLE", .runtime_error);
+    var report = try Report.init(allocator, "Cache Directory Unavailable", "The cache directory is not available.", .runtime_error);
 
-    try report.document.addText("The cache directory is not available.");
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
     try report.document.addText("Reason: ");
     try report.document.addText(info.reason);
 
@@ -532,13 +580,10 @@ fn createCacheDirUnavailableReport(allocator: Allocator, info: anytype) Allocato
 }
 
 fn createNoPlatformFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "NO PLATFORM FOUND", .fatal);
+    const headline = try std.fmt.allocPrint(allocator, "The app file {s} does not specify a platform.", .{info.app_path});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "No Platform Found", headline, .fatal);
 
-    try report.document.addText("The app file ");
-    try report.document.addAnnotated(info.app_path, .path);
-    try report.document.addText(" does not specify a platform.");
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
     try report.document.addText("Add a platform to your app header, for example:");
     try report.document.addLineBreak();
     try report.document.addCodeBlock(
@@ -549,11 +594,8 @@ fn createNoPlatformFoundReport(allocator: Allocator, info: anytype) Allocator.Er
 }
 
 fn createPlatformNotFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "PLATFORM NOT FOUND", .fatal);
+    var report = try Report.init(allocator, "Platform Not Found", "I could not find the platform file.", .fatal);
 
-    try report.document.addText("I could not find the platform file:");
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
     try report.document.addText("    ");
     try report.document.addAnnotated(info.platform_path, .path);
     try report.document.addLineBreak();
@@ -564,10 +606,8 @@ fn createPlatformNotFoundReport(allocator: Allocator, info: anytype) Allocator.E
 }
 
 fn createPlatformSourceNotFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "PLATFORM SOURCE NOT FOUND", .runtime_error);
+    var report = try Report.init(allocator, "Platform Source Not Found", "Could not find the platform source file.", .runtime_error);
 
-    try report.document.addText("Could not find the platform source file.");
-    try report.document.addLineBreak();
     try report.document.addText("Platform path: ");
     try report.document.addAnnotated(info.platform_path, .path);
     try report.document.addLineBreak();
@@ -583,11 +623,10 @@ fn createPlatformSourceNotFoundReport(allocator: Allocator, info: anytype) Alloc
 }
 
 fn createMissingPlatformModuleReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "MISSING PLATFORM MODULE", .runtime_error);
+    const headline = try std.fmt.allocPrint(allocator, "The platform at {s}.", .{info.platform_path});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Missing Platform Module", headline, .runtime_error);
 
-    try report.document.addText("The platform at ");
-    try report.document.addAnnotated(info.platform_path, .path);
-    try report.document.addLineBreak();
     try report.document.addText("is missing the required module: ");
     try report.document.addAnnotated(info.module_name, .emphasized);
 
@@ -595,25 +634,18 @@ fn createMissingPlatformModuleReport(allocator: Allocator, info: anytype) Alloca
 }
 
 fn createMissingTypeInModuleReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "MISSING TYPE IN MODULE", .runtime_error);
+    const headline = try std.fmt.allocPrint(allocator, "Module {s} does not expose a type named {s}.", .{ info.module_name, info.type_name });
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Missing Type In Module", headline, .runtime_error);
 
-    try report.document.addText("Module ");
-    try report.document.addAnnotated(info.module_name, .emphasized);
-    try report.document.addText(" does not expose a type named ");
-    try report.document.addAnnotated(info.type_name, .emphasized);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
     try report.document.addText("Platform modules must expose a type with the same name as the module.");
 
     return report;
 }
 
 fn createCircularPlatformDependencyReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "CIRCULAR PLATFORM DEPENDENCY", .runtime_error);
+    var report = try Report.init(allocator, "Circular Platform Dependency", "A circular dependency was detected in the platform modules.", .runtime_error);
 
-    try report.document.addText("A circular dependency was detected in the platform modules:");
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
     for (info.module_chain) |mod| {
         try report.document.addText("    ");
         try report.document.addAnnotated(mod, .emphasized);
@@ -625,19 +657,16 @@ fn createCircularPlatformDependencyReport(allocator: Allocator, info: anytype) A
 }
 
 fn createPlatformValidationFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "PLATFORM VALIDATION FAILED", .runtime_error);
-
-    try report.document.addText(info.message);
+    const headline = try std.fmt.allocPrint(allocator, "{s}.", .{info.message});
+    defer allocator.free(headline);
+    const report = try Report.init(allocator, "Platform Validation Failed", headline, .runtime_error);
 
     return report;
 }
 
 fn createAbsolutePlatformPathReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "ABSOLUTE PLATFORM PATH", .runtime_error);
+    var report = try Report.init(allocator, "Absolute Platform Path", "Absolute paths are not allowed for platform specifications.", .runtime_error);
 
-    try report.document.addText("Absolute paths are not allowed for platform specifications:");
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
     try report.document.addText("    ");
     try report.document.addAnnotated(info.platform_spec, .path);
     try report.document.addLineBreak();
@@ -650,13 +679,10 @@ fn createAbsolutePlatformPathReport(allocator: Allocator, info: anytype) Allocat
 }
 
 fn createInvalidAppHeaderReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "INVALID APP HEADER", .runtime_error);
+    const headline = try std.fmt.allocPrint(allocator, "The file {s} does not have a valid app header with a platform declaration.", .{info.app_path});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Invalid App Header", headline, .runtime_error);
 
-    try report.document.addText("The file ");
-    try report.document.addAnnotated(info.app_path, .path);
-    try report.document.addText(" does not have a valid app header with a platform declaration.");
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
     try report.document.addText("Expected an app header like:");
     try report.document.addLineBreak();
     try report.document.addLineBreak();
@@ -673,12 +699,10 @@ fn createInvalidAppHeaderReport(allocator: Allocator, info: anytype) Allocator.E
 }
 
 fn createBuildNotSupportedForHeaderlessReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "BUILD NOT SUPPORTED", .fatal);
+    const headline = try std.fmt.allocPrint(allocator, "The file {s} is a headerless app, which uses a simple builtin platform.", .{info.app_path});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Build Not Supported", headline, .fatal);
 
-    try report.document.addText("The file ");
-    try report.document.addAnnotated(info.app_path, .path);
-    try report.document.addText(" is a headerless app, which uses a simple builtin platform");
-    try report.document.addLineBreak();
     try report.document.addText("designed for tutorials and cannot be compiled to a standalone executable.");
     try report.document.addLineBreak();
     try report.document.addLineBreak();
@@ -698,15 +722,10 @@ fn createBuildNotSupportedForHeaderlessReport(allocator: Allocator, info: anytyp
 }
 
 fn createUnsupportedOptLevelReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "OPTIMIZATION MODE NOT IMPLEMENTED", .fatal);
+    const headline = try std.fmt.allocPrint(allocator, "The optimization mode {s} is not implemented for {s} yet.", .{ info.opt, info.command });
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Optimization Mode Not Implemented", headline, .fatal);
 
-    try report.document.addText("The optimization mode ");
-    try report.document.addAnnotated(info.opt, .emphasized);
-    try report.document.addText(" is not implemented for ");
-    try report.document.addAnnotated(info.command, .emphasized);
-    try report.document.addText(" yet.");
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
     try report.document.addText("Use ");
     try report.document.addAnnotated("--opt=dev", .emphasized);
     try report.document.addText(" for compiled builds, or ");
@@ -717,13 +736,9 @@ fn createUnsupportedOptLevelReport(allocator: Allocator, info: anytype) Allocato
 }
 
 fn createCompilationFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "COMPILATION FAILED", .fatal);
-
-    try report.document.addText("Compilation of ");
-    try report.document.addAnnotated(info.path, .path);
-    try report.document.addText(" failed.");
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    const headline = try std.fmt.allocPrint(allocator, "Compilation of {s} failed.", .{info.path});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Compilation Failed", headline, .fatal);
 
     var buf: [32]u8 = undefined;
     const count_str = std.fmt.bufPrint(&buf, "{}", .{info.error_count}) catch "?";
@@ -735,12 +750,10 @@ fn createCompilationFailedReport(allocator: Allocator, info: anytype) Allocator.
 }
 
 fn createMissingHostSymbolsReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "MISSING HOST SYMBOLS", .fatal);
+    const headline = try std.fmt.allocPrint(allocator, "The platform's host inputs for target {s} do not define these symbols the application references.", .{info.target});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Missing Host Symbols", headline, .fatal);
 
-    try report.document.addText("The platform's host inputs for target ");
-    try report.document.addAnnotated(info.target, .emphasized);
-    try report.document.addText(" do not define these symbols the application references:");
-    try report.document.addLineBreak();
     for (info.symbols) |symbol| {
         try report.document.addLineBreak();
         try report.document.addText("    ");
@@ -758,12 +771,10 @@ fn createMissingHostSymbolsReport(allocator: Allocator, info: anytype) Allocator
 }
 
 fn createLinkerFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "LINKER FAILED", .fatal);
+    const headline = try std.fmt.allocPrint(allocator, "The linker failed while building for target {s}.", .{info.target});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Linker Failed", headline, .fatal);
 
-    try report.document.addText("The linker failed while building for target ");
-    try report.document.addAnnotated(info.target, .emphasized);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
     try report.document.addText("Error: ");
     try report.document.addText(@errorName(info.err));
 
@@ -771,12 +782,10 @@ fn createLinkerFailedReport(allocator: Allocator, info: anytype) Allocator.Error
 }
 
 fn createObjectCompilationFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "OBJECT COMPILATION FAILED", .runtime_error);
+    const headline = try std.fmt.allocPrint(allocator, "Failed to compile object file for {s}.", .{info.path});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Object Compilation Failed", headline, .runtime_error);
 
-    try report.document.addText("Failed to compile object file for ");
-    try report.document.addAnnotated(info.path, .path);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
     try report.document.addText("Error: ");
     try report.document.addText(@errorName(info.err));
 
@@ -784,11 +793,8 @@ fn createObjectCompilationFailedReport(allocator: Allocator, info: anytype) Allo
 }
 
 fn createShimGenerationFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "SHIM GENERATION FAILED", .runtime_error);
+    var report = try Report.init(allocator, "Shim Generation Failed", "Failed to generate the platform shim.", .runtime_error);
 
-    try report.document.addText("Failed to generate the platform shim.");
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
     try report.document.addText("Error: ");
     try report.document.addText(@errorName(info.err));
 
@@ -796,26 +802,34 @@ fn createShimGenerationFailedReport(allocator: Allocator, info: anytype) Allocat
 }
 
 fn createInvalidUrlReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "INVALID URL", .runtime_error);
+    const headline = try std.fmt.allocPrint(allocator, "The URL is invalid: {s}.", .{info.url});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Invalid URL", headline, .runtime_error);
 
-    try report.document.addText("The URL is invalid: ");
-    try report.document.addAnnotated(info.url, .emphasized);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
     try report.document.addText("Reason: ");
     try report.document.addText(info.reason);
 
     return report;
 }
 
+fn createBumpFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    var report = try Report.init(allocator, info.title, "roc bump failed.", .runtime_error);
+
+    try report.document.addText(info.message);
+
+    return report;
+}
+
 fn createDownloadFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "DOWNLOAD FAILED", .runtime_error);
+    const headline = switch (info.err) {
+        error.InvalidHash => try std.fmt.allocPrint(allocator, "Error: {s}.", .{@errorName(info.err)}),
+        else => try std.fmt.allocPrint(allocator, "Failed to download from {s}.", .{info.url}),
+    };
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Download Failed", headline, .runtime_error);
 
     switch (info.err) {
         error.InvalidHash => {
-            try report.document.addText("Error: ");
-            try report.document.addError(@errorName(info.err));
-            try report.document.addLineBreak();
             try report.document.addText("The url contains an invalid hash.");
             try report.document.addLineBreaks(2);
 
@@ -840,9 +854,6 @@ fn createDownloadFailedReport(allocator: Allocator, info: anytype) Allocator.Err
             try report.document.addLineBreak();
         },
         else => {
-            try report.document.addText("Failed to download from ");
-            try report.document.addAnnotated(info.url, .emphasized);
-            try report.document.addLineBreaks(2);
             try report.document.addText("Error: ");
             try report.document.addText(@errorName(info.err));
         },
@@ -852,25 +863,127 @@ fn createDownloadFailedReport(allocator: Allocator, info: anytype) Allocator.Err
 }
 
 fn createPackageCacheErrorReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "PACKAGE CACHE ERROR", .runtime_error);
+    const headline = try std.fmt.allocPrint(allocator, "Error with cached package {s}.", .{info.package});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Package Cache Error", headline, .runtime_error);
 
-    try report.document.addText("Error with cached package ");
-    try report.document.addAnnotated(info.package, .emphasized);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
     try report.document.addText("Reason: ");
     try report.document.addText(info.reason);
 
     return report;
 }
 
-fn createChildProcessSpawnFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "PROCESS SPAWN FAILED", .runtime_error);
+fn createInvalidShorthandReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "`{s}` is not a valid shorthand name.", .{info.name});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Invalid Shorthand", headline, .runtime_error);
 
-    try report.document.addText("Failed to start process: ");
-    try report.document.addAnnotated(info.command, .emphasized);
+    try report.document.addText("A shorthand starts with a lowercase letter, followed by lowercase letters, digits, or underscores. The name `roc` and Windows reserved device names such as `con` and `nul` are not allowed on any OS.");
+    try report.document.addLineBreaks(2);
+    try report.document.addText("For example: ");
+    try report.document.addAnnotated("tokei", .emphasized);
+    try report.document.addText(" or ");
+    try report.document.addAnnotated("rust_glue", .emphasized);
+
+    return report;
+}
+
+fn createShorthandConflictReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "`{s}` is already installed from a different URL.", .{info.name});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Shorthand Conflict", headline, .runtime_error);
+
+    try report.document.addText("Currently installed from:");
     try report.document.addLineBreak();
+    try report.document.addText("    ");
+    try report.document.addAnnotated(info.existing_url, .emphasized);
+    try report.document.addLineBreaks(2);
+    try report.document.addText("Requested:");
     try report.document.addLineBreak();
+    try report.document.addText("    ");
+    try report.document.addAnnotated(info.new_url, .emphasized);
+    try report.document.addLineBreaks(2);
+    try report.document.addSuggestion("The existing installation was left unchanged. To install this URL, choose a different shorthand name.");
+
+    return report;
+}
+
+fn createUnknownShorthandReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "Nothing is installed under the name `{s}` for this compiler version.", .{info.name});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Unknown Shorthand", headline, .runtime_error);
+
+    const install_hint = try std.fmt.allocPrint(allocator, "To install something under that name, run: roc install {s} <URL>", .{info.name});
+    defer allocator.free(install_hint);
+    try report.document.addSuggestion(install_hint);
+    try report.document.addLineBreak();
+    const path_hint = try std.fmt.allocPrint(allocator, "If you meant a local file named `{s}`, write it as `./{s}`.", .{ info.name, info.name });
+    defer allocator.free(path_hint);
+    try report.document.addSuggestion(path_hint);
+
+    return report;
+}
+
+fn createInstallEntryCorruptReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "The installation under `{s}` is corrupt or incomplete.", .{info.name});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Corrupt Installation", headline, .runtime_error);
+
+    try report.document.addText("    ");
+    try report.document.addAnnotated(info.path, .path);
+    try report.document.addLineBreaks(2);
+    try report.document.addText("Reason: ");
+    try report.document.addText(info.reason);
+    try report.document.addLineBreaks(2);
+    const hint = try std.fmt.allocPrint(allocator, "Delete that directory, then reinstall with: roc install {s} <URL>", .{info.name});
+    defer allocator.free(hint);
+    try report.document.addSuggestion(hint);
+
+    return report;
+}
+
+fn createInstallDirUnavailableReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    var report = try Report.init(allocator, "Install Directory Unavailable", "I could not determine the install directory.", .runtime_error);
+
+    try report.document.addText("Reason: ");
+    try report.document.addText(info.reason);
+    try report.document.addLineBreaks(2);
+    try report.document.addSuggestion("Set the ROC_INSTALL_DIR environment variable to choose an install directory explicitly.");
+
+    return report;
+}
+
+fn createInstallBundleMissingMainReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "The bundle downloaded from {s} has no main.roc at its root.", .{info.url});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Invalid Bundle", headline, .runtime_error);
+
+    try report.document.addText("I looked for:");
+    try report.document.addLineBreak();
+    try report.document.addText("    ");
+    try report.document.addAnnotated(info.searched_path, .path);
+    try report.document.addLineBreaks(2);
+    try report.document.addText("Installable bundles must contain a main.roc at the archive root.");
+
+    return report;
+}
+
+fn createInstallPublishFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "I could not publish the completed installation for `{s}`.", .{info.name});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Install Publish Failed", headline, .runtime_error);
+
+    try report.document.addText("Error: ");
+    try report.document.addText(@errorName(info.err));
+
+    return report;
+}
+
+fn createChildProcessSpawnFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "Failed to start process: {s}.", .{info.command});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Process Spawn Failed", headline, .runtime_error);
+
     try report.document.addText("Error: ");
     try report.document.addText(@errorName(info.err));
 
@@ -878,40 +991,26 @@ fn createChildProcessSpawnFailedReport(allocator: Allocator, info: anytype) Allo
 }
 
 fn createChildProcessFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "PROCESS FAILED", .runtime_error);
-
-    try report.document.addText("Process ");
-    try report.document.addAnnotated(info.command, .emphasized);
-    try report.document.addText(" exited with code ");
-
-    var buf: [16]u8 = undefined;
-    const code_str = std.fmt.bufPrint(&buf, "{}", .{info.exit_code}) catch "?";
-    try report.document.addAnnotated(code_str, .error_highlight);
+    const headline = try std.fmt.allocPrint(allocator, "Process {s} exited with code {d}.", .{ info.command, info.exit_code });
+    defer allocator.free(headline);
+    const report = try Report.init(allocator, "Process Failed", headline, .runtime_error);
 
     return report;
 }
 
 fn createChildProcessSignaledReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "PROCESS SIGNALED", .runtime_error);
-
-    try report.document.addText("Process ");
-    try report.document.addAnnotated(info.command, .emphasized);
-    try report.document.addText(" was terminated by signal ");
-
-    var buf: [16]u8 = undefined;
-    const sig_str = std.fmt.bufPrint(&buf, "{}", .{info.signal}) catch "?";
-    try report.document.addAnnotated(sig_str, .error_highlight);
+    const headline = try std.fmt.allocPrint(allocator, "Process {s} was terminated by signal {d}.", .{ info.command, info.signal });
+    defer allocator.free(headline);
+    const report = try Report.init(allocator, "Process Signaled", headline, .runtime_error);
 
     return report;
 }
 
 fn createChildProcessWaitFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "PROCESS WAIT FAILED", .runtime_error);
+    const headline = try std.fmt.allocPrint(allocator, "Failed to wait for process {s}.", .{info.command});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Process Wait Failed", headline, .runtime_error);
 
-    try report.document.addText("Failed to wait for process ");
-    try report.document.addAnnotated(info.command, .emphasized);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
     try report.document.addText("Error: ");
     try report.document.addText(@errorName(info.err));
 
@@ -919,13 +1018,10 @@ fn createChildProcessWaitFailedReport(allocator: Allocator, info: anytype) Alloc
 }
 
 fn createSharedMemoryFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "SHARED MEMORY FAILED", .runtime_error);
+    const headline = try std.fmt.allocPrint(allocator, "Shared memory operation '{s}' failed.", .{info.operation});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Shared Memory Failed", headline, .runtime_error);
 
-    try report.document.addText("Shared memory operation '");
-    try report.document.addText(info.operation);
-    try report.document.addText("' failed.");
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
     try report.document.addText("Error: ");
     try report.document.addText(@errorName(info.err));
 
@@ -933,11 +1029,10 @@ fn createSharedMemoryFailedReport(allocator: Allocator, info: anytype) Allocator
 }
 
 fn createExpectedAppHeaderReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "EXPECTED APP HEADER", .runtime_error);
+    const headline = try std.fmt.allocPrint(allocator, "Expected an app header in {s}.", .{info.path});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Expected App Header", headline, .runtime_error);
 
-    try report.document.addText("Expected an app header in ");
-    try report.document.addAnnotated(info.path, .path);
-    try report.document.addLineBreak();
     try report.document.addText("but found: ");
     try report.document.addAnnotated(info.found, .emphasized);
     try report.document.addLineBreak();
@@ -960,12 +1055,10 @@ fn createExpectedAppHeaderReport(allocator: Allocator, info: anytype) Allocator.
 }
 
 fn createExpectedPlatformStringReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "EXPECTED PLATFORM STRING", .runtime_error);
+    const headline = try std.fmt.allocPrint(allocator, "Expected a platform string in the app header of {s}.", .{info.path});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Expected Platform String", headline, .runtime_error);
 
-    try report.document.addText("Expected a platform string in the app header of ");
-    try report.document.addAnnotated(info.path, .path);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
     try report.document.addText("Example:");
     try report.document.addLineBreak();
     try report.document.addCodeBlock(
@@ -976,12 +1069,10 @@ fn createExpectedPlatformStringReport(allocator: Allocator, info: anytype) Alloc
 }
 
 fn createModuleInitFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "MODULE INITIALIZATION FAILED", .runtime_error);
+    const headline = try std.fmt.allocPrint(allocator, "Failed to initialize module {s}.", .{info.path});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Module Initialization Failed", headline, .runtime_error);
 
-    try report.document.addText("Failed to initialize module ");
-    try report.document.addAnnotated(info.path, .path);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
     try report.document.addText("Error: ");
     try report.document.addText(@errorName(info.err));
 
@@ -989,12 +1080,10 @@ fn createModuleInitFailedReport(allocator: Allocator, info: anytype) Allocator.E
 }
 
 fn createNoExportsFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = Report.init(allocator, "NO EXPORTS FOUND", .runtime_error);
+    const headline = try std.fmt.allocPrint(allocator, "No exports were found in {s}.", .{info.path});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "No Exports Found", headline, .runtime_error);
 
-    try report.document.addText("No exports were found in ");
-    try report.document.addAnnotated(info.path, .path);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
     try report.document.addText("Ensure the module exports at least one definition.");
 
     return report;
@@ -1013,7 +1102,7 @@ test "file_not_found generates correct report" {
     var report = try problem.toReport(allocator);
     defer report.deinit();
 
-    try std.testing.expectEqualStrings("FILE NOT FOUND", report.title);
+    try std.testing.expectEqualStrings("File Not Found", report.title);
     try std.testing.expectEqual(Severity.fatal, report.severity);
 }
 
@@ -1028,7 +1117,7 @@ test "compilation_failed generates correct report" {
     var report = try problem.toReport(allocator);
     defer report.deinit();
 
-    try std.testing.expectEqualStrings("COMPILATION FAILED", report.title);
+    try std.testing.expectEqualStrings("Compilation Failed", report.title);
     try std.testing.expectEqual(Severity.fatal, report.severity);
 }
 
@@ -1043,7 +1132,7 @@ test "unsupported_opt_level generates correct report" {
     var report = try problem.toReport(allocator);
     defer report.deinit();
 
-    try std.testing.expectEqualStrings("OPTIMIZATION MODE NOT IMPLEMENTED", report.title);
+    try std.testing.expectEqualStrings("Optimization Mode Not Implemented", report.title);
     try std.testing.expectEqual(Severity.fatal, report.severity);
 }
 
@@ -1057,7 +1146,7 @@ test "no_platform_found generates correct report" {
     var report = try problem.toReport(allocator);
     defer report.deinit();
 
-    try std.testing.expectEqualStrings("NO PLATFORM FOUND", report.title);
+    try std.testing.expectEqualStrings("No Platform Found", report.title);
     try std.testing.expectEqual(Severity.fatal, report.severity);
 }
 

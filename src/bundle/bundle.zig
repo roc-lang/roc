@@ -20,6 +20,7 @@ const Allocator = std.mem.Allocator;
 const base58 = @import("base58");
 const streaming_writer = @import("streaming_writer.zig");
 const streaming_reader = @import("streaming_reader.zig");
+const format = @import("unbundle").format;
 const c = @cImport({
     @cDefine("ZSTD_STATIC_LINKING_ONLY", "1");
     @cInclude("zstd.h");
@@ -31,8 +32,8 @@ const SIZE_STORAGE_BYTES: usize = 16; // Extra bytes for storing allocation size
 const ZSTD_ALLOC_ALIGNMENT: std.mem.Alignment = .@"16";
 const TAR_PATH_MAX_LENGTH: usize = 255; // Maximum path length for tar compatibility
 /// Size of the buffer used for streaming operations (in bytes)
-pub const STREAM_BUFFER_SIZE: usize = 64 * 1024;
-const TAR_EXTENSION = ".tar.zst";
+pub const STREAM_BUFFER_SIZE = format.STREAM_BUFFER_SIZE;
+const TAR_EXTENSION = format.TAR_EXTENSION;
 /// Default compression level for zstd (22 = maximum compression)
 pub const DEFAULT_COMPRESSION_LEVEL: c_int = 22;
 

@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Module dot malformed (should error)
+description=Mod dot malformed (should error)
 type=expr
 ~~~
 # SOURCE
@@ -8,23 +8,17 @@ type=expr
 I.5
 ~~~
 # EXPECTED
-TYPE MISMATCH - module_dot_tuple.md:1:1:1:4
+INVALID TUPLE ACCESS - mod_dot_tuple.md:1:1:1:4
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**module_dot_tuple.md:1:1:1:4:**
-```roc
-I.5
-```
-^^^
 
-It has the type:
+┌──────────────────────┐
+│ INVALID TUPLE ACCESS ├─ This value is not a tuple, so it has no .5 ─────────┐
+└┬─────────────────────┘  element.                                            │
+ │                                                                            │
+ │  I.5                                                                       │
+ │  ‾‾‾                                                                       │
+ └─────────────────────────────────────────────────── mod_dot_tuple.md:1:1 ┘
 
-    (_field, _field2, _field3, _field4, _field5, _field6)
-
-But you are trying to use it as:
-
-    [I, ..]
 
 # TOKENS
 ~~~zig

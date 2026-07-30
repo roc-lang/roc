@@ -36,7 +36,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "all_fields")
 			(ty-fn
@@ -152,9 +152,9 @@ NO CHANGE
 						(record-destruct (label "z") (ident "z")
 							(required
 								(p-assign (ident "z")))))))
-			(e-dispatch-call (method "plus") (constraint-fn-var 139)
+			(e-dispatch-call (method "plus") (constraint-fn-var 335)
 				(receiver
-					(e-dispatch-call (method "plus") (constraint-fn-var 129)
+					(e-dispatch-call (method "plus") (constraint-fn-var 329)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))
@@ -189,7 +189,7 @@ NO CHANGE
 						(record-destruct (label "z") (ident "z")
 							(sub-pattern
 								(p-underscore))))))
-			(e-dispatch-call (method "plus") (constraint-fn-var 175)
+			(e-dispatch-call (method "plus") (constraint-fn-var 351)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -221,7 +221,7 @@ NO CHANGE
 						(record-destruct (label "#others") (ident "#others")
 							(rest-pattern
 								(p-underscore))))))
-			(e-dispatch-call (method "plus") (constraint-fn-var 211)
+			(e-dispatch-call (method "plus") (constraint-fn-var 367)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -253,9 +253,9 @@ NO CHANGE
 						(record-destruct (label "rest") (ident "rest")
 							(rest-pattern
 								(p-assign (ident "rest")))))))
-			(e-dispatch-call (method "plus") (constraint-fn-var 260)
+			(e-dispatch-call (method "plus") (constraint-fn-var 392)
 				(receiver
-					(e-dispatch-call (method "plus") (constraint-fn-var 247)
+					(e-dispatch-call (method "plus") (constraint-fn-var 383)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))

@@ -17,53 +17,56 @@ green : Color
 green = Green
 ~~~
 # EXPECTED
-PARSE ERROR - nominal_import_wildcard.md:1:13:1:15
+UNEXPECTED STATEMENT - nominal_import_wildcard.md:1:13:1:15
 UNDECLARED TYPE - nominal_import_wildcard.md:3:7:3:12
 UNDECLARED TYPE - nominal_import_wildcard.md:6:8:6:13
 UNDECLARED TYPE - nominal_import_wildcard.md:9:9:9:14
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
 
-**nominal_import_wildcard.md:1:13:1:15:**
-```roc
-import Color.*
-```
-            ^^
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  import Color.*                                                            │
+ │              ‾‾                                                            │
+ └─────────────────────────────────────────── nominal_import_wildcard.md:1:13 ┘
 
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
-**UNDECLARED TYPE**
-The type _Color_ is not declared in this scope.
+    For example:
+        answer = 42
 
-This type is referenced here:
-**nominal_import_wildcard.md:3:7:3:12:**
-```roc
-red : Color
-```
-      ^^^^^
+    I found `.*` here.
 
 
-**UNDECLARED TYPE**
-The type _Color_ is not declared in this scope.
-
-This type is referenced here:
-**nominal_import_wildcard.md:6:8:6:13:**
-```roc
-blue : Color
-```
-       ^^^^^
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Color` is not declared in this scope. ─────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  red : Color                                                               │
+ │        ‾‾‾‾‾                                                               │
+ └──────────────────────────────────────────── nominal_import_wildcard.md:3:7 ┘
 
 
-**UNDECLARED TYPE**
-The type _Color_ is not declared in this scope.
 
-This type is referenced here:
-**nominal_import_wildcard.md:9:9:9:14:**
-```roc
-green : Color
-```
-        ^^^^^
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Color` is not declared in this scope. ─────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  blue : Color                                                              │
+ │         ‾‾‾‾‾                                                              │
+ └──────────────────────────────────────────── nominal_import_wildcard.md:6:8 ┘
+
+
+
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Color` is not declared in this scope. ─────────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  green : Color                                                             │
+ │          ‾‾‾‾‾                                                             │
+ └──────────────────────────────────────────── nominal_import_wildcard.md:9:9 ┘
 
 
 # TOKENS
@@ -80,7 +83,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "Color"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -132,7 +135,7 @@ green = Green
 		(e-tag (name "Green"))
 		(annotation
 			(ty-malformed)))
-	(s-import (module "Color")
+	(s-import (mod "Color")
 		(exposes)))
 ~~~
 # TYPES

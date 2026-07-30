@@ -66,6 +66,7 @@ enum ZigLLVMThinOrFullLTOPhase {
 enum ZigLLVMIROptimizationLevel {
     ZigLLVMIROptimizationLevel_Oz = 0,
     ZigLLVMIROptimizationLevel_O3,
+    ZigLLVMIROptimizationLevel_O0,
 };
 
 struct ZigLLVMEmitOptions {
@@ -86,6 +87,7 @@ struct ZigLLVMEmitOptions {
     const char *bitcode_filename;
     ZigLLVMCoverageOptions coverage;
     bool no_target_libcalls;
+    bool lower_memory_intrinsics_to_loops;
 };
 
 // synchronize with llvm/include/Object/Archive.h::Object::Archive::Kind

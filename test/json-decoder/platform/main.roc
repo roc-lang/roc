@@ -2,7 +2,7 @@ platform "json-decoder"
 	requires {
 		main! : Str => U64
 	}
-	exposes [Json]
+	exposes []
 	packages {}
 	provides { "roc_main": main_for_host! }
 	targets: {
@@ -14,8 +14,6 @@ platform "json-decoder"
 		x64win: { inputs: ["host.lib", app], output: Exe },
 		arm64win: { inputs: ["host.lib", app], output: Exe },
 	}
-
-import Json
 
 main_for_host! : Str => U64
 main_for_host! = |json| main!(json)

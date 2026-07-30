@@ -13,33 +13,41 @@ runEffect! = |fn!, x| fn!(x)
 main! = |_| {}
 ~~~
 # EXPECTED
-PARSE ERROR - type_function_effectful.md:3:31:3:33
-PARSE ERROR - type_function_effectful.md:3:34:3:36
+AMBIGUOUS FUNCTION TYPE - type_function_effectful.md:3:31:3:33
+UNEXPECTED STATEMENT - type_function_effectful.md:3:34:3:36
 # PROBLEMS
-**PARSE ERROR**
-Function types with multiple arrows need parentheses.
 
-Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
-        a -> (b -> c) for a **curried** function (a function that **returns** another function)
-        (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
+┌─────────────────────────┐
+│ AMBIGUOUS FUNCTION TYPE ├─ I was parsing a function type, and multiple ─────┐
+└┬────────────────────────┘  arrows need parentheses.                         │
+ │                                                                            │
+ │  runEffect! : (_a => _b) -> _a => _b                                       │
+ │                                ‾‾                                          │
+ └─────────────────────────────────────────── type_function_effectful.md:3:31 ┘
 
-**type_function_effectful.md:3:31:3:33:**
-```roc
-runEffect! : (_a => _b) -> _a => _b
-```
-                              ^^
+    Use parentheses to say whether the function returns another function or
+    takes a function as an argument.
+
+    For example:
+        a -> (b -> c)
+        (a -> b) -> c
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  runEffect! : (_a => _b) -> _a => _b                                       │
+ │                                   ‾‾                                       │
+ └─────────────────────────────────────────── type_function_effectful.md:3:34 ┘
 
-**type_function_effectful.md:3:34:3:36:**
-```roc
-runEffect! : (_a => _b) -> _a => _b
-```
-                                 ^^
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
+    For example:
+        answer = 42
+
+    I found `_b` here.
 
 # TOKENS
 ~~~zig
@@ -107,7 +115,7 @@ main! = |_| {}
 			(args
 				(p-assign (ident "fn!"))
 				(p-assign (ident "x")))
-			(e-call (constraint-fn-var 27)
+			(e-call (constraint-fn-var 211)
 				(e-lookup-local
 					(p-assign (ident "fn!")))
 				(e-lookup-local

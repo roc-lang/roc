@@ -10,9 +10,18 @@ match (1, 2) {
 }
 ~~~
 # EXPECTED
-NIL
+UNCONDITIONAL CONDITION - pattern_as_basic.md:1:7:1:13
 # PROBLEMS
-NIL
+
+┌─────────────────────────┐
+│ UNCONDITIONAL CONDITION ├─ This match value is known at compile time, so ───┐
+└┬────────────────────────┘  this match will always inspect the same value.   │
+ │                                                                            │
+ │  match (1, 2) {                                                            │
+ │        ‾‾‾‾‾‾                                                              │
+ └─────────────────────────────────────────────────── pattern_as_basic.md:1:7 ┘
+
+
 # TOKENS
 ~~~zig
 KwMatch,OpenRound,Int,Comma,Int,CloseRound,OpenCurly,

@@ -41,8 +41,8 @@ fi
 is_intentional_error_fixture() {
     local filename="$1"
 
-    # These files intentionally exercise diagnostics, --allow-errors, or
-    # runtime crash reporting. They are test fixtures, not successful execution
+    # These files intentionally exercise diagnostics or runtime crash reporting.
+    # They are test fixtures, not successful execution
     # benchmarks. Do not add compiler crash/regression repros here; those should
     # fail if the PR binary cannot run them.
     case "$filename" in
@@ -60,21 +60,6 @@ is_intentional_error_fixture() {
         stack_overflow_runtime.roc|\
         test_type_mismatch.roc|\
         unused_state_var.roc)
-            return 0
-            ;;
-    esac
-
-    return 1
-}
-
-is_non_benchmark_fixture() {
-    local filename="$1"
-
-    # These files are tiny semantic/codegen regression fixtures. They should run
-    # in the FX test suite, but `roc <file> --no-cache` mostly measures fixed
-    # compiler/linker setup for them rather than program execution.
-    case "$filename" in
-        zst_nested_singleton_shapes.roc)
             return 0
             ;;
     esac
@@ -157,10 +142,6 @@ for fx_file in test/fx/*.roc; do
     filename=$(basename "$fx_file")
     if is_intentional_error_fixture "$filename"; then
         echo "Skipping $fx_file (intentional error fixture)"
-        continue
-    fi
-    if is_non_benchmark_fixture "$filename"; then
-        echo "Skipping $fx_file (semantic regression fixture, not an execution benchmark)"
         continue
     fi
     if ! grep -qE '^app[[:space:]]*\[[[:space:]]*main![[:space:]]*\]' "$fx_file" 2>/dev/null; then

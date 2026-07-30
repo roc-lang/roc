@@ -8,9 +8,21 @@ type=expr
 99999999999999999999999999999999999999999
 ~~~
 # EXPECTED
-NIL
+INVALID NUMBER - expr_int_invalid.md:1:1:1:42
 # PROBLEMS
-NIL
+
+┌────────────────┐
+│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  99999999999999999999999999999999999999999                                 │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                 │
+ └─────────────────────────────────────────────────── expr_int_invalid.md:1:1 ┘
+
+    The inferred type is:
+
+        Dec
+
 # TOKENS
 ~~~zig
 Int,
@@ -26,9 +38,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-num-from-numeral)
+(e-runtime-error (tag "erroneous_value_expr"))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Dec"))
+(expr (type "Error"))
 ~~~

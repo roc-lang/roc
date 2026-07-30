@@ -4,6 +4,9 @@ const std = @import("std");
 const builtin = @import("builtin");
 const target = @import("target.zig");
 const reporting = @import("reporting");
+const builtins = @import("builtins");
+const builtin_registry = builtins.builtin_registry;
+const BuiltinFn = builtin_registry.BuiltinFn;
 
 const Allocator = std.mem.Allocator;
 
@@ -21,7 +24,11 @@ fn stderrWriter() *std.Io.Writer {
     return &stderr_file_writer.interface;
 }
 
-/// Optimization levels for compilation
+/// Set to true locally to have the LLVM backend also write the optimized IR for
+/// each object into the current directory. Always committed as false.
+const dump_llvm_artifacts = false;
+
+/// Optimization policy requested for LLVM code generation.
 pub const OptimizationLevel = enum {
     size, // --opt size (optimize for binary size)
     speed, // --opt speed (aggressive performance optimizations)
@@ -47,6 +54,7 @@ pub const CompileConfig = struct {
     output_path: []const u8,
     optimization: OptimizationLevel,
     target: target.RocTarget,
+    report_config: reporting.ReportingConfig,
     cpu: []const u8 = "",
     features: []const u8 = "",
     debug: bool = false, // Enable debug info generation in output
@@ -54,6 +62,7 @@ pub const CompileConfig = struct {
     host_call_extern: bool = false, // Builtins reach the host via extern symbols (the symbol ABI)
     pic: bool = false, // Position-independent code (required for shared library output)
     no_target_libcalls: bool = false,
+    lower_memory_intrinsics_to_loops: bool = false,
 
     /// Check if compiling for the current machine
     pub fn isNative(self: CompileConfig) bool {
@@ -126,6 +135,7 @@ const ZigLLVMEmitOptions = extern struct {
     bitcode_filename: ?[*:0]const u8,
     coverage: ZigLLVMCoverageOptions,
     no_target_libcalls: bool,
+    lower_memory_intrinsics_to_loops: bool,
 };
 
 // LLVM Code Generation Optimization Levels
@@ -226,94 +236,10 @@ const llvm_embedded = if (llvm_available) @import("llvm_embedded") else struct {
     pub const builtins64_core_extern_bc: []const u8 = "";
 };
 
-const core_builtin_roots = std.StaticStringMap(void).initComptime(.{
-    .{ "roc__num_add_with_overflow_i128", {} },
-    .{ "roc__num_mul_with_overflow_i16", {} },
-    .{ "roc__num_mul_with_overflow_i32", {} },
-    .{ "roc__num_mul_with_overflow_i64", {} },
-    .{ "roc__num_mul_with_overflow_i8", {} },
-    .{ "roc__num_sub_with_overflow_i128", {} },
-    .{ "roc_builtins_allocate_with_refcount", {} },
-    .{ "roc_builtins_box_decref_with", {} },
-    .{ "roc_builtins_box_decref_with_single_thread", {} },
-    .{ "roc_builtins_box_free_with", {} },
-    .{ "roc_builtins_dbg_str", {} },
-    .{ "roc_builtins_expect_err_str", {} },
-    .{ "roc_builtins_decref_data_ptr", {} },
-    .{ "roc_builtins_decref_data_ptr_single_thread", {} },
-    .{ "roc_builtins_erased_callable_decref", {} },
-    .{ "roc_builtins_erased_callable_decref_single_thread", {} },
-    .{ "roc_builtins_erased_callable_free", {} },
-    .{ "roc_builtins_erased_callable_incref", {} },
-    .{ "roc_builtins_free_data_ptr", {} },
-    .{ "roc_builtins_i16_mod_by", {} },
-    .{ "roc_builtins_i32_mod_by", {} },
-    .{ "roc_builtins_i64_mod_by", {} },
-    .{ "roc_builtins_i8_mod_by", {} },
-    .{ "roc_builtins_incref_data_ptr", {} },
-    .{ "roc_builtins_incref_data_ptr_single_thread", {} },
-    .{ "roc_builtins_int_from_str", {} },
-    .{ "roc_builtins_int_to_str", {} },
-    .{ "roc_builtins_list_append_unsafe", {} },
-    .{ "roc_builtins_list_concat", {} },
-    .{ "roc_builtins_list_decref_flat_list", {} },
-    .{ "roc_builtins_list_decref_str", {} },
-    .{ "roc_builtins_list_decref_with", {} },
-    .{ "roc_builtins_list_decref_with_single_thread", {} },
-    .{ "roc_builtins_list_drop_at", {} },
-    .{ "roc_builtins_list_eq", {} },
-    .{ "roc_builtins_list_free_flat_list", {} },
-    .{ "roc_builtins_list_free_with", {} },
-    .{ "roc_builtins_list_incref", {} },
-    .{ "roc_builtins_list_incref_single_thread", {} },
-    .{ "roc_builtins_list_list_eq", {} },
-    .{ "roc_builtins_list_prepend", {} },
-    .{ "roc_builtins_list_release_excess_capacity", {} },
-    .{ "roc_builtins_list_replace", {} },
-    .{ "roc_builtins_list_reserve", {} },
-    .{ "roc_builtins_list_reverse", {} },
-    .{ "roc_builtins_list_str_eq", {} },
-    .{ "roc_builtins_list_sublist", {} },
-    .{ "roc_builtins_list_swap", {} },
-    .{ "roc_builtins_list_with_capacity", {} },
-    .{ "roc_builtins_roc_crashed", {} },
-    .{ "roc_builtins_roc_expect_failed", {} },
-    .{ "roc_builtins_str_caseless_ascii_equals", {} },
-    .{ "roc_builtins_str_concat", {} },
-    .{ "roc_builtins_str_contains", {} },
-    .{ "roc_builtins_str_count_utf8_bytes", {} },
-    .{ "roc_builtins_str_drop_prefix", {} },
-    .{ "roc_builtins_str_drop_prefix_caseless_ascii", {} },
-    .{ "roc_builtins_str_drop_suffix", {} },
-    .{ "roc_builtins_str_ends_with", {} },
-    .{ "roc_builtins_str_equal", {} },
-    .{ "roc_builtins_str_escape_and_quote", {} },
-    .{ "roc_builtins_str_from_literal", {} },
-    .{ "roc_builtins_str_from_utf8", {} },
-    .{ "roc_builtins_str_from_utf8_lossy", {} },
-    .{ "roc_builtins_str_from_utf8_parts", {} },
-    .{ "roc_builtins_str_from_utf8_result", {} },
-    .{ "roc_builtins_str_join_with", {} },
-    .{ "roc_builtins_str_release_excess_capacity", {} },
-    .{ "roc_builtins_str_repeat", {} },
-    .{ "roc_builtins_str_reserve", {} },
-    .{ "roc_builtins_str_split", {} },
-    .{ "roc_builtins_str_starts_with", {} },
-    .{ "roc_builtins_str_to_utf8", {} },
-    .{ "roc_builtins_str_trim", {} },
-    .{ "roc_builtins_str_trim_end", {} },
-    .{ "roc_builtins_str_trim_start", {} },
-    .{ "roc_builtins_str_with_ascii_lowercased", {} },
-    .{ "roc_builtins_str_with_ascii_uppercased", {} },
-    .{ "roc_builtins_str_with_capacity", {} },
-    .{ "roc_builtins_u16_mod_by", {} },
-    .{ "roc_builtins_u32_mod_by", {} },
-    .{ "roc_builtins_u64_mod_by", {} },
-    .{ "roc_builtins_u8_mod_by", {} },
-});
+const core_builtin_roots = builtin_registry.core_root_symbols;
 
 fn isBuiltinRoot(name: []const u8) bool {
-    return std.mem.startsWith(u8, name, "roc_builtins_") or std.mem.startsWith(u8, name, "roc__num_");
+    return std.mem.startsWith(u8, name, builtin_registry.symbol_prefix) or std.mem.startsWith(u8, name, "roc__num_");
 }
 
 fn canUseCoreBuiltins(app_decls: *const std.StringHashMap(void)) bool {
@@ -341,20 +267,30 @@ fn selectBuiltinBitcode(ptr_width: u16, app_decls: *const std.StringHashMap(void
 }
 
 test "core builtin roots include common LLVM declarations" {
-    const common_roots = [_][]const u8{
-        "roc_builtins_int_to_str",
-        "roc_builtins_int_from_str",
-        "roc_builtins_list_incref_single_thread",
-        "roc_builtins_list_decref_with_single_thread",
-        "roc_builtins_incref_data_ptr_single_thread",
-        "roc_builtins_decref_data_ptr_single_thread",
-        "roc_builtins_box_decref_with_single_thread",
-        "roc_builtins_erased_callable_decref_single_thread",
+    const common_roots = [_][:0]const u8{
+        BuiltinFn.int_to_str.symbolName(),
+        BuiltinFn.int_from_str.symbolName(),
+        BuiltinFn.list_concat.symbolName(),
+        BuiltinFn.list_incref_single_thread.symbolName(),
+        BuiltinFn.list_decref_with_single_thread.symbolName(),
+        BuiltinFn.incref_data_ptr_single_thread.symbolName(),
+        BuiltinFn.decref_data_ptr_single_thread.symbolName(),
+        BuiltinFn.box_decref_with_single_thread.symbolName(),
+        BuiltinFn.erased_callable_decref_single_thread.symbolName(),
     };
-
     for (common_roots) |root| {
         try std.testing.expect(core_builtin_roots.has(root));
     }
+
+    // The overflow helpers are roots in every payload.
+    for (builtin_registry.overflow_root_symbols) |root| {
+        try std.testing.expect(core_builtin_roots.has(root));
+    }
+
+    // `.full`-only and `.jit_only` wrappers are absent from the core payload,
+    // so they are not valid core roots.
+    try std.testing.expect(!core_builtin_roots.has(BuiltinFn.dec_sqrt.symbolName()));
+    try std.testing.expect(!core_builtin_roots.has(BuiltinFn.hot_reload_enter.symbolName()));
 }
 
 /// LLVM-C linkage value for `internal`: a local definition, never an exported
@@ -413,9 +349,9 @@ pub fn initializeLLVM() void {
 }
 
 /// Compile LLVM bitcode file to object file
-pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileConfig) Allocator.Error!bool {
+pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileConfig) (Allocator.Error || error{LLVMNotAvailable})!bool {
     if (comptime !llvm_available) {
-        try renderLLVMNotAvailableError(gpa);
+        try renderLLVMNotAvailableError(gpa, config.report_config);
         return error.LLVMNotAvailable;
     }
 
@@ -429,7 +365,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
 
     // Verify input file exists
     std.Io.Dir.cwd().access(std_io, config.input_path, .{}) catch |err| {
-        try renderFileNotAccessibleError(gpa, config.input_path, err);
+        try renderFileNotAccessibleError(gpa, config.input_path, err, config.report_config);
         return false;
     };
 
@@ -447,7 +383,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     defer gpa.free(bitcode_path_z);
 
     if (externs.LLVMCreateMemoryBufferWithContentsOfFile(bitcode_path_z.ptr, &mem_buf, &error_message) != 0) {
-        try renderLLVMError(gpa, "BITCODE LOAD ERROR", "Failed to load bitcode file", std.mem.span(error_message));
+        try renderLLVMError(gpa, "Bitcode Load Error", "Failed to load bitcode file.", std.mem.span(error_message), config.report_config);
         externs.LLVMDisposeMessage(error_message);
         return false;
     }
@@ -458,7 +394,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     std.log.debug("Parsing bitcode into LLVM module...", .{});
     var module: ?*anyopaque = null;
     if (externs.LLVMParseBitcode(mem_buf, &module, &error_message) != 0) {
-        try renderLLVMError(gpa, "BITCODE PARSE ERROR", "Failed to parse bitcode", std.mem.span(error_message));
+        try renderLLVMError(gpa, "Bitcode Parse Error", "Failed to parse bitcode.", std.mem.span(error_message), config.report_config);
         externs.LLVMDisposeMessage(error_message);
         return false;
     }
@@ -538,7 +474,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
             return false;
         }
 
-        const bc_buf = externs.LLVMCreateMemoryBufferWithMemoryRangeCopy(builtins_bc.ptr, builtins_bc.len, "roc_builtins_bc");
+        const bc_buf = externs.LLVMCreateMemoryBufferWithMemoryRangeCopy(builtins_bc.ptr, builtins_bc.len, "roc-builtins-bc");
         var builtins_module: ?*anyopaque = null;
         if (externs.LLVMParseBitcode2(bc_buf, &builtins_module) == 0) {
             externs.LLVMSetTarget(builtins_module, target_triple_z.ptr);
@@ -636,7 +572,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     std.log.debug("Getting LLVM target for triple: {s}", .{target_triple});
     var llvm_target: ?*anyopaque = null;
     if (externs.LLVMGetTargetFromTriple(target_triple_z.ptr, &llvm_target, &error_message) != 0) {
-        try renderTargetError(gpa, target_triple, std.mem.span(error_message));
+        try renderTargetError(gpa, target_triple, std.mem.span(error_message), config.report_config);
         externs.LLVMDisposeMessage(error_message);
         return false;
     }
@@ -664,7 +600,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
         false, // emulated_tls
     );
     if (target_machine == null) {
-        try renderTargetMachineError(gpa, target_triple, config.cpu, config.features);
+        try renderTargetMachineError(gpa, target_triple, config.cpu, config.features, config.report_config);
         return false;
     }
     defer externs.LLVMDisposeTargetMachine(target_machine);
@@ -681,6 +617,30 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     var coverage_options = std.mem.zeroes(ZigLLVMCoverageOptions);
     coverage_options.CoverageType = .ZigLLVMCoverageType_None;
 
+    // Flip `dump_llvm_artifacts` to true while working on the compiler to get
+    // the optimized LLVM IR for each object written into the current directory
+    // as `<object name>.ll`. Reading it is the only way to tell whether a given
+    // instruction sequence was decided in the middle end or during instruction
+    // selection -- final disassembly alone leaves you guessing which stage is
+    // responsible.
+    //
+    // It lands in the current directory rather than beside the object because
+    // objects are built inside a temporary directory that is deleted when the
+    // build finishes, which would take the dump with it.
+    //
+    // Only the IR is emitted, not assembly: asking this entry point for both an
+    // object file and a .s runs code generation over the module twice, which
+    // fails with duplicate symbol definitions.
+    //
+    // This is deliberately a constant rather than a CLI flag: it is a tool for
+    // people changing code generation, not a supported output format, and
+    // wiring it to a flag would mean committing to its behavior.
+    const ir_path_z: ?[:0]u8 = if (dump_llvm_artifacts)
+        try std.fmt.allocPrintSentinel(gpa, "{s}.ll", .{std.fs.path.basename(config.output_path)}, 0)
+    else
+        null;
+    defer if (ir_path_z) |p| gpa.free(p);
+
     const emit_options = ZigLLVMEmitOptions{
         // App object debug output is controlled by the user's --debug flag.
         .is_debug = config.debug,
@@ -693,10 +653,11 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
         .allow_machine_outliner = true,
         .asm_filename = null,
         .bin_filename = object_path_z.ptr,
-        .llvm_ir_filename = null,
+        .llvm_ir_filename = if (ir_path_z) |p| p.ptr else null,
         .bitcode_filename = null,
         .coverage = coverage_options,
         .no_target_libcalls = config.no_target_libcalls,
+        .lower_memory_intrinsics_to_loops = config.lower_memory_intrinsics_to_loops,
     };
 
     const emit_result = externs.ZigLLVMTargetMachineEmitToFile(
@@ -707,7 +668,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     );
 
     if (emit_result) {
-        try renderEmitError(gpa, config.output_path, std.mem.span(emit_error_message));
+        try renderEmitError(gpa, config.output_path, std.mem.span(emit_error_message), config.report_config);
         externs.LLVMDisposeMessage(emit_error_message);
         return false;
     }
@@ -730,12 +691,10 @@ pub fn isLLVMAvailable() bool {
 
 // --- Error Reporting Helpers ---
 
-fn renderLLVMNotAvailableError(allocator: Allocator) Allocator.Error!void {
-    var report = reporting.Report.init(allocator, "LLVM NOT AVAILABLE", .fatal);
+fn renderLLVMNotAvailableError(allocator: Allocator, config: reporting.ReportingConfig) Allocator.Error!void {
+    var report = try reporting.Report.init(allocator, "LLVM Not Available", "LLVM is not available at compile time.", .fatal);
     defer report.deinit();
 
-    try report.document.addText("LLVM is not available at compile time.");
-    try report.document.addLineBreak();
     try report.document.addLineBreak();
     try report.document.addText("This binary was built without LLVM support.");
     try report.document.addLineBreak();
@@ -745,17 +704,20 @@ fn renderLLVMNotAvailableError(allocator: Allocator) Allocator.Error!void {
     reporting.renderReportToTerminal(
         &report,
         stderrWriter(),
-        .ANSI,
-        reporting.ReportingConfig.initColorTerminal(),
+        reporting.ColorUtils.getPaletteForConfig(config),
+        config,
     ) catch {};
 }
 
-fn renderFileNotAccessibleError(allocator: Allocator, path: []const u8, err: std.Io.Dir.AccessError) Allocator.Error!void {
-    var report = reporting.Report.init(allocator, "FILE NOT ACCESSIBLE", .fatal);
+fn renderFileNotAccessibleError(
+    allocator: Allocator,
+    path: []const u8,
+    err: std.Io.Dir.AccessError,
+    config: reporting.ReportingConfig,
+) Allocator.Error!void {
+    var report = try reporting.Report.init(allocator, "File Not Accessible", "Input bitcode file does not exist or is not accessible.", .fatal);
     defer report.deinit();
 
-    try report.document.addText("Input bitcode file does not exist or is not accessible:");
-    try report.document.addLineBreak();
     try report.document.addLineBreak();
     try report.document.addText("    ");
     try report.document.addAnnotated(path, .path);
@@ -768,17 +730,21 @@ fn renderFileNotAccessibleError(allocator: Allocator, path: []const u8, err: std
     reporting.renderReportToTerminal(
         &report,
         stderrWriter(),
-        .ANSI,
-        reporting.ReportingConfig.initColorTerminal(),
+        reporting.ColorUtils.getPaletteForConfig(config),
+        config,
     ) catch {};
 }
 
-fn renderLLVMError(allocator: Allocator, title: []const u8, message: []const u8, llvm_message: []const u8) Allocator.Error!void {
-    var report = reporting.Report.init(allocator, title, .fatal);
+fn renderLLVMError(
+    allocator: Allocator,
+    title: []const u8,
+    message: []const u8,
+    llvm_message: []const u8,
+    config: reporting.ReportingConfig,
+) Allocator.Error!void {
+    var report = try reporting.Report.init(allocator, title, message, .fatal);
     defer report.deinit();
 
-    try report.document.addText(message);
-    try report.document.addLineBreak();
     try report.document.addLineBreak();
     try report.document.addText("LLVM error: ");
     try report.document.addAnnotated(llvm_message, .error_highlight);
@@ -787,17 +753,20 @@ fn renderLLVMError(allocator: Allocator, title: []const u8, message: []const u8,
     reporting.renderReportToTerminal(
         &report,
         stderrWriter(),
-        .ANSI,
-        reporting.ReportingConfig.initColorTerminal(),
+        reporting.ColorUtils.getPaletteForConfig(config),
+        config,
     ) catch {};
 }
 
-fn renderTargetError(allocator: Allocator, triple: []const u8, llvm_message: []const u8) Allocator.Error!void {
-    var report = reporting.Report.init(allocator, "INVALID TARGET", .fatal);
+fn renderTargetError(
+    allocator: Allocator,
+    triple: []const u8,
+    llvm_message: []const u8,
+    config: reporting.ReportingConfig,
+) Allocator.Error!void {
+    var report = try reporting.Report.init(allocator, "Invalid Target", "Failed to get LLVM target for triple.", .fatal);
     defer report.deinit();
 
-    try report.document.addText("Failed to get LLVM target for triple:");
-    try report.document.addLineBreak();
     try report.document.addLineBreak();
     try report.document.addText("    ");
     try report.document.addAnnotated(triple, .emphasized);
@@ -810,17 +779,21 @@ fn renderTargetError(allocator: Allocator, triple: []const u8, llvm_message: []c
     reporting.renderReportToTerminal(
         &report,
         stderrWriter(),
-        .ANSI,
-        reporting.ReportingConfig.initColorTerminal(),
+        reporting.ColorUtils.getPaletteForConfig(config),
+        config,
     ) catch {};
 }
 
-fn renderTargetMachineError(allocator: Allocator, triple: []const u8, cpu: []const u8, features: []const u8) Allocator.Error!void {
-    var report = reporting.Report.init(allocator, "TARGET MACHINE ERROR", .fatal);
+fn renderTargetMachineError(
+    allocator: Allocator,
+    triple: []const u8,
+    cpu: []const u8,
+    features: []const u8,
+    config: reporting.ReportingConfig,
+) Allocator.Error!void {
+    var report = try reporting.Report.init(allocator, "Target Machine Error", "Failed to create LLVM target machine with configuration.", .fatal);
     defer report.deinit();
 
-    try report.document.addText("Failed to create LLVM target machine with configuration:");
-    try report.document.addLineBreak();
     try report.document.addLineBreak();
     try report.document.addText("    Triple:   ");
     try report.document.addAnnotated(triple, .emphasized);
@@ -846,17 +819,20 @@ fn renderTargetMachineError(allocator: Allocator, triple: []const u8, cpu: []con
     reporting.renderReportToTerminal(
         &report,
         stderrWriter(),
-        .ANSI,
-        reporting.ReportingConfig.initColorTerminal(),
+        reporting.ColorUtils.getPaletteForConfig(config),
+        config,
     ) catch {};
 }
 
-fn renderEmitError(allocator: Allocator, output_path: []const u8, llvm_message: []const u8) Allocator.Error!void {
-    var report = reporting.Report.init(allocator, "OBJECT FILE EMIT ERROR", .fatal);
+fn renderEmitError(
+    allocator: Allocator,
+    output_path: []const u8,
+    llvm_message: []const u8,
+    config: reporting.ReportingConfig,
+) Allocator.Error!void {
+    var report = try reporting.Report.init(allocator, "Object File Emit Error", "Failed to emit object file.", .fatal);
     defer report.deinit();
 
-    try report.document.addText("Failed to emit object file:");
-    try report.document.addLineBreak();
     try report.document.addLineBreak();
     try report.document.addText("    Output: ");
     try report.document.addAnnotated(output_path, .path);
@@ -869,7 +845,7 @@ fn renderEmitError(allocator: Allocator, output_path: []const u8, llvm_message: 
     reporting.renderReportToTerminal(
         &report,
         stderrWriter(),
-        .ANSI,
-        reporting.ReportingConfig.initColorTerminal(),
+        reporting.ColorUtils.getPaletteForConfig(config),
+        config,
     ) catch {};
 }

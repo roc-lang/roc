@@ -29,6 +29,49 @@ pub const macos_deployment = struct {
     }
 };
 
+/// Errors returned when a target cannot be expressed for a Mach-O link.
+pub const MachoArchError = error{
+    /// The CPU architecture is not one Mach-O links support in this compiler.
+    UnsupportedMachoArch,
+};
+
+/// The Mach-O `-arch` name (`ld64.lld`'s spelling) for a CPU architecture.
+///
+/// Returns `error.UnsupportedMachoArch` for any architecture Roc does not link
+/// as Mach-O, so an unexpected arch fails loudly instead of being silently
+/// linked as the wrong architecture.
+pub fn machoArchName(arch: std.Target.Cpu.Arch) MachoArchError![]const u8 {
+    return switch (arch) {
+        .aarch64 => "arm64",
+        .x86_64 => "x86_64",
+        else => error.UnsupportedMachoArch,
+    };
+}
+
+/// Dynamic-linker (`ld.so`) soname filenames, one authority for the bare
+/// filenames used both by `RocTarget.getDynamicLinkerPath` (which prefixes them
+/// with a known absolute directory) and by `cli/libc_finder.zig` (which probes
+/// the real filesystem for them). Only the filenames live here; absolute search
+/// directories stay with the code that owns them.
+pub const ld_so = struct {
+    /// glibc ld.so soname for x86_64.
+    pub const glibc_x86_64 = "ld-linux-x86-64.so.2";
+    /// glibc ld.so soname for aarch64.
+    pub const glibc_aarch64 = "ld-linux-aarch64.so.1";
+    /// glibc ld.so soname for 32-bit hard-float ARM.
+    pub const glibc_arm = "ld-linux-armhf.so.3";
+    /// glibc ld.so soname for 32-bit x86.
+    pub const glibc_x86 = "ld-linux.so.2";
+    /// musl ld.so soname for x86_64.
+    pub const musl_x86_64 = "ld-musl-x86_64.so.1";
+    /// musl ld.so soname for aarch64.
+    pub const musl_aarch64 = "ld-musl-aarch64.so.1";
+    /// musl ld.so soname for 32-bit ARM.
+    pub const musl_arm = "ld-musl-arm.so.1";
+    /// musl ld.so soname for 32-bit x86.
+    pub const musl_x86 = "ld-musl-i386.so.1";
+};
+
 /// Roc's simplified target representation.
 /// Maps to specific OS/arch/ABI combinations for cross-compilation.
 pub const RocTarget = enum {
@@ -166,6 +209,46 @@ pub const RocTarget = enum {
         };
     }
 
+    /// Build the single target query used for every LLVM compilation of Roc
+    /// program code, including linked applications, host shims, eval, and
+    /// optimized `roc test` roots.
+    pub fn llvmTargetQuery(self: RocTarget) std.Target.Query {
+        var query = std.Target.Query{
+            .cpu_arch = self.toCpuArch(),
+            .os_tag = self.toOsTag(),
+            .abi = switch (self) {
+                .x64musl, .arm64musl, .arm32musl => .musl,
+                .x64glibc, .x64linux, .arm64glibc, .arm64linux, .arm32linux => .gnu,
+                .x64win, .arm64win => .msvc,
+                else => .none,
+            },
+        };
+        if (self.toOsTag() == .macos) {
+            query.os_version_min = macos_deployment.query_os_version;
+        }
+
+        switch (self.toCpuArch()) {
+            .x86_64 => {
+                // x86-64-v3 covers AVX2/SSSE3/BMI2/POPCNT/FMA. The named
+                // level omits AES and PCLMULQDQ, so enable both explicitly.
+                query.cpu_model = .{ .explicit = &std.Target.x86.cpu.x86_64_v3 };
+                query.cpu_features_add.addFeature(@intFromEnum(std.Target.x86.Feature.aes));
+                query.cpu_features_add.addFeature(@intFromEnum(std.Target.x86.Feature.pclmul));
+            },
+            .aarch64, .aarch64_be => {
+                if (self.toOsTag() != .macos) {
+                    query.cpu_model = .{ .explicit = &std.Target.aarch64.cpu.cortex_a76 };
+                }
+            },
+            .wasm32 => {
+                query.cpu_features_add.addFeature(@intFromEnum(std.Target.wasm.Feature.simd128));
+            },
+            else => {},
+        }
+
+        return query;
+    }
+
     /// Convert Roc target to LLVM target triple
     pub fn toTriple(self: RocTarget) []const u8 {
         return switch (self) {
@@ -275,13 +358,13 @@ pub const RocTarget = enum {
     pub fn getDynamicLinkerPath(self: RocTarget) error{ StaticLinkingTarget, WindowsTarget, NoKnownLinkerPath, WebAssemblyTarget }![]const u8 {
         return switch (self) {
             // x64 glibc targets
-            .x64glibc, .x64linux => "/lib64/ld-linux-x86-64.so.2",
+            .x64glibc, .x64linux => "/lib64/" ++ ld_so.glibc_x86_64,
 
             // arm64 glibc targets
-            .arm64glibc, .arm64linux => "/lib/ld-linux-aarch64.so.1",
+            .arm64glibc, .arm64linux => "/lib/" ++ ld_so.glibc_aarch64,
 
             // arm32 glibc targets
-            .arm32linux => "/lib/ld-linux-armhf.so.3",
+            .arm32linux => "/lib/" ++ ld_so.glibc_arm,
 
             // Static linking targets don't need dynamic linker
             .x64musl, .arm64musl, .arm32musl => return error.StaticLinkingTarget,
@@ -305,6 +388,34 @@ pub const RocTarget = enum {
         };
     }
 };
+
+/// LLVM spelling of a resolved Zig CPU model.
+pub fn llvmCpuName(target: std.Target) []const u8 {
+    return target.cpu.model.llvm_name orelse "";
+}
+
+/// LLVM feature delta relative to the resolved CPU model.
+pub fn llvmFeatureString(allocator: std.mem.Allocator, target: std.Target) std.mem.Allocator.Error![:0]u8 {
+    const all_features = target.cpu.arch.allFeaturesList();
+    var model_features = target.cpu.model.features;
+    model_features.populateDependencies(all_features);
+
+    var features = std.ArrayList(u8).empty;
+    errdefer features.deinit(allocator);
+
+    for (all_features) |feature| {
+        const llvm_name = feature.llvm_name orelse continue;
+        const enabled = target.cpu.features.isEnabled(feature.index);
+        const model_enabled = model_features.isEnabled(feature.index);
+        if (enabled == model_enabled) continue;
+
+        if (features.items.len > 0) try features.append(allocator, ',');
+        try features.append(allocator, if (enabled) '+' else '-');
+        try features.appendSlice(allocator, llvm_name);
+    }
+
+    return features.toOwnedSliceSentinel(allocator, 0);
+}
 
 test "native target matches host OS and architecture" {
     try std.testing.expect(RocTarget.detectNative().matchesHostOsAndArch());

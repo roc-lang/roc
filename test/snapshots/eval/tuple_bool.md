@@ -13,53 +13,57 @@ MISSING METHOD - tuple_bool.md:1:45:1:51
 MISSING METHOD - tuple_bool.md:1:69:1:74
 MISSING METHOD - tuple_bool.md:1:78:1:83
 # PROBLEMS
-**MISSING METHOD**
-This **not** method is being called on a value whose type doesn't have that method:
-**tuple_bool.md:1:38:1:43:**
-```roc
-(True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
-```
-                                     ^^^^^
 
-The value's type, which does not have a method named **not**, is:
+┌────────────────┐
+│ MISSING METHOD ├─ This `not` method is being called on a value whose type ──┐
+└┬───────────────┘  doesn't have that method.                                 │
+ │                                                                            │
+ │  ….False, !True, !False, True and False, !True or !True)                   │
+ │           ‾‾‾‾‾                                                            │
+ └──────────────────────────────────────────────────────── tuple_bool.md:1:38 ┘
 
-    [True, ..]
+    The value's type, which does not have a method named `not`, is:
 
-**MISSING METHOD**
-This **not** method is being called on a value whose type doesn't have that method:
-**tuple_bool.md:1:45:1:51:**
-```roc
-(True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
-```
-                                            ^^^^^^
+        [True, ..]
 
-The value's type, which does not have a method named **not**, is:
 
-    [False, ..]
+┌────────────────┐
+│ MISSING METHOD ├─ This `not` method is being called on a value whose type ──┐
+└┬───────────────┘  doesn't have that method.                                 │
+ │                                                                            │
+ │  … !True, !False, True and False, !True or !True)                          │
+ │           ‾‾‾‾‾‾                                                           │
+ └──────────────────────────────────────────────────────── tuple_bool.md:1:45 ┘
 
-**MISSING METHOD**
-This **not** method is being called on a value whose type doesn't have that method:
-**tuple_bool.md:1:69:1:74:**
-```roc
-(True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
-```
-                                                                    ^^^^^
+    The value's type, which does not have a method named `not`, is:
 
-The value's type, which does not have a method named **not**, is:
+        [False, ..]
 
-    [True, ..]
 
-**MISSING METHOD**
-This **not** method is being called on a value whose type doesn't have that method:
-**tuple_bool.md:1:78:1:83:**
-```roc
-(True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
-```
-                                                                             ^^^^^
+┌────────────────┐
+│ MISSING METHOD ├─ This `not` method is being called on a value whose type ──┐
+└┬───────────────┘  doesn't have that method.                                 │
+ │                                                                            │
+ │  … False, !True or !True)                                                  │
+ │           ‾‾‾‾‾                                                            │
+ └──────────────────────────────────────────────────────── tuple_bool.md:1:69 ┘
 
-The value's type, which does not have a method named **not**, is:
+    The value's type, which does not have a method named `not`, is:
 
-    [True, ..]
+        [True, ..]
+
+
+┌────────────────┐
+│ MISSING METHOD ├─ This `not` method is being called on a value whose type ──┐
+└┬───────────────┘  doesn't have that method.                                 │
+ │                                                                            │
+ │  …True or !True)                                                           │
+ │           ‾‾‾‾‾                                                            │
+ └──────────────────────────────────────────────────────── tuple_bool.md:1:78 ┘
+
+    The value's type, which does not have a method named `not`, is:
+
+        [True, ..]
 
 # TOKENS
 ~~~zig
@@ -102,14 +106,8 @@ NO CHANGE
 		(e-nominal-external
 			(builtin)
 			(e-tag (name "False")))
-		(e-dispatch-call (method "not") (constraint-fn-var 47)
-			(receiver
-				(e-tag (name "True")))
-			(args))
-		(e-dispatch-call (method "not") (constraint-fn-var 51)
-			(receiver
-				(e-tag (name "False")))
-			(args))
+		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(e-if
 			(if-branches
 				(if-branch
@@ -122,20 +120,14 @@ NO CHANGE
 		(e-if
 			(if-branches
 				(if-branch
-					(e-dispatch-call (method "not") (constraint-fn-var 67)
-						(receiver
-							(e-tag (name "True")))
-						(args))
+					(e-runtime-error (tag "erroneous_value_expr"))
 					(e-nominal-external
 						(builtin)
 						(e-tag (name "True")))))
 			(if-else
-				(e-dispatch-call (method "not") (constraint-fn-var 79)
-					(receiver
-						(e-tag (name "True")))
-					(args))))))
+				(e-runtime-error (tag "erroneous_value_expr"))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "([True, ..], [False, ..], Bool, Bool, Error, Error, Bool, Error)"))
+(expr (type "([True, ..], [False, ..], Bool, Bool, [True, ..], [False, ..], Bool, Bool)"))
 ~~~

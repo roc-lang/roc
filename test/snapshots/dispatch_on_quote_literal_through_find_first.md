@@ -27,7 +27,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "foo")
 			(ty-fn
@@ -88,7 +88,7 @@ foo = |letter| {
 					(e-match
 						(match
 							(cond
-								(e-dispatch-call (method "find_first") (constraint-fn-var 103)
+								(e-dispatch-call (method "find_first") (constraint-fn-var 260)
 									(receiver
 										(e-list
 											(elems
@@ -103,9 +103,9 @@ foo = |letter| {
 											(e-lambda
 												(args
 													(p-assign (ident "letters")))
-												(e-dispatch-call (method "contains") (constraint-fn-var 101)
+												(e-dispatch-call (method "contains") (constraint-fn-var 258)
 													(receiver
-														(e-dispatch-call (method "to_utf8") (constraint-fn-var 99)
+														(e-dispatch-call (method "to_utf8") (constraint-fn-var 256)
 															(receiver
 																(e-lookup-local
 																	(p-assign (ident "letters"))))

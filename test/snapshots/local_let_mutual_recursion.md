@@ -15,17 +15,20 @@ canonicalize_diagnostics=true
 # EXPECTED
 MUTUALLY RECURSIVE LOCAL DEFINITIONS - local_let_mutual_recursion.md:2:46:2:52
 # PROBLEMS
-**MUTUALLY RECURSIVE LOCAL DEFINITIONS**
-The local definitions `is_even` and `is_odd` are mutually recursive, which isn't supported for local definitions.
 
-Local definitions are evaluated in order and can only refer to themselves or to earlier definitions. Move these mutually recursive definitions to the top level, where mutual recursion is supported.
+┌──────────────────────────────────────┐
+│ MUTUALLY RECURSIVE LOCAL DEFINITIONS ├─ The local definitions `is_even` ────┐
+└┬─────────────────────────────────────┘  and `is_odd` are mutually           │
+ │                                        recursive, which isn't supported    │
+ │                                        for local definitions.              │
+ │                                                                            │
+ │  is_even = |n| if (n == 0) Bool.True else is_odd(n - 1)                    │
+ │                                           ‾‾‾‾‾‾                           │
+ └──────────────────────────────────────── local_let_mutual_recursion.md:2:46 ┘
 
-**local_let_mutual_recursion.md:2:46:2:52:**
-```roc
-    is_even = |n| if (n == 0) Bool.True else is_odd(n - 1)
-```
-                                             ^^^^^^
-
+    Local definitions are evaluated in order and can only refer to themselves
+    or to earlier definitions. Move these mutually recursive definitions to the
+    top level, where mutual recursion is supported.
 
 # TOKENS
 ~~~zig
@@ -113,7 +116,7 @@ EndOfFile,
 					(if-else
 						(e-call
 							(e-runtime-error (tag "local_reference_before_definition"))
-							(e-dispatch-call (method "minus") (constraint-fn-var 128)
+							(e-dispatch-call (method "minus") (constraint-fn-var 254)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "n"))))
@@ -137,16 +140,16 @@ EndOfFile,
 								(builtin)
 								(e-tag (name "False")))))
 					(if-else
-						(e-call (constraint-fn-var 223)
+						(e-call (constraint-fn-var 291)
 							(e-lookup-local
 								(p-assign (ident "is_even")))
-							(e-dispatch-call (method "minus") (constraint-fn-var 221)
+							(e-dispatch-call (method "minus") (constraint-fn-var 289)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "n"))))
 								(args
 									(e-num (value "1")))))))))
-		(e-call (constraint-fn-var 269)
+		(e-call (constraint-fn-var 309)
 			(e-lookup-local
 				(p-assign (ident "is_even")))
 			(e-num (value "4")))))

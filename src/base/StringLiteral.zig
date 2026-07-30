@@ -7,6 +7,7 @@ const collections = @import("collections");
 const testing = std.testing;
 
 const CompactWriter = collections.CompactWriter;
+const InternedBytes = @import("InternedBytes.zig");
 
 /// The index of this string in a `Store`.
 pub const Idx = enum(u32) {
@@ -18,22 +19,16 @@ pub const Idx = enum(u32) {
     }
 };
 
-/// An interner for string literals.
-///
-/// String literals are deduplicated so that identical strings receive the same Idx.
-/// This enables direct index comparison for equality checking (e.g., in exhaustiveness).
-/// The deduplication uses a linear search through existing strings, which is acceptable
-/// because the number of unique string literals in pattern matching is typically small.
+/// Durable storage for string literals.
 pub const Store = struct {
     /// An Idx points to the first byte of the string. The entry immediately
-    /// before it stores a static refcount word, and the entry header stores
-    /// the string length:
+    /// before it stores the string length in canonical little-endian form:
     ///
-    /// | len: u32 | padding | static refcount: isize | bytes... |
+    /// | len: u32 little-endian | bytes... |
     ///
-    /// The byte pointer at Idx can therefore be used directly as big `RocStr`
-    /// static data. Runtime refcount operations read the word immediately
-    /// before the bytes and see `0`, the static-data refcount sentinel.
+    /// This store is checked/cache data, not runtime static data. Target-specific
+    /// string emission is responsible for building any runtime `RocStr` headers
+    /// or static refcount words later.
     ///
     /// Note:
     /// Later we could change from fixed u32-s to variable lengthed
@@ -43,13 +38,7 @@ pub const Store = struct {
     buffer: Buffer = .{},
 
     const len_size = @sizeOf(u32);
-    const static_refcount_size = @sizeOf(isize);
-    pub const static_refcount_alignment = @alignOf(isize);
-    const static_refcount_alignment_value = std.mem.Alignment.fromByteUnits(static_refcount_alignment);
-    const refcount_offset_from_entry_start = std.mem.alignForward(usize, len_size, static_refcount_alignment);
-    const entry_header_size = refcount_offset_from_entry_start + static_refcount_size;
-    // Must match builtins.utils.REFCOUNT_STATIC_DATA without making base depend on builtins.
-    const static_refcount_value: isize = 0;
+    const entry_header_size = len_size;
 
     pub const Entry = struct {
         idx: Idx,
@@ -64,13 +53,12 @@ pub const Store = struct {
             const buffer_items = self.store.buffer.items.items;
 
             while (true) {
-                self.pos = std.mem.alignForward(usize, self.pos, static_refcount_alignment);
                 if (self.pos + entry_header_size > buffer_items.len) return null;
 
-                const str_len = std.mem.bytesAsValue(u32, buffer_items[self.pos .. self.pos + len_size]).*;
+                const str_len = std.mem.readInt(u32, buffer_items[self.pos..][0..len_size], .little);
                 const content_start = self.pos + entry_header_size;
+                if (str_len > buffer_items.len - content_start) return null;
                 const content_end = content_start + str_len;
-                if (content_end > buffer_items.len) return null;
 
                 self.pos = content_end;
                 return .{
@@ -82,7 +70,7 @@ pub const Store = struct {
     };
 
     pub const Buffer = struct {
-        items: std.array_list.Aligned(u8, static_refcount_alignment_value) = .empty,
+        items: std.ArrayList(u8) = .empty,
 
         const SerializedDataRef = struct {
             offset: usize,
@@ -113,7 +101,7 @@ pub const Store = struct {
                     return Buffer{};
                 }
 
-                const items_ptr: [*]align(static_refcount_alignment) u8 = @ptrFromInt(base +% @as(usize, @intCast(self.offset)));
+                const items_ptr: [*]u8 = @ptrFromInt(base +% @as(usize, @intCast(self.offset)));
 
                 return Buffer{
                     .items = .{
@@ -126,7 +114,7 @@ pub const Store = struct {
 
         pub fn initCapacity(gpa: std.mem.Allocator, bytes: usize) std.mem.Allocator.Error!Buffer {
             return .{
-                .items = try std.array_list.Aligned(u8, static_refcount_alignment_value).initCapacity(gpa, bytes),
+                .items = try std.ArrayList(u8).initCapacity(gpa, bytes),
             };
         }
 
@@ -174,7 +162,7 @@ pub const Store = struct {
             self.items.items.ptr = @ptrFromInt(new_addr);
         }
 
-        pub fn fromMappedSlice(items: []align(static_refcount_alignment) u8, capacity: usize) Buffer {
+        pub fn fromMappedSlice(items: []u8, capacity: usize) Buffer {
             return .{
                 .items = .{
                     .items = items,
@@ -194,7 +182,7 @@ pub const Store = struct {
                 return Buffer{};
             }
 
-            const items_ptr: [*]align(static_refcount_alignment) u8 = @ptrFromInt(data_ref.offset);
+            const items_ptr: [*]u8 = @ptrFromInt(data_ref.offset);
 
             return Buffer{
                 .items = .{
@@ -213,7 +201,6 @@ pub const Store = struct {
                 return .{ .offset = 0, .len = 0, .capacity = 0 };
             }
 
-            try writer.padToAlignment(allocator, static_refcount_alignment);
             const data_offset = writer.total_bytes;
             const bytes: []const u8 = self.items.items;
             _ = try writer.appendSlice(allocator, bytes);
@@ -251,40 +238,19 @@ pub const Store = struct {
         };
     }
 
-    /// Insert a new string into a `Store`.
-    ///
-    /// Deduplicates: if an identical string already exists, returns its index.
-    /// This enables direct index comparison for equality checking.
-    pub fn insert(self: *Store, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Idx {
-        // Search for an existing identical string
-        if (self.findExisting(string)) |existing_idx| {
-            return existing_idx;
-        }
+    fn appendFresh(self: *Store, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Idx {
+        const str_len = checkedU32(string.len, "string literal length");
 
-        // String not found, insert it
-        const str_len: u32 = @truncate(string.len);
-
-        try self.alignBufferForEntry(gpa);
-
-        const str_len_bytes = std.mem.asBytes(&str_len);
+        var str_len_bytes: [len_size]u8 = undefined;
+        std.mem.writeInt(u32, &str_len_bytes, str_len, .little);
         {
             const expected_start = self.buffer.items.items.len;
-            const start = try self.buffer.appendSlice(gpa, str_len_bytes);
+            const start = try self.buffer.appendSlice(gpa, &str_len_bytes);
             assertAppendRange(expected_start, str_len_bytes.len, start, str_len_bytes.len);
         }
 
-        while (self.buffer.items.items.len % static_refcount_alignment != 0) {
-            _ = try self.buffer.append(gpa, 0);
-        }
-
-        const static_refcount_bytes = std.mem.asBytes(&static_refcount_value);
-        {
-            const expected_start = self.buffer.items.items.len;
-            const start = try self.buffer.appendSlice(gpa, static_refcount_bytes);
-            assertAppendRange(expected_start, static_refcount_bytes.len, start, static_refcount_bytes.len);
-        }
-
         const string_content_start = self.buffer.len();
+        const idx = checkedU32(string_content_start, "string literal content offset");
 
         {
             const expected_start = self.buffer.items.items.len;
@@ -292,50 +258,15 @@ pub const Store = struct {
             assertAppendRange(expected_start, string.len, start, string.len);
         }
 
-        return @enumFromInt(@as(u32, @intCast(string_content_start)));
-    }
-
-    /// Search for an existing string in the store and return its index if found.
-    fn findExisting(self: *const Store, string: []const u8) ?Idx {
-        const buffer_items = self.buffer.items.items;
-        var pos: usize = 0;
-
-        while (true) {
-            pos = std.mem.alignForward(usize, pos, static_refcount_alignment);
-            if (pos + entry_header_size > buffer_items.len) break;
-
-            // Read the length (4 bytes)
-            const str_len = std.mem.bytesAsValue(u32, buffer_items[pos .. pos + len_size]).*;
-            const content_start = pos + entry_header_size;
-            const content_end = content_start + str_len;
-
-            if (content_end > buffer_items.len) break;
-
-            // Compare with the target string
-            const existing = buffer_items[content_start..content_end];
-            if (std.mem.eql(u8, existing, string)) {
-                return @enumFromInt(@as(u32, @intCast(content_start)));
-            }
-
-            // Move to next string
-            pos = content_end;
-        }
-
-        return null;
+        return @enumFromInt(idx);
     }
 
     /// Get a string literal's text from this `Store`.
     pub fn get(self: *const Store, idx: Idx) []u8 {
-        const idx_u32: u32 = @intCast(@intFromEnum(idx));
-        const len_start = idx_u32 - entry_header_size;
-        const str_len = std.mem.bytesAsValue(u32, self.buffer.items.items[len_start .. len_start + len_size]).*;
-        return self.buffer.items.items[idx_u32 .. idx_u32 + str_len];
-    }
-
-    fn alignBufferForEntry(self: *Store, gpa: std.mem.Allocator) std.mem.Allocator.Error!void {
-        while (self.buffer.items.items.len % static_refcount_alignment != 0) {
-            _ = try self.buffer.append(gpa, 0);
-        }
+        const idx_usize: usize = @intFromEnum(idx);
+        const len_start = idx_usize - entry_header_size;
+        const str_len = std.mem.readInt(u32, self.buffer.items.items[len_start..][0..len_size], .little);
+        return self.buffer.items.items[idx_usize .. idx_usize + str_len];
     }
 
     /// Serialize this Store to the given CompactWriter. The resulting Store
@@ -389,6 +320,70 @@ pub const Store = struct {
     };
 };
 
+/// Transient dedup state for constructing a `StringLiteral.Store`.
+pub const BuilderState = struct {
+    index: InternedBytes.Index(StringLiteralPolicy) = .{},
+
+    pub fn deinit(self: *BuilderState, gpa: std.mem.Allocator) void {
+        self.index.deinit(gpa);
+    }
+
+    pub fn clone(self: *const BuilderState, gpa: std.mem.Allocator) std.mem.Allocator.Error!BuilderState {
+        return .{ .index = try self.index.clone(gpa) };
+    }
+
+    pub fn insert(self: *BuilderState, store: *Store, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Idx {
+        var owner = BuilderOwner{ .store = store };
+        return self.index.insert(&owner, gpa, string);
+    }
+};
+
+const BuilderOwner = struct {
+    store: *Store,
+};
+
+const StringLiteralPolicy = struct {
+    pub const Id = Idx;
+    pub const Cell = Idx;
+    pub const empty_cell: Cell = .none;
+    pub const initial_index_capacity: usize = 16;
+    pub const use_fingerprints = true;
+
+    pub fn cellForId(id: Id) Cell {
+        return id;
+    }
+
+    pub fn idFromCell(cell: Cell) Id {
+        return cell;
+    }
+
+    pub fn textForId(owner: anytype, id: Id) []const u8 {
+        return owner.store.get(id);
+    }
+
+    pub fn appendEntry(owner: anytype, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Id {
+        return owner.store.appendFresh(gpa, string);
+    }
+
+    pub fn entryCount(_: anytype, index: *const InternedBytes.Index(StringLiteralPolicy)) u32 {
+        return index.len;
+    }
+
+    pub fn hash(string: []const u8) u64 {
+        return InternedBytes.hash(string);
+    }
+};
+
+fn checkedU32(value: usize, comptime invariant_name: []const u8) u32 {
+    if (value > std.math.maxInt(u32)) {
+        if (comptime builtin.mode == .Debug) {
+            std.debug.panic("{s} exceeded u32 storage invariant", .{invariant_name});
+        }
+        unreachable;
+    }
+    return @intCast(value);
+}
+
 fn assertAppendRange(expected_start: usize, expected_len: usize, actual_start: usize, actual_len: usize) void {
     if (comptime builtin.mode == .Debug) {
         std.debug.assert(actual_start == expected_start);
@@ -399,16 +394,9 @@ fn assertAppendRange(expected_start: usize, expected_len: usize, actual_start: u
 }
 
 fn expectedNextStringContentStart(previous_end: *usize, string_len: usize) u32 {
-    const entry_start = std.mem.alignForward(usize, previous_end.*, Store.static_refcount_alignment);
-    const content_start = entry_start + Store.entry_header_size;
+    const content_start = previous_end.* + Store.entry_header_size;
     previous_end.* = content_start + string_len;
     return @intCast(content_start);
-}
-
-fn expectStaticRefcountBefore(bytes: []const u8) error{TestExpectedEqual}!void {
-    try testing.expectEqual(@as(usize, 0), @intFromPtr(bytes.ptr) % Store.static_refcount_alignment);
-    const refcount_ptr: *const isize = @ptrCast(@alignCast(bytes.ptr - @sizeOf(isize)));
-    try testing.expectEqual(Store.static_refcount_value, refcount_ptr.*);
 }
 
 test "insert" {
@@ -416,27 +404,67 @@ test "insert" {
 
     var interner = Store{};
     defer interner.deinit(gpa);
+    var builder = BuilderState{};
+    defer builder.deinit(gpa);
 
     const str_1 = "abc".*;
     const str_2 = "defg".*;
-    const idx_1 = try interner.insert(gpa, &str_1);
-    const idx_2 = try interner.insert(gpa, &str_2);
+    const idx_1 = try builder.insert(&interner, gpa, &str_1);
+    const idx_2 = try builder.insert(&interner, gpa, &str_2);
 
     try std.testing.expectEqualStrings("abc", interner.get(idx_1));
     try std.testing.expectEqualStrings("defg", interner.get(idx_2));
 }
 
-test "insert stores static refcount immediately before bytes" {
+test "builder deduplicates exact string literal bytes" {
     const gpa = std.testing.allocator;
 
-    var interner = Store{};
-    defer interner.deinit(gpa);
+    var store = Store{};
+    defer store.deinit(gpa);
+    var builder = BuilderState{};
+    defer builder.deinit(gpa);
 
-    const idx = try interner.insert(gpa, "aaaaaaaaaaaaaaaaaaaaaaaa");
-    const bytes = interner.get(idx);
+    const empty1 = try builder.insert(&store, gpa, "");
+    const empty2 = try builder.insert(&store, gpa, "");
+    const binary1 = try builder.insert(&store, gpa, "\x00\x01abc");
+    const binary2 = try builder.insert(&store, gpa, "\x00\x01abc");
+    const binary3 = try builder.insert(&store, gpa, "\x00\x01abd");
 
-    try testing.expectEqualStrings("aaaaaaaaaaaaaaaaaaaaaaaa", bytes);
-    try expectStaticRefcountBefore(bytes);
+    try testing.expectEqual(empty1, empty2);
+    try testing.expectEqual(binary1, binary2);
+    try testing.expect(binary1 != binary3);
+    try testing.expectEqualStrings("", store.get(empty1));
+    try testing.expectEqualStrings("\x00\x01abc", store.get(binary1));
+    try testing.expectEqualStrings("\x00\x01abd", store.get(binary3));
+}
+
+test "store uses exact portable length-prefixed bytes" {
+    const gpa = std.testing.allocator;
+
+    var store = Store{};
+    defer store.deinit(gpa);
+    var builder = BuilderState{};
+    defer builder.deinit(gpa);
+
+    const empty = try builder.insert(&store, gpa, "");
+    const abc = try builder.insert(&store, gpa, "abc");
+    const binary = try builder.insert(&store, gpa, "\x00\x01abc");
+
+    try testing.expectEqual(@as(u32, 4), @intFromEnum(empty));
+    try testing.expectEqual(@as(u32, 8), @intFromEnum(abc));
+    try testing.expectEqual(@as(u32, 15), @intFromEnum(binary));
+    try testing.expectEqualStrings("", store.get(empty));
+    try testing.expectEqualStrings("abc", store.get(abc));
+    try testing.expectEqualStrings("\x00\x01abc", store.get(binary));
+
+    const expected = [_]u8{
+        0x00, 0x00, 0x00, 0x00,
+        0x03, 0x00, 0x00, 0x00,
+        'a',  'b',  'c',  0x05,
+        0x00, 0x00, 0x00, 0x00,
+        0x01, 'a',  'b',  'c',
+    };
+    try testing.expectEqualSlices(u8, &expected, store.buffer.items.items);
 }
 
 test "Store empty CompactWriter roundtrip" {
@@ -488,10 +516,12 @@ test "Store basic CompactWriter roundtrip" {
     // Create original store and add some strings
     var original = Store{};
     defer original.deinit(gpa);
+    var builder = BuilderState{};
+    defer builder.deinit(gpa);
 
-    const idx1 = try original.insert(gpa, "hello");
-    const idx2 = try original.insert(gpa, "world");
-    const idx3 = try original.insert(gpa, "foo bar baz");
+    const idx1 = try builder.insert(&original, gpa, "hello");
+    const idx2 = try builder.insert(&original, gpa, "world");
+    const idx3 = try builder.insert(&original, gpa, "foo bar baz");
 
     // Verify original values
     try std.testing.expectEqualStrings("hello", original.get(idx1));
@@ -541,6 +571,8 @@ test "Store comprehensive CompactWriter roundtrip" {
 
     var original = Store{};
     defer original.deinit(gpa);
+    var builder = BuilderState{};
+    defer builder.deinit(gpa);
 
     // Test various string types
     const test_strings = [_][]const u8{
@@ -560,7 +592,7 @@ test "Store comprehensive CompactWriter roundtrip" {
     defer indices.deinit(gpa);
 
     for (test_strings) |str| {
-        const idx = try original.insert(gpa, str);
+        const idx = try builder.insert(&original, gpa, str);
         try indices.append(gpa, idx);
     }
 
@@ -610,9 +642,11 @@ test "Store CompactWriter roundtrip" {
     // Create and populate store
     var original = Store{};
     defer original.deinit(gpa);
+    var builder = BuilderState{};
+    defer builder.deinit(gpa);
 
-    const idx1 = try original.insert(gpa, "test1");
-    const idx2 = try original.insert(gpa, "test2");
+    const idx1 = try builder.insert(&original, gpa, "test1");
+    const idx2 = try builder.insert(&original, gpa, "test2");
     try std.testing.expect(@intFromEnum(idx1) < @intFromEnum(idx2));
 
     // Create a temp file
@@ -646,6 +680,10 @@ test "Store CompactWriter roundtrip" {
     // Cast and relocate
     const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr)));
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+    // Verify the strings are accessible
+    try std.testing.expectEqualStrings("test1", deserialized.get(idx1));
+    try std.testing.expectEqualStrings("test2", deserialized.get(idx2));
 }
 
 test "Store.Serialized roundtrip" {
@@ -654,10 +692,12 @@ test "Store.Serialized roundtrip" {
     // Create original store and add some strings
     var original = Store{};
     defer original.deinit(gpa);
+    var builder = BuilderState{};
+    defer builder.deinit(gpa);
 
-    const idx1 = try original.insert(gpa, "hello");
-    const idx2 = try original.insert(gpa, "world");
-    const idx3 = try original.insert(gpa, "foo bar baz");
+    const idx1 = try builder.insert(&original, gpa, "hello");
+    const idx2 = try builder.insert(&original, gpa, "world");
+    const idx3 = try builder.insert(&original, gpa, "foo bar baz");
 
     // Create a CompactWriter and arena
     var arena = collections.SingleThreadArena.init(gpa);
@@ -701,22 +741,24 @@ test "Store edge case indices CompactWriter roundtrip" {
 
     var original = Store{};
     defer original.deinit(gpa);
+    var builder = BuilderState{};
+    defer builder.deinit(gpa);
 
     // The index returned points to the first byte of the string content.
     // Test various scenarios that might stress the index calculation.
     var previous_end: usize = 0;
 
-    const idx1 = try original.insert(gpa, "first");
+    const idx1 = try builder.insert(&original, gpa, "first");
     try std.testing.expectEqual(expectedNextStringContentStart(&previous_end, "first".len), @intFromEnum(idx1));
 
-    const idx2 = try original.insert(gpa, "second");
+    const idx2 = try builder.insert(&original, gpa, "second");
     try std.testing.expectEqual(expectedNextStringContentStart(&previous_end, "second".len), @intFromEnum(idx2));
 
-    const idx3 = try original.insert(gpa, "");
+    const idx3 = try builder.insert(&original, gpa, "");
     try std.testing.expectEqual(expectedNextStringContentStart(&previous_end, "".len), @intFromEnum(idx3));
 
     const long_str = "x" ** 1000;
-    const idx4 = try original.insert(gpa, long_str);
+    const idx4 = try builder.insert(&original, gpa, long_str);
     try std.testing.expectEqual(expectedNextStringContentStart(&previous_end, long_str.len), @intFromEnum(idx4));
 
     // Create a temp file

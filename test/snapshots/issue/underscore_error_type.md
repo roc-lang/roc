@@ -43,146 +43,165 @@ TYPE MISMATCH - underscore_error_type.md:9:7:9:16
 TYPE MISMATCH - underscore_error_type.md:19:7:19:12
 TYPE MISMATCH - underscore_error_type.md:24:8:24:21
 # PROBLEMS
-**UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
 
-**underscore_error_type.md:1:1:1:1:**
-```roc
-BadType := _
-```
-^
+┌──────────────────────────┐
+│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
+└┬─────────────────────────┘  declarations.                                   │
+ │                                                                            │
+ │  BadType := _                                                              │
+ │  ‾                                                                         │
+ └────────────────────────────────────────────── underscore_error_type.md:1:1 ┘
 
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
+    Underscores in type annotations mean "I don't care about this type", which
+    doesn't make sense when declaring a type. If you need a placeholder type
+    variable, use a named type variable like `a` instead.
 
-**UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
 
-**underscore_error_type.md:6:17:6:17:**
-```roc
-BadList := List(_)
-```
-                ^
+┌──────────────────────────┐
+│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
+└┬─────────────────────────┘  declarations.                                   │
+ │                                                                            │
+ │  BadList := List(_)                                                        │
+ │                  ‾                                                         │
+ └───────────────────────────────────────────── underscore_error_type.md:6:17 ┘
 
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
+    Underscores in type annotations mean "I don't care about this type", which
+    doesn't make sense when declaring a type. If you need a placeholder type
+    variable, use a named type variable like `a` instead.
 
-**UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
 
-**underscore_error_type.md:6:12:6:16:**
-```roc
-BadList := List(_)
-```
-           ^^^^
+┌──────────────────────────┐
+│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
+└┬─────────────────────────┘  declarations.                                   │
+ │                                                                            │
+ │  BadList := List(_)                                                        │
+ │             ‾‾‾‾                                                           │
+ └───────────────────────────────────────────── underscore_error_type.md:6:12 ┘
 
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
+    Underscores in type annotations mean "I don't care about this type", which
+    doesn't make sense when declaring a type. If you need a placeholder type
+    variable, use a named type variable like `a` instead.
 
-**UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
 
-**underscore_error_type.md:1:1:1:1:**
-```roc
-BadType := _
-```
-^
+┌──────────────────────────┐
+│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
+└┬─────────────────────────┘  declarations.                                   │
+ │                                                                            │
+ │  BadType := _                                                              │
+ │  ‾                                                                         │
+ └────────────────────────────────────────────── underscore_error_type.md:1:1 ┘
 
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
+    Underscores in type annotations mean "I don't care about this type", which
+    doesn't make sense when declaring a type. If you need a placeholder type
+    variable, use a named type variable like `a` instead.
 
-**UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
 
-**underscore_error_type.md:1:1:1:1:**
-```roc
-BadType := _
-```
-^
+┌──────────────────────────┐
+│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
+└┬─────────────────────────┘  declarations.                                   │
+ │                                                                            │
+ │  BadType := _                                                              │
+ │  ‾                                                                         │
+ └────────────────────────────────────────────── underscore_error_type.md:1:1 ┘
 
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
+    Underscores in type annotations mean "I don't care about this type", which
+    doesn't make sense when declaring a type. If you need a placeholder type
+    variable, use a named type variable like `a` instead.
 
-**UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
 
-**underscore_error_type.md:1:1:1:1:**
-```roc
-BadType := _
-```
-^
+┌──────────────────────────┐
+│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
+└┬─────────────────────────┘  declarations.                                   │
+ │                                                                            │
+ │  BadType := _                                                              │
+ │  ‾                                                                         │
+ └────────────────────────────────────────────── underscore_error_type.md:1:1 ┘
 
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
+    Underscores in type annotations mean "I don't care about this type", which
+    doesn't make sense when declaring a type. If you need a placeholder type
+    variable, use a named type variable like `a` instead.
 
-**UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
 
-**underscore_error_type.md:21:14:21:14:**
-```roc
-BadTuple := (_, U32)
-```
-             ^
+┌──────────────────────────┐
+│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
+└┬─────────────────────────┘  declarations.                                   │
+ │                                                                            │
+ │  BadTuple := (_, U32)                                                      │
+ │               ‾                                                            │
+ └──────────────────────────────────────────── underscore_error_type.md:21:14 ┘
 
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
+    Underscores in type annotations mean "I don't care about this type", which
+    doesn't make sense when declaring a type. If you need a placeholder type
+    variable, use a named type variable like `a` instead.
 
-**TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**underscore_error_type.md:4:7:4:9:**
-```roc
-foo = 42
-```
-      ^^
 
-Other code expects this to have the type:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This number is being used where a non-number type is ──────┐
+└┬──────────────┘  needed.                                                    │
+ │                                                                            │
+ │  foo = 42                                                                  │
+ │        ‾‾                                                                  │
+ └────────────────────────────────────────────── underscore_error_type.md:4:7 ┘
 
-    BadType
+    Other code expects this to have the type:
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**underscore_error_type.md:9:7:9:16:**
-```roc
-bar = [1, 2, 3]
-```
-      ^^^^^^^^^
+        BadType
 
-It has the type:
 
-    List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
+┌───────────────┐
+│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  bar = [1, 2, 3]                                                           │
+ │        ‾‾‾‾‾‾‾‾‾                                                           │
+ └────────────────────────────────────────────── underscore_error_type.md:9:7 ┘
 
-But the annotation says it should be:
+    It has the type:
 
-    BadList
+        List(a) where [a.from_numeral : Numeral -> Try(a,
+        [InvalidNumeral(Str)])]
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**underscore_error_type.md:19:7:19:12:**
-```roc
-qux = |x| x
-```
-      ^^^^^
+    But the annotation says it should be:
 
-It has the type:
+        BadList
 
-    a -> a
 
-But the annotation says it should be:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  qux = |x| x                                                               │
+ │        ‾‾‾‾‾                                                               │
+ └───────────────────────────────────────────── underscore_error_type.md:19:7 ┘
 
-    BadFunction
+    It has the type:
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**underscore_error_type.md:24:8:24:21:**
-```roc
-quux = ("hello", 42)
-```
-       ^^^^^^^^^^^^^
+        a -> a
 
-It has the type:
+    But the annotation says it should be:
 
-    (a, b)
-      where [
-        a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]),
-        b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-      ]
+        BadFunction
 
-But the annotation says it should be:
 
-    BadTuple
+┌───────────────┐
+│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  quux = ("hello", 42)                                                      │
+ │         ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
+ └───────────────────────────────────────────── underscore_error_type.md:24:8 ┘
+
+    It has the type:
+
+        (a, b)
+          where [
+            a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]),
+            b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+          ]
+
+    But the annotation says it should be:
+
+        BadTuple
 
 # TOKENS
 ~~~zig
@@ -206,7 +225,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "BadType")
@@ -310,16 +329,12 @@ quux = ("hello", 42)
 (can-ir
 	(d-let
 		(p-assign (ident "foo"))
-		(e-num (value "42"))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "BadType") (local))))
 	(d-let
 		(p-assign (ident "bar"))
-		(e-list
-			(elems
-				(e-num (value "1"))
-				(e-num (value "2"))
-				(e-num (value "3"))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "BadList") (local))))
 	(d-let
@@ -335,20 +350,12 @@ quux = ("hello", 42)
 			(ty-lookup (name "BadRecord") (local))))
 	(d-let
 		(p-assign (ident "qux"))
-		(e-lambda
-			(args
-				(p-assign (ident "x")))
-			(e-lookup-local
-				(p-assign (ident "x"))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "BadFunction") (local))))
 	(d-let
 		(p-assign (ident "quux"))
-		(e-tuple
-			(elems
-				(e-string
-					(e-literal (string "hello")))
-				(e-num (value "42"))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "BadTuple") (local))))
 	(s-nominal-decl

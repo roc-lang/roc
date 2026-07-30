@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=An empty module with multiline exposes and comments
+description=An empty mod with multiline exposes and comments
 type=snippet
 ~~~
 # SOURCE
@@ -11,78 +11,103 @@ type=snippet
 	]
 ~~~
 # EXPECTED
-PARSE ERROR - module_multiline_with_comments.md:1:2:1:3
-PARSE ERROR - module_multiline_with_comments.md:2:3:2:12
-PARSE ERROR - module_multiline_with_comments.md:2:12:2:13
-PARSE ERROR - module_multiline_with_comments.md:3:11:3:12
-PARSE ERROR - module_multiline_with_comments.md:4:2:4:3
+UNEXPECTED STATEMENT - mod_multiline_with_comments.md:1:2:1:3
+UNEXPECTED STATEMENT - mod_multiline_with_comments.md:2:3:2:12
+UNEXPECTED STATEMENT - mod_multiline_with_comments.md:2:12:2:13
+TYPE APPLICATION NEEDS PARENTHESES - mod_multiline_with_comments.md:3:11:3:12
+UNEXPECTED STATEMENT - mod_multiline_with_comments.md:4:2:4:3
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
 
-**module_multiline_with_comments.md:1:2:1:3:**
-```roc
-	[ # Comment After exposes open
-```
-	^
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  [ # Comment After exposes open                                            │
+ │  ‾                                                                         │
+ └───────────────────────────────────── mod_multiline_with_comments.md:1:2 ┘
 
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+    For example:
+        answer = 42
 
-**module_multiline_with_comments.md:2:3:2:12:**
-```roc
-		something, # Comment after exposed item
-```
-		^^^^^^^^^
+    I found `[` here.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  something, # Comment after exposed item                                   │
+ │  ‾‾‾‾‾‾‾‾‾                                                                 │
+ └───────────────────────────────────── mod_multiline_with_comments.md:2:3 ┘
 
-**module_multiline_with_comments.md:2:12:2:13:**
-```roc
-		something, # Comment after exposed item
-```
-		         ^
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
+    For example:
+        answer = 42
 
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**module_multiline_with_comments.md:3:11:3:12:**
-```roc
-		SomeType, # Comment after final exposed item
-```
-		        ^
+    I found `something` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  something, # Comment after exposed item                                   │
+ │           ‾                                                                │
+ └──────────────────────────────────── mod_multiline_with_comments.md:2:12 ┘
 
-**module_multiline_with_comments.md:4:2:4:3:**
-```roc
-	]
-```
-	^
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
+    For example:
+        answer = 42
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
+
+
+┌────────────────────────────────────┐
+│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
+└┬───────────────────────────────────┘  and I found a type argument without   │
+ │                                      parentheses.                          │
+ │                                                                            │
+ │  SomeType, # Comment after final exposed item                              │
+ │          ‾                                                                 │
+ └──────────────────────────────────── mod_multiline_with_comments.md:3:11 ┘
+
+    Roc type applications use parentheses around their arguments. Write
+    `List(U8)`, not `List U8`.
+
+    For example:
+        List(U8)
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
+
+
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  ]                                                                         │
+ │  ‾                                                                         │
+ └───────────────────────────────────── mod_multiline_with_comments.md:4:2 ┘
+
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `]` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 # TOKENS
 ~~~zig
@@ -95,7 +120,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))

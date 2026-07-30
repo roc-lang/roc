@@ -10,18 +10,18 @@ import json.Json as MyJson
 main = MyJson.decode
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - can_import_with_alias.md:3:8:3:21
+NAME NOT IN SCOPE - can_import_with_alias.md:3:8:3:21
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `decode` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**can_import_with_alias.md:3:8:3:21:**
-```roc
-main = MyJson.decode
-```
-       ^^^^^^^^^^^^^
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `decode` in this scope. ──────────────┐
+└┬──────────────────┘                                                         │
+ │                                                                            │
+ │  main = MyJson.decode                                                      │
+ │         ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
+ └────────────────────────────────────────────── can_import_with_alias.md:3:8 ┘
 
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig
@@ -32,7 +32,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "json.Json") (alias "MyJson"))
 		(s-decl
@@ -49,7 +49,7 @@ NO CHANGE
 	(d-let
 		(p-assign (ident "main"))
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(s-import (module "json.Json")
+	(s-import (mod "json.Json")
 		(exposes)))
 ~~~
 # TYPES

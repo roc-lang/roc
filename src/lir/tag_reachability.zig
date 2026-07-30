@@ -6,11 +6,13 @@
 //! not need ownership repair.
 
 const std = @import("std");
+const collections = @import("collections");
 const core = @import("lir_core");
 
 const LIR = core.LIR;
 const LirProgram = core.Program;
 const LirStore = core.LirStore;
+const GuardedList = collections.GuardedList;
 const Allocator = std.mem.Allocator;
 
 /// Analyze possible tag values and bypass switches that cannot take some of
@@ -30,19 +32,19 @@ const PayloadSlot = struct {
 
 const PayloadInfo = struct {
     slot: PayloadSlot,
-    tags: TagSet = .{},
+    value: ValueInfo = .{},
 
     fn deinit(self: *PayloadInfo, allocator: Allocator) void {
-        self.tags.deinit(allocator);
+        self.value.deinit(allocator);
     }
 };
 
 const FieldInfo = struct {
     field: u16,
-    tags: TagSet = .{},
+    value: ValueInfo = .{},
 
     fn deinit(self: *FieldInfo, allocator: Allocator) void {
-        self.tags.deinit(allocator);
+        self.value.deinit(allocator);
     }
 };
 
@@ -98,10 +100,21 @@ const TagSet = struct {
     }
 };
 
+/// Producer facts for one whole LIR value. Fields and payloads retain another
+/// complete `ValueInfo` rather than only its top-level tags: projections may
+/// cross several struct/tag boundaries before reaching a switch, and loop joins
+/// must merge every reachable tag at that nested path before pruning an edge.
 const ValueInfo = struct {
     tags: TagSet = .{},
     payloads: std.ArrayList(PayloadInfo) = .empty,
     fields: std.ArrayList(FieldInfo) = .empty,
+
+    fn hasFacts(self: *const ValueInfo) bool {
+        return self.tags.all or
+            self.tags.values.items.len != 0 or
+            self.payloads.items.len != 0 or
+            self.fields.items.len != 0;
+    }
 
     fn deinit(self: *ValueInfo, allocator: Allocator) void {
         for (self.payloads.items) |*payload| payload.deinit(allocator);
@@ -131,48 +144,50 @@ const ValueInfo = struct {
         if (other.tags.all) return self.markAll(allocator);
         var changed = try self.tags.mergeFrom(allocator, &other.tags);
         for (other.payloads.items) |*payload| {
-            if (try self.mergePayloadTags(allocator, payload.slot, &payload.tags)) changed = true;
+            if (try self.mergePayloadValue(allocator, payload.slot, &payload.value)) changed = true;
         }
         for (other.fields.items) |*field| {
-            if (try self.mergeFieldTags(allocator, field.field, &field.tags)) changed = true;
+            if (try self.mergeFieldValue(allocator, field.field, &field.value)) changed = true;
         }
         return changed;
     }
 
-    fn mergePayloadTags(self: *ValueInfo, allocator: Allocator, slot: PayloadSlot, tags: *const TagSet) Allocator.Error!bool {
+    fn mergePayloadValue(self: *ValueInfo, allocator: Allocator, slot: PayloadSlot, value: *const ValueInfo) Allocator.Error!bool {
         if (self.tags.all) return false;
+        if (!value.hasFacts()) return false;
         for (self.payloads.items) |*payload| {
             if (payload.slot.variant == slot.variant and payload.slot.payload == slot.payload) {
-                return payload.tags.mergeFrom(allocator, tags);
+                return payload.value.mergeFrom(allocator, value);
             }
         }
         try self.payloads.append(allocator, .{ .slot = slot });
-        return self.payloads.items[self.payloads.items.len - 1].tags.mergeFrom(allocator, tags);
+        return self.payloads.items[self.payloads.items.len - 1].value.mergeFrom(allocator, value);
     }
 
-    fn mergeFieldTags(self: *ValueInfo, allocator: Allocator, field_index: u16, tags: *const TagSet) Allocator.Error!bool {
+    fn mergeFieldValue(self: *ValueInfo, allocator: Allocator, field_index: u16, value: *const ValueInfo) Allocator.Error!bool {
         if (self.tags.all) return false;
+        if (!value.hasFacts()) return false;
         for (self.fields.items) |*field| {
             if (field.field == field_index) {
-                return field.tags.mergeFrom(allocator, tags);
+                return field.value.mergeFrom(allocator, value);
             }
         }
         try self.fields.append(allocator, .{ .field = field_index });
-        return self.fields.items[self.fields.items.len - 1].tags.mergeFrom(allocator, tags);
+        return self.fields.items[self.fields.items.len - 1].value.mergeFrom(allocator, value);
     }
 
-    fn payloadTags(self: *const ValueInfo, slot: PayloadSlot) ?*const TagSet {
+    fn payloadValue(self: *const ValueInfo, slot: PayloadSlot) ?*const ValueInfo {
         for (self.payloads.items) |*payload| {
             if (payload.slot.variant == slot.variant and payload.slot.payload == slot.payload) {
-                return &payload.tags;
+                return &payload.value;
             }
         }
         return null;
     }
 
-    fn fieldTags(self: *const ValueInfo, field_index: u16) ?*const TagSet {
+    fn fieldValue(self: *const ValueInfo, field_index: u16) ?*const ValueInfo {
         for (self.fields.items) |*field| {
-            if (field.field == field_index) return &field.tags;
+            if (field.field == field_index) return &field.value;
         }
         return null;
     }
@@ -191,15 +206,15 @@ const Pass = struct {
 
     fn init(result: *LirProgram.Result) Allocator.Error!Pass {
         const allocator = result.store.allocator;
-        const local_info = try allocator.alloc(ValueInfo, result.store.locals.items.len);
+        const local_info = try allocator.alloc(ValueInfo, result.store.localCount());
         errdefer allocator.free(local_info);
         @memset(local_info, .{});
 
-        const proc_returns = try allocator.alloc(ValueInfo, result.store.proc_specs.items.len);
+        const proc_returns = try allocator.alloc(ValueInfo, result.store.procSpecCount());
         errdefer allocator.free(proc_returns);
         @memset(proc_returns, .{});
 
-        const use_counts = try allocator.alloc(u32, result.store.locals.items.len);
+        const use_counts = try allocator.alloc(u32, result.store.localCount());
         errdefer allocator.free(use_counts);
         @memset(use_counts, 0);
 
@@ -237,11 +252,14 @@ const Pass = struct {
     }
 
     fn seedBoundaries(self: *Pass) Allocator.Error!void {
-        for (self.store.proc_specs.items, 0..) |proc, proc_index| {
+        for (0..self.store.procSpecCount()) |proc_index| {
+            const proc = self.store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
             if (proc.body == null or proc.hosted != null) {
                 _ = self.proc_returns[proc_index].markAll(self.allocator);
             }
-            for (self.store.getLocalSpan(proc.args)) |arg| {
+            const args = self.store.getLocalSpan(proc.args);
+            for (0..args.len) |index| {
+                const arg = GuardedList.at(args, index);
                 _ = self.local_info[@intFromEnum(arg)].markAll(self.allocator);
             }
         }
@@ -251,7 +269,8 @@ const Pass = struct {
         var changed = true;
         while (changed) {
             changed = false;
-            for (self.store.proc_specs.items, 0..) |proc, proc_index| {
+            for (0..self.store.procSpecCount()) |proc_index| {
+                const proc = self.store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
                 const body = proc.body orelse continue;
                 if (try self.analyzeProc(@enumFromInt(@as(u32, @intCast(proc_index))), body)) {
                     changed = true;
@@ -314,9 +333,11 @@ const Pass = struct {
             },
             .assign_struct => |s| {
                 const target = self.localInfoMut(s.target);
-                for (self.store.getLocalSpan(s.fields), 0..) |field, index| {
+                const fields = self.store.getLocalSpan(s.fields);
+                for (0..fields.len) |index| {
+                    const field = GuardedList.at(fields, index);
                     const source = self.localInfo(field);
-                    if (try target.mergeFieldTags(self.allocator, @intCast(index), &source.tags)) changed = true;
+                    if (try target.mergeFieldValue(self.allocator, @intCast(index), source)) changed = true;
                 }
                 try self.pushStmt(s.next);
             },
@@ -325,19 +346,21 @@ const Pass = struct {
                 if (try target.tags.add(self.allocator, s.discriminant)) changed = true;
                 if (s.payload) |payload| {
                     const source = self.localInfo(payload);
-                    if (try target.mergePayloadTags(self.allocator, .{
+                    if (try target.mergePayloadValue(self.allocator, .{
                         .variant = s.discriminant,
                         .payload = payload_struct_slot,
-                    }, &source.tags)) changed = true;
+                    }, source)) changed = true;
                     for (source.fields.items) |*field| {
-                        if (try target.mergePayloadTags(self.allocator, .{
+                        if (try target.mergePayloadValue(self.allocator, .{
                             .variant = s.discriminant,
                             .payload = field.field,
-                        }, &field.tags)) changed = true;
+                        }, &field.value)) changed = true;
                     }
                 }
                 try self.pushStmt(s.next);
             },
+            .store_struct => |s| try self.pushStmt(s.next),
+            .store_tag => |s| try self.pushStmt(s.next),
             .set_local => |s| {
                 if (try self.localInfoMut(s.target).mergeFrom(self.allocator, self.localInfo(s.value))) changed = true;
                 try self.pushStmt(s.next);
@@ -350,7 +373,8 @@ const Pass = struct {
             .decref_if_initialized => |s| try self.pushStmt(s.next),
             .free => |s| try self.pushStmt(s.next),
             .switch_stmt => |s| {
-                for (self.store.getCFSwitchBranches(s.branches)) |branch| try self.pushStmt(branch.body);
+                const branches = self.store.getCFSwitchBranches(s.branches);
+                for (0..branches.len) |index| try self.pushStmt(GuardedList.at(branches, index).body);
                 try self.pushStmt(s.default_branch);
                 if (s.continuation) |continuation| try self.pushStmt(continuation);
             },
@@ -363,7 +387,8 @@ const Pass = struct {
                 try self.pushStmt(s.on_miss);
             },
             .str_match_set => |s| {
-                for (self.store.getStrMatchArms(s.arms)) |arm| try self.pushStmt(arm.on_match);
+                const arms = self.store.getStrMatchArms(s.arms);
+                for (0..arms.len) |index| try self.pushStmt(GuardedList.at(arms, index).on_match);
                 try self.pushStmt(s.on_miss);
             },
             .join => |s| {
@@ -406,21 +431,22 @@ const Pass = struct {
     fn mergeFieldRead(self: *Pass, target: LIR.LocalId, source: LIR.LocalId, field_index: u16) Allocator.Error!bool {
         const source_info = self.localInfo(source);
         if (source_info.tags.all) return self.localInfoMut(target).markAll(self.allocator);
-        const tags = source_info.fieldTags(field_index) orelse return false;
-        return self.localInfoMut(target).tags.mergeFrom(self.allocator, tags);
+        const value = source_info.fieldValue(field_index) orelse return false;
+        return self.localInfoMut(target).mergeFrom(self.allocator, value);
     }
 
     fn mergePayloadRead(self: *Pass, target: LIR.LocalId, source: LIR.LocalId, slot: PayloadSlot) Allocator.Error!bool {
         const source_info = self.localInfo(source);
         if (source_info.tags.all) return self.localInfoMut(target).markAll(self.allocator);
         if (!source_info.tags.contains(slot.variant)) return false;
-        const tags = source_info.payloadTags(slot) orelse return false;
-        return self.localInfoMut(target).tags.mergeFrom(self.allocator, tags);
+        const value = source_info.payloadValue(slot) orelse return false;
+        return self.localInfoMut(target).mergeFrom(self.allocator, value);
     }
 
     fn collectUseCounts(self: *Pass) Allocator.Error!void {
         @memset(self.use_counts, 0);
-        for (self.store.cf_stmts.items) |stmt| {
+        for (0..self.store.cfStmtCount()) |stmt_index| {
+            const stmt = self.store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
             try self.countStmtUses(stmt);
         }
     }
@@ -438,16 +464,41 @@ const Pass = struct {
                     .nominal => |ref| self.noteUse(ref.backing_ref),
                 }
             },
-            .assign_call => |s| for (self.store.getLocalSpan(s.args)) |arg| self.noteUse(arg),
+            .assign_call => |s| {
+                const args = self.store.getLocalSpan(s.args);
+                for (0..args.len) |index| self.noteUse(GuardedList.at(args, index));
+            },
             .assign_call_erased => |s| {
                 self.noteUse(s.closure);
-                for (self.store.getLocalSpan(s.args)) |arg| self.noteUse(arg);
+                const args = self.store.getLocalSpan(s.args);
+                for (0..args.len) |index| self.noteUse(GuardedList.at(args, index));
             },
-            .assign_packed_erased_fn => |s| if (s.capture) |capture| self.noteUse(capture),
-            .assign_low_level => |s| for (self.store.getLocalSpan(s.args)) |arg| self.noteUse(arg),
-            .assign_list => |s| for (self.store.getLocalSpan(s.elems)) |elem| self.noteUse(elem),
-            .assign_struct => |s| for (self.store.getLocalSpan(s.fields)) |field| self.noteUse(field),
+            .assign_packed_erased_fn => |s| {
+                if (s.capture) |capture| self.noteUse(capture);
+                if (s.reuse) |reuse| self.noteUse(reuse);
+            },
+            .assign_low_level => |s| {
+                const args = self.store.getLocalSpan(s.args);
+                for (0..args.len) |index| self.noteUse(GuardedList.at(args, index));
+            },
+            .assign_list => |s| {
+                const elems = self.store.getLocalSpan(s.elems);
+                for (0..elems.len) |index| self.noteUse(GuardedList.at(elems, index));
+            },
+            .assign_struct => |s| {
+                const fields = self.store.getLocalSpan(s.fields);
+                for (0..fields.len) |index| self.noteUse(GuardedList.at(fields, index));
+            },
             .assign_tag => |s| if (s.payload) |payload| self.noteUse(payload),
+            .store_struct => |s| {
+                self.noteUse(s.dest);
+                const fields = self.store.getLocalSpan(s.fields);
+                for (0..fields.len) |index| self.noteUse(GuardedList.at(fields, index));
+            },
+            .store_tag => |s| {
+                self.noteUse(s.dest);
+                if (s.payload) |payload| self.noteUse(payload);
+            },
             .set_local => |s| self.noteUse(s.value),
             .debug => |s| self.noteUse(s.message),
             .expect => |s| self.noteUse(s.condition),
@@ -483,7 +534,7 @@ const Pass = struct {
 
     fn rewriteSwitches(self: *Pass) Allocator.Error!void {
         var stmt_index: usize = 0;
-        while (stmt_index < self.store.cf_stmts.items.len) : (stmt_index += 1) {
+        while (stmt_index < self.store.cfStmtCount()) : (stmt_index += 1) {
             const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
             const stmt = self.store.getCFStmt(stmt_id);
             const switch_stmt = switch (stmt) {
@@ -501,7 +552,8 @@ const Pass = struct {
             const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
             var kept = std.ArrayList(LIR.CFSwitchBranch).empty;
             defer kept.deinit(self.allocator);
-            for (branches) |branch| {
+            for (0..branches.len) |index| {
+                const branch = GuardedList.at(branches, index);
                 if (branch.value > std.math.maxInt(u16)) continue;
                 if (tags.contains(@intCast(branch.value))) {
                     try kept.append(self.allocator, branch);
@@ -522,7 +574,9 @@ const Pass = struct {
     }
 
     fn targetForDiscriminant(self: *Pass, switch_stmt: anytype, value: u16) LIR.CFStmtId {
-        for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
+        const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
+        for (0..branches.len) |index| {
+            const branch = GuardedList.at(branches, index);
             if (branch.value == value) return branch.body;
         }
         return switch_stmt.default_branch;
@@ -530,7 +584,7 @@ const Pass = struct {
 
     fn removeDeadDiscriminantReads(self: *Pass) Allocator.Error!void {
         var stmt_index: usize = 0;
-        while (stmt_index < self.store.cf_stmts.items.len) : (stmt_index += 1) {
+        while (stmt_index < self.store.cfStmtCount()) : (stmt_index += 1) {
             const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
             const stmt = self.store.getCFStmt(stmt_id);
             const assign = switch (stmt) {
@@ -555,15 +609,18 @@ const Pass = struct {
     fn patchRedirects(self: *Pass) Allocator.Error!void {
         if (self.redirects.count() == 0) return;
 
-        for (self.store.proc_specs.items) |*proc| {
+        for (0..self.store.procSpecCount()) |proc_index| {
+            const proc = self.store.getProcSpecPtr(@enumFromInt(@as(u32, @intCast(proc_index))));
             if (proc.body) |body| proc.body = self.resolveRedirect(body);
-            for (self.store.getJoinPointSpanMut(proc.join_points)) |*join_point| {
+            const join_points = self.store.getJoinPointSpanMut(proc.join_points);
+            for (0..join_points.len) |index| {
+                const join_point = GuardedList.atPtr(join_points, index);
                 join_point.body = self.resolveRedirect(join_point.body);
             }
         }
 
         var stmt_index: usize = 0;
-        while (stmt_index < self.store.cf_stmts.items.len) : (stmt_index += 1) {
+        while (stmt_index < self.store.cfStmtCount()) : (stmt_index += 1) {
             const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
             const stmt = self.store.getCFStmtPtr(stmt_id);
             switch (stmt.*) {
@@ -577,6 +634,8 @@ const Pass = struct {
                 .assign_list => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_struct => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_tag => |*s| s.next = self.resolveRedirect(s.next),
+                .store_struct => |*s| s.next = self.resolveRedirect(s.next),
+                .store_tag => |*s| s.next = self.resolveRedirect(s.next),
                 .set_local => |*s| s.next = self.resolveRedirect(s.next),
                 .debug => |*s| s.next = self.resolveRedirect(s.next),
                 .expect => |*s| s.next = self.resolveRedirect(s.next),
@@ -586,7 +645,9 @@ const Pass = struct {
                 .decref_if_initialized => |*s| s.next = self.resolveRedirect(s.next),
                 .free => |*s| s.next = self.resolveRedirect(s.next),
                 .switch_stmt => |*s| {
-                    for (self.store.getCFSwitchBranchesMut(s.branches)) |*branch| {
+                    const branches = self.store.getCFSwitchBranchesMut(s.branches);
+                    for (0..branches.len) |index| {
+                        const branch = GuardedList.atPtr(branches, index);
                         branch.body = self.resolveRedirect(branch.body);
                     }
                     s.default_branch = self.resolveRedirect(s.default_branch);
@@ -604,7 +665,9 @@ const Pass = struct {
                     const arms = self.store.getStrMatchArms(s.arms);
                     const rewritten = try self.allocator.alloc(LIR.StrMatchArm, arms.len);
                     defer self.allocator.free(rewritten);
-                    for (arms, rewritten) |arm, *out| {
+                    for (0..arms.len) |index| {
+                        const arm = GuardedList.at(arms, index);
+                        const out = &rewritten[index];
                         out.* = arm;
                         out.on_match = self.resolveRedirect(arm.on_match);
                     }
@@ -885,6 +948,131 @@ test "tag reachability tracks per-payload tags through payload structs" {
     try testing.expectEqual(success, payload_stmt.next);
 }
 
+test "tag reachability preserves nested tag variants extracted across a loop join" {
+    var f = try TestProgram.init(testing.allocator);
+    defer f.deinit();
+    const store = &f.result.store;
+
+    const wrapper_layout = try f.result.layouts.putStructFields(&[_]layout.StructField{
+        .{ .index = 0, .layout = f.inner_layout },
+    });
+    const pair_layout = try f.result.layouts.putStructFields(&[_]layout.StructField{
+        .{ .index = 0, .layout = .zst },
+        .{ .index = 1, .layout = wrapper_layout },
+    });
+    const step_layout = try f.result.layouts.putTagUnion(&[_]layout.Idx{pair_layout});
+
+    const initial_tag = try f.local(f.inner_layout);
+    const initial_wrapper = try f.local(wrapper_layout);
+    const loop_slot = try f.local(wrapper_layout);
+    const successor_tag = try f.local(f.inner_layout);
+    const successor_wrapper = try f.local(wrapper_layout);
+    const item = try f.local(.zst);
+    const pair = try f.local(pair_layout);
+    const step = try f.local(step_layout);
+    const extracted_pair = try f.local(pair_layout);
+    const extracted_wrapper = try f.local(wrapper_layout);
+    const loop_inner = try f.local(f.inner_layout);
+    const disc = try f.local(.u16);
+
+    const branch_zero = try store.addCFStmt(.{ .ret = .{ .value = loop_inner } });
+    const branch_one = try store.addCFStmt(.{ .ret = .{ .value = loop_inner } });
+    const bad_default = try store.addCFStmt(.{ .runtime_error = {} });
+    const switch_stmt = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = disc,
+        .branches = try store.addCFSwitchBranches(&[_]LIR.CFSwitchBranch{
+            .{ .value = 0, .body = branch_zero },
+            .{ .value = 1, .body = branch_one },
+        }),
+        .default_branch = bad_default,
+    } });
+    const disc_read = try store.addCFStmt(.{ .assign_ref = .{
+        .target = disc,
+        .op = .{ .discriminant = .{ .source = loop_inner } },
+        .next = switch_stmt,
+    } });
+    const read_loop_inner = try store.addCFStmt(.{ .assign_ref = .{
+        .target = loop_inner,
+        .op = .{ .field = .{ .source = loop_slot, .field_idx = 0 } },
+        .next = disc_read,
+    } });
+    const merge_successor = try store.addCFStmt(.{ .set_local = .{
+        .target = loop_slot,
+        .value = extracted_wrapper,
+        .mode = .replace_existing,
+        .next = read_loop_inner,
+    } });
+    const read_successor = try store.addCFStmt(.{ .assign_ref = .{
+        .target = extracted_wrapper,
+        .op = .{ .field = .{ .source = extracted_pair, .field_idx = 1 } },
+        .next = merge_successor,
+    } });
+    const read_step_payload = try store.addCFStmt(.{ .assign_ref = .{
+        .target = extracted_pair,
+        .op = .{ .tag_payload_struct = .{
+            .source = step,
+            .variant_index = 0,
+            .tag_discriminant = 0,
+        } },
+        .next = read_successor,
+    } });
+    const assign_step = try store.addCFStmt(.{ .assign_tag = .{
+        .target = step,
+        .variant_index = 0,
+        .discriminant = 0,
+        .payload = pair,
+        .next = read_step_payload,
+    } });
+    const assign_pair = try store.addCFStmt(.{ .assign_struct = .{
+        .target = pair,
+        .fields = try store.addLocalSpan(&[_]LIR.LocalId{ item, successor_wrapper }),
+        .next = assign_step,
+    } });
+    const assign_successor_wrapper = try store.addCFStmt(.{ .assign_struct = .{
+        .target = successor_wrapper,
+        .fields = try store.addLocalSpan(&[_]LIR.LocalId{successor_tag}),
+        .next = assign_pair,
+    } });
+    const assign_successor_tag = try store.addCFStmt(.{ .assign_tag = .{
+        .target = successor_tag,
+        .variant_index = 0,
+        .discriminant = 0,
+        .payload = null,
+        .next = assign_successor_wrapper,
+    } });
+    const seed_loop_slot = try store.addCFStmt(.{ .set_local = .{
+        .target = loop_slot,
+        .value = initial_wrapper,
+        .mode = .initialize_join_param,
+        .next = assign_successor_tag,
+    } });
+    const assign_initial_wrapper = try store.addCFStmt(.{ .assign_struct = .{
+        .target = initial_wrapper,
+        .fields = try store.addLocalSpan(&[_]LIR.LocalId{initial_tag}),
+        .next = seed_loop_slot,
+    } });
+    const body = try store.addCFStmt(.{ .assign_tag = .{
+        .target = initial_tag,
+        .variant_index = 1,
+        .discriminant = 1,
+        .payload = null,
+        .next = assign_initial_wrapper,
+    } });
+    const proc = try store.addProcSpec(.{
+        .name = LIR.Symbol.fromRaw(11),
+        .args = LIR.LocalSpan.empty(),
+        .body = body,
+        .ret_layout = f.inner_layout,
+    });
+    try f.result.root_procs.append(testing.allocator, proc);
+
+    try run(&f.result);
+
+    try testing.expectEqual(disc_read, store.getCFStmt(read_loop_inner).assign_ref.next);
+    const branches = store.getCFSwitchBranches(store.getCFStmt(switch_stmt).switch_stmt.branches);
+    try testing.expectEqual(@as(usize, 2), branches.len);
+}
+
 test "tag reachability removes impossible explicit branches from multi-value sets" {
     var f = try TestProgram.init(testing.allocator);
     defer f.deinit();
@@ -935,7 +1123,7 @@ test "tag reachability removes impossible explicit branches from multi-value set
     const rewritten = store.getCFStmt(switch_stmt).switch_stmt;
     const branches = store.getCFSwitchBranches(rewritten.branches);
     try testing.expectEqual(@as(usize, 1), branches.len);
-    try testing.expectEqual(@as(u64, 0), branches[0].value);
+    try testing.expectEqual(@as(u64, 0), GuardedList.at(branches, 0).value);
 }
 
 test "tag reachability keeps unrelated live discriminant reads" {

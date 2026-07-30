@@ -23,23 +23,20 @@ outerFunc = |_| {
 # EXPECTED
 DUPLICATE DEFINITION - can_basic_scoping.md:7:5:7:6
 # PROBLEMS
-**DUPLICATE DEFINITION**
-The name `x` is being redeclared in this scope.
 
-The redeclaration is here:
-**can_basic_scoping.md:7:5:7:6:**
-```roc
-    x = 20  # Should shadow top-level x
-```
-    ^
+┌──────────────────────┐
+│ DUPLICATE DEFINITION ├─ The name `x` is being redeclared here. ─────────────┐
+└┬─────────────────────┘                                                      │
+ │                                                                            │
+ │  x = 20  # Should shadow top-level x                                       │
+ │  ‾                                                                         │
+ └────────────────────────────────────────────────── can_basic_scoping.md:7:5 ┘
 
-But `x` was already defined here:
-**can_basic_scoping.md:2:1:2:2:**
-```roc
-x = 5
-```
-^
-
+    In this scope, `x` was already defined here:
+      ┌───────────────────────────────────────────────────────────────────────┐
+    2 │  x = 5                                                                │
+      │  ‾                                                                    │
+      └───────────────────────────────────────────── can_basic_scoping.md:2:1 ┘
 
 # TOKENS
 ~~~zig
@@ -58,7 +55,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "x"))
@@ -131,14 +128,14 @@ outerFunc = |_| {
 					(e-block
 						(s-let
 							(p-assign (ident "z"))
-							(e-dispatch-call (method "plus") (constraint-fn-var 132)
+							(e-dispatch-call (method "plus") (constraint-fn-var 238)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "x"))))
 								(args
 									(e-lookup-local
 										(p-assign (ident "y"))))))
-						(e-dispatch-call (method "plus") (constraint-fn-var 167)
+						(e-dispatch-call (method "plus") (constraint-fn-var 247)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "z"))))

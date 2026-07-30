@@ -5,3 +5,7 @@
 //! implementations (e.g. WASM playground, in-memory test mocks).
 
 pub const CoreCtx = @import("CoreCtx.zig");
+
+test {
+    @import("std").testing.refAllDecls(CoreCtx);
+}

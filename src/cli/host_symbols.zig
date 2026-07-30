@@ -9,17 +9,17 @@
 //! symbol tables up front turns both into a proper diagnostic.
 
 const std = @import("std");
+const shim_symbols = @import("builtins").shim_symbols;
 
 const Allocator = std.mem.Allocator;
 
 /// The fixed runtime symbols every symbol-ABI host defines.
-pub const runtime_symbols = [_][]const u8{
-    "roc_alloc",
-    "roc_dealloc",
-    "roc_realloc",
-    "roc_dbg",
-    "roc_expect_failed",
-    "roc_crashed",
+pub const runtime_symbols: [shim_symbols.runtime_set.len][]const u8 = blk: {
+    var symbols: [shim_symbols.runtime_set.len][]const u8 = undefined;
+    for (shim_symbols.runtime_set, 0..) |name, index| {
+        symbols[index] = name;
+    }
+    break :blk symbols;
 };
 
 /// Outcome of scanning the host inputs for a set of needed symbols.

@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=External declaration lookup from json module
+description=External declaration lookup from json mod
 type=file
 ~~~
 # SOURCE
@@ -12,35 +12,51 @@ import json.Json
 
 main! = |_| {
     # This should create an external declaration for json.Json.utf8
-    result = Json.utf8("Hello from external module!")
+    result = Json.utf8("Hello from external mod!")
     Stdout.line!(result)
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - external_decl_lookup.md:8:14:8:23
-UNDEFINED VARIABLE - external_decl_lookup.md:9:5:9:17
+DUPLICATE DEFINITION - external_decl_lookup.md:4:1:4:17
+NAME NOT IN SCOPE - external_decl_lookup.md:8:14:8:23
+NAME NOT IN SCOPE - external_decl_lookup.md:9:5:9:17
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `utf8` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**external_decl_lookup.md:8:14:8:23:**
-```roc
-    result = Json.utf8("Hello from external module!")
-```
-             ^^^^^^^^^
+┌──────────────────────┐
+│ DUPLICATE DEFINITION ├─ The name `Json` is being redeclared here. ──────────┐
+└┬─────────────────────┘                                                      │
+ │                                                                            │
+ │  import json.Json                                                          │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                          │
+ └─────────────────────────────────────────────── external_decl_lookup.md:4:1 ┘
+
+    In this scope, `Json` was already defined here:
+      ┌───────────────────────────────────────────────────────────────────────┐
+    1 │  app [main!] { pf: platform "../basic-cli/platform.roc" }             │
+      │  ‾                                                                    │
+      └────────────────────────────────────────── external_decl_lookup.md:1:1 ┘
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `utf8` in this scope. ────────────────┐
+└┬──────────────────┘                                                         │
+ │                                                                            │
+ │  result = Json.utf8("Hello from external mod!")                            │
+ │           ‾‾‾‾‾‾‾‾‾                                                        │
+ └────────────────────────────────────────────── external_decl_lookup.md:8:14 ┘
 
-**external_decl_lookup.md:9:5:9:17:**
-```roc
-    Stdout.line!(result)
-```
-    ^^^^^^^^^^^^
+    Is it misspelled, or is there an import missing?
 
+
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
+ │                                                                            │
+ │  Stdout.line!(result)                                                      │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
+ └─────────────────────────────────────────────── external_decl_lookup.md:9:5 ┘
+
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig
@@ -82,7 +98,7 @@ EndOfFile,
 							(e-apply
 								(e-ident (raw "Json.utf8"))
 								(e-string
-									(e-string-part (raw "Hello from external module!")))))
+									(e-string-part (raw "Hello from external mod!")))))
 						(e-apply
 							(e-ident (raw "Stdout.line!"))
 							(e-ident (raw "result")))))))))
@@ -96,7 +112,7 @@ import json.Json
 
 main! = |_| {
 	# This should create an external declaration for json.Json.utf8
-	result = Json.utf8("Hello from external module!")
+	result = Json.utf8("Hello from external mod!")
 	Stdout.line!(result)
 }
 ~~~
@@ -105,23 +121,10 @@ main! = |_| {
 (can-ir
 	(d-let
 		(p-assign (ident "main!"))
-		(e-lambda
-			(args
-				(p-underscore))
-			(e-block
-				(s-let
-					(p-assign (ident "result"))
-					(e-call
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-string
-							(e-literal (string "Hello from external module!")))))
-				(e-call
-					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-lookup-local
-						(p-assign (ident "result")))))))
-	(s-import (module "pf.Stdout")
+		(e-runtime-error (tag "erroneous_value_expr")))
+	(s-import (mod "pf.Stdout")
 		(exposes))
-	(s-import (module "json.Json")
+	(s-import (mod "json.Json")
 		(exposes)))
 ~~~
 # TYPES

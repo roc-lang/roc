@@ -15,21 +15,22 @@ main = "${y}"
 # EXPECTED
 TYPE MISMATCH - issue_9075.md:6:11:6:12
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**issue_9075.md:6:11:6:12:**
-```roc
-main = "${y}"
-```
-          ^
 
-It has the type:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  main = "${y}"                                                             │
+ │            ‾                                                               │
+ └──────────────────────────────────────────────────────── issue_9075.md:6:11 ┘
 
-    Dec
+    It has the type:
 
-But you are trying to use it as:
+        Dec
 
-    Str
+    But you are trying to use it as:
+
+        Str
 
 # TOKENS
 ~~~zig
@@ -42,7 +43,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "call")
 			(ty-fn
@@ -108,7 +109,7 @@ main = "${y}"
 				(p-assign (ident "thing"))
 				(p-assign (ident "f")))
 			(e-block
-				(e-call (constraint-fn-var 49)
+				(e-call (constraint-fn-var 237)
 					(e-lookup-local
 						(p-assign (ident "f")))
 					(e-lookup-local
@@ -123,7 +124,7 @@ main = "${y}"
 				(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))
 	(d-let
 		(p-assign (ident "y"))
-		(e-call (constraint-fn-var 122)
+		(e-call (constraint-fn-var 258)
 			(e-lookup-local
 				(p-assign (ident "call")))
 			(e-num (value "5"))
@@ -131,7 +132,7 @@ main = "${y}"
 				(args
 					(p-assign (ident "i")))
 				(e-block
-					(e-dispatch-call (method "plus") (constraint-fn-var 120)
+					(e-dispatch-call (method "plus") (constraint-fn-var 256)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "i"))))
@@ -144,13 +145,7 @@ main = "${y}"
 				(p-assign (ident "#interp_0"))
 				(e-lookup-local
 					(p-assign (ident "y"))))
-			(e-interpolation (constraint-fn-var 177)
-				(first
-					(e-literal (string "")))
-				(parts
-					(e-lookup-local
-						(p-assign (ident "#interp_0")))
-					(e-literal (string "")))))))
+			(e-runtime-error (tag "erroneous_value_expr")))))
 ~~~
 # TYPES
 ~~~clojure

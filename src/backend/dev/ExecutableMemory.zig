@@ -7,6 +7,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
+const coff = @import("object/coff.zig");
 
 // std.os.windows.VirtualAlloc / VirtualFree / VirtualProtect were removed in Zig 0.16.
 // Declare the thin extern bindings we need locally; only referenced on Windows.
@@ -21,6 +22,19 @@ const win32 = struct {
     const MEM_RELEASE: DWORD = 0x8000;
     const PAGE_READWRITE: DWORD = 0x04;
     const PAGE_EXECUTE_READ: DWORD = 0x20;
+
+    const RuntimeFunction = switch (builtin.cpu.arch) {
+        .x86_64 => extern struct {
+            BeginAddress: DWORD,
+            EndAddress: DWORD,
+            UnwindData: DWORD,
+        },
+        .aarch64 => extern struct {
+            BeginAddress: DWORD,
+            UnwindData: DWORD,
+        },
+        else => void,
+    };
 
     extern "kernel32" fn VirtualAlloc(
         lpAddress: LPVOID,
@@ -39,6 +53,140 @@ const win32 = struct {
         flNewProtect: DWORD,
         lpflOldProtect: PDWORD,
     ) callconv(.winapi) std.os.windows.BOOL;
+    extern "ntdll" fn RtlAddFunctionTable(
+        FunctionTable: [*]RuntimeFunction,
+        EntryCount: DWORD,
+        BaseAddress: usize,
+    ) callconv(.winapi) std.os.windows.BOOLEAN;
+    extern "ntdll" fn RtlDeleteFunctionTable(
+        FunctionTable: [*]RuntimeFunction,
+    ) callconv(.winapi) std.os.windows.BOOLEAN;
+};
+
+const WindowsUnwindState = if (builtin.os.tag == .windows) struct {
+    entries: []win32.RuntimeFunction = &.{},
+    registered: bool = false,
+
+    const allocator = std.heap.smp_allocator;
+
+    fn coffArch() error{UnsupportedPlatform}!coff.Architecture {
+        return switch (builtin.cpu.arch) {
+            .x86_64 => .x86_64,
+            .aarch64 => .aarch64,
+            else => error.UnsupportedPlatform,
+        };
+    }
+
+    fn xdataSize(functions: []const coff.FunctionInfo) (Allocator.Error || error{UnsupportedPlatform})!usize {
+        if (functions.len == 0) return 0;
+        var writer = try coff.CoffWriter.init(allocator, try coffArch());
+        defer writer.deinit();
+
+        var total: usize = 0;
+        for (functions) |function| {
+            if (function.start_offset >= function.end_offset) {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("JIT unwind invariant violated: invalid function range {d}-{d}", .{ function.start_offset, function.end_offset });
+                }
+                unreachable;
+            }
+            total += try writer.functionXdataSize(function);
+        }
+        return total;
+    }
+
+    fn lessThanFunction(_: void, lhs: coff.FunctionInfo, rhs: coff.FunctionInfo) bool {
+        return lhs.start_offset < rhs.start_offset;
+    }
+
+    fn init(
+        memory: []align(std.heap.page_size_min) u8,
+        code_size: usize,
+        xdata_offset: usize,
+        functions: []const coff.FunctionInfo,
+    ) (Allocator.Error || error{ UnsupportedPlatform, UnwindRegistrationFailed })!WindowsUnwindState {
+        if (functions.len == 0) return .{};
+
+        const sorted_functions = try allocator.dupe(coff.FunctionInfo, functions);
+        defer allocator.free(sorted_functions);
+        std.mem.sort(coff.FunctionInfo, sorted_functions, {}, lessThanFunction);
+
+        var writer = try coff.CoffWriter.init(allocator, try coffArch());
+        defer writer.deinit();
+
+        var xdata: std.ArrayList(u8) = .empty;
+        defer xdata.deinit(allocator);
+
+        const xdata_offsets = try allocator.alloc(u32, sorted_functions.len);
+        defer allocator.free(xdata_offsets);
+
+        var previous_end: u32 = 0;
+        for (sorted_functions, 0..) |function, i| {
+            if (function.start_offset >= function.end_offset or function.end_offset > code_size or function.start_offset < previous_end) {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("JIT unwind invariant violated: invalid or overlapping function range {d}-{d} for code size {d}", .{ function.start_offset, function.end_offset, code_size });
+                }
+                unreachable;
+            }
+            previous_end = function.end_offset;
+
+            xdata_offsets[i] = @intCast(xdata.items.len);
+            try writer.appendFunctionXdata(&xdata, function);
+        }
+
+        @memcpy(memory[xdata_offset..][0..xdata.items.len], xdata.items);
+
+        const entries = try allocator.alloc(win32.RuntimeFunction, sorted_functions.len);
+        errdefer allocator.free(entries);
+
+        for (sorted_functions, xdata_offsets, 0..) |function, xdata_function_offset, i| {
+            const xdata_rva: u32 = @intCast(xdata_offset + xdata_function_offset);
+            entries[i] = switch (builtin.cpu.arch) {
+                .x86_64 => .{
+                    .BeginAddress = function.start_offset,
+                    .EndAddress = function.end_offset,
+                    .UnwindData = xdata_rva,
+                },
+                .aarch64 => .{
+                    .BeginAddress = function.start_offset,
+                    .UnwindData = xdata_rva,
+                },
+                else => unreachable,
+            };
+        }
+
+        if (win32.RtlAddFunctionTable(entries.ptr, @intCast(entries.len), @intFromPtr(memory.ptr)) == .FALSE) {
+            return error.UnwindRegistrationFailed;
+        }
+
+        return .{
+            .entries = entries,
+            .registered = true,
+        };
+    }
+
+    fn deinit(self: *WindowsUnwindState) void {
+        if (self.registered) {
+            _ = win32.RtlDeleteFunctionTable(self.entries.ptr);
+        }
+        allocator.free(self.entries);
+        self.* = .{};
+    }
+} else struct {
+    fn xdataSize(_: []const coff.FunctionInfo) (Allocator.Error || error{UnsupportedPlatform})!usize {
+        return 0;
+    }
+
+    fn init(
+        _: []align(std.heap.page_size_min) u8,
+        _: usize,
+        _: usize,
+        _: []const coff.FunctionInfo,
+    ) (Allocator.Error || error{ UnsupportedPlatform, UnwindRegistrationFailed })!WindowsUnwindState {
+        return .{};
+    }
+
+    fn deinit(_: *WindowsUnwindState) void {}
 };
 
 /// A region of memory that can be executed as code.
@@ -49,25 +197,38 @@ pub const ExecutableMemory = struct {
     code_size: usize,
     /// Offset from start where execution should begin (for compiled procedures)
     entry_offset: usize,
+    windows_unwind: WindowsUnwindState = .{},
 
     const Self = @This();
 
     /// Allocate executable memory and copy the given code into it.
     /// The code bytes should already have any relocations applied.
-    pub fn init(code: []const u8) (Allocator.Error || error{ EmptyCode, MmapFailed, VirtualAllocFailed, MprotectFailed, VirtualProtectFailed, UnsupportedPlatform })!Self {
+    pub fn init(code: []const u8) (Allocator.Error || error{ EmptyCode, MmapFailed, VirtualAllocFailed, MprotectFailed, VirtualProtectFailed, UnsupportedPlatform, UnwindRegistrationFailed })!Self {
         return initWithEntryOffset(code, 0);
     }
 
     /// Allocate executable memory with a specific entry offset.
     /// Use this when procedures are compiled before the main expression.
-    pub fn initWithEntryOffset(code: []const u8, entry_offset: usize) (Allocator.Error || error{ EmptyCode, MmapFailed, VirtualAllocFailed, MprotectFailed, VirtualProtectFailed, UnsupportedPlatform })!Self {
+    pub fn initWithEntryOffset(code: []const u8, entry_offset: usize) (Allocator.Error || error{ EmptyCode, MmapFailed, VirtualAllocFailed, MprotectFailed, VirtualProtectFailed, UnsupportedPlatform, UnwindRegistrationFailed })!Self {
+        return initWithEntryOffsetAndUnwindInfo(code, entry_offset, &.{});
+    }
+
+    pub fn initWithEntryOffsetAndUnwindInfo(
+        code: []const u8,
+        entry_offset: usize,
+        functions: []const coff.FunctionInfo,
+    ) (Allocator.Error || error{ EmptyCode, MmapFailed, VirtualAllocFailed, MprotectFailed, VirtualProtectFailed, UnsupportedPlatform, UnwindRegistrationFailed })!Self {
         if (code.len == 0) {
             return error.EmptyCode;
         }
 
+        const xdata_size = try WindowsUnwindState.xdataSize(functions);
+        const xdata_offset = std.mem.alignForward(usize, code.len, 4);
+        const used_size = if (xdata_size == 0) code.len else xdata_offset + xdata_size;
+
         // Round up to page size
         const page_size = std.heap.page_size_min;
-        const alloc_size = std.mem.alignForward(usize, code.len, page_size);
+        const alloc_size = std.mem.alignForward(usize, used_size, page_size);
 
         // Allocate memory with read-write permissions initially
         const memory = try allocateMemory(alloc_size);
@@ -75,6 +236,10 @@ pub const ExecutableMemory = struct {
 
         // Copy the code
         @memcpy(memory[0..code.len], code);
+        @memset(memory[code.len..], 0);
+
+        var windows_unwind = try WindowsUnwindState.init(memory, code.len, xdata_offset, functions);
+        errdefer windows_unwind.deinit();
 
         // Make the memory executable (and read-only)
         try protectExecutable(memory);
@@ -83,6 +248,7 @@ pub const ExecutableMemory = struct {
             .memory = memory,
             .code_size = code.len,
             .entry_offset = entry_offset,
+            .windows_unwind = windows_unwind,
         };
     }
 
@@ -111,6 +277,7 @@ pub const ExecutableMemory = struct {
 
     /// Free the executable memory
     pub fn deinit(self: *Self) void {
+        self.windows_unwind.deinit();
         freeMemory(self.memory);
         self.memory = &.{};
         self.code_size = 0;

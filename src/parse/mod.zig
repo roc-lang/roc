@@ -9,10 +9,12 @@ const tracy = @import("tracy");
 
 pub const tokenize = @import("tokenize.zig");
 
+/// Single source of truth for the string/char escape alphabet.
+pub const escape = @import("escape.zig");
+
 const Allocator = std.mem.Allocator;
 const CommonEnv = base.CommonEnv;
 const Diagnostic = AST.Diagnostic;
-const ParseTestError = Allocator.Error || error{TestExpectedEqual};
 
 /// **AST.Parser**
 pub const Parser = @import("Parser.zig");
@@ -116,12 +118,26 @@ fn statementRootNode(parser: *Parser) Allocator.Error!u32 {
     return @intFromEnum(idx);
 }
 
+fn topLevelStatementRootNode(parser: *Parser) Allocator.Error!u32 {
+    const idx = try parser.runTopLevelStatement();
+    return @intFromEnum(idx);
+}
+
 /// Parses a single Roc statement - for use in REPL and snapshots.
 ///
 /// The caller must call `ast.deinit()` when done, which frees all internal
 /// allocations AND the AST struct itself.
 pub fn statement(gpa: Allocator, env: *CommonEnv) Allocator.Error!*AST {
     return try runTokenDispatch(gpa, env, statementRootNode);
+}
+
+/// Parses a single top-level Roc statement - for use in the REPL, which
+/// synthesizes a module and so accepts top-level-only statements like `import`.
+///
+/// The caller must call `ast.deinit()` when done, which frees all internal
+/// allocations AND the AST struct itself.
+pub fn statementTopLevel(gpa: Allocator, env: *CommonEnv) Allocator.Error!*AST {
+    return try runTokenDispatch(gpa, env, topLevelStatementRootNode);
 }
 
 test "parser tests" {
@@ -132,6 +148,7 @@ test "parser tests" {
     std.testing.refAllDecls(@import("NumericLiteral.zig"));
     std.testing.refAllDecls(@import("Parser.zig"));
     std.testing.refAllDecls(@import("tokenize.zig"));
+    std.testing.refAllDecls(@import("escape.zig"));
     std.testing.refAllDecls(@import("test/ast_node_store_test.zig"));
 }
 
@@ -158,35 +175,41 @@ test "deeply nested parentheses parse stack-safely" {
     try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 }
 
-test "range operators parse as binary operators" {
+test "dollar-prefixed record field names are rejected with a single diagnostic" {
     const gpa = std.testing.allocator;
 
-    for ([_][]const u8{ "1..<5", "1..=5", "1..<n + 1", "start..=finish" }) |source| {
-        var env = try CommonEnv.init(gpa, source);
+    const Case = struct {
+        source: []const u8,
+        parse: *const fn (Allocator, *CommonEnv) Allocator.Error!*AST,
+    };
+
+    for ([_]Case{
+        .{
+            .source = "match value { { $field } => \"matched\" }",
+            .parse = expr,
+        },
+        .{
+            .source = "app [main!] { $pf: platform \"./platform/main.roc\" }",
+            .parse = header,
+        },
+        .{
+            .source = "package [Foo] { $dep: \"../dep/main.roc\" }",
+            .parse = header,
+        },
+    }) |case| {
+        var env = try CommonEnv.init(gpa, case.source);
         defer env.deinit(gpa);
 
-        const ast = try expr(gpa, &env);
+        const ast = try case.parse(gpa, &env);
         defer ast.deinit();
 
         try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
-        try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+        try std.testing.expectEqual(@as(usize, 1), ast.parse_diagnostics.items.len);
+        try std.testing.expectEqual(
+            AST.Diagnostic.Tag.record_field_name_cannot_be_var,
+            ast.parse_diagnostics.items[0].tag,
+        );
     }
-}
-
-test "bare .. in expression position is a helpful parse error" {
-    const gpa = std.testing.allocator;
-
-    var env = try CommonEnv.init(gpa, "1..5");
-    defer env.deinit(gpa);
-
-    const ast = try expr(gpa, &env);
-    defer ast.deinit();
-
-    try std.testing.expect(ast.parse_diagnostics.items.len > 0);
-    try std.testing.expectEqual(
-        AST.Diagnostic.Tag.expr_double_dot_is_not_range,
-        ast.parse_diagnostics.items[0].tag,
-    );
 }
 
 fn vmExprAllocationFailureImpl(allocator: Allocator, tokens: tokenize.TokenizedBuffer) Allocator.Error!void {
@@ -220,49 +243,6 @@ test "parse error triggers errdefer cleanup" {
     defer output.tokens.deinit(gpa);
 
     try std.testing.checkAllAllocationFailures(gpa, vmExprAllocationFailureImpl, .{output.tokens});
-}
-
-fn expectStatementParsesWithoutDiagnostics(source: []const u8) ParseTestError!void {
-    const gpa = std.testing.allocator;
-
-    var env = try CommonEnv.init(gpa, source);
-    defer env.deinit(gpa);
-
-    const ast = try statement(gpa, &env);
-    defer ast.deinit();
-
-    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
-    try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
-}
-
-fn expectFileParsesWithoutDiagnostics(source: []const u8) ParseTestError!void {
-    const gpa = std.testing.allocator;
-
-    var env = try CommonEnv.init(gpa, source);
-    defer env.deinit(gpa);
-
-    const ast = try file(gpa, &env);
-    defer ast.deinit();
-
-    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
-    try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
-}
-
-test "method and static dispatch chains parse stack-safely" {
-    try expectStatementParsesWithoutDiagnostics("Dict.from_list([(\"a\", 1), (\"b\", 2)]).get(\"a\")");
-    try expectStatementParsesWithoutDiagnostics("lst.map(|_| \"zzz \").join_with(\" \").trim()");
-}
-
-test "double question operator parses after static dispatch" {
-    try expectStatementParsesWithoutDiagnostics("Try.Ok(\"hello\") ?? \"default\"");
-}
-
-test "where clause method function types parse stack-safely" {
-    try expectFileParsesWithoutDiagnostics(
-        \\module []
-        \\
-        \\A(a) : a where [a.a1 : (a, a) -> Str, a.a2 : (a, a) -> Str]
-    );
 }
 
 fn vmInitAllocationFailureImpl(allocator: Allocator, tokens: tokenize.TokenizedBuffer) Allocator.Error!void {
@@ -326,11 +306,9 @@ test "parse diagnostic report handles invalid mutable identifier spelling" {
     }
 }
 
-test "bughunt B212: parameterized type arguments accept bare function types" {
+test "regression B212: parameterized type arguments accept bare function types" {
     const gpa = std.testing.allocator;
     const source =
-        \\module []
-        \\
         \\BoxedFn : Box(Str -> Str)
         \\BoxedParenFn : Box((Str -> Str))
         \\ResultFn : Result(Str -> Str, Str -> Str)
@@ -352,8 +330,6 @@ test "bughunt B212: parameterized type arguments accept bare function types" {
 test "parser records top-level type declaration dependencies" {
     const gpa = std.testing.allocator;
     const source =
-        \\module []
-        \\
         \\A : (B, Mod.C) -> D
         \\B : {}
         \\D : {}
@@ -400,8 +376,6 @@ test "parser records top-level type declaration dependencies" {
 test "parser records nested associated owner paths" {
     const gpa = std.testing.allocator;
     const source =
-        \\module []
-        \\
         \\Parent := [P].{
         \\    Nested := [N].{
         \\        val = 1
@@ -442,8 +416,6 @@ test "parser records nested associated owner paths" {
 test "parser keeps block-local type paths lexically distinct" {
     const gpa = std.testing.allocator;
     const source =
-        \\module []
-        \\
         \\first = {
         \\    T := [First].{
         \\        Inner := [FirstInner]
@@ -503,8 +475,6 @@ test "parser keeps block-local type paths lexically distinct" {
 test "parser does not create a type path for malformed associated type headers" {
     const gpa = std.testing.allocator;
     const source =
-        \\module []
-        \\
         \\Outer := [Outer].{
         \\    Broken(a := [Broken]
         \\    ok = 1

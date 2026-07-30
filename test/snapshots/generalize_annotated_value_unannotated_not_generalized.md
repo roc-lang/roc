@@ -20,21 +20,22 @@ main! = |_| {}
 # EXPECTED
 TYPE MISMATCH - generalize_annotated_value_unannotated_not_generalized.md:9:8:9:12
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**generalize_annotated_value_unannotated_not_generalized.md:9:8:9:12:**
-```roc
-strs = bare
-```
-       ^^^^
 
-It has the type:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  strs = bare                                                               │
+ │         ‾‾‾‾                                                               │
+ └───────────── generalize_annotated_value_unannotated_not_generalized.md:9:8 ┘
 
-    List(U64)
+    It has the type:
 
-But the annotation says it should be:
+        List(U64)
 
-    List(Str)
+    But the annotation says it should be:
+
+        List(Str)
 
 # TOKENS
 ~~~zig

@@ -327,7 +327,7 @@ fn failureData(allocator: std.mem.Allocator, message: ?[]const u8, status: TestR
 const TestData = struct {
     pub fn happyPathRocCode(allocator: std.mem.Allocator) Allocator.Error![]u8 {
         return allocator.dupe(u8,
-            \\module [foo]
+            \\main! = |_| {}
             \\
             \\foo = "bar"
         );
@@ -335,14 +335,12 @@ const TestData = struct {
 
     pub fn syntaxErrorRocCode(allocator: std.mem.Allocator) Allocator.Error![]u8 {
         return allocator.dupe(u8,
-            \\module [main]
             \\main = [1, 2, 3
         );
     }
 
     pub fn typeErrorRocCode(allocator: std.mem.Allocator) Allocator.Error![]u8 {
         return allocator.dupe(u8,
-            \\module [main]
             \\main = "hello" + 123
         );
     }
@@ -1166,8 +1164,8 @@ fn matchesAnyFilter(name: []const u8, filters: []const []const u8) bool {
 pub fn main(init: std.process.Init) anyerror!void {
     const std_io = init.io;
     // Setup gpa allocator used for bytebox WASM VM
-    var gpa = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa.deinit();
+    var gpa = std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
+    defer _ = build_options.debugGpaOk(gpa.deinit());
 
     // Setup arena allocator used for test harness
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
@@ -1284,7 +1282,7 @@ pub fn main(init: std.process.Init) anyerror!void {
 
     // Diagnostics over the playground protocol.
     const syntax_error_code_val = try TestData.syntaxErrorRocCode(allocator);
-    try test_cases.append(allocator, try createSimpleTest(allocator, "Syntax Error - Mismatched Braces", syntax_error_code_val, .{ .min_errors = 1, .error_messages = &.{"LIST NOT CLOSED"} }, true));
+    try test_cases.append(allocator, try createSimpleTest(allocator, "Syntax Error - Mismatched Braces", syntax_error_code_val, .{ .min_errors = 1, .error_messages = &.{"EXPECTED LIST SEPARATOR"} }, true));
 
     const type_error_code_val = try TestData.typeErrorRocCode(allocator);
     try test_cases.append(allocator, try createSimpleTest(allocator, "Type Error - Adding String and Number", type_error_code_val, .{ .min_errors = 1, .error_messages = &.{"MISSING METHOD"} }, true));
@@ -1309,7 +1307,7 @@ pub fn main(init: std.process.Init) anyerror!void {
     reset_test_steps[1] = .{
         .message = .{ .type = "LOAD_SOURCE", .source = code_for_reset_test },
         .expected_status = "SUCCESS",
-        .expected_diagnostics = .{ .min_errors = 1, .error_messages = &.{"LIST NOT CLOSED"} },
+        .expected_diagnostics = .{ .min_errors = 1, .error_messages = &.{"EXPECTED LIST SEPARATOR"} },
         .owned_source = code_for_reset_test,
     };
     reset_test_steps[2] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };

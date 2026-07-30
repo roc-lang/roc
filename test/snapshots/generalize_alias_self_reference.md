@@ -12,17 +12,19 @@ main = x
 # EXPECTED
 INVALID ASSIGNMENT TO ITSELF - generalize_alias_self_reference.md:1:5:1:6
 # PROBLEMS
-**INVALID ASSIGNMENT TO ITSELF**
-The value `x` is assigned to itself, which would cause an infinite loop at runtime.
 
-Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.
+┌──────────────────────────────┐
+│ INVALID ASSIGNMENT TO ITSELF ├─ The value `x` is assigned to itself, ───────┐
+└┬─────────────────────────────┘  which would cause an infinite loop at       │
+ │                                runtime.                                    │
+ │                                                                            │
+ │  x = x                                                                     │
+ │      ‾                                                                     │
+ └──────────────────────────────────── generalize_alias_self_reference.md:1:5 ┘
 
-**generalize_alias_self_reference.md:1:5:1:6:**
-```roc
-x = x
-```
-    ^
-
+    Only functions can reference themselves (for recursion). For non-function
+    values, the right-hand side must be fully computable without referring to
+    the value being assigned.
 
 # TOKENS
 ~~~zig
@@ -33,7 +35,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "x"))
@@ -54,8 +56,7 @@ NO CHANGE
 		(e-runtime-error (tag "self_referential_definition")))
 	(d-let
 		(p-assign (ident "main"))
-		(e-lookup-local
-			(p-assign (ident "x")))))
+		(e-runtime-error (tag "erroneous_value_use"))))
 ~~~
 # TYPES
 ~~~clojure

@@ -1,12 +1,3 @@
-module [
-    Color,
-    to_str,
-    rgb,
-    rgba,
-    hex,
-    named,
-]
-
 Color := [
     RGB(U8, U8, U8),
     RGBA(U8, U8, U8, Dec),

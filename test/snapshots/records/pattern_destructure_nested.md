@@ -11,31 +11,31 @@ match person {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - pattern_destructure_nested.md:1:7:1:13
+NAME NOT IN SCOPE - pattern_destructure_nested.md:1:7:1:13
 UNUSED VARIABLE - pattern_destructure_nested.md:2:38:2:45
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `person` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**pattern_destructure_nested.md:1:7:1:13:**
-```roc
-match person {
-```
-      ^^^^^^
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `person` in this scope. ──────────────┐
+└┬──────────────────┘                                                         │
+ │                                                                            │
+ │  match person {                                                            │
+ │        ‾‾‾‾‾‾                                                              │
+ └───────────────────────────────────────── pattern_destructure_nested.md:1:7 ┘
+
+    Is it misspelled, or is there an import missing?
 
 
-**UNUSED VARIABLE**
-Variable `zipCode` is not used anywhere in your code.
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `zipCode` is defined here and then never used. ─┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  …, city, zipCode } } => "${name} lives on ${street} in ${city}"           │
+ │           ‾‾‾‾‾‾‾                                                          │
+ └──────────────────────────────────────── pattern_destructure_nested.md:2:38 ┘
 
-If you don't need this variable, prefix it with an underscore like `_zipCode` to suppress this warning.
-The unused variable is declared here:
-**pattern_destructure_nested.md:2:38:2:45:**
-```roc
-    { name, address: { street, city, zipCode } } => "${name} lives on ${street} in ${city}"
-```
-                                     ^^^^^^^
-
+    If you don't need this variable, prefix it with an underscore like
+    `_zipCode` to suppress this warning.
 
 # TOKENS
 ~~~zig
@@ -114,7 +114,7 @@ match person {
 							(p-assign (ident "#interp_2"))
 							(e-lookup-local
 								(p-assign (ident "city"))))
-						(e-interpolation (constraint-fn-var 103)
+						(e-interpolation (constraint-fn-var 245) (dispatcher-var 30)
 							(first
 								(e-literal (string "")))
 							(parts

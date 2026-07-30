@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=annotation-only REPL input is rejected before lowering
+description=annotation-only REPL input is held for a later definition and prints nothing
 type=repl
 ~~~
 # SOURCE
@@ -8,6 +8,6 @@ type=repl
 » foo : Str -> Str
 ~~~
 # OUTPUT
-Parse error: Type annotations are not supported in the REPL yet
+
 # PROBLEMS
 NIL

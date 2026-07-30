@@ -14,17 +14,18 @@ main = (picked(1), picked("a"))
 # EXPECTED
 TYPE MISMATCH - generalize_alias_if_branches.md:5:27:5:30
 # PROBLEMS
-**TYPE MISMATCH**
-This string literal is being used where a non-string type is needed:
-**generalize_alias_if_branches.md:5:27:5:30:**
-```roc
-main = (picked(1), picked("a"))
-```
-                          ^^^
 
-The type was determined to be:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
+└┬──────────────┘  type is needed.                                            │
+ │                                                                            │
+ │  main = (picked(1), picked("a"))                                           │
+ │                            ‾‾‾                                             │
+ └────────────────────────────────────── generalize_alias_if_branches.md:5:27 ┘
 
-    Dec
+    The type was determined to be:
+
+        Dec
 
 # TOKENS
 ~~~zig
@@ -36,7 +37,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "id"))
@@ -92,15 +93,14 @@ NO CHANGE
 		(p-assign (ident "main"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 77)
+				(e-call (constraint-fn-var 231)
 					(e-lookup-local
 						(p-assign (ident "picked")))
 					(e-num (value "1")))
-				(e-call (constraint-fn-var 94)
+				(e-call (constraint-fn-var 240)
 					(e-lookup-local
 						(p-assign (ident "picked")))
-					(e-string
-						(e-literal (string "a"))))))))
+					(e-runtime-error (tag "erroneous_value_expr")))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -10,17 +10,18 @@ x = 12.34()
 # EXPECTED
 MISSING METHOD - call_float_literal.md:1:5:1:10
 # PROBLEMS
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
-**call_float_literal.md:1:5:1:10:**
-```roc
-x = 12.34()
-```
-    ^^^^^
 
-The value's type, which does not have a method named **from_numeral**, is:
+┌────────────────┐
+│ MISSING METHOD ├─ This `from_numeral` method is being called on a value ────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  x = 12.34()                                                               │
+ │      ‾‾‾‾‾                                                                 │
+ └───────────────────────────────────────────────── call_float_literal.md:1:5 ┘
 
-    ({}) -> _ret
+    The value's type, which does not have a method named `from_numeral`, is:
+
+        ({}) -> _ret
 
 # TOKENS
 ~~~zig
@@ -30,7 +31,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "x"))
@@ -46,8 +47,8 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "x"))
-		(e-call (constraint-fn-var 45)
-			(e-dec-small (numerator "1234") (denominator-power-of-ten "2") (value "12.34")))))
+		(e-call (constraint-fn-var 203)
+			(e-runtime-error (tag "erroneous_value_expr")))))
 ~~~
 # TYPES
 ~~~clojure

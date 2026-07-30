@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Error for undefined deeply nested tag (no fallback to module)
+description=Error for undefined deeply nested tag (no fallback to mod)
 type=snippet
 ~~~
 # SOURCE
@@ -8,21 +8,20 @@ type=snippet
 Foo := [A, B, C]
 
 # This should error as "undeclared type Foo.Bar.Baz"
-# NOT try to interpret it as a module import
+# NOT try to interpret it as a mod import
 x = Foo.Bar.Baz.X
 ~~~
 # EXPECTED
 UNDECLARED TYPE - nominal_undefined_deeply_nested_tag.md:5:12:5:16
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Foo.Bar.Baz_ is not declared in this scope.
 
-This type is referenced here:
-**nominal_undefined_deeply_nested_tag.md:5:12:5:16:**
-```roc
-x = Foo.Bar.Baz.X
-```
-           ^^^^
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Foo.Bar.Baz` is not declared in this scope. ───┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  x = Foo.Bar.Baz.X                                                         │
+ │             ‾‾‾‾                                                           │
+ └─────────────────────────────── nominal_undefined_deeply_nested_tag.md:5:12 ┘
 
 
 # TOKENS
@@ -34,7 +33,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "Foo")

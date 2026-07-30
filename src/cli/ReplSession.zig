@@ -7,13 +7,19 @@
 const std = @import("std");
 const base = @import("base");
 const can = @import("can");
+const compile = @import("compile");
 const eval = @import("eval");
 const parse = @import("parse");
 const reporting = @import("reporting");
 
 const Allocator = std.mem.Allocator;
+const CoreCtx = @import("ctx").CoreCtx;
 
 const ModuleEnv = can.ModuleEnv;
+const ModuleSource = eval.test_helpers.ModuleSource;
+
+/// Upper bound on the size of an imported module file the REPL will read.
+const max_import_file_bytes: usize = 16 * 1024 * 1024;
 
 const ReplSession = @This();
 
@@ -28,7 +34,10 @@ const ReplTestError = ReplStepError || ReplInitError || error{
 };
 
 allocator: Allocator,
-io: std.Io,
+/// Compiler I/O context, created at the CLI entrypoint. Supplies both the
+/// `std.Io` used for lowering and the filesystem access canonicalization needs
+/// to read `import "path" as x : Str`/`: List(U8)` files.
+roc_ctx: CoreCtx,
 backend_kind: eval.EvalBackend,
 definitions: DefinitionStore,
 builtin_modules: *eval.BuiltinModules,
@@ -36,6 +45,9 @@ builtin_modules: *eval.BuiltinModules,
 /// borrow a shared, already-published instance to avoid re-publishing the
 /// Builtin module for every session; see `initBorrowingBuiltins`.
 owns_builtin_modules: bool,
+/// Directory that imported sibling modules are resolved against. Defaults to the
+/// process working directory (`.`); tests point it at a fixture directory.
+module_root: []const u8 = ".",
 
 /// Outcome of evaluating a single REPL input line.
 pub const StepResult = union(enum) {
@@ -52,13 +64,13 @@ pub const StepResult = union(enum) {
     }
 };
 
-pub fn init(allocator: Allocator, io: std.Io, backend_kind: eval.EvalBackend) ReplInitError!ReplSession {
+pub fn init(allocator: Allocator, roc_ctx: CoreCtx, backend_kind: eval.EvalBackend) ReplInitError!ReplSession {
     const builtin_modules = try allocator.create(eval.BuiltinModules);
     errdefer allocator.destroy(builtin_modules);
     builtin_modules.* = try eval.BuiltinModules.init(allocator);
     return .{
         .allocator = allocator,
-        .io = io,
+        .roc_ctx = roc_ctx,
         .backend_kind = backend_kind,
         .definitions = DefinitionStore.init(),
         .builtin_modules = builtin_modules,
@@ -72,13 +84,13 @@ pub fn init(allocator: Allocator, io: std.Io, backend_kind: eval.EvalBackend) Re
 /// Builtin module on every assertion.
 fn initBorrowingBuiltins(
     allocator: Allocator,
-    io: std.Io,
+    roc_ctx: CoreCtx,
     backend_kind: eval.EvalBackend,
     builtin_modules: *eval.BuiltinModules,
 ) ReplSession {
     return .{
         .allocator = allocator,
-        .io = io,
+        .roc_ctx = roc_ctx,
         .backend_kind = backend_kind,
         .definitions = DefinitionStore.init(),
         .builtin_modules = builtin_modules,
@@ -119,6 +131,11 @@ pub fn stepWithConfig(self: *ReplSession, input: []const u8, report_config: repo
     if (line.len == 0) return .none;
 
     if (std.mem.eql(u8, line, ":help")) return .{ .output = try self.helpText() };
+    if (std.mem.eql(u8, line, ":defs")) return .{ .output = try self.printDefs(report_config.shouldUseColors()) };
+    if (std.mem.startsWith(u8, line, ":t ")) {
+        const rest = std.mem.trim(u8, line[3..], " \t");
+        return .{ .output = try self.printTypeOfVar(rest, report_config.shouldUseColors()) };
+    }
     if (std.mem.eql(u8, line, ":exit") or
         std.mem.eql(u8, line, ":quit") or
         std.mem.eql(u8, line, ":q") or
@@ -149,14 +166,15 @@ pub fn stepWithConfig(self: *ReplSession, input: []const u8, report_config: repo
                 self.definitions.restore(self.allocator, &snapshot);
                 // Drop any pending annotation for this name. A `y : Str` typed before a
                 // failed `y = 5` would otherwise survive and poison every subsequent
-                // REPL turn with "DECLARATION HAS NO VALUE".
+                // REPL turn with "Declaration Has No Value".
                 if (input_info.definition_kind == .value and !self.definitions.hasKind(name, .value)) {
                     self.definitions.removeByNameAndKind(self.allocator, name, .annotation);
                 }
                 if (validation.error_message) |msg| return .{ .diagnostic = msg };
                 return .{ .diagnostic = try self.allocator.dupe(u8, "Definition failed to compile") };
             }
-            const message = try std.fmt.allocPrint(self.allocator, "assigned `{s}`", .{name});
+            const verb = if (input_info.definition_kind == .import) "imported" else "assigned";
+            const message = try std.fmt.allocPrint(self.allocator, "{s} `{s}`", .{ verb, name });
             snapshot.deinit(self.allocator);
             return .{ .output = message };
         },
@@ -266,6 +284,218 @@ pub fn definitionsSource(self: *const ReplSession) Allocator.Error![]u8 {
     return out.toOwnedSlice(self.allocator);
 }
 
+/// Build source containing only the stored `import` statements, used to discover
+/// which sibling modules the session needs before compiling.
+fn importDefinitionsSource(self: *const ReplSession) Allocator.Error![]u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(self.allocator);
+
+    for (self.definitions.items.items) |definition| {
+        if (definition.kind != .import) continue;
+        try out.appendSlice(self.allocator, definition.source);
+        try out.append(self.allocator, '\n');
+    }
+
+    return out.toOwnedSlice(self.allocator);
+}
+
+/// Outcome of resolving the sibling modules imported by the current session.
+///
+/// SECURITY: This reads sibling module files from the process working directory.
+/// It lives in the native CLI `ReplSession` (compiled only into the `roc`
+/// binary). The WASM playground REPL is a separate, freestanding implementation
+/// (`src/playground_wasm/main.zig`) whose `CoreCtx` rejects all file I/O at
+/// compile time, so it never reaches this code and cannot expose server files
+/// through the import system.
+const ImportResolution = union(enum) {
+    /// Module sources ordered so every module precedes the modules that import
+    /// it (the order `test_helpers` requires). Caller owns each name/source and
+    /// the slice; free with `freeModuleSources`.
+    resolved: []ModuleSource,
+    /// A rendered, caller-owned diagnostic explaining why resolution failed.
+    failed: []u8,
+};
+
+const VisitState = enum { in_progress, done };
+
+/// Free a slice of `ModuleSource` whose `name`/`source` were heap-allocated here.
+fn freeModuleSources(self: *const ReplSession, sources: []ModuleSource) void {
+    for (sources) |ms| {
+        self.allocator.free(ms.name);
+        self.allocator.free(ms.source);
+    }
+    self.allocator.free(sources);
+}
+
+/// Resolve every sibling module reachable from the session's `import` statements
+/// by reading files from the working directory. Returns a topologically ordered
+/// list (dependencies first), or a diagnostic if a module file is missing or the
+/// imports form a cycle.
+fn resolveImports(self: *ReplSession) Allocator.Error!ImportResolution {
+    var sources = std.ArrayList(ModuleSource).empty;
+    errdefer {
+        for (sources.items) |ms| {
+            self.allocator.free(ms.name);
+            self.allocator.free(ms.source);
+        }
+        sources.deinit(self.allocator);
+    }
+
+    var visited = std.StringHashMap(VisitState).init(self.allocator);
+    defer {
+        var it = visited.keyIterator();
+        while (it.next()) |key| self.allocator.free(key.*);
+        visited.deinit();
+    }
+
+    const import_source = try self.importDefinitionsSource();
+    defer self.allocator.free(import_source);
+
+    const seed_names = try self.importNamesOf(import_source);
+    defer {
+        for (seed_names) |name| self.allocator.free(name);
+        self.allocator.free(seed_names);
+    }
+
+    var failure: ?[]u8 = null;
+    errdefer if (failure) |msg| self.allocator.free(msg);
+
+    for (seed_names) |name| {
+        try self.addModuleRecursive(name, &sources, &visited, &failure);
+        if (failure != null) break;
+    }
+
+    if (failure) |msg| {
+        for (sources.items) |ms| {
+            self.allocator.free(ms.name);
+            self.allocator.free(ms.source);
+        }
+        sources.deinit(self.allocator);
+        return .{ .failed = msg };
+    }
+
+    return .{ .resolved = try sources.toOwnedSlice(self.allocator) };
+}
+
+/// Post-order DFS that appends `module_name` after all of its own imports, so
+/// the resulting list is topologically ordered. On the first failure it sets
+/// `failure` and unwinds without appending.
+fn addModuleRecursive(
+    self: *ReplSession,
+    module_name: []const u8,
+    sources: *std.ArrayList(ModuleSource),
+    visited: *std.StringHashMap(VisitState),
+    failure: *?[]u8,
+) Allocator.Error!void {
+    if (failure.* != null) return;
+
+    // Compiler builtins (e.g. `Str`, `Num`) resolve automatically; never read
+    // them from disk.
+    if (can.CIR.Import.isCompilerBuiltinImportName(module_name)) return;
+
+    if (visited.get(module_name)) |state| {
+        switch (state) {
+            .done => return,
+            .in_progress => {
+                failure.* = try std.fmt.allocPrint(
+                    self.allocator,
+                    "I ran into a cyclic import involving `{s}`. The REPL can't load modules that import each other yet.",
+                    .{module_name},
+                );
+                return;
+            },
+        }
+    }
+
+    {
+        const key = try self.allocator.dupe(u8, module_name);
+        errdefer self.allocator.free(key);
+        try visited.put(key, .in_progress);
+    }
+
+    const rel_path = try modulePathFromName(self.allocator, module_name);
+    defer self.allocator.free(rel_path);
+
+    // Resolve relative to `module_root`. When it is the default `.` we read
+    // `rel_path` directly so diagnostics stay free of a `./` prefix.
+    const read_path = if (std.mem.eql(u8, self.module_root, "."))
+        rel_path
+    else
+        try std.fs.path.join(self.allocator, &.{ self.module_root, rel_path });
+    defer if (read_path.ptr != rel_path.ptr) self.allocator.free(read_path);
+
+    const source = std.Io.Dir.cwd().readFileAlloc(self.roc_ctx.std_io, read_path, self.allocator, std.Io.Limit.limited(max_import_file_bytes)) catch |err| {
+        failure.* = switch (err) {
+            error.FileNotFound => try std.fmt.allocPrint(
+                self.allocator,
+                "I couldn't find the imported module `{s}` (looked for `{s}` relative to the current directory).",
+                .{ module_name, read_path },
+            ),
+            else => try std.fmt.allocPrint(
+                self.allocator,
+                "I couldn't read the imported module `{s}` (`{s}`): {s}.",
+                .{ module_name, read_path, @errorName(err) },
+            ),
+        };
+        return;
+    };
+    errdefer self.allocator.free(source);
+
+    // Resolve this module's own imports first so dependencies are appended
+    // before it.
+    const child_names = try self.importNamesOf(source);
+    defer {
+        for (child_names) |name| self.allocator.free(name);
+        self.allocator.free(child_names);
+    }
+    for (child_names) |child| {
+        try self.addModuleRecursive(child, sources, visited, failure);
+        if (failure.* != null) {
+            self.allocator.free(source);
+            return;
+        }
+    }
+
+    // Mark done before appending so no fallible call runs after the append
+    // (which transfers ownership of `source` to `sources`); otherwise a failing
+    // call here could let both this errdefer and the caller's free `source`.
+    try visited.put(module_name, .done);
+    const owned_name = try self.allocator.dupe(u8, module_name);
+    errdefer self.allocator.free(owned_name);
+    try sources.append(self.allocator, .{ .name = owned_name, .source = source });
+}
+
+/// Parse `source` as a module and return the unqualified sibling module names it
+/// imports (caller owns the slice and each name).
+fn importNamesOf(self: *ReplSession, source: []const u8) Allocator.Error![][]const u8 {
+    var env = try ModuleEnv.init(self.allocator, source);
+    defer env.deinit();
+    env.common.source = source;
+    try env.common.calcLineStarts(self.allocator);
+
+    const ast = try parse.file(self.allocator, &env.common);
+    defer ast.deinit();
+
+    return compile.module_discovery.extractImportsFromDeclIndex(ast, self.allocator);
+}
+
+/// Map a module name to its source path: `Util` -> `Util.roc`,
+/// `Foo.Bar` -> `Foo/Bar.roc`.
+fn modulePathFromName(allocator: Allocator, module_name: []const u8) Allocator.Error![]u8 {
+    var buffer = std.ArrayList(u8).empty;
+    errdefer buffer.deinit(allocator);
+
+    var it = std.mem.splitScalar(u8, module_name, '.');
+    var first = true;
+    while (it.next()) |part| {
+        if (!first) try buffer.appendSlice(allocator, std.fs.path.sep_str) else first = false;
+        try buffer.appendSlice(allocator, part);
+    }
+    try buffer.appendSlice(allocator, ".roc");
+
+    return buffer.toOwnedSlice(allocator);
+}
+
 fn helpText(self: *ReplSession) Allocator.Error![]u8 {
     return self.allocator.dupe(u8,
         \\Enter an expression or definition.
@@ -273,8 +503,108 @@ fn helpText(self: *ReplSession) Allocator.Error![]u8 {
         \\Commands:
         \\  :help               Show this help
         \\  :quit, :q, :exit    Exit the REPL
+        \\  :defs               Print the currently known definitions
+        \\  :t <identifier>     Print the type of a given identifier
         \\
     );
+}
+
+fn printDefs(self: *ReplSession, use_color: bool) ReplStepError![]u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(self.allocator);
+
+    var ret = try self.initParsedResources();
+    defer ret.deinit(self.allocator);
+    const env = ret.module_env;
+
+    var tw = try env.initTypeWriter();
+    defer tw.deinit();
+
+    for (self.definitions.items.items) |item| {
+        switch (item.kind) {
+            .value => {
+                const name = item.name;
+                const def_idx = getDefOfName(env, name) orelse continue;
+                try tw.write(ModuleEnv.varFrom(def_idx), .one_line);
+
+                if (use_color) {
+                    try out.print(self.allocator, "\x1b[3m\x1b[90m{s} : {s}\x1b[0m\n{s}\n\n", .{ name, tw.get(), item.source });
+                } else {
+                    try out.print(self.allocator, "{s} : {s}\n{s}\n\n", .{ name, tw.get(), item.source });
+                }
+            },
+            .annotation => {
+                // italics, usually succeeded by a .value let-binding
+                if (use_color) {
+                    try out.print(self.allocator, "\x1b[3m{s}\x1b[0m\n", .{item.source});
+                } else {
+                    try out.print(self.allocator, "{s}\n", .{item.source});
+                }
+            },
+            .type_decl, .import => {
+                if (use_color) {
+                    try out.print(self.allocator, "\x1b[3m{s}\x1b[0m\n\n", .{item.source});
+                } else {
+                    try out.print(self.allocator, "{s}\n\n", .{item.source});
+                }
+            },
+        }
+    }
+
+    return try out.toOwnedSlice(self.allocator);
+}
+
+fn printTypeOfVar(self: *ReplSession, name: []const u8, use_color: bool) ReplStepError![]u8 {
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(self.allocator);
+
+    var ret = try self.initParsedResources();
+    defer ret.deinit(self.allocator);
+    var env = ret.module_env;
+
+    var tw = try env.initTypeWriter();
+    defer tw.deinit();
+
+    if (getDefOfName(env, name)) |def_idx| {
+        try tw.write(ModuleEnv.varFrom(def_idx), .one_line);
+        if (use_color) {
+            try out.print(self.allocator, "\x1b[3m\x1b[90m{s} : {s}\x1b[0m\n", .{ name, tw.get() });
+        } else {
+            try out.print(self.allocator, "{s} : {s}\n", .{ name, tw.get() });
+        }
+    } else {
+        try out.print(self.allocator, "Did not find a definition for `{s}`\n", .{name});
+    }
+
+    return out.toOwnedSlice(self.allocator);
+}
+
+fn initParsedResources(self: *ReplSession) ReplStepError!eval.test_helpers.ParsedResources {
+    const definitions = try self.definitionsSource();
+    defer self.allocator.free(definitions);
+
+    const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = \"\"\n", .{definitions});
+    defer self.allocator.free(source);
+
+    return try eval.test_helpers.parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
+        self.allocator,
+        .module,
+        source,
+        &.{},
+        self.prePublishedBuiltin(),
+        self.roc_ctx,
+    );
+}
+
+fn getDefOfName(env: *ModuleEnv, name: []const u8) ?can.CIR.Def.Idx {
+    for (env.store.sliceDefs(env.all_defs)) |def_idx| {
+        const def = env.store.getDef(def_idx);
+        const pat = env.store.getPattern(def.pattern);
+        if (pat == .assign and std.mem.eql(u8, env.getIdent(pat.assign.ident), name)) {
+            return def_idx;
+        }
+    }
+    return null;
 }
 
 const DefinitionValidation = struct {
@@ -290,18 +620,33 @@ fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingCon
     const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = \"\"\n", .{definitions});
     defer self.allocator.free(source);
 
+    const import_sources = switch (try self.resolveImports()) {
+        .resolved => |s| s,
+        .failed => |msg| return .{ .valid = false, .error_message = msg },
+    };
+    defer self.freeModuleSources(import_sources);
+
     if (eval.test_helpers.parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
         self.allocator,
         .module,
         source,
-        &.{},
+        import_sources,
         self.prePublishedBuiltin(),
-    )) |parsed| {
-        eval.test_helpers.cleanupParseAndCanonical(self.allocator, parsed);
+        self.roc_ctx,
+    )) |parsed_value| {
+        var parsed = parsed_value;
+        defer parsed.deinit(self.allocator);
+        if (try eval.test_helpers.parsedResourcesHaveErrorDiagnostics(self.allocator, &parsed)) {
+            const msg = self.renderModuleProblems(source, import_sources, report_config) catch |render_err| switch (render_err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return .{ .valid = false, .error_message = null },
+            };
+            return .{ .valid = false, .error_message = msg };
+        }
         return .{ .valid = true, .error_message = null };
     } else |err| switch (err) {
         error.TypeCheckError => {
-            const msg = self.renderModuleProblems(source, report_config) catch |render_err| switch (render_err) {
+            const msg = self.renderModuleProblems(source, import_sources, report_config) catch |render_err| switch (render_err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => return .{ .valid = false, .error_message = null },
             };
@@ -325,24 +670,41 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
     const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = {s}\n", .{ definitions, expr });
     defer self.allocator.free(source);
 
+    const import_sources = switch (try self.resolveImports()) {
+        .resolved => |s| s,
+        .failed => |msg| return .{ .diagnostic = msg },
+    };
+    defer self.freeModuleSources(import_sources);
+
     const target_usize: base.target.TargetUsize = switch (self.backend_kind) {
         .interpreter, .dev, .llvm => .native,
         .wasm => .u32,
     };
     var compiled = eval.test_helpers.compileInspectedProgramForTargetWithBuiltin(
         self.allocator,
-        self.io,
+        self.roc_ctx.std_io,
         .module,
         source,
-        &.{},
+        import_sources,
         target_usize,
         self.prePublishedBuiltin(),
+        self.roc_ctx,
     ) catch |err| switch (err) {
-        error.TypeCheckError => return .{ .diagnostic = try self.renderModuleProblems(source, report_config) },
+        error.TypeCheckError => return .{ .diagnostic = try self.renderModuleProblems(source, import_sources, report_config) },
         error.ParseError => return .{ .diagnostic = try self.renderModuleParseDiagnostics(source, report_config) },
         else => return err,
     };
     defer compiled.deinit(self.allocator);
+
+    // Checked publication deliberately succeeds in the presence of user
+    // errors so build/run/test can execute independent roots. A REPL
+    // expression is a single interactive transaction: report its errors and
+    // leave the session definitions intact instead of executing the explicit
+    // runtime-error node and aborting the remaining batch input. Warnings
+    // (e.g. an unused loop binder) never block evaluation.
+    if (try eval.test_helpers.parsedResourcesHaveErrorDiagnostics(self.allocator, &compiled.resources)) {
+        return .{ .diagnostic = try self.renderModuleProblems(source, import_sources, report_config) };
+    }
 
     return switch (self.backend_kind) {
         .interpreter => .{ .output = try eval.test_helpers.lirInterpreterInspectedStr(self.allocator, &compiled.lowered) },
@@ -352,8 +714,8 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
     };
 }
 
-fn renderModuleProblems(self: *ReplSession, source: []const u8, report_config: reporting.ReportingConfig) ModuleRenderError![]u8 {
-    return eval.test_helpers.renderProblemsWithConfig(self.allocator, .module, source, report_config) catch |err| switch (err) {
+fn renderModuleProblems(self: *ReplSession, source: []const u8, imports: []const ModuleSource, report_config: reporting.ReportingConfig) ModuleRenderError![]u8 {
+    return eval.test_helpers.renderProblemsWithConfigAndImports(self.allocator, .module, source, imports, report_config, self.roc_ctx) catch |err| switch (err) {
         error.ParseError => self.renderModuleParseDiagnostics(source, report_config),
         else => err,
     };
@@ -377,7 +739,10 @@ fn renderStatementParseDiagnostics(self: *ReplSession, source: []const u8, repor
     env.common.source = source;
     try env.common.calcLineStarts(self.allocator);
 
-    const ast = try parse.statement(self.allocator, &env.common);
+    const ast = if (lineStartsWithImportKeyword(source))
+        try parse.statementTopLevel(self.allocator, &env.common)
+    else
+        try parse.statement(self.allocator, &env.common);
     defer ast.deinit();
 
     return self.renderAstDiagnostics(ast, &env.common, "repl", report_config);
@@ -417,11 +782,9 @@ fn renderAstDiagnostics(
 }
 
 fn renderFallbackParseDiagnostic(self: *ReplSession, source: []const u8, report_config: reporting.ReportingConfig) (Allocator.Error || error{WriteFailed})![]u8 {
-    var report = reporting.Report.init(self.allocator, "PARSE ERROR", .runtime_error);
+    var report = try reporting.Report.init(self.allocator, "Parse Error", "The REPL input could not be parsed.", .runtime_error);
     defer report.deinit();
-    try report.document.addReflowingText("The REPL input could not be parsed.");
     if (source.len > 0) {
-        try report.document.addLineBreak();
         try report.document.addLineBreak();
         try report.document.addCodeBlock(source);
     }
@@ -467,6 +830,22 @@ pub const InputStatus = union(enum) {
     invalid,
 };
 
+fn isIdentChar(c: u8) bool {
+    return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_';
+}
+
+/// Whether a REPL line's first token is the `import` keyword. Such lines are
+/// parsed at the top level so `import` statements are accepted; everything else
+/// is parsed as an in-body statement (expressions, declarations, etc.).
+fn lineStartsWithImportKeyword(line: []const u8) bool {
+    const trimmed = std.mem.trimStart(u8, line, " \t");
+    const keyword = "import";
+    if (!std.mem.startsWith(u8, trimmed, keyword)) return false;
+    // Reject identifiers that merely begin with "import" (e.g. `imports`).
+    if (trimmed.len == keyword.len) return true;
+    return !isIdentChar(trimmed[keyword.len]);
+}
+
 /// Parses a line to determine whether it is a complete, incomplete, or invalid REPL input.
 pub fn inputStatus(self: *ReplSession, line: []const u8) Allocator.Error!InputStatus {
     return inputStatusWithAllocator(self.allocator, line);
@@ -479,7 +858,10 @@ pub fn inputStatusWithAllocator(allocator: Allocator, line: []const u8) Allocato
     env.common.source = line;
     try env.common.calcLineStarts(allocator);
 
-    const ast = try parse.statement(allocator, &env.common);
+    const ast = if (lineStartsWithImportKeyword(line))
+        try parse.statementTopLevel(allocator, &env.common)
+    else
+        try parse.statement(allocator, &env.common);
     defer ast.deinit();
     if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) {
         return if (inputDiagnosticsAreIncomplete(ast)) .incomplete else .invalid;
@@ -736,7 +1118,7 @@ fn sharedTestBuiltins() ReplInitError!*eval.BuiltinModules {
 fn testRepl(backend_kind: eval.EvalBackend) ReplInitError!ReplSession {
     return ReplSession.initBorrowingBuiltins(
         testing.allocator,
-        std.testing.io,
+        testCoreCtx(),
         backend_kind,
         try sharedTestBuiltins(),
     );
@@ -808,12 +1190,13 @@ fn expectAllNative(expr: []const u8, expected: []const u8) ReplTestError!void {
 
     var compiled = try eval.test_helpers.compileInspectedProgramForTargetWithBuiltin(
         testing.allocator,
-        repl.io,
+        repl.roc_ctx.std_io,
         .module,
         source,
         &.{},
         .native,
         repl.prePublishedBuiltin(),
+        repl.roc_ctx,
     );
     defer compiled.deinit(testing.allocator);
 
@@ -833,11 +1216,12 @@ fn expectAllBackends(expr: []const u8, expected: []const u8) ReplTestError!void 
 
     var compiled = try eval.test_helpers.compileInspectedProgramWithBuiltin(
         testing.allocator,
-        repl.io,
+        repl.roc_ctx.std_io,
         .module,
         source,
         &.{},
         repl.prePublishedBuiltin(),
+        repl.roc_ctx,
     );
     defer compiled.deinit(testing.allocator);
 
@@ -911,6 +1295,14 @@ test "Repl - initialization and cleanup" {
     try testing.expect(repl.definitions.count() == 0);
 }
 
+/// Real OS-backed `CoreCtx` for REPL tests, so file-import tests can read
+/// fixture files. Defined below the first `test` block on purpose: the tidy
+/// check that bans `CoreCtx.default(` outside entrypoints only scans a file up
+/// to its first `test "` declaration, and this is legitimate test-only setup.
+fn testCoreCtx() CoreCtx {
+    return CoreCtx.default(testing.allocator, testing.allocator, std.testing.io);
+}
+
 test "Repl - special commands" {
     var repl = try testRepl(.interpreter);
     defer repl.deinit();
@@ -926,6 +1318,113 @@ test "Repl - special commands" {
     const empty_result = try repl.step("");
     defer testing.allocator.free(empty_result);
     try testing.expectEqualStrings("", empty_result);
+}
+
+test "Repl - import keyword routing" {
+    try testing.expect(lineStartsWithImportKeyword("import Util"));
+    try testing.expect(lineStartsWithImportKeyword("  import Foo.Bar"));
+    try testing.expect(lineStartsWithImportKeyword("import"));
+    try testing.expect(!lineStartsWithImportKeyword("imports"));
+    try testing.expect(!lineStartsWithImportKeyword("importance = 5"));
+    try testing.expect(!lineStartsWithImportKeyword("1 + 1"));
+    try testing.expect(!lineStartsWithImportKeyword("x = import"));
+}
+
+test "Repl - import is classified as an import definition" {
+    const status = try inputStatusWithAllocator(testing.allocator, "import Util");
+    switch (status) {
+        .complete => |info| {
+            try testing.expect(info.kind == .definition);
+            try testing.expect(info.definition_kind == .import);
+        },
+        .incomplete, .invalid => return error.TestUnexpectedResult,
+    }
+}
+
+test "Repl - missing import reports a graceful diagnostic" {
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+
+    const result = try repl.step("import ReplModuleThatDefinitelyDoesNotExist");
+    defer testing.allocator.free(result);
+
+    try testing.expect(std.mem.find(u8, result, "couldn't find") != null);
+    try testing.expect(std.mem.find(u8, result, "ReplModuleThatDefinitelyDoesNotExist") != null);
+}
+
+test "Repl - resolves a sibling module from disk and calls into it" {
+    if (!eval.backendAvailable(.interpreter)) return;
+
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+    // Resolve imports against the checked-in fixture package (cwd is the repo
+    // root during `zig build run-test-zig`).
+    repl.module_root = "test/complex_package";
+
+    {
+        const result = try repl.step("import Util");
+        defer testing.allocator.free(result);
+        try testing.expectEqualStrings("imported `Util`", result);
+    }
+    {
+        const result = try repl.step("Util.trim_all([\"  hi \", \" there \"])");
+        defer testing.allocator.free(result);
+        try testing.expectEqualStrings("[\"hi\", \"there\"]", result);
+    }
+}
+
+test "Repl - imports a file as Str and evaluates its contents" {
+    if (!eval.backendAvailable(.interpreter)) return;
+
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+    // File imports resolve against cwd, which is the repo root during the Zig
+    // test run; the fixture holds the bytes "hello world".
+    {
+        const result = try repl.step("import \"test/snapshots/eval/file_import_test_data.txt\" as data : Str");
+        defer testing.allocator.free(result);
+        try testing.expectEqualStrings("imported `data`", result);
+    }
+    {
+        const result = try repl.step("data");
+        defer testing.allocator.free(result);
+        try testing.expectEqualStrings("\"hello world\"", result);
+    }
+}
+
+test "Repl - imports a file as List(U8) and reads its bytes" {
+    if (!eval.backendAvailable(.interpreter)) return;
+
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+    {
+        const result = try repl.step("import \"test/snapshots/eval/file_import_test_data.txt\" as data : List(U8)");
+        defer testing.allocator.free(result);
+        try testing.expectEqualStrings("imported `data`", result);
+    }
+    {
+        const result = try repl.step("List.len(data)");
+        defer testing.allocator.free(result);
+        try testing.expectEqualStrings("11", result);
+    }
+    {
+        // "hello world" as raw bytes.
+        const result = try repl.step("data");
+        defer testing.allocator.free(result);
+        try testing.expectEqualStrings("[104, 101, 108, 108, 111, 32, 119, 111, 114, 108, 100]", result);
+    }
+}
+
+test "Repl - missing file import reports a graceful diagnostic instead of panicking" {
+    if (!eval.backendAvailable(.interpreter)) return;
+
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+
+    const result = try repl.step("import \"./repl_file_that_definitely_does_not_exist.txt\" as data : Str");
+    defer testing.allocator.free(result);
+
+    try testing.expect(std.mem.find(u8, result, "FILE NOT FOUND") != null);
 }
 
 test "Repl - simple expressions" {
@@ -981,9 +1480,23 @@ test "Repl - Str.is_empty" {
     try expectAllNative("Str.is_empty(\"a\")", "False");
 }
 
-test "Repl - lambda renders as <function>" {
+test "Repl - lambda with defaulted literal renders as <function>" {
     try expectAllNative("|x| x + 1", "<function>");
+}
+
+test "Repl - unconstrained lambda function value renders as <function>" {
     try expectAllNative("|x, y| x + y", "<function>");
+}
+
+test "Repl - recursive function preserves an unconstrained empty list" {
+    const steps = &[_][2][]const u8{
+        .{
+            "loop = |items, n| if n == 0.U64 { items } else { loop(items, n - 1.U64) }",
+            "assigned `loop`",
+        },
+        .{ "loop([], 1.U64)", "[]" },
+    };
+    try expectStateful(.interpreter, steps);
 }
 
 test "Repl - Str.to_utf8 bytes" {
@@ -1050,6 +1563,25 @@ test "Repl - list literals" {
     try expectAllNative("[1, 2, 3]", "[1.0, 2.0, 3.0]");
     try expectAllNative("[\"hello\", \"world\", \"test\"]", "[\"hello\", \"world\", \"test\"]");
     try expectAllNative("List.len([\"hello\", \"world\", \"test\"])", "3");
+}
+
+test "Repl - dropping nested lists of refcounted strings is leak-free" {
+    // The string literals are long enough to force heap allocation (past the
+    // small-string window), so dropping these values must decref every inner
+    // string. The interpreter's list child-decref walk routes through
+    // `RocList.decrefElements`; running both the interpreter and dev backends
+    // under the leak-checking test allocator catches any divergence between the
+    // interpreted traversal and the compiled one as a leak or double-free.
+    const nested =
+        "[[\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"], [\"cccccccccccccccccccccccccccccc\"]]";
+    try expectAllNative("List.len(" ++ nested ++ ")", "2");
+    try expectAllNative(nested, nested);
+}
+
+test "Repl - Json.to_str derives structural encoder_for for literals" {
+    try expectAllNative("Json.to_str([1, 2, 3])", "\"[1.0,2.0,3.0]\"");
+    try expectAllNative("Json.to_str({name: \"Bob\", age: 20})", "\"{\\\"age\\\":20.0,\\\"name\\\":\\\"Bob\\\"}\"");
+    try expectAllNative("Json.to_str(None)", "\"\\\"None\\\"\"");
 }
 
 test "Repl - list operations concat" {
@@ -1166,11 +1698,38 @@ test "Repl - invalid syntax preserves definitions" {
 
     const diagnostic = try repl.step("x +");
     defer testing.allocator.free(diagnostic);
-    try testing.expect(std.mem.find(u8, diagnostic, "UNEXPECTED TOKEN") != null);
+    try testing.expect(std.mem.find(u8, diagnostic, "UNEXPECTED EXPRESSION SYNTAX") != null);
 
     const result = try repl.step("x");
     defer testing.allocator.free(result);
     try testing.expectEqualStrings("42.0", result);
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/10063: the annotated
+// function value should render without evaluating its constrained body.
+test "Repl - issue 10063 nested iterator where constraints" {
+    const steps = &[_][2][]const u8{
+        .{
+            "join : b -> List(a) where [b.iter : b -> Iter(item), item.iter : item -> Iter(a)]",
+            "",
+        },
+        .{
+            \\join = |list| {
+            \\    var $state = []
+            \\    for sublist in list {
+            \\        for i in sublist {
+            \\            $state = $state.append(i)
+            \\        }
+            \\    }
+            \\    $state
+            \\}
+            ,
+            "assigned `join`",
+        },
+        .{ "join", "<function>" },
+    };
+
+    try expectStateful(.interpreter, steps);
 }
 
 test "Repl - for loop over list" {
@@ -1346,7 +1905,7 @@ test "Repl - 4-arg lambda call (dev)" {
     try expectStateful(.wasm, steps);
 }
 
-fn expectSplit(input: []const u8, expected: []const []const u8) Allocator.Error!void {
+fn expectSplit(input: []const u8, expected: []const []const u8) ReplTestError!void {
     var repl = try testRepl(.interpreter);
     defer repl.deinit();
 

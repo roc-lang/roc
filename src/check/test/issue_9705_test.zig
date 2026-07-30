@@ -22,7 +22,7 @@ test "issue 9705: Bool shadowing warns but boolean operators still use builtin B
     defer test_env.gpa.free(diagnostics);
 
     try std.testing.expectEqual(@as(usize, 1), diagnostics.len);
-    try std.testing.expect(diagnostics[0] == .shadowing_warning);
+    try std.testing.expectEqual(std.meta.activeTag(diagnostics[0]), .builtin_type_shadowed_warning);
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.problems.problems.items.len);
 }
 
@@ -42,6 +42,6 @@ test "issue 9705: nested Bool shadowing warns but succeeds" {
     defer test_env.gpa.free(diagnostics);
 
     try std.testing.expectEqual(@as(usize, 1), diagnostics.len);
-    try std.testing.expect(diagnostics[0] == .shadowing_warning);
+    try std.testing.expectEqual(std.meta.activeTag(diagnostics[0]), .builtin_type_shadowed_warning);
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.problems.problems.items.len);
 }

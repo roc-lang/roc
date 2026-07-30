@@ -17,30 +17,57 @@ pub fn isBuiltinModule(env: *const ModuleEnv) bool {
     return env.module_role == .builtin;
 }
 
-/// Returns whether an annotation-only Builtin declaration is handled as an intrinsic wrapper.
-pub fn isIntrinsicAnnotation(env: *const ModuleEnv, ident: base.Ident.Idx) bool {
-    if (ident.eql(env.idents.builtin_str_inspect)) return true;
+/// Stable compiler-owned identity for each annotation-only Builtin intrinsic.
+pub const IntrinsicId = enum(u8) {
+    str_inspect,
+    structural_eq,
+    parse_tag_union,
+    field_names_rename_fields,
+    field_names_shortest_name,
+    field_names_longest_name,
+    field_names_iter,
+    field_names_for_size,
+    field_name,
 
-    if (env.common.findIdent("Builtin.Str.Utf8Problem.is_eq")) |utf8_problem_eq| {
-        if (ident.eql(utf8_problem_eq)) return true;
-    }
-
-    const parse_intrinsics = [_][]const u8{
-        "Builtin.Str.ParseTagUnionSpec.parse",
-        "Builtin.Str.FieldName.FieldNames.rename_fields",
-        "Builtin.Str.FieldName.FieldNames.shortest_name",
-        "Builtin.Str.FieldName.FieldNames.longest_name",
-        "Builtin.Str.FieldName.FieldNames.iter",
-        "Builtin.Str.FieldName.FieldNames.for_size",
-        "Builtin.Str.FieldName.name",
+    pub const RequestResultSource = union(enum(u8)) {
+        declared_return,
+        argument: u8,
     };
-    for (parse_intrinsics) |name| {
-        if (env.common.findIdent(name)) |intrinsic| {
-            if (ident.eql(intrinsic)) return true;
+
+    /// Explicit request-topology contract for compiler-owned intrinsic calls.
+    pub fn requestResultSource(self: IntrinsicId) RequestResultSource {
+        return switch (self) {
+            .field_names_rename_fields => .{ .argument = 0 },
+            else => .declared_return,
+        };
+    }
+};
+
+/// Producer-owned identity for an annotation-only compiler intrinsic.
+pub fn intrinsicAnnotation(env: *const ModuleEnv, ident: base.Ident.Idx) ?IntrinsicId {
+    if (ident.eql(env.idents.builtin_str_inspect)) return .str_inspect;
+
+    const entries = [_]struct { name: []const u8, intrinsic: IntrinsicId }{
+        .{ .name = "Builtin.Str.Utf8Problem.is_eq", .intrinsic = .structural_eq },
+        .{ .name = "Builtin.Encoding.ParseTagUnionSpec.parse", .intrinsic = .parse_tag_union },
+        .{ .name = "Builtin.Encoding.FieldName.FieldNames.rename_fields", .intrinsic = .field_names_rename_fields },
+        .{ .name = "Builtin.Encoding.FieldName.FieldNames.shortest_name", .intrinsic = .field_names_shortest_name },
+        .{ .name = "Builtin.Encoding.FieldName.FieldNames.longest_name", .intrinsic = .field_names_longest_name },
+        .{ .name = "Builtin.Encoding.FieldName.FieldNames.iter", .intrinsic = .field_names_iter },
+        .{ .name = "Builtin.Encoding.FieldName.FieldNames.for_size", .intrinsic = .field_names_for_size },
+        .{ .name = "Builtin.Encoding.FieldName.name", .intrinsic = .field_name },
+    };
+    for (entries) |entry| {
+        if (env.common.findIdent(entry.name)) |intrinsic_ident| {
+            if (ident.eql(intrinsic_ident)) return entry.intrinsic;
         }
     }
+    return null;
+}
 
-    return false;
+/// Returns whether an annotation-only Builtin declaration is handled as an intrinsic wrapper.
+pub fn isIntrinsicAnnotation(env: *const ModuleEnv, ident: base.Ident.Idx) bool {
+    return intrinsicAnnotation(env, ident) != null;
 }
 
 /// Replaces Builtin.roc annotation-only primitive declarations with low-level operation lambdas.
@@ -57,6 +84,8 @@ pub fn apply(env: *ModuleEnv) (Allocator.Error || error{ UnsupportedBuiltinAnnot
     );
     defer graph.deinit();
 
+    var demand_dependencies = try DependencyGraph.collectDependencies(&graph, env.gpa);
+    errdefer demand_dependencies.deinit(env.gpa);
     const eval_order = try DependencyGraph.computeSCCs(&graph, env.gpa);
     if (env.evaluation_order) |old_order| {
         old_order.deinit();
@@ -64,6 +93,8 @@ pub fn apply(env: *ModuleEnv) (Allocator.Error || error{ UnsupportedBuiltinAnnot
     }
     const eval_order_ptr = try env.gpa.create(DependencyGraph.EvaluationOrder);
     eval_order_ptr.* = eval_order;
+    env.setTopLevelDemandDependencies(demand_dependencies);
+    demand_dependencies = .{};
     env.evaluation_order = eval_order_ptr;
 }
 
@@ -191,11 +222,20 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("Builtin.Str.drop_suffix")) |str_drop_suffix_ident| {
         try low_level_map.put(str_drop_suffix_ident, .str_drop_suffix);
     }
-    if (env.common.findIdent("str_find_first_raw")) |str_find_first_ident| {
-        try low_level_map.put(str_find_first_ident, .str_find_first);
+    if (env.common.findIdent("str_split_first_raw")) |str_split_first_ident| {
+        try low_level_map.put(str_split_first_ident, .str_split_first);
+    }
+    if (env.common.findIdent("str_split_last_raw")) |str_split_last_ident| {
+        try low_level_map.put(str_split_last_ident, .str_split_last);
     }
     if (env.common.findIdent("Builtin.Str.count_utf8_bytes")) |str_count_utf8_bytes_ident| {
         try low_level_map.put(str_count_utf8_bytes_ident, .str_count_utf8_bytes);
+    }
+    if (env.common.findIdent("str_get_utf8_byte_unsafe")) |ident| {
+        try low_level_map.put(ident, .str_get_utf8_byte_unsafe);
+    }
+    if (env.common.findIdent("str_substring_unsafe")) |ident| {
+        try low_level_map.put(ident, .str_substring_unsafe);
     }
     if (env.common.findIdent("Builtin.Str.with_capacity")) |str_with_capacity_ident| {
         try low_level_map.put(str_with_capacity_ident, .str_with_capacity);
@@ -325,6 +365,24 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
             try low_level_map.put(ident, primitive.op);
         }
     }
+    const crypto_primitives = [_]struct {
+        name: []const u8,
+        op: CIR.Expr.LowLevel,
+    }{
+        .{ .name = "crypto_sha256_hash_bytes", .op = .crypto_sha256_hash_bytes },
+        .{ .name = "crypto_sha256_hasher_empty", .op = .crypto_sha256_hasher_empty },
+        .{ .name = "crypto_sha256_hasher_write", .op = .crypto_sha256_hasher_write },
+        .{ .name = "crypto_sha256_hasher_finish", .op = .crypto_sha256_hasher_finish },
+        .{ .name = "crypto_blake3_hash_bytes", .op = .crypto_blake3_hash_bytes },
+        .{ .name = "crypto_blake3_hasher_empty", .op = .crypto_blake3_hasher_empty },
+        .{ .name = "crypto_blake3_hasher_write", .op = .crypto_blake3_hasher_write },
+        .{ .name = "crypto_blake3_hasher_finish", .op = .crypto_blake3_hasher_finish },
+    };
+    for (crypto_primitives) |primitive| {
+        if (env.common.findIdent(primitive.name)) |ident| {
+            try low_level_map.put(ident, primitive.op);
+        }
+    }
     const numeric_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64" };
     const signed_types = [_][]const u8{ "I8", "I16", "I32", "I64", "I128", "Dec", "F32", "F64" };
     // Numeric equality operations.
@@ -433,11 +491,119 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.rem_by", .{num_type}, .num_rem_by);
     }
 
-    // Numeric modulo operation (integer types only)
+    // Integer-only numeric operations
     const integer_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128" };
     for (integer_types) |num_type| {
         try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.mod_by", .{num_type}, .num_mod_by);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.plus_wrap", .{num_type}, .num_plus_wrap);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.minus_wrap", .{num_type}, .num_minus_wrap);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.times_wrap", .{num_type}, .num_times_wrap);
     }
+
+    const simd_types = [_][]const u8{ "U8x16", "I8x16", "U16x8", "I16x8", "U32x4", "I32x4", "U64x2", "I64x2" };
+    const shared_simd_methods = [_]struct { name: []const u8, op: CIR.Expr.LowLevel }{
+        .{ .name = "splat", .op = .simd_splat },
+        .{ .name = "to_u128_bits", .op = .simd_to_u128_bits },
+        .{ .name = "from_u128_bits", .op = .simd_from_u128_bits },
+        .{ .name = "plus_wrap", .op = .simd_add_wrap },
+        .{ .name = "minus_wrap", .op = .simd_sub_wrap },
+        .{ .name = "bitwise_and", .op = .simd_and },
+        .{ .name = "bitwise_or", .op = .simd_or },
+        .{ .name = "bitwise_xor", .op = .simd_xor },
+        .{ .name = "bitwise_not", .op = .simd_not },
+        .{ .name = "bit_select", .op = .simd_bit_select },
+        .{ .name = "eq_lanes", .op = .simd_eq_lanes },
+        .{ .name = "to_bitmask", .op = .simd_bitmask },
+        .{ .name = "shl_wrap", .op = .simd_shl_wrap },
+        .{ .name = "shr_wrap", .op = .simd_shr_wrap },
+        .{ .name = "shr_zf_wrap", .op = .simd_shr_zf_wrap },
+        .{ .name = "interleave_lo", .op = .simd_interleave_lo },
+        .{ .name = "interleave_hi", .op = .simd_interleave_hi },
+        .{ .name = "reverse_lanes", .op = .simd_reverse_lanes },
+        .{ .name = "append_to", .op = .simd_append_16 },
+    };
+    for (simd_types) |simd_type| {
+        for (shared_simd_methods) |method| {
+            try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.{s}", .{ simd_type, method.name }, method.op);
+        }
+    }
+
+    const internal_simd_types = [_][]const u8{ "u8x16", "i8x16", "u16x8", "i16x8", "u32x4", "i32x4", "u64x2", "i64x2" };
+    for (internal_simd_types) |simd_type| {
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "simd_{s}_get_lane_unchecked", .{simd_type}, .simd_get_lane_unchecked);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "simd_{s}_with_lane_unchecked", .{simd_type}, .simd_with_lane_unchecked);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "simd_{s}_load_16_unchecked", .{simd_type}, .simd_load_16_unchecked);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "simd_{s}_store_16_unchecked", .{simd_type}, .simd_store_16_unchecked);
+    }
+    try putLowLevelFmt(&low_level_map, env, &name_scratch, "simd_u8x16_concat_shift_bytes_unchecked", .{}, .simd_concat_shift_bytes);
+
+    const simd_method_mappings = [_]struct { owner: []const u8, name: []const u8, op: CIR.Expr.LowLevel }{
+        .{ .owner = "U8x16", .name = "plus_saturated", .op = .simd_add_sat },
+        .{ .owner = "I8x16", .name = "plus_saturated", .op = .simd_add_sat },
+        .{ .owner = "U16x8", .name = "plus_saturated", .op = .simd_add_sat },
+        .{ .owner = "I16x8", .name = "plus_saturated", .op = .simd_add_sat },
+        .{ .owner = "U8x16", .name = "minus_saturated", .op = .simd_sub_sat },
+        .{ .owner = "I8x16", .name = "minus_saturated", .op = .simd_sub_sat },
+        .{ .owner = "U16x8", .name = "minus_saturated", .op = .simd_sub_sat },
+        .{ .owner = "I16x8", .name = "minus_saturated", .op = .simd_sub_sat },
+        .{ .owner = "I8x16", .name = "negate_wrap", .op = .simd_neg_wrap },
+        .{ .owner = "I16x8", .name = "negate_wrap", .op = .simd_neg_wrap },
+        .{ .owner = "I32x4", .name = "negate_wrap", .op = .simd_neg_wrap },
+        .{ .owner = "I64x2", .name = "negate_wrap", .op = .simd_neg_wrap },
+        .{ .owner = "I8x16", .name = "abs_wrap", .op = .simd_abs_wrap },
+        .{ .owner = "I16x8", .name = "abs_wrap", .op = .simd_abs_wrap },
+        .{ .owner = "I32x4", .name = "abs_wrap", .op = .simd_abs_wrap },
+        .{ .owner = "U8x16", .name = "abs_diff", .op = .simd_abs_diff },
+        .{ .owner = "U16x8", .name = "abs_diff", .op = .simd_abs_diff },
+        .{ .owner = "U8x16", .name = "avg_rounded", .op = .simd_avg_rounded },
+        .{ .owner = "U16x8", .name = "avg_rounded", .op = .simd_avg_rounded },
+        .{ .owner = "U16x8", .name = "times_high", .op = .simd_mul_high },
+        .{ .owner = "I16x8", .name = "times_high", .op = .simd_mul_high },
+        .{ .owner = "I16x8", .name = "times_fixed_q15_saturated", .op = .simd_mul_q15_sat },
+        .{ .owner = "I16x8", .name = "dot_pairs", .op = .simd_dot_pairs },
+        .{ .owner = "U8x16", .name = "dot_pairs_saturated", .op = .simd_dot_pairs_sat },
+        .{ .owner = "U8x16", .name = "sums_of_abs_diffs", .op = .simd_sad },
+        .{ .owner = "I16x8", .name = "shift_right_rounded_by", .op = .simd_shr_rounded },
+        .{ .owner = "I32x4", .name = "shift_right_rounded_by", .op = .simd_shr_rounded },
+        .{ .owner = "U8x16", .name = "table_lookup", .op = .simd_table_lookup },
+        .{ .owner = "U64x2", .name = "carryless_times_lo", .op = .simd_clmul_lo },
+        .{ .owner = "U64x2", .name = "carryless_times_hi", .op = .simd_clmul_hi },
+    };
+    for (simd_method_mappings) |mapping| {
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.{s}", .{ mapping.owner, mapping.name }, mapping.op);
+    }
+
+    for (simd_types) |simd_type| {
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.gt_lanes", .{simd_type}, .simd_gt_lanes);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.gte_lanes", .{simd_type}, .simd_gte_lanes);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.min", .{simd_type}, .simd_min);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.max", .{simd_type}, .simd_max);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.times_wrap", .{simd_type}, .simd_mul_wrap);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.times_wide_lo", .{simd_type}, .simd_mul_wide_lo);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.times_wide_hi", .{simd_type}, .simd_mul_wide_hi);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.even_lanes", .{simd_type}, .simd_even_lanes);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.odd_lanes", .{simd_type}, .simd_odd_lanes);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.sum_lanes", .{simd_type}, .simd_sum_lanes);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.sum_lanes_wrap", .{simd_type}, .simd_sum_lanes_wrap);
+    }
+
+    const width_method_mappings = [_]struct { name: []const u8, op: CIR.Expr.LowLevel }{
+        .{ .name = "to_u16x8_lo", .op = .simd_widen_lo },                      .{ .name = "to_i16x8_lo", .op = .simd_widen_lo },
+        .{ .name = "to_u32x4_lo", .op = .simd_widen_lo },                      .{ .name = "to_i32x4_lo", .op = .simd_widen_lo },
+        .{ .name = "to_u64x2_lo", .op = .simd_widen_lo },                      .{ .name = "to_i64x2_lo", .op = .simd_widen_lo },
+        .{ .name = "to_u16x8_hi", .op = .simd_widen_hi },                      .{ .name = "to_i16x8_hi", .op = .simd_widen_hi },
+        .{ .name = "to_u32x4_hi", .op = .simd_widen_hi },                      .{ .name = "to_i32x4_hi", .op = .simd_widen_hi },
+        .{ .name = "to_u64x2_hi", .op = .simd_widen_hi },                      .{ .name = "to_i64x2_hi", .op = .simd_widen_hi },
+        .{ .name = "pairwise_plus_to_u16x8", .op = .simd_pairwise_add_widen }, .{ .name = "pairwise_plus_to_i16x8", .op = .simd_pairwise_add_widen },
+        .{ .name = "pairwise_plus_to_u32x4", .op = .simd_pairwise_add_widen }, .{ .name = "pairwise_plus_to_i32x4", .op = .simd_pairwise_add_widen },
+        .{ .name = "narrow_to_u8x16_wrap", .op = .simd_narrow_wrap },          .{ .name = "narrow_to_u16x8_wrap", .op = .simd_narrow_wrap },
+        .{ .name = "narrow_to_u32x4_wrap", .op = .simd_narrow_wrap },          .{ .name = "narrow_to_u8x16_saturated", .op = .simd_narrow_sat },
+        .{ .name = "narrow_to_i8x16_saturated", .op = .simd_narrow_sat },      .{ .name = "narrow_to_u16x8_saturated", .op = .simd_narrow_sat },
+        .{ .name = "narrow_to_i16x8_saturated", .op = .simd_narrow_sat },
+    };
+    for (simd_types) |simd_type| for (width_method_mappings) |mapping| {
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.{s}", .{ simd_type, mapping.name }, mapping.op);
+    };
 
     // Numeric negate operation (signed types only)
     for (signed_types) |num_type| {
@@ -452,9 +618,26 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
 
     // Bitwise shift operations (integer types only);
     for (integer_types) |num_type| {
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.shift_left_by", .{num_type}, .num_shift_left_by);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.shift_right_by", .{num_type}, .num_shift_right_by);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.shift_right_zf_by", .{num_type}, .num_shift_right_zf_by);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.shl_wrap", .{num_type}, .num_shift_left_by);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.shr_wrap", .{num_type}, .num_shift_right_by);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.shr_zf_wrap", .{num_type}, .num_shift_right_zf_by);
+    }
+
+    // Bit-counting operations (integer types only). The operand's layout carries
+    // the width, so a single low-level op serves every integer type. Each returns
+    // a U8 regardless of operand width.
+    for (integer_types) |num_type| {
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.count_one_bits", .{num_type}, .num_count_one_bits);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.count_leading_zero_bits", .{num_type}, .num_count_leading_zero_bits);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.count_trailing_zero_bits", .{num_type}, .num_count_trailing_zero_bits);
+    }
+
+    // Little-endian byte-list loads (multi-byte integer types only; a one-byte
+    // load is List.get). The result's layout carries the width, so a single
+    // low-level op serves every one of them.
+    const multibyte_integer_types = [_][]const u8{ "u16", "i16", "u32", "i32", "u64", "i64", "u128", "i128" };
+    for (multibyte_integer_types) |num_type| {
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "{s}_from_le_bytes_unchecked", .{num_type}, .num_from_le_bytes_unchecked);
     }
 
     // Bitwise logical operations (integer types only)
@@ -1356,7 +1539,6 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
                 // Check if this identifier matches a low-level operation
                 const entry = low_level_map.fetchRemove(ident) orelse {
                     if (isIntrinsicAnnotation(env, ident)) continue;
-
                     return error.UnsupportedBuiltinAnnotationOnly;
                 };
                 const low_level_op = entry.value;

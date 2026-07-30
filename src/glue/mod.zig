@@ -6,4 +6,6 @@
 pub const glue = @import("glue.zig");
 pub const GlueArgs = glue.GlueArgs;
 pub const GlueError = glue.GlueError;
+pub const GlueOpt = glue.GlueOpt;
 pub const rocGlue = glue.rocGlue;
+pub const buildGlueSpecDylibFile = glue.buildGlueSpecDylibFile;

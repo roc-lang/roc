@@ -8,18 +8,24 @@ type=expr
 Stdout.line???
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - suffixed_question.md:1:14:1:15
+UNEXPECTED EXPRESSION SYNTAX - suffixed_question.md:1:14:1:15
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **?** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
 
-**suffixed_question.md:1:14:1:15:**
-```roc
-Stdout.line???
-```
-             ^
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  Stdout.line???                                                            │
+ │               ‾                                                            │
+ └───────────────────────────────────────────────── suffixed_question.md:1:14 ┘
 
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `?` here.
 
 # TOKENS
 ~~~zig
@@ -34,7 +40,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-Stdout.line ?? 
+Stdout.line ??
 ~~~
 # CANONICALIZE
 ~~~clojure

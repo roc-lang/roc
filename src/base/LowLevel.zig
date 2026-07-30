@@ -5,7 +5,7 @@
 //! no separate semantic/backend enum pair.
 
 /// Canonical primitive operations shared across canonicalization and LIR/codegen.
-pub const LowLevel = enum {
+pub const LowLevel = enum(u16) {
     // String operations
     str_is_eq,
     str_is_eq_static_small,
@@ -25,8 +25,11 @@ pub const LowLevel = enum {
     str_drop_prefix,
     str_drop_prefix_caseless_ascii,
     str_drop_suffix,
-    str_find_first,
+    str_split_first,
+    str_split_last,
     str_count_utf8_bytes,
+    str_get_utf8_byte_unsafe,
+    str_substring_unsafe,
     str_with_capacity,
     str_reserve,
     str_release_excess_capacity,
@@ -103,6 +106,16 @@ pub const LowLevel = enum {
     hasher_write_bytes,
     hasher_write_str,
 
+    // Crypto operations
+    crypto_sha256_hash_bytes,
+    crypto_sha256_hasher_empty,
+    crypto_sha256_hasher_write,
+    crypto_sha256_hasher_finish,
+    crypto_blake3_hash_bytes,
+    crypto_blake3_hasher_empty,
+    crypto_blake3_hasher_write,
+    crypto_blake3_hasher_finish,
+
     // Numeric comparison operations
     num_is_eq,
     num_is_gt,
@@ -115,12 +128,24 @@ pub const LowLevel = enum {
     num_abs,
     num_abs_diff,
     num_plus,
+    num_plus_wrap,
+    num_plus_checked,
     num_minus,
+    num_minus_wrap,
+    num_minus_checked,
     num_times,
+    num_times_wrap,
+    num_times_checked,
     num_div_by,
+    num_div_by_checked,
     num_div_trunc_by,
+    num_div_trunc_by_checked,
     num_rem_by,
+    num_rem_by_checked,
     num_mod_by,
+    num_mod_by_checked,
+    num_negate_checked,
+    num_abs_checked,
     num_pow,
     num_sqrt,
     num_sin,
@@ -150,8 +175,77 @@ pub const LowLevel = enum {
     num_bitwise_xor,
     num_bitwise_not,
 
+    // Bit-counting operations (integer types only). Each takes an integer
+    // operand and returns a U8, regardless of the operand's width.
+    num_count_one_bits,
+    num_count_leading_zero_bits,
+    num_count_trailing_zero_bits,
+
+    // Read a little-endian integer out of a byte list. The result layout
+    // carries the width, so a single low-level op serves every multi-byte
+    // integer type. The bounds check lives in the Roc wrapper, so this op
+    // requires the caller to have proven the bytes are in range.
+    num_from_le_bytes_unchecked,
+
+    // Fixed-width integer SIMD operations. Lane width and signedness are
+    // carried by the operand/result layouts; these operations never encode a
+    // concrete vector type in their identity.
+    simd_load_16_unchecked,
+    simd_store_16_unchecked,
+    simd_append_16,
+    simd_splat,
+    simd_get_lane_unchecked,
+    simd_with_lane_unchecked,
+    simd_to_u128_bits,
+    simd_from_u128_bits,
+    simd_add_wrap,
+    simd_sub_wrap,
+    simd_add_sat,
+    simd_sub_sat,
+    simd_neg_wrap,
+    simd_abs_wrap,
+    simd_min,
+    simd_max,
+    simd_abs_diff,
+    simd_avg_rounded,
+    simd_mul_wrap,
+    simd_mul_high,
+    simd_mul_q15_sat,
+    simd_mul_wide_lo,
+    simd_mul_wide_hi,
+    simd_dot_pairs,
+    simd_dot_pairs_sat,
+    simd_sad,
+    simd_and,
+    simd_or,
+    simd_xor,
+    simd_not,
+    simd_bit_select,
+    simd_eq_lanes,
+    simd_gt_lanes,
+    simd_gte_lanes,
+    simd_bitmask,
+    simd_shl_wrap,
+    simd_shr_wrap,
+    simd_shr_zf_wrap,
+    simd_shr_rounded,
+    simd_interleave_lo,
+    simd_interleave_hi,
+    simd_even_lanes,
+    simd_odd_lanes,
+    simd_reverse_lanes,
+    simd_table_lookup,
+    simd_concat_shift_bytes,
+    simd_widen_lo,
+    simd_widen_hi,
+    simd_pairwise_add_widen,
+    simd_narrow_wrap,
+    simd_narrow_sat,
+    simd_sum_lanes,
+    simd_sum_lanes_wrap,
+    simd_clmul_lo,
+    simd_clmul_hi,
     // Numeric parsing operations
-    num_from_numeral,
     u8_from_str,
     i8_from_str,
     u16_from_str,
@@ -441,6 +535,11 @@ pub const LowLevel = enum {
     // Box operations
     box_box,
     box_unbox,
+    /// Box(T) -> Box(T): consume a box and return a unique box containing the
+    /// same payload. Reuses the allocation when uniqueness is known or the
+    /// runtime check succeeds; otherwise copies the payload into a fresh box,
+    /// retains nested payload children, and releases the consumed input.
+    box_prepare_update,
     erased_capture_load,
 
     // Compiler-internal pointer operations, introduced by the TRMC pass
@@ -466,6 +565,72 @@ pub const LowLevel = enum {
 
     // Crash/panic
     crash,
+
+    /// Index into `builtins.simd.Op`. The SIMD entries are intentionally one
+    /// contiguous, order-pinned block so the interpreter and compile-time
+    /// evaluator share the semantic oracle's operation vocabulary without a
+    /// module cycle.
+    pub fn simdOpIndex(self: LowLevel) ?u8 {
+        return switch (self) {
+            .simd_load_16_unchecked,
+            .simd_store_16_unchecked,
+            .simd_append_16,
+            .simd_splat,
+            .simd_get_lane_unchecked,
+            .simd_with_lane_unchecked,
+            .simd_to_u128_bits,
+            .simd_from_u128_bits,
+            .simd_add_wrap,
+            .simd_sub_wrap,
+            .simd_add_sat,
+            .simd_sub_sat,
+            .simd_neg_wrap,
+            .simd_abs_wrap,
+            .simd_min,
+            .simd_max,
+            .simd_abs_diff,
+            .simd_avg_rounded,
+            .simd_mul_wrap,
+            .simd_mul_high,
+            .simd_mul_q15_sat,
+            .simd_mul_wide_lo,
+            .simd_mul_wide_hi,
+            .simd_dot_pairs,
+            .simd_dot_pairs_sat,
+            .simd_sad,
+            .simd_and,
+            .simd_or,
+            .simd_xor,
+            .simd_not,
+            .simd_bit_select,
+            .simd_eq_lanes,
+            .simd_gt_lanes,
+            .simd_gte_lanes,
+            .simd_bitmask,
+            .simd_shl_wrap,
+            .simd_shr_wrap,
+            .simd_shr_zf_wrap,
+            .simd_shr_rounded,
+            .simd_interleave_lo,
+            .simd_interleave_hi,
+            .simd_even_lanes,
+            .simd_odd_lanes,
+            .simd_reverse_lanes,
+            .simd_table_lookup,
+            .simd_concat_shift_bytes,
+            .simd_widen_lo,
+            .simd_widen_hi,
+            .simd_pairwise_add_widen,
+            .simd_narrow_wrap,
+            .simd_narrow_sat,
+            .simd_sum_lanes,
+            .simd_sum_lanes_wrap,
+            .simd_clmul_lo,
+            .simd_clmul_hi,
+            => @intCast(@intFromEnum(self) - @intFromEnum(LowLevel.simd_load_16_unchecked)),
+            else => null,
+        };
+    }
 
     /// Reference-counting behavior exposed by this primitive before LIR ARC
     /// insertion. This is explicit primitive metadata, not backend policy.
@@ -563,6 +728,16 @@ pub const LowLevel = enum {
             };
         }
 
+        pub fn runtimeUniquenessMaybeSharedResult(mask: u64) RcEffect {
+            return .{
+                .may_allocate = true,
+                .may_retain_or_release = true,
+                .may_runtime_uniqueness_check_args = mask,
+                .consume_args = mask,
+                .result_aliases_consumed_args = mask,
+            };
+        }
+
         pub fn runtimeUniquenessRetainingArgs(runtime_mask: u64, retain_mask: u64) RcEffect {
             return .{
                 .may_allocate = true,
@@ -579,7 +754,6 @@ pub const LowLevel = enum {
             return .{
                 .may_retain_or_release = true,
                 .result_shares_args = mask,
-                .result_unique = true,
             };
         }
 
@@ -588,7 +762,6 @@ pub const LowLevel = enum {
                 .may_retain_or_release = mask != 0,
                 .retain_args = mask,
                 .result_shares_args = mask,
-                .result_unique = true,
             };
         }
 
@@ -605,7 +778,6 @@ pub const LowLevel = enum {
                 .may_allocate = true,
                 .may_retain_or_release = true,
                 .result_shares_args = mask,
-                .result_unique = true,
             };
         }
 
@@ -643,10 +815,14 @@ pub const LowLevel = enum {
             => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
             .str_drop_prefix,
-            .str_drop_prefix_caseless_ascii,
             .str_drop_suffix,
-            .str_find_first,
+            .str_substring_unsafe,
             => RcEffect.retainsSharingArgs(argMask(&.{0})),
+
+            .str_drop_prefix_caseless_ascii,
+            .str_split_first,
+            .str_split_last,
+            => RcEffect.retainsOrReleasesSharingArgs(argMask(&.{0})),
 
             .str_from_utf8 => RcEffect.retainsOrReleasesSharingArgs(argMask(&.{0})),
 
@@ -658,12 +834,20 @@ pub const LowLevel = enum {
             .list_drop_last,
             .list_take_first,
             .list_take_last,
+            .list_split_first,
+            .list_split_last,
+            => RcEffect.runtimeUniquenessMaybeSharedResult(argMask(&.{0})),
+
             .list_reverse,
             .list_reserve,
             .list_release_excess_capacity,
-            .list_split_first,
-            .list_split_last,
             => RcEffect.runtimeUniqueness(argMask(&.{0})),
+
+            // SIMD byte stores and appends consume/update their List(U8),
+            // which is argument 1 in both primitive signatures.
+            .simd_store_16_unchecked,
+            .simd_append_16,
+            => RcEffect.runtimeUniqueness(argMask(&.{1})),
 
             .list_prepend => RcEffect.runtimeUniquenessRetainingArgs(argMask(&.{0}), argMask(&.{1})),
 
@@ -720,6 +904,14 @@ pub const LowLevel = enum {
             .f64_to_str,
             .num_to_str,
             .list_with_capacity,
+            .crypto_sha256_hash_bytes,
+            .crypto_sha256_hasher_empty,
+            .crypto_sha256_hasher_write,
+            .crypto_sha256_hasher_finish,
+            .crypto_blake3_hash_bytes,
+            .crypto_blake3_hasher_empty,
+            .crypto_blake3_hasher_write,
+            .crypto_blake3_hasher_finish,
             => RcEffect.allocates(),
 
             .str_join_with => RcEffect.allocatesConsumingArgs(argMask(&.{0})),
@@ -727,6 +919,8 @@ pub const LowLevel = enum {
             .box_box => RcEffect.allocatesRetainingArgs(argMask(&.{0})),
 
             .box_unbox => RcEffect.retainsResultBorrowingArgs(argMask(&.{0})),
+
+            .box_prepare_update => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
             // The capture environment is read through the executing frame's
             // closure, not through an explicit refcounted argument, so the
@@ -753,6 +947,7 @@ pub const LowLevel = enum {
             .str_starts_with,
             .str_ends_with,
             .str_count_utf8_bytes,
+            .str_get_utf8_byte_unsafe,
             .list_len,
             .bool_not,
             .dict_pseudo_seed,
@@ -779,15 +974,27 @@ pub const LowLevel = enum {
             .num_is_lt,
             .num_is_lte,
             .num_negate,
+            .num_negate_checked,
             .num_abs,
+            .num_abs_checked,
             .num_abs_diff,
             .num_plus,
+            .num_plus_wrap,
+            .num_plus_checked,
             .num_minus,
+            .num_minus_wrap,
+            .num_minus_checked,
             .num_times,
+            .num_times_wrap,
+            .num_times_checked,
             .num_div_by,
+            .num_div_by_checked,
             .num_div_trunc_by,
+            .num_div_trunc_by_checked,
             .num_rem_by,
+            .num_rem_by_checked,
             .num_mod_by,
+            .num_mod_by_checked,
             .num_pow,
             .num_sqrt,
             .num_sin,
@@ -811,7 +1018,63 @@ pub const LowLevel = enum {
             .num_bitwise_or,
             .num_bitwise_xor,
             .num_bitwise_not,
-            .num_from_numeral,
+            .num_count_one_bits,
+            .num_count_leading_zero_bits,
+            .num_count_trailing_zero_bits,
+            .num_from_le_bytes_unchecked,
+            .simd_load_16_unchecked,
+            .simd_splat,
+            .simd_get_lane_unchecked,
+            .simd_with_lane_unchecked,
+            .simd_to_u128_bits,
+            .simd_from_u128_bits,
+            .simd_add_wrap,
+            .simd_sub_wrap,
+            .simd_add_sat,
+            .simd_sub_sat,
+            .simd_neg_wrap,
+            .simd_abs_wrap,
+            .simd_min,
+            .simd_max,
+            .simd_abs_diff,
+            .simd_avg_rounded,
+            .simd_mul_wrap,
+            .simd_mul_high,
+            .simd_mul_q15_sat,
+            .simd_mul_wide_lo,
+            .simd_mul_wide_hi,
+            .simd_dot_pairs,
+            .simd_dot_pairs_sat,
+            .simd_sad,
+            .simd_and,
+            .simd_or,
+            .simd_xor,
+            .simd_not,
+            .simd_bit_select,
+            .simd_eq_lanes,
+            .simd_gt_lanes,
+            .simd_gte_lanes,
+            .simd_bitmask,
+            .simd_shl_wrap,
+            .simd_shr_wrap,
+            .simd_shr_zf_wrap,
+            .simd_shr_rounded,
+            .simd_interleave_lo,
+            .simd_interleave_hi,
+            .simd_even_lanes,
+            .simd_odd_lanes,
+            .simd_reverse_lanes,
+            .simd_table_lookup,
+            .simd_concat_shift_bytes,
+            .simd_widen_lo,
+            .simd_widen_hi,
+            .simd_pairwise_add_widen,
+            .simd_narrow_wrap,
+            .simd_narrow_sat,
+            .simd_sum_lanes,
+            .simd_sum_lanes_wrap,
+            .simd_clmul_lo,
+            .simd_clmul_hi,
             .u8_from_str,
             .i8_from_str,
             .u16_from_str,

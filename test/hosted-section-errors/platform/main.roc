@@ -7,6 +7,7 @@ platform ""
     provides { "roc_main": main_for_host! }
     hosted {
         "roc_host_double": Host.nonexistent!,
+        "roc-host-bad": Host.double!,
         "roc_alloc": Host.double!,
         "roc__sneaky": Host.double!,
         "roc_main": Host.triple!,

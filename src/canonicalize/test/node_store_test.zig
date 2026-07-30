@@ -281,6 +281,7 @@ test "NodeStore round trip - Expressions" {
             .method_name_region = rand_region(),
             .constraint_fn_var = rand_idx(types.Var),
             .step_fn_var = rand_idx(types.Var),
+            .dispatcher_var = rand_idx(types.Var),
         },
     });
     try expressions.append(gpa, CIR.Expr{
@@ -513,6 +514,12 @@ test "NodeStore round trip - Expressions" {
     try expressions.append(gpa, CIR.Expr{
         .e_anno_only = .{
             .ident = rand_ident_idx(),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_derived_method = .{
+            .ident = rand_ident_idx(),
+            .kind = .encoder,
         },
     });
     try expressions.append(gpa, CIR.Expr{
@@ -910,7 +917,13 @@ test "NodeStore round trip - Diagnostics" {
             .name = rand_ident_idx(),
             .region = rand_region(),
             .original_region = rand_region(),
-            .cross_scope = rand.random().boolean(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .builtin_type_shadowed_warning = .{
+            .name = rand_ident_idx(),
+            .region = rand_region(),
         },
     });
 
@@ -926,6 +939,14 @@ test "NodeStore round trip - Diagnostics" {
     try diagnostics.append(gpa, CIR.Diagnostic{
         .duplicate_record_field = .{
             .field_name = rand_ident_idx(),
+            .duplicate_region = rand_region(),
+            .original_region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .duplicate_tag = .{
+            .tag_name = rand_ident_idx(),
             .duplicate_region = rand_region(),
             .original_region = rand_region(),
         },
@@ -982,6 +1003,13 @@ test "NodeStore round trip - Diagnostics" {
 
     try diagnostics.append(gpa, CIR.Diagnostic{
         .exposed_but_not_implemented = .{
+            .ident = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .provided_value_is_required = .{
             .ident = rand_ident_idx(),
             .region = rand_region(),
         },
@@ -1407,6 +1435,7 @@ test "NodeStore round trip - Pattern" {
             .value = rand.random().float(f64),
         },
     });
+    try patterns.append(gpa, CIR.Pattern{ .num_from_numeral_literal = .{} });
     try patterns.append(gpa, CIR.Pattern{ .underscore = {} });
     try patterns.append(gpa, CIR.Pattern{
         .runtime_error = .{
@@ -1435,4 +1464,88 @@ test "NodeStore round trip - Pattern" {
     if (actual_test_count < NodeStore.MODULEENV_PATTERN_NODE_COUNT) {
         return error.IncompletePatternTestCoverage;
     }
+}
+
+test "SurfaceOrigin encode/decode round-trips" {
+    const SurfaceOrigin = CIR.Expr.SurfaceOrigin;
+    // Every unit form.
+    const unit_origins = [_]SurfaceOrigin{ .method_call, .unary_minus, .unary_not };
+    for (unit_origins) |origin| {
+        try testing.expectEqual(
+            origin,
+            NodeStore.decodeSurfaceOrigin(NodeStore.encodeSurfaceOrigin(origin)),
+        );
+    }
+    // Every binop form.
+    inline for (@typeInfo(CIR.Expr.Binop.Op).@"enum".fields) |field| {
+        const op: CIR.Expr.Binop.Op = @enumFromInt(field.value);
+        const origin = SurfaceOrigin{ .binop = op };
+        try testing.expectEqual(
+            origin,
+            NodeStore.decodeSurfaceOrigin(NodeStore.encodeSurfaceOrigin(origin)),
+        );
+    }
+}
+
+test "where clause span records canonical rigid ownership by annotation scope" {
+    const gpa = testing.allocator;
+    var store = try NodeStore.init(gpa);
+    defer store.deinit();
+
+    const name: base.Ident.Idx = @bitCast(@as(u32, 1));
+    const method_name: base.Ident.Idx = @bitCast(@as(u32, 2));
+    const outer = try store.addTypeAnno(.{ .rigid_var = .{ .name = name } }, base.Region.zero());
+    const item = try store.addTypeAnno(.{ .rigid_var = .{ .name = name } }, base.Region.zero());
+    const enclosing = try store.addTypeAnno(.{ .rigid_var = .{ .name = name } }, base.Region.zero());
+    const outer_ref = try store.addTypeAnno(.{ .rigid_var_lookup = .{ .ref = outer } }, base.Region.zero());
+    const item_ref = try store.addTypeAnno(.{ .rigid_var_lookup = .{ .ref = item } }, base.Region.zero());
+    const enclosing_ref = try store.addTypeAnno(.{ .rigid_var_lookup = .{ .ref = enclosing } }, base.Region.zero());
+    const no_args = CIR.TypeAnno.Span{ .span = base.DataSpan.empty() };
+
+    const outer_method = try store.addWhereClause(.{ .w_method = .{
+        .var_ = outer_ref,
+        .method_name = method_name,
+        .args = no_args,
+        .ret = item,
+        .effectful = false,
+    } }, base.Region.zero());
+    try store.addScratchWhereClause(outer_method);
+    const item_method = try store.addWhereClause(.{ .w_method = .{
+        .var_ = item_ref,
+        .method_name = method_name,
+        .args = no_args,
+        .ret = outer_ref,
+        .effectful = false,
+    } }, base.Region.zero());
+    try store.addScratchWhereClause(item_method);
+    const enclosing_method = try store.addWhereClause(.{ .w_method = .{
+        .var_ = enclosing_ref,
+        .method_name = method_name,
+        .args = no_args,
+        .ret = outer_ref,
+        .effectful = false,
+    } }, base.Region.zero());
+    try store.addScratchWhereClause(enclosing_method);
+
+    const where = try store.whereClauseSpanFrom(0, outer);
+    const owners = store.sliceWhereClauseOwners(where);
+    try testing.expectEqual(@as(usize, 3), owners.len);
+
+    try testing.expectEqual(@intFromEnum(outer), owners[0].rigid_var);
+    try testing.expect(owners[0].introduced_in_scope);
+    try testing.expectEqualSlices(CIR.WhereClause.Idx, &.{outer_method}, store.sliceWhereClausesForOwner(owners[0]));
+
+    try testing.expectEqual(@intFromEnum(item), owners[1].rigid_var);
+    try testing.expect(owners[1].introduced_in_scope);
+    try testing.expectEqualSlices(CIR.WhereClause.Idx, &.{item_method}, store.sliceWhereClausesForOwner(owners[1]));
+
+    try testing.expectEqual(@intFromEnum(enclosing), owners[2].rigid_var);
+    try testing.expect(!owners[2].introduced_in_scope);
+    try testing.expectEqualSlices(CIR.WhereClause.Idx, &.{enclosing_method}, store.sliceWhereClausesForOwner(owners[2]));
+
+    var cloned = try store.clone(gpa);
+    defer cloned.deinit();
+    const cloned_owners = cloned.sliceWhereClauseOwners(where);
+    try testing.expectEqualSlices(NodeStore.WhereClauseOwnerData, owners, cloned_owners);
+    try testing.expectEqualSlices(CIR.WhereClause.Idx, &.{item_method}, cloned.sliceWhereClausesForOwner(cloned_owners[1]));
 }

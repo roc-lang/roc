@@ -16,30 +16,30 @@ print_msg! = |msg| Stdout.line!(msg)
 main! = print_msg!("Hello, world!")
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - effectful_with_effectful_annotation.md:7:20:7:32
-EFFECTFUL TOP-LEVEL VALUE - effectful_with_effectful_annotation.md:9:9:9:36
+NAME NOT IN SCOPE - effectful_with_effectful_annotation.md:7:20:7:32
+EFFECTFUL TOP LEVEL VALUE - effectful_with_effectful_annotation.md:9:9:9:36
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**effectful_with_effectful_annotation.md:7:20:7:32:**
-```roc
-print_msg! = |msg| Stdout.line!(msg)
-```
-                   ^^^^^^^^^^^^
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
+ │                                                                            │
+ │  print_msg! = |msg| Stdout.line!(msg)                                      │
+ │                     ‾‾‾‾‾‾‾‾‾‾‾‾                                           │
+ └─────────────────────────────── effectful_with_effectful_annotation.md:7:20 ┘
 
-
-**EFFECTFUL TOP-LEVEL VALUE**
-This top-level definition performs an effect while initializing.
-**effectful_with_effectful_annotation.md:9:9:9:36:**
-```roc
-main! = print_msg!("Hello, world!")
-```
-        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    Is it misspelled, or is there an import missing?
 
 
-Move the effect into a function body so it runs when the function is called.
+┌───────────────────────────┐
+│ EFFECTFUL TOP LEVEL VALUE ├─ This top-level definition performs an effect ──┐
+└┬──────────────────────────┘  while initializing.                            │
+ │                                                                            │
+ │  main! = print_msg!("Hello, world!")                                       │
+ │          ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                       │
+ └──────────────────────────────── effectful_with_effectful_annotation.md:9:9 ┘
+
+    Move the effect into a function body so it runs when the function is called.
 
 # TOKENS
 ~~~zig
@@ -97,22 +97,19 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "msg")))
-			(e-call
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-lookup-local
-					(p-assign (ident "msg")))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful true)
 				(ty-lookup (name "Str") (builtin))
 				(ty-record))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-call (constraint-fn-var 55)
+		(e-call (constraint-fn-var 231)
 			(e-lookup-local
 				(p-assign (ident "print_msg!")))
 			(e-string
 				(e-literal (string "Hello, world!")))))
-	(s-import (module "pf.Stdout")
+	(s-import (mod "pf.Stdout")
 		(exposes)))
 ~~~
 # TYPES

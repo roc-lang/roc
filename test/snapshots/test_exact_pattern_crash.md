@@ -36,29 +36,30 @@ main = {
 UNUSED VARIABLE - test_exact_pattern_crash.md:19:5:19:7
 TOO MANY ARGS - test_exact_pattern_crash.md:23:10:23:50
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `p1` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_p1` to suppress this warning.
-The unused variable is declared here:
-**test_exact_pattern_crash.md:19:5:19:7:**
-```roc
-    p1 = swap_pair((1, 2))
-```
-    ^^
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `p1` is defined here and then never used. ──────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  p1 = swap_pair((1, 2))                                                    │
+ │  ‾‾                                                                        │
+ └────────────────────────────────────────── test_exact_pattern_crash.md:19:5 ┘
+
+    If you don't need this variable, prefix it with an underscore like `_p1` to
+    suppress this warning.
 
 
-**TOO MANY ARGS**
-The `map_pair` function expects 3 arguments, but it got 4 instead:
-**test_exact_pattern_crash.md:23:10:23:50:**
-```roc
-    p2 = map_pair(3, 4, (|x| x + 1), (|y| y * 2))
-```
-         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+┌───────────────┐
+│ TOO MANY ARGS ├─ The `map_pair` function expects 3 arguments, but it got ───┐
+└┬──────────────┘  4 instead.                                                 │
+ │                                                                            │
+ │  p2 = map_pair(3, 4, (|x| x + 1), (|y| y * 2))                             │
+ │       ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                             │
+ └───────────────────────────────────────── test_exact_pattern_crash.md:23:10 ┘
 
-The `map_pair` function has the type:
+    The `map_pair` function has the type:
 
-    Pair(a, b), (a -> c), (b -> d) -> Pair(c, d)
+        Pair(a, b), (a -> c), (b -> d) -> Pair(c, d)
 
 # TOKENS
 ~~~zig
@@ -249,12 +250,12 @@ main = {
 				(p-assign (ident "g")))
 			(e-tuple
 				(elems
-					(e-call (constraint-fn-var 121)
+					(e-call (constraint-fn-var 331)
 						(e-lookup-local
 							(p-assign (ident "f")))
 						(e-lookup-local
 							(p-assign (ident "x"))))
-					(e-call (constraint-fn-var 122)
+					(e-call (constraint-fn-var 332)
 						(e-lookup-local
 							(p-assign (ident "g")))
 						(e-lookup-local
@@ -280,7 +281,7 @@ main = {
 		(e-block
 			(s-let
 				(p-assign (ident "p1"))
-				(e-call (constraint-fn-var 196)
+				(e-call (constraint-fn-var 354)
 					(e-lookup-local
 						(p-assign (ident "swap_pair")))
 					(e-tuple
@@ -289,31 +290,8 @@ main = {
 							(e-num (value "2"))))))
 			(s-let
 				(p-assign (ident "p2"))
-				(e-call (constraint-fn-var 346)
-					(e-lookup-local
-						(p-assign (ident "map_pair")))
-					(e-num (value "3"))
-					(e-num (value "4"))
-					(e-lambda
-						(args
-							(p-assign (ident "x")))
-						(e-dispatch-call (method "plus") (constraint-fn-var 307)
-							(receiver
-								(e-lookup-local
-									(p-assign (ident "x"))))
-							(args
-								(e-num (value "1")))))
-					(e-lambda
-						(args
-							(p-assign (ident "y")))
-						(e-dispatch-call (method "times") (constraint-fn-var 342)
-							(receiver
-								(e-lookup-local
-									(p-assign (ident "y"))))
-							(args
-								(e-num (value "2")))))))
-			(e-lookup-local
-				(p-assign (ident "p2")))))
+				(e-runtime-error (tag "erroneous_value_expr")))
+			(e-runtime-error (tag "erroneous_value_use"))))
 	(s-alias-decl
 		(ty-header (name "Pair")
 			(ty-args

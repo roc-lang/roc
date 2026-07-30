@@ -1,6 +1,7 @@
 //! Tests for CLI platform resolution that do not cross the post-check lowering boundary
 
 const std = @import("std");
+const build_options = @import("build_options");
 const testing = std.testing;
 const main = @import("main.zig");
 const base = @import("base");
@@ -30,8 +31,8 @@ fn sharedPrePublishedBuiltin() SharedMemorySystemTestError!test_helpers.PrePubli
 }
 
 test "platform resolution - basic cli platform" {
-    var gpa_impl = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa_impl.deinit();
+    var gpa_impl = std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
+    defer _ = build_options.debugGpaOk(gpa_impl.deinit());
     const gpa = gpa_impl.allocator();
     var arena_impl = base.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
@@ -69,8 +70,8 @@ test "platform resolution - basic cli platform" {
 }
 
 test "platform resolution - no platform in file" {
-    var gpa_impl = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa_impl.deinit();
+    var gpa_impl = std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
+    defer _ = build_options.debugGpaOk(gpa_impl.deinit());
     const gpa = gpa_impl.allocator();
     var arena_impl = base.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
@@ -103,8 +104,8 @@ test "platform resolution - no platform in file" {
 }
 
 test "platform resolution - file not found" {
-    var gpa_impl = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa_impl.deinit();
+    var gpa_impl = std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
+    defer _ = build_options.debugGpaOk(gpa_impl.deinit());
     const gpa = gpa_impl.allocator();
     var arena_impl = base.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
@@ -121,8 +122,8 @@ test "platform resolution - file not found" {
 }
 
 test "platform resolution - insecure HTTP URL rejected" {
-    var gpa_impl = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa_impl.deinit();
+    var gpa_impl = std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
+    defer _ = build_options.debugGpaOk(gpa_impl.deinit());
     const gpa = gpa_impl.allocator();
     var arena_impl = base.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
@@ -186,15 +187,15 @@ fn expectLirImageCanBeViewedFromMappedHeader(compiled: *const test_helpers.Compi
     const used = compiled.lowered.shm.getUsedSize();
     try testing.expect(used > @sizeOf(lir.LirImage.Header));
     try testing.expect(compiled.lowered.view.root_procs.len > 0);
-    try testing.expect(compiled.lowered.view.store.proc_specs.items.len > 0);
+    try testing.expect(compiled.lowered.view.store.getProcSpecs().len > 0);
     try testing.expect(compiled.lowered.view.layouts.layouts.items.items.len > 0);
 
     const header = compiled.lowered.image_header;
-    const child_view = try lir.LirImage.viewMappedImage(header, compiled.lowered.shm.base_ptr, used);
+    const child_view = try lir.LirImage.viewMappedImage(header, compiled.lowered.shm.base_ptr, used, compiled.lowered.view.target_usize);
     try testing.expectEqual(lir.LirImage.MAGIC, header.magic);
     try testing.expectEqual(lir.LirImage.FORMAT_VERSION, header.format_version);
     try testing.expectEqual(compiled.lowered.view.root_procs.len, child_view.root_procs.len);
-    try testing.expectEqual(compiled.lowered.view.store.proc_specs.items.len, child_view.store.proc_specs.items.len);
+    try testing.expectEqual(compiled.lowered.view.store.getProcSpecs().len, child_view.store.getProcSpecs().len);
     try testing.expectEqual(compiled.lowered.view.layouts.layouts.items.items.len, child_view.layouts.layouts.items.items.len);
 }
 
@@ -240,9 +241,46 @@ test "integration - compilation pipeline for u32 platform" {
     try testing.expectEqual(base.target.TargetUsize.u32, wasm32.lowered.view.target_usize);
 }
 
+test "integration - one LIR image resolves layouts for both pointer widths" {
+    // The serialized LIR image is pointer-width independent: the layout store
+    // carries both widths' sizes/offsets and the op stream uses no width-
+    // dependent decisions, so the same image bytes can be viewed for either
+    // width. This is what lets a single lowered image be cached and reused by,
+    // e.g., a 64-bit interpreter and a 32-bit codegen backend.
+    var compiled = try compileLirImageForSharedTestTarget(
+        testing.allocator,
+        "main : () -> List(I64)\nmain = || [1, 2, 3]",
+        &.{},
+        .native,
+    );
+    defer compiled.deinit(testing.allocator);
+
+    var arena_impl = base.SingleThreadArena.init(testing.allocator);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    const header = compiled.lowered.image_header;
+    const image_base = compiled.lowered.shm.base_ptr;
+    const used = compiled.lowered.shm.getUsedSize();
+
+    // View the very same image bytes for each pointer width.
+    const view32 = try lir.LirImage.viewMappedImageWithAllocator(header, image_base, used, .u32, arena);
+    const view64 = try lir.LirImage.viewMappedImageWithAllocator(header, image_base, used, .u64, arena);
+    try testing.expectEqual(base.target.TargetUsize.u32, view32.target_usize);
+    try testing.expectEqual(base.target.TargetUsize.u64, view64.target_usize);
+
+    // `main` returns `List(I64)`, a three-word RocList: 12 bytes at 4-byte
+    // pointers, 24 bytes at 8-byte pointers — both resolved from one image.
+    const ret_layout = view32.store.getProcSpec(view32.root_procs[0]).ret_layout;
+    const size32 = view32.layouts.layoutSize(view32.layouts.getLayout(ret_layout));
+    const size64 = view64.layouts.layoutSize(view64.layouts.getLayout(ret_layout));
+    try testing.expectEqual(@as(u32, 12), size32);
+    try testing.expectEqual(@as(u32, 24), size64);
+}
+
 test "integration - error handling for non-existent file" {
-    var gpa_impl = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa_impl.deinit();
+    var gpa_impl = std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
+    defer _ = build_options.debugGpaOk(gpa_impl.deinit());
     const gpa = gpa_impl.allocator();
     var arena_impl = base.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
@@ -258,8 +296,8 @@ test "integration - error handling for non-existent file" {
 
 test "integration - automatic module dependency ordering" {
     const imports = [_]test_helpers.ModuleSource{
-        .{ .name = "Leaf", .source = "module [value]\nvalue : I64\nvalue = 40\n" },
-        .{ .name = "Branch", .source = "module [value]\nimport Leaf\nvalue : I64\nvalue = Leaf.value + 2\n" },
+        .{ .name = "Leaf", .source = "Leaf := [].{\n    value : I64\n    value = 40\n}\n" },
+        .{ .name = "Branch", .source = "import Leaf\nBranch := [].{\n    value : I64\n    value = Leaf.value + 2\n}\n" },
     };
     var compiled = try compileLirImageForSharedTest(
         testing.allocator,
@@ -274,8 +312,8 @@ test "integration - automatic module dependency ordering" {
 
 test "integration - transitive module imports (module A imports module B)" {
     const imports = [_]test_helpers.ModuleSource{
-        .{ .name = "B", .source = "module [value]\nvalue : I64\nvalue = 40\n" },
-        .{ .name = "A", .source = "module [value]\nimport B\nvalue : I64\nvalue = B.value + 2\n" },
+        .{ .name = "B", .source = "B := [].{\n    value : I64\n    value = 40\n}\n" },
+        .{ .name = "A", .source = "import B\nA := [].{\n    value : I64\n    value = B.value + 2\n}\n" },
     };
     var compiled = try compileLirImageForSharedTest(
         testing.allocator,
@@ -290,10 +328,10 @@ test "integration - transitive module imports (module A imports module B)" {
 
 test "integration - diamond dependency pattern (A imports B and C, both import D)" {
     const imports = [_]test_helpers.ModuleSource{
-        .{ .name = "D", .source = "module [value]\nvalue : {} -> I64\nvalue = |_| 10\n" },
-        .{ .name = "B", .source = "module [value]\nimport D\nvalue : {} -> I64\nvalue = |_| D.value({}) + 10\n" },
-        .{ .name = "C", .source = "module [value]\nimport D\nvalue : {} -> I64\nvalue = |_| D.value({}) + 12\n" },
-        .{ .name = "A", .source = "module [value]\nimport B\nimport C\nvalue : {} -> I64\nvalue = |_| B.value({}) + C.value({})\n" },
+        .{ .name = "D", .source = "D := [].{\n    value : {} -> I64\n    value = |_| 10\n}\n" },
+        .{ .name = "B", .source = "import D\nB := [].{\n    value : {} -> I64\n    value = |_| D.value({}) + 10\n}\n" },
+        .{ .name = "C", .source = "import D\nC := [].{\n    value : {} -> I64\n    value = |_| D.value({}) + 12\n}\n" },
+        .{ .name = "A", .source = "import B\nimport C\nA := [].{\n    value : {} -> I64\n    value = |_| B.value({}) + C.value({})\n}\n" },
     };
     var compiled = try compileLirImageForSharedTest(
         testing.allocator,
@@ -308,8 +346,8 @@ test "integration - diamond dependency pattern (A imports B and C, both import D
 
 test "integration - direct Core and Utils calls from app" {
     const imports = [_]test_helpers.ModuleSource{
-        .{ .name = "Core", .source = "module [inc]\ninc : I64 -> I64\ninc = |x| x + 1\n" },
-        .{ .name = "Utils", .source = "module [double]\ndouble : I64 -> I64\ndouble = |x| x * 2\n" },
+        .{ .name = "Core", .source = "Core := [].{\n    inc : I64 -> I64\n    inc = |x| x + 1\n}\n" },
+        .{ .name = "Utils", .source = "Utils := [].{\n    double : I64 -> I64\n    double = |x| x * 2\n}\n" },
     };
     var compiled = try compileLirImageForSharedTest(
         testing.allocator,

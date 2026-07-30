@@ -63,7 +63,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "RBTree")
@@ -191,7 +191,7 @@ NO CHANGE
 													(p-nominal
 														(p-applied-tag))))
 											(value
-												(e-call (constraint-fn-var 141)
+												(e-call (constraint-fn-var 316)
 													(e-lookup-local
 														(p-assign (ident "delRBTree")))
 													(e-nominal (nominal "RBTree")
@@ -223,7 +223,7 @@ NO CHANGE
 													(p-nominal
 														(p-applied-tag))))
 											(value
-												(e-call (constraint-fn-var 182)
+												(e-call (constraint-fn-var 349)
 													(e-lookup-local
 														(p-assign (ident "delRBTree")))
 													(e-lookup-local
@@ -235,7 +235,7 @@ NO CHANGE
 											(value
 												(e-lookup-local
 													(p-assign (ident "t")))))))))))
-				(e-call (constraint-fn-var 188)
+				(e-call (constraint-fn-var 356)
 					(e-lookup-local
 						(p-assign (ident "delCurr")))
 					(e-lookup-local

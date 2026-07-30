@@ -16,3 +16,57 @@
    fun:enframe
    fun:__libc_malloc_impl
 }
+
+# musl realpath conditionally inspects internal path-buffer bytes while
+# canonicalizing a path. Valgrind 3.26 reports this inside libc before control
+# returns to Zig's std.fs realpath wrapper; this does not indicate that Roc
+# read uninitialized program memory. Match any internal realpath helper frames
+# because Zig's optimized libc memcpy path varies by source/destination length.
+{
+   musl-realpath-dir-realpath
+   Memcheck:Cond
+   ...
+   fun:realpath
+   fun:Io.Threaded.dirRealPathFilePosix
+}
+
+{
+   musl-realpath-value-dir-realpath
+   Memcheck:Value8
+   ...
+   fun:realpath
+   fun:Io.Threaded.dirRealPathFilePosix
+}
+
+{
+   musl-realpath-readlink-dir-realpath
+   Memcheck:Param
+   readlink(buf)
+   fun:readlink
+   fun:realpath
+   fun:Io.Threaded.dirRealPathFilePosix
+}
+
+{
+   musl-realpath-readlink-bufsiz-dir-realpath
+   Memcheck:Param
+   readlink(bufsiz)
+   fun:readlink
+   fun:realpath
+   fun:Io.Threaded.dirRealPathFilePosix
+}
+
+# musl's realpath builds its result in a stack buffer it fills via readlink
+# and path arithmetic; valgrind cannot see the kernel writing the buffer and
+# flags the subsequent byte scans as reads of uninitialised memory. Same
+# class as the mallocng suppression above: musl-internal bookkeeping that is
+# correct by construction. Observed flaking on `roc --no-cache` package
+# discovery (Io.Threaded.dirRealPathFilePosix -> realpath). Kept alongside the
+# frame-specific suppressions above because the flake also appears through
+# other callers of realpath.
+{
+   musl-realpath-uninitialised
+   Memcheck:Cond
+   ...
+   fun:realpath
+}

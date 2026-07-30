@@ -33,7 +33,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "total")
 			(ty (name "U64")))
@@ -79,15 +79,15 @@ total = {
 				(e-num (value "0")))
 			(s-for
 				(p-assign (ident "i"))
-				(e-call (constraint-fn-var 262)
-					(e-lookup-external
-						(builtin))
-					(e-num (value "1"))
-					(e-num (value "5")))
+				(e-dispatch-call (method "range_inclusive") (constraint-fn-var 238)
+					(receiver
+						(e-num (value "1")))
+					(args
+						(e-num (value "5"))))
 				(e-block
 					(s-reassign
 						(p-assign (ident "sum_"))
-						(e-dispatch-call (method "plus") (constraint-fn-var 385)
+						(e-dispatch-call (method "plus") (constraint-fn-var 282)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "sum_"))))

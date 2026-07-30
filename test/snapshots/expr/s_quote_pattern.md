@@ -12,9 +12,18 @@ match ... {
 }
 ~~~
 # EXPECTED
-NIL
+UNCONDITIONAL CONDITION - s_quote_pattern.md:1:7:1:10
 # PROBLEMS
-NIL
+
+┌─────────────────────────┐
+│ UNCONDITIONAL CONDITION ├─ This match value is known at compile time, so ───┐
+└┬────────────────────────┘  this match will always inspect the same value.   │
+ │                                                                            │
+ │  match ... {                                                               │
+ │        ‾‾‾                                                                 │
+ └──────────────────────────────────────────────────── s_quote_pattern.md:1:7 ┘
+
+
 # TOKENS
 ~~~zig
 KwMatch,TripleDot,OpenCurly,

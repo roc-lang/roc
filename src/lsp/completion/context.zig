@@ -9,18 +9,18 @@ const std = @import("std");
 pub const CompletionContext = union(enum) {
     /// After a dot with a module prefix: "Str." or "List."
     after_module_dot: []const u8,
-    /// After a dot with a value, either a record or a normal value for method completion : "myVal."
+    /// After `myVal.`, before following syntax has selected field access or a method call.
     after_value_dot: struct {
         /// The full dotted access chain before the dot (e.g., "myrec.subrec")
         access_chain: []const u8,
         /// Byte offset of the start of the chain
         chain_start: u32,
         /// Byte offset of the start of the segment before the dot
-        member_start: u32,
+        receiver_segment_start: u32,
 
         dot_offset: u32,
     },
-    /// After a dot whose receiver is not a plain identifier (e.g., "func().")
+    /// After a dot whose receiver is not a plain identifier (e.g. `func().`).
     after_receiver_dot: struct {
         /// Byte offset of the dot character
         dot_offset: u32,
@@ -55,7 +55,7 @@ pub fn detectCompletionContext(source: []const u8, line: u32, character: u32) Co
         pos -= 1;
     }
 
-    // Check for dot immediately (no whitespace skip). Roc dot access syntax
+    // Check for dot immediately (no whitespace skip). Roc value-dot syntax
     // does not allow whitespace between receiver and dot (`record.field`, not
     // `record .field`), so we only recognize a dot that is directly adjacent.
     if (pos > 0 and source[pos - 1] == '.') {
@@ -77,7 +77,8 @@ pub fn detectCompletionContext(source: []const u8, line: u32, character: u32) Co
 
 /// Detect the specific dot context once we know source[pos-1] == '.'.
 fn detectDotContext(source: []const u8, pos: anytype) CompletionContext {
-    // After a dot - could be module access or record field access
+    // After a dot - could be module access, record field access, or the
+    // incomplete prefix of a method call.
     // Look for identifier before the dot
     const ident_end = pos - 1;
     var ident_start = ident_end;
@@ -110,7 +111,7 @@ fn detectDotContext(source: []const u8, pos: anytype) CompletionContext {
                     .access_chain = access_chain,
                     .chain_start = @intCast(chain_start),
                     .dot_offset = @intCast(pos - 1),
-                    .member_start = @intCast(ident_start),
+                    .receiver_segment_start = @intCast(ident_start),
                 } };
             }
         }
@@ -199,7 +200,7 @@ test "detectCompletionContext: after nested record dot" {
     try std.testing.expect(ctx == .after_value_dot);
     try std.testing.expectEqualStrings("myrec.subrec", ctx.after_value_dot.access_chain);
     try std.testing.expectEqual(@as(u32, 0), ctx.after_value_dot.chain_start);
-    try std.testing.expectEqual(@as(u32, 6), ctx.after_value_dot.member_start);
+    try std.testing.expectEqual(@as(u32, 6), ctx.after_value_dot.receiver_segment_start);
 }
 
 test "detectCompletionContext: after receiver dot" {

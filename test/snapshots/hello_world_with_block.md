@@ -19,31 +19,31 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - hello_world_with_block.md:11:2:11:14
+NAME NOT IN SCOPE - hello_world_with_block.md:11:2:11:14
 UNUSED VARIABLE - hello_world_with_block.md:9:2:9:7
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**hello_world_with_block.md:11:2:11:14:**
-```roc
-	Stdout.line!("Hello, world!")
-```
-	^^^^^^^^^^^^
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
+ │                                                                            │
+ │  Stdout.line!("Hello, world!")                                             │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
+ └──────────────────────────────────────────── hello_world_with_block.md:11:2 ┘
+
+    Is it misspelled, or is there an import missing?
 
 
-**UNUSED VARIABLE**
-Variable `world` is not used anywhere in your code.
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `world` is defined here and then never used. ───┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  world = "World"                                                           │
+ │  ‾‾‾‾‾                                                                     │
+ └───────────────────────────────────────────── hello_world_with_block.md:9:2 ┘
 
-If you don't need this variable, prefix it with an underscore like `_world` to suppress this warning.
-The unused variable is declared here:
-**hello_world_with_block.md:9:2:9:7:**
-```roc
-	world = "World"
-```
-	^^^^^
-
+    If you don't need this variable, prefix it with an underscore like `_world`
+    to suppress this warning.
 
 # TOKENS
 ~~~zig
@@ -96,19 +96,8 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "main!"))
-		(e-lambda
-			(args
-				(p-underscore))
-			(e-block
-				(s-let
-					(p-assign (ident "world"))
-					(e-string
-						(e-literal (string "World"))))
-				(e-call
-					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-string
-						(e-literal (string "Hello, world!")))))))
-	(s-import (module "pf.Stdout")
+		(e-runtime-error (tag "erroneous_value_expr")))
+	(s-import (mod "pf.Stdout")
 		(exposes)))
 ~~~
 # TYPES

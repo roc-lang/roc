@@ -8,42 +8,50 @@ type=snippet
 import u.R}g:r->R.a.E
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_042.md:1:11:1:12
-MODULE NOT FOUND - fuzz_crash_042.md:1:20:1:22
+UNEXPECTED STATEMENT - fuzz_crash_042.md:1:11:1:12
+MOD NOT FOUND - fuzz_crash_042.md:1:20:1:22
 DECLARATION HAS NO VALUE - fuzz_crash_042.md:1:12:1:22
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_042.md:1:11:1:12:**
-```roc
-import u.R}g:r->R.a.E
-```
-          ^
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
+ │                                                                            │
+ │  import u.R}g:r->R.a.E                                                     │
+ │            ‾                                                               │
+ └──────────────────────────────────────────────────── fuzz_crash_042.md:1:11 ┘
 
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
 
-**MODULE NOT FOUND**
-The type `a.E` is qualified by the module `u.R`, but that module was not found in this Roc project.
+    For example:
+        answer = 42
 
-You're attempting to use this type here:
-**fuzz_crash_042.md:1:20:1:22:**
-```roc
-import u.R}g:r->R.a.E
-```
-                   ^^
+    I found `}` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_042.md:1:12:1:22:**
-```roc
-import u.R}g:r->R.a.E
-```
-           ^^^^^^^^^^
+┌──────────────────┐
+│ MOD NOT FOUND ├─ This `a.E` type is declared to be in `u.R`, which ──────┐
+└┬─────────────────┘  does not exist.                                         │
+ │                                                                            │
+ │  import u.R}g:r->R.a.E                                                     │
+ │                     ‾‾                                                     │
+ └──────────────────────────────────────────────────── fuzz_crash_042.md:1:20 ┘
 
 
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  import u.R}g:r->R.a.E                                                     │
+ │             ‾‾‾‾‾‾‾‾‾‾                                                     │
+ └──────────────────────────────────────────────────── fuzz_crash_042.md:1:12 ┘
+
+    Add a value body here, or put hosted functions in a platform type mod so
+    they are published through the host boundary.
 
 # TOKENS
 ~~~zig
@@ -53,7 +61,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "u.R"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -77,7 +85,7 @@ g : r -> R.a.E
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "r"))
 				(ty-malformed))))
-	(s-import (module "u.R")
+	(s-import (mod "u.R")
 		(exposes)))
 ~~~
 # TYPES

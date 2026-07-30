@@ -1,49 +1,52 @@
-ParserTopLevelStoredValidatedWrapper :: [].{
-	DecodeErr := [MissingRequired, TrailingInput].{}
-}
+ParserTopLevelStoredValidatedWrapper :: [].{}
 
 Format := [Default].{
 	rename_field : Format, Str -> Str
 	rename_field = |_, name| name
 
-	parse_str : Format, State -> Try({ value : Str, rest : State }, ParserTopLevelStoredValidatedWrapper.DecodeErr)
+	parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError, ..])
 	parse_str = |_, state|
 		match state {
 			Present(value) => Ok({ value, rest: Done })
-			Done => Err(ParserTopLevelStoredValidatedWrapper.DecodeErr.MissingRequired)
+			Done => Err(FormatError)
 		}
 
-	parse_record_field : Format, Str.FieldName.FieldNames(_shape), State -> Try(
+	parse_record_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [FormatError, ..])
+	parse_record_start = |_, state| Ok(Uncounted(state))
+
+	parse_record_field : Format,
+	Encoding.FieldName.FieldNames(_shape),
+	State -> Try(
 		[
-			Field({ field : Str.FieldName(_shape), rest : State }),
+			Field({ field : Encoding.FieldName(_shape), rest : State }),
 			TryField({ name : Str, rest : State }),
 			TryFieldCaseless({ name : Str, rest : State }),
-			Continue({ rest : State }),
-			Done({ rest : State }),
+			Continue(State),
+			Done(State),
 		],
-		ParserTopLevelStoredValidatedWrapper.DecodeErr,
+		[FormatError, ..],
 	)
 	parse_record_field = |_, _, state|
 		match state {
 			Present(_) => Ok(TryField({ name: "foo", rest: state }))
-			Done => Ok(Done({ rest: state }))
+			Done => Ok(Done(state))
 		}
 
-	skip_record_field : Format, State -> Try(State, ParserTopLevelStoredValidatedWrapper.DecodeErr)
-	skip_record_field = |_, _| Ok(Done)
+	parse_record_after_field : Format, State -> Try([Continue(State), Done(State)], [FormatError, ..])
+	parse_record_after_field = |_, state| Ok(Continue(state))
 
-	missing_record_field : Format, Str, State -> ParserTopLevelStoredValidatedWrapper.DecodeErr
-	missing_record_field = |_, _, _| ParserTopLevelStoredValidatedWrapper.DecodeErr.MissingRequired
+	skip_record_field : Format, State -> Try(State, [FormatError, ..])
+	skip_record_field = |_, _| Ok(Done)
 }
 
 State := [Present(Str), Done]
 
-trailing_input : ParserTopLevelStoredValidatedWrapper.DecodeErr
-trailing_input = ParserTopLevelStoredValidatedWrapper.DecodeErr.TrailingInput
+trailing_input : [TrailingInput, ..]
+trailing_input = TrailingInput
 
-parser_for : () -> (Str -> Try(a, ParserTopLevelStoredValidatedWrapper.DecodeErr))
+parser_for : () -> (Str -> Try(a, [FormatError, TrailingInput, ..errs]))
 	where [
-		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, ParserTopLevelStoredValidatedWrapper.DecodeErr)),
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError, TrailingInput, ..errs])),
 	]
 parser_for = || {
 	Shape : a
@@ -59,7 +62,7 @@ parser_for = || {
 	}
 }
 
-parse_stored : Str -> Try({ foo : Str }, ParserTopLevelStoredValidatedWrapper.DecodeErr)
+parse_stored : Str -> Try({ foo : Str }, [FormatError, MissingRequiredField(Str), TrailingInput])
 parse_stored = parser_for()
 
 expect {

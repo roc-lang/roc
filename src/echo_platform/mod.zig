@@ -29,7 +29,7 @@ pub const run_shim_platform_main_source =
     \\    exposes [Echo]
     \\    packages {}
     \\    provides { "roc_main": main_for_host! }
-    \\    hosted { "roc_default_echo_line": Echo.line! }
+++ "\n    hosted { \"" ++ builtins.shim_symbols.roc_default_echo_line ++ "\": Echo.line! }\n" ++
     \\
     \\import Echo
     \\
@@ -39,7 +39,7 @@ pub const run_shim_platform_main_source =
     \\        Ok(_) => 0
     \\        Err(Exit(code)) => code
     \\        Err(other) => {
-    \\            Echo.line!("Program exited with error: ${Str.inspect(other)}")
+    \\            Echo.line!("Program exited with error: ${Str.inspect(other)}\n")
     \\            1
     \\        }
     \\    }
@@ -54,7 +54,7 @@ pub const build_platform_main_source =
     \\    exposes [Echo]
     \\    packages {}
     \\    provides { "_start": main_for_host! }
-    \\    hosted { "roc_default_echo_line": Echo.line! }
+++ "\n    hosted { \"" ++ builtins.shim_symbols.roc_default_echo_line ++ "\": Echo.line! }\n" ++
     \\    targets: {
     \\        inputs_dir: "targets/",
     \\        x64musl: { inputs: [app] },
@@ -76,15 +76,15 @@ pub const build_platform_main_source =
 ;
 
 /// Build-only default platform for targets that use a C runtime entrypoint.
-/// The user-facing main! signature stays the same; the synthetic main returns
-/// the C process status code.
+/// The C runtime object owns `main`; it calls this exported Roc entrypoint and
+/// folds failed inline expects into the process status code.
 pub const build_c_platform_main_source =
     \\platform ""
     \\    requires {} { main! : List(Str) => Try(_, [Exit(I8), ..]) }
     \\    exposes [Echo]
     \\    packages {}
-    \\    provides { "main": main_for_host! }
-    \\    hosted { "roc_default_echo_line": Echo.line! }
+++ "\n    provides { \"" ++ builtins.shim_symbols.roc_default_start_main ++ "\": main_for_host! }" ++
+    "\n    hosted { \"" ++ builtins.shim_symbols.roc_default_echo_line ++ "\": Echo.line! }\n" ++
     \\    targets: {
     \\        inputs_dir: "targets/",
     \\        x64mac: { inputs: [app] },
@@ -114,7 +114,7 @@ pub const build_wasm_archive_platform_main_source =
     \\    exposes [Echo]
     \\    packages {}
     \\    provides { "main": main_for_host! }
-    \\    hosted { "roc_default_echo_line": Echo.line! }
+++ "\n    hosted { \"" ++ builtins.shim_symbols.roc_default_echo_line ++ "\": Echo.line! }\n" ++
     \\    targets: {
     \\        inputs_dir: "targets/",
     \\        wasm32: { inputs: [app], output: Archive },
@@ -147,7 +147,7 @@ pub const EchoEnv = struct {
 /// parameter, so the runner stores its RocOps here before running any Roc code.
 pub var g_roc_ops: ?*host_abi.RocOps = null;
 
-/// Echo host function: reads a RocStr arg and prints it + newline to stdout.
+/// Echo host function: reads a RocStr arg and writes it unchanged to stdout.
 /// Ownership of `roc_str` transfers to this host function — the RC insertion
 /// pass emits zero RC ops for hosted-call args (see test in `src/lir/arc.zig`
 /// "RC hosted call transfers unused refcounted arg to host", and the test
@@ -168,13 +168,7 @@ pub fn echoHostedFn(str: RocStr) callconv(.c) void {
     } else {
         const env: *EchoEnv = @ptrCast(@alignCast(ops.env));
         const stdout_file: std.Io.File = .stdout();
-        if (appendTemporaryNewline(&owned)) |message_with_newline| {
-            stdout_file.writeStreamingAll(env.std_io, message_with_newline) catch |err| handleStdoutError(err);
-            message_with_newline[message_with_newline.len - 1] = 0;
-        } else {
-            stdout_file.writeStreamingAll(env.std_io, message) catch |err| handleStdoutError(err);
-            stdout_file.writeStreamingAll(env.std_io, "\n") catch |err| handleStdoutError(err);
-        }
+        stdout_file.writeStreamingAll(env.std_io, message) catch |err| handleStdoutError(err);
     }
     // Returns {} (ZST) — no bytes to write to ret_bytes
 }
@@ -199,16 +193,6 @@ pub fn echoLineHostedFn() host_abi.HostedFn {
         host_abi.hostedFn(&echoHostedFnWasm)
     else
         host_abi.hostedFn(&echoHostedFn);
-}
-
-fn appendTemporaryNewline(str: *RocStr) ?[]u8 {
-    const len = str.len();
-    if (len >= str.getCapacity()) return null;
-    if (!(str.isSmallStr() or (!str.isSeamlessSlice() and str.isUnique()))) return null;
-
-    const bytes = str.asSliceWithCapacityMut();
-    bytes[len] = '\n';
-    return bytes[0 .. len + 1];
 }
 
 /// Handle stdout write errors: exit cleanly on broken pipe (standard
@@ -415,48 +399,6 @@ fn sanitizeUtf8(input: []const u8, allocator: std.mem.Allocator) std.mem.Allocat
 
 const testing = std.testing;
 const test_allocator = std.testing.allocator;
-
-test "appendTemporaryNewline: small string uses spare inline byte" {
-    var str = RocStr.fromSliceSmall("hello");
-
-    const message = appendTemporaryNewline(&str) orelse return error.TestUnexpectedResult;
-    try testing.expectEqualStrings("hello\n", message);
-    try testing.expectEqualStrings("hello", str.asSlice());
-
-    message[message.len - 1] = 0;
-    try testing.expectEqual(@as(u8, 0), str.asSliceWithCapacity()[str.len()]);
-}
-
-test "appendTemporaryNewline: unique heap string with spare capacity is writable" {
-    var test_env = builtins.utils.TestEnv.init(test_allocator);
-    defer test_env.deinit();
-    const ops = test_env.getOps();
-
-    var str = RocStr.fromSlice("a string long enough to require heap allocation", ops);
-    str = builtins.str.reserve(str, 1, .Immutable, ops);
-    defer str.decref(ops);
-
-    const message = appendTemporaryNewline(&str) orelse return error.TestUnexpectedResult;
-    try testing.expectEqualStrings("a string long enough to require heap allocation\n", message);
-    try testing.expectEqualStrings("a string long enough to require heap allocation", str.asSlice());
-
-    message[message.len - 1] = 0;
-    try testing.expectEqual(@as(u8, 0), str.asSliceWithCapacity()[str.len()]);
-}
-
-test "appendTemporaryNewline: shared heap string is not writable" {
-    var test_env = builtins.utils.TestEnv.init(test_allocator);
-    defer test_env.deinit();
-    const ops = test_env.getOps();
-
-    var str = RocStr.fromSlice("a string long enough to require heap allocation", ops);
-    str = builtins.str.reserve(str, 1, .Immutable, ops);
-    defer str.decref(ops);
-    str.incref(1, ops);
-    defer str.decref(ops);
-
-    try testing.expectEqual(@as(?[]u8, null), appendTemporaryNewline(&str));
-}
 
 test "sanitizeUtf8: valid ASCII passes through unchanged" {
     const input = "hello world";

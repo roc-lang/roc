@@ -8,18 +8,24 @@ type=expr
 -!h
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - minus_not_h.md:1:1:1:2
+UNEXPECTED EXPRESSION SYNTAX - minus_not_h.md:1:1:1:2
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **-** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
 
-**minus_not_h.md:1:1:1:2:**
-```roc
--!h
-```
-^
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
+ │                                                                            │
+ │  -!h                                                                       │
+ │  ‾                                                                         │
+ └──────────────────────────────────────────────────────── minus_not_h.md:1:1 ┘
 
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `-` here.
 
 # TOKENS
 ~~~zig

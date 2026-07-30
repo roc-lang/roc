@@ -1,25 +1,12 @@
-//! Value storage and register allocation for the dev backend.
+//! Value storage kinds for the dev backend.
 //!
-//! This module provides infrastructure for tracking where computed values
-//! are stored (registers, stack, immediates) and managing register allocation.
-//! It serves as a foundation for the architecture-specific code generators.
-//!
-//! TODO: investigate removing or refactoring this module. The
-//! `ValueStorage(...)` factory below appears to be a stalled abstraction
-//! attempt — it is not instantiated anywhere, and the architecture-specific
-//! backends in `x86_64/CodeGen.zig` and `aarch64/CodeGen.zig` duplicate the
-//! same bitmask freelist logic directly. Only the `ValueLoc` and `NumKind`
-//! enums are consumed by callers, and `ValueLoc` here is structurally
-//! poorer than `LirCodeGen.ValueLocation` (raw `u8` register fields, fewer
-//! variants). Either delete the factory and move the enums next to their
-//! consumers, or finish the original intent by routing both backends
-//! through this layer (and adding the constraint-aware primitives the
-//! current naive allocator lacks).
+//! Defines the `ValueLoc` union describing where a computed value lives
+//! (register, stack, immediate, or memory address) and the `NumKind` enum of
+//! numeric types. The architecture-specific code generators in
+//! `x86_64/CodeGen.zig` and `aarch64/CodeGen.zig` consume `ValueLoc` when
+//! tracking local variable locations.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
-
-const Relocation = @import("Relocation.zig").Relocation;
 
 /// Value location - where a computed value is stored
 pub const ValueLoc = union(enum) {
@@ -78,145 +65,6 @@ pub const NumKind = enum {
         };
     }
 };
-
-/// Value storage manager that tracks register allocation and local variable locations.
-/// This is parameterized by the target architecture's types.
-pub fn ValueStorage(
-    comptime GeneralReg: type,
-    comptime FloatReg: type,
-    comptime Emit: type,
-    comptime CC: type,
-) type {
-    return struct {
-        const Self = @This();
-
-        /// The instruction emitter
-        emit: Emit,
-
-        /// Allocator for dynamic allocations
-        allocator: Allocator,
-
-        /// Stack frame offset (grows negative from RBP/FP)
-        stack_offset: i32,
-
-        /// Current stack alignment requirement
-        stack_alignment: u32,
-
-        /// Relocations needed for linking
-        relocations: std.ArrayList(Relocation),
-
-        /// Map from local variable indices to their locations
-        locals: std.AutoHashMap(u32, ValueLoc),
-
-        /// Free general-purpose registers (as a bitset)
-        free_general: u32,
-
-        /// Free floating-point registers (as a bitset)
-        free_float: u32,
-
-        /// Initialize a new code generator
-        pub fn init(allocator: Allocator) Self {
-            return Self{
-                .emit = Emit.init(allocator),
-                .allocator = allocator,
-                .stack_offset = 0,
-                .stack_alignment = 16, // Most ABIs require 16-byte alignment
-                .relocations = .{},
-                .locals = std.AutoHashMap(u32, ValueLoc).init(allocator),
-                .free_general = CC.CALLER_SAVED_GENERAL_MASK,
-                .free_float = CC.CALLER_SAVED_FLOAT_MASK,
-            };
-        }
-
-        /// Clean up resources
-        pub fn deinit(self: *Self) void {
-            self.emit.deinit();
-            self.relocations.deinit(self.allocator);
-            self.locals.deinit();
-        }
-
-        /// Get the generated code
-        pub fn getCode(self: *Self) []const u8 {
-            return self.emit.buf.items;
-        }
-
-        /// Get the current code offset (for calculating relative jumps)
-        pub fn currentOffset(self: *Self) usize {
-            return self.emit.buf.items.len;
-        }
-
-        // Register allocation (simple linear scan)
-
-        /// Allocate a general-purpose register
-        pub fn allocGeneral(self: *Self) ?GeneralReg {
-            if (self.free_general == 0) return null;
-            const bit = @ctz(self.free_general);
-            self.free_general &= ~(@as(u32, 1) << @intCast(bit));
-            return @enumFromInt(bit);
-        }
-
-        /// Free a general-purpose register
-        pub fn freeGeneral(self: *Self, reg: GeneralReg) void {
-            self.free_general |= @as(u32, 1) << @intFromEnum(reg);
-        }
-
-        /// Allocate a floating-point register
-        pub fn allocFloat(self: *Self) ?FloatReg {
-            if (self.free_float == 0) return null;
-            const bit = @ctz(self.free_float);
-            self.free_float &= ~(@as(u32, 1) << @intCast(bit));
-            return @enumFromInt(bit);
-        }
-
-        /// Free a floating-point register
-        pub fn freeFloat(self: *Self, reg: FloatReg) void {
-            self.free_float |= @as(u32, 1) << @intFromEnum(reg);
-        }
-
-        // Stack management
-
-        /// Allocate space on the stack, returns offset from frame pointer
-        pub fn allocStack(self: *Self, size: u32) i32 {
-            // Align size to 8 bytes
-            const aligned_size = (size + 7) & ~@as(u32, 7);
-            self.stack_offset -= @intCast(aligned_size);
-            return self.stack_offset;
-        }
-
-        /// Get total stack space used
-        pub fn getStackSize(self: *Self) u32 {
-            const size: u32 = @intCast(-self.stack_offset);
-            // Align to 16 bytes for ABI compliance
-            return (size + 15) & ~@as(u32, 15);
-        }
-
-        // Local variable management
-
-        /// Bind a local variable to a location
-        pub fn bindLocal(self: *Self, idx: u32, loc: ValueLoc) Allocator.Error!void {
-            try self.locals.put(idx, loc);
-        }
-
-        /// Look up a local variable's location
-        pub fn getLocal(self: *Self, idx: u32) ?ValueLoc {
-            return self.locals.get(idx);
-        }
-
-        // Code emission helpers (architecture-independent interface)
-
-        /// Emit function prologue
-        pub fn emitPrologue(_: *Self) Allocator.Error!void {
-            // This will be specialized per architecture
-            @compileError("emitPrologue must be specialized for the target architecture");
-        }
-
-        /// Emit function epilogue and return
-        pub fn emitEpilogue(_: *Self) Allocator.Error!void {
-            // This will be specialized per architecture
-            @compileError("emitEpilogue must be specialized for the target architecture");
-        }
-    };
-}
 
 // Tests
 

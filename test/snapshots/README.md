@@ -11,6 +11,7 @@ Each snapshot file contains the expected output and helps us to detect regressio
 - **Generate all snapshots**: `zig build run-snapshot-tool`
 - **Update specific snapshot**: `zig build run-snapshot-tool -- <file_path>`
 - **Update expected from problems**: `zig build run-snapshot-tool -- <file_path> --update-expected`
+- **Embed carriage-return source bytes**: add `source_escapes=true` to `META` and write each carriage return as `\r` in `SOURCE`
 - **Debug REPL evaluation with trace**: `zig build run-snapshot-tool -- <repl_snapshot.md> --trace-eval`
 
 ### Trace Debugging

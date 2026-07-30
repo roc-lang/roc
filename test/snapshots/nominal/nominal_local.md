@@ -19,17 +19,18 @@ test = |{}| {
 # EXPECTED
 MISSING METHOD - nominal_local.md:9:5:9:15
 # PROBLEMS
-**MISSING METHOD**
-This **encode_str** method is being called on a value whose type doesn't have that method:
-**nominal_local.md:9:5:9:15:**
-```roc
-    Str.encode("hi", fmt)
-```
-    ^^^^^^^^^^
 
-The value's type, which does not have a method named **encode_str**, is:
+┌────────────────┐
+│ MISSING METHOD ├─ This `encode_str` method is being called on a value ──────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  Str.encode("hi", fmt)                                                     │
+ │  ‾‾‾‾‾‾‾‾‾‾                                                                │
+ └────────────────────────────────────────────────────── nominal_local.md:9:5 ┘
 
-    [Utf8Format, ..]
+    The value's type, which does not have a method named `encode_str`, is:
+
+        [Utf8Format, ..]
 
 # TOKENS
 ~~~zig
@@ -47,7 +48,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "main!"))
@@ -125,7 +126,35 @@ test = |{}| {
 			(e-empty_record)))
 	(d-let
 		(p-assign (ident "test"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-lambda
+			(args
+				(p-record-destructure
+					(destructs)))
+			(e-block
+				(s-nominal-decl
+					(ty-header (name "Utf8Format"))
+					(ty-record))
+				(s-let
+					(p-assign (ident "Utf8Format.encode_str"))
+					(e-lambda
+						(args
+							(p-assign (ident "_fmt"))
+							(p-assign (ident "s")))
+						(e-call (constraint-fn-var 272)
+							(e-lookup-external
+								(builtin))
+							(e-lookup-local
+								(p-assign (ident "s"))))))
+				(s-let
+					(p-assign (ident "fmt"))
+					(e-tag (name "Utf8Format")))
+				(e-call (constraint-fn-var 296)
+					(e-lookup-external
+						(builtin))
+					(e-string
+						(e-literal (string "hi")))
+					(e-lookup-local
+						(p-assign (ident "fmt")))))))
 	(s-nominal-decl
 		(ty-header (name "Utf8Format"))
 		(ty-record)))
@@ -136,12 +165,12 @@ test = |{}| {
 	(defs
 		(patt (type "Str => {}"))
 		(patt (type "_arg -> {}"))
-		(patt (type "{} -> Error")))
+		(patt (type "{} -> Try(encoded, err)")))
 	(type_decls
 		(nominal (type "Utf8Format")
 			(ty-header (name "Utf8Format"))))
 	(expressions
 		(expr (type "Str => {}"))
 		(expr (type "_arg -> {}"))
-		(expr (type "{} -> Error"))))
+		(expr (type "{} -> Try(encoded, err)"))))
 ~~~

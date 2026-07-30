@@ -64,6 +64,22 @@ pub const CFStmtId = enum(u32) {
     _,
 };
 
+/// Identifier of one virtual source frame introduced by inlining.
+pub const InlineScopeId = enum(u32) {
+    _,
+
+    pub const none: InlineScopeId = @enumFromInt(std.math.maxInt(u32));
+};
+
+/// A virtual source frame retained independently of physical procedures.
+pub const InlineScope = extern struct {
+    source_symbol: Symbol,
+    source_name: StringLiteral.Idx,
+    source_loc: base.SourceLoc,
+    call_site: base.SourceLoc,
+    parent: InlineScopeId,
+};
+
 /// Identifier of a compile-time-observed control-flow site.
 pub const ComptimeSiteId = enum(u32) {
     _,
@@ -100,7 +116,7 @@ pub const Local = struct {
 /// Span into flat local-id storage.
 pub const LocalSpan = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
 
     /// Returns an empty local-id span.
     pub fn empty() LocalSpan {
@@ -137,6 +153,11 @@ pub const StrLiteral = struct {
     backing: StringLiteral.Idx,
     offset: u32,
     len: u32,
+};
+
+/// Identifier for one readonly data object emitted by static-data materialization.
+pub const StaticDataId = enum(u32) {
+    _,
 };
 
 /// How a string interpolation pattern must finish after its last step.
@@ -267,6 +288,8 @@ pub const LiteralValue = union(enum) {
     f32_literal: f32,
     dec_literal: i128,
     str_literal: StrLiteral,
+    static_data: StaticDataId,
+    bytes_literal: StrLiteral,
     null_ptr,
     proc_ref: LirProcSpecId,
 };
@@ -388,6 +411,25 @@ pub const TailTransform = enum(u8) {
     tce,
 };
 
+/// Whether native backends must probe this proc's stack frame page-by-page
+/// before any frame-local access. This is a LIR contract, not a backend
+/// policy decision: lowering sets it when a proc's logical locals/params/return can
+/// force dangerous native-stack aggregate storage.
+pub const StackProbe = enum(u8) {
+    default,
+    required,
+};
+
+/// Page-size threshold used when deciding whether a layout needs native stack probing.
+pub const stack_probe_page_size: u32 = 4096;
+
+/// Reports whether values of this layout are large enough to require stack probing.
+pub fn layoutNeedsStackProbe(layouts: *const layout.Store, layout_idx: layout.Idx) bool {
+    const layout_data = layouts.getLayout(layout_idx);
+    const size = layouts.layoutSizeAlign(layout_data).size;
+    return size >= stack_probe_page_size;
+}
+
 /// Single statement/control-flow language for all lowered code.
 pub const CFStmt = union(enum) {
     init_uninitialized: struct {
@@ -423,6 +465,15 @@ pub const CFStmt = union(enum) {
         capture: ?LocalId,
         capture_layout: ?layout.Idx,
         on_drop: ErasedCallableOnDrop,
+        /// Optional consumed erased callable allocation to repack.
+        ///
+        /// When present, this statement returns a unique erased callable with
+        /// the new proc/drop/capture. If `reuse_unique` is true, ARC proved the
+        /// consumed allocation is uniquely owned at the statement. Otherwise,
+        /// consumers must runtime-check uniqueness and take the fresh allocate
+        /// path when the old allocation is shared.
+        reuse: ?LocalId = null,
+        reuse_unique: bool = false,
         next: CFStmtId,
     },
     assign_low_level: struct {
@@ -437,6 +488,13 @@ pub const CFStmt = union(enum) {
         /// without inspecting the count; the runtime check is always sound,
         /// so a zero mask reproduces fully checked behavior.
         unique_args: u64 = 0,
+        /// For `list_map_can_reuse`: whether the input and output element
+        /// layouts are interchangeable in one allocation, computed per pointer
+        /// width. Resolved at codegen for the target being built — a `false`
+        /// width forces the op to a constant `0` (reuse statically impossible),
+        /// so the in-place branch is never taken there. Target-independent
+        /// because both widths are stored; ignored by every other op.
+        interchangeable: layout.WidthValues(bool) = layout.WidthValues(bool).both(true, true),
         args: LocalSpan,
         next: CFStmtId,
     },
@@ -452,6 +510,20 @@ pub const CFStmt = union(enum) {
     },
     assign_tag: struct {
         target: LocalId,
+        variant_index: u16,
+        discriminant: u16,
+        payload: ?LocalId,
+        next: CFStmtId,
+    },
+    store_struct: struct {
+        dest: LocalId,
+        struct_layout: layout.Idx,
+        fields: LocalSpan,
+        next: CFStmtId,
+    },
+    store_tag: struct {
+        dest: LocalId,
+        tag_layout: layout.Idx,
         variant_index: u16,
         discriminant: u16,
         payload: ?LocalId,
@@ -531,9 +603,12 @@ pub const CFStmt = union(enum) {
         /// expected to be cold. Backends may use this for branch weights or
         /// block placement, but must not infer it from source names or shapes.
         default_is_cold: bool = false,
-        /// Common continuation used by structured branch-result switches, when
-        /// the branch bodies flow back to a shared suffix. ARC insertion uses
-        /// this to release branch-local owned values before the shared suffix.
+        /// Common continuation used by structured branch-result switches. Direct
+        /// lowering must provide this when branch bodies reach one exact shared
+        /// suffix within the same control-flow region. `null` means there is no
+        /// such same-region suffix; branches may still converge across a join.
+        /// ARC insertion uses the continuation to release branch-local owned
+        /// values before the shared suffix.
         continuation: ?CFStmtId = null,
     },
     /// Branch on a condition that is compiler-proven to describe whether
@@ -609,10 +684,16 @@ pub const LirProcSpec = struct {
     body: ?CFStmtId = null,
     ret_layout: layout.Idx,
     abi: ProcAbi = .roc,
+    /// This closed proc exists only so target static-data materialization can
+    /// execute its exact post-layout construction. Runtime backends register
+    /// and emit only ordinary procedures.
+    is_static_initializer: bool = false,
     /// Hosted call ABI metadata, when this proc is provided by the platform.
     hosted: ?HostedProc = null,
     /// Tail-recursion rewrite applied by the TRMC pass, if any.
     tail_transform: TailTransform = .none,
+    /// Explicit native-stack probing requirement for this proc.
+    stack_probe: StackProbe = .default,
 };
 
 /// Identifier of a stored LirPattern.

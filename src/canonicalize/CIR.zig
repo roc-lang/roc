@@ -20,13 +20,14 @@ const TypeVar = types_mod.Var;
 pub const NodeStore = @import("NodeStore.zig");
 pub const Node = @import("Node.zig");
 pub const Expr = @import("Expression.zig").Expr;
+pub const DerivedMethodKind = @import("Expression.zig").DerivedMethodKind;
 pub const Pattern = @import("Pattern.zig").Pattern;
 pub const Statement = @import("Statement.zig").Statement;
 pub const TypeAnno = @import("TypeAnnotation.zig").TypeAnno;
 pub const Diagnostic = @import("Diagnostic.zig").Diagnostic;
 
 /// Indices of builtin type declarations within the Builtin module.
-/// Loaded once at startup from builtin_indices.bin (generated at build time).
+/// Generated at build time into typed static data embedded in the compiler.
 /// Contains both statement indices (positions within Builtin.bin) and ident indices
 /// (interned identifiers for comparison without string lookups).
 pub const BuiltinIndices = struct {
@@ -44,6 +45,13 @@ pub const BuiltinIndices = struct {
     parse_tag_union_spec_type: Statement.Idx,
     fields_type: Statement.Idx,
     field_type: Statement.Idx,
+    json_state_type: Statement.Idx,
+    json_encode_state_type: Statement.Idx,
+    json_container_encode_state_type: Statement.Idx,
+    json_encoding_type: Statement.Idx,
+    http_header_state_type: Statement.Idx,
+    http_header_encoding_type: Statement.Idx,
+    http_header_type: Statement.Idx,
     utf8_problem_type: Statement.Idx,
     u8_type: Statement.Idx,
     i8_type: Statement.Idx,
@@ -58,7 +66,22 @@ pub const BuiltinIndices = struct {
     dec_type: Statement.Idx,
     f32_type: Statement.Idx,
     f64_type: Statement.Idx,
+    u8x16_type: Statement.Idx,
+    i8x16_type: Statement.Idx,
+    u16x8_type: Statement.Idx,
+    i16x8_type: Statement.Idx,
+    u32x4_type: Statement.Idx,
+    i32x4_type: Statement.Idx,
+    u64x2_type: Statement.Idx,
+    i64x2_type: Statement.Idx,
     numeral_type: Statement.Idx,
+    crypto_type: Statement.Idx,
+    crypto_digest_bytes_err_type: Statement.Idx,
+    crypto_digest_hex_err_type: Statement.Idx,
+    crypto_sha256_digest_type: Statement.Idx,
+    crypto_sha256_hasher_type: Statement.Idx,
+    crypto_blake3_digest_type: Statement.Idx,
+    crypto_blake3_hasher_type: Statement.Idx,
 
     // Ident indices - simple unqualified names (e.g., "Bool", "U8")
     bool_ident: Ident.Idx,
@@ -74,6 +97,13 @@ pub const BuiltinIndices = struct {
     parse_tag_union_spec_ident: Ident.Idx,
     fields_ident: Ident.Idx,
     field_ident: Ident.Idx,
+    json_state_ident: Ident.Idx,
+    json_encode_state_ident: Ident.Idx,
+    json_container_encode_state_ident: Ident.Idx,
+    json_encoding_ident: Ident.Idx,
+    http_header_state_ident: Ident.Idx,
+    http_header_encoding_ident: Ident.Idx,
+    http_header_ident: Ident.Idx,
     utf8_problem_ident: Ident.Idx,
     u8_ident: Ident.Idx,
     i8_ident: Ident.Idx,
@@ -88,7 +118,22 @@ pub const BuiltinIndices = struct {
     dec_ident: Ident.Idx,
     f32_ident: Ident.Idx,
     f64_ident: Ident.Idx,
+    u8x16_ident: Ident.Idx,
+    i8x16_ident: Ident.Idx,
+    u16x8_ident: Ident.Idx,
+    i16x8_ident: Ident.Idx,
+    u32x4_ident: Ident.Idx,
+    i32x4_ident: Ident.Idx,
+    u64x2_ident: Ident.Idx,
+    i64x2_ident: Ident.Idx,
     numeral_ident: Ident.Idx,
+    crypto_ident: Ident.Idx,
+    crypto_digest_bytes_err_ident: Ident.Idx,
+    crypto_digest_hex_err_ident: Ident.Idx,
+    crypto_sha256_digest_ident: Ident.Idx,
+    crypto_sha256_hasher_ident: Ident.Idx,
+    crypto_blake3_digest_ident: Ident.Idx,
+    crypto_blake3_hasher_ident: Ident.Idx,
     // Tag idents for Try type
     ok_ident: Ident.Idx,
     err_ident: Ident.Idx,
@@ -96,21 +141,157 @@ pub const BuiltinIndices = struct {
     /// Convert a nominal type's ident to a NumKind, if it's a builtin numeric type.
     /// This allows direct ident comparison instead of string comparison for type identification.
     pub fn numKindFromIdent(self: BuiltinIndices, ident: Ident.Idx) ?NumKind {
-        if (ident.eql(self.u8_ident)) return .u8;
-        if (ident.eql(self.i8_ident)) return .i8;
-        if (ident.eql(self.u16_ident)) return .u16;
-        if (ident.eql(self.i16_ident)) return .i16;
-        if (ident.eql(self.u32_ident)) return .u32;
-        if (ident.eql(self.i32_ident)) return .i32;
-        if (ident.eql(self.u64_ident)) return .u64;
-        if (ident.eql(self.i64_ident)) return .i64;
-        if (ident.eql(self.u128_ident)) return .u128;
-        if (ident.eql(self.i128_ident)) return .i128;
-        if (ident.eql(self.f32_ident)) return .f32;
-        if (ident.eql(self.f64_ident)) return .f64;
-        if (ident.eql(self.dec_ident)) return .dec;
+        inline for (builtin_type_specs) |spec| {
+            if (spec.num_kind) |num_kind| {
+                if (ident.eql(@field(self, spec.ident_field))) return num_kind;
+            }
+        }
         return null;
     }
+};
+
+/// How the builtin compiler should locate a type declaration in Builtin.roc.
+pub const BuiltinTypeLookup = union(enum) {
+    top_level: []const u8,
+    nested: struct {
+        parent: []const u8,
+        name: []const u8,
+    },
+    qualified: []const u8,
+};
+
+/// Static registry entry describing one builtin type that the compiler needs by index.
+pub const BuiltinTypeSpec = struct {
+    display_name: []const u8,
+    qualified_name: []const u8,
+    type_field: []const u8,
+    ident_field: []const u8,
+    lookup: BuiltinTypeLookup,
+    num_kind: ?NumKind = null,
+    auto_import: bool = true,
+};
+
+/// Ordered builtin type registry shared by builtin generation and runtime validation.
+pub const builtin_type_specs = [_]BuiltinTypeSpec{
+    .{ .display_name = "Bool", .qualified_name = "Builtin.Bool", .type_field = "bool_type", .ident_field = "bool_ident", .lookup = .{ .top_level = "Bool" } },
+    .{ .display_name = "Try", .qualified_name = "Builtin.Try", .type_field = "try_type", .ident_field = "try_ident", .lookup = .{ .top_level = "Try" } },
+    .{ .display_name = "Dict", .qualified_name = "Builtin.Dict", .type_field = "dict_type", .ident_field = "dict_ident", .lookup = .{ .top_level = "Dict" } },
+    .{ .display_name = "Set", .qualified_name = "Builtin.Set", .type_field = "set_type", .ident_field = "set_ident", .lookup = .{ .top_level = "Set" } },
+    .{ .display_name = "Str", .qualified_name = "Builtin.Str", .type_field = "str_type", .ident_field = "str_ident", .lookup = .{ .top_level = "Str" } },
+    .{ .display_name = "Hasher", .qualified_name = "Builtin.Hasher", .type_field = "hasher_type", .ident_field = "hasher_ident", .lookup = .{ .top_level = "Hasher" } },
+    .{ .display_name = "Iter", .qualified_name = "Builtin.Iter", .type_field = "iter_type", .ident_field = "iter_ident", .lookup = .{ .top_level = "Iter" } },
+    .{ .display_name = "Stream", .qualified_name = "Builtin.Stream", .type_field = "stream_type", .ident_field = "stream_ident", .lookup = .{ .top_level = "Stream" } },
+    .{ .display_name = "List", .qualified_name = "Builtin.List", .type_field = "list_type", .ident_field = "list_ident", .lookup = .{ .top_level = "List" } },
+    .{ .display_name = "Box", .qualified_name = "Builtin.Box", .type_field = "box_type", .ident_field = "box_ident", .lookup = .{ .top_level = "Box" } },
+    .{ .display_name = "ParseTagUnionSpec", .qualified_name = "Builtin.Encoding.ParseTagUnionSpec", .type_field = "parse_tag_union_spec_type", .ident_field = "parse_tag_union_spec_ident", .lookup = .{ .nested = .{ .parent = "Encoding", .name = "ParseTagUnionSpec" } }, .auto_import = false },
+    .{ .display_name = "FieldNames", .qualified_name = "Builtin.Encoding.FieldName.FieldNames", .type_field = "fields_type", .ident_field = "fields_ident", .lookup = .{ .qualified = "Builtin.Encoding.FieldName.FieldNames" }, .auto_import = false },
+    .{ .display_name = "FieldName", .qualified_name = "Builtin.Encoding.FieldName", .type_field = "field_type", .ident_field = "field_ident", .lookup = .{ .qualified = "Builtin.Encoding.FieldName" }, .auto_import = false },
+    .{ .display_name = "JsonState", .qualified_name = "Builtin.Encoding.JsonState", .type_field = "json_state_type", .ident_field = "json_state_ident", .lookup = .{ .qualified = "Builtin.Encoding.JsonState" }, .auto_import = false },
+    .{ .display_name = "JsonEncodeState", .qualified_name = "Builtin.Encoding.JsonEncodeState", .type_field = "json_encode_state_type", .ident_field = "json_encode_state_ident", .lookup = .{ .qualified = "Builtin.Encoding.JsonEncodeState" }, .auto_import = false },
+    .{ .display_name = "JsonContainerEncodeState", .qualified_name = "Builtin.Encoding.JsonContainerEncodeState", .type_field = "json_container_encode_state_type", .ident_field = "json_container_encode_state_ident", .lookup = .{ .qualified = "Builtin.Encoding.JsonContainerEncodeState" }, .auto_import = false },
+    .{ .display_name = "JsonEncoding", .qualified_name = "Builtin.Encoding.JsonEncoding", .type_field = "json_encoding_type", .ident_field = "json_encoding_ident", .lookup = .{ .qualified = "Builtin.Encoding.JsonEncoding" }, .auto_import = false },
+    .{ .display_name = "HttpHeaderState", .qualified_name = "Builtin.Encoding.HttpHeaderState", .type_field = "http_header_state_type", .ident_field = "http_header_state_ident", .lookup = .{ .qualified = "Builtin.Encoding.HttpHeaderState" }, .auto_import = false },
+    .{ .display_name = "HttpHeaderEncoding", .qualified_name = "Builtin.Encoding.HttpHeaderEncoding", .type_field = "http_header_encoding_type", .ident_field = "http_header_encoding_ident", .lookup = .{ .qualified = "Builtin.Encoding.HttpHeaderEncoding" }, .auto_import = false },
+    .{ .display_name = "HttpHeader", .qualified_name = "Builtin.Encoding.HttpHeader", .type_field = "http_header_type", .ident_field = "http_header_ident", .lookup = .{ .nested = .{ .parent = "Encoding", .name = "HttpHeader" } }, .auto_import = false },
+    .{ .display_name = "Utf8Problem", .qualified_name = "Builtin.Str.Utf8Problem", .type_field = "utf8_problem_type", .ident_field = "utf8_problem_ident", .lookup = .{ .nested = .{ .parent = "Str", .name = "Utf8Problem" } } },
+    .{ .display_name = "U8", .qualified_name = "Builtin.Num.U8", .type_field = "u8_type", .ident_field = "u8_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "U8" } }, .num_kind = .u8 },
+    .{ .display_name = "I8", .qualified_name = "Builtin.Num.I8", .type_field = "i8_type", .ident_field = "i8_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "I8" } }, .num_kind = .i8 },
+    .{ .display_name = "U16", .qualified_name = "Builtin.Num.U16", .type_field = "u16_type", .ident_field = "u16_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "U16" } }, .num_kind = .u16 },
+    .{ .display_name = "I16", .qualified_name = "Builtin.Num.I16", .type_field = "i16_type", .ident_field = "i16_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "I16" } }, .num_kind = .i16 },
+    .{ .display_name = "U32", .qualified_name = "Builtin.Num.U32", .type_field = "u32_type", .ident_field = "u32_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "U32" } }, .num_kind = .u32 },
+    .{ .display_name = "I32", .qualified_name = "Builtin.Num.I32", .type_field = "i32_type", .ident_field = "i32_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "I32" } }, .num_kind = .i32 },
+    .{ .display_name = "U64", .qualified_name = "Builtin.Num.U64", .type_field = "u64_type", .ident_field = "u64_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "U64" } }, .num_kind = .u64 },
+    .{ .display_name = "I64", .qualified_name = "Builtin.Num.I64", .type_field = "i64_type", .ident_field = "i64_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "I64" } }, .num_kind = .i64 },
+    .{ .display_name = "U128", .qualified_name = "Builtin.Num.U128", .type_field = "u128_type", .ident_field = "u128_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "U128" } }, .num_kind = .u128 },
+    .{ .display_name = "I128", .qualified_name = "Builtin.Num.I128", .type_field = "i128_type", .ident_field = "i128_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "I128" } }, .num_kind = .i128 },
+    .{ .display_name = "Dec", .qualified_name = "Builtin.Num.Dec", .type_field = "dec_type", .ident_field = "dec_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "Dec" } }, .num_kind = .dec },
+    .{ .display_name = "F32", .qualified_name = "Builtin.Num.F32", .type_field = "f32_type", .ident_field = "f32_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "F32" } }, .num_kind = .f32 },
+    .{ .display_name = "F64", .qualified_name = "Builtin.Num.F64", .type_field = "f64_type", .ident_field = "f64_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "F64" } }, .num_kind = .f64 },
+    .{ .display_name = "U8x16", .qualified_name = "Builtin.Num.U8x16", .type_field = "u8x16_type", .ident_field = "u8x16_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "U8x16" } } },
+    .{ .display_name = "I8x16", .qualified_name = "Builtin.Num.I8x16", .type_field = "i8x16_type", .ident_field = "i8x16_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "I8x16" } } },
+    .{ .display_name = "U16x8", .qualified_name = "Builtin.Num.U16x8", .type_field = "u16x8_type", .ident_field = "u16x8_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "U16x8" } } },
+    .{ .display_name = "I16x8", .qualified_name = "Builtin.Num.I16x8", .type_field = "i16x8_type", .ident_field = "i16x8_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "I16x8" } } },
+    .{ .display_name = "U32x4", .qualified_name = "Builtin.Num.U32x4", .type_field = "u32x4_type", .ident_field = "u32x4_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "U32x4" } } },
+    .{ .display_name = "I32x4", .qualified_name = "Builtin.Num.I32x4", .type_field = "i32x4_type", .ident_field = "i32x4_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "I32x4" } } },
+    .{ .display_name = "U64x2", .qualified_name = "Builtin.Num.U64x2", .type_field = "u64x2_type", .ident_field = "u64x2_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "U64x2" } } },
+    .{ .display_name = "I64x2", .qualified_name = "Builtin.Num.I64x2", .type_field = "i64x2_type", .ident_field = "i64x2_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "I64x2" } } },
+    .{ .display_name = "Numeral", .qualified_name = "Builtin.Num.Numeral", .type_field = "numeral_type", .ident_field = "numeral_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "Numeral" } } },
+    .{ .display_name = "Crypto", .qualified_name = "Builtin.Crypto", .type_field = "crypto_type", .ident_field = "crypto_ident", .lookup = .{ .top_level = "Crypto" } },
+    .{ .display_name = "DigestBytesErr", .qualified_name = "Builtin.Crypto.DigestBytesErr", .type_field = "crypto_digest_bytes_err_type", .ident_field = "crypto_digest_bytes_err_ident", .lookup = .{ .qualified = "Builtin.Crypto.DigestBytesErr" }, .auto_import = false },
+    .{ .display_name = "DigestHexErr", .qualified_name = "Builtin.Crypto.DigestHexErr", .type_field = "crypto_digest_hex_err_type", .ident_field = "crypto_digest_hex_err_ident", .lookup = .{ .qualified = "Builtin.Crypto.DigestHexErr" }, .auto_import = false },
+    .{ .display_name = "Digest", .qualified_name = "Builtin.Crypto.SHA256.Digest", .type_field = "crypto_sha256_digest_type", .ident_field = "crypto_sha256_digest_ident", .lookup = .{ .qualified = "Builtin.Crypto.SHA256.Digest" }, .auto_import = false },
+    .{ .display_name = "Hasher", .qualified_name = "Builtin.Crypto.SHA256.Hasher", .type_field = "crypto_sha256_hasher_type", .ident_field = "crypto_sha256_hasher_ident", .lookup = .{ .qualified = "Builtin.Crypto.SHA256.Hasher" }, .auto_import = false },
+    .{ .display_name = "Digest", .qualified_name = "Builtin.Crypto.BLAKE3.Digest", .type_field = "crypto_blake3_digest_type", .ident_field = "crypto_blake3_digest_ident", .lookup = .{ .qualified = "Builtin.Crypto.BLAKE3.Digest" }, .auto_import = false },
+    .{ .display_name = "Hasher", .qualified_name = "Builtin.Crypto.BLAKE3.Hasher", .type_field = "crypto_blake3_hasher_type", .ident_field = "crypto_blake3_hasher_ident", .lookup = .{ .qualified = "Builtin.Crypto.BLAKE3.Hasher" }, .auto_import = false },
+};
+
+/// Nominal declarations that only group nested builtin types rather than representing builtin types.
+pub const builtin_type_container_names = [_][]const u8{
+    "Builtin",
+    "Builtin.Num",
+    "Builtin.Encoding",
+    "Builtin.Encoding.Json",
+    "Builtin.Crypto",
+    "Builtin.Crypto.SHA256",
+    "Builtin.Crypto.BLAKE3",
+};
+
+const hash_offset: u64 = 0xcbf29ce484222325;
+const hash_prime: u64 = 0x100000001b3;
+
+fn hashByte(hash: u64, byte: u8) u64 {
+    return (hash ^ byte) *% hash_prime;
+}
+
+fn hashBytes(hash: u64, bytes: []const u8) u64 {
+    var result = hash;
+    for (bytes) |byte| result = hashByte(result, byte);
+    return result;
+}
+
+fn hashInt(hash: u64, value: u64) u64 {
+    var result = hash;
+    inline for (0..8) |shift| {
+        result = hashByte(result, @intCast((value >> (shift * 8)) & 0xff));
+    }
+    return result;
+}
+
+/// Hash of the builtin type registry used to reject stale generated builtin index metadata.
+pub const BUILTIN_TYPE_REGISTRY_HASH: u64 = blk: {
+    @setEvalBranchQuota(10_000);
+    var hash = hashBytes(hash_offset, "roc-builtin-type-registry-v1");
+    for (builtin_type_specs) |spec| {
+        hash = hashBytes(hash, spec.display_name);
+        hash = hashBytes(hash, spec.qualified_name);
+        hash = hashBytes(hash, spec.type_field);
+        hash = hashBytes(hash, spec.ident_field);
+        hash = hashBytes(hash, @tagName(spec.lookup));
+        switch (spec.lookup) {
+            .top_level => |name| hash = hashBytes(hash, name),
+            .nested => |nested| {
+                hash = hashBytes(hash, nested.parent);
+                hash = hashBytes(hash, nested.name);
+            },
+            .qualified => |name| hash = hashBytes(hash, name),
+        }
+        hash = if (spec.num_kind) |num_kind| hashBytes(hash, @tagName(num_kind)) else hashBytes(hash, "-");
+        hash = hashBytes(hash, if (spec.auto_import) "auto" else "internal");
+    }
+    break :blk hash;
+};
+
+/// Hash of the BuiltinIndices field layout used to reject stale generated index values.
+pub const BUILTIN_INDICES_LAYOUT_HASH: u64 = blk: {
+    @setEvalBranchQuota(10_000);
+    var hash = hashBytes(hash_offset, "roc-builtin-indices-layout-v1");
+    hash = hashInt(hash, @sizeOf(BuiltinIndices));
+    hash = hashInt(hash, @alignOf(BuiltinIndices));
+    for (@typeInfo(BuiltinIndices).@"struct".fields) |field| {
+        hash = hashBytes(hash, field.name);
+        hash = hashBytes(hash, @typeName(field.type));
+    }
+    break :blk hash;
 };
 
 // Type definitions for module compilation
@@ -248,13 +429,26 @@ pub const TypeHeader = struct {
 /// Represents a where clause constraint in type definitions
 pub const WhereClause = union(enum) {
     pub const Idx = enum(u32) { _ };
-    pub const Span = extern struct { span: base.DataSpan };
+    pub const IdxSpan = extern struct { span: base.DataSpan };
+    pub const Owner = extern struct {
+        rigid_var: TypeAnno.Idx,
+        clauses: IdxSpan,
+        introduced_in_scope: bool,
+        _padding: [3]u8 = .{ 0, 0, 0 },
+
+        pub const Span = extern struct { span: base.DataSpan };
+    };
+    pub const Span = extern struct {
+        span: base.DataSpan,
+        owners: Owner.Span,
+    };
 
     w_method: struct {
         var_: TypeAnno.Idx,
         method_name: base.Ident.Idx,
         args: TypeAnno.Span,
         ret: TypeAnno.Idx,
+        effectful: bool,
     },
     w_alias: struct {
         var_: TypeAnno.Idx,
@@ -280,6 +474,7 @@ pub const WhereClause = union(enum) {
 
                 const method_name_str = cir.getIdent(method.method_name);
                 try tree.pushStringPair("name", method_name_str);
+                if (method.effectful) try tree.pushBoolPair("effectful", true);
 
                 const attrs = tree.beginNode();
 
@@ -343,6 +538,12 @@ pub const Annotation = struct {
     /// Whether `anno` *introduces* a type variable (`.rigid_var`). Derived and
     /// populated like `mentions_type_var`.
     introduces_type_var: bool = false,
+    /// Whether the annotation contains an `_` inference hole — in `anno` or in
+    /// any where-clause method signature. Derived by `addAnnotation` and
+    /// populated on read by `getAnnotation`; the value passed at construction is
+    /// ignored. A hole is inferred from the def's body, so an annotation
+    /// containing one does not on its own determine a generalized scheme.
+    contains_underscore: bool = false,
 
     pub fn pushToSExprTree(self: *const @This(), env: anytype, tree: *SExprTree, idx: Annotation.Idx) Allocator.Error!void {
         const annotation = self.*;
@@ -415,15 +616,6 @@ pub const SmallDecValue = struct {
         return numerator_f64 / divisor;
     }
 
-    /// Calculate the int requirements of a SmallDecValue
-    pub fn toFracRequirements(self: SmallDecValue) types_mod.FracRequirements {
-        const f64_val = self.toF64();
-        return types_mod.FracRequirements{
-            .fits_in_f32 = fitsInF32(f64_val),
-            .fits_in_dec = fitsInDec(f64_val),
-        };
-    }
-
     /// Convert to RocDec representation (i128 scaled by 10^18)
     pub fn toRocDec(self: SmallDecValue) RocDec {
         return RocDec.fromFraction(self.numerator, self.denominator_power_of_ten);
@@ -466,51 +658,14 @@ pub const SmallDecValue = struct {
             try std.testing.expectEqual(@as(f64, -32768.0), val.toF64());
         }
     }
-
-    test "SmallDecValue.toFracRequirements - fits in all types" {
-        // Small integer - fits in everything
-        {
-            const val = SmallDecValue{ .numerator = 100, .denominator_power_of_ten = 0 };
-            const req = val.toFracRequirements();
-            try std.testing.expect(req.fits_in_f32);
-            try std.testing.expect(req.fits_in_dec);
-        }
-
-        // Pi approximation - fits in everything
-        {
-            const val = SmallDecValue{ .numerator = 31416, .denominator_power_of_ten = 4 };
-            const req = val.toFracRequirements();
-            try std.testing.expect(req.fits_in_f32);
-            try std.testing.expect(req.fits_in_dec);
-        }
-    }
 };
-
-/// Check if the given f64 fits in f32 range (ignoring precision loss)
-pub fn fitsInF32(f64_val: f64) bool {
-    // Check if it's within the range that f32 can represent.
-    // This includes normal, subnormal, and zero values.
-    // (This is a magnitude check, so take the abs value to check
-    // positive and negative at the same time.)
-    const abs_val = @abs(f64_val);
-    return abs_val == 0.0 or (abs_val >= std.math.floatTrueMin(f32) and abs_val <= std.math.floatMax(f32));
-}
-
-/// Check if a float value can be represented accurately in RocDec
-pub fn fitsInDec(value: f64) bool {
-    // RocDec uses i128 with 18 decimal places
-    const max_dec_value = 170141183460469231731.0;
-    const min_dec_value = -170141183460469231731.0;
-
-    return value >= min_dec_value and value <= max_dec_value;
-}
 
 /// Represents an arbitrary precision integer value
 pub const IntValue = struct {
     bytes: [16]u8,
     kind: IntKind,
 
-    pub const IntKind = enum {
+    pub const IntKind = enum(u8) {
         i128,
         u128,
     };
@@ -540,84 +695,6 @@ pub const IntValue = struct {
         errdefer tree.discardReservedStringBuffer(begin);
         const value_str = self.bufPrint(tree.reservedStringBuffer(begin)[0..40]) catch unreachable;
         try tree.pushReservedStringPair(key, begin, value_str);
-    }
-
-    /// Calculate the int requirements of an IntValue
-    pub fn toIntRequirements(self: IntValue) types_mod.IntRequirements {
-        var is_negated = false;
-        var u128_val: u128 = undefined;
-
-        switch (self.kind) {
-            .i128 => {
-                const val: i128 = @bitCast(self.bytes);
-                is_negated = val < 0;
-                u128_val = if (val < 0) @abs(val) else @intCast(val);
-            },
-            .u128 => {
-                const val: u128 = @bitCast(self.bytes);
-                is_negated = false;
-                u128_val = val;
-            },
-        }
-
-        // Special handling for minimum signed values
-        // These are the exact minimum values for each signed integer type.
-        // They need special handling because their absolute value is one more
-        // than the maximum positive value of the same signed type.
-        // For example: i8 range is -128 to 127, so abs(-128) = 128 doesn't fit in i8's positive range
-        const is_minimum_signed = is_negated and switch (u128_val) {
-            @as(u128, @intCast(std.math.maxInt(i8))) + 1 => true,
-            @as(u128, @intCast(std.math.maxInt(i16))) + 1 => true,
-            @as(u128, @intCast(std.math.maxInt(i32))) + 1 => true,
-            @as(u128, @intCast(std.math.maxInt(i64))) + 1 => true,
-            @as(u128, @intCast(std.math.maxInt(i128))) + 1 => true,
-            else => false,
-        };
-
-        // For minimum signed values, subtract 1 from the magnitude
-        // This makes the bit calculation work correctly with the "n-1 bits for magnitude" rule
-        const adjusted_val = if (is_minimum_signed) u128_val - 1 else u128_val;
-        const bits_needed = types_mod.Int.BitsNeeded.fromValue(adjusted_val);
-        return types_mod.IntRequirements{
-            .sign_needed = is_negated and u128_val != 0, // -0 doesn't need a sign
-            .bits_needed = bits_needed.toBits(),
-            .is_minimum_signed = is_minimum_signed,
-        };
-    }
-
-    /// Calculate the frac requirements of an IntValue
-    pub fn toFracRequirements(self: IntValue) types_mod.FracRequirements {
-        // Convert to f64 for checking
-        const f64_val: f64 = switch (self.kind) {
-            .i128 => builtins.compiler_rt_128.i128_to_f64(@as(i128, @bitCast(self.bytes))),
-            .u128 => blk: {
-                const val = @as(u128, @bitCast(self.bytes));
-                if (val > @as(u128, 1) << 64) {
-                    break :blk std.math.inf(f64);
-                }
-                break :blk builtins.compiler_rt_128.u128_to_f64(val);
-            },
-        };
-
-        // For integers, check both range AND exact representability in f32
-        const fits_in_f32 = blk: {
-            // Check range
-            if (!fitsInF32(f64_val)) {
-                break :blk false;
-            }
-
-            // Additionally check exact representability for integers
-            // F32 can exactly represent integers only up to 2^24
-            const f32_max_exact_int = 16777216.0; // 2^24
-            break :blk @abs(f64_val) <= f32_max_exact_int;
-        };
-
-        const fits_in_dec = fitsInDec(f64_val);
-
-        return types_mod.FracRequirements{
-            .fits_in_f32 = fits_in_f32,
-            .fits_in_dec = fits_in_dec,
-        };
     }
 };
 
@@ -667,7 +744,7 @@ pub const NumeralDigits = struct {
     /// Number of bytes for digits_after_pt
     after_pt_len: u16,
     /// Number of decimal digits after the point before base-256 encoding
-    after_pt_digit_count: u32,
+    after_pt_digit_count: u64,
     /// Whether the literal had a minus sign
     is_negative: bool,
 
@@ -688,8 +765,7 @@ pub const NumeralDigits = struct {
     }
 };
 
-// RocDec type definition (for missing export)
-// Must match the structure of builtins.RocDec
+// Re-export of the canonical Dec type so CIR consumers can name it locally.
 pub const RocDec = builtins.dec.RocDec;
 
 /// Converts a RocDec to an i128 integer
@@ -700,7 +776,7 @@ pub fn toI128(self: RocDec) i128 {
 /// Creates a RocDec from an f64 value, returns null if conversion fails
 pub fn fromF64(f: f64) ?RocDec {
     // Simple conversion - the real implementation is in builtins/dec.zig
-    const scaled = builtins.compiler_rt_128.f64_to_i128(f * 1_000_000_000_000_000_000.0);
+    const scaled = builtins.compiler_rt_128.f64_to_i128(f * @as(f64, @floatFromInt(RocDec.one_point_zero_i128)));
     return RocDec{ .num = scaled };
 }
 
@@ -786,18 +862,18 @@ pub const Import = struct {
         /// The module name is first checked against existing imports by comparing strings.
         /// New imports are initially unresolved (unresolved).
         /// If ident_idx is provided, it will be stored for index-based lookups.
-        pub fn getOrPut(self: *Store, allocator: std.mem.Allocator, strings: *base.StringLiteral.Store, module_name: []const u8) Allocator.Error!Import.Idx {
-            return self.getOrPutWithIdent(allocator, strings, module_name, null);
+        pub fn getOrPut(self: *Store, allocator: std.mem.Allocator, common: *base.CommonEnv, module_name: []const u8) Allocator.Error!Import.Idx {
+            return self.getOrPutWithIdent(allocator, common, module_name, null);
         }
 
         /// Get or create an Import.Idx for the given module name, with an associated ident.
         /// The module name is first checked against existing imports by comparing strings.
         /// New imports are initially unresolved (unresolved).
         /// If ident_idx is provided, it will be stored for index-based lookups.
-        pub fn getOrPutWithIdent(self: *Store, allocator: std.mem.Allocator, strings: *base.StringLiteral.Store, module_name: []const u8, ident_idx: ?base.Ident.Idx) Allocator.Error!Import.Idx {
+        pub fn getOrPutWithIdent(self: *Store, allocator: std.mem.Allocator, common: *base.CommonEnv, module_name: []const u8, ident_idx: ?base.Ident.Idx) Allocator.Error!Import.Idx {
             // First check if we already have this module name by comparing strings
             for (self.imports.items.items, 0..) |existing_string_idx, i| {
-                const existing_name = strings.get(existing_string_idx);
+                const existing_name = common.getString(existing_string_idx);
                 if (std.mem.eql(u8, existing_name, module_name)) {
                     // Found existing import with same name
                     // Update ident if provided and not already set
@@ -814,7 +890,7 @@ pub const Import = struct {
             }
 
             // Not found - create new import
-            const string_idx = try strings.insert(allocator, module_name);
+            const string_idx = try common.insertString(allocator, module_name);
             const idx = @as(Import.Idx, @enumFromInt(self.imports.len()));
 
             // Add to both the list and the map, with unresolved module initially

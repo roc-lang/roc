@@ -10,29 +10,31 @@ package # This comment is here
 	{ somePkg: "../main.roc" }
 ~~~
 # EXPECTED
-MODULE NOT FOUND - package_header_nonempty_multiline_1.md:2:14:2:22
+MOD NOT FOUND - package_header_nonempty_multiline_1.md:2:14:2:22
 EXPOSED BUT NOT DEFINED - package_header_nonempty_multiline_1.md:2:3:2:12
 # PROBLEMS
-**MODULE NOT FOUND**
-The module `SomeType` was not found in this Roc project.
 
-You're attempting to use this module here:
-**package_header_nonempty_multiline_1.md:2:14:2:22:**
-```roc
-	[something, SomeType]
-```
-	            ^^^^^^^^
+┌──────────────────┐
+│ MOD NOT FOUND ├─ The mod `SomeType` was not found in this Roc ────────┐
+└┬─────────────────┘  project.                                                │
+ │                                                                            │
+ │  [something, SomeType]                                                     │
+ │              ‾‾‾‾‾‾‾‾                                                      │
+ └─────────────────────────────── package_header_nonempty_multiline_1.md:2:14 ┘
 
 
-**EXPOSED BUT NOT DEFINED**
-The module header says that `something` is exposed, but it is not defined anywhere in this module.
 
-**package_header_nonempty_multiline_1.md:2:3:2:12:**
-```roc
-	[something, SomeType]
-```
-	 ^^^^^^^^^
-You can fix this by either defining `something` in this module, or by removing it from the list of exposed values.
+┌─────────────────────────┐
+│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `something` is ──────┐
+└┬────────────────────────┘  exposed, but it is not defined anywhere in       │
+ │                           this mod.                                     │
+ │                                                                            │
+ │  [something, SomeType]                                                     │
+ │   ‾‾‾‾‾‾‾‾‾                                                                │
+ └──────────────────────────────── package_header_nonempty_multiline_1.md:2:3 ┘
+
+    You can fix this by either defining `something` in this mod, or by
+    removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig
@@ -62,7 +64,7 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-import (module "SomeType")
+	(s-import (mod "SomeType")
 		(exposes)))
 ~~~
 # TYPES

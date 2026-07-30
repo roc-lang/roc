@@ -45,7 +45,7 @@ test "cross-module - check type - monomorphic function fails" {
     ;
     var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
-    try test_env_b.assertOneTypeError("TYPE MISMATCH");
+    try test_env_b.assertOneTypeError("Type Mismatch");
 }
 
 test "cross-module - check type - polymorphic function passes" {
@@ -146,6 +146,30 @@ test "cross-module - check type - static dispatch - no annotation & indirection"
     try test_env_b.assertDefType("main", "(Str, Str, Str)");
 }
 
+test "cross-module - check type - method call on imported associated constant" {
+    const source_html =
+        \\Html := { foo : U8 }.{
+        \\  href : Html, Str -> Html
+        \\  href = |html, _val| html
+        \\
+        \\  a : Html
+        \\  a = { foo: 4 }
+        \\}
+    ;
+    var test_env_html = try TestEnv.init("Html", source_html);
+    defer test_env_html.deinit();
+
+    const source_main =
+        \\import Html
+        \\
+        \\main : Html
+        \\main = Html.a.href("./other-page.html")
+    ;
+    var test_env_main = try TestEnv.initWithImport("Main", source_main, "Html", &test_env_html);
+    defer test_env_main.deinit();
+    try test_env_main.assertDefType("main", "Html");
+}
+
 test "cross-module - check type - opaque types 1" {
     const source_a =
         \\A :: [A(Str)].{}
@@ -161,7 +185,7 @@ test "cross-module - check type - opaque types 1" {
     ;
     var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
-    try test_env_b.assertFirstTypeError("TYPE MISMATCH");
+    try test_env_b.assertFirstTypeError("Type Mismatch");
 }
 
 test "cross-module - check type - opaque types 2" {
@@ -178,7 +202,7 @@ test "cross-module - check type - opaque types 2" {
     ;
     var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
-    try test_env_b.assertFirstTypeError("CANNOT USE OPAQUE NOMINAL TYPE");
+    try test_env_b.assertFirstTypeError("Cannot Use Opaque Nominal Type");
 }
 
 test "displayNameIsBetter - shorter names are preferred" {
@@ -239,4 +263,41 @@ test "cross-module - check type - nested module access" {
     try test_env_main.assertDefType("test1", "I64");
     try test_env_main.assertDefType("test2", "I64");
     try test_env_main.assertDefType("main", "I64");
+}
+
+test "cross-module - ambiguous instantiation of an imported where-clause scheme reports in the instantiating module" {
+    // Module A exposes a legitimate polymorphic scheme in the `Iter.collect`
+    // shape: the constrained var appears in return position (any caller can
+    // pin it by using the result) and the body dispatches the contract, so
+    // the constraint is body-forced. A itself is clean.
+    const source_a =
+        \\A := [A].{
+        \\    make : List(U64) -> output where [output.from_list : List(U64) -> output]
+        \\    make = |xs| {
+        \\        Output : output
+        \\        Output.from_list(xs)
+        \\    }
+        \\}
+    ;
+    var test_env_a = try TestEnv.init("A", source_a);
+    defer test_env_a.deinit();
+    try test_env_a.assertNoErrors();
+
+    // Module B instantiates the scheme and throws the result away, so nothing
+    // can ever pin the copied receiver: the body-forced contract is a genuine
+    // dead end (the issue 9815/9819 shape, across a module boundary).
+    // Constraint provenance is module-scoped (cleared on import), so the
+    // diagnostic must land on B's own instantiating expression.
+    const source_b =
+        \\import A
+        \\
+        \\use_it = || {
+        \\    _ = A.make([1, 2, 3])
+        \\    {}
+        \\}
+    ;
+    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
+    defer test_env_b.deinit();
+
+    try test_env_b.assertOneTypeError("Missing Method");
 }

@@ -1,0 +1,3 @@
+Base := [].{
+	OptionConfig : { short : Str }
+}

@@ -37,14 +37,18 @@ pub const Problem = union(enum) {
     nominal_type_resolution_failed: NominalTypeResolutionFailed,
     recursive_alias: RecursiveAlias,
     unsupported_alias_where_clause: UnsupportedAliasWhereClause,
+    where_clause_receiver_not_introduced: WhereClauseReceiverNotIntroduced,
+    invalid_nominal_decl_recursion: InvalidNominalDeclRecursion,
     infinite_recursion: VarWithSnapshot,
     anonymous_recursion: VarWithSnapshot,
     polymorphic_value: VarWithSnapshot,
     polymorphic_var_annotation: PolymorphicVarAnnotation,
     effectful_top_level: EffectfulTopLevel,
     effectful_expect: EffectfulExpect,
+    effectful_function_name: EffectfulFunctionName,
     annotation_only_value: AnnotationOnlyValue,
     hosted_unboxed_function: HostedUnboxedFunction,
+    host_boundary_open_row: HostBoundaryOpenRow,
     platform_def_not_found: PlatformDefNotFound,
     platform_hosted_section: PlatformHostedSection,
     platform_alias_not_found: PlatformAliasNotFound,
@@ -55,6 +59,7 @@ pub const Problem = union(enum) {
     comptime_eval_error: ComptimeEvalError,
     invalid_numeric_literal: InvalidNumericLiteral,
     tuple_access_needs_annotation: TupleAccessNeedsAnnotation,
+    invalid_tuple_access: InvalidTupleAccess,
     literal_defaulted: LiteralDefaulted,
     non_exhaustive_match: NonExhaustiveMatch,
     non_exhaustive_destructure: NonExhaustiveDestructure,
@@ -62,6 +67,7 @@ pub const Problem = union(enum) {
     unmatchable_pattern: UnmatchablePattern,
     unreachable_code: UnreachableCode,
     comptime_unused_branch: ComptimeUnusedBranch,
+    comptime_condition: ComptimeCondition,
 
     pub const Idx = enum(u32) { _ };
     pub const Tag = std.meta.Tag(@This());
@@ -72,7 +78,9 @@ pub const Problem = union(enum) {
 /// Error for when a platform expects an alias to be defined, but it's not there
 pub const PlatformAliasNotFound = struct {
     expected_alias_ident: Ident.Idx,
-    ctx: enum { not_found, found_but_not_alias },
+    app_region: base.Region,
+    platform_region: base.Region,
+    ctx: enum { not_found, found_but_not_type },
 };
 
 /// The platform's hosted section disagrees with the hosted functions its
@@ -89,6 +97,8 @@ pub const PlatformHostedSection = struct {
         duplicate_function,
         /// Two hosted/provides entries use the same linker symbol
         duplicate_symbol,
+        /// The symbol is not a valid external C identifier
+        invalid_symbol,
         /// The symbol is one of the fixed runtime symbols (the roc_alloc family)
         reserved_symbol,
         /// The symbol starts with the internal roc__ namespace prefix
@@ -99,11 +109,18 @@ pub const PlatformHostedSection = struct {
 /// Error for when a platform expects a def to be defined, but it's not there
 pub const PlatformDefNotFound = struct {
     expected_def_ident: Ident.Idx,
+    app_region: base.Region,
+    platform_region: base.Region,
     ctx: enum { not_found, found_but_not_exported },
 };
 
 /// Hosted functions cannot accept or return unboxed functions.
 pub const HostedUnboxedFunction = struct {
+    region: base.Region,
+};
+
+/// Host-bound types must not contain open record or tag-union rows.
+pub const HostBoundaryOpenRow = struct {
     region: base.Region,
 };
 
@@ -126,6 +143,11 @@ pub const EffectfulTopLevel = struct {
 
 /// An expect expression performs effects while evaluating its condition.
 pub const EffectfulExpect = struct {
+    region: base.Region,
+};
+
+/// Warning for an effectful function binding whose name does not end in `!`.
+pub const EffectfulFunctionName = struct {
     region: base.Region,
 };
 
@@ -161,6 +183,24 @@ pub const ComptimeExpectFailed = struct {
 pub const ComptimeEvalError = struct {
     error_name: ExtraStringIdx,
     region: base.Region,
+};
+
+// nominal declaration errors //
+
+/// A nominal type declaration whose backing recursion is invalid: the
+/// declaration graph contains a cycle that is either structurally infinite
+/// (never passes through a tag-union/record payload position) or anonymous
+/// (never passes back through a nominal declaration's backing).
+pub const InvalidNominalDeclRecursion = struct {
+    /// The declaration statement var (source of the report's region).
+    decl_var: Var,
+    /// Snapshot of the offending cyclic type for display.
+    snapshot: SnapshotContentIdx,
+    /// The declared type's name.
+    type_name: Ident.Idx,
+    kind: Kind,
+
+    pub const Kind = enum { infinite, anonymous };
 };
 
 // generic errors //
@@ -201,6 +241,16 @@ pub const InvalidNumericLiteral = struct {
 pub const TupleAccessNeedsAnnotation = struct {
     region: base.Region,
     elem_index: u32,
+};
+
+/// Tuple access on a value whose resolved type proves the access is invalid.
+pub const InvalidTupleAccess = struct {
+    region: base.Region,
+    elem_index: u32,
+    reason: union(enum) {
+        not_tuple,
+        index_out_of_bounds: u32,
+    },
 };
 
 /// Warning (the Haskell §4.3.4 / `-Wtype-defaults` analogue): an open literal
@@ -290,6 +340,16 @@ pub const ComptimeUnusedBranch = struct {
     branch_region: base.Region,
 };
 
+/// A conditional expression was known while checking, so it will always make the same choice.
+pub const ComptimeCondition = struct {
+    kind: enum {
+        if_condition,
+        if_guard,
+        match_scrutinee,
+    },
+    region: base.Region,
+};
+
 /// Problem data for a redundant pattern in a match
 pub const RedundantPattern = struct {
     match_expr: CIR.Expr.Idx,
@@ -316,6 +376,7 @@ pub const StaticDispatch = union(enum) {
     dispatcher_not_nominal: DispatcherNotNominal,
     dispatcher_does_not_impl_method: DispatcherDoesNotImplMethod,
     type_does_not_support_equality: TypeDoesNotSupportEquality,
+    type_does_not_support_map: TypeDoesNotSupportMap,
     unresolved_dispatcher: UnresolvedDispatcher,
     recursive_dispatch: RecursiveDispatch,
 };
@@ -348,6 +409,9 @@ pub const UnresolvedDispatcher = struct {
     is_binop: bool,
     /// For desugared equality (`==`/`!=`), whether the source operator was `!=`.
     binop_negated: bool,
+    /// True when checking inserted an explicit runtime-error node for this
+    /// diagnostic, so post-check lowering can safely continue through it.
+    runtime_error_inserted: bool,
 };
 
 /// Error when you try to static dispatch on something that's not a nominal type
@@ -366,9 +430,9 @@ pub const DispatcherDoesNotImplMethod = struct {
     fn_var: Var,
     method_name: Ident.Idx,
     origin: types_mod.StaticDispatchConstraint.Origin,
-    /// Optional numeric literal info for from_numeral constraints
+    /// Optional numeric literal info for `from_literal` constraints of kind `numeral`
     num_literal: ?types_mod.NumeralInfo = null,
-    /// Source region of the string literal for from_quote constraints
+    /// Source region of the string literal for `from_literal` constraints of kind `quote`
     quote_region: ?base.Region = null,
     /// True when the dispatcher was a numeric literal that was defaulted to Dec
     /// because no type annotation was given. Used to add explanatory text in errors.
@@ -384,6 +448,14 @@ pub const TypeDoesNotSupportEquality = struct {
     dispatcher_var: Var,
     dispatcher_snapshot: SnapshotContentIdx,
     fn_var: Var,
+};
+
+/// Error when compiler-derived `map`/`map!` cannot select one direct tag
+/// payload to transform under the language's zero-sized-payload rules.
+pub const TypeDoesNotSupportMap = struct {
+    dispatcher_snapshot: SnapshotContentIdx,
+    fn_var: Var,
+    method_name: Ident.Idx,
 };
 
 /// Error when satisfying a static-dispatch constraint immediately requires the
@@ -434,5 +506,13 @@ pub const RecursiveAlias = struct {
 /// This syntax was used for abilities which have been removed from the language
 pub const UnsupportedAliasWhereClause = struct {
     alias_name: base.Ident.Idx,
+    region: base.Region,
+};
+
+/// Error when a where clause attempts to add a constraint to a rigid type
+/// variable introduced by a different annotation.
+pub const WhereClauseReceiverNotIntroduced = struct {
+    type_var_name: base.Ident.Idx,
+    method_name: base.Ident.Idx,
     region: base.Region,
 };

@@ -17,39 +17,44 @@ UNDERSCORE IN TYPE ALIAS - usage_test.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - usage_test.md:1:1:1:1
 TYPE MISMATCH - usage_test.md:6:9:6:11
 # PROBLEMS
-**UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
 
-**usage_test.md:1:1:1:1:**
-```roc
-UnusedType := _
-```
-^
+┌──────────────────────────┐
+│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
+└┬─────────────────────────┘  declarations.                                   │
+ │                                                                            │
+ │  UnusedType := _                                                           │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────────────────── usage_test.md:1:1 ┘
 
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
+    Underscores in type annotations mean "I don't care about this type", which
+    doesn't make sense when declaring a type. If you need a placeholder type
+    variable, use a named type variable like `a` instead.
 
-**UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
 
-**usage_test.md:1:1:1:1:**
-```roc
-UnusedType := _
-```
-^
+┌──────────────────────────┐
+│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
+└┬─────────────────────────┘  declarations.                                   │
+ │                                                                            │
+ │  UnusedType := _                                                           │
+ │  ‾                                                                         │
+ └───────────────────────────────────────────────────────── usage_test.md:1:1 ┘
 
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
+    Underscores in type annotations mean "I don't care about this type", which
+    doesn't make sense when declaring a type. If you need a placeholder type
+    variable, use a named type variable like `a` instead.
 
-**TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**usage_test.md:6:9:6:11:**
-```roc
-value = 42
-```
-        ^^
 
-Other code expects this to have the type:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This number is being used where a non-number type is ──────┐
+└┬──────────────┘  needed.                                                    │
+ │                                                                            │
+ │  value = 42                                                                │
+ │          ‾‾                                                                │
+ └───────────────────────────────────────────────────────── usage_test.md:6:9 ┘
 
-    UsedType
+    Other code expects this to have the type:
+
+        UsedType
 
 # TOKENS
 ~~~zig
@@ -62,7 +67,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "UnusedType")
@@ -87,7 +92,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "value"))
-		(e-num (value "42"))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "UsedType") (local))))
 	(s-nominal-decl

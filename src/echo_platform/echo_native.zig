@@ -9,6 +9,7 @@
 //! it in an `app [main!]` header that imports the embedded echo platform.
 
 const std = @import("std");
+const build_options = @import("build_options");
 const compile = @import("compile");
 const reporting = @import("reporting");
 const roc_target = @import("roc_target");
@@ -77,8 +78,8 @@ pub fn main(init: std.process.Init) EchoNativeError!void {
     process_io = init.io;
     const io = init.io;
 
-    var gpa_impl: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = gpa_impl.deinit();
+    var gpa_impl: std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }) = .init;
+    defer _ = build_options.debugGpaOk(gpa_impl.deinit());
     const gpa = gpa_impl.allocator();
 
     var arena_impl = base.SingleThreadArena.init(gpa);

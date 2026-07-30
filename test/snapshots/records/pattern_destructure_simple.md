@@ -11,31 +11,31 @@ match person {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - pattern_destructure_simple.md:1:7:1:13
+NAME NOT IN SCOPE - pattern_destructure_simple.md:1:7:1:13
 UNUSED VARIABLE - pattern_destructure_simple.md:2:13:2:16
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `person` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
-**pattern_destructure_simple.md:1:7:1:13:**
-```roc
-match person {
-```
-      ^^^^^^
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `person` in this scope. ──────────────┐
+└┬──────────────────┘                                                         │
+ │                                                                            │
+ │  match person {                                                            │
+ │        ‾‾‾‾‾‾                                                              │
+ └───────────────────────────────────────── pattern_destructure_simple.md:1:7 ┘
+
+    Is it misspelled, or is there an import missing?
 
 
-**UNUSED VARIABLE**
-Variable `age` is not used anywhere in your code.
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `age` is defined here and then never used. ─────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  { name, age } => name                                                     │
+ │          ‾‾‾                                                               │
+ └──────────────────────────────────────── pattern_destructure_simple.md:2:13 ┘
 
-If you don't need this variable, prefix it with an underscore like `_age` to suppress this warning.
-The unused variable is declared here:
-**pattern_destructure_simple.md:2:13:2:16:**
-```roc
-    { name, age } => name
-```
-            ^^^
-
+    If you don't need this variable, prefix it with an underscore like `_age`
+    to suppress this warning.
 
 # TOKENS
 ~~~zig

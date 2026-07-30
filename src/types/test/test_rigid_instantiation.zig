@@ -327,10 +327,9 @@ test "instantiate - alias preserves structure" {
 
     const rigid_a = try env.types.freshFromContentWithRank(try env.mkRigidVar("a"), .generalized);
     const list_ident_idx = try env.idents.insert(gpa, .for_text("List"));
-    const builtin_module_idx = try env.idents.insert(gpa, .for_text("Builtin"));
+    const builtin_module_idx = base.ModuleIdentity.Idx.NONE;
     const backing_content = try env.types.mkNominal(
         .{ .ident_idx = list_ident_idx },
-        rigid_a,
         &[_]Var{rigid_a},
         builtin_module_idx,
         false,
@@ -367,7 +366,7 @@ test "instantiate - alias preserves structure" {
     try std.testing.expectEqual(args[0], backing_list_elem);
 }
 
-test "instantiate - box and list" {
+test "instantiate - nominal type application instantiates its args" {
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);
     defer env.deinit();
@@ -377,10 +376,9 @@ test "instantiate - box and list" {
     // Test Box a
     {
         const box_ident_idx = try env.idents.insert(gpa, .for_text("Box"));
-        const builtin_module_idx = try env.idents.insert(gpa, .for_text("Builtin"));
+        const builtin_module_idx = base.ModuleIdentity.Idx.NONE;
         const box_content = try env.types.mkNominal(
             .{ .ident_idx = box_ident_idx },
-            rigid_a,
             &[_]Var{rigid_a},
             builtin_module_idx,
             false,
@@ -403,36 +401,6 @@ test "instantiate - box and list" {
         const args = env.types.sliceNominalArgs(nominal);
         try std.testing.expect(args.len == 1);
         try std.testing.expect(args[0] != rigid_a);
-    }
-
-    // Test List a
-    {
-        const list_ident_idx = try env.idents.insert(gpa, .for_text("List"));
-        const builtin_module_idx = try env.idents.insert(gpa, .for_text("Builtin"));
-        const list_content = try env.types.mkNominal(
-            .{ .ident_idx = list_ident_idx },
-            rigid_a,
-            &[_]Var{rigid_a},
-            builtin_module_idx,
-            false,
-        );
-        const list_var = try env.types.freshFromContentWithRank(list_content, .generalized);
-
-        var instantiator = Instantiator{
-            .store = &env.types,
-            .idents = &env.idents,
-            .var_map = &env.var_map,
-            .rigid_behavior = .fresh_flex,
-            .current_rank = .outermost,
-        };
-
-        const instantiated = try instantiator.instantiateVar(list_var);
-        const resolved = env.types.resolveVar(instantiated);
-
-        try std.testing.expect(resolved.desc.content.structure == .nominal_type);
-        const nominal = resolved.desc.content.structure.nominal_type;
-        const nominal_args = env.types.sliceNominalArgs(nominal);
-        try std.testing.expect(nominal_args[0] != rigid_a);
     }
 }
 
@@ -521,7 +489,7 @@ const TestEnv = struct {
 
     // helpers - alias //
 
-    fn mkAlias(self: *Self, name: []const u8, backing_var: Var, args: []const Var, module_idx: Ident.Idx) std.mem.Allocator.Error!Content {
+    fn mkAlias(self: *Self, name: []const u8, backing_var: Var, args: []const Var, module_idx: base.ModuleIdentity.Idx) std.mem.Allocator.Error!Content {
         return try self.types.mkAlias(try self.mkTypeIdent(name), backing_var, args, module_idx);
     }
 

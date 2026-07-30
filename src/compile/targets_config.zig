@@ -11,6 +11,7 @@ const std = @import("std");
 const base = @import("base");
 const builtins = @import("builtins");
 const check = @import("check");
+const CoreCtx = @import("ctx").CoreCtx;
 const parse = @import("parse");
 const roc_target = @import("roc_target");
 
@@ -33,9 +34,35 @@ pub const LinkItem = union(enum) {
     win_gui,
 };
 
+/// How a wasm target obtains linear memory.
+pub const WasmImportMemory = enum {
+    no,
+    uninitialized,
+    zeroed,
+
+    pub fn importsMemory(self: WasmImportMemory) bool {
+        return self != .no;
+    }
+
+    pub fn importedMemoryIsZeroed(self: WasmImportMemory) bool {
+        return self == .zeroed;
+    }
+
+    pub fn fromTagName(name: []const u8) ?WasmImportMemory {
+        if (std.mem.eql(u8, name, "No")) return .no;
+        if (std.mem.eql(u8, name, "Uninitialized")) return .uninitialized;
+        if (std.mem.eql(u8, name, "Zeroed")) return .zeroed;
+        return null;
+    }
+};
+
 /// Optional wasm-specific settings from a target record in a platform header.
 pub const WasmTargetConfig = struct {
-    import_memory: bool = false,
+    /// Final host-visible function exports. `null` preserves the legacy
+    /// contract where public symbols are read from the platform object; a
+    /// present slice, including an empty one, is the complete export set.
+    exports: ?[]const []const u8 = null,
+    import_memory: WasmImportMemory = .no,
     minimum_memory: ?usize = null,
     maximum_memory: ?usize = null,
     initial_stack_size: ?usize = null,
@@ -47,6 +74,10 @@ pub const WasmTargetConfig = struct {
     global_base_ident: ?[]const u8 = null,
 
     fn deinit(self: WasmTargetConfig, allocator: Allocator) void {
+        if (self.exports) |exports| {
+            for (exports) |name| allocator.free(name);
+            allocator.free(exports);
+        }
         if (self.import_memory_ident) |ident| allocator.free(ident);
         if (self.minimum_memory_ident) |ident| allocator.free(ident);
         if (self.maximum_memory_ident) |ident| allocator.free(ident);
@@ -69,7 +100,7 @@ pub const TargetConfigResolveReason = enum {
     missing_top_level_value,
     not_constant,
     unevaluated_constant,
-    expected_bool,
+    expected_import_memory,
     expected_unsigned_integer,
     integer_out_of_range,
 
@@ -78,7 +109,7 @@ pub const TargetConfigResolveReason = enum {
             .missing_top_level_value => "does not name a top-level value in the platform module",
             .not_constant => "names a function, but target configuration requires a constant",
             .unevaluated_constant => "does not have a stored compile-time constant value",
-            .expected_bool => "must resolve to True or False",
+            .expected_import_memory => "must resolve to Zeroed, Uninitialized, or No",
             .expected_unsigned_integer => "must resolve to a non-negative whole number",
             .integer_out_of_range => "resolves to a number outside the supported range",
         };
@@ -101,6 +132,16 @@ pub const TargetLinkSpec = struct {
     output: OutputKind,
     items: []const LinkItem,
     wasm: ?WasmTargetConfig = null,
+
+    fn hasDeclaredTargetFiles(self: TargetLinkSpec) bool {
+        for (self.items) |item| {
+            switch (item) {
+                .file_path => return true,
+                .app, .win_gui => {},
+            }
+        }
+        return false;
+    }
 };
 
 fn freeLinkSpec(allocator: Allocator, spec: TargetLinkSpec) void {
@@ -203,8 +244,71 @@ pub const TargetsConfig = struct {
         try resolveLinkTypeCheckedConstants(allocator, checked_module, @constCast(self.targets), diagnostic);
     }
 
+    pub fn validateDeclaredTargetFilesExist(
+        self: TargetsConfig,
+        allocator: Allocator,
+        filesystem: CoreCtx,
+        platform_dir: []const u8,
+        target: RocTarget,
+    ) Allocator.Error!TargetFileValidation {
+        var issues = std.ArrayList(TargetFileValidationIssue).empty;
+        errdefer {
+            for (issues.items) |issue| issue.deinit(allocator);
+            issues.deinit(allocator);
+        }
+
+        const spec = self.getLinkSpec(target) orelse {
+            return .{ .issues = try issues.toOwnedSlice(allocator) };
+        };
+
+        if (!spec.hasDeclaredTargetFiles()) return .{ .issues = try issues.toOwnedSlice(allocator) };
+
+        const inputs_dir = self.inputs_dir orelse "targets";
+        const inputs_dir_path = try std.fs.path.join(allocator, &.{ platform_dir, inputs_dir });
+        var inputs_dir_path_owned = true;
+        defer if (inputs_dir_path_owned) allocator.free(inputs_dir_path);
+
+        if (!filesystem.fileExists(inputs_dir_path)) {
+            try issues.append(allocator, .{
+                .missing_inputs_directory = .{
+                    .inputs_dir = inputs_dir,
+                    .expected_path = inputs_dir_path,
+                },
+            });
+            inputs_dir_path_owned = false;
+            return .{ .issues = try issues.toOwnedSlice(allocator) };
+        }
+
+        const target_name = @tagName(spec.target);
+        for (spec.items) |item| {
+            switch (item) {
+                .file_path => |path| {
+                    const full_path = try std.fs.path.join(allocator, &.{ platform_dir, inputs_dir, target_name, path });
+                    var full_path_owned = true;
+                    defer if (full_path_owned) allocator.free(full_path);
+
+                    if (!filesystem.fileExists(full_path)) {
+                        try issues.append(allocator, .{
+                            .missing_target_file = .{
+                                .target = spec.target,
+                                .output = spec.output,
+                                .file_path = path,
+                                .expected_full_path = full_path,
+                            },
+                        });
+                        full_path_owned = false;
+                    }
+                },
+                .app, .win_gui => {},
+            }
+        }
+
+        return .{ .issues = try issues.toOwnedSlice(allocator) };
+    }
+
     /// Create a TargetsConfig from a parsed AST.
-    /// Returns null if the platform header has no targets section.
+    /// Returns null if the platform header has no targets section. An explicit
+    /// empty `targets: {}` section returns a hostless config with zero targets.
     /// All string values are duped with the provided allocator, so the
     /// returned TargetsConfig owns its memory and is independent of the AST.
     pub fn fromAST(allocator: Allocator, ast: anytype) Allocator.Error!?TargetsConfig {
@@ -255,8 +359,8 @@ pub const TargetsConfig = struct {
             const target_file = store.getTargetFile(file_idx);
 
             switch (target_file) {
-                .string_literal => |tok| {
-                    const path = ast.resolve(tok);
+                .string_literal => |maybe_tok| {
+                    const path = if (maybe_tok) |tok| ast.resolve(tok) else "";
                     try link_items.append(.{ .file_path = try allocator.dupe(u8, path) });
                 },
                 .special_ident => |tok| {
@@ -278,6 +382,37 @@ pub const TargetsConfig = struct {
             else => {},
         };
         link_items.clearRetainingCapacity();
+    }
+
+    fn replaceWasmExports(
+        allocator: Allocator,
+        store: *const parse.NodeStore,
+        ast: anytype,
+        values: parse.AST.TargetConfigValue.Span,
+        wasm: *WasmTargetConfig,
+    ) Allocator.Error!void {
+        if (wasm.exports) |old_exports| {
+            for (old_exports) |name| allocator.free(name);
+            allocator.free(old_exports);
+            wasm.exports = null;
+        }
+
+        var exports = std.array_list.Managed([]const u8).init(allocator);
+        errdefer {
+            for (exports.items) |name| allocator.free(name);
+            exports.deinit();
+        }
+
+        for (store.targetConfigValueSlice(values)) |value_idx| {
+            switch (store.getTargetConfigValue(value_idx)) {
+                .string_literal => |maybe_tok| {
+                    const name = maybe_tok orelse continue;
+                    try exports.append(try allocator.dupe(u8, ast.resolve(name)));
+                },
+                else => {},
+            }
+        }
+        wasm.exports = try exports.toOwnedSlice();
     }
 
     fn storeIdent(
@@ -319,23 +454,13 @@ pub const TargetsConfig = struct {
         };
     }
 
-    fn parseBoolValue(
+    fn parseWasmImportMemoryValue(
         store: *const parse.NodeStore,
         ast: anytype,
         value_idx: parse.AST.TargetConfigValue.Idx,
-    ) ?bool {
+    ) ?WasmImportMemory {
         return switch (store.getTargetConfigValue(value_idx)) {
-            .tag_literal => |tok| blk: {
-                const tag = ast.resolve(tok);
-                if (std.mem.eql(u8, tag, "True")) break :blk true;
-                if (std.mem.eql(u8, tag, "False")) break :blk false;
-                break :blk null;
-            },
-            .string_literal => |tok| blk: {
-                const value = ast.resolve(tok);
-                if (std.mem.eql(u8, value, "env.memory")) break :blk true;
-                break :blk null;
-            },
+            .tag_literal => |tok| WasmImportMemory.fromTagName(ast.resolve(tok)),
             else => null,
         };
     }
@@ -366,8 +491,16 @@ pub const TargetsConfig = struct {
                     },
                     else => {},
                 }
+            } else if (std.mem.eql(u8, name, "exports")) {
+                switch (value) {
+                    .list => |values| {
+                        try replaceWasmExports(allocator, store, ast, values, &wasm);
+                        has_wasm_config = true;
+                    },
+                    else => {},
+                }
             } else if (std.mem.eql(u8, name, "import_memory")) {
-                if (parseBoolValue(store, ast, entry.value)) |import_memory| {
+                if (parseWasmImportMemoryValue(store, ast, entry.value)) |import_memory| {
                     wasm.import_memory = import_memory;
                     has_wasm_config = true;
                 } else if (targetConfigIdentToken(value)) |ident| {
@@ -491,6 +624,51 @@ pub const TargetsConfig = struct {
     }
 };
 
+/// Result of checking that every declared target file exists on disk.
+pub const TargetFileValidation = struct {
+    issues: []TargetFileValidationIssue,
+
+    pub fn deinit(self: TargetFileValidation, allocator: Allocator) void {
+        for (self.issues) |issue| issue.deinit(allocator);
+        allocator.free(self.issues);
+    }
+
+    pub fn hasErrors(self: TargetFileValidation) bool {
+        return self.issues.len > 0;
+    }
+
+    pub fn hasMissingInputsDirectory(self: TargetFileValidation) bool {
+        for (self.issues) |issue| {
+            switch (issue) {
+                .missing_inputs_directory => return true,
+                .missing_target_file => {},
+            }
+        }
+        return false;
+    }
+};
+
+/// A file-system issue found while validating declared target files.
+pub const TargetFileValidationIssue = union(enum) {
+    missing_inputs_directory: struct {
+        inputs_dir: []const u8,
+        expected_path: []const u8,
+    },
+    missing_target_file: struct {
+        target: RocTarget,
+        output: OutputKind,
+        file_path: []const u8,
+        expected_full_path: []const u8,
+    },
+
+    fn deinit(self: TargetFileValidationIssue, allocator: Allocator) void {
+        switch (self) {
+            .missing_inputs_directory => |issue| allocator.free(issue.expected_path),
+            .missing_target_file => |issue| allocator.free(issue.expected_full_path),
+        }
+    }
+};
+
 fn resolveLinkTypeCheckedConstants(
     allocator: Allocator,
     checked_module: *const checked.CheckedModuleArtifact,
@@ -515,20 +693,20 @@ fn resolveWasmCheckedConstants(
     wasm: *WasmTargetConfig,
     diagnostic: *TargetConfigResolveDiagnostic,
 ) error{TargetConfigInvalid}!void {
-    try resolveWasmBoolField(allocator, checked_module, target, output, "import_memory", &wasm.import_memory, &wasm.import_memory_ident, diagnostic);
+    try resolveWasmImportMemoryField(allocator, checked_module, target, output, "import_memory", &wasm.import_memory, &wasm.import_memory_ident, diagnostic);
     try resolveWasmUsizeField(allocator, checked_module, target, output, "minimum_memory", &wasm.minimum_memory, &wasm.minimum_memory_ident, diagnostic);
     try resolveWasmUsizeField(allocator, checked_module, target, output, "maximum_memory", &wasm.maximum_memory, &wasm.maximum_memory_ident, diagnostic);
     try resolveWasmUsizeField(allocator, checked_module, target, output, "initial_stack_size", &wasm.initial_stack_size, &wasm.initial_stack_size_ident, diagnostic);
     try resolveWasmU32Field(allocator, checked_module, target, output, "global_base", &wasm.global_base, &wasm.global_base_ident, diagnostic);
 }
 
-fn resolveWasmBoolField(
+fn resolveWasmImportMemoryField(
     allocator: Allocator,
     checked_module: *const checked.CheckedModuleArtifact,
     target: RocTarget,
     output: OutputKind,
     field_name: []const u8,
-    out: *bool,
+    out: *WasmImportMemory,
     ident_slot: *?[]const u8,
     diagnostic: *TargetConfigResolveDiagnostic,
 ) error{TargetConfigInvalid}!void {
@@ -538,8 +716,8 @@ fn resolveWasmBoolField(
         diagnostic.* = .{ .target = target, .output = output, .field_name = field_name, .ident_name = ident, .reason = reason };
         return error.TargetConfigInvalid;
     };
-    const value = constBool(checked_module, node) orelse {
-        diagnostic.* = .{ .target = target, .output = output, .field_name = field_name, .ident_name = ident, .reason = .expected_bool };
+    const value = constWasmImportMemory(checked_module, node) orelse {
+        diagnostic.* = .{ .target = target, .output = output, .field_name = field_name, .ident_name = ident, .reason = .expected_import_memory };
         return error.TargetConfigInvalid;
     };
     out.* = value;
@@ -631,19 +809,12 @@ fn topLevelConstNode(
     return null;
 }
 
-fn constBool(checked_module: *const checked.CheckedModuleArtifact, node: checked.ConstNodeId) ?bool {
+fn constWasmImportMemory(checked_module: *const checked.CheckedModuleArtifact, node: checked.ConstNodeId) ?WasmImportMemory {
     return switch (checked_module.const_store.get(node)) {
-        .nominal => |nominal| constBool(checked_module, nominal.backing),
+        .nominal => |nominal| constWasmImportMemory(checked_module, nominal.backing),
         .tag => |tag| blk: {
             if (tag.payloads.len != 0) break :blk null;
-            if (std.mem.eql(u8, tag.tag_name, "True")) break :blk true;
-            if (std.mem.eql(u8, tag.tag_name, "False")) break :blk false;
-            break :blk null;
-        },
-        .str => |str| blk: {
-            const bytes = checked_module.const_store.strBytes(str);
-            if (std.mem.eql(u8, bytes, "env.memory")) break :blk true;
-            break :blk null;
+            break :blk WasmImportMemory.fromTagName(tag.tag_name);
         },
         else => null,
     };
@@ -787,6 +958,84 @@ test "getLinkSpec returns null for unsupported target" {
     try testing.expect(spec == null);
 }
 
+test "fromAST accepts explicit hostless targets section" {
+    const allocator = testing.allocator;
+
+    const source =
+        \\platform ""
+        \\    requires { make_glue : List({}) -> Try(List({}), Str) }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_make_glue": make_glue_for_host }
+        \\    targets: {}
+        \\
+    ;
+
+    const source_copy = try allocator.dupe(u8, source);
+    defer allocator.free(source_copy);
+
+    var env = try base.CommonEnv.init(allocator, source_copy);
+    defer env.deinit(allocator);
+
+    const ast = try parse.file(allocator, &env);
+    defer ast.deinit();
+
+    try testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+
+    const maybe_config = try TargetsConfig.fromAST(allocator, ast);
+    try testing.expect(maybe_config != null);
+
+    const config = maybe_config.?;
+    defer config.deinit(allocator);
+
+    try testing.expect(config.inputs_dir == null);
+    try testing.expectEqual(@as(usize, 0), config.targets.len);
+}
+
+test "fromAST captures explicit wasm exports" {
+    const allocator = testing.allocator;
+
+    const source =
+        \\platform ""
+        \\    requires { main : {} }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_main": main_for_host }
+        \\    targets: {
+        \\        inputs_dir: "targets/",
+        \\        wasm32: {
+        \\            inputs: ["host.wasm", app],
+        \\            output: Shared,
+        \\            exports: ["start", "update"],
+        \\        },
+        \\    }
+        \\
+    ;
+
+    const source_copy = try allocator.dupe(u8, source);
+    defer allocator.free(source_copy);
+
+    var env = try base.CommonEnv.init(allocator, source_copy);
+    defer env.deinit(allocator);
+
+    const ast = try parse.file(allocator, &env);
+    defer ast.deinit();
+
+    try testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+
+    const maybe_config = try TargetsConfig.fromAST(allocator, ast);
+    try testing.expect(maybe_config != null);
+
+    const config = maybe_config.?;
+    defer config.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 1), config.targets.len);
+    const exports = config.targets[0].wasm.?.exports.?;
+    try testing.expectEqual(@as(usize, 2), exports.len);
+    try testing.expectEqualStrings("start", exports[0]);
+    try testing.expectEqualStrings("update", exports[1]);
+}
+
 test "fromAST captures punned wasm identifier config" {
     const allocator = testing.allocator;
 
@@ -809,7 +1058,7 @@ test "fromAST captures punned wasm identifier config" {
         \\        },
         \\    }
         \\
-        \\import_memory = True
+        \\import_memory = Zeroed
         \\minimum_memory = 65536
         \\maximum_memory = 65536
         \\initial_stack_size = 14752
@@ -843,4 +1092,84 @@ test "fromAST captures punned wasm identifier config" {
     try testing.expectEqualStrings("maximum_memory", wasm.maximum_memory_ident.?);
     try testing.expectEqualStrings("initial_stack_size", wasm.initial_stack_size_ident.?);
     try testing.expectEqualStrings("global_base", wasm.global_base_ident.?);
+}
+
+test "validateDeclaredTargetFilesExist checks selected target files" {
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.createDir(testing.io, "targets", .default_dir);
+    try tmp.dir.createDir(testing.io, "targets/x64mac", .default_dir);
+    try tmp.dir.createDir(testing.io, "targets/wasm32", .default_dir);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "targets/x64mac/libhost.a", .data = "" });
+
+    const platform_dir = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
+    defer allocator.free(platform_dir);
+    const filesystem = CoreCtx.default(allocator, allocator, testing.io);
+
+    const x64_items: []const LinkItem = &.{ .{ .file_path = "libhost.a" }, .app };
+    const wasm_items: []const LinkItem = &.{ .{ .file_path = "host.wasm" }, .app };
+    const specs: []const TargetLinkSpec = &.{
+        .{ .target = .x64mac, .output = .shared, .items = x64_items },
+        .{ .target = .wasm32, .output = .shared, .items = wasm_items },
+    };
+    const config = TargetsConfig{
+        .inputs_dir = "targets",
+        .targets = specs,
+    };
+
+    const x64_validation = try config.validateDeclaredTargetFilesExist(allocator, filesystem, platform_dir, .x64mac);
+    defer x64_validation.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 0), x64_validation.issues.len);
+
+    const wasm_validation = try config.validateDeclaredTargetFilesExist(allocator, filesystem, platform_dir, .wasm32);
+    defer wasm_validation.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 1), wasm_validation.issues.len);
+    switch (wasm_validation.issues[0]) {
+        .missing_target_file => |issue| {
+            try testing.expectEqual(RocTarget.wasm32, issue.target);
+            try testing.expectEqual(OutputKind.shared, issue.output);
+            try testing.expectEqualStrings("host.wasm", issue.file_path);
+            const expected_path = try std.fs.path.join(allocator, &.{ platform_dir, "targets", "wasm32", "host.wasm" });
+            defer allocator.free(expected_path);
+            try testing.expectEqualStrings(expected_path, issue.expected_full_path);
+        },
+        else => return error.UnexpectedResult,
+    }
+}
+
+test "validateDeclaredTargetFilesExist uses default targets directory" {
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const platform_dir = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
+    defer allocator.free(platform_dir);
+    const filesystem = CoreCtx.default(allocator, allocator, testing.io);
+
+    const items: []const LinkItem = &.{ .{ .file_path = "libhost.a" }, .app };
+    const specs: []const TargetLinkSpec = &.{
+        .{ .target = .x64mac, .output = .exe, .items = items },
+    };
+    const config = TargetsConfig{
+        .inputs_dir = null,
+        .targets = specs,
+    };
+
+    const validation = try config.validateDeclaredTargetFilesExist(allocator, filesystem, platform_dir, .x64mac);
+    defer validation.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 1), validation.issues.len);
+    switch (validation.issues[0]) {
+        .missing_inputs_directory => |issue| {
+            try testing.expectEqualStrings("targets", issue.inputs_dir);
+            try testing.expect(std.mem.endsWith(u8, issue.expected_path, "targets"));
+        },
+        else => return error.UnexpectedResult,
+    }
 }

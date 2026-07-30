@@ -5,6 +5,6 @@ import pf.Stdout
 main! = || {
     Stdout.line!("Hello, World!")
 
-    # Intentionally provoke errors to test --allow-errors
+    # This checked error must become a crash only when execution reaches it.
     x = y
 }

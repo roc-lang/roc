@@ -11,23 +11,24 @@ get_sum = |{ x, y }| x + y
 # EXPECTED
 TYPE MISMATCH - destructure_closed_fn_arg.md:2:12:2:20
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**destructure_closed_fn_arg.md:2:12:2:20:**
-```roc
-get_sum = |{ x, y }| x + y
-```
-           ^^^^^^^^
 
-It has the type:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
+└┬──────────────┘                                                             │
+ │                                                                            │
+ │  get_sum = |{ x, y }| x + y                                                │
+ │             ‾‾‾‾‾‾‾‾                                                       │
+ └───────────────────────────────────────── destructure_closed_fn_arg.md:2:12 ┘
 
-    { x: _field, y: _field2 }
+    It has the type:
 
-But the annotation says it should be:
+        { x: _field, y: U64 }
 
-    { x: U64, y: U64, z: U64 }
+    But the annotation says it should be:
 
-**Hint:** This record is missing the field: `z`
+        { x: U64, y: U64, z: U64 }
+
+    Hint: This record is missing the field: `z`
 
 # TOKENS
 ~~~zig
@@ -38,7 +39,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "get_sum")
 			(ty-fn
@@ -80,7 +81,7 @@ NO CHANGE
 						(record-destruct (label "y") (ident "y")
 							(required
 								(p-assign (ident "y")))))))
-			(e-dispatch-call (method "plus") (constraint-fn-var 54)
+			(e-dispatch-call (method "plus") (constraint-fn-var 230)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))

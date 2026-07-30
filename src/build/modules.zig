@@ -49,6 +49,71 @@ const FileToScan = struct {
     include_imports: bool,
 };
 
+const glue_platform_files = [_][]const u8{
+    "AbiFieldLayout.roc",
+    "AbiLayout.roc",
+    "AbiLayoutDetails.roc",
+    "AbiRecordLayout.roc",
+    "AbiTagLayout.roc",
+    "AbiTagUnionLayout.roc",
+    "AbiWidth.roc",
+    "ArgShape.roc",
+    "EntryPoint.roc",
+    "File.roc",
+    "FunctionInfo.roc",
+    "FunctionRepr.roc",
+    "GlueInput.roc",
+    "HostRcPlan.roc",
+    "HostedFunctionInfo.roc",
+    "ModuleTypeInfo.roc",
+    "ProvidesEntry.roc",
+    "RecordField.roc",
+    "RecordFieldInfo.roc",
+    "RecordRepr.roc",
+    "RocName.roc",
+    "TagUnionRepr.roc",
+    "TagVariant.roc",
+    "TypeId.roc",
+    "TypeInfo.roc",
+    "TypeNamePlan.roc",
+    "TypeRepr.roc",
+    "TypeTable.roc",
+    "Types.roc",
+    "main.roc",
+};
+
+fn createCompilerPlatformSourcesModule(b: *Build) *Module {
+    const write_files = b.addWriteFiles();
+    var source = std.ArrayList(u8).empty;
+    source.appendSlice(b.allocator,
+        \\pub const File = struct {
+        \\    path: []const u8,
+        \\    bytes: []const u8,
+        \\};
+        \\
+        \\pub const glue_files = [_]File{
+        \\
+    ) catch @panic("OOM");
+
+    for (glue_platform_files) |file_name| {
+        const source_path = b.fmt("src/glue/platform/{s}", .{file_name});
+        const embed_path = b.fmt("glue-platform/{s}", .{file_name});
+        _ = write_files.addCopyFile(b.path(source_path), embed_path);
+        source.appendSlice(
+            b.allocator,
+            b.fmt("    .{{ .path = \"{s}\", .bytes = @embedFile(\"{s}\") }},\n", .{ file_name, embed_path }),
+        ) catch @panic("OOM");
+    }
+
+    source.appendSlice(b.allocator,
+        \\};
+        \\
+    ) catch @panic("OOM");
+
+    const generated_source = write_files.add("compiler_platform_sources.zig", source.items);
+    return b.createModule(.{ .root_source_file = generated_source });
+}
+
 // Count `test { ... }` blocks (no names) so filtered runs can subtract the
 // wrappers they inevitably execute even when Zig test filters are set.
 fn wrapperTestCount(b: *Build, module_type: ModuleType, module: *Module) usize {
@@ -268,10 +333,17 @@ fn targetMatchesHost(target: ResolvedTarget) bool {
         target.result.abi == builtin.target.abi;
 }
 
-/// Represents a test module with its compilation and execution steps.
+/// Represents a test module's compilation step.
+///
+/// Deliberately does not carry a pre-made `Step.Run`. Every run of these
+/// binaries is created by `TestSuiteRegistry` in build.zig, which builds one
+/// run for the tests summary and a separate one for the public
+/// `run-test-zig-module-*` step. A ready-made run stored here is exactly the
+/// convenient thing to hand to `TestsSummaryStep.addRun` *and* to a public
+/// step -- which is how eleven other suites ended up sharing one run and, on
+/// Windows, dragging the whole serialization chain behind them.
 pub const ModuleTest = struct {
     test_step: *Step.Compile,
-    run_step: *Step.Run,
 };
 
 /// Bundles the per-module test steps with accounting for forced passes (aggregators +
@@ -300,9 +372,8 @@ pub const ModuleType = enum {
     ctx,
     build_options,
     layout,
-    interpreter_layout,
+    static_data,
     values,
-    interpreter_values,
     eval,
     ipc,
     fmt,
@@ -322,7 +393,9 @@ pub const ModuleType = enum {
     sljmp,
     echo_platform,
     docs,
+    bump,
     glue,
+    host_alloc,
 
     /// Returns the dependencies for this module type
     pub fn getDependencies(self: ModuleType) []const ModuleType {
@@ -332,7 +405,7 @@ pub const ModuleType = enum {
             .ctx => &.{},
             .tracy => &.{.build_options},
             .collections => &.{},
-            .base => &.{.collections},
+            .base => &.{ .collections, .builtins },
             .roc_src => &.{},
             .types => &.{ .tracy, .base, .collections },
             .reporting => &.{ .collections, .base },
@@ -340,11 +413,10 @@ pub const ModuleType = enum {
             .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse, .reporting, .build_options, .ctx },
             .check => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting, .build_options },
             .layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
-            .interpreter_layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
+            .static_data => &.{ .base, .builtins, .check, .collections, .layout, .lir, .roc_target },
             .values => &.{ .collections, .base, .builtins, .layout },
-            .interpreter_values => &.{ .collections, .base, .builtins, .interpreter_layout },
-            .eval => &.{ .tracy, .ctx, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .interpreter_layout, .values, .interpreter_values, .build_options, .reporting, .backend, .lir, .symbol, .roc_target, .sljmp, .ipc },
-            .compile => &.{ .tracy, .build_options, .ctx, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle, .roc_target, .backend, .lir, .symbol, .sljmp },
+            .eval => &.{ .tracy, .ctx, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .static_data, .values, .build_options, .reporting, .backend, .lir, .symbol, .roc_target, .sljmp, .ipc },
+            .compile => &.{ .tracy, .build_options, .ctx, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .static_data, .eval, .unbundle, .roc_target, .backend, .lir, .symbol, .sljmp },
             .ipc => &.{},
 
             .fmt => &.{ .base, .parse, .collections, .can, .ctx, .tracy },
@@ -354,16 +426,18 @@ pub const ModuleType = enum {
             .base58 => &.{},
             .lsp => &.{ .compile, .reporting, .build_options, .ctx, .base, .parse, .can, .types, .fmt, .eval, .roc_target },
             .lsp_unit, .lsp_integration => &.{ .lsp, .compile, .reporting, .build_options, .ctx, .base, .parse, .can, .types, .fmt, .eval, .roc_target },
-            .backend => &.{ .base, .layout, .builtins, .can, .lir, .roc_target, .ctx },
+            .backend => &.{ .base, .layout, .builtins, .can, .lir, .static_data, .roc_target, .ctx },
             .lir_core => &.{ .base, .collections, .layout, .types, .can, .check },
-            .postcheck => &.{ .base, .builtins, .can, .check, .layout, .lir_core },
-            .lir => &.{ .base, .collections, .layout, .types, .can, .check, .build_options, .lir_core, .postcheck },
+            .postcheck => &.{ .base, .builtins, .can, .check, .collections, .layout, .lir_core },
+            .lir => &.{ .base, .collections, .layout, .types, .can, .check, .build_options, .lir_core, .postcheck, .builtins },
             .symbol => &.{.base},
             .roc_target => &.{.base},
             .sljmp => &.{},
             .echo_platform => &.{.builtins},
             .docs => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .check, .reporting },
-            .glue => &.{ .base, .parse, .compile, .can, .check, .reporting, .echo_platform, .builtins, .roc_target, .types, .layout, .backend, .eval, .lir },
+            .bump => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .check, .reporting },
+            .glue => &.{ .base, .parse, .compile, .can, .check, .reporting, .echo_platform, .builtins, .roc_target, .types, .layout, .backend, .eval, .lir, .build_options },
+            .host_alloc => &.{ .builtins, .build_options },
         };
     }
 };
@@ -384,9 +458,8 @@ pub const RocModules = struct {
     ctx: *Module,
     build_options: *Module,
     layout: *Module,
-    interpreter_layout: *Module,
+    static_data: *Module,
     values: *Module,
-    interpreter_values: *Module,
     eval: *Module,
     ipc: *Module,
     fmt: *Module,
@@ -406,8 +479,29 @@ pub const RocModules = struct {
     sljmp: *Module,
     echo_platform: *Module,
     docs: *Module,
+    bump: *Module,
     glue: *Module,
     embedded_lld: *Module,
+    compiler_platform_sources: *Module,
+
+    // The default-platform runtimes (`src/default_platform/*_runtime.zig`) are
+    // compiled as standalone freestanding objects without the `builtins` module,
+    // so they read the host-boundary `RocStr` encoding through this single-file
+    // module instead of restating it. It is wired into the `builtins` module too
+    // so a `builtins` test can assert the view matches the canonical `RocStr`.
+    roc_str_view: *Module,
+
+    // Boundary symbol names (`src/builtins/shim_symbols.zig`) as a standalone
+    // module for consumers compiled without the `builtins` module (the
+    // default-platform runtimes); everything else reaches the same file through
+    // `builtins.shim_symbols`.
+    shim_symbols: *Module,
+
+    // The size-tracking host allocator (`src/host_alloc/mod.zig`) shared by
+    // the test platform hosts. Part of the module dependency graph so its
+    // tests run with the other module tests, but consumed only by hosts, never
+    // by the compiler.
+    host_alloc: *Module,
 
     // Vendored-from-Zig modules. Kept out of the `ModuleType` dependency graph
     // (like `embedded_lld`) and wired into their specific consumers via
@@ -442,9 +536,8 @@ pub const RocModules = struct {
                 .{ .root_source_file = build_options_step.getOutput() },
             ),
             .layout = b.addModule("layout", .{ .root_source_file = b.path("src/layout/mod.zig") }),
-            .interpreter_layout = b.addModule("interpreter_layout", .{ .root_source_file = b.path("src/interpreter_layout/mod.zig") }),
+            .static_data = b.addModule("static_data", .{ .root_source_file = b.path("src/static_data.zig") }),
             .values = b.addModule("values", .{ .root_source_file = b.path("src/values/mod.zig") }),
-            .interpreter_values = b.addModule("interpreter_values", .{ .root_source_file = b.path("src/eval/interpreter_values.zig") }),
             .eval = b.addModule("eval", .{ .root_source_file = b.path("src/eval/mod.zig") }),
             .ipc = b.addModule("ipc", .{ .root_source_file = b.path("src/ipc/mod.zig") }),
             .fmt = b.addModule("fmt", .{ .root_source_file = b.path("src/fmt/mod.zig") }),
@@ -464,8 +557,13 @@ pub const RocModules = struct {
             .sljmp = b.addModule("sljmp", .{ .root_source_file = b.path("src/sljmp/mod.zig") }),
             .echo_platform = b.addModule("echo_platform", .{ .root_source_file = b.path("src/echo_platform/mod.zig") }),
             .docs = b.addModule("docs", .{ .root_source_file = b.path("src/docs/mod.zig") }),
+            .bump = b.addModule("bump", .{ .root_source_file = b.path("src/bump/mod.zig") }),
             .glue = b.addModule("glue", .{ .root_source_file = b.path("src/glue/mod.zig") }),
             .embedded_lld = b.addModule("embedded_lld", .{ .root_source_file = b.path("src/build/embedded_lld.zig") }),
+            .compiler_platform_sources = createCompilerPlatformSourcesModule(b),
+            .roc_str_view = b.addModule("roc_str_view", .{ .root_source_file = b.path("src/default_platform/roc_str_view.zig") }),
+            .shim_symbols = b.addModule("shim_symbols", .{ .root_source_file = b.path("src/builtins/shim_symbols.zig") }),
+            .host_alloc = b.addModule("host_alloc", .{ .root_source_file = b.path("src/host_alloc/mod.zig") }),
 
             .vendor_parse_float = b.addModule("vendor_parse_float", .{ .root_source_file = b.path("vendor/parse_float/parse_float.zig") }),
             .vendor_ryu = b.addModule("vendor_ryu", .{ .root_source_file = b.path("vendor/ryu.zig") }),
@@ -523,9 +621,8 @@ pub const RocModules = struct {
             .ctx,
             .build_options,
             .layout,
-            .interpreter_layout,
+            .static_data,
             .values,
-            .interpreter_values,
             .eval,
             .ipc,
             .fmt,
@@ -545,7 +642,9 @@ pub const RocModules = struct {
             .sljmp,
             .echo_platform,
             .docs,
+            .bump,
             .glue,
+            .host_alloc,
         };
 
         // Setup dependencies for each module
@@ -571,9 +670,15 @@ pub const RocModules = struct {
             .builtins => {
                 module.addImport("vendor_parse_float", self.vendor_parse_float);
                 module.addImport("vendor_ryu", self.vendor_ryu);
+                // Lets a `builtins` test assert the default-platform `RocStr` view
+                // matches the canonical `RocStr` (see `roc_str_view` above).
+                module.addImport("roc_str_view", self.roc_str_view);
             },
             .eval => {
                 module.addImport("vendor_eval_loader", self.vendor_eval_loader);
+            },
+            .compile, .glue => {
+                module.addImport("compiler_platform_sources", self.compiler_platform_sources);
             },
             else => {},
         }
@@ -594,7 +699,7 @@ pub const RocModules = struct {
         step.root_module.addImport("ctx", self.ctx);
         step.root_module.addImport("build_options", self.build_options);
         step.root_module.addImport("layout", self.layout);
-        step.root_module.addImport("interpreter_layout", self.interpreter_layout);
+        step.root_module.addImport("static_data", self.static_data);
         step.root_module.addImport("eval", self.eval);
         step.root_module.addImport("fmt", self.fmt);
         step.root_module.addImport("unbundle", self.unbundle);
@@ -608,6 +713,7 @@ pub const RocModules = struct {
         step.root_module.addImport("sljmp", self.sljmp);
         step.root_module.addImport("echo_platform", self.echo_platform);
         step.root_module.addImport("docs", self.docs);
+        step.root_module.addImport("bump", self.bump);
         step.root_module.addImport("glue", self.glue);
         step.root_module.addImport("compile", self.compile);
         step.root_module.addImport("embedded_lld", self.embedded_lld);
@@ -647,9 +753,8 @@ pub const RocModules = struct {
             .ctx => self.ctx,
             .build_options => self.build_options,
             .layout => self.layout,
-            .interpreter_layout => self.interpreter_layout,
+            .static_data => self.static_data,
             .values => self.values,
-            .interpreter_values => self.interpreter_values,
             .eval => self.eval,
             .ipc => self.ipc,
             .fmt => self.fmt,
@@ -669,7 +774,9 @@ pub const RocModules = struct {
             .sljmp => self.sljmp,
             .echo_platform => self.echo_platform,
             .docs => self.docs,
+            .bump => self.bump,
             .glue => self.glue,
+            .host_alloc => self.host_alloc,
         };
     }
 
@@ -702,8 +809,9 @@ pub const RocModules = struct {
             .can,
             .check,
             .ctx,
+            .eval,
             .layout,
-            .interpreter_layout,
+            .static_data,
             .values,
             .ipc,
             .fmt,
@@ -711,15 +819,19 @@ pub const RocModules = struct {
             .bundle,
             .unbundle,
             .base58,
+            .lsp,
             .lsp_unit,
             .backend,
             .lir_core,
+            .roc_target,
             .postcheck,
             .lir,
             .symbol,
             .sljmp,
             .echo_platform,
             .docs,
+            .bump,
+            .host_alloc,
         };
 
         const tests = b.allocator.alloc(ModuleTest, test_configs.len) catch
@@ -751,6 +863,12 @@ pub const RocModules = struct {
                 .filters = filter_injection.filters,
             });
 
+            // The eval module's host-call trampoline is implemented in assembly;
+            // the test compile has its own root module, so it needs the file too.
+            if (module_type == .eval) {
+                test_step.root_module.addAssemblyFile(b.path("src/eval/host_trampoline.S"));
+            }
+
             // Watch module needs Core Foundation and FSEvents on macOS (only when not cross-compiling)
             // These frameworks provide the FSEvents API for proper event-driven file system monitoring on macOS.
             if (module_type == .watch and target.result.os.tag == .macos and targetMatchesHost(target)) {
@@ -768,11 +886,8 @@ pub const RocModules = struct {
                 }
             }
 
-            const run_step = b.addRunArtifact(test_step);
-
             tests[i] = .{
                 .test_step = test_step,
-                .run_step = run_step,
             };
         }
 

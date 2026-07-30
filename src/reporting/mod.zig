@@ -22,6 +22,7 @@ pub const renderReport = @import("renderer.zig").renderReport;
 pub const renderReportWithConfig = @import("renderer.zig").renderReportWithConfig;
 pub const renderReportToTerminal = @import("renderer.zig").renderReportToTerminal;
 pub const renderReportToMarkdown = @import("renderer.zig").renderReportToMarkdown;
+pub const renderReportToBoxPlain = @import("renderer.zig").renderReportToBoxPlain;
 pub const renderReportToHtml = @import("renderer.zig").renderReportToHtml;
 pub const renderReportToLsp = @import("renderer.zig").renderReportToLsp;
 pub const renderDocument = @import("renderer.zig").renderDocument;
@@ -29,6 +30,7 @@ pub const renderDocumentToTerminal = @import("renderer.zig").renderDocumentToTer
 pub const renderDocumentToMarkdown = @import("renderer.zig").renderDocumentToMarkdown;
 pub const renderDocumentToHtml = @import("renderer.zig").renderDocumentToHtml;
 pub const renderDocumentToLsp = @import("renderer.zig").renderDocumentToLsp;
+pub const writeShouted = @import("renderer.zig").writeShouted;
 
 // Configuration utilities
 pub const validateUtf8 = @import("config.zig").validateUtf8;
@@ -39,4 +41,6 @@ pub const formatUtf8Bounded = @import("config.zig").formatUtf8Bounded;
 test {
     const std = @import("std");
     std.testing.refAllDecls(@import("test.zig"));
+    std.testing.refAllDecls(@import("parity_test.zig"));
+    std.testing.refAllDecls(@import("common_misspellings.zig"));
 }

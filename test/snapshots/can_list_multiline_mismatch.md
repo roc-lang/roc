@@ -14,17 +14,18 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - can_list_multiline_mismatch.md:3:5:3:18
 # PROBLEMS
-**TYPE MISMATCH**
-This string literal is being used where a non-string type is needed:
-**can_list_multiline_mismatch.md:3:5:3:18:**
-```roc
-    "hello world",
-```
-    ^^^^^^^^^^^^^
 
-The type was determined to be:
+┌───────────────┐
+│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
+└┬──────────────┘  type is needed.                                            │
+ │                                                                            │
+ │  "hello world",                                                            │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                             │
+ └──────────────────────────────────────── can_list_multiline_mismatch.md:3:5 ┘
 
-    Dec
+    The type was determined to be:
+
+        Dec
 
 # TOKENS
 ~~~zig
@@ -45,19 +46,14 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-[
-	42,
-	"hello world",
-	100,
-]
+[42, "hello world", 100]
 ~~~
 # CANONICALIZE
 ~~~clojure
 (e-list
 	(elems
 		(e-num (value "42"))
-		(e-string
-			(e-literal (string "hello world")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(e-num (value "100"))))
 ~~~
 # TYPES

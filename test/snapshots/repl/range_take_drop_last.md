@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Iter.take_last / drop_last over a range exercise its Known length (steps_between)
+description=Iter.take_last / drop_last over a range exercise its Known length
 type=repl
 ~~~
 # SOURCE
