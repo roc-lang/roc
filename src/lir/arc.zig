@@ -3313,6 +3313,19 @@ const Inserter = struct {
         return (self.solution.uniqueSeedMaskOf(proc_id) & argMaskBit(position)) != 0;
     }
 
+    /// Whether the callee's dismantle plan has owned-only takes keyed by this
+    /// parameter, so an owned variant would consume the dying container's
+    /// stored units at its field reads.
+    fn paramHasOwnedOnlyTakes(
+        self: *const Inserter,
+        proc_id: LIR.LirProcSpecId,
+        position: usize,
+    ) bool {
+        const params = self.store.getLocalSpan(self.store.getProcSpec(proc_id).args);
+        if (position >= GuardedList.borrowLen(params)) return false;
+        return self.dismantles.ownedOnlyContainerOf(GuardedList.at(params, position)) != null;
+    }
+
     fn callArgOwnership(
         self: *Inserter,
         callee: ?LIR.LirProcSpecId,
@@ -3348,7 +3361,13 @@ const Inserter = struct {
                 const seed_can_reach_check = if (callee) |direct| self.procParamCanUseUniqueSeed(direct, position) else false;
                 const seeds_unique_param = unique_demand and seed_can_reach_check and self.isLocalUniqueHere(local) and
                     !self.groupSharesOtherOperand(locals, position, local);
-                if (!return_borrows_param and !seeds_unique_param) continue;
+                // Ownership also changes runtime work when the callee has
+                // owned-only takes for this parameter: the owned variant's
+                // field reads consume the dying container's stored units
+                // instead of retaining, which is what lets mutations of the
+                // fields stay in place.
+                const takes_with_ownership = if (callee) |direct| self.paramHasOwnedOnlyTakes(direct, position) else false;
+                if (!return_borrows_param and !seeds_unique_param and !takes_with_ownership) continue;
                 demanded.borrowed_params &= ~bit;
                 if (return_borrows_param) {
                     demanded.ret_mode = .owned;

@@ -5301,37 +5301,42 @@ A container qualifies for dismantling when all of the following hold:
 
 - its committed layout is a struct containing at least one refcounted field
 - its binding is owned, bound exactly once, and is not a join parameter
-- every occurrence of it is a field read, either directly or through a
-  borrowed pure same-value alias whose own occurrences are all field reads
+- every occurrence of it is a field read (directly or through a borrowed
+  pure same-value alias whose own occurrences are all field reads) or an
+  operand-position whole use: moved into an aggregate or a call, returned,
+  or join-carried by `set_local`
 
 A proc parameter solved borrowed qualifies conditionally: its takes are
 solved once against the shared ownership-neutral body but recorded as
 owned-only, applying exactly in emissions whose demand vector overrides that
 parameter to owned — the mode-specialized variants callers with dying
 arguments select. The base emission keeps the borrowed schedule untouched.
+Owned-only takes also feed the demand side: a call site whose final-use
+argument lands on a borrowed parameter demands the owned variant when the
+callee has owned-only takes for that parameter, since ownership then deletes
+the field-read retains that would otherwise force the callee's mutations to
+copy.
 
-A field read of a qualifying container becomes a take when its result binding
-is owned, its result never flows into join-carried state, and the read lies
-on the container's spine: the statement chain from its definition following
-`next` edges and join remainders, never entering switch branches or join
-bodies. The spine may additionally cross a switch whose every branch —
-default included — is a plain statement chain falling straight through to
-the switch's shared continuation: such a diamond's continuation runs exactly
-once on every path, so a take after the rejoin is as good as one before the
-branch. Spine placement is what makes each take execute exactly once, in a
-known order, before the container dies; residual reads may live in branches,
-because the death point follows the last use on every path. The join-state
-restriction — the read result must not be a `set_local` operand or feed a
-join parameter through pure aliases, closed backward over aliasing — keeps
-each take's deferred claim inside one certifier walk segment, where its value
-identity is exact rather than quotiented. A taken field must additionally be
-refcounted and read exactly once in the whole procedure: allowing earlier
-borrows of the same field would be sound, but a borrow after the take could
-observe stale bytes once the taker mutates, and restricting to one read makes
-the rule checkable without order reasoning. A field that fails any per-field
-rule simply stays residual — its read keeps its retain and its stored unit is
-released at the death point — and a container whose take set comes out empty
-keeps today's whole release exactly.
+Which consuming reads become takes is decided per field by a forward
+dataflow from the container's definition over the control-flow graph,
+tracking for each refcounted field whether it may and whether it must have
+been taken on the paths reaching each point. A consuming read is a take only
+where the field cannot have been taken yet — a take where it may already be
+gone would double-consume its unit on that path. A borrow of the field, and
+any whole use of the container, must likewise run where no take can have
+happened: after a take, the container's bytes for that field can alias the
+taker's mutation rather than the original value. Every exit the flow reaches
+— returns, crashes, and jumps that leave the region, such as a loop's back
+edge — must agree on the taken set (`may == must`), so the residual release
+is the same however the death point was reached. Merges meet pointwise, and
+a loop poisons its own takes: a take inside one reaches itself as
+possibly-taken. Consuming reads on exclusive branches thereby take exactly
+when every path through the branching takes the field exactly once — the
+success and fallback arms of a checked mutation are the canonical case — and
+a read the flow never reaches keeps its field residual. A field that fails
+any rule simply stays residual — its reads keep their retains and its stored
+unit is released at the death point — and a container whose take set comes
+out empty keeps today's whole release exactly.
 
 Emission changes in exactly two places. A take's read emits no retain: the
 result's unit is the container's stored unit for that field, moved rather
@@ -5346,7 +5351,7 @@ path balancing are untouched.
 Like precise lifetimes, take solving is order-sensitive and therefore runs in
 the ARC stage against the solved modes rather than inside the mode fixpoint.
 It allocates per-candidate tables only: a container that cannot benefit --
-wrong layout shape, borrowed, escaping, or off-spine uses -- contributes
+wrong layout shape, borrowed, or non-operand whole uses -- contributes
 nothing beyond its visit in one linear statement scan, preserving the rule
 that ARC memory scales with ownership work actually demanded.
 
