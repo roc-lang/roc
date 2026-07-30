@@ -23,6 +23,12 @@ if ! command -v objdump >/dev/null 2>&1; then
     echo "objdump is required for the match extension codegen check" >&2
     exit 1
 fi
+host_os="$(uname -s)"
+if [ "$host_os" != "Darwin" ] && ! command -v readelf >/dev/null 2>&1; then
+    echo "readelf is required for the match extension codegen check" >&2
+    exit 1
+fi
+
 roc_bin="$1"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fixture="$repo_root/test/cli/match_extension_codegen.roc"
@@ -38,6 +44,16 @@ expectations=(
 )
 
 failed=0
+
+count_objdump_instructions() {
+    objdump -d --no-show-raw-insn "$1" | awk '
+        /^[0-9a-f]+ <_?roc__proc/ { in_proc = 1; next }
+        /^[0-9a-f]+ </           { in_proc = 0 }
+        in_proc && /^[[:space:]]+[0-9a-f]+:/ { count++ }
+        END { print count + 0 }
+    '
+}
+
 for entry in "${expectations[@]}"; do
     target="${entry%%:*}"
     expected="${entry##*:}"
@@ -47,10 +63,15 @@ for entry in "${expectations[@]}"; do
 
     case "$target" in
         arm64musl)
-            if command -v readelf >/dev/null 2>&1; then
-                # Every AArch64 instruction is exactly four bytes. Reading the
-                # exact procedure symbol sizes supports GNU objdump builds
-                # without the AArch64 disassembler.
+            if [ "$host_os" = "Darwin" ]; then
+                # Apple's objdump supports every architecture emitted by this
+                # check, including AArch64 ELF targets.
+                actual="$(count_objdump_instructions "$tmp_dir/match-$target")"
+            else
+                # GNU objdump is commonly configured for only the host
+                # architecture. Every AArch64 instruction is four bytes, so
+                # exact procedure symbol sizes provide the target-independent
+                # count on these hosts.
                 actual="$(readelf -sW "$tmp_dir/match-$target" | awk '
                     $8 ~ /^_?roc__proc/ { bytes += $3 }
                     END {
@@ -58,23 +79,10 @@ for entry in "${expectations[@]}"; do
                         print bytes / 4
                     }
                 ')"
-            else
-                # macOS ships a multi-target LLVM objdump but no readelf.
-                actual="$(objdump -d --no-show-raw-insn "$tmp_dir/match-$target" | awk '
-                    /^[0-9a-f]+ <_?roc__proc/ { in_proc = 1; next }
-                    /^[0-9a-f]+ </           { in_proc = 0 }
-                    in_proc && /^[[:space:]]+[0-9a-f]+:/ { count++ }
-                    END { print count + 0 }
-                ')"
             fi
             ;;
         x64musl)
-            actual="$(objdump -d --no-show-raw-insn "$tmp_dir/match-$target" | awk '
-                /^[0-9a-f]+ <_?roc__proc/ { in_proc = 1; next }
-                /^[0-9a-f]+ </           { in_proc = 0 }
-                in_proc && /^[[:space:]]+[0-9a-f]+:/ { count++ }
-                END { print count + 0 }
-            ')"
+            actual="$(count_objdump_instructions "$tmp_dir/match-$target")"
             ;;
         *)
             echo "match extension codegen has no instruction counter for $target" >&2
@@ -102,9 +110,8 @@ To see what changed, build the fixture and disassemble the roc__proc symbols:
         --output=/tmp/match test/cli/match_extension_codegen.roc
     objdump -d --no-show-raw-insn /tmp/match
 
-For arm64musl, `readelf -sW /tmp/match` reports procedure byte sizes and
-`objdump -d --no-show-raw-insn /tmp/match` disassembles them on multi-target
-hosts. AArch64 instructions are four bytes each.
+For arm64musl on non-macOS hosts, `readelf -sW /tmp/match` reports procedure
+byte sizes; AArch64 instructions are four bytes each.
 
 For why a given instruction is there, set `dump_llvm_artifacts` to true in
 src/cli/builder.zig to also get the optimized LLVM IR: that distinguishes a
