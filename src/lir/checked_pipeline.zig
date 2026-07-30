@@ -192,27 +192,7 @@ pub const Timing = struct {
     }
 };
 
-const TimingCounter = if (base.parallel.is_freestanding or builtin.target.cpu.arch == .wasm32) struct {
-    value: u64 = 0,
-
-    fn load(self: *const @This()) u64 {
-        return self.value;
-    }
-
-    fn add(self: *@This(), value: u64) void {
-        self.value +%= value;
-    }
-} else struct {
-    value: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
-
-    fn load(self: *const @This()) u64 {
-        return self.value.load(.monotonic);
-    }
-
-    fn add(self: *@This(), value: u64) void {
-        _ = self.value.fetchAdd(value, .monotonic);
-    }
-};
+const TimingCounter = base.ConcurrentU64;
 
 /// Immutable checked-to-LIR timings for progress reporting.
 pub const TimingSnapshot = struct {
