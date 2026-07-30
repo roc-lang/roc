@@ -2225,6 +2225,30 @@ census was re-sited onto it before the argument could be redone.
    them. The rehearsal measures positions in isolation and these positions
    are not isolated; the measurement moves to the seam (step 2b) rather
    than the operand descriptor growing further.
+2a. **The read surface, enumerated.** Coverage is only meaningful against a
+   denominator, and the denominator is small. Every Monotype body lowering
+   obtains from the graph leaves through exactly two exits:
+   `graph.activeTypeViewForNode`, whose only production caller in
+   `lower.zig` is the one line inside `activeTypeFromNode` (its other
+   callers are `solve.zig`'s own internals and tests), and
+   `GraphTypeFinals.sealNode` on the frozen-emission path. Every other
+   helper — `resolvedTypeViewForNode`, `currentPhaseTypeForNode`,
+   `activeTypeFromCell`, `typeForChecked`, `resolvedCheckedTypeView` —
+   delegates into one of those two. So complete coverage does not mean
+   routing dozens of call sites; it means measuring two functions.
+
+   What blocks measuring them is not their number but their argument: they
+   take a node, and a node does not name the checked position it stands
+   for. `instNode` already records that provenance
+   (`trace.noteProvenance`), but only for a node created in the
+   specialization's own root context with no nested declaration scope
+   open, because a nested scope binds the same checked id under a
+   different binding. Extending that provenance to every node created from
+   a checked position, and recording the binding context with it, is what
+   turns the two chokepoints into total coverage. The immediate
+   measurement is the denominator itself: count calls at both exits and
+   compare against the 1568 currently measured.
+
 2b. **Re-measure the logical residual at the production seam.**
    `BodyContext.typeForChecked` compares directed translation against the
    graph at every read, holds the body-walk context the isolated operands
