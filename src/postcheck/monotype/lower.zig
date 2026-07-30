@@ -28709,12 +28709,12 @@ const BodyContext = struct {
             null;
 
         // Spread-carried fields are read out of the base before the update's
-        // own field expressions run, each bound to its own local. The reads
-        // are pure projections of an already-evaluated value, so hoisting them
-        // is unobservable, and it ends the base's last use ahead of any
-        // mutation an updated field performs. Without it, the base stays live
-        // across those mutations and only the field read last -- canonical
-        // field order, so whichever sorts last -- finds its collection
+        // own field expressions run, each bound to its own local. Each field
+        // read only reads an already-evaluated record, so moving the reads
+        // earlier is unobservable and ends the base's last use before an
+        // updated field expression changes a collection. Otherwise, the base
+        // stays live across those collection changes and only the final read
+        // in record field-name order finds its collection
         // uniquely referenced; every other field copies its whole value.
         const SpreadRead = struct { local: DraftLocalId, cell: DraftTypeCell, value: DraftExprId };
         const spread_reads = try self.allocator.alloc(?SpreadRead, target_fields.len);
