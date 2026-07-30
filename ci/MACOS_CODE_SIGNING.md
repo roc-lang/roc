@@ -1,12 +1,22 @@
 # macOS Code Signing and Notarization
 
-The nightly builds for the new Zig-based compiler are code signed and notarized
-for macOS. This allows users to download and run the binary without Gatekeeper
-warnings.
+The nightly release workflow lives in
+[`roc-lang/nightlies`](https://github.com/roc-lang/nightlies/blob/main/.github/workflows/nightly_new_compiler_all_os.yml).
+Its macOS jobs need to code sign and notarize the Roc binary before packaging it
+so downloaded nightlies run without Gatekeeper warnings.
+
+The Apple Developer Program membership must be enrolled as an organization so
+the signing identity belongs to the Roc Programming Language Foundation rather
+than an individual. Apple requires the organization to be a legal entity with a
+D-U-N-S Number, a public website, and a work email address on the organization's
+domain. The person enrolling becomes the Account Holder and must have authority
+to bind the organization to Apple's agreements.
 
 ## Required GitHub Secrets
 
-The following secrets must be configured in the repository settings:
+Configure the following seven secrets in the
+[`roc-lang/nightlies` Actions secrets](https://github.com/roc-lang/nightlies/settings/secrets/actions),
+not in `roc-lang/roc`:
 
 ### Code Signing Secrets
 
@@ -29,15 +39,22 @@ The following secrets must be configured in the repository settings:
 
 ### 1. Apple Developer Program
 
-You need an Apple Developer Program membership ($99/year) to get a Developer ID
-certificate and access notarization services.
+Enroll the foundation as an organization in the Apple Developer Program. The
+program costs $99/year, although eligible nonprofit organizations can request a
+fee waiver during enrollment.
 
 ### 2. Create Developer ID Certificate
 
-1. Go to [Apple Developer](https://developer.apple.com) > Certificates, Identifiers & Profiles
-2. Create a new "Developer ID Application" certificate
-3. Download and install in Keychain Access
-4. Export as `.p12` with a password
+1. In Keychain Access, choose Certificate Assistant > Request a Certificate
+   from a Certificate Authority and save the certificate signing request to
+   disk.
+2. Go to [Certificates, Identifiers & Profiles](https://developer.apple.com/account/resources/certificates/list)
+   and create a **Developer ID Application** certificate. Apple requires the
+   Account Holder role for this certificate type.
+3. Upload the certificate signing request, download the certificate, and open
+   it to install it in Keychain Access.
+4. In Keychain Access > My Certificates, export the Developer ID Application
+   certificate and its private key together as a password-protected `.p12`.
 5. Base64-encode the certificate:
    ```sh
    base64 -i certificate.p12 -o certificate-base64.txt
@@ -46,19 +63,28 @@ certificate and access notarization services.
 
 ### 3. Create Notarization API Key
 
-1. Go to [App Store Connect](https://appstoreconnect.apple.com) > Users and Access > Integrations > App Store Connect API
-2. Create a new key with "Developer" access
-3. Download the `.p8` key file (can only be downloaded once!)
-4. Note the Key ID and Issuer ID shown on the page
-5. Use these values for the `APPLE_NOTARIZATION_*` secrets
+1. Go to [App Store Connect](https://appstoreconnect.apple.com) > Users and
+   Access > Integrations > App Store Connect API.
+2. If API access has not been enabled, the Account Holder must click **Request
+   Access** and accept the terms.
+3. Under **Team Keys**, create a key named `Roc Nightly Notarization` with
+   **Developer** access. Do not create an Individual Key; individual keys
+   cannot use `notarytool`.
+4. Download the `.p8` key file. It can only be downloaded once, so also store a
+   recovery copy in the foundation's secrets manager.
+5. Note the Key ID and Issuer ID shown on the page.
+6. Use these values for the `APPLE_NOTARIZATION_*` secrets.
 
 ### 4. Add Secrets to GitHub
 
-Go to Repository Settings > Secrets and variables > Actions and add all six secrets.
+Go to the `roc-lang/nightlies` repository's Settings > Secrets and variables >
+Actions and add all seven secrets.
 
 ## How It Works
 
-1. After building the `roc` binary, the CI imports the certificate into a
+When the signing steps are enabled in `roc-lang/nightlies`:
+
+1. After building the `roc` binary, CI imports the certificate into a
    temporary keychain
 2. The binary is signed with `codesign` using the Developer ID certificate and
    hardened runtime (`-o runtime`)
@@ -87,5 +113,8 @@ Access for the certificate's "Common Name".
 
 ## References
 
-- [Notarize a Command Line Tool with notarytool](https://scriptingosx.com/2021/07/notarize-a-command-line-tool-with-notarytool/)
-- [Apple Developer Documentation: Customizing the notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow)
+- [Apple Developer Program enrollment](https://developer.apple.com/help/account/membership/program-enrollment/)
+- [Apple Developer Program fee waivers](https://developer.apple.com/help/account/membership/fee-waivers)
+- [Developer ID certificates](https://developer.apple.com/help/account/certificates/create-developer-id-certificates/)
+- [App Store Connect API keys](https://developer.apple.com/help/app-store-connect/get-started/app-store-connect-api/)
+- [Customizing the notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow)
