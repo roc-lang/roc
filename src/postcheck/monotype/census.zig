@@ -422,13 +422,11 @@ pub const Census = struct {
     graph_exit_read_derived: Counter = Counter.init(0),
     // Why a read at a graph exit was not measured against directed translation.
     exit_read_no_contexted_provenance: Counter = Counter.init(0),
-    exit_read_context_differs: Counter = Counter.init(0),
-    // Whether a read declined for a differing binding context would have
-    // agreed anyway, which says if the guard costs real coverage.
-    declined_context_would_agree: Counter = Counter.init(0),
-    declined_context_would_diverge: Counter = Counter.init(0),
-    declined_context_unresolvable: Counter = Counter.init(0),
-    exit_read_module_differs: Counter = Counter.init(0),
+    // Measured even though the node was made under a different binding
+    // context than the read holds; refusing these suppressed coverage without
+    // protecting the comparison.
+    exit_read_context_differed_measured: Counter = Counter.init(0),
+    exit_read_module_differed_measured: Counter = Counter.init(0),
     exit_read_unreadable: Counter = Counter.init(0),
     // Of reads that DIVERGED, whether the node was made inside an edge-naming
     // request scope. This decides whether carrying the binding from that edge

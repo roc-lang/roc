@@ -14536,44 +14536,6 @@ const BodyContext = struct {
         return graph_ty;
     }
 
-    /// Debug/probe-only: whether a read declined for a differing binding
-    /// context would have agreed anyway. Counted apart from `seam_direct` so a
-    /// conservative guard is never mistaken for coverage.
-    fn measureDeclinedContextRead(
-        self: *BodyContext,
-        record: spec_rehearsal.ContextedProvenance,
-        graph_ty: Type.TypeId,
-    ) void {
-        if (comptime !census.enabled) return;
-        const instantiation = self.builder.rehearsal orelse return;
-        var binding: spec_rehearsal.Rehearsal.PositionBinding = .none;
-        const probed = instantiation.typeForCheckedPositionWithEdge(
-            record.address,
-            self.callee_context,
-            &binding,
-            record.request_edge,
-        ) catch null;
-        const direct_ty = probed orelse {
-            census.bump("declined_context_unresolvable");
-            return;
-        };
-        const types = &self.builder.program.types;
-        const name_store = &self.builder.program.names;
-        const left = types.typeDigest(name_store, direct_ty);
-        const right = types.typeDigest(name_store, graph_ty);
-        if (std.mem.eql(u8, &left.bytes, &right.bytes)) {
-            census.bump("declined_context_would_agree");
-            return;
-        }
-        const left_unfolded = types.unfoldedDigest(name_store, direct_ty);
-        const right_unfolded = types.unfoldedDigest(name_store, graph_ty);
-        if (std.mem.eql(u8, &left_unfolded.bytes, &right_unfolded.bytes)) {
-            census.bump("declined_context_would_agree");
-        } else {
-            census.bump("declined_context_would_diverge");
-        }
-    }
-
     /// Debug/probe-only: measure one read at a graph exit against directed
     /// translation, using the checked position the node was instantiated from
     /// (reunify.md 13.2 step 2a). A node built under a different binding
@@ -14586,27 +14548,76 @@ const BodyContext = struct {
             census.bump("exit_read_no_contexted_provenance");
             return;
         };
+        // A node made under a different binding context than this read holds is
+        // measured all the same. Refusing them cost 97.9% agreement on both
+        // corpora while hiding the rest, so the refusal protected nothing and
+        // suppressed coverage; a read whose directed answer differs is a
+        // divergence to explain, not one to decline (reunify.md 13.2 2a).
         if (record.callee_context != self.callee_context or
             record.scope_depth != @as(u32, @intCast(self.decl_scopes.items.len)))
         {
-            census.bump("exit_read_context_differs");
-            // The guard is conservative: a node made under a different binding
-            // context may still translate to the same type. Ask, without
-            // counting the answer as coverage, whether declining these costs
-            // anything (reunify.md 13.2 2a).
-            self.measureDeclinedContextRead(record, graph_ty);
-            return;
+            census.bump("exit_read_context_differed_measured");
         }
         if (!moduleBytesEqual(record.address.module_bytes, self.view.key.bytes)) {
-            census.bump("exit_read_module_differs");
-            return;
+            // The position belongs to another module's checked store. Its own
+            // address names it, so it is measured under that address rather
+            // than declined; only rebuilding the address from this context's
+            // view would have been wrong (reunify.md 13.2 2a).
+            census.bump("exit_read_module_differed_measured");
         }
-        self.measureSeamReadCorrelated(
-            @enumFromInt(record.address.type_id),
+        self.measureSeamReadAtAddress(
+            record.address,
             graph_ty,
             record.inside_request_edge,
             record.request_edge,
         );
+    }
+
+    /// Debug/probe-only: the seam comparison for a position named by its own
+    /// checked address rather than by one rebuilt from this body's view.
+    fn measureSeamReadAtAddress(
+        self: *BodyContext,
+        address: spec_rehearsal.CheckedAddress,
+        graph_ty: Type.TypeId,
+        inside_edge: ?bool,
+        entering_edge: ?spec_rehearsal.RequestEdgeName,
+    ) void {
+        if (comptime !census.enabled) return;
+        const instantiation = self.builder.rehearsal orelse return;
+        var binding: spec_rehearsal.Rehearsal.PositionBinding = .none;
+        const probed = instantiation.typeForCheckedPositionWithEdge(
+            address,
+            self.callee_context,
+            &binding,
+            entering_edge,
+        ) catch null;
+        const direct_ty = probed orelse {
+            census.bump("seam_direct_absent");
+            return;
+        };
+        const types = &self.builder.program.types;
+        const name_store = &self.builder.program.names;
+        const left = types.typeDigest(name_store, direct_ty);
+        const right = types.typeDigest(name_store, graph_ty);
+        if (std.mem.eql(u8, &left.bytes, &right.bytes)) {
+            census.bump("seam_direct");
+            return;
+        }
+        const left_unfolded = types.unfoldedDigest(name_store, direct_ty);
+        const right_unfolded = types.unfoldedDigest(name_store, graph_ty);
+        if (std.mem.eql(u8, &left_unfolded.bytes, &right_unfolded.bytes)) {
+            census.bump("seam_direct");
+            return;
+        }
+        census.bump("seam_direct_diverged");
+        if (inside_edge) |inside| {
+            if (inside) {
+                census.bump("diverged_node_inside_request_edge");
+            } else {
+                census.bump("diverged_node_outside_request_edge");
+            }
+        }
+        instantiation.noteDivergenceEdgeSite(address, self.callee_context, entering_edge);
     }
 
     /// Debug/probe-only: compare what directed translation computes for one
