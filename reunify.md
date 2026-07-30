@@ -2237,15 +2237,22 @@ census was re-sited onto it before the argument could be redone.
    from nodes rather than from checked ids. Widening it is the work, and
    it is known to be delicate — an earlier repointing produced 27 eval
    crashes — so each newly routed site is landed and verified on its own.
-   The seam-EQUIVALENT reads are already exhausted: extracting the seam's
-   comparison into `measureSeamRead` and routing
-   `resolvedCheckedTypeView` through it covers every remaining read that
-   already resolves a checked type to a Monotype, and it adds nothing on
-   snapshots because its two call sites are const-restore paths the corpus
-   does not reach. Coverage past that point is not a routing exercise:
-   body lowering reads types from NODES rather than from checked ids, so
-   extending the seam means making those reads name a checked position,
-   which changes what flows through lowering instead of only observing it.
+   Widening does not require rerouting a read, only knowing which checked
+   position it answers for. The comparison is extracted into
+   `measureSeamRead`, which returns nothing and feeds nothing back, so any
+   read whose checked position is already in scope can be measured with no
+   behavioural change at all. `lowerExprType` is the case in point: every
+   branch answers for the same `expr.ty`, and its call-result,
+   dispatch-result and lookup branches previously returned a Monotype the
+   seam never saw. Measuring it took snapshot coverage from 629 to **1248
+   reads with `seam_direct_diverged` and `seam_direct_absent` both still
+   zero** — 619 production reads newly checked, all agreeing. The reads
+   that genuinely resolve a checked type are separately exhausted
+   (`resolvedCheckedTypeView`'s two call sites are const-restore paths the
+   corpus does not reach), but that is a much smaller limit than it first
+   appeared. What remains costly is only the reads whose checked position
+   is NOT in scope, which is where naming one changes what flows through
+   lowering.
    The precondition is properly a statement about this seam: that every
    position production lowering reads, directed translation already
    computes. Stating it over constraint executions measures the machinery

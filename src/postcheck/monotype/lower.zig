@@ -16020,7 +16020,22 @@ const BodyContext = struct {
         };
     }
 
+    /// The Monotype this specialization gives one checked expression. Every
+    /// branch answers for the SAME checked position, `expr.ty`, so the read is
+    /// measured against it (reunify.md sections 9, 13 Slice 7) whichever branch
+    /// produced it — the measurement observes and returns nothing.
     fn lowerExprType(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!Type.TypeId {
+        const ty = try self.lowerExprTypeInner(expr_id);
+        switch (self.view.bodies.expr(expr_id).data) {
+            // A checked runtime error emits a crash and deliberately answers
+            // unit rather than its own checked type, so it is not this seam.
+            .runtime_error => {},
+            else => self.measureSeamRead(self.view.bodies.expr(expr_id).ty, ty),
+        }
+        return ty;
+    }
+
+    fn lowerExprTypeInner(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!Type.TypeId {
         const expr = self.view.bodies.expr(expr_id);
         return switch (expr.data) {
             // A checked runtime error emits a crash and never returns a value,
