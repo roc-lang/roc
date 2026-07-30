@@ -542,6 +542,16 @@ const EnvironmentLevel = struct {
 /// id each node finally sealed to. The join of the two is the position list the
 /// rehearsal compares against. Nodes are carried as raw indices so the graph
 /// owns its own id type.
+/// One node's checked position together with the binding context it was
+/// instantiated under.
+pub const ContextedProvenance = struct {
+    address: CheckedAddress,
+    callee_context: bool,
+    scope_depth: u32,
+};
+
+/// Debug/probe-only record of what each graph node stands for and how it
+/// sealed, so a read at a graph exit can name the checked position behind it.
 pub const SealTrace = struct {
     allocator: Allocator,
     provenance: std.AutoHashMapUnmanaged(u32, CheckedAddress),
@@ -552,6 +562,12 @@ pub const SealTrace = struct {
     /// what says whether a read of it could ever name one (reunify.md 13.2
     /// step 2a).
     from_checked: std.AutoHashMapUnmanaged(u32, void),
+    /// Every node instantiated from a checked position, with the binding
+    /// context it was created under. `provenance` covers only the root context,
+    /// because a nested scope binds the same checked id under a different
+    /// binding; recording the context lets a read decide whether the binding it
+    /// holds is the one the node was built under (reunify.md 13.2 step 2a).
+    contexted: std.AutoHashMapUnmanaged(u32, ContextedProvenance),
     sealed: std.AutoHashMapUnmanaged(u32, Type.TypeId),
     disabled: bool,
 
@@ -561,6 +577,7 @@ pub const SealTrace = struct {
             .allocator = allocator,
             .provenance = .empty,
             .from_checked = .empty,
+            .contexted = .empty,
             .sealed = .empty,
             .disabled = false,
         };
@@ -570,11 +587,27 @@ pub const SealTrace = struct {
     pub fn deinit(self: *SealTrace) void {
         self.provenance.deinit(self.allocator);
         self.from_checked.deinit(self.allocator);
+        self.contexted.deinit(self.allocator);
         self.sealed.deinit(self.allocator);
     }
 
     /// Record that `node` was instantiated from `address`. Repeats keep the
     /// first address: one node stands for one checked position.
+    /// Record `node`'s checked position and the context it was built under.
+    pub fn noteContexted(self: *SealTrace, node: u32, record: ContextedProvenance) void {
+        if (self.disabled) return;
+        const gop = self.contexted.getOrPut(self.allocator, node) catch {
+            self.disabled = true;
+            return;
+        };
+        if (!gop.found_existing) gop.value_ptr.* = record;
+    }
+
+    /// The recorded position and context for `node`, if any.
+    pub fn contextedFor(self: *const SealTrace, node: u32) ?ContextedProvenance {
+        return self.contexted.get(node);
+    }
+
     /// Record that `node` was instantiated from some checked position.
     pub fn noteFromChecked(self: *SealTrace, node: u32) void {
         if (self.disabled) return;

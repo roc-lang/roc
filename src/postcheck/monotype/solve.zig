@@ -1368,6 +1368,19 @@ pub const InstGraph = struct {
         return .{ .graph = self, .current = self.class_member_head.items[@intFromEnum(root)] };
     }
 
+    /// Debug/probe-only: the checked position and creation context recorded for
+    /// any node joined to this one, since unification means a read may be handed
+    /// any member of the class (reunify.md 13.2 step 2a).
+    pub fn classContexted(self: *InstGraph, node: NodeId) ?spec_rehearsal.ContextedProvenance {
+        const trace = self.trace orelse return null;
+        if (trace.contextedFor(@intFromEnum(node))) |record| return record;
+        var it = self.classMemberIterator(node);
+        while (it.next()) |member| {
+            if (trace.contextedFor(@intFromEnum(member))) |record| return record;
+        }
+        return null;
+    }
+
     /// Debug/probe-only: whether any node joined to this one stands for a
     /// checked position. Unification means a read can land on any member of a
     /// class, so asking only the node handed over understates how many reads

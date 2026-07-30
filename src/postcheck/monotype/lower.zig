@@ -12262,15 +12262,17 @@ const BodyContext = struct {
         // a Monotype from the graph (reunify.md 13.2 step 2a). Counting them is
         // what makes seam coverage a fraction rather than a direction.
         census.bump("graph_exit_active_type_view");
+        const graph_ty = try self.graph.activeTypeViewForNode(node);
         if (comptime census.enabled) {
             if (self.graph.classNamesChecked(node)) {
                 census.bump("graph_exit_read_names_checked");
+                self.measureExitRead(node, graph_ty);
             } else {
                 census.bump("graph_exit_read_derived");
                 self.graph.noteDerivedReadKind(node);
             }
         }
-        return try self.graph.activeTypeViewForNode(node);
+        return graph_ty;
     }
 
     fn activeTypeFromCell(self: *BodyContext, cell: DraftTypeCell) Allocator.Error!Type.TypeId {
@@ -14534,6 +14536,31 @@ const BodyContext = struct {
         return graph_ty;
     }
 
+    /// Debug/probe-only: measure one read at a graph exit against directed
+    /// translation, using the checked position the node was instantiated from
+    /// (reunify.md 13.2 step 2a). A node built under a different binding
+    /// context than the one this read holds is counted rather than translated,
+    /// because translating it under the wrong environment would compare against
+    /// a value the checker never assigned there.
+    fn measureExitRead(self: *BodyContext, node: NodeId, graph_ty: Type.TypeId) void {
+        if (comptime !census.enabled) return;
+        const record = self.graph.classContexted(node) orelse {
+            census.bump("exit_read_no_contexted_provenance");
+            return;
+        };
+        if (record.callee_context != self.callee_context or
+            record.scope_depth != @as(u32, @intCast(self.decl_scopes.items.len)))
+        {
+            census.bump("exit_read_context_differs");
+            return;
+        }
+        if (!moduleBytesEqual(record.address.module_bytes, self.view.key.bytes)) {
+            census.bump("exit_read_module_differs");
+            return;
+        }
+        self.measureSeamRead(@enumFromInt(record.address.type_id), graph_ty);
+    }
+
     /// Debug/probe-only: compare what directed translation computes for one
     /// checked position against what this specialization's graph gives it, for
     /// every read that resolves a checked type to a Monotype (reunify.md
@@ -14623,7 +14650,14 @@ const BodyContext = struct {
         // instantiation scope or a per-call context binds the same checked id
         // under a different binding, which this specialization's environment
         // does not describe.
-        if (self.graph.trace) |trace| trace.noteFromChecked(@intFromEnum(placeholder));
+        if (self.graph.trace) |trace| {
+            trace.noteFromChecked(@intFromEnum(placeholder));
+            trace.noteContexted(@intFromEnum(placeholder), .{
+                .address = .{ .module_bytes = address.module_bytes, .type_id = address.type_id },
+                .callee_context = self.callee_context,
+                .scope_depth = @intCast(self.decl_scopes.items.len),
+            });
+        }
         if (self.spec_root_context and self.decl_scopes.items.len == 0) {
             if (self.graph.trace) |trace| trace.noteProvenance(@intFromEnum(placeholder), .{
                 .module_bytes = address.module_bytes,
@@ -14636,7 +14670,14 @@ const BodyContext = struct {
         // scope memoizes and the content it unifies with. A read can land on
         // either representative, so marking only one understates how many
         // reads name a checked position (reunify.md 13.2 step 2a).
-        if (self.graph.trace) |trace| trace.noteFromChecked(@intFromEnum(built));
+        if (self.graph.trace) |trace| {
+            trace.noteFromChecked(@intFromEnum(built));
+            trace.noteContexted(@intFromEnum(built), .{
+                .address = .{ .module_bytes = address.module_bytes, .type_id = address.type_id },
+                .callee_context = self.callee_context,
+                .scope_depth = @intCast(self.decl_scopes.items.len),
+            });
+        }
         self.noteUnifyConstruction(.inst_node_placeholder_to_content);
         try self.graph.unify(placeholder, built);
         return placeholder;

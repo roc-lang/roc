@@ -420,6 +420,11 @@ pub const Census = struct {
     // names none, so no per-position measurement can ever cover it.
     graph_exit_read_names_checked: Counter = Counter.init(0),
     graph_exit_read_derived: Counter = Counter.init(0),
+    // Why a read at a graph exit was not measured against directed translation.
+    exit_read_no_contexted_provenance: Counter = Counter.init(0),
+    exit_read_context_differs: Counter = Counter.init(0),
+    exit_read_module_differs: Counter = Counter.init(0),
+    exit_read_unreadable: Counter = Counter.init(0),
     // What a read naming no checked position is, by node shape.
     derived_read_redirect: Counter = Counter.init(0),
     derived_read_unresolved: Counter = Counter.init(0),
