@@ -2237,6 +2237,15 @@ census was re-sited onto it before the argument could be redone.
    from nodes rather than from checked ids. Widening it is the work, and
    it is known to be delicate — an earlier repointing produced 27 eval
    crashes — so each newly routed site is landed and verified on its own.
+   The seam-EQUIVALENT reads are already exhausted: extracting the seam's
+   comparison into `measureSeamRead` and routing
+   `resolvedCheckedTypeView` through it covers every remaining read that
+   already resolves a checked type to a Monotype, and it adds nothing on
+   snapshots because its two call sites are const-restore paths the corpus
+   does not reach. Coverage past that point is not a routing exercise:
+   body lowering reads types from NODES rather than from checked ids, so
+   extending the seam means making those reads name a checked position,
+   which changes what flows through lowering instead of only observing it.
    The precondition is properly a statement about this seam: that every
    position production lowering reads, directed translation already
    computes. Stating it over constraint executions measures the machinery

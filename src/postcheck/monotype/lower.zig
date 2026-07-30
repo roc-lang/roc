@@ -14505,7 +14505,9 @@ const BodyContext = struct {
     }
 
     fn resolvedCheckedTypeView(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
-        return try self.resolvedTypeViewForNode(try self.lowerTypeNode(checked_ty));
+        const graph_ty = try self.resolvedTypeViewForNode(try self.lowerTypeNode(checked_ty));
+        self.measureSeamRead(checked_ty, graph_ty);
+        return graph_ty;
     }
 
     /// The Monotype this specialization gives a checked type: the single seam
@@ -14516,6 +14518,15 @@ const BodyContext = struct {
     /// hand back the type at that position.
     fn typeForChecked(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
         const graph_ty = try self.activeTypeFromNode(try self.instNode(checked_ty));
+        self.measureSeamRead(checked_ty, graph_ty);
+        return graph_ty;
+    }
+
+    /// Debug/probe-only: compare what directed translation computes for one
+    /// checked position against what this specialization's graph gives it, for
+    /// every read that resolves a checked type to a Monotype (reunify.md
+    /// sections 9, 13 Slice 7). Reads nothing back into lowering.
+    fn measureSeamRead(self: *BodyContext, checked_ty: checked.CheckedTypeId, graph_ty: Type.TypeId) void {
         if (comptime census.enabled) {
             if (self.builder.rehearsal) |instantiation| {
                 const address: spec_rehearsal.CheckedAddress = .{
@@ -14523,7 +14534,8 @@ const BodyContext = struct {
                     .type_id = @intFromEnum(checked_ty),
                 };
                 var binding: spec_rehearsal.Rehearsal.PositionBinding = .none;
-                if (try instantiation.typeForCheckedPosition(address, self.callee_context, &binding)) |direct_ty| {
+                const probed = instantiation.typeForCheckedPosition(address, self.callee_context, &binding) catch null;
+                if (probed) |direct_ty| {
                     const types = &self.builder.program.types;
                     const name_store = &self.builder.program.names;
                     const left = types.typeDigest(name_store, direct_ty);
@@ -14545,7 +14557,6 @@ const BodyContext = struct {
                 }
             }
         }
-        return graph_ty;
     }
 
     fn graphFunctionNode(
