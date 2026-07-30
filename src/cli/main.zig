@@ -6004,7 +6004,7 @@ fn lowerLirWithBuildEnv(
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(relation_artifacts);
 
-    if (reporter) |r| r.begin("Specialization");
+    if (reporter) |r| r.begin(post_check_lowering_phase_name);
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
     var lowered = try lowerCheckedSourceToLir(
         lir_allocator,
@@ -6019,7 +6019,7 @@ fn lowerLirWithBuildEnv(
         &spec_timing,
     );
     errdefer lowered.deinit();
-    if (reporter) |r| r.endWithBreakdownSequential(&specializationBreakdown(spec_timing.snapshot()));
+    if (reporter) |r| r.endWithBreakdownSequential(&postCheckLoweringBreakdown(spec_timing.snapshot()));
 
     const internal_static_data: ?[]backend.StaticDataExport = switch (artifact) {
         .lir_image => null,
@@ -8881,7 +8881,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
 
     const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
 
-    reporter.begin("Specialization");
+    reporter.begin(post_check_lowering_phase_name);
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
     var lowered = try lowerCheckedSourceToLir(
         ctx.gpa,
@@ -8896,7 +8896,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         &spec_timing,
     );
     defer lowered.deinit();
-    reporter.endWithBreakdownSequential(&specializationBreakdown(spec_timing.snapshot()));
+    reporter.endWithBreakdownSequential(&postCheckLoweringBreakdown(spec_timing.snapshot()));
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
@@ -9195,7 +9195,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
 
     const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
 
-    reporter.begin("Specialization");
+    reporter.begin(post_check_lowering_phase_name);
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
     var lowered = try lowerCheckedSourceToLir(
         ctx.gpa,
@@ -9210,7 +9210,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         &spec_timing,
     );
     defer lowered.deinit();
-    reporter.endWithBreakdownSequential(&specializationBreakdown(spec_timing.snapshot()));
+    reporter.endWithBreakdownSequential(&postCheckLoweringBreakdown(spec_timing.snapshot()));
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
@@ -9518,7 +9518,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     const shm_allocator = shm.allocator();
     const image_header = try shm_allocator.create(lir.LirImage.Header);
 
-    reporter.begin("Specialization");
+    reporter.begin(post_check_lowering_phase_name);
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
     var lowered = try lowerCheckedSourceToLir(
         ctx.gpa,
@@ -9533,7 +9533,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         &spec_timing,
     );
     defer lowered.deinit();
-    reporter.endWithBreakdownSequential(&specializationBreakdown(spec_timing.snapshot()));
+    reporter.endWithBreakdownSequential(&postCheckLoweringBreakdown(spec_timing.snapshot()));
 
     reporter.begin("LIR Image Generation");
     const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
@@ -13880,7 +13880,7 @@ fn frontEndBreakdown(timing: anytype) [3]progress.SubTiming {
 
 fn compileTimeEvaluationBreakdown(timing: anytype) [8]progress.SubTiming {
     return .{
-        .{ .name = "Specialization", .ns = timing.monotype_ns },
+        .{ .name = "Monotype Lowering", .ns = timing.monotype_ns },
         .{ .name = "LIR Generation", .ns = timing.postcheck_to_lir_ns },
         .{ .name = "LIR Passes", .ns = timing.lir_passes_ns },
         .{ .name = "ARC", .ns = timing.arc_ns },
@@ -13891,16 +13891,71 @@ fn compileTimeEvaluationBreakdown(timing: anytype) [8]progress.SubTiming {
     };
 }
 
-fn specializationBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [7]progress.SubTiming {
+const post_check_lowering_phase_name = "Post-Check Lowering";
+
+fn postCheckLoweringBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [18]progress.SubTiming {
     return .{
-        .{ .name = "Specialization", .ns = timing.monotype_ns },
-        .{ .name = "Lifting", .ns = timing.lift_ns },
+        .{ .name = "Monotype Setup", .ns = timing.monotype_setup_ns },
+        .{ .name = "Root + Wrapper Setup", .ns = timing.monotype_procedure_root_wrapper_ns },
+        .{ .name = "Specialization Lookup + Reservation", .ns = timing.monotype_procedure_lookup_reservation_ns },
+        .{ .name = "Dispatch Evidence", .ns = timing.monotype_procedure_dispatch_evidence_ns },
+        .{ .name = "Body Graph Setup", .ns = timing.monotype_procedure_body_graph_setup_ns },
+        .{ .name = "Procedure Body Construction", .ns = timing.monotype_procedure_body_lowering_ns },
+        .{ .name = "Body Sealing + Commit", .ns = timing.monotype_procedure_body_finalization_ns },
+        .{ .name = "Procedure Completion", .ns = timing.monotype_procedure_completion_ns },
+        .{ .name = "Layout Requests", .ns = timing.monotype_layout_requests_ns },
+        .{ .name = "Static Data Requests", .ns = timing.monotype_static_data_requests_ns },
+        .{ .name = "Monotype Finalization", .ns = timing.monotype_finalization_ns },
+        .{ .name = "Closure Lifting", .ns = timing.lift_ns },
         .{ .name = "SpecConstr", .ns = timing.spec_constr_ns },
-        .{ .name = "Lambda Sets", .ns = timing.lambda_solve_ns },
+        .{ .name = "Lambda-Set Solving", .ns = timing.lambda_solve_ns },
+        .{ .name = "Inline Planning", .ns = timing.inline_plan_ns },
         .{ .name = "LIR Generation", .ns = timing.lir_gen_ns },
         .{ .name = "LIR Passes", .ns = timing.lir_passes_ns },
         .{ .name = "ARC", .ns = timing.arc_ns },
     };
+}
+
+test "post-check timing names distinct work and keep inlining separate from SpecConstr" {
+    const rows = postCheckLoweringBreakdown(.{
+        .monotype_setup_ns = 1,
+        .monotype_procedure_specialization_ns = 35,
+        .monotype_procedure_root_wrapper_ns = 2,
+        .monotype_procedure_lookup_reservation_ns = 3,
+        .monotype_procedure_dispatch_evidence_ns = 4,
+        .monotype_procedure_body_graph_setup_ns = 5,
+        .monotype_procedure_body_lowering_ns = 6,
+        .monotype_procedure_body_finalization_ns = 7,
+        .monotype_procedure_completion_ns = 8,
+        .monotype_layout_requests_ns = 9,
+        .monotype_static_data_requests_ns = 10,
+        .monotype_finalization_ns = 11,
+        .lift_ns = 12,
+        .spec_constr_ns = 13,
+        .lambda_solve_ns = 14,
+        .inline_plan_ns = 15,
+        .lir_gen_ns = 16,
+        .lir_passes_ns = 17,
+        .arc_ns = 18,
+    });
+
+    try std.testing.expectEqualStrings("Root + Wrapper Setup", rows[1].name);
+    try std.testing.expectEqualStrings("Specialization Lookup + Reservation", rows[2].name);
+    try std.testing.expectEqualStrings("Dispatch Evidence", rows[3].name);
+    try std.testing.expectEqualStrings("Body Graph Setup", rows[4].name);
+    try std.testing.expectEqualStrings("Procedure Body Construction", rows[5].name);
+    try std.testing.expectEqualStrings("Body Sealing + Commit", rows[6].name);
+    try std.testing.expectEqualStrings("Procedure Completion", rows[7].name);
+    for (rows[1..8], 2..) |row, expected_ns| {
+        try std.testing.expectEqual(@as(u64, @intCast(expected_ns)), row.ns);
+    }
+    try std.testing.expectEqualStrings("SpecConstr", rows[12].name);
+    try std.testing.expectEqualStrings("Inline Planning", rows[14].name);
+    try std.testing.expectEqual(@as(u64, 13), rows[12].ns);
+    try std.testing.expectEqual(@as(u64, 15), rows[14].ns);
+    for (rows) |row| {
+        try std.testing.expect(!std.mem.eql(u8, post_check_lowering_phase_name, row.name));
+    }
 }
 
 fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {

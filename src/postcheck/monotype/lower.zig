@@ -120,6 +120,146 @@ pub const Options = struct {
     /// ConstStore shape may require runtime storage.
     static_data_literals: bool = false,
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
+    /// Optional phase timings for the work owned by Monotype lowering.
+    timing: ?*Timing = null,
+};
+
+/// Timings for the sequential phases owned by Monotype lowering.
+pub const Timing = struct {
+    std_io: std.Io,
+    setup_ns: u64 = 0,
+    procedure_specialization_ns: u64 = 0,
+    procedure_root_wrapper_ns: u64 = 0,
+    procedure_lookup_reservation_ns: u64 = 0,
+    procedure_dispatch_evidence_ns: u64 = 0,
+    procedure_body_graph_setup_ns: u64 = 0,
+    procedure_body_lowering_ns: u64 = 0,
+    procedure_body_finalization_ns: u64 = 0,
+    procedure_completion_ns: u64 = 0,
+    layout_requests_ns: u64 = 0,
+    static_data_requests_ns: u64 = 0,
+    finalization_ns: u64 = 0,
+    active_procedure_phase: ?ProcedureTimingPhase = null,
+    active_procedure_phase_started_ns: i64 = 0,
+
+    pub fn init(std_io: std.Io) Timing {
+        return .{ .std_io = std_io };
+    }
+
+    pub fn snapshot(self: *const Timing) TimingSnapshot {
+        return .{
+            .setup_ns = self.setup_ns,
+            .procedure_specialization_ns = self.procedure_specialization_ns,
+            .procedure_root_wrapper_ns = self.procedure_root_wrapper_ns,
+            .procedure_lookup_reservation_ns = self.procedure_lookup_reservation_ns,
+            .procedure_dispatch_evidence_ns = self.procedure_dispatch_evidence_ns,
+            .procedure_body_graph_setup_ns = self.procedure_body_graph_setup_ns,
+            .procedure_body_lowering_ns = self.procedure_body_lowering_ns,
+            .procedure_body_finalization_ns = self.procedure_body_finalization_ns,
+            .procedure_completion_ns = self.procedure_completion_ns,
+            .layout_requests_ns = self.layout_requests_ns,
+            .static_data_requests_ns = self.static_data_requests_ns,
+            .finalization_ns = self.finalization_ns,
+        };
+    }
+
+    fn start(self: *const Timing) i64 {
+        return @intCast(@max(0, std.Io.Timestamp.now(self.std_io, .awake).nanoseconds));
+    }
+
+    fn finish(self: *Timing, started_ns: i64, phase: TimingPhase) void {
+        const finished_ns: i64 = @intCast(@max(0, std.Io.Timestamp.now(self.std_io, .awake).nanoseconds));
+        const elapsed_ns: u64 = @intCast(@max(0, finished_ns - started_ns));
+        switch (phase) {
+            .setup => self.setup_ns +%= elapsed_ns,
+            .procedure_specialization => self.procedure_specialization_ns +%= elapsed_ns,
+            .layout_requests => self.layout_requests_ns +%= elapsed_ns,
+            .static_data_requests => self.static_data_requests_ns +%= elapsed_ns,
+            .finalization => self.finalization_ns +%= elapsed_ns,
+        }
+    }
+
+    fn startProcedureBreakdown(self: *Timing) void {
+        if (self.active_procedure_phase != null) Common.invariant("Monotype procedure timing started twice");
+        self.active_procedure_phase = .root_wrapper;
+        self.active_procedure_phase_started_ns = self.start();
+    }
+
+    fn finishProcedureBreakdown(self: *Timing) void {
+        self.switchProcedurePhase(null);
+    }
+
+    fn switchProcedurePhase(self: *Timing, next: ?ProcedureTimingPhase) void {
+        const current = self.active_procedure_phase orelse {
+            if (next != null) Common.invariant("Monotype procedure subphase started outside procedure lowering");
+            return;
+        };
+        const now = self.start();
+        const elapsed_ns: u64 = @intCast(@max(0, now - self.active_procedure_phase_started_ns));
+        switch (current) {
+            .root_wrapper => self.procedure_root_wrapper_ns +%= elapsed_ns,
+            .lookup_reservation => self.procedure_lookup_reservation_ns +%= elapsed_ns,
+            .dispatch_evidence => self.procedure_dispatch_evidence_ns +%= elapsed_ns,
+            .body_graph_setup => self.procedure_body_graph_setup_ns +%= elapsed_ns,
+            .body_lowering => self.procedure_body_lowering_ns +%= elapsed_ns,
+            .body_finalization => self.procedure_body_finalization_ns +%= elapsed_ns,
+            .completion => self.procedure_completion_ns +%= elapsed_ns,
+        }
+        self.active_procedure_phase = next;
+        self.active_procedure_phase_started_ns = now;
+    }
+};
+
+/// Immutable Monotype phase timings consumed by checked-pipeline reporting.
+pub const TimingSnapshot = struct {
+    setup_ns: u64 = 0,
+    procedure_specialization_ns: u64 = 0,
+    procedure_root_wrapper_ns: u64 = 0,
+    procedure_lookup_reservation_ns: u64 = 0,
+    procedure_dispatch_evidence_ns: u64 = 0,
+    procedure_body_graph_setup_ns: u64 = 0,
+    procedure_body_lowering_ns: u64 = 0,
+    procedure_body_finalization_ns: u64 = 0,
+    procedure_completion_ns: u64 = 0,
+    layout_requests_ns: u64 = 0,
+    static_data_requests_ns: u64 = 0,
+    finalization_ns: u64 = 0,
+};
+
+const TimingPhase = enum {
+    setup,
+    procedure_specialization,
+    layout_requests,
+    static_data_requests,
+    finalization,
+};
+
+const ProcedureTimingPhase = enum {
+    root_wrapper,
+    lookup_reservation,
+    dispatch_evidence,
+    body_graph_setup,
+    body_lowering,
+    body_finalization,
+    completion,
+};
+
+const ProcedureTimingScope = struct {
+    timing: ?*Timing = null,
+    previous: ProcedureTimingPhase = undefined,
+
+    fn begin(timing: ?*Timing, phase: ProcedureTimingPhase) ProcedureTimingScope {
+        const active = timing orelse return .{};
+        const previous = active.active_procedure_phase orelse return .{};
+        active.switchProcedurePhase(phase);
+        return .{ .timing = active, .previous = previous };
+    }
+
+    fn end(self: *ProcedureTimingScope) void {
+        const timing = self.timing orelse return;
+        timing.switchProcedurePhase(self.previous);
+        self.timing = null;
+    }
 };
 
 /// Deterministic counters used by specialization-shape tests.
@@ -136,6 +276,7 @@ pub fn run(
         Common.invariant("Monotype lowering requires explicit roots, layout requests, or static data requests");
     }
 
+    const setup_started_ns = if (options.timing) |timing| timing.start() else 0;
     var program = Ast.Program.init(allocator);
     errdefer program.deinit();
 
@@ -143,17 +284,29 @@ pub fn run(
     defer builder.deinit();
     try builder.initHostedCatalog();
     try builder.loadCandidateSpecializationShards();
+    if (options.timing) |timing| timing.finish(setup_started_ns, .setup);
 
+    const procedures_started_ns = if (options.timing) |timing| timing.start() else 0;
+    if (options.timing) |timing| timing.startProcedureBreakdown();
     for (roots.requests) |request| {
         try builder.lowerRoot(request);
     }
+    if (options.timing) |timing| timing.finishProcedureBreakdown();
+    if (options.timing) |timing| timing.finish(procedures_started_ns, .procedure_specialization);
+
+    const layouts_started_ns = if (options.timing) |timing| timing.start() else 0;
     for (roots.layout_requests) |checked_ty| {
         try builder.lowerLayoutRequest(checked_ty);
     }
+    if (options.timing) |timing| timing.finish(layouts_started_ns, .layout_requests);
+
+    const static_data_started_ns = if (options.timing) |timing| timing.start() else 0;
     for (roots.static_data_requests) |request| {
         try builder.lowerStaticDataRequest(request);
     }
+    if (options.timing) |timing| timing.finish(static_data_started_ns, .static_data_requests);
 
+    const finalization_started_ns = if (options.timing) |timing| timing.start() else 0;
     program.next_symbol = builder.symbols.next;
     try program.sealRemainingCaptureIdentities();
     program.freeze();
@@ -165,6 +318,7 @@ pub fn run(
         builder.spec_store.validateLookupIntegrity();
         verifyMonotypeSpecsReady(&program);
     }
+    if (options.timing) |timing| timing.finish(finalization_started_ns, .finalization);
 
     return program;
 }
@@ -1516,6 +1670,7 @@ const Builder = struct {
     inline_expects: InlineExpectMode,
     static_data_literals: bool,
     target_usize: base.target.TargetUsize,
+    timing: ?*Timing,
     symbols: Common.SymbolGen = .{},
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
     spec_store: specialize.SpecBuilder,
@@ -1589,6 +1744,7 @@ const Builder = struct {
             .inline_expects = options.inline_expects,
             .static_data_literals = options.static_data_literals,
             .target_usize = options.target_usize,
+            .timing = options.timing,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
             .spec_store = spec_store,
             .lowered_templates = std.AutoHashMap(Ast.FnId, LoweredTemplate).init(allocator),
@@ -2067,6 +2223,8 @@ const Builder = struct {
     ) Allocator.Error!Ast.DefId {
         const view = moduleView(self.root_view);
         const template_ref = self.templateRefForProcedureUse(procedure);
+        var graph_setup_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
+        defer graph_setup_timing_scope.end();
         const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
         defer graph.destroy();
         const saved_graph = self.active_graph;
@@ -2093,19 +2251,26 @@ const Builder = struct {
             args[index] = .{ .local = local, .ty = arg_cell };
             arg_exprs[index] = try ctx.addExprWithTypeCell(arg_cell, .{ .local = local });
         }
+        graph_setup_timing_scope.end();
 
         const draft = FinalBodyOutputGuard.begin(self);
-        const callee = try ctx.draftFnSlotForProcedureUseAtNode(
-            procedure,
-            request.checked_type,
-            procedure.source_fn_ty_template,
-            root_node,
-            &.{},
-            request.root_evidence,
-        );
-        const callee_fn_node = try ctx.draftFnSlotTypeNode(callee, root_node);
-        try relateFunctionRequestInterface(graph, root_node, callee_fn_node);
-        const completed_fn = try graph.functionNodes(root_node);
+        const callee, const completed_fn = blk: {
+            var dispatch_timing_scope = ProcedureTimingScope.begin(self.timing, .dispatch_evidence);
+            defer dispatch_timing_scope.end();
+            const selected = try ctx.draftFnSlotForProcedureUseAtNode(
+                procedure,
+                request.checked_type,
+                procedure.source_fn_ty_template,
+                root_node,
+                &.{},
+                request.root_evidence,
+            );
+            const callee_fn_node = try ctx.draftFnSlotTypeNode(selected, root_node);
+            try relateFunctionRequestInterface(graph, root_node, callee_fn_node);
+            break :blk .{ selected, try graph.functionNodes(root_node) };
+        };
+        var body_timing_scope = ProcedureTimingScope.begin(self.timing, .body_lowering);
+        defer body_timing_scope.end();
         const ret_cell = DraftTypeCell.fromGraphNode(completed_fn.ret);
         const body = try ctx.addExprWithTypeCell(ret_cell, .{
             .call_proc = .{
@@ -2122,6 +2287,7 @@ const Builder = struct {
             .body = .{ .roc = body },
             .ret = ret_cell,
         });
+        body_timing_scope.end();
         const draft_end = draft.end(self);
         const sealed = try self.sealActiveBodyDraft(
             graph,
@@ -2134,6 +2300,8 @@ const Builder = struct {
             null,
         );
         defer sealed.deinit(self.allocator);
+        var completion_timing_scope = ProcedureTimingScope.begin(self.timing, .completion);
+        defer completion_timing_scope.end();
         return sealed.root_def orelse Common.invariant("procedure use root did not commit its wrapper definition");
     }
 
@@ -2255,6 +2423,8 @@ const Builder = struct {
         const wrapper = view.entry_wrappers.lookupByRoot(template.root) orelse
             Common.invariant("callable eval template root had no checked entry wrapper");
 
+        var graph_setup_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
+        defer graph_setup_timing_scope.end();
         const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
         defer graph.destroy();
         const saved_graph = self.active_graph;
@@ -2267,17 +2437,23 @@ const Builder = struct {
         defer body_draft.deinit();
         var body_ctx = try BodyContext.init(self.allocator, self, view, wrapper.template, graph, &body_draft);
         defer body_ctx.deinit();
+        graph_setup_timing_scope.end();
 
         const draft = FinalBodyOutputGuard.begin(self);
+        var body_timing_scope = ProcedureTimingScope.begin(self.timing, .body_lowering);
+        defer body_timing_scope.end();
         const lowered = try body_ctx.lowerPendingCallableEvalBindingValue(
             view,
             template,
             root,
             mono_fn_ty,
         );
+        body_timing_scope.end();
         const draft_end = draft.end(self);
         const sealed = try self.sealActiveBodyDraft(graph, &body_draft, draft, draft_end, null, null, null, null);
         defer sealed.deinit(self.allocator);
+        var completion_timing_scope = ProcedureTimingScope.begin(self.timing, .completion);
+        defer completion_timing_scope.end();
         return sealed.ids.expr(lowered);
     }
 
@@ -2297,10 +2473,11 @@ const Builder = struct {
             source_ty_view.types.rootKey(source_fn_ty),
             fn_ty,
         );
-        const evidence = if (root_evidence) |evidence_ref|
-            try self.materializeRootProcedureEvidence(fn_template, evidence_ref)
-        else
-            &.{};
+        const evidence = if (root_evidence) |evidence_ref| blk: {
+            var timing_scope = ProcedureTimingScope.begin(self.timing, .dispatch_evidence);
+            defer timing_scope.end();
+            break :blk try self.materializeRootProcedureEvidence(fn_template, evidence_ref);
+        } else &.{};
         return try self.lowerTemplateWithMono(
             template_ref,
             view,
@@ -2410,6 +2587,9 @@ const Builder = struct {
         template: checked.CheckedProcedureTemplate,
         partial: []const SpecEvidence,
     ) Allocator.Error![]const SpecEvidence {
+        var timing_scope = ProcedureTimingScope.begin(self.timing, .dispatch_evidence);
+        defer timing_scope.end();
+
         const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
         defer graph.destroy();
         var draft = BodyDraftStore.init(self.allocator);
@@ -2434,6 +2614,9 @@ const Builder = struct {
         precomputed_request_digest: ?names.TypeDigest,
         retained_topology: ?EvidenceChain,
     ) Allocator.Error!Ast.DefId {
+        var lookup_timing_scope = ProcedureTimingScope.begin(self.timing, .lookup_reservation);
+        defer lookup_timing_scope.end();
+
         if (request_accounting == .count) self.count("template_requests");
         const lower_fn_ty = fn_ty;
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
@@ -2538,6 +2721,9 @@ const Builder = struct {
 
         switch (template.target) {
             .hosted => {
+                var completion_timing_scope = ProcedureTimingScope.begin(self.timing, .completion);
+                defer completion_timing_scope.end();
+
                 // The host is compiled against the declared hosted signature,
                 // so that exact type is the only one the extern boundary may
                 // use. A use site can still widen a (closed) tag-union row in
@@ -2624,6 +2810,8 @@ const Builder = struct {
             => {},
         }
 
+        var graph_setup_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
+        defer graph_setup_timing_scope.end();
         const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
         defer graph.destroy();
         const saved_graph = self.active_graph;
@@ -2654,24 +2842,33 @@ const Builder = struct {
         };
         const root_owner = try body_draft.enterOwner(.{ .reserved_fn = reservation.fn_id });
         defer root_owner.leave();
+        graph_setup_timing_scope.end();
 
         // The durable request remains an immutable snapshot. The body keeps
         // the related request node until the draft's single final seal creates
         // the solved function type.
-        try body_ctx.instantiateTemplateDispatchRelations(template, null);
+        {
+            var dispatch_timing_scope = ProcedureTimingScope.begin(self.timing, .dispatch_evidence);
+            defer dispatch_timing_scope.end();
+            try body_ctx.instantiateTemplateDispatchRelations(template, null);
+        }
         const draft = FinalBodyOutputGuard.begin(self);
         body_ctx.owner_context_fn_key = source_fn_key;
         body_ctx.current_fn_key = source_fn_key;
         const lowered = try body_ctx.lowerTemplateBodyAtNode(template_ref, template, root_node);
-        const sealed_root_node = switch (signature_relation) {
-            .exact_graph => root_node,
-            .independent_roots => try body_ctx.completedFunctionNodeForLoweredRet(
-                root_node,
-                lowered.ret,
-                body_ctx.exprCarriesFunctionDefinitionEvidence(lowered.body),
-            ),
+        const sealed_root_node, const draft_end = blk: {
+            var relations_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
+            defer relations_timing_scope.end();
+            const completed_root = switch (signature_relation) {
+                .exact_graph => root_node,
+                .independent_roots => try body_ctx.completedFunctionNodeForLoweredRet(
+                    root_node,
+                    lowered.ret,
+                    body_ctx.exprCarriesFunctionDefinitionEvidence(lowered.body),
+                ),
+            };
+            break :blk .{ completed_root, draft.end(self) };
         };
-        const draft_end = draft.end(self);
         const sealed = try self.sealActiveBodyDraft(
             graph,
             body_draft,
@@ -2683,6 +2880,8 @@ const Builder = struct {
             null,
         );
         defer sealed.deinit(self.allocator);
+        var completion_timing_scope = ProcedureTimingScope.begin(self.timing, .completion);
+        defer completion_timing_scope.end();
         const body_ids = sealed.ids;
         const final_fn_ty = sealed.root_ty.?;
         // The definition records the body's solved view of the root type.
@@ -5919,6 +6118,9 @@ const Builder = struct {
         root_def: ?DraftDefId,
         root_fn: ?DraftFnId,
     ) Allocator.Error!ActiveBodyDraftSeal {
+        var timing_scope = ProcedureTimingScope.begin(self.timing, .body_finalization);
+        defer timing_scope.end();
+
         final_guard.assertNoFinalBodyOutput(final_end);
         if (body_draft.active_callable_eval_bindings.items.len != 0) {
             Common.invariant("unfinished callable eval binding reached Monotype body sealing");
@@ -14370,6 +14572,9 @@ const BodyContext = struct {
         template: checked.CheckedProcedureTemplate,
         fn_node: NodeId,
     ) Allocator.Error!LoweredTemplateBody {
+        var timing_scope = ProcedureTimingScope.begin(self.builder.timing, .body_lowering);
+        defer timing_scope.end();
+
         if (!names.procedureTemplateRefEql(self.owner_template, template_ref)) {
             Common.invariant("Monotype body context owner did not match lowered checked template");
         }

@@ -5869,7 +5869,6 @@ test "spec constr keeps a same-binder scalar distinct from a substituted aggrega
     defer lifted.deinit();
 
     try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted);
-    try postcheck.MonotypeLifted.Lift.recomputeCaptures(allocator, &lifted);
 
     // The input program has no tuple nested directly inside another tuple, so a
     // nested tuple after specialization means the substituted aggregate leaked
