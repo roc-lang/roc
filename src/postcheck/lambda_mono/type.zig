@@ -210,8 +210,16 @@ pub const Store = struct {
         return self.spans.borrowSpan(span_.start, span_.len);
     }
 
+    pub fn typeAt(self: *const Store, span_: Span, index: usize) TypeId {
+        return GuardedList.at(self.span(span_), index);
+    }
+
     pub fn fieldSpan(self: *const Store, span_: Span) StoreSpanBorrow(Field, "fields") {
         return self.fields.borrowSpan(span_.start, span_.len);
+    }
+
+    pub fn fieldAt(self: *const Store, span_: Span, index: usize) Field {
+        return GuardedList.at(self.fieldSpan(span_), index);
     }
 
     pub fn captureFieldSpan(self: *const Store, span_: Span) StoreSpanBorrow(CaptureField, "capture_fields") {
@@ -220,6 +228,10 @@ pub const Store = struct {
 
     pub fn tagSpan(self: *const Store, span_: Span) StoreSpanBorrow(Tag, "tags") {
         return self.tags.borrowSpan(span_.start, span_.len);
+    }
+
+    pub fn tagAt(self: *const Store, span_: Span, index: usize) Tag {
+        return GuardedList.at(self.tagSpan(span_), index);
     }
 
     pub fn addDeclaredFields(self: *Store, values: []const DeclaredField) std.mem.Allocator.Error!Span {
@@ -233,8 +245,16 @@ pub const Store = struct {
         return self.declared_fields.borrowSpan(span_.start, span_.len);
     }
 
+    pub fn declaredFieldAt(self: *const Store, span_: Span, index: usize) DeclaredField {
+        return GuardedList.at(self.declaredFieldSpan(span_), index);
+    }
+
     pub fn fnVariantSpan(self: *const Store, span_: Span) StoreSpanBorrow(FnVariant, "fn_variants") {
         return self.fn_variants.borrowSpan(span_.start, span_.len);
+    }
+
+    pub fn fnVariantAt(self: *const Store, span_: Span, index: usize) FnVariant {
+        return GuardedList.at(self.fnVariantSpan(span_), index);
     }
 
     pub const View = struct {
