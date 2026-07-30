@@ -425,6 +425,11 @@ pub const Census = struct {
     exit_read_context_differs: Counter = Counter.init(0),
     exit_read_module_differs: Counter = Counter.init(0),
     exit_read_unreadable: Counter = Counter.init(0),
+    // Of reads that DIVERGED, whether the node was made inside an edge-naming
+    // request scope. This decides whether carrying the binding from that edge
+    // can close the gap, or whether no recorded route reaches the position.
+    diverged_node_inside_request_edge: Counter = Counter.init(0),
+    diverged_node_outside_request_edge: Counter = Counter.init(0),
     // What a read naming no checked position is, by node shape.
     derived_read_redirect: Counter = Counter.init(0),
     derived_read_unresolved: Counter = Counter.init(0),

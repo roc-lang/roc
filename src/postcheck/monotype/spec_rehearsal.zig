@@ -426,6 +426,12 @@ const GeneratedRequest = struct {
 
 /// What one open request scope names: nothing, the checked use site the request
 /// was made at, or the declared generated rule that produced it.
+/// The identity half of a request scope's checked edge.
+pub const RequestEdgeName = struct {
+    module_bytes: [32]u8,
+    use_expr: checked.CheckedExprId,
+};
+
 const RequestScope = union(enum) {
     none,
     checked: RequestEdge,
@@ -548,6 +554,9 @@ pub const ContextedProvenance = struct {
     address: CheckedAddress,
     callee_context: bool,
     scope_depth: u32,
+    /// Whether an edge-naming request scope was open when the node was made,
+    /// which is the binding a read could resolve from if none other names it.
+    inside_request_edge: bool = false,
 };
 
 /// Debug/probe-only record of what each graph node stands for and how it
@@ -1363,6 +1372,17 @@ pub const Rehearsal = struct {
     /// caller's module and the checked expression the use sits at. The scope
     /// must be closed by `closeRequest` when the request finishes, so an edge no
     /// reservation claimed cannot be read by a later, unrelated request.
+    /// Debug/probe-only: the innermost open request scope's checked edge, if it
+    /// names one (reunify.md 13.2 2a).
+    pub fn innermostRequestEdge(self: *const Rehearsal) ?RequestEdgeName {
+        if (self.disabled) return null;
+        if (self.requests.items.len == 0) return null;
+        return switch (self.requests.items[self.requests.items.len - 1]) {
+            .checked => |edge| .{ .module_bytes = edge.module_bytes, .use_expr = edge.use_expr },
+            .none, .generated => null,
+        };
+    }
+
     pub fn openRequestEdge(
         self: *Rehearsal,
         module_bytes: [32]u8,

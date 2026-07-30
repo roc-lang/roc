@@ -14558,7 +14558,7 @@ const BodyContext = struct {
             census.bump("exit_read_module_differs");
             return;
         }
-        self.measureSeamRead(@enumFromInt(record.address.type_id), graph_ty);
+        self.measureSeamReadCorrelated(@enumFromInt(record.address.type_id), graph_ty, record.inside_request_edge);
     }
 
     /// Debug/probe-only: compare what directed translation computes for one
@@ -14566,6 +14566,19 @@ const BodyContext = struct {
     /// every read that resolves a checked type to a Monotype (reunify.md
     /// sections 9, 13 Slice 7). Reads nothing back into lowering.
     fn measureSeamRead(self: *BodyContext, checked_ty: checked.CheckedTypeId, graph_ty: Type.TypeId) void {
+        self.measureSeamReadCorrelated(checked_ty, graph_ty, null);
+    }
+
+    /// The same comparison, additionally reporting whether a read that diverged
+    /// was of a node made inside an edge-naming request scope — the correlation
+    /// that says whether carrying the binding from that edge could close the
+    /// gap (reunify.md 13.2 2a).
+    fn measureSeamReadCorrelated(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        graph_ty: Type.TypeId,
+        inside_edge: ?bool,
+    ) void {
         if (comptime census.enabled) {
             if (self.builder.rehearsal) |instantiation| {
                 const address: spec_rehearsal.CheckedAddress = .{
@@ -14588,6 +14601,13 @@ const BodyContext = struct {
                             census.bump("seam_direct");
                         } else {
                             census.bump("seam_direct_diverged");
+                            if (inside_edge) |inside| {
+                                if (inside) {
+                                    census.bump("diverged_node_inside_request_edge");
+                                } else {
+                                    census.bump("diverged_node_outside_request_edge");
+                                }
+                            }
                             self.builder.noteSeamDivergence(self.view, checked_ty, direct_ty, graph_ty, binding, self.callee_context);
                         }
                     }
@@ -14650,12 +14670,17 @@ const BodyContext = struct {
         // instantiation scope or a per-call context binds the same checked id
         // under a different binding, which this specialization's environment
         // does not describe.
+        const inside_edge = if (self.builder.rehearsal) |rehearsal|
+            rehearsal.innermostRequestEdge() != null
+        else
+            false;
         if (self.graph.trace) |trace| {
             trace.noteFromChecked(@intFromEnum(placeholder));
             trace.noteContexted(@intFromEnum(placeholder), .{
                 .address = .{ .module_bytes = address.module_bytes, .type_id = address.type_id },
                 .callee_context = self.callee_context,
                 .scope_depth = @intCast(self.decl_scopes.items.len),
+                .inside_request_edge = inside_edge,
             });
         }
         if (self.spec_root_context and self.decl_scopes.items.len == 0) {
@@ -14676,6 +14701,7 @@ const BodyContext = struct {
                 .address = .{ .module_bytes = address.module_bytes, .type_id = address.type_id },
                 .callee_context = self.callee_context,
                 .scope_depth = @intCast(self.decl_scopes.items.len),
+                .inside_request_edge = inside_edge,
             });
         }
         self.noteUnifyConstruction(.inst_node_placeholder_to_content);
