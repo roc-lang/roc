@@ -484,6 +484,10 @@ pub const Census = struct {
     // though the final recorded root no longer mentions it.
     unowned_rigid_in_pristine_root_only: Counter = Counter.init(0),
     unowned_rigid_in_no_pristine_root_either: Counter = Counter.init(0),
+    // Whether the parameter is a nominal TYPE declaration's formal parameter,
+    // which a nominal's arguments bind at each use rather than any scheme.
+    unowned_rigid_is_nominal_declaration_parameter: Counter = Counter.init(0),
+    unowned_rigid_in_nothing_at_all: Counter = Counter.init(0),
     unowned_rigid_reachable_from_frame_scheme: Counter = Counter.init(0),
     unowned_rigid_outside_frame_scheme: Counter = Counter.init(0),
     unowned_frame_owner_has_no_scheme: Counter = Counter.init(0),

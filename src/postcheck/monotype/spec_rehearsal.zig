@@ -1545,6 +1545,26 @@ pub const Rehearsal = struct {
                                 census.bump("unowned_rigid_in_pristine_root_only");
                             } else {
                                 census.bump("unowned_rigid_in_no_pristine_root_either");
+                                // A scheme is a VALUE definition's signature. A
+                                // nominal TYPE declaration also has formal
+                                // parameters, and those are bound by the
+                                // nominal's arguments at each use rather than by
+                                // any scheme's binder list. Ask whether the
+                                // parameter is one of those.
+                                var in_declaration = false;
+                                for (cursor.view.nominal_declarations) |declaration| {
+                                    if (self.checkedReaches(cursor, declaration.declaration_root, free) or
+                                        self.checkedReaches(cursor, declaration.backing, free))
+                                    {
+                                        in_declaration = true;
+                                        break;
+                                    }
+                                }
+                                if (in_declaration) {
+                                    census.bump("unowned_rigid_is_nominal_declaration_parameter");
+                                } else {
+                                    census.bump("unowned_rigid_in_nothing_at_all");
+                                }
                             }
                         }
                     }
@@ -2228,10 +2248,28 @@ pub const Rehearsal = struct {
         if (comptime !census.enabled) return;
         const raw_path = std.c.getenv("ROC_REUNIFY_CENSUS") orelse return;
         const hex = std.fmt.bytesToHex(address.module_bytes[0..8].*, .lower);
+        // Name the parameter the position wants. A rigid carries the source
+        // name it was declared under, which says what construct introduced it.
+        var param_name: []const u8 = "?";
+        var param_id: u32 = 0;
+        var position_kind: []const u8 = "?";
+        if (self.lookup.cursor(address.module_bytes)) |cursor| {
+            position_kind = @tagName(cursor.view.payload(@enumFromInt(address.type_id)));
+            var env: ?*const direct_translate.BindingEnvironment = null;
+            if (self.frameForModule(address.module_bytes)) |frame| env = frame.environment();
+            if (self.firstFreeVariable(cursor.view, @enumFromInt(address.type_id), env)) |free| {
+                param_id = @intFromEnum(free);
+                switch (cursor.view.payload(free)) {
+                    .rigid => |variable| param_name = variable.name orelse "<unnamed>",
+                    .flex => |variable| param_name = variable.name orelse "<unnamed-flex>",
+                    else => param_name = "<not-a-var>",
+                }
+            }
+        }
         const line = std.fmt.allocPrint(
             self.allocator,
-            "needs_record {s} {d}\n",
-            .{ &hex, address.type_id },
+            "needs_record {s} {d} pos={s} param={d} name={s}\n",
+            .{ &hex, address.type_id, position_kind, param_id, param_name },
         ) catch return;
         defer self.allocator.free(line);
         census.appendToFile(raw_path, line);
