@@ -39,6 +39,16 @@ pub fn getModuleNameAlloc(
     return try allocator.dupe(u8, getModuleName(path));
 }
 
+/// Return the source-visible module name from a dotted local module path.
+///
+/// Examples:
+///   "Widget" -> "Widget"
+///   "Src.Widget" -> "Widget"
+pub fn getModuleBasename(module_path: []const u8) []const u8 {
+    const dot = std.mem.findScalarLast(u8, module_path, '.') orelse return module_path;
+    return module_path[dot + 1 ..];
+}
+
 test "getModuleName strips .roc extension" {
     try std.testing.expectEqualStrings("Module", getModuleName("path/to/Module.roc"));
     try std.testing.expectEqualStrings("Module", getModuleName("Module.roc"));
@@ -59,6 +69,11 @@ test "getModuleNameAlloc allocates correctly" {
     const result = try getModuleNameAlloc(allocator, "path/to/Module.roc");
     defer allocator.free(result);
     try std.testing.expectEqualStrings("Module", result);
+}
+
+test "getModuleBasename returns the final dotted segment" {
+    try std.testing.expectEqualStrings("Widget", getModuleBasename("Widget"));
+    try std.testing.expectEqualStrings("Widget", getModuleBasename("Src.Widget"));
 }
 
 /// Result of parsing a qualified import name like "pf.Wrapper"

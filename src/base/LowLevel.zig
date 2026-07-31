@@ -181,6 +181,12 @@ pub const LowLevel = enum(u16) {
     num_count_leading_zero_bits,
     num_count_trailing_zero_bits,
 
+    // Read a little-endian integer out of a byte list. The result layout
+    // carries the width, so a single low-level op serves every multi-byte
+    // integer type. The bounds check lives in the Roc wrapper, so this op
+    // requires the caller to have proven the bytes are in range.
+    num_from_le_bytes_unchecked,
+
     // Fixed-width integer SIMD operations. Lane width and signedness are
     // carried by the operand/result layouts; these operations never encode a
     // concrete vector type in their identity.
@@ -1015,6 +1021,7 @@ pub const LowLevel = enum(u16) {
             .num_count_one_bits,
             .num_count_leading_zero_bits,
             .num_count_trailing_zero_bits,
+            .num_from_le_bytes_unchecked,
             .simd_load_16_unchecked,
             .simd_splat,
             .simd_get_lane_unchecked,

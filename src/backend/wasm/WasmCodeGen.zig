@@ -10855,6 +10855,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
     const args = self.store.getLocalSpan(ll.args);
 
     switch (ll.op) {
+        .num_from_le_bytes_unchecked => try self.emitNumFromLeBytes(ll, args),
         .simd_load_16_unchecked,
         .simd_store_16_unchecked,
         .simd_append_16,
@@ -17086,6 +17087,43 @@ fn emitSimdLoad16(self: *Self, args: anytype) Allocator.Error!void {
     try self.emitConversion(try self.procLocalValType(GuardedList.at(args, 1)), .i32);
     self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
     try self.emitV128Load(0, 0);
+}
+
+/// Read a little-endian integer out of a byte list. The result layout supplies
+/// the width, and the Roc wrapper has already bounds-checked, so this is
+/// address arithmetic plus one load. wasm memory is little-endian by
+/// specification, so the loaded bytes need no reordering on any host.
+fn emitNumFromLeBytes(self: *Self, ll: anytype, args: anytype) Allocator.Error!void {
+    const width = try self.layoutStorageByteSize(ll.ret_layout);
+
+    // 128-bit results live in stack memory and are referred to by pointer, so
+    // they are copied into a fresh slot whose pointer becomes the result.
+    const result_ptr = if (width > 8) blk: {
+        const result_offset = try self.allocStackMemory(16, 16);
+        const ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitFpOffset(result_offset);
+        try self.emitLocalSet(ptr);
+        try self.emitLocalGet(ptr);
+        break :blk ptr;
+    } else null;
+
+    // Address of the bytes: the list's data pointer plus the byte index.
+    try self.emitProcLocal(GuardedList.at(args, 0));
+    const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(list_ptr);
+    try self.emitLocalGet(list_ptr);
+    try self.emitLoadOp(.i32, 0);
+    try self.emitProcLocal(GuardedList.at(args, 1));
+    try self.emitConversion(try self.procLocalValType(GuardedList.at(args, 1)), .i32);
+    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+
+    if (result_ptr) |ptr| {
+        try self.emitV128Load(0, 0);
+        try self.emitStoreOp(.v128, 0);
+        try self.emitLocalGet(ptr);
+    } else {
+        try self.emitLoadOpForLayout(ll.ret_layout, 0);
+    }
 }
 
 fn emitSimdBitCast(self: *Self, args: anytype, to_u128: bool) Allocator.Error!void {

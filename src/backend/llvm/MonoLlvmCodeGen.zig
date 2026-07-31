@@ -2975,6 +2975,7 @@ pub const MonoLlvmCodeGen = struct {
             .num_count_leading_zero_bits,
             .num_count_trailing_zero_bits,
             => try self.emitNumericBitCount(target, op, GuardedList.at(arg_locals, 0)),
+            .num_from_le_bytes_unchecked => try self.emitNumFromLeBytes(target, arg_locals),
             .simd_load_16_unchecked => try self.emitSimdLoad(target, arg_locals),
             .simd_store_16_unchecked => try self.emitSimdStore(target, arg_locals, unique_args),
             .simd_append_16 => try self.emitSimdAppend(target, arg_locals, unique_args),
@@ -3788,6 +3789,25 @@ pub const MonoLlvmCodeGen = struct {
         return builder.vectorValue(ty, constants[0..indices.len]) catch return error.OutOfMemory;
     }
 
+    /// Read a little-endian integer straight out of a byte list. The result
+    /// layout supplies the width, and the caller has already proven the bytes
+    /// are in range, so this is one unaligned load. On a big-endian target the
+    /// load reads the bytes the other way around, so it is byte-swapped back:
+    /// `from_le_bytes` means little-endian everywhere, not host-endian.
+    fn emitNumFromLeBytes(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const target_layout = self.localLayout(target);
+        const value_ty = self.scalarType(target_layout);
+        const bytes = try self.loadPointer(self.slot(GuardedList.at(args, 0)).ptr);
+        const index = try self.loadIntegerLocalAsUsize(GuardedList.at(args, 1));
+        const source = wip.gep(.inbounds, .i8, bytes, &.{index}, "") catch return error.OutOfMemory;
+        var value = wip.load(.normal, value_ty, source, LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
+        if (self.target.cpu.arch.endian() == .big) {
+            value = wip.callIntrinsic(.normal, .none, .bswap, &.{value_ty}, &.{value}, "") catch return error.OutOfMemory;
+        }
+        try self.storeScalar(self.slot(target).ptr, target_layout, value);
+    }
+
     fn emitSimdLoad(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
         const vector = self.simdVectorForLayout(self.localLayout(target)) orelse return error.CompilationFailed;
@@ -4279,9 +4299,15 @@ pub const MonoLlvmCodeGen = struct {
         const indices = try self.loadSimdLocal(GuardedList.at(args, 1));
         const vector_ty = try self.simdRawType(8, 16);
         if (self.target.cpu.arch == .x86_64) {
-            const invalid = wip.icmp(.uge, indices, try self.simdRawSplat(8, 16, 16), "") catch return error.OutOfMemory;
-            const hardware_indices = wip.select(.normal, invalid, try self.simdRawSplat(8, 16, 0x80), indices, "") catch return error.OutOfMemory;
-            try self.storeSimdLocal(target, try self.callBuiltin("llvm.x86.ssse3.pshuf.b.128", vector_ty, &.{ vector_ty, vector_ty }, &.{ table, hardware_indices }));
+            // pshufb zeroes a lane when bit 7 of its index is set, but wraps
+            // indices 16-127 through `& 0x0F` instead of zeroing them, which is
+            // not the semantics this op promises. Saturating-add 0x70 first:
+            // 0-15 land in 0x70-0x7F, leaving bit 7 clear and the low nibble
+            // intact, while everything >= 16 saturates to at least 0x80 and so
+            // zeroes. That is one `paddusb`, and emitting it directly keeps the
+            // guarantee independent of whether an optimizer is running.
+            const biased = wip.callIntrinsic(.normal, .none, .@"uadd.sat", &.{vector_ty}, &.{ indices, try self.simdRawSplat(8, 16, 0x70) }, "") catch return error.OutOfMemory;
+            try self.storeSimdLocal(target, try self.callBuiltin("llvm.x86.ssse3.pshuf.b.128", vector_ty, &.{ vector_ty, vector_ty }, &.{ table, biased }));
             return;
         }
         if (self.target.cpu.arch == .aarch64 or self.target.cpu.arch == .aarch64_be) {
@@ -4485,6 +4511,10 @@ pub const MonoLlvmCodeGen = struct {
             },
             .dec_to_f32_try_unsafe => {
                 try self.emitDecToF32TryUnsafeConversion(target, GuardedList.at(args, 0));
+                return;
+            },
+            .i128_to_dec_try_unsafe, .u128_to_dec_try_unsafe => {
+                try self.emitInt128ToDecTryUnsafeConversion(target, GuardedList.at(args, 0), op == .i128_to_dec_try_unsafe);
                 return;
             },
             .dec_to_f32_wrap, .dec_to_f64 => {
@@ -4711,6 +4741,27 @@ pub const MonoLlvmCodeGen = struct {
         };
     }
 
+    const TryUnsafeTarget = struct {
+        ptr: LlvmBuilder.Value,
+        success_offset: u32,
+        value_offset: u32,
+    };
+
+    /// Allocate a `{ success, value }` result and read its field offsets. Unlike
+    /// `tryUnsafeRecordInfo` this places no constraint on the value field's
+    /// layout, so it also serves conversions whose value is a float or a Dec.
+    fn allocTryUnsafeTarget(self: *MonoLlvmCodeGen, target: LocalId) Error!TryUnsafeTarget {
+        const allocated = try self.allocAggregateTarget(target);
+        const ret_layout_val = self.layoutValue(allocated.layout_idx);
+        if (ret_layout_val.tag != .struct_) return error.CompilationFailed;
+        const struct_idx = ret_layout_val.getStruct().idx;
+        return .{
+            .ptr = allocated.ptr,
+            .success_offset = self.layouts().getStructFieldOffsetByOriginalIndex(struct_idx, 0),
+            .value_offset = self.layouts().getStructFieldOffsetByOriginalIndex(struct_idx, 1),
+        };
+    }
+
     fn emitFloatToIntTryUnsafeConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const info = try self.tryUnsafeRecordInfo(self.localLayout(target));
@@ -4736,12 +4787,7 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitF64ToF32TryUnsafeConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
-        const allocated = try self.allocAggregateTarget(target);
-        const ret_layout_val = self.layoutValue(allocated.layout_idx);
-        if (ret_layout_val.tag != .struct_) return error.CompilationFailed;
-        const struct_idx = ret_layout_val.getStruct().idx;
-        const success_offset = self.layouts().getStructFieldOffsetByOriginalIndex(struct_idx, 0);
-        const value_offset = self.layouts().getStructFieldOffsetByOriginalIndex(struct_idx, 1);
+        const allocated = try self.allocTryUnsafeTarget(target);
         const value = try self.loadScalar(self.slot(arg).ptr, .f64);
 
         try self.callBuiltinVoid(
@@ -4750,20 +4796,15 @@ pub const MonoLlvmCodeGen = struct {
             &.{
                 allocated.ptr,
                 value,
-                builder.intValue(.i32, success_offset) catch return error.OutOfMemory,
-                builder.intValue(.i32, value_offset) catch return error.OutOfMemory,
+                builder.intValue(.i32, allocated.success_offset) catch return error.OutOfMemory,
+                builder.intValue(.i32, allocated.value_offset) catch return error.OutOfMemory,
             },
         );
     }
 
     fn emitDecToF32TryUnsafeConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
-        const allocated = try self.allocAggregateTarget(target);
-        const ret_layout_val = self.layoutValue(allocated.layout_idx);
-        if (ret_layout_val.tag != .struct_) return error.CompilationFailed;
-        const struct_idx = ret_layout_val.getStruct().idx;
-        const success_offset = self.layouts().getStructFieldOffsetByOriginalIndex(struct_idx, 0);
-        const value_offset = self.layouts().getStructFieldOffsetByOriginalIndex(struct_idx, 1);
+        const allocated = try self.allocTryUnsafeTarget(target);
         const value = try self.loadScalar(self.slot(arg).ptr, .dec);
         const parts = try self.splitI128Value(value);
 
@@ -4774,8 +4815,27 @@ pub const MonoLlvmCodeGen = struct {
                 allocated.ptr,
                 parts.low,
                 parts.high,
-                builder.intValue(.i32, success_offset) catch return error.OutOfMemory,
-                builder.intValue(.i32, value_offset) catch return error.OutOfMemory,
+                builder.intValue(.i32, allocated.success_offset) catch return error.OutOfMemory,
+                builder.intValue(.i32, allocated.value_offset) catch return error.OutOfMemory,
+            },
+        );
+    }
+
+    fn emitInt128ToDecTryUnsafeConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, is_signed: bool) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const allocated = try self.allocTryUnsafeTarget(target);
+        const value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
+        const parts = try self.splitI128Value(value);
+
+        try self.callBuiltinVoid(
+            LowLevelBuiltins.int128ToDec(is_signed).symbolName(),
+            &.{ try self.ptrType(), .i64, .i64, .i32, .i32 },
+            &.{
+                allocated.ptr,
+                parts.low,
+                parts.high,
+                builder.intValue(.i32, allocated.success_offset) catch return error.OutOfMemory,
+                builder.intValue(.i32, allocated.value_offset) catch return error.OutOfMemory,
             },
         );
     }

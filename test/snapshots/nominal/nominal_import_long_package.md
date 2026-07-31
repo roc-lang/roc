@@ -56,7 +56,7 @@ NO CHANGE
 		(e-not-implemented)
 		(annotation
 			(ty-malformed)))
-	(s-import (mod "design.Styles")
+	(s-import (mod "design.Styles.Color")
 		(exposes
 			(exposed (name "Encoder") (alias "CE") (wildcard false)))))
 ~~~

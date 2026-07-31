@@ -162,6 +162,8 @@ pub const PackageHeaderModule = struct {
 
 /// Explicit source import recorded by the parser.
 pub const Import = struct {
+    /// Complete uppercase module path, excluding any lowercase package qualifier.
+    /// Nested imports contain only the root module selected by the parser.
     module_name: Ident.Idx,
     qualifier: ?Ident.Idx,
     nested: bool,

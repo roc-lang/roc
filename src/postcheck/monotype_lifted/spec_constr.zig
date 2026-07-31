@@ -4115,6 +4115,15 @@ const Cloner = struct {
     subst: Subst,
     inline_stack: std.ArrayList(InlineFrame),
     loop_stack: std.ArrayList(LoopPattern),
+    /// Exit-ABI selection for each loop body currently being cloned,
+    /// innermost last. A null frame preserves that loop's source exit ABI and
+    /// shadows any selection owned by an enclosing loop.
+    loop_exit_stack: std.ArrayList(?LoopExitSelection),
+    /// Exact provenance for break nodes already rewritten to a selected loop
+    /// result. Normalization can re-clone output nodes while the owning loop
+    /// selection remains active; propagating this stamp makes that clone
+    /// idempotent without inferring provenance from expression shape.
+    selected_loop_exit_tys: std.AutoHashMap(Ast.ExprId, Type.TypeId),
     join_stack: std.ArrayList(ActiveJoinClone),
     /// Remaining arms the shape-preserving let-of-case rewrite may still
     /// process. That rewrite re-clones each arm's body against the small
@@ -4124,6 +4133,9 @@ const Cloner = struct {
     /// budget runs out the rewrite retains the plain shared join, which never
     /// re-clones arm bodies.
     let_case_shape_growth: CodeGrowthBudget,
+    /// Expression count of the program when this clone operation began;
+    /// inlining stops once `inline_expr_budget` expressions have been added.
+    start_expr_count: usize,
     /// Active let-of-case join rewrites, innermost last. Cloning a jump whose
     /// target belongs to one of these frames records the jump site's symbolic
     /// argument values for later parameter decomposition instead of cloning
@@ -4166,6 +4178,14 @@ const Cloner = struct {
 
     const case_of_case_work_budget: u32 = 256;
 
+    /// Total expressions one top-level clone operation may append through
+    /// call inlining. Inlining is demand-driven and transitively re-enters
+    /// callee bodies, so one specialization over deeply composed known-shape
+    /// values can otherwise multiply the whole reachable call graph into its
+    /// body. Once the budget is spent, remaining calls clone as plain calls,
+    /// which every shape matcher already treats as opaque.
+    const inline_expr_budget: usize = 50_000;
+
     fn init(pass: *Pass, source_fn: Ast.FnId, pattern: CallPattern) Cloner {
         return .{
             .pass = pass,
@@ -4175,7 +4195,10 @@ const Cloner = struct {
             .subst = Subst.init(pass.allocator),
             .inline_stack = .empty,
             .loop_stack = .empty,
+            .loop_exit_stack = .empty,
+            .selected_loop_exit_tys = std.AutoHashMap(Ast.ExprId, Type.TypeId).init(pass.allocator),
             .join_stack = .empty,
+            .start_expr_count = pass.program.exprCount(),
             .let_case_shape_growth = .init(let_case_shape_arm_budget),
             .let_case_builds = .empty,
             .active_recursive_value_locals = std.AutoHashMap(Ast.LocalId, void).init(pass.allocator),
@@ -4203,7 +4226,10 @@ const Cloner = struct {
             .subst = Subst.init(pass.allocator),
             .inline_stack = .empty,
             .loop_stack = .empty,
+            .loop_exit_stack = .empty,
+            .selected_loop_exit_tys = std.AutoHashMap(Ast.ExprId, Type.TypeId).init(pass.allocator),
             .join_stack = .empty,
+            .start_expr_count = pass.program.exprCount(),
             .let_case_shape_growth = .init(let_case_shape_arm_budget),
             .let_case_builds = .empty,
             .active_recursive_value_locals = std.AutoHashMap(Ast.LocalId, void).init(pass.allocator),
@@ -4225,6 +4251,8 @@ const Cloner = struct {
     fn deinit(self: *Cloner) void {
         self.inline_stack.deinit(self.pass.allocator);
         self.loop_stack.deinit(self.pass.allocator);
+        self.loop_exit_stack.deinit(self.pass.allocator);
+        self.selected_loop_exit_tys.deinit();
         self.join_stack.deinit(self.pass.allocator);
         self.let_case_builds.deinit(self.pass.allocator);
         self.active_recursive_value_locals.deinit();
@@ -4695,7 +4723,7 @@ const Cloner = struct {
                 } };
             },
             .let_ => |let_| return try self.cloneLetValue(let_, bindings),
-            .loop_ => |loop| return try self.cloneLoopValue(expr.ty, loop, bindings),
+            .loop_ => |loop| return try self.cloneLoopValue(expr.ty, loop, bindings, null),
             .block => |block| {
                 if (try self.cloneBlockValue(block, bindings)) |value| return value;
                 return .{ .expr = try self.cloneExprPlain(expr_id) };
@@ -5068,10 +5096,27 @@ const Cloner = struct {
             .block => |block| return try self.cloneBlock(expr.ty, block),
             .loop_ => |loop| {
                 var bindings: BindingChain = .{};
-                const value = try self.cloneLoopValue(expr.ty, loop, &bindings);
+                const value = try self.cloneLoopValue(expr.ty, loop, &bindings, null);
                 return try self.wrapBindings(bindings, try self.materialize(value));
             },
-            .break_ => |maybe| .{ .break_ = if (maybe) |value| try self.cloneExpr(value) else null },
+            .break_ => |maybe| blk: {
+                if (self.currentLoopExitSelection()) |selection| {
+                    if (self.selected_loop_exit_tys.get(expr_id)) |selected_ty| {
+                        if (selected_ty != selection.result_ty) {
+                            Common.invariant("selected break was re-cloned under a different loop exit ABI");
+                        }
+                        const projected = try self.addExpr(.{
+                            .ty = expr.ty,
+                            .data = .{ .break_ = if (maybe) |value| try self.cloneExpr(value) else null },
+                        });
+                        try self.selected_loop_exit_tys.put(projected, selected_ty);
+                        return projected;
+                    }
+                    const value = maybe orelse Common.invariant("selected value-producing loop had a valueless break");
+                    return try self.cloneSelectedLoopExit(expr.ty, value, selection);
+                }
+                break :blk .{ .break_ = if (maybe) |value| try self.cloneExpr(value) else null };
+            },
             .continue_ => |continue_| return try self.cloneContinue(expr.ty, continue_),
             .join_point => |join_point| return try self.cloneJoinPoint(expr.ty, join_point),
             .jump => |jump| blk: {
@@ -5308,7 +5353,6 @@ const Cloner = struct {
             else => return null,
         }
         if (kept_indices.items.len == 0 or kept_indices.items.len == source_arity) return null;
-
         var selected_rest = let_.rest;
         if (aggregate_local) |local| {
             const source_tys = aggregate_tys orelse Common.invariant("loop exit selection had no source tuple types");
@@ -5341,12 +5385,7 @@ const Cloner = struct {
                 .result_ty = selected.ty,
                 .transfer = .break_value,
             };
-            const exit_body = (try self.cloneLoopControlExprWithSelectedExit(loop.body, selection)) orelse return null;
-            const selected_loop = try self.addExpr(.{ .ty = selected.ty, .data = .{ .loop_ = .{
-                .params = loop.params,
-                .initial_values = loop.initial_values,
-                .body = exit_body,
-            } } });
+            const selected_loop = try self.cloneLoopWithSelectedExit(selected.ty, loop, selection);
             const bind = try self.pass.program.addPat(.{ .ty = selected.ty, .data = .{ .bind = selected.local } });
             return try self.addExpr(.{ .ty = self.pass.program.getExpr(selected_rest).ty, .data = .{ .let_ = .{
                 .bind = bind,
@@ -5369,15 +5408,10 @@ const Cloner = struct {
                 .sites = &exit_sites,
             } },
         };
-        const exit_body = (try self.cloneLoopControlExprWithSelectedExit(loop.body, selection)) orelse return null;
-        const remainder = try self.addExpr(.{ .ty = result_ty, .data = .{ .loop_ = .{
-            .params = loop.params,
-            .initial_values = loop.initial_values,
-            .body = exit_body,
-        } } });
+        const remainder = try self.cloneLoopWithSelectedExit(result_ty, loop, selection);
 
         if (exit_sites.items.len == 0) return null;
-        if (exit_sites.items.len == 1) {
+        if (exit_sites.items.len == 1 and !exprContainsFreeLoopControl(self.pass.program, selected_rest, 0)) {
             try self.inlineLoopExitAtSite(exit_sites.items[0], kept_params.items, selected_rest, target);
             return remainder;
         }
@@ -5390,152 +5424,63 @@ const Cloner = struct {
         } } });
     }
 
-    /// Copy the result-control spine of one loop body, replacing every exit with
-    /// a transfer that supplies the selected live values. A null result means the
-    /// expression can complete normally and the exit selection does not apply.
-    /// Nested loops own their own breaks and are never traversed here.
-    fn cloneLoopControlExprWithSelectedExit(self: *Cloner, expr_id: Ast.ExprId, selection: LoopExitSelection) Common.LowerError!?Ast.ExprId {
-        const saved_loc = self.current_loc;
-        defer self.current_loc = saved_loc;
-        const saved_region = self.current_region;
-        defer self.current_region = saved_region;
-        const saved_inline_scope = self.current_inline_scope;
-        defer self.current_inline_scope = saved_inline_scope;
-        try self.adoptExprInlineScope(expr_id);
-        const expr_loc = self.pass.program.exprLoc(expr_id);
-        if (expr_loc.hasLocation()) self.current_loc = expr_loc;
-        const expr_region = self.pass.program.exprRegion(expr_id);
-        if (!expr_region.isEmpty()) self.current_region = expr_region;
-
-        const expr = self.pass.program.getExpr(expr_id);
-        const data: Ast.ExprData = switch (expr.data) {
-            .@"unreachable" => .@"unreachable",
-            .crash => |msg| .{ .crash = msg },
-            .comptime_exhaustiveness_failed => |site| .{ .comptime_exhaustiveness_failed = site },
-            .return_ => |ret| .{ .return_ = ret },
-            .continue_ => |continue_| .{ .continue_ = continue_ },
-            .break_ => |maybe| return if (maybe) |value|
-                try self.loopExitExpr(value, selection)
-            else
-                null,
-            .let_ => |let_| .{ .let_ = .{
-                .bind = let_.bind,
-                .value = let_.value,
-                .rest = (try self.cloneLoopControlExprWithSelectedExit(let_.rest, selection)) orelse return null,
-                .comptime_site = let_.comptime_site,
-            } },
-            .block => |block| blk: {
-                const source = try GuardedList.dupe(self.pass.allocator, Ast.StmtId, self.pass.program.stmtSpan(block.statements));
-                defer self.pass.allocator.free(source);
-                const statements = try self.pass.allocator.alloc(Ast.StmtId, source.len);
-                defer self.pass.allocator.free(statements);
-                for (source, statements) |stmt, *out| {
-                    if (try self.cloneLoopControlStmtWithSelectedExit(stmt, selection)) |selected| {
-                        out.* = selected;
-                    } else {
-                        out.* = stmt;
-                    }
-                }
-                const final_expr = (try self.cloneLoopControlExprWithSelectedExit(block.final_expr, selection)) orelse return null;
-                break :blk .{ .block = .{
-                    .statements = try self.pass.program.addStmtSpan(statements),
-                    .final_expr = final_expr,
-                } };
-            },
-            .if_ => |if_| blk: {
-                const branches = try GuardedList.dupe(self.pass.allocator, Ast.IfBranch, self.pass.program.ifBranchSpan(if_.branches));
-                defer self.pass.allocator.free(branches);
-                const selected = try self.pass.allocator.alloc(Ast.IfBranch, branches.len);
-                defer self.pass.allocator.free(selected);
-                for (branches, selected) |branch, *out| out.* = .{
-                    .cond = branch.cond,
-                    .body = (try self.cloneLoopControlExprWithSelectedExit(branch.body, selection)) orelse return null,
-                };
-                break :blk .{ .if_ = .{
-                    .branches = try self.pass.program.addIfBranchSpan(selected),
-                    .final_else = (try self.cloneLoopControlExprWithSelectedExit(if_.final_else, selection)) orelse return null,
-                } };
-            },
-            .match_ => |match| blk: {
-                const branches = try GuardedList.dupe(self.pass.allocator, Ast.Branch, self.pass.program.branchSpan(match.branches));
-                defer self.pass.allocator.free(branches);
-                const selected = try self.pass.allocator.alloc(Ast.Branch, branches.len);
-                defer self.pass.allocator.free(selected);
-                for (branches, selected) |branch, *out| out.* = .{
-                    .pat = branch.pat,
-                    .guard = branch.guard,
-                    .body = (try self.cloneLoopControlExprWithSelectedExit(branch.body, selection)) orelse return null,
-                };
-                break :blk .{ .match_ = .{
-                    .scrutinee = match.scrutinee,
-                    .branches = try self.pass.program.addBranchSpan(selected),
-                    .comptime_site = match.comptime_site,
-                } };
-            },
-            .comptime_branch_taken => |taken| .{ .comptime_branch_taken = .{
-                .site = taken.site,
-                .branch_index = taken.branch_index,
-                .body = (try self.cloneLoopControlExprWithSelectedExit(taken.body, selection)) orelse return null,
-            } },
-            .join_point => |join_point| .{ .join_point = .{
-                .id = join_point.id,
-                .params = join_point.params,
-                .body = (try self.cloneLoopControlExprWithSelectedExit(join_point.body, selection)) orelse return null,
-                .remainder = (try self.cloneLoopControlExprWithSelectedExit(join_point.remainder, selection)) orelse return null,
-            } },
-            .if_initialized_payload => |payload| .{ .if_initialized_payload = .{
-                .cond = payload.cond,
-                .cond_mask = payload.cond_mask,
-                .payload = payload.payload,
-                .uninitialized_is_cold = payload.uninitialized_is_cold,
-                .initialized = (try self.cloneLoopControlExprWithSelectedExit(payload.initialized, selection)) orelse return null,
-                .uninitialized = (try self.cloneLoopControlExprWithSelectedExit(payload.uninitialized, selection)) orelse return null,
-            } },
-            .loop_ => return null,
-            else => return null,
-        };
-        return try self.addExpr(.{ .ty = selection.result_ty, .data = data });
+    fn cloneLoopWithSelectedExit(
+        self: *Cloner,
+        ty: Type.TypeId,
+        loop: anytype,
+        selection: LoopExitSelection,
+    ) Common.LowerError!Ast.ExprId {
+        var bindings: BindingChain = .{};
+        const value = try self.cloneLoopValue(ty, loop, &bindings, selection);
+        return try self.wrapBindings(bindings, try self.materialize(value));
     }
 
-    fn cloneLoopControlStmtWithSelectedExit(self: *Cloner, stmt_id: Ast.StmtId, selection: LoopExitSelection) Common.LowerError!?Ast.StmtId {
-        const stmt = self.pass.program.getStmt(stmt_id);
-        const selected: Ast.Stmt = switch (stmt) {
-            .let_ => |let_| .{ .let_ = .{
-                .pat = let_.pat,
-                .value = (try self.cloneLoopControlExprWithSelectedExit(let_.value, selection)) orelse return null,
-                .recursive = let_.recursive,
-                .comptime_site = let_.comptime_site,
-            } },
-            .expr => |value| .{ .expr = (try self.cloneLoopControlExprWithSelectedExit(value, selection)) orelse return null },
-            .expect => |value| .{ .expect = (try self.cloneLoopControlExprWithSelectedExit(value, selection)) orelse return null },
-            .dbg => |value| .{ .dbg = (try self.cloneLoopControlExprWithSelectedExit(value, selection)) orelse return null },
-            else => return null,
-        };
-        return try self.pass.program.addStmt(selected);
+    fn cloneLoopBody(
+        self: *Cloner,
+        body: Ast.ExprId,
+        selection: ?LoopExitSelection,
+    ) Common.LowerError!Ast.ExprId {
+        try self.loop_exit_stack.append(self.pass.allocator, selection);
+        defer _ = self.loop_exit_stack.pop();
+        return try self.cloneExpr(body);
     }
 
-    fn loopExitExpr(self: *Cloner, value_expr: Ast.ExprId, selection: LoopExitSelection) Common.LowerError!?Ast.ExprId {
+    fn currentLoopExitSelection(self: *Cloner) ?LoopExitSelection {
+        if (self.loop_exit_stack.items.len == 0) return null;
+        return self.loop_exit_stack.items[self.loop_exit_stack.items.len - 1];
+    }
+
+    fn cloneSelectedLoopExit(
+        self: *Cloner,
+        break_ty: Type.TypeId,
+        value_expr: Ast.ExprId,
+        selection: LoopExitSelection,
+    ) Common.LowerError!Ast.ExprId {
         const tuple = switch (self.pass.program.getExpr(value_expr).data) {
             .tuple => |items| try GuardedList.dupe(self.pass.allocator, Ast.ExprId, self.pass.program.exprSpan(items)),
-            else => return null,
+            else => Common.invariant("selected loop exit did not carry compiler-generated tuple state"),
         };
         defer self.pass.allocator.free(tuple);
-        if (tuple.len != selection.source_arity) return null;
+        if (tuple.len != selection.source_arity) {
+            Common.invariant("selected loop exit tuple arity differed from its source ABI");
+        }
 
         return switch (selection.transfer) {
             .break_value => blk: {
                 if (selection.kept_indices.len != 1) Common.invariant("direct loop exit selection did not contain one value");
-                break :blk try self.addExpr(.{
-                    .ty = selection.result_ty,
-                    .data = .{ .break_ = tuple[selection.kept_indices[0]] },
+                const projected = try self.addExpr(.{
+                    .ty = break_ty,
+                    .data = .{ .break_ = try self.cloneExpr(tuple[selection.kept_indices[0]]) },
                 });
+                try self.selected_loop_exit_tys.put(projected, selection.result_ty);
+                break :blk projected;
             },
             .jump => |jump_transfer| blk: {
                 const args = try self.pass.allocator.alloc(Ast.ExprId, selection.kept_indices.len);
                 defer self.pass.allocator.free(args);
-                for (selection.kept_indices, args) |index, *out| out.* = tuple[index];
+                for (selection.kept_indices, args) |index, *out| out.* = try self.cloneExpr(tuple[index]);
                 const jump = try self.addExpr(.{
-                    .ty = selection.result_ty,
+                    .ty = break_ty,
                     .data = .{ .jump = .{
                         .target = jump_transfer.target,
                         .args = try self.pass.program.addExprSpan(args),
@@ -6356,6 +6301,7 @@ const Cloner = struct {
         ty: Type.TypeId,
         loop: anytype,
         bindings: *BindingChain,
+        exit_selection: ?LoopExitSelection,
     ) Common.LowerError!Value {
         const params = try GuardedList.dupe(self.pass.allocator, Ast.TypedLocal, self.pass.program.typedLocalSpan(loop.params));
         defer self.pass.allocator.free(params);
@@ -6467,7 +6413,7 @@ const Cloner = struct {
                 .values = shapes,
                 .any_demoted = false,
             });
-            const body = try self.cloneExpr(loop.body);
+            const body = try self.cloneLoopBody(loop.body, exit_selection);
             const frame = self.loop_stack.pop() orelse Common.invariant("loop stack underflow after split attempt");
 
             if (!frame.any_demoted) {
@@ -6522,7 +6468,7 @@ const Cloner = struct {
             .values = whole_shapes,
             .any_demoted = false,
         });
-        const body = try self.cloneExpr(loop.body);
+        const body = try self.cloneLoopBody(loop.body, exit_selection);
         if (self.loop_stack.pop() == null) Common.invariant("loop stack underflow after whole-state body clone");
         return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .loop_ = .{
             .params = try self.pass.program.addTypedLocalSpan(whole_params),
@@ -6687,7 +6633,9 @@ const Cloner = struct {
         const values = self.pass.program.exprSpan(continue_.values);
         const source_values = try GuardedList.dupe(self.pass.allocator, Ast.ExprId, values);
         defer self.pass.allocator.free(source_values);
-        if (source_values.len != loop.values.len) Common.invariant("continue value count differed from specialized loop pattern");
+        if (source_values.len != loop.values.len) {
+            Common.invariantFmt("continue value count differed from specialized loop pattern: continue has {d} values, {d} frames with innermost expecting {d}", .{ source_values.len, frame_count, loop.values.len });
+        }
 
         var new_values = std.ArrayList(Ast.ExprId).empty;
         defer new_values.deinit(self.pass.allocator);
@@ -7822,6 +7770,10 @@ const Cloner = struct {
         };
     }
 
+    fn inlineGrowthExhausted(self: *const Cloner) bool {
+        return self.pass.program.exprCount() - self.start_expr_count > inline_expr_budget;
+    }
+
     fn inlineCallableCallValue(
         self: *Cloner,
         ty: Type.TypeId,
@@ -7831,6 +7783,12 @@ const Cloner = struct {
         result_shape_demanded: bool,
         bindings: *BindingChain,
     ) Common.LowerError!Value {
+        if (self.inlineGrowthExhausted()) {
+            return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
+                .callee = try self.materialize(.{ .callable = callable }),
+                .args = try self.cloneExprSpan(args_span),
+            } } }) };
+        }
         var callable_call_size = ConstructorSize{ .exact = 0 };
         for (callable.captures) |capture| callable_call_size = callable_call_size.plus(self.knownConstructorSize(capture.value));
         callable_call_size = callable_call_size.plus(self.argsKnownConstructorSize(args_span));
@@ -7942,6 +7900,9 @@ const Cloner = struct {
         result_shape_demanded: bool,
         bindings: *BindingChain,
     ) Common.LowerError!Value {
+        if (self.inlineGrowthExhausted()) {
+            return .{ .expr = try self.cloneExprPlain(original_expr) };
+        }
         const direct_call_size = self.argsKnownConstructorSize(args_span).plus(self.captureOperandsKnownConstructorSize(captures_span));
         const exact_call_size = direct_call_size.exactValue() orelse return .{ .expr = try self.cloneExprPlain(original_expr) };
         for (self.inline_stack.items) |active| {
@@ -9952,6 +9913,135 @@ fn stmtContainsReturn(program: *const Ast.Program, stmt_id: Ast.StmtId) bool {
         .expect,
         .dbg,
         => |expr| exprContainsReturn(program, expr),
+        .uninitialized,
+        .crash,
+        => false,
+    };
+}
+
+/// Reports whether moving `expr_id` beneath another loop would change the
+/// target of a lexical `break` or `continue`. Monotype expression ownership is
+/// acyclic, so this structural recursion always terminates. A loop owns control
+/// transfers in its body, but not in its initial values.
+fn exprContainsFreeLoopControl(program: *const Ast.Program, expr_id: Ast.ExprId, loop_depth: usize) bool {
+    return switch (program.getExpr(expr_id).data) {
+        .@"unreachable",
+        .local,
+        .unit,
+        .int_lit,
+        .frac_f32_lit,
+        .frac_f64_lit,
+        .dec_lit,
+        .str_lit,
+        .bytes_lit,
+        .crash,
+        .comptime_exhaustiveness_failed,
+        .uninitialized,
+        .uninitialized_payload,
+        .lambda,
+        .def_ref,
+        .fn_def,
+        => false,
+        .fn_ref => |fn_ref| captureOperandSpanContainsFreeLoopControl(program, fn_ref.captures, loop_depth),
+        .return_ => |ret| exprContainsFreeLoopControl(program, ret.value, loop_depth),
+        .list,
+        .tuple,
+        => |items| exprSpanContainsFreeLoopControl(program, items, loop_depth),
+        .record => |fields| {
+            const field_exprs = program.fieldExprSpan(fields);
+            for (0..field_exprs.len) |index| {
+                const field = GuardedList.at(field_exprs, index);
+                if (exprContainsFreeLoopControl(program, field.value, loop_depth)) return true;
+            }
+            return false;
+        },
+        .tag => |tag| exprSpanContainsFreeLoopControl(program, tag.payloads, loop_depth),
+        .static_data_candidate => |candidate| exprContainsFreeLoopControl(program, candidate.runtime_expr, loop_depth),
+        .nominal,
+        .dbg,
+        .expect,
+        => |child| exprContainsFreeLoopControl(program, child, loop_depth),
+        .expect_err => |expect_err| exprContainsFreeLoopControl(program, expect_err.msg, loop_depth),
+        .comptime_branch_taken => |taken| exprContainsFreeLoopControl(program, taken.body, loop_depth),
+        .let_ => |let_| exprContainsFreeLoopControl(program, let_.value, loop_depth) or exprContainsFreeLoopControl(program, let_.rest, loop_depth),
+        .call_value => |call| exprContainsFreeLoopControl(program, call.callee, loop_depth) or exprSpanContainsFreeLoopControl(program, call.args, loop_depth),
+        .call_proc => |call| exprSpanContainsFreeLoopControl(program, call.args, loop_depth) or captureOperandSpanContainsFreeLoopControl(program, call.captures, loop_depth),
+        .low_level => |call| exprSpanContainsFreeLoopControl(program, call.args, loop_depth),
+        .field_access => |field| exprContainsFreeLoopControl(program, field.receiver, loop_depth),
+        .tuple_access => |access| exprContainsFreeLoopControl(program, access.tuple, loop_depth),
+        .structural_eq => |eq| exprContainsFreeLoopControl(program, eq.lhs, loop_depth) or exprContainsFreeLoopControl(program, eq.rhs, loop_depth),
+        .structural_hash => |h| exprContainsFreeLoopControl(program, h.value, loop_depth) or exprContainsFreeLoopControl(program, h.hasher, loop_depth),
+        .match_ => |match| {
+            if (exprContainsFreeLoopControl(program, match.scrutinee, loop_depth)) return true;
+            const branches = program.branchSpan(match.branches);
+            for (0..branches.len) |index| {
+                const branch = GuardedList.at(branches, index);
+                if (branch.guard) |guard| {
+                    if (exprContainsFreeLoopControl(program, guard, loop_depth)) return true;
+                }
+                if (exprContainsFreeLoopControl(program, branch.body, loop_depth)) return true;
+            }
+            return false;
+        },
+        .if_ => |if_| {
+            const branches = program.ifBranchSpan(if_.branches);
+            for (0..branches.len) |index| {
+                const branch = GuardedList.at(branches, index);
+                if (exprContainsFreeLoopControl(program, branch.cond, loop_depth)) return true;
+                if (exprContainsFreeLoopControl(program, branch.body, loop_depth)) return true;
+            }
+            return exprContainsFreeLoopControl(program, if_.final_else, loop_depth);
+        },
+        .block => |block| {
+            const statements = program.stmtSpan(block.statements);
+            for (0..statements.len) |index| {
+                const stmt = GuardedList.at(statements, index);
+                if (stmtContainsFreeLoopControl(program, stmt, loop_depth)) return true;
+            }
+            return exprContainsFreeLoopControl(program, block.final_expr, loop_depth);
+        },
+        .loop_ => |loop| exprSpanContainsFreeLoopControl(program, loop.initial_values, loop_depth) or
+            exprContainsFreeLoopControl(program, loop.body, loop_depth + 1),
+        .break_ => |maybe| loop_depth == 0 or
+            (if (maybe) |value| exprContainsFreeLoopControl(program, value, loop_depth) else false),
+        .continue_ => |continue_| loop_depth == 0 or exprSpanContainsFreeLoopControl(program, continue_.values, loop_depth),
+        .join_point => |join_point| exprContainsFreeLoopControl(program, join_point.body, loop_depth) or
+            exprContainsFreeLoopControl(program, join_point.remainder, loop_depth),
+        .jump => |jump| exprSpanContainsFreeLoopControl(program, jump.args, loop_depth),
+        .if_initialized_payload => |payload_switch| exprContainsFreeLoopControl(program, payload_switch.cond, loop_depth) or
+            exprContainsFreeLoopControl(program, payload_switch.initialized, loop_depth) or
+            exprContainsFreeLoopControl(program, payload_switch.uninitialized, loop_depth),
+        .try_sequence => |sequence| exprContainsFreeLoopControl(program, sequence.try_expr, loop_depth) or
+            exprContainsFreeLoopControl(program, sequence.ok_body, loop_depth),
+        .try_record_sequence => |sequence| exprContainsFreeLoopControl(program, sequence.try_expr, loop_depth) or
+            exprContainsFreeLoopControl(program, sequence.ok_body, loop_depth),
+    };
+}
+
+fn exprSpanContainsFreeLoopControl(program: *const Ast.Program, span: Ast.Span(Ast.ExprId), loop_depth: usize) bool {
+    const exprs = program.exprSpan(span);
+    for (0..exprs.len) |index| {
+        if (exprContainsFreeLoopControl(program, GuardedList.at(exprs, index), loop_depth)) return true;
+    }
+    return false;
+}
+
+fn captureOperandSpanContainsFreeLoopControl(program: *const Ast.Program, span: Ast.Span(Ast.CaptureOperand), loop_depth: usize) bool {
+    const operands = program.captureOperandSpan(span);
+    for (0..GuardedList.borrowLen(operands)) |index| {
+        if (exprContainsFreeLoopControl(program, GuardedList.at(operands, index).value, loop_depth)) return true;
+    }
+    return false;
+}
+
+fn stmtContainsFreeLoopControl(program: *const Ast.Program, stmt_id: Ast.StmtId, loop_depth: usize) bool {
+    return switch (program.getStmt(stmt_id)) {
+        .return_ => |ret| exprContainsFreeLoopControl(program, ret.value, loop_depth),
+        .let_ => |let_| exprContainsFreeLoopControl(program, let_.value, loop_depth),
+        .expr,
+        .expect,
+        .dbg,
+        => |expr| exprContainsFreeLoopControl(program, expr, loop_depth),
         .uninitialized,
         .crash,
         => false,

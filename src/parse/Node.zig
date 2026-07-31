@@ -109,10 +109,9 @@ pub const Tag = enum {
     /// An import statement
     /// Example: `import pf.Stdout`
     /// * main_token - first token in module ident
-    /// * lhs - extra_data description - struct(packed){ aliased: u1, num_exposes: u31 }
-    /// * rhs - extra_data index or 0 if lhs is 0
-    /// * extra_data format(if aliased == 1): [alias upper_ident node index, [exposed node index]{num_exposes}]
-    /// * extra_data format(if aliased == 0): [[exposed node index]{num_exposes}]
+    /// * lhs - extra_data index
+    /// * rhs - packed alias, qualifier, and nested-import flags
+    /// * extra_data - [exposes start, exposes len, qualifier token?, alias token?]
     import,
     /// A file import statement
     /// Example: `import "README.md" as readme : Str`

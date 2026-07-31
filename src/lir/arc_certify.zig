@@ -189,6 +189,7 @@ fn certifyStoreWithWorkStats(
     var certifier = Certifier{
         .allocator = allocator,
         .store = store,
+        .layouts = layouts,
         .sigs = sigs,
         .rc_local = rc_local,
         .lender_arena = std.heap.ArenaAllocator.init(allocator),
@@ -492,6 +493,14 @@ fn writeFailureContext(
         if (!reachable.contains(@enumFromInt(@as(u32, @intCast(index))))) continue;
         const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(index))));
         var mentions = if (local) |l| stmtMentionsLocal(store, stmt, l) else false;
+        if (local) |l| {
+            if (stmt == .join) {
+                const jp = store.getLocalSpan(stmt.join.params);
+                for (0..GuardedList.borrowLen(jp)) |jpi| {
+                    if (GuardedList.at(jp, jpi) == l) mentions = true;
+                }
+            }
+        }
         for (extra_locals) |extra| {
             mentions = mentions or stmtMentionsLocal(store, stmt, extra);
         }
@@ -506,9 +515,16 @@ fn writeFailureContext(
         if (!mentions and !structural and !nearby) continue;
         context.append("  stmt {d}: {s}", .{ index, @tagName(stmt) });
         switch (stmt) {
-            .join => |j| context.append(" id={d} body={d} remainder={d}", .{
-                @intFromEnum(j.id), @intFromEnum(j.body), @intFromEnum(j.remainder),
-            }),
+            .join => |j| {
+                context.append(" id={d} body={d} remainder={d} params=[", .{
+                    @intFromEnum(j.id), @intFromEnum(j.body), @intFromEnum(j.remainder),
+                });
+                const jp = store.getLocalSpan(j.params);
+                for (0..GuardedList.borrowLen(jp)) |jpi| {
+                    context.append(" {d}", .{@intFromEnum(GuardedList.at(jp, jpi))});
+                }
+                context.append(" ]", .{});
+            },
             .jump => |j| context.append(" target={d}", .{@intFromEnum(j.target)}),
             .assign_ref => |a| {
                 context.append(" target={d} op=", .{@intFromEnum(a.target)});
@@ -704,6 +720,12 @@ const ValueInfo = struct {
     lenders: []const ValueId,
     /// True for borrowed proc parameters: live for the whole call by ABI.
     always_live: bool,
+    /// Container value this value was field-read from, or `no_value`. A
+    /// unit-less consume or release of this value may claim the container's
+    /// stored unit for that field instead of failing (a field take).
+    payload_source: ValueId = no_value,
+    /// Original field index of the read, valid when `payload_source` is set.
+    payload_field: u16 = 0,
 };
 
 /// One forked ownership state along a control-flow path.
@@ -727,6 +749,11 @@ const State = struct {
     /// must be released; if false, the payload was never initialized.
     conditional_condition: std.ArrayList(u32),
     conditional_condition_mask: std.ArrayList(u64),
+    /// Fields of a value whose stored units have been claimed by field
+    /// takes. A claimed value's remaining unit covers only its unclaimed
+    /// fields: it can no longer be released or consumed whole, and at a
+    /// terminal it must be fully claimed and residual-released instead.
+    claims: std.AutoHashMapUnmanaged(ValueId, u64),
 
     fn init(allocator: Allocator, local_dense: []const u32, proc_local_count: usize) Allocator.Error!State {
         const local_value = try allocator.alloc(ValueId, proc_local_count);
@@ -739,6 +766,7 @@ const State = struct {
             .holder = .empty,
             .conditional_condition = .empty,
             .conditional_condition_mask = .empty,
+            .claims = .empty,
         };
     }
 
@@ -748,6 +776,7 @@ const State = struct {
         self.holder.deinit(self.allocator);
         self.conditional_condition.deinit(self.allocator);
         self.conditional_condition_mask.deinit(self.allocator);
+        self.claims.deinit(self.allocator);
     }
 
     fn clone(self: *const State) Allocator.Error!State {
@@ -759,7 +788,9 @@ const State = struct {
         errdefer holder.deinit(self.allocator);
         var conditional_condition = try self.conditional_condition.clone(self.allocator);
         errdefer conditional_condition.deinit(self.allocator);
-        const conditional_condition_mask = try self.conditional_condition_mask.clone(self.allocator);
+        var conditional_condition_mask = try self.conditional_condition_mask.clone(self.allocator);
+        errdefer conditional_condition_mask.deinit(self.allocator);
+        const claims = try self.claims.clone(self.allocator);
         return .{
             .allocator = self.allocator,
             .local_dense = self.local_dense,
@@ -768,7 +799,16 @@ const State = struct {
             .holder = holder,
             .conditional_condition = conditional_condition,
             .conditional_condition_mask = conditional_condition_mask,
+            .claims = claims,
         };
+    }
+
+    fn claimsOf(self: *const State, value: ValueId) u64 {
+        return self.claims.get(value) orelse 0;
+    }
+
+    fn setClaims(self: *State, value: ValueId, mask: u64) Allocator.Error!void {
+        try self.claims.put(self.allocator, value, mask);
     }
 
     fn denseIndex(self: *const State, local: LIR.LocalId) usize {
@@ -859,10 +899,24 @@ const LocalSummary = struct {
     /// unit-carrying value in the lender/holder chain. Equal to `repr` for
     /// ABI-borrowed parameters, which are self-anchored.
     lender_repr: u32,
+    /// True when the summarized value is a borrowed proc parameter's value:
+    /// live for the whole call by ABI even while it transiently carries an
+    /// ownership unit, so rebuilt states must keep it readable after the
+    /// unit moves on.
+    abi_live: bool = false,
     /// For conditional-owned locals: raw local id of the presence condition.
     condition: u32,
     /// For conditional-owned locals: presence mask on `condition`.
     condition_mask: u64,
+    /// For owned locals: fields of the value already claimed by field takes.
+    /// Set identically on every member of the alias set.
+    claims: u64 = 0,
+    /// For borrowed locals born from a field read: dense position of the
+    /// container local the read's later claim would target, or `no_dense`.
+    /// Set identically on every member of the alias set.
+    payload_source: u32 = no_dense,
+    /// Original field index of the read, valid with `payload_source`.
+    payload_field: u16 = 0,
 };
 
 const LocalClass = enum(u8) {
@@ -941,6 +995,7 @@ const Segment = struct {
 const Certifier = struct {
     allocator: Allocator,
     store: *const LirStore,
+    layouts: *const layout_mod.Store,
     sigs: arc_sig.SigTable,
     rc_local: []const bool,
     values: std.ArrayList(ValueInfo) = .empty,
@@ -1168,12 +1223,70 @@ const Certifier = struct {
 
     /// Strict consumption: a transferred unit must exist when it leaves this
     /// proc's hands (call arguments, consumed low-level arguments, returns).
+    /// A unit-less field-read value may instead claim its container's stored
+    /// unit for that field (a field take).
     fn consumeUnit(self: *Certifier, state: *State, value: ValueId, local: LIR.LocalId) CertifyError!void {
         if (value == no_value) return;
+        if (state.claimsOf(value) != 0) {
+            return self.fail("consumed partially dismantled local {d}", .{@intFromEnum(local)});
+        }
         if (state.balanceOf(value) < 1) {
+            if (try self.tryClaim(state, value)) return;
             return self.fail("consumed local {d} without an ownership unit", .{@intFromEnum(local)});
         }
         try state.addBalance(value, -1);
+    }
+
+    /// Attempts to spend the container's stored unit for the field this
+    /// value was read from. The container must still hold its own unit
+    /// unconditionally, and each field's stored unit can be claimed once.
+    /// The container's balance stays at one — later borrowed reads of its
+    /// remaining bytes are still legitimate — and a claim set covering every
+    /// refcounted field marks the unit spent (`claimsSpendUnit`) rather than
+    /// releasable.
+    fn tryClaim(self: *Certifier, state: *State, value: ValueId) Allocator.Error!bool {
+        if (value >= self.values.items.len) return false;
+        const info = self.values.items[value];
+        if (info.payload_source == no_value) return false;
+        if (info.payload_field >= 64) return false;
+        const container = info.payload_source;
+        if (state.balanceOf(container) < 1) return false;
+        if (state.conditionalConditionOf(container) != null) return false;
+        const bit = @as(u64, 1) << @intCast(info.payload_field);
+        const existing = state.claimsOf(container);
+        if (existing & bit != 0) return false;
+        try state.setClaims(container, existing | bit);
+        return true;
+    }
+
+    /// Whether the value's single unit is fully spent by claims: every
+    /// refcounted field's stored unit was taken or residually released, so
+    /// no whole release is owed and none is allowed.
+    fn claimsSpendUnit(self: *Certifier, state: *const State, value: ValueId) bool {
+        const claims = state.claimsOf(value);
+        if (claims == 0) return false;
+        if (state.balanceOf(value) != 1) return false;
+        const required = self.requiredClaimMask(value) orelse return false;
+        return claims == required;
+    }
+
+    /// The refcounted-field mask a fully dismantled value must have claimed:
+    /// one bit per refcounted field of its struct layout. Null when the
+    /// value's layout does not support claims at all.
+    fn requiredClaimMask(self: *Certifier, value: ValueId) ?u64 {
+        if (value >= self.values.items.len) return null;
+        const origin = self.values.items[value].origin;
+        const origin_layout = self.layouts.getLayout(self.store.getLocal(origin).layout_idx);
+        if (origin_layout.tag != .struct_) return null;
+        const info = self.layouts.getStructInfo(origin_layout);
+        var mask: u64 = 0;
+        for (0..info.fields.len) |i| {
+            const field = info.fields.get(@intCast(i));
+            if (field.index >= 64) return null;
+            if (!self.layouts.layoutContainsRefcounted(self.layouts.getLayout(field.layout))) continue;
+            mask |= @as(u64, 1) << @intCast(field.index);
+        }
+        return mask;
     }
 
     /// Aggregate consumption: one unit moves into the holder. The emitted
@@ -1181,20 +1294,63 @@ const Certifier = struct {
     /// transiently negative here; the per-path terminal balance check flags a
     /// missing restore.
     fn consumeIntoHolder(
-        _: *Certifier,
+        self: *Certifier,
         state: *State,
         value: ValueId,
         holder_value: ValueId,
     ) CertifyError!void {
         if (value == no_value) return;
+        if (state.claimsOf(value) != 0) {
+            return self.fail(
+                "partially dismantled value originating at local {d} moved into an aggregate",
+                .{@intFromEnum(self.values.items[value].origin)},
+            );
+        }
         try state.addBalance(value, -1);
         if (holder_value != no_value) {
             try state.setHolder(value, holder_value);
         }
     }
 
-    fn checkLeaks(self: *Certifier, state: *const State) CertifyError!void {
+    /// Settles deferred takes: a field-read value driven negative by an
+    /// aggregate move claims its container's stored unit once the path's
+    /// outcome is fixed (a terminal or a jump quotient). Valid non-take
+    /// emissions never reach a settlement point negative, so this only
+    /// rescues balances that were already failures before field takes.
+    fn settleNegativeClaims(self: *Certifier, state: *State) Allocator.Error!void {
+        for (0..state.balance.items.len) |value_index| {
+            while (state.balance.items[value_index] < 0) {
+                if (!try self.tryClaim(state, @intCast(value_index))) break;
+                state.balance.items[value_index] += 1;
+            }
+        }
+    }
+
+    fn checkLeaks(self: *Certifier, state: *State) CertifyError!void {
+        try self.settleNegativeClaims(state);
+
         for (state.balance.items, 0..) |units, value_index| {
+            const claims = state.claimsOf(@intCast(value_index));
+            if (claims != 0) {
+                // A dismantled value's own unit must still be in hand, and
+                // every refcounted field's stored unit must have been spent
+                // exactly once by a take or a residual release.
+                if (self.claimsSpendUnit(state, @intCast(value_index))) continue;
+                const origin = self.values.items[value_index].origin;
+                self.diag.context_local = origin;
+                self.diag.context_proc = self.current_proc;
+                if (units != 1) {
+                    self.describeValueChain(state, @intCast(value_index));
+                    return self.fail(
+                        "partially dismantled value originating at local {d} ended with balance {d}",
+                        .{ @intFromEnum(origin), units },
+                    );
+                }
+                return self.fail(
+                    "dismantled value originating at local {d} left stored units unspent",
+                    .{@intFromEnum(origin)},
+                );
+            }
             if (units == 0) continue;
             const origin = self.values.items[value_index].origin;
             if (units > 0) {
@@ -1244,7 +1400,7 @@ const Certifier = struct {
                             .condition_mask = condition.mask,
                         };
                     } else {
-                        summary = .{ .class = .owned, .repr = repr, .balance = @intCast(units), .lender_repr = 0, .condition = no_dense, .condition_mask = 0 };
+                        summary = .{ .class = .owned, .repr = repr, .balance = @intCast(units), .lender_repr = 0, .condition = no_dense, .condition_mask = 0, .claims = state.claimsOf(value) };
                     }
                 } else if (try self.valueIsLive(state, value)) {
                     summary = .{
@@ -1255,12 +1411,27 @@ const Certifier = struct {
                         .condition = no_dense,
                         .condition_mask = 0,
                     };
+                    self.addPayloadOriginToSummary(state, value, &summary);
                 }
             }
             self.summary_scratch.appendAssumeCapacity(summary);
         }
 
         return self.summary_scratch.items;
+    }
+
+    /// Carries a borrowed field-read value's claim target across a state
+    /// quotient: the container's dense representative and the field index,
+    /// when the container is still bound in this state. Requires
+    /// `repr_scratch` to hold the current summary's value representatives.
+    fn addPayloadOriginToSummary(self: *Certifier, state: *const State, value: ValueId, summary: *LocalSummary) void {
+        if (value >= self.values.items.len) return;
+        const info = self.values.items[value];
+        if (info.payload_source == no_value) return;
+        if (state.balanceOf(info.payload_source) < 1) return;
+        const source_repr = self.repr_scratch.get(info.payload_source) orelse return;
+        summary.payload_source = source_repr;
+        summary.payload_field = info.payload_field;
     }
 
     /// Returns the dense position anchoring the first unit-carrying (or
@@ -1319,8 +1490,12 @@ const Certifier = struct {
             hasher.update(std.mem.asBytes(&entry.repr));
             hasher.update(std.mem.asBytes(&entry.balance));
             hasher.update(std.mem.asBytes(&entry.lender_repr));
+            hasher.update(std.mem.asBytes(&entry.abi_live));
             hasher.update(std.mem.asBytes(&entry.condition));
             hasher.update(std.mem.asBytes(&entry.condition_mask));
+            hasher.update(std.mem.asBytes(&entry.claims));
+            hasher.update(std.mem.asBytes(&entry.payload_source));
+            hasher.update(std.mem.asBytes(&entry.payload_field));
         }
         return hasher.final();
     }
@@ -1335,12 +1510,15 @@ const Certifier = struct {
         for (summary, 0..) |entry, dense| {
             if (entry.class != .owned or entry.repr != dense) continue;
             const local = self.proc_locals.items[dense];
-            _ = try self.bindFresh(&state, local, @intCast(entry.balance), &.{});
+            const value = try self.bindFresh(&state, local, @intCast(entry.balance), &.{});
+            if (entry.abi_live) self.values.items[value].always_live = true;
+            if (entry.claims != 0) try state.setClaims(value, entry.claims);
         }
         for (summary, 0..) |entry, dense| {
             if (entry.class != .conditional_owned or entry.repr != dense) continue;
             const local = self.proc_locals.items[dense];
             const value = try self.bindFresh(&state, local, 1, &.{});
+            if (entry.abi_live) self.values.items[value].always_live = true;
             try state.setConditional(value, .{ .local = @enumFromInt(entry.condition), .mask = entry.condition_mask });
         }
         for (summary, 0..) |entry, dense| {
@@ -1372,7 +1550,17 @@ const Certifier = struct {
             if (lender == no_value) {
                 return self.fail("borrowed local {d} crossed a join without a live owner local", .{@intFromEnum(local)});
             }
-            _ = try self.bindFresh(&state, local, 0, &.{lender});
+            const value = try self.bindFresh(&state, local, 0, &.{lender});
+            // Restore the claim target of a field-read value: the container's
+            // rebuilt value, resolved through its dense representative.
+            if (entry.payload_source != no_dense and entry.payload_source < self.proc_locals.items.len) {
+                const container = state.valueAtDense(entry.payload_source);
+                if (container != no_value) {
+                    const info = &self.values.items[value];
+                    info.payload_source = container;
+                    info.payload_field = entry.payload_field;
+                }
+            }
         }
         for (summary, 0..) |entry, dense| {
             if (entry.class != .borrowed or entry.repr == dense) continue;
@@ -1445,10 +1633,16 @@ const Certifier = struct {
     fn modesCompatible(a: []const LocalSummary, b: []const LocalSummary) bool {
         for (a, b) |ga, sb| {
             if (ga.class != sb.class) return false;
+            if (ga.abi_live != sb.abi_live) return false;
             switch (ga.class) {
-                .unbound, .owned => {},
+                .unbound => {},
+                // Claims are per-field spend records, not attributable
+                // balances; states disagreeing on them walk separately.
+                .owned => if (ga.claims != sb.claims) return false,
                 .conditional_owned => if (ga.condition != sb.condition or ga.condition_mask != sb.condition_mask) return false,
-                .borrowed => if (ga.lender_repr != sb.lender_repr) return false,
+                .borrowed => if (ga.lender_repr != sb.lender_repr or
+                    ga.payload_source != sb.payload_source or
+                    ga.payload_field != sb.payload_field) return false,
             }
         }
         return true;
@@ -2342,10 +2536,16 @@ const Certifier = struct {
     /// the join through a relevant local.
     fn summarizeForJoin(
         self: *Certifier,
-        state: *const State,
+        state: *State,
         record: *const JoinRecord,
         join_id: LIR.JoinPointId,
     ) CertifyError![]const LocalSummary {
+        // Settle deferred takes before quotienting: a field-read value driven
+        // negative by an aggregate move claims its container's stored unit
+        // here, so the claim crosses the join on the container instead of a
+        // negative balance failing below.
+        try self.settleNegativeClaims(state);
+
         // Seed the working relevant set from the record.
         self.relevant_scratch.unsetAll();
         self.relevant_scratch.setUnion(record.relevant);
@@ -2408,6 +2608,7 @@ const Certifier = struct {
                     if (value != no_value) {
                         const repr = self.repr_scratch.get(value) orelse 0;
                         const units = state.balanceOf(value);
+                        const abi_live = self.values.items[value].always_live;
                         if (units > 0) {
                             if (state.conditionalConditionOf(value)) |condition| {
                                 summary = .{
@@ -2415,11 +2616,12 @@ const Certifier = struct {
                                     .repr = repr,
                                     .balance = @intCast(units),
                                     .lender_repr = 0,
+                                    .abi_live = abi_live,
                                     .condition = @intFromEnum(condition.local),
                                     .condition_mask = condition.mask,
                                 };
                             } else {
-                                summary = .{ .class = .owned, .repr = repr, .balance = @intCast(units), .lender_repr = 0, .condition = no_dense, .condition_mask = 0 };
+                                summary = .{ .class = .owned, .repr = repr, .balance = @intCast(units), .lender_repr = 0, .abi_live = abi_live, .condition = no_dense, .condition_mask = 0, .claims = state.claimsOf(value) };
                             }
                         } else if (try self.valueIsLive(state, value)) {
                             summary = .{
@@ -2427,9 +2629,11 @@ const Certifier = struct {
                                 .repr = repr,
                                 .balance = 0,
                                 .lender_repr = try self.borrowSummaryAnchorRepr(state, value),
+                                .abi_live = abi_live,
                                 .condition = no_dense,
                                 .condition_mask = 0,
                             };
+                            self.addPayloadOriginToSummary(state, value, &summary);
                         }
                     }
                 }
@@ -2438,9 +2642,12 @@ const Certifier = struct {
         }
 
         // Every outstanding ownership unit must be carried into the join by
-        // a relevant local; anything else can never be released again.
+        // a relevant local; anything else can never be released again. A
+        // fully dismantled value is exempt: its unit is already spent by its
+        // claims and owes no further release.
         for (state.balance.items, 0..) |units, value_index| {
             if (units == 0) continue;
+            if (self.claimsSpendUnit(state, @intCast(value_index))) continue;
             const origin = self.values.items[value_index].origin;
             if (units < 0) {
                 return self.fail(
@@ -2585,9 +2792,9 @@ const Certifier = struct {
                             }
                         },
                         .discriminant => |op| _ = try self.requireLive(&state, op.source),
-                        .field => |op| try self.bindPayloadRead(&state, assign.target, op.source),
-                        .tag_payload => |op| try self.bindPayloadRead(&state, assign.target, op.source),
-                        .tag_payload_struct => |op| try self.bindPayloadRead(&state, assign.target, op.source),
+                        .field => |op| try self.bindPayloadRead(&state, assign.target, op.source, op.field_idx),
+                        .tag_payload => |op| try self.bindPayloadRead(&state, assign.target, op.source, null),
+                        .tag_payload_struct => |op| try self.bindPayloadRead(&state, assign.target, op.source, null),
                         .list_reinterpret => |op| try self.bindSameValue(&state, assign.target, op.backing_ref),
                         .nominal => |op| try self.bindSameValue(&state, assign.target, op.backing_ref),
                     }
@@ -2906,7 +3113,7 @@ const Certifier = struct {
         }
     }
 
-    fn bindPayloadRead(self: *Certifier, state: *State, target: LIR.LocalId, source: LIR.LocalId) CertifyError!void {
+    fn bindPayloadRead(self: *Certifier, state: *State, target: LIR.LocalId, source: LIR.LocalId, field_idx: ?u16) CertifyError!void {
         const source_value = try self.requireLive(state, source);
         if (!self.isRc(target)) return;
         if (source_value == no_value) {
@@ -2915,7 +3122,12 @@ const Certifier = struct {
                 .{ @intFromEnum(target), @intFromEnum(source) },
             );
         }
-        _ = try self.bindFresh(state, target, 0, &.{source_value});
+        const value = try self.bindFresh(state, target, 0, &.{source_value});
+        if (field_idx) |field| {
+            const info = &self.values.items[value];
+            info.payload_source = source_value;
+            info.payload_field = field;
+        }
     }
 
     fn bindSameValue(self: *Certifier, state: *State, target: LIR.LocalId, source: LIR.LocalId) CertifyError!void {
@@ -2940,7 +3152,13 @@ const Certifier = struct {
             self.diag.context_proc = self.current_proc;
             return self.fail("release of unbound local {d}", .{@intFromEnum(local)});
         }
+        if (state.claimsOf(value) != 0) {
+            self.diag.context_local = local;
+            self.diag.context_proc = self.current_proc;
+            return self.fail("whole release of partially dismantled local {d}", .{@intFromEnum(local)});
+        }
         if (state.balanceOf(value) < 1) {
+            if (try self.tryClaim(state, value)) return;
             self.diag.context_local = local;
             self.diag.context_proc = self.current_proc;
             return self.fail("release of local {d} without an ownership unit", .{@intFromEnum(local)});
@@ -4194,4 +4412,112 @@ test "certify flags unbounded per-iteration balance accumulation" {
     _ = try f.addProc(&.{}, body, .i64);
     try testing.expectError(error.Certification, f.certify());
     try testing.expect(std.mem.find(u8, f.diag.message(), "accumulation") != null);
+}
+
+fn fieldReadStmt(f: *CertifyTest, target: LIR.LocalId, source: LIR.LocalId, field_idx: u16, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+    return try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = target,
+        .op = .{ .field = .{ .source = source, .field_idx = field_idx } },
+        .next = next,
+    } });
+}
+
+test "certify accepts a fully dismantled record via field takes" {
+    // Both refcounted fields of a dying owned pair are read without retains
+    // and released; each release claims the pair's stored unit for its
+    // field, and the fully claimed pair needs no whole release.
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const pair = try f.local(f.pair_str);
+    const first = try f.local(.str);
+    const second = try f.local(.str);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, ret);
+    const release_second = try f.decrefStmt(second, .str, result_assign);
+    const release_first = try f.decrefStmt(first, .str, release_second);
+    const read_second = try fieldReadStmt(&f, second, pair, 1, release_first);
+    const body = try fieldReadStmt(&f, first, pair, 0, read_second);
+    _ = try f.addProc(&.{pair}, body, .i64);
+    try f.certify();
+}
+
+test "certify flags a whole release of a partially dismantled record" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const pair = try f.local(f.pair_str);
+    const first = try f.local(.str);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, ret);
+    const release_pair = try f.decrefStmt(pair, f.pair_str, result_assign);
+    const release_first = try f.decrefStmt(first, .str, release_pair);
+    const body = try fieldReadStmt(&f, first, pair, 0, release_first);
+    _ = try f.addProc(&.{pair}, body, .i64);
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "partially dismantled") != null);
+}
+
+test "certify flags a dismantle that leaves a stored unit unspent" {
+    // Only one of the pair's two refcounted fields is taken and the pair is
+    // never released whole: the other field's stored unit leaks.
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const pair = try f.local(f.pair_str);
+    const first = try f.local(.str);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, ret);
+    const release_first = try f.decrefStmt(first, .str, result_assign);
+    const body = try fieldReadStmt(&f, first, pair, 0, release_first);
+    _ = try f.addProc(&.{pair}, body, .i64);
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "unspent") != null);
+}
+
+test "certify flags a double take of one field" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const pair = try f.local(f.pair_str);
+    const first = try f.local(.str);
+    const again = try f.local(.str);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, ret);
+    const release_again = try f.decrefStmt(again, .str, result_assign);
+    const release_first = try f.decrefStmt(first, .str, release_again);
+    const read_again = try fieldReadStmt(&f, again, pair, 0, release_first);
+    const body = try fieldReadStmt(&f, first, pair, 0, read_again);
+    _ = try f.addProc(&.{pair}, body, .i64);
+    try testing.expectError(error.Certification, f.certify());
+}
+
+test "certify accepts a take consumed by an owned call argument" {
+    // The taken field's unit leaves through a call instead of a release; the
+    // residual other field is released at the pair's death point.
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const pair = try f.local(f.pair_str);
+    const taken = try f.local(.str);
+    const residual = try f.local(.str);
+    const callee_arg = try f.local(.str);
+    const callee_result = try f.local(.i64);
+    const callee_ret = try f.ret(callee_result);
+    const callee_result_assign = try f.assignI64(callee_result, callee_ret);
+    const callee_release = try f.decrefStmt(callee_arg, .str, callee_result_assign);
+    const callee = try f.addProc(&.{callee_arg}, callee_release, .i64);
+
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = result,
+        .proc = callee,
+        .args = try f.store.addLocalSpan(&.{taken}),
+        .next = ret,
+    } });
+    const release_residual = try f.decrefStmt(residual, .str, call);
+    const read_residual = try fieldReadStmt(&f, residual, pair, 1, release_residual);
+    const body = try fieldReadStmt(&f, taken, pair, 0, read_residual);
+    _ = try f.addProc(&.{pair}, body, .i64);
+    try f.certify();
 }

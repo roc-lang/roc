@@ -847,6 +847,44 @@ fn liftModuleAfterSpecConstr(
     };
 }
 
+// Repro for https://github.com/roc-lang/roc/issues/10461: specializing a
+// constructor argument must preserve the distinct back edges of nested loops.
+test "issue 10461 SpecConstr preserves nested loop back-edge arities" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\run : { inner_limit : U64 }, U64 -> U64
+        \\run = |config, outer_limit| {
+        \\    var $outer = 0.U64
+        \\    var $total = 0.U64
+        \\    while $outer < outer_limit {
+        \\        var $inner = 0.U64
+        \\        var $discard_a = 0.U64
+        \\        var $discard_b = 0.U64
+        \\        while $inner < config.inner_limit {
+        \\            $inner = $inner + 1
+        \\            $discard_a = $discard_a + 1
+        \\            $discard_b = $discard_b + 1
+        \\        }
+        \\        $outer = $outer + 1
+        \\        $total = $total + $inner + $discard_a
+        \\    }
+        \\    $total
+        \\}
+        \\
+        \\main : Bool -> U64
+        \\main = |flag| {
+        \\    outer_limit = match flag {
+        \\        Bool.True => 2
+        \\        Bool.False => 3
+        \\    }
+        \\    run({ inner_limit: 1 }, outer_limit)
+        \\}
+    ;
+
+    var lifted = try liftModuleAfterSpecConstr(allocator, source);
+    defer lifted.deinit(allocator);
+}
+
 test "issue 10153 nested loops do not multiply SpecConstr callable functions" {
     const allocator = std.testing.allocator;
     // Repro for https://github.com/roc-lang/roc/issues/10153. Adding one fixed
@@ -1437,7 +1475,8 @@ fn whileRecordStateWorkerIsSpecialized(shape: ProcShape) bool {
         shape.self_call_count == 0 and
         shape.join_count >= 1 and
         shape.max_join_param_count == 2 and
-        shape.jump_count >= 2;
+        shape.jump_count >= 2 and
+        shape.struct_assign_count == 0;
 }
 
 fn whileRecordStateWorkerIsGeneric(shape: ProcShape) bool {
@@ -1445,6 +1484,18 @@ fn whileRecordStateWorkerIsGeneric(shape: ProcShape) bool {
         shape.join_count >= 1 and
         shape.max_join_param_count == 1 and
         shape.jump_count >= 2;
+}
+
+/// The shape aggregate loop state takes without call specialization now that
+/// join scalarization sees through lowered aliases: the loop carries the
+/// fields as separate join parameters, while the seeded initializer builds
+/// remain live outside the loop.
+fn whileRecordStateWorkerIsScalarizedUnspecialized(shape: ProcShape) bool {
+    return shape.self_call_count == 0 and
+        shape.join_count >= 1 and
+        shape.max_join_param_count >= 2 and
+        shape.jump_count >= 2 and
+        shape.struct_assign_count >= 1;
 }
 
 fn directTupleWorkerIsSpecialized(shape: ProcShape) bool {
@@ -1459,6 +1510,18 @@ fn directTupleWorkerIsGeneric(shape: ProcShape) bool {
         shape.self_call_count == 0 and
         shape.jump_count >= 1 and
         shape.struct_assign_count >= 1;
+}
+
+/// The shape a tail-recursive aggregate-state worker takes without call
+/// specialization: the proc still receives the aggregate, but join
+/// scalarization has dissolved the loop-carried wrapper, so the loop rebuilds
+/// no struct and carries the fields as separate join parameters.
+fn unspecializedWorkerLoopIsScalarized(shape: ProcShape) bool {
+    return shape.arg_count == 1 and
+        shape.self_call_count == 0 and
+        shape.jump_count >= 1 and
+        shape.struct_assign_count == 0 and
+        shape.max_join_param_count >= 2;
 }
 
 fn unusedStateWorkerIsSpecialized(shape: ProcShape) bool {
@@ -1759,15 +1822,18 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
     ;
 
     try expectMonotypeSpecializationCountersWithin(try monotypeCountersForModule(allocator, source), .{
-        .template_requests = 27,
-        .template_hits = 22,
-        .template_misses = 5,
+        // The eight scalar `plus` method calls are producer-authored low-level
+        // operations, so direct publication emits them without procedure
+        // specialization requests.
+        .template_requests = 19,
+        .template_hits = 15,
+        .template_misses = 4,
         .nested_requests = 16,
         .nested_hits = 8,
         .nested_misses = 8,
         .template_lookup_candidates = 0,
         .nested_lookup_candidates = 0,
-        .specialization_type_digest_requests = 84,
+        .specialization_type_digest_requests = 74,
         .max_specialization_type_digest_cache_hits = 160,
         .max_specialization_type_digest_cache_misses = 160,
         .max_specialization_type_digest_nodes_visited = 160,
@@ -1859,6 +1925,44 @@ test "imported and local generic specialization counters reuse closed types" {
     try std.testing.expect(counters.template_misses >= 2);
     try std.testing.expect(counters.template_hits >= 2);
     try std.testing.expect(counters.template_lookup_candidates <= counters.template_requests);
+}
+
+test "closed direct method calls reuse specialization before durable key construction" {
+    const allocator = std.testing.allocator;
+    const one_call =
+        \\Thing := [Val(U64)].{
+        \\    next : Thing -> Thing
+        \\    next = |Thing.Val(n)| Thing.Val(n.plus_wrap(1))
+        \\}
+        \\
+        \\main : Thing
+        \\main = Thing.Val(0).next()
+    ;
+    const repeated_calls =
+        \\Thing := [Val(U64)].{
+        \\    next : Thing -> Thing
+        \\    next = |Thing.Val(n)| Thing.Val(n.plus_wrap(1))
+        \\}
+        \\
+        \\main : Thing
+        \\main = {
+        \\    v0 = Thing.Val(0)
+        \\    v1 = v0.next()
+        \\    v2 = v1.next()
+        \\    v3 = v2.next()
+        \\    v4 = v3.next()
+        \\    v5 = v4.next()
+        \\    v6 = v5.next()
+        \\    v7 = v6.next()
+        \\    v7.next()
+        \\}
+    ;
+
+    const one = try monotypeCountersForModule(allocator, one_call);
+    const repeated = try monotypeCountersForModule(allocator, repeated_calls);
+    try std.testing.expectEqual(one.template_requests, repeated.template_requests);
+    try std.testing.expectEqual(one.template_misses, repeated.template_misses);
+    try std.testing.expectEqual(one.specialization_type_digest_requests, repeated.specialization_type_digest_requests);
 }
 
 test "alias-heavy generic specialization count does not exceed backing types" {
@@ -2699,8 +2803,11 @@ test "spec constr specializes recursive record state" {
     try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, directRecordWorkerIsSpecialized));
     try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, directRecordWorkerIsGeneric));
 
+    // Without call specialization the proc keeps its aggregate argument, but
+    // join scalarization still dissolves the loop-carried record.
     try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, directRecordWorkerIsSpecialized));
-    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, directRecordWorkerIsGeneric));
+    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, directRecordWorkerIsGeneric));
+    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, unspecializedWorkerLoopIsScalarized));
 }
 
 test "spec constr specializes record state carried by while loop" {
@@ -2734,7 +2841,8 @@ test "spec constr specializes record state carried by while loop" {
     try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWorkerIsGeneric));
 
     try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsSpecialized));
-    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
+    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
+    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsScalarizedUnspecialized));
 }
 
 test "spec constr specializes recursive tuple state" {
@@ -2765,8 +2873,11 @@ test "spec constr specializes recursive tuple state" {
     try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, directTupleWorkerIsSpecialized));
     try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, directTupleWorkerIsGeneric));
 
+    // As with record state: no call specialization, but the loop-carried
+    // tuple still scalarizes.
     try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, directTupleWorkerIsSpecialized));
-    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, directTupleWorkerIsGeneric));
+    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, directTupleWorkerIsGeneric));
+    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, unspecializedWorkerLoopIsScalarized));
 }
 
 test "spec constr leaves uninspected constructor arguments generic" {
@@ -3817,7 +3928,8 @@ fn branchJoinedRecordStateWorkerIsSpecialized(shape: ProcShape) bool {
     return shape.self_call_count == 0 and
         shape.join_count >= 1 and
         shape.max_join_param_count == 2 and
-        shape.jump_count >= 2;
+        shape.jump_count >= 2 and
+        shape.struct_assign_count == 0;
 }
 
 fn branchJoinedRecordStateWorkerIsGeneric(shape: ProcShape) bool {
@@ -4790,7 +4902,8 @@ test "spec constr specializes primitive-start record state carried by while loop
     try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWorkerIsGeneric));
 
     try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsSpecialized));
-    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
+    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
+    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsScalarizedUnspecialized));
 }
 
 test "spec constr does not require single-field record wrapper for local loop splitting" {
@@ -4873,7 +4986,8 @@ test "spec constr splits loop record state with opaque callable field" {
     try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWithZeroCaptureCallableIsSpecialized));
 
     try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsSpecialized));
-    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
+    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
+    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsScalarizedUnspecialized));
 }
 
 test "spec constr splits loop record state with direct callable captures" {
@@ -4908,7 +5022,8 @@ test "spec constr splits loop record state with direct callable captures" {
     try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWithOpaqueCallableIsSpecialized));
 
     try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWithCallableCapturesIsSpecialized));
-    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
+    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
+    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsScalarizedUnspecialized));
 }
 
 test "spec constr splits loop record state with returned callable captures" {
@@ -4944,7 +5059,8 @@ test "spec constr splits loop record state with returned callable captures" {
     try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWithOpaqueCallableIsSpecialized));
 
     try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWithCallableCapturesIsSpecialized));
-    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
+    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
+    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsScalarizedUnspecialized));
 }
 
 test "spec constr splits loop record state with annotated returned callable captures" {
@@ -4981,7 +5097,8 @@ test "spec constr splits loop record state with annotated returned callable capt
     try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWithOpaqueCallableIsSpecialized));
 
     try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWithCallableCapturesIsSpecialized));
-    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
+    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
+    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsScalarizedUnspecialized));
 }
 
 test "spec constr exposes direct call record result for field access" {
@@ -5102,7 +5219,8 @@ test "spec constr specializes if-joined record state carried by while loop" {
     try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, branchJoinedRecordStateWorkerIsGeneric));
 
     try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, branchJoinedRecordStateWorkerIsSpecialized));
-    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, branchJoinedRecordStateWorkerIsGeneric));
+    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, branchJoinedRecordStateWorkerIsGeneric));
+    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsScalarizedUnspecialized));
 }
 
 test "spec constr specializes match-joined record state carried by while loop" {
@@ -5142,7 +5260,8 @@ test "spec constr specializes match-joined record state carried by while loop" {
     try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, branchJoinedRecordStateWorkerIsGeneric));
 
     try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, branchJoinedRecordStateWorkerIsSpecialized));
-    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, branchJoinedRecordStateWorkerIsGeneric));
+    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, branchJoinedRecordStateWorkerIsGeneric));
+    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsScalarizedUnspecialized));
 }
 
 // Iterator lowering differential harness.
@@ -5791,7 +5910,6 @@ test "spec constr keeps a same-binder scalar distinct from a substituted aggrega
     defer lifted.deinit();
 
     try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted);
-    try postcheck.MonotypeLifted.Lift.recomputeCaptures(allocator, &lifted);
 
     // The input program has no tuple nested directly inside another tuple, so a
     // nested tuple after specialization means the substituted aggregate leaked
@@ -5954,8 +6072,13 @@ test "dispatch evidence boundary validator names the method of a dangling eviden
     var corrupted_method: ?[]const u8 = null;
     for (table.plans) |*plan| {
         switch (plan.resolution) {
-            .direct => {
-                plan.resolution = .{ .direct = @enumFromInt(table.evidence_nodes.len) };
+            .direct_closed => {
+                plan.resolution = .{ .direct_closed = .{ .evidence = @enumFromInt(table.evidence_nodes.len) } };
+                corrupted_method = resources.checked_artifact.canonical_names.methodNameText(plan.method);
+                break;
+            },
+            .direct_parametric => {
+                plan.resolution = .{ .direct_parametric = .{ .evidence = @enumFromInt(table.evidence_nodes.len) } };
                 corrupted_method = resources.checked_artifact.canonical_names.methodNameText(plan.method);
                 break;
             },
@@ -6387,6 +6510,270 @@ test "issue 10253 optimized tail recursion preserves the previous scalar argumen
     );
 }
 
+/// How many distinct fields of `record` are read before the first call in the
+/// proc, and how many are read overall. A record update evaluates its own
+/// field expressions as calls; spread-carried fields are read out of the base
+/// before those run, so an update that carries any spread field reads more
+/// than one field ahead of its first call. Leaving a spread read after a call
+/// keeps the base live across whatever that call does to a collection read out
+/// of it, which is what forces the copy path in issue 10426.
+fn recordFieldReadCounts(
+    allocator: Allocator,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    proc_id: LIR.LirProcSpecId,
+    record: LIR.LocalId,
+) TestError!struct { before_first_call: usize, total: usize } {
+    const store = &lowered.lir_result.store;
+    const proc = store.getProcSpec(proc_id);
+    const body = proc.body orelse return .{ .before_first_call = 0, .total = 0 };
+
+    var aliases = std.AutoHashMap(LIR.LocalId, void).init(allocator);
+    defer aliases.deinit();
+    try aliases.put(record, {});
+
+    var before = std.AutoHashMap(u32, void).init(allocator);
+    defer before.deinit();
+    var total = std.AutoHashMap(u32, void).init(allocator);
+    defer total.deinit();
+
+    // Straight-line walk from the entry: the reads in question are all in the
+    // proc's entry chain, and stopping at the first branch keeps the count
+    // unambiguous.
+    var cursor = body;
+    var seen_call = false;
+    var steps: usize = 0;
+    while (steps < 4096) : (steps += 1) {
+        switch (store.getCFStmt(cursor)) {
+            .assign_ref => |stmt| {
+                switch (stmt.op) {
+                    .local => |src| if (aliases.contains(src)) try aliases.put(stmt.target, {}),
+                    .field => |ref| if (aliases.contains(ref.source)) {
+                        try total.put(ref.field_idx, {});
+                        if (!seen_call) try before.put(ref.field_idx, {});
+                    },
+                    else => {},
+                }
+                cursor = stmt.next;
+            },
+            .assign_call => |stmt| {
+                seen_call = true;
+                cursor = stmt.next;
+            },
+            .assign_low_level => |stmt| {
+                seen_call = true;
+                cursor = stmt.next;
+            },
+            inline .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
+                cursor = stmt.next;
+            },
+            else => break,
+        }
+    }
+    return .{ .before_first_call = before.count(), .total = total.count() };
+}
+
+// Issue 10426: with several refcounted fields, a record update wrote in place
+// only for the field whose read happened to come last -- canonical field
+// order, so whichever sorted last, and nothing at all when a non-refcounted
+// field sorted after them. Every other field copied its whole collection.
+// Spread-carried reads now bind before the update's own field expressions, so
+// the base's last use precedes the mutation for every field.
+test "issue 10426 record update reads spread fields before the mutation" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Model : { count : I64, other : List(I64), rows : List(I64) }
+        \\
+        \\bump_other : Model -> Model
+        \\bump_other = |m| { ..m, count: m.count + 1, other: List.set(m.other, 0, 7) ?? [] }
+        \\
+        \\bump_rows : Model -> Model
+        \\bump_rows = |m| { ..m, count: m.count + 1, rows: List.set(m.rows, 0, 7) ?? [] }
+        \\
+        \\main : I64
+        \\main = {
+        \\    m0 = { count: 0, other: List.repeat(1, 8), rows: List.repeat(2, 8) }
+        \\    a = bump_rows(bump_other(m0))
+        \\    a.count + (List.get(a.other, 0) ?? 0) + (List.get(a.rows, 0) ?? 0)
+        \\}
+    ;
+
+    var lowered = try lowerModule(allocator, source, .none);
+    defer lowered.deinit(allocator);
+
+    const store = &lowered.lowered.lir_result.store;
+    var checked_any = false;
+    for (0..store.procSpecCount()) |index| {
+        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc = store.getProcSpec(proc_id);
+        const args = store.getLocalSpan(proc.args);
+        if (GuardedList.borrowLen(args) != 1) continue;
+        const counts = try recordFieldReadCounts(allocator, &lowered.lowered, proc_id, GuardedList.at(args, 0));
+        // The update procs read the spread field and `count` in their entry
+        // chain, before the branch the mutated field's expression builds;
+        // anything reading fewer than two fields is unrelated.
+        if (counts.total < 2) continue;
+        checked_any = true;
+        // Both the spread field and the explicit `count` read precede the
+        // first call; only the mutated field's read may follow it.
+        try std.testing.expect(counts.before_first_call >= 2);
+    }
+    try std.testing.expect(checked_any);
+}
+
+// Counts incref statements whose value is the target of a `ref.field` read
+// (or a pure alias of one) anywhere in the proc. Field takes hand such reads
+// the container's stored unit, so a take-covered read pays no retain.
+fn fieldReadRetainCount(
+    allocator: Allocator,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    proc_id: LIR.LirProcSpecId,
+) TestError!usize {
+    const store = &lowered.lir_result.store;
+    const proc = store.getProcSpec(proc_id);
+    const body = proc.body orelse return 0;
+
+    var read_targets = std.AutoHashMap(LIR.LocalId, void).init(allocator);
+    defer read_targets.deinit();
+    var retained = std.AutoHashMap(LIR.LocalId, void).init(allocator);
+    defer retained.deinit();
+    var visited = std.AutoHashMap(u32, void).init(allocator);
+    defer visited.deinit();
+    var stack = std.ArrayList(LIR.CFStmtId).empty;
+    defer stack.deinit(allocator);
+
+    // Two sweeps so alias edges and increfs seen before their read resolve:
+    // first collect read targets and their alias closure, then count.
+    for (0..2) |sweep| {
+        visited.clearRetainingCapacity();
+        stack.clearRetainingCapacity();
+        try stack.append(allocator, body);
+        while (stack.pop()) |cursor| {
+            const seen = try visited.getOrPut(@intFromEnum(cursor));
+            if (seen.found_existing) continue;
+            switch (store.getCFStmt(cursor)) {
+                .assign_ref => |stmt| {
+                    switch (stmt.op) {
+                        .field => try read_targets.put(stmt.target, {}),
+                        .local => |src| if (read_targets.contains(src)) {
+                            try read_targets.put(stmt.target, {});
+                        },
+                        else => {},
+                    }
+                    try stack.append(allocator, stmt.next);
+                },
+                .incref => |stmt| {
+                    if (sweep == 1 and read_targets.contains(stmt.value)) {
+                        try retained.put(stmt.value, {});
+                    }
+                    try stack.append(allocator, stmt.next);
+                },
+                inline .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .decref, .decref_if_initialized, .free => |stmt| {
+                    try stack.append(allocator, stmt.next);
+                },
+                .switch_stmt => |stmt| {
+                    const branches = store.getCFSwitchBranches(stmt.branches);
+                    for (0..GuardedList.borrowLen(branches)) |i| {
+                        try stack.append(allocator, GuardedList.at(branches, i).body);
+                    }
+                    try stack.append(allocator, stmt.default_branch);
+                    if (stmt.continuation) |continuation| try stack.append(allocator, continuation);
+                },
+                .switch_initialized_payload => |stmt| {
+                    try stack.append(allocator, stmt.initialized_branch);
+                    try stack.append(allocator, stmt.uninitialized_branch);
+                },
+                .str_match => |stmt| {
+                    try stack.append(allocator, stmt.on_match);
+                    try stack.append(allocator, stmt.on_miss);
+                },
+                .str_match_set => |stmt| {
+                    const arms = store.getStrMatchArms(stmt.arms);
+                    for (0..GuardedList.borrowLen(arms)) |i| {
+                        try stack.append(allocator, GuardedList.at(arms, i).on_match);
+                    }
+                    try stack.append(allocator, stmt.on_miss);
+                },
+                .join => |stmt| {
+                    try stack.append(allocator, stmt.body);
+                    try stack.append(allocator, stmt.remainder);
+                },
+                else => {},
+            }
+        }
+    }
+    return retained.count();
+}
+
+// A locally built record whose fields are read once each and then dies is
+// dismantled by field takes: every read on the record's spine keeps the
+// record's stored unit instead of paying a retain, so the update's mutation
+// sees a unique collection and writes in place. Both records here qualify,
+// leaving no retained field read anywhere in the program.
+test "field takes drop the field-read retains of dying local records" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : I64
+        \\main = {
+        \\    m = { count: 0.I64, other: List.repeat(1.I64, 8), rows: List.repeat(2.I64, 8) }
+        \\    a = { ..m, count: m.count + 1, rows: List.set(m.rows, 0, 7) ?? [] }
+        \\    a.count + (List.get(a.other, 0) ?? 0) + (List.get(a.rows, 0) ?? 0)
+        \\}
+    ;
+
+    var lowered = try lowerModule(allocator, source, .none);
+    defer lowered.deinit(allocator);
+
+    const store = &lowered.lowered.lir_result.store;
+    var root_retained: ?usize = null;
+    for (0..store.procSpecCount()) |index| {
+        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc = store.getProcSpec(proc_id);
+        const args = store.getLocalSpan(proc.args);
+        if (GuardedList.borrowLen(args) != 0) continue;
+        if (proc.body == null) continue;
+        const retained = try fieldReadRetainCount(allocator, &lowered.lowered, proc_id);
+        root_retained = (root_retained orelse 0) + retained;
+    }
+    // m's `count`/`other`/`rows` reads and a's `count`/`other` reads are all
+    // takes; only a's `rows` read may retain.
+    try std.testing.expect(root_retained != null);
+    try std.testing.expectEqual(@as(usize, 0), root_retained.?);
+}
+
+// A field read placed after an if-diamond still takes: every branch of the
+// lowered switch falls straight through to its shared continuation, so the
+// read past the rejoin runs exactly once on every path and may consume the
+// dying record's stored unit for its field.
+test "field takes cross a fall-through branch diamond" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : I64
+        \\main = {
+        \\    m = { flag: 3.I64, rows: List.repeat(2.I64, 8) }
+        \\    bump = if m.flag > 0 { 1.I64 } else { 2 }
+        \\    r = List.set(m.rows, 0, bump) ?? []
+        \\    (List.get(r, 0) ?? 0) + bump
+        \\}
+    ;
+
+    var lowered = try lowerModule(allocator, source, .none);
+    defer lowered.deinit(allocator);
+
+    const store = &lowered.lowered.lir_result.store;
+    var root_retained: ?usize = null;
+    for (0..store.procSpecCount()) |index| {
+        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc = store.getProcSpec(proc_id);
+        const args = store.getLocalSpan(proc.args);
+        if (GuardedList.borrowLen(args) != 0) continue;
+        if (proc.body == null) continue;
+        const retained = try fieldReadRetainCount(allocator, &lowered.lowered, proc_id);
+        root_retained = (root_retained orelse 0) + retained;
+    }
+    try std.testing.expect(root_retained != null);
+    try std.testing.expectEqual(@as(usize, 0), root_retained.?);
+}
+
 // Repro for https://github.com/roc-lang/roc/issues/10435: SpecConstr must
 // preserve the two observed loop results without mutating frozen Monotype type
 // data while removing the unused third result.
@@ -6429,4 +6816,209 @@ test "issue 10435 SpecConstr preserves frozen types for partially used while sta
     switch (result) {
         .value => |value| try std.testing.expectEqual(@as(u64, 9), value.read(u64)),
     }
+}
+
+// Repro for the ARC certifier failure behind
+// https://github.com/roc-lang/roc/issues/10461: ScalarizeJoins treated a
+// neighboring join's parameter as a splattable wrapper temporary because its
+// only initialization was a struct literal and its only use was a
+// `set_local initialize_join_param` copy. Splatting deleted the literal —
+// that join's edge initialization — leaving the parameter uninitialized, so
+// ARC's release of the (unused, refcounted) parameter had nothing to
+// release. The parameter must instead be seeded by field reads and dissolve
+// on a later fixpoint round.
+test "issue 10461 ScalarizeJoins keeps neighboring join parameter initialization" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : U64
+        \\main = {
+        \\    data_len = 300.U64
+        \\    var $bytes = List.with_capacity(8.U64)
+        \\    var $bitcount = 0.U8
+        \\    var $pos = 0.U64
+        \\
+        \\    while $pos < data_len {
+        \\        var $seqs = List.with_capacity(8.U64)
+        \\        var $litrun = 0.U64
+        \\        var $in_block = True
+        \\
+        \\        while $in_block {
+        \\            if data_len - $pos < 5 {
+        \\                var $k = 0.U64
+        \\                while $k < data_len - $pos {
+        \\                    $litrun = $litrun + 1
+        \\                    $pos = $pos + 1
+        \\                    $k = $k + 1
+        \\                }
+        \\                $in_block = False
+        \\            } else {
+        \\                if $pos % 2 == 1 {
+        \\                    $seqs = $seqs.append($litrun)
+        \\                    $litrun = 0
+        \\                    $pos = $pos + 4
+        \\                } else {
+        \\                    $litrun = $litrun + 1
+        \\                    $pos = $pos + 1
+        \\                }
+        \\
+        \\                if $pos >= data_len {
+        \\                    $in_block = False
+        \\                } else {}
+        \\            }
+        \\        }
+        \\
+        \\        seqs = if $litrun > 0 {
+        \\            $seqs.append($litrun)
+        \\        } else {
+        \\            $seqs
+        \\        }
+        \\        var $s = 0.U64
+        \\        while $s < seqs.len() {
+        \\            seq = match seqs.get($s) {
+        \\                Ok(v) => v
+        \\                Err(_) => 0
+        \\            }
+        \\            c = $bitcount + seq.to_u8_wrap()
+        \\            if c >= 8 {
+        \\                $bytes = $bytes.append(c)
+        \\                $bitcount = c - 8
+        \\            } else {
+        \\                $bitcount = c
+        \\            }
+        \\            $s = $s + 1
+        \\        }
+        \\    }
+        \\
+        \\    if $bitcount > 0 {
+        \\        $bytes = $bytes.append($bitcount)
+        \\    } else {}
+        \\    $bytes.len()
+        \\}
+    ;
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    var runtime_env = eval.RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+    var interpreter = try eval.Interpreter.init(
+        allocator,
+        &optimized.lowered.lir_result.store,
+        &optimized.lowered.lir_result.layouts,
+        runtime_env.get_ops(),
+        .preserve,
+    );
+    defer interpreter.deinit();
+
+    const result = try interpreter.eval(.{ .proc_id = try rootProc(&optimized.lowered) });
+    switch (result) {
+        .value => |value| try std.testing.expectEqual(@as(u64, 1), value.read(u64)),
+    }
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/10461: when SpecConstr
+// narrows an inner loop's partially demanded results and the continuation
+// after that loop ends in the enclosing loop's back edge, inlining the
+// continuation at the inner loop's exit site would rebind that `continue` to
+// the inner loop. The continuation must stay outside as a join body.
+test "issue 10461 SpecConstr keeps outer loop back edge out of inner loop body" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : U64
+        \\main = {
+        \\    var $a = 0.U64
+        \\    var $b = 0.U64
+        \\    var $c = 0.U64
+        \\    var $d = 0.U64
+        \\    while $a < 3 {
+        \\        var $x = 0.U64
+        \\        var $y = 0.U64
+        \\        var $z = 0.U64
+        \\        while $x < 2 {
+        \\            $x = $x + 1
+        \\            $y = $y + $a
+        \\            $z = $z + 2
+        \\        }
+        \\        $a = $a + $x
+        \\        $b = $b + $y
+        \\        $c = $c + 1
+        \\        $d = $d + 2
+        \\    }
+        \\    $a + $b
+        \\}
+    ;
+
+    var lifted = try liftModuleAfterSpecConstr(allocator, source);
+    defer lifted.deinit(allocator);
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    var runtime_env = eval.RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+    var interpreter = try eval.Interpreter.init(
+        allocator,
+        &optimized.lowered.lir_result.store,
+        &optimized.lowered.lir_result.layouts,
+        runtime_env.get_ops(),
+        .preserve,
+    );
+    defer interpreter.deinit();
+
+    const result = try interpreter.eval(.{ .proc_id = try rootProc(&optimized.lowered) });
+    switch (result) {
+        .value => |value| try std.testing.expectEqual(@as(u64, 8), value.read(u64)),
+    }
+}
+
+// A selected loop-result ABI applies to every break owned by that loop,
+// including breaks nested inside match arms. Rewriting only the terminating
+// spine leaves those tuple-valued breaks stamped with the selected scalar type
+// and Lambda Solved rejects the inconsistent expression.
+test "SpecConstr rewrites nested match breaks with the selected loop exit ABI" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : List(U8), U64, U64 -> U64
+        \\main = |bytes, a_start, b_start| {
+        \\    lo = a_start.min(b_start)
+        \\    delta = a_start.max(b_start).minus_saturated(lo)
+        \\    var $acc = 0.U64
+        \\    var $a = lo
+        \\
+        \\    while True {
+        \\        x = match U64.from_le_bytes(bytes, $a) {
+        \\            Ok(v) => v
+        \\            Err(_) => break
+        \\        }
+        \\        y = match U64.from_le_bytes(bytes, $a.plus_wrap(delta)) {
+        \\            Ok(v) => v
+        \\            Err(_) => break
+        \\        }
+        \\        if x != y {
+        \\            return $acc.plus_wrap(U64.count_trailing_zero_bits(x.bitwise_xor(y)).to_u64() // 8)
+        \\        }
+        \\        $acc = $acc.plus_wrap(8)
+        \\        $a = $a.plus_wrap(8)
+        \\    }
+        \\
+        \\    while True {
+        \\        p = match bytes.get($a) {
+        \\            Ok(v) => v
+        \\            Err(_) => break
+        \\        }
+        \\        q = match bytes.get($a.plus_wrap(delta)) {
+        \\            Ok(v) => v
+        \\            Err(_) => break
+        \\        }
+        \\        if p != q { break }
+        \\        $acc = $acc.plus_wrap(1)
+        \\        $a = $a.plus_wrap(1)
+        \\    }
+        \\
+        \\    $acc
+        \\}
+    ;
+
+    var lowered = try lowerModule(allocator, source, .wrappers);
+    defer lowered.deinit(allocator);
 }

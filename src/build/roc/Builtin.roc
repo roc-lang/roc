@@ -15,8 +15,8 @@ Builtin :: [].{
 	#     parse_tuple_next  : encoding, state, U64, U64 -> Try(state, err)
 	#     parse_tuple_end   : encoding, state, U64 -> Try(state, err)
 	#
-	# parse_tuple_next runs before every element after the first and receives
-	# that element's zero-based index along with the total. Because the format
+	# parse_tuple_next runs before every item after the first and receives
+	# that item's zero-based index along with the total. Because the format
 	# knows the expected arity, it is the one that reports an arity mismatch,
 	# at the position where it can say what it actually found.
 	#
@@ -38,8 +38,8 @@ Builtin :: [].{
 	#
 	# Uncounted drives an event loop instead. For lists:
 	#
-	#     parse_list_next          : encoding, state -> Try([Element(state), Done(state)], err)
-	#     parse_list_after_element : encoding, state -> Try([Continue(state), Done(state)], err)
+	#     parse_list_next       : encoding, state -> Try([Item(state), Done(state)], err)
+	#     parse_list_after_item : encoding, state -> Try([Continue(state), Done(state)], err)
 	#
 	# Records use parse_record_start, then parse_record_field to read a field
 	# name, then parse_record_after_field. A field event may also be Continue,
@@ -150,11 +150,11 @@ Builtin :: [].{
 			parse_list_start : JsonEncoding, JsonState -> Try([Counted({ len : U64, rest : JsonState }), Uncounted(JsonState)], [InvalidJson(Str)])
 			parse_list_start = |encoding, state| JsonEncoding.parse_list_start(encoding, state)
 
-			parse_list_next : JsonEncoding, JsonState -> Try([Element(JsonState), Done(JsonState)], [InvalidJson(Str)])
+			parse_list_next : JsonEncoding, JsonState -> Try([Item(JsonState), Done(JsonState)], [InvalidJson(Str)])
 			parse_list_next = |encoding, state| JsonEncoding.parse_list_next(encoding, state)
 
-			parse_list_after_element : JsonEncoding, JsonState -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str)])
-			parse_list_after_element = |encoding, state| JsonEncoding.parse_list_after_element(encoding, state)
+			parse_list_after_item : JsonEncoding, JsonState -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str)])
+			parse_list_after_item = |encoding, state| JsonEncoding.parse_list_after_item(encoding, state)
 
 			parse_tuple_start : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str)])
 			parse_tuple_start = |encoding, state, len| JsonEncoding.parse_tuple_start(encoding, state, len)
@@ -221,10 +221,10 @@ Builtin :: [].{
 			encode_record = |_, state, count, write_fields| JsonEncoding.encode_record(state, count, write_fields)
 
 			encode_tuple : JsonEncoding, JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
-			encode_tuple = |_, state, count, write_elements| JsonEncoding.encode_tuple(state, count, write_elements)
+			encode_tuple = |_, state, count, write_items| JsonEncoding.encode_tuple(state, count, write_items)
 
 			encode_list : JsonEncoding, JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
-			encode_list = |_, state, count, write_elements| JsonEncoding.encode_list(state, count, write_elements)
+			encode_list = |_, state, count, write_items| JsonEncoding.encode_list(state, count, write_items)
 
 			encode_dict : JsonEncoding, JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)), (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
 			encode_dict = |_, state, count, write_entries| JsonEncoding.encode_dict(state, count, write_entries)
@@ -346,7 +346,7 @@ Builtin :: [].{
 				}
 			}
 
-			## A JSON array never declares its element count up front, so list
+			## A JSON array never declares its item count up front, so list
 			## parsing always runs in Uncounted mode.
 			parse_list_start_from_json : Str -> Try([Counted({ len : U64, rest : JsonState }), Uncounted(JsonState)], [InvalidJson(Str), ..])
 			parse_list_start_from_json = |raw| {
@@ -359,19 +359,19 @@ Builtin :: [].{
 				}
 			}
 
-			parse_list_next_from_json : Str -> Try([Element(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
+			parse_list_next_from_json : Str -> Try([Item(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
 			parse_list_next_from_json = |raw| {
 				trimmed = json_trim_start(raw)
 
 				if Str.starts_with(trimmed, "]") {
 					Ok(Done(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, "]")))))
 				} else {
-					Ok(Element(JsonState.Input(trimmed)))
+					Ok(Item(JsonState.Input(trimmed)))
 				}
 			}
 
-			parse_list_after_element_from_json : JsonEncoding, Str -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
-			parse_list_after_element_from_json = |encoding, raw| {
+			parse_list_after_item_from_json : JsonEncoding, Str -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
+			parse_list_after_item_from_json = |encoding, raw| {
 				trimmed = json_trim_start(raw)
 
 				if Str.starts_with(trimmed, "]") {
@@ -395,7 +395,7 @@ Builtin :: [].{
 
 			## JSON writes tuples as arrays. Because the arity is known, a
 			## mismatch is detected here rather than by the driver, so the error
-			## can point at the element position that actually disagreed.
+			## can point at the item position that actually disagreed.
 			parse_tuple_start_from_json : Str, U64 -> Try(JsonState, [InvalidJson(Str), ..])
 			parse_tuple_start_from_json = |raw, len| {
 				trimmed = json_trim_start(raw)
@@ -717,8 +717,8 @@ Builtin :: [].{
 				)
 			}
 
-			write_sequence_element : JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)
-			write_sequence_element = |state, write_value| {
+			write_sequence_item : JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)
+			write_sequence_item = |state, write_value| {
 				output = if state.needs_comma {
 					u8_append(state.output, 44)
 				} else {
@@ -1603,16 +1603,16 @@ Builtin :: [].{
 					Input(raw) => Json.parse_list_start_from_json(raw)
 				}
 
-			parse_list_next : JsonEncoding, JsonState -> Try([Element(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
+			parse_list_next : JsonEncoding, JsonState -> Try([Item(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
 			parse_list_next = |_, state|
 				match state {
 					Input(raw) => Json.parse_list_next_from_json(raw)
 				}
 
-			parse_list_after_element : JsonEncoding, JsonState -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
-			parse_list_after_element = |encoding, state|
+			parse_list_after_item : JsonEncoding, JsonState -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
+			parse_list_after_item = |encoding, state|
 				match state {
-					Input(raw) => Json.parse_list_after_element_from_json(encoding, raw)
+					Input(raw) => Json.parse_list_after_item_from_json(encoding, raw)
 				}
 
 			parse_tuple_start : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str), ..])
@@ -1756,14 +1756,14 @@ Builtin :: [].{
 			}
 
 			encode_tuple : JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
-			encode_tuple = |state, _, write_elements| {
+			encode_tuple = |state, _, write_items| {
 				started = JsonContainerEncodeState.{ output: u8_append(state.output, 91), needs_comma: False }
-				finished = write_elements(started, Json.write_sequence_element)?
+				finished = write_items(started, Json.write_sequence_item)?
 				Ok(JsonEncodeState.{ output: u8_append(finished.output, 93) })
 			}
 
 			encode_list : JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
-			encode_list = |state, count, write_elements| JsonEncoding.encode_tuple(state, count, write_elements)
+			encode_list = |state, count, write_items| JsonEncoding.encode_tuple(state, count, write_items)
 
 			## A dict writes as a JSON object. The key is written by its own
 			## thunk, which the key encoders always render as a quoted string.
@@ -3324,6 +3324,87 @@ Builtin :: [].{
 				One({ item, rest }) => Iter.fold(rest, step(acc, item), step)
 			}
 
+		## Sum the items of an iterator, without collecting them into a list first.
+		## Works for any type that implements `plus` and `default` methods, such as the
+		## numeric types.
+		##
+		## `default` is called only when the iterator is empty; otherwise it is never
+		## called at all. Summing begins at the first item and uses `plus` to combine
+		## the rest, so a single-item iterator returns that item without calling
+		## either method, and `default` does not need to be an identity value for `plus`.
+		## ```roc
+		## expect (1..=4).sum() == 10
+		##
+		## expect [42.I64].iter().sum() == 42
+		##
+		## expect [].iter().sum() == 0.I64
+		## ```
+		sum : Iter(item) -> item
+			where [item.plus : item, item -> item, item.default : item]
+		sum = |iterator| {
+			Item : item
+			match Iter.next(iterator) {
+				Done => Item.default()
+				Skip({ rest }) => Iter.sum(rest)
+				One({ item: first, rest }) => Iter.fold(rest, first, |acc, item| acc + item)
+			}
+		}
+
+		## Multiply the items of an iterator together, or `Err(IterWasEmpty)` if the
+		## iterator is empty. Works for any type that implements `times`.
+		##
+		## Unlike [Iter.sum], this reports an empty iterator instead of answering it.
+		## `default` is zero for the numeric types, which is the identity for `plus` but
+		## not for `times`, so there is no value it could return for an empty iterator
+		## that would keep `product` consistent with multiplication.
+		## ```roc
+		## expect (1..=4).product() == Ok(24)
+		##
+		## expect [42.I64].iter().product() == Ok(42)
+		##
+		## expect [7.I64].iter().drop_first(1).product() == Err(IterWasEmpty)
+		## ```
+		product : Iter(item) -> Try(item, [IterWasEmpty])
+			where [item.times : item, item -> item]
+		product = |iterator|
+			match Iter.next(iterator) {
+				Done => Err(IterWasEmpty)
+				Skip({ rest }) => Iter.product(rest)
+				One({ item: first, rest }) => Ok(Iter.fold(rest, first, |acc, item| acc * item))
+			}
+
+		## Find the minimum item of an iterator, or `Err(IterWasEmpty)` if the
+		## iterator is empty. Works for any type that implements `min`.
+		## ```roc
+		## expect [3.I64, 1, 2].iter().min() == Ok(1)
+		##
+		## expect [7.I64].iter().drop_first(1).min() == Err(IterWasEmpty)
+		## ```
+		min : Iter(item) -> Try(item, [IterWasEmpty])
+			where [item.min : item, item -> item]
+		min = |iterator|
+			match Iter.next(iterator) {
+				Done => Err(IterWasEmpty)
+				Skip({ rest }) => Iter.min(rest)
+				One({ item: first, rest }) => Ok(Iter.fold(rest, first, |best_so_far, item| best_so_far.min(item)))
+			}
+
+		## Find the maximum item of an iterator, or `Err(IterWasEmpty)` if the
+		## iterator is empty. Works for any type that implements `max`.
+		## ```roc
+		## expect [3.I64, 1, 2].iter().max() == Ok(3)
+		##
+		## expect [7.I64].iter().drop_first(1).max() == Err(IterWasEmpty)
+		## ```
+		max : Iter(item) -> Try(item, [IterWasEmpty])
+			where [item.max : item, item -> item]
+		max = |iterator|
+			match Iter.next(iterator) {
+				Done => Err(IterWasEmpty)
+				Skip({ rest }) => Iter.max(rest)
+				One({ item: first, rest }) => Ok(Iter.fold(rest, first, |best_so_far, item| best_so_far.max(item)))
+			}
+
 		## Returns the iterator's length if it is known up front, so collections
 		## can pre-size their allocation.
 		size_hint : Iter(item) -> [Known(U64), Unknown]
@@ -3528,7 +3609,7 @@ Builtin :: [].{
 	}
 
 	## An effectful iterator: identical to [Iter] except that its `step!` thunk is
-	## effectful, so combinators like [Stream.map!] can run effects per element while
+	## effectful, so combinators like [Stream.map!] can run effects per item while
 	## staying lazy. Produced from an [Iter] via [Iter.map!] and driven by [Stream.collect!].
 	Stream(item) :: {
 		len_if_known : [Known(U64), Unknown],
@@ -3633,9 +3714,9 @@ Builtin :: [].{
 	List(_item) :: [ProvidedByCompiler].{
 		parser_for : _
 
-		## Returns the length of the list, which is equal to the number of elements it contains.
+		## Returns the length of the list, which is equal to the number of items it contains.
 		##
-		## One [List] can store up to [I64.highest] elements on 64-bit targets and [I32.highest] on 32-bit targets like wasm.
+		## One [List] can store up to [I64.highest] items on 64-bit targets and [I32.highest] on 32-bit targets like wasm.
 		## This means the #U64 this function returns can always be safely converted to #I64 or #I32, depending on the target.
 		len : List(_item) -> U64
 
@@ -3728,7 +3809,7 @@ Builtin :: [].{
 		## ```
 		join : List(List(item)) -> List(item)
 		join = |lists| {
-			# `$total` counts exactly the elements appended below, so every
+			# `$total` counts exactly the items appended below, so every
 			# unchecked append stays in bounds.
 			var $total = 0
 			for inner in lists {
@@ -3737,18 +3818,18 @@ Builtin :: [].{
 
 			var $joined = List.with_capacity($total)
 			for inner in lists {
-				for elem in inner {
-					$joined = list_append_unsafe($joined, elem)
+				for item in inner {
+					$joined = list_append_unsafe($joined, item)
 				}
 			}
 
 			$joined
 		}
 
-		## Create a list with space for at least capacity elements
+		## Create a list with space for at least capacity items
 		with_capacity : U64 -> List(item)
 
-		## Ensure this list has room for at least spare additional elements.
+		## Ensure this list has room for at least spare additional items.
 		reserve : List(item), U64 -> List(item)
 		reserve = |list, spare| list_reserve(list, spare)
 
@@ -3757,7 +3838,7 @@ Builtin :: [].{
 		release_excess_capacity = |list| list_release_excess_capacity(list)
 
 		## Sort a list using a custom comparison function. The comparator receives two
-		## elements and returns `LT`, `EQ`, or `GT` to indicate their relative order.
+		## items and returns `LT`, `EQ`, or `GT` to indicate their relative order.
 		## ```roc
 		## expect [3, 1, 2].sort_with(|a, b| if a < b LT else if a > b GT else EQ) == [1, 2, 3]
 		##
@@ -3806,7 +3887,7 @@ Builtin :: [].{
 			}
 		}
 
-		## Returns `True` if the two lists have the same length and their elements are pairwise equal.
+		## Returns `True` if the two lists have the same length and their items are pairwise equal.
 		is_eq : List(item), List(item) -> Bool
 			where [item.is_eq : item, item -> Bool]
 		is_eq = |self, other| {
@@ -3839,7 +3920,7 @@ Builtin :: [].{
 			$next
 		}
 
-		## Add a single element to the end of a list.
+		## Add a single item to the end of a list.
 		## ```roc
 		## [1.I64, 2, 3].append(4)
 		##
@@ -3871,7 +3952,7 @@ Builtin :: [].{
 		prepend_if_ok : List(a), Try(a, err) -> List(a)
 		prepend_if_ok = |list, maybe_item| list_prepend_if_ok(list, maybe_item)
 
-		## Add a single element to the beginning of a list.
+		## Add a single item to the beginning of a list.
 		## ```roc
 		## expect [2, 3, 4].prepend(1) == [1, 2, 3, 4]
 		##
@@ -3879,7 +3960,7 @@ Builtin :: [].{
 		## ```
 		prepend : List(a), a -> List(a)
 
-		## Returns the first element in the list, or `ListWasEmpty` if it was empty.
+		## Returns the first item in the list, or `ListWasEmpty` if it was empty.
 		## ```roc
 		## expect [1, 2, 3].first() == Ok(1)
 		## expect [].first() == Err(ListWasEmpty)
@@ -3891,7 +3972,7 @@ Builtin :: [].{
 			Try.Ok(list_get_unsafe(list, 0))
 		}
 
-		## Returns an element from a list at the given index.
+		## Returns an item from a list at the given index.
 		##
 		## Returns `Err OutOfBounds` if the given index exceeds the List's length
 		## ```roc
@@ -3906,7 +3987,7 @@ Builtin :: [].{
 		}
 
 		## Alias for [List.get], enabling the future `list[index]` subscript operator.
-		## Returns an element from a list at the given index.
+		## Returns an item from a list at the given index.
 		##
 		## Returns `Err OutOfBounds` if the given index exceeds the List's length
 		## ```roc
@@ -3916,7 +3997,7 @@ Builtin :: [].{
 		subscript : List(item), U64 -> Try(item, [OutOfBounds, ..])
 		subscript = |list, index| List.get(list, index)
 
-		## Returns the element at the given index, wrapping back to the start when the
+		## Returns the item at the given index, wrapping back to the start when the
 		## index is past the end (the index is taken modulo the length).
 		##
 		## You may know a similar function named `getWrap`, or indexing that wraps a
@@ -3936,7 +4017,7 @@ Builtin :: [].{
 			}
 		}
 
-		## Replaces the element at the given index with a new value.
+		## Replaces the item at the given index with a new value.
 		## ```roc
 		## expect [10, 20, 30].set(1, 99) == Ok([10, 99, 30])
 		##
@@ -3950,7 +4031,7 @@ Builtin :: [].{
 				Err(OutOfBounds)
 			}
 
-		## Replaces the element at the given index, returning both the updated list
+		## Replaces the item at the given index, returning both the updated list
 		## and the value that was replaced.
 		## ```roc
 		## expect [10, 20, 30].replace(1, 99) == Ok({ list: [10, 99, 30], prev: 20 })
@@ -3964,7 +4045,7 @@ Builtin :: [].{
 				Err(OutOfBounds)
 			}
 
-		## Updates the element at the given index by applying a function to it.
+		## Updates the item at the given index by applying a function to it.
 		## ```roc
 		## expect [10, 20, 30].update(1, |x| x + 5) == Ok([10, 25, 30])
 		##
@@ -3977,7 +4058,7 @@ Builtin :: [].{
 			Err(OutOfBounds)
 		}
 
-		## Exchanges the elements at the two given indices.
+		## Exchanges the items at the two given indices.
 		## ```roc
 		## expect [10, 20, 30, 40].swap(0, 3) == Ok([40, 20, 30, 10])
 		##
@@ -3993,8 +4074,8 @@ Builtin :: [].{
 			}
 		}
 
-		## Inserts an element at the given index, shifting later elements toward the end.
-		## An index equal to the length appends the element; a greater index is out of bounds.
+		## Inserts an item at the given index, shifting later items toward the end.
+		## An index equal to the length appends the item; a greater index is out of bounds.
 		## ```roc
 		## expect [1.I64, 2, 3].insert(1, 9) == Ok([1, 9, 2, 3])
 		##
@@ -4006,7 +4087,7 @@ Builtin :: [].{
 			if index > len {
 				Err(OutOfBounds)
 			} else {
-				# The two loops append exactly `index` then `len - index` elements plus
+				# The two loops append exactly `index` then `len - index` items plus
 				# the inserted one, so every unchecked append stays within `len + 1`.
 				var $result = List.with_capacity(len + 1)
 				var $i = 0
@@ -4040,7 +4121,7 @@ Builtin :: [].{
 			fun!(item)
 		}
 
-		## Convert each element in the list to something new, by calling a conversion
+		## Convert each item in the list to something new, by calling a conversion
 		## function on each of them. Then return a new list of the converted values.
 		## ```roc
 		## expect [1, 2, 3].map(|num| num + 1) == [2, 3, 4]
@@ -4072,7 +4153,7 @@ Builtin :: [].{
 		}
 
 		## This works like [List.map], except it also passes the index
-		## of the element to the conversion function.
+		## of the item to the conversion function.
 		## ```roc
 		## expect List.map_with_index([10, 20, 30], (|num, index| num + index)) == [10, 21, 32]
 		## ```
@@ -4087,7 +4168,7 @@ Builtin :: [].{
 			$new_list
 		}
 
-		## Apply a binary function to pairs of elements from two lists, returning a list of results.
+		## Apply a binary function to pairs of items from two lists, returning a list of results.
 		## The result's length is the length of the shorter input list.
 		## ```
 		## expect [1, 2, 3].map2([10, 20, 30], |a, b| a + b) == [11, 22, 33]
@@ -4111,7 +4192,7 @@ Builtin :: [].{
 			$result
 		}
 
-		## Apply a ternary function to triples of elements from three lists, returning a list of results.
+		## Apply a ternary function to triples of items from three lists, returning a list of results.
 		## The result's length is the length of the shortest input list.
 		## ```
 		## expect [1, 2, 3].map3([10, 20, 30], [100, 200, 300], |a, b, c| a + b + c) == [111, 222, 333]
@@ -4135,7 +4216,7 @@ Builtin :: [].{
 			$result
 		}
 
-		## Apply a quaternary function to groups of elements from four lists, returning a list of results.
+		## Apply a quaternary function to groups of items from four lists, returning a list of results.
 		## The result's length is the length of the shortest input list.
 		## ```
 		## expect [1, 2, 3].map4([10, 20, 30], [100, 200, 300], [1000, 2000, 3000], |a, b, c, d| a + b + c + d) == [1111, 2222, 3333]
@@ -4159,8 +4240,8 @@ Builtin :: [].{
 			$result
 		}
 
-		## Run the given function on each element of a list, and return all the
-		## elements for which the function returned `Bool.True`.
+		## Run the given function on each item of a list, and return all the
+		## items for which the function returned `Bool.True`.
 		## ```roc
 		## [1.I64, 2, 3, 4].keep_if(|num| num > 2)
 		## ```
@@ -4177,7 +4258,7 @@ Builtin :: [].{
 		##
 		## If given a unique list, [List.keep_if] will mutate it in place to assemble the appropriate list.
 		## If that happens, this function will not allocate any new memory on the heap.
-		## If all elements in the list end up being kept, Roc will return the original
+		## If all items in the list end up being kept, Roc will return the original
 		## list unaltered.
 		##
 		keep_if : List(a), (a -> Bool) -> List(a)
@@ -4185,16 +4266,16 @@ Builtin :: [].{
 			List.fold(
 				list,
 				[],
-				|acc, elem|
-					if predicate(elem) {
-						List.concat(acc, [elem])
+				|acc, item|
+					if predicate(item) {
+						List.concat(acc, [item])
 					} else {
 						acc
 					},
 			)
 
-		## Run the given function on each element of a list, and return all the
-		## elements for which the function returned `Bool.False`.
+		## Run the given function on each item of a list, and return all the
+		## items for which the function returned `Bool.False`.
 		## ```roc
 		## [1.I64, 2, 3, 4].drop_if(|num| num > 2)
 		## ```
@@ -4207,16 +4288,16 @@ Builtin :: [].{
 			List.fold(
 				list,
 				[],
-				|acc, elem|
-					if predicate(elem) {
+				|acc, item|
+					if predicate(item) {
 						acc
 					} else {
-						List.concat(acc, [elem])
+						List.concat(acc, [item])
 					},
 			)
 
-		## Run the given function on each element of a list, and return a list of
-		## the values it wrapped in `Ok`. Elements the function maps to `Err` are
+		## Run the given function on each item of a list, and return a list of
+		## the values it wrapped in `Ok`. Items the function maps to `Err` are
 		## dropped. Use [List.keep_errs] to keep the `Err` values instead.
 		## ```roc
 		## expect [1.I64, 2, 3, 4].keep_oks(|n| if n.is_even() { Ok(n) } else { Err({}) }) == [2, 4]
@@ -4226,15 +4307,15 @@ Builtin :: [].{
 			List.fold(
 				list,
 				[],
-				|acc, elem|
-					match transform(elem) {
+				|acc, item|
+					match transform(item) {
 						Ok(after) => List.concat(acc, [after])
 						Err(_) => acc
 					},
 			)
 
-		## Run the given function on each element of a list, and return a list of
-		## the values it wrapped in `Err`. Elements the function maps to `Ok` are
+		## Run the given function on each item of a list, and return a list of
+		## the values it wrapped in `Err`. Items the function maps to `Ok` are
 		## dropped. Use [List.keep_oks] to keep the `Ok` values instead.
 		## ```roc
 		## expect [1.I64, 2, 3, 4].keep_errs(|n| if n.is_even() { Ok(n) } else { Err(n) }) == [1, 3]
@@ -4244,15 +4325,15 @@ Builtin :: [].{
 			List.fold(
 				list,
 				[],
-				|acc, elem|
-					match transform(elem) {
+				|acc, item|
+					match transform(item) {
 						Err(after) => List.concat(acc, [after])
 						Ok(_) => acc
 					},
 			)
 
-		## Run the given function on each element of a list, and return the
-		## number of elements for which the function returned `Bool.True`.
+		## Run the given function on each item of a list, and return the
+		## number of items for which the function returned `Bool.True`.
 		## ```roc
 		## expect [1, -2, -3].count_if(I64.is_negative) == 2
 		## expect [1, 2, 3].count_if(|num| num > 1) == 2
@@ -4262,8 +4343,8 @@ Builtin :: [].{
 			List.fold(
 				list,
 				0,
-				|acc, elem|
-					if predicate(elem) {
+				|acc, item|
+					if predicate(item) {
 						acc + 1
 					} else {
 						acc
@@ -4271,7 +4352,7 @@ Builtin :: [].{
 			)
 
 		## Like [List.map], but the transform can fail. Runs a `Try`-returning
-		## function on each element and collects the `Ok` values. Stops at the first
+		## function on each item and collects the `Ok` values. Stops at the first
 		## `Err` and returns it, so the result is either all the transformed values
 		## or the first failure.
 		## ```roc
@@ -4280,28 +4361,28 @@ Builtin :: [].{
 		map_try : List(a), (a -> Try(b, err)) -> Try(List(b), err)
 		map_try = |list, transform| {
 			var $out = List.with_capacity(list.len())
-			for elem in list {
-				$out = list_append_unsafe($out, transform(elem)?)
+			for item in list {
+				$out = list_append_unsafe($out, transform(item)?)
 			}
 			Ok($out)
 		}
 
 		## Like [List.map_try], but the transform is effectful. It runs on each
-		## element until one returns `Err`, then stops.
+		## item until one returns `Err`, then stops.
 		## ```roc
 		## rows.map_try!(|row| SQL.insert!("INSERT INTO t VALUES (?)", [row]))
 		## ```
 		map_try! : List(a), (a => Try(b, err)) => Try(List(b), err)
 		map_try! = |list, transform!| {
 			var $out = List.with_capacity(list.len())
-			for elem in list {
-				$out = list_append_unsafe($out, transform!(elem)?)
+			for item in list {
+				$out = list_append_unsafe($out, transform!(item)?)
 			}
 			Ok($out)
 		}
 
 		## Like [List.keep_if], but the predicate can fail. Runs a `Try`-returning
-		## predicate on each element, keeping the ones it maps to `Ok(Bool.True)`.
+		## predicate on each item, keeping the ones it maps to `Ok(Bool.True)`.
 		## Stops at the first `Err` and returns it.
 		## ```roc
 		## expect [1.I64, 2, 3].keep_if_try(|n| Ok(n > 1)) == Ok([2, 3])
@@ -4309,25 +4390,25 @@ Builtin :: [].{
 		keep_if_try : List(a), (a -> Try(Bool, err)) -> Try(List(a), err)
 		keep_if_try = |list, predicate| {
 			var $out = []
-			for elem in list {
-				if predicate(elem)? {
-					$out = List.concat($out, [elem])
+			for item in list {
+				if predicate(item)? {
+					$out = List.concat($out, [item])
 				}
 			}
 			Ok($out)
 		}
 
 		## Like [List.keep_if_try], but the predicate is effectful. It runs on each
-		## element until one returns `Err`, then stops.
+		## item until one returns `Err`, then stops.
 		## ```roc
 		## users.keep_if_try!(|user| SQL.query_bool!("SELECT is_active FROM users WHERE id = ?", [user.id]))
 		## ```
 		keep_if_try! : List(a), (a => Try(Bool, err)) => Try(List(a), err)
 		keep_if_try! = |list, predicate!| {
 			var $out = []
-			for elem in list {
-				if predicate!(elem)? {
-					$out = List.concat($out, [elem])
+			for item in list {
+				if predicate!(item)? {
+					$out = List.concat($out, [item])
 				}
 			}
 			Ok($out)
@@ -4341,42 +4422,42 @@ Builtin :: [].{
 		fold_try : List(item), state, (state, item -> Try(state, err)) -> Try(state, err)
 		fold_try = |list, initial, step| {
 			var $state = initial
-			for elem in list {
-				$state = step($state, elem)?
+			for item in list {
+				$state = step($state, item)?
 			}
 			Ok($state)
 		}
 
 		## Like [List.fold_try], but the step function is effectful. It runs on each
-		## element until one returns `Err`, then stops.
+		## item until one returns `Err`, then stops.
 		## ```roc
 		## events.fold_try!(State.init, |state, event| Store.apply!(state, event))
 		## ```
 		fold_try! : List(item), state, (state, item => Try(state, err)) => Try(state, err)
 		fold_try! = |list, initial, step!| {
 			var $state = initial
-			for elem in list {
-				$state = step!($state, elem)?
+			for item in list {
+				$state = step!($state, item)?
 			}
 			Ok($state)
 		}
 
-		## Build a value using each element in the list.
+		## Build a value using each item in the list.
 		##
-		## Starting with a given `state` value, this folds through each element in the
-		## list from first to last, running a given `step` function on that element
+		## Starting with a given `state` value, this folds through each item in the
+		## list from first to last, running a given `step` function on that item
 		## which updates the `state`. It returns the final `state` at the end.
 		## ```roc
 		## [2, 4, 8].fold(0, U64.plus)
 		## ```
 		## This returns 14 because:
 		## * `state` starts at 0
-		## * Each `step` runs `state.plus(elem)`, and the return value becomes the new `state`.
+		## * Each `step` runs `state.plus(item)`, and the return value becomes the new `state`.
 		##
-		## Here is a table of how `state` changes as [List.fold] folds over the elements
+		## Here is a table of how `state` changes as [List.fold] folds over the items
 		## `[2, 4, 8]` using [U64.plus] as its `step` function to determine the next `state`.
 		##
-		## state | elem  | U64.plus(state, elem)
+		## state | item  | U64.plus(state, item)
 		## :---: | :---: | :----------------:
 		## 0     |       |
 		## 0     | 2     | 2
@@ -4400,7 +4481,7 @@ Builtin :: [].{
 			$state
 		}
 
-		## Like [List.fold], but at each step the function also receives the index of the current element.
+		## Like [List.fold], but at each step the function also receives the index of the current item.
 		fold_with_index : List(item), state, (state, item, U64 -> state) -> state
 		fold_with_index = |list, init, step| {
 			var $state = init
@@ -4418,13 +4499,13 @@ Builtin :: [].{
 		##
 		## ## Performance Details
 		##
-		## Compared to [List.fold], this can potentially visit fewer elements (which can
+		## Compared to [List.fold], this can potentially visit fewer items (which can
 		## improve performance) at the cost of making each step take longer.
 		## However, the added cost to each step is extremely small, and can easily
-		## be outweighed if it results in skipping even a small number of elements.
+		## be outweighed if it results in skipping even a small number of items.
 		##
 		## As such, it is typically better for performance to use this over [List.fold]
-		## if returning `Break` earlier than the last element is expected to be common.
+		## if returning `Break` earlier than the last item is expected to be common.
 		fold_until : List(item), state, (state, item -> [Continue(state), Break(state)]) -> state
 		fold_until = |list, init, step| {
 			var $state = init
@@ -4467,16 +4548,16 @@ Builtin :: [].{
 		}
 
 		## Like [List.fold], but walks the list from last to first. The `step` function
-		## receives the element first and the current `state` second.
+		## receives the item first and the current `state` second.
 		##
 		## ```roc
 		## expect [1, 2, 3].fold_rev(0, I64.minus) == 2
 		## ```
 		##
 		## Here is a table of how `state` changes as [List.fold_rev] folds over the
-		## elements `[1, 2, 3]` using [I64.minus] as its `step` function.
+		## items `[1, 2, 3]` using [I64.minus] as its `step` function.
 		##
-		## state | elem  | I64.minus(elem, state)
+		## state | item  | I64.minus(item, state)
 		## :---: | :---: | :-------------------:
 		## 0     |       |
 		## 0     | 3     | 3
@@ -4519,8 +4600,8 @@ Builtin :: [].{
 		ends_with = |list, suffix|
 			suffix == List.take_last(list, List.len(suffix))
 
-		## Run the given predicate on each element of the list, returning `Bool.True` if
-		## any of the elements satisfy it.
+		## Run the given predicate on each item of the list, returning `Bool.True` if
+		## any of the items satisfy it.
 		## ```roc
 		## expect [1, 2, 3].any(|n| n % 2 == 0)
 		##
@@ -4536,7 +4617,7 @@ Builtin :: [].{
 			False
 		}
 
-		## Returns `Bool.True` if the list contains an element equal to the given value.
+		## Returns `Bool.True` if the list contains an item equal to the given value.
 		## ```roc
 		## expect [1, 2, 3].contains(2)
 		##
@@ -4547,8 +4628,8 @@ Builtin :: [].{
 			List.any(list, |x| x == elt)
 		}
 
-		## Run the given predicate on each element of the list, returning `Bool.True` if
-		## all of the elements satisfy it.
+		## Run the given predicate on each item of the list, returning `Bool.True` if
+		## all of the items satisfy it.
 		## ```roc
 		## expect [2, 4, 6].all(|n| n % 2 == 0)
 		##
@@ -4564,7 +4645,7 @@ Builtin :: [].{
 			True
 		}
 
-		## Returns the last element in the list, or `ListWasEmpty` if it was empty.
+		## Returns the last item in the list, or `ListWasEmpty` if it was empty.
 		## ```roc
 		## expect [1, 2, 3].last() == Ok(3.0)
 		## expect [].last() == Err(ListWasEmpty)
@@ -4576,7 +4657,7 @@ Builtin :: [].{
 			Try.Ok(list_get_unsafe(list, List.len(list) - 1))
 		}
 
-		## Create a list with a single element in it.
+		## Create a list with a single item in it.
 		##
 		## ```roc
 		## expect List.single(42) == [42.0]
@@ -4584,7 +4665,7 @@ Builtin :: [].{
 		single : item -> List(item)
 		single = |x| [x]
 
-		## Remove the element at the given index. If the index is out of bounds, the
+		## Remove the item at the given index. If the index is out of bounds, the
 		## list is returned unchanged.
 		## ```roc
 		## expect [10, 20, 30, 40].drop_at(1) == [10, 30, 40]
@@ -4593,9 +4674,9 @@ Builtin :: [].{
 		## ```
 		drop_at : List(a), U64 -> List(a)
 
-		## Removes the element at the given index by moving the last element into its
-		## place, so the order of the remaining elements is not preserved. This is O(1),
-		## unlike `drop_at`, which shifts every later element down.
+		## Removes the item at the given index by moving the last item into its
+		## place, so the order of the remaining items is not preserved. This is O(1),
+		## unlike `drop_at`, which shifts every later item down.
 		##
 		## Returns the list unchanged if the index is out of bounds.
 		## ```roc
@@ -4612,7 +4693,7 @@ Builtin :: [].{
 		}
 
 		## Return a sublist of the list starting at `start` and containing up to `len`
-		## elements. Out-of-bounds ranges are clamped, producing a shorter or empty list.
+		## items. Out-of-bounds ranges are clamped, producing a shorter or empty list.
 		## ```roc
 		## expect [1, 2, 3, 4, 5].sublist({ start: 1, len: 3 }) == [2, 3, 4]
 		##
@@ -4622,8 +4703,8 @@ Builtin :: [].{
 		## ```
 		sublist : List(a), { start : U64, len : U64 } -> List(a)
 
-		## Return the first `n` elements of the list. If the list has fewer than `n`
-		## elements, the entire list is returned.
+		## Return the first `n` items of the list. If the list has fewer than `n`
+		## items, the entire list is returned.
 		## ```roc
 		## expect [1, 2, 3, 4, 5].take_first(3) == [1, 2, 3]
 		##
@@ -4634,7 +4715,7 @@ Builtin :: [].{
 			List.sublist(list, { len: n, start: 0 })
 		}
 
-		## Removes every element while preserving the current capacity.
+		## Removes every item while preserving the current capacity.
 		## ```roc
 		## expect [1.I64, 2, 3].clear() == []
 		## ```
@@ -4643,18 +4724,18 @@ Builtin :: [].{
 			List.take_first(list, 0)
 		}
 
-		## Returns the given number of elements from the end of the list.
+		## Returns the given number of items from the end of the list.
 		## ```roc
 		## expect [1, 2, 3, 4, 5, 6, 7, 8].take_last(4) == [5, 6, 7, 8]
 		## ```
-		## If there are fewer elements in the list than the requested number,
+		## If there are fewer items in the list than the requested number,
 		## the entire list is returned.
 		## ```roc
 		## expect [1, 2].take_last(5) == [1, 2]
 		## ```
-		## To *remove* elements from the end of the list, use `List.take_first`.
+		## To *remove* items from the end of the list, use `List.take_first`.
 		##
-		## To remove elements from both the beginning and end of the list,
+		## To remove items from both the beginning and end of the list,
 		## use `List.sublist`.
 		##
 		take_last : List(a), U64 -> List(a)
@@ -4664,7 +4745,7 @@ Builtin :: [].{
 			List.sublist(list, { start: start, len: len })
 		}
 
-		## Drops n elements from the beginning of the list. If `n` is larger than the
+		## Drops n items from the beginning of the list. If `n` is larger than the
 		## list length, an empty list is returned.
 		## ```roc
 		## expect [1, 2, 3, 4, 5].drop_first(2) == [3, 4, 5]
@@ -4677,7 +4758,7 @@ Builtin :: [].{
 			List.sublist(list, { start: n, len: len })
 		}
 
-		## Drops n elements from the end of the list. If `n` is larger than the
+		## Drops n items from the end of the list. If `n` is larger than the
 		## list length, an empty list is returned.
 		## ```roc
 		## expect [1, 2, 3, 4, 5].drop_last(2) == [1, 2, 3]
@@ -4691,7 +4772,7 @@ Builtin :: [].{
 			List.sublist(list, { start: 0, len: take_len })
 		}
 
-		## Find the first element in a list that satisfies a given predicate, returning it wrapped in `Ok` if found, or `Err(NotFound)` if no such element exists.
+		## Find the first item in a list that satisfies a given predicate, returning it wrapped in `Ok` if found, or `Err(NotFound)` if no such item exists.
 		## ```
 		## expect [1, 2, 3, 4].find_first(|x| x % 2 == 0) == Ok(2)
 		## ```
@@ -4703,7 +4784,7 @@ Builtin :: [].{
 			return Err(NotFound)
 		}
 
-		## Find the last element in a list that satisfies a given predicate, returning it wrapped in `Ok` if found, or `Err(NotFound)` if no such element exists.
+		## Find the last item in a list that satisfies a given predicate, returning it wrapped in `Ok` if found, or `Err(NotFound)` if no such item exists.
 		## ```
 		## expect [1, 2, 3, 4].find_last(|x| x % 2 == 0) == Ok(4)
 		## ```
@@ -4715,7 +4796,7 @@ Builtin :: [].{
 			return Err(NotFound)
 		}
 
-		## Find the index of the first element in a list that satisfies a given predicate, returning it wrapped in `Ok` if found, or `Err(NotFound)` if no such element exists.
+		## Find the index of the first item in a list that satisfies a given predicate, returning it wrapped in `Ok` if found, or `Err(NotFound)` if no such item exists.
 		## ```
 		## expect [1, 2, 3, 4].find_first_index(|x| x > 1) == Ok(1)
 		## ```
@@ -4731,7 +4812,7 @@ Builtin :: [].{
 			return Err(NotFound)
 		}
 
-		## Find the index of the last element in a list that satisfies a given predicate, returning it wrapped in `Ok` if found, or `Err(NotFound)` if no such element exists.
+		## Find the index of the last item in a list that satisfies a given predicate, returning it wrapped in `Ok` if found, or `Err(NotFound)` if no such item exists.
 		## ```
 		## expect [1, 2, 3, 4].find_last_index(|x| x < 4) == Ok(2)
 		## ```
@@ -4764,7 +4845,7 @@ Builtin :: [].{
 			{ before, others }
 		}
 
-		## Split a list into sublists using a specified delimiter element.
+		## Split a list into sublists using a specified delimiter item.
 		##
 		## Consecutive delimiters and delimiters at the start or end of the list
 		## produce empty sublists at the corresponding positions.
@@ -4816,7 +4897,7 @@ Builtin :: [].{
 			var $skip = 0
 			var $i = 0
 
-			for elem in list {
+			for item in list {
 				if $skip > 0 {
 					$skip = $skip - 1
 				} else if $i + delim_len <= list_len
@@ -4825,7 +4906,7 @@ Builtin :: [].{
 					$current = []
 					$skip = delim_len - 1
 				} else {
-					$current = $current.append(elem)
+					$current = $current.append(item)
 				}
 				$i = $i + 1
 			}
@@ -4833,7 +4914,7 @@ Builtin :: [].{
 			$lists.append($current)
 		}
 
-		## Split a list into two parts at the first occurrence of a specified delimiter element, returning the part before the delimiter and the part after it. If the delimiter is not found, return `Err(NotFound)`.
+		## Split a list into two parts at the first occurrence of a specified delimiter item, returning the part before the delimiter and the part after it. If the delimiter is not found, return `Err(NotFound)`.
 		## ```
 		## expect [0, 1, 2, 1, 2].split_first(2) == Ok({ before: [0, 1], after: [1, 2] })
 		## ```
@@ -4848,7 +4929,7 @@ Builtin :: [].{
 				Err(NotFound) => Err(NotFound)
 			}
 
-		## Split a list into two parts at the last occurrence of a specified delimiter element, returning the part before the delimiter and the part after it. If the delimiter is not found, return `Err(NotFound)`.
+		## Split a list into two parts at the last occurrence of a specified delimiter item, returning the part before the delimiter and the part after it. If the delimiter is not found, return `Err(NotFound)`.
 		## ```
 		## expect [0, 1, 2, 1, 2].split_last(1) == Ok({ before: [0, 1, 2], after: [2] })
 		## ```
@@ -4880,21 +4961,25 @@ Builtin :: [].{
 			$list
 		}
 
-		## Sum the elements of a list. Works for any type that implements `plus` and
+		## Sum the items of a list. Works for any type that implements `plus` and
 		## `default` methods, such as the numeric types.
+		##
+		## `default` is called only when the list is empty; otherwise it is never called
+		## at all. Summing begins at the first item and uses `plus` to combine the
+		## rest, so a single-item list returns that item without calling either
+		## method, and `default` does not need to be an identity value for `plus`.
 		## ```roc
 		## expect List.sum([1.I64, 2, 3, 4]) == 10
+		##
+		## expect List.sum([42.I64]) == 42
 		##
 		## expect List.sum([]) == 0.I64
 		## ```
 		sum : List(item) -> item
 			where [item.plus : item, item -> item, item.default : item]
-		sum = |list| {
-			Item : item
-			List.fold(list, Item.default(), |acc, elem| acc + elem)
-		}
+		sum = |list| list.iter().sum()
 
-		## Find the minimum element in a list, or `Err(ListWasEmpty)` if the list is empty.
+		## Find the minimum item in a list, or `Err(ListWasEmpty)` if the list is empty.
 		## Works for any type that implements `min`.
 		min : List(a) -> Try(a, [ListWasEmpty])
 			where [a.min : a, a -> a]
@@ -4905,7 +4990,7 @@ Builtin :: [].{
 						List.fold(
 							list,
 							initial,
-							|best_so_far, elem| best_so_far.min(elem),
+							|best_so_far, item| best_so_far.min(item),
 						),
 					)
 
@@ -4913,7 +4998,7 @@ Builtin :: [].{
 					Err(ListWasEmpty)
 				}
 
-		## Find the maximum element in a list, or `Err(ListWasEmpty)` if the list is empty.
+		## Find the maximum item in a list, or `Err(ListWasEmpty)` if the list is empty.
 		## Works for any type that implements `max`.
 		max : List(a) -> Try(a, [ListWasEmpty])
 			where [a.max : a, a -> a]
@@ -4924,7 +5009,7 @@ Builtin :: [].{
 						List.fold(
 							list,
 							initial,
-							|best_so_far, elem| best_so_far.max(elem),
+							|best_so_far, item| best_so_far.max(item),
 						),
 					)
 
@@ -4947,14 +5032,14 @@ Builtin :: [].{
 				Encoding.encode_list(
 					state,
 					List.len(self),
-					|current, element|
+					|current, write_item|
 						List.fold(
 							self,
 							Ok(current),
-							|state_result, elem|
+							|state_result, item|
 								match state_result {
-									Ok(element_state) =>
-										element(element_state, |value_state| encode_item(elem, value_state))
+									Ok(item_state) =>
+										write_item(item_state, |value_state| encode_item(item, value_state))
 
 									Err(err) => Err(err)
 								},
@@ -5907,8 +5992,8 @@ Builtin :: [].{
 				state = List.fold(
 					list_a,
 					{ all_found: Bool.True, check: list_b },
-					|st, elem|
-						if List.contains(st.check, elem) {
+					|st, item|
+						if List.contains(st.check, item) {
 							st
 						} else {
 							{ all_found: Bool.False, check: st.check }
@@ -5943,7 +6028,7 @@ Builtin :: [].{
 		## Set.single(42.I64)
 		## ```
 		single : item -> Set(item)
-		single = |elem| Items([elem])
+		single = |item| Items([item])
 
 		## Counts the number of values in a given `Set`.
 		## ```roc
@@ -5963,18 +6048,18 @@ Builtin :: [].{
 		## Test if a value is in the `Set`.
 		contains : Set(a), a -> Bool
 			where [a.is_eq : a, a -> Bool]
-		contains = |set, elem| match set {
-			Items(list) => List.contains(list, elem)
+		contains = |set, item| match set {
+			Items(list) => List.contains(list, item)
 		}
 
 		## Insert a value into a `Set`.
 		insert : Set(a), a -> Set(a)
 			where [a.is_eq : a, a -> Bool]
-		insert = |set, elem| match set {
+		insert = |set, item| match set {
 			Items(list) => Items(
 				List.append(
-					List.keep_if(list, |x| x != elem),
-					elem,
+					List.keep_if(list, |x| x != item),
+					item,
 				),
 			)
 		}
@@ -5982,8 +6067,8 @@ Builtin :: [].{
 		## Removes the value from the given `Set`.
 		remove : Set(a), a -> Set(a)
 			where [a.is_eq : a, a -> Bool]
-		remove = |set, elem| match set {
-			Items(list) => Items(List.keep_if(list, |x| x != elem))
+		remove = |set, item| match set {
+			Items(list) => Items(List.keep_if(list, |x| x != item))
 		}
 
 		## Retrieve the values in a `Set` as a `List`.
@@ -6000,18 +6085,18 @@ Builtin :: [].{
 				List.fold(
 					list,
 					[],
-					|acc, elem|
-						if List.contains(acc, elem) {
+					|acc, item|
+						if List.contains(acc, item) {
 							acc
 						} else {
-							List.append(acc, elem)
+							List.append(acc, item)
 						},
 				),
 			)
 		}
 
-		## Run the given function on each element in the `Set`, and return
-		## a `Set` with just the elements for which the function returned `Bool.True`.
+		## Run the given function on each item in the `Set`, and return
+		## a `Set` with just the items for which the function returned `Bool.True`.
 		## ```roc
 		## expect Set.from_list([1, 2, 3, 4]).keep_if(|num| num > 2) == Set.from_list([3, 4])
 		## ```
@@ -6020,8 +6105,8 @@ Builtin :: [].{
 			Items(list) => Items(List.keep_if(list, predicate))
 		}
 
-		## Run the given function on each element in the `Set`, and return
-		## a `Set` with just the elements for which the function returned `Bool.False`.
+		## Run the given function on each item in the `Set`, and return
+		## a `Set` with just the items for which the function returned `Bool.False`.
 		## ```roc
 		## expect Set.from_list([1, 2, 3, 4]).drop_if(|num| num > 2) == Set.from_list([1, 2])
 		## ```
@@ -6043,7 +6128,7 @@ Builtin :: [].{
 		union : Set(a), Set(a) -> Set(a)
 			where [a.is_eq : a, a -> Bool]
 		union = |set_a, set_b|
-			List.fold(Set.to_list(set_b), set_a, |acc, elem| Set.insert(acc, elem))
+			List.fold(Set.to_list(set_b), set_a, |acc, item| Set.insert(acc, item))
 
 		## Combine two `Set`s by keeping the
 		## [intersection](https://en.wikipedia.org/wiki/Intersection_(set_theory))
@@ -6064,9 +6149,9 @@ Builtin :: [].{
 			state = List.fold(
 				list_a,
 				{ result: [], check: list_b },
-				|st, elem|
-					if List.contains(st.check, elem) {
-						{ result: List.append(st.result, elem), check: st.check }
+				|st, item|
+					if List.contains(st.check, item) {
+						{ result: List.append(st.result, item), check: st.check }
 					} else {
 						st
 					},
@@ -6092,11 +6177,11 @@ Builtin :: [].{
 			state = List.fold(
 				list_a,
 				{ result: [], check: list_b },
-				|st, elem|
-					if List.contains(st.check, elem) {
+				|st, item|
+					if List.contains(st.check, item) {
 						st
 					} else {
-						{ result: List.append(st.result, elem), check: st.check }
+						{ result: List.append(st.result, item), check: st.check }
 					},
 			)
 			Items(state.result)
@@ -6119,12 +6204,12 @@ Builtin :: [].{
 					List.fold(
 						list,
 						[],
-						|acc, elem| {
-							new_elem = transform(elem)
-							if List.contains(acc, new_elem) {
+						|acc, item| {
+							new_item = transform(item)
+							if List.contains(acc, new_item) {
 								acc
 							} else {
-								List.append(acc, new_elem)
+								List.append(acc, new_item)
 							}
 						},
 					),
@@ -6632,9 +6717,9 @@ Builtin :: [].{
 			count_one_bits : U8 -> U8
 
 			## Build a [U8] from a list of base-10 digits, most significant first.
-			## Each element of the list must be a digit in the range `0` to `9`.
+			## Each item of the list must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in a
-			## [U8] (`0` to `255`), or if any element is not a valid digit.
+			## [U8] (`0` to `255`), or if any item is not a valid digit.
 			## ```roc
 			## expect U8.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
@@ -7427,9 +7512,9 @@ Builtin :: [].{
 				)
 
 			## Build an [I8] from a list of base-10 digits, most significant first.
-			## Each element of the list must be a digit in the range `0` to `9`.
+			## Each item of the list must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in an
-			## [I8] (`-128` to `127`), or if any element is not a valid digit. The
+			## [I8] (`-128` to `127`), or if any item is not a valid digit. The
 			## result is always non-negative; to build a negative value, [I8.negate]
 			## the result.
 			## ```roc
@@ -8071,6 +8156,32 @@ Builtin :: [].{
 			## ```
 			count_one_bits : U16 -> U8
 
+			## Read a little-endian [U16] from the two bytes at the given byte
+			## index. Returns `Err(OutOfBounds)` unless
+			## `index + 2 <= List.len(bytes)`.
+			## ```roc
+			## expect U16.from_le_bytes([0x34, 0x12], 0) == Ok(0x1234)
+			##
+			## expect U16.from_le_bytes([0x34], 0) == Err(OutOfBounds)
+			## ```
+			from_le_bytes : List(U8), U64 -> Try(U16, [OutOfBounds, ..])
+			from_le_bytes = |bytes, index| {
+				len = List.len(bytes)
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 2` and `len - 2` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 2` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 2`.
+				if len < 2 or index > len.minus_wrap(2) {
+					Err(OutOfBounds)
+				} else {
+					Ok(u16_from_le_bytes_unchecked(bytes, index))
+				}
+			}
+
 			## Iterator of integers beginning with this `U16` and ending with the other `U16`.
 			## (Use [U16.until] instead to end with the other `U16` minus one.)
 			## Returns an empty iterator if this `U16` is greater than the other.
@@ -8138,9 +8249,9 @@ Builtin :: [].{
 				)
 
 			## Build a [U16] from a list of base-10 digits, most significant first.
-			## Each element of the list must be a digit in the range `0` to `9`.
+			## Each item of the list must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in a
-			## [U16] (`0` to `65535`), or if any element is not a valid digit.
+			## [U16] (`0` to `65535`), or if any item is not a valid digit.
 			## ```roc
 			## expect U16.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
@@ -8833,6 +8944,32 @@ Builtin :: [].{
 			## ```
 			count_one_bits : I16 -> U8
 
+			## Read a little-endian [I16] from the two bytes at the given byte
+			## index. Returns `Err(OutOfBounds)` unless
+			## `index + 2 <= List.len(bytes)`.
+			## ```roc
+			## expect I16.from_le_bytes([0x00, 0x80], 0) == Ok(I16.lowest)
+			##
+			## expect I16.from_le_bytes([0x00], 0) == Err(OutOfBounds)
+			## ```
+			from_le_bytes : List(U8), U64 -> Try(I16, [OutOfBounds, ..])
+			from_le_bytes = |bytes, index| {
+				len = List.len(bytes)
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 2` and `len - 2` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 2` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 2`.
+				if len < 2 or index > len.minus_wrap(2) {
+					Err(OutOfBounds)
+				} else {
+					Ok(i16_from_le_bytes_unchecked(bytes, index))
+				}
+			}
+
 			## Iterator of integers beginning with this `I16` and ending with the other `I16`.
 			## (Use [I16.until] instead to end with the other `I16` minus one.)
 			## Returns an empty iterator if this `I16` is greater than the other.
@@ -8900,9 +9037,9 @@ Builtin :: [].{
 				)
 
 			## Build an [I16] from a list of base-10 digits, most significant first.
-			## Each element of the list must be a digit in the range `0` to `9`.
+			## Each item of the list must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in an
-			## [I16] (`-32768` to `32767`), or if any element is not a valid digit.
+			## [I16] (`-32768` to `32767`), or if any item is not a valid digit.
 			## The result is always non-negative; to build a negative value, [I16.negate]
 			## the result.
 			## ```roc
@@ -9559,6 +9696,32 @@ Builtin :: [].{
 			## ```
 			count_one_bits : U32 -> U8
 
+			## Read a little-endian [U32] from the four bytes at the given byte
+			## index. Returns `Err(OutOfBounds)` unless
+			## `index + 4 <= List.len(bytes)`.
+			## ```roc
+			## expect U32.from_le_bytes([0x78, 0x56, 0x34, 0x12], 0) == Ok(0x12345678)
+			##
+			## expect U32.from_le_bytes([0x78, 0x56, 0x34], 0) == Err(OutOfBounds)
+			## ```
+			from_le_bytes : List(U8), U64 -> Try(U32, [OutOfBounds, ..])
+			from_le_bytes = |bytes, index| {
+				len = List.len(bytes)
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 4` and `len - 4` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 4` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 4`.
+				if len < 4 or index > len.minus_wrap(4) {
+					Err(OutOfBounds)
+				} else {
+					Ok(u32_from_le_bytes_unchecked(bytes, index))
+				}
+			}
+
 			## Iterator of integers beginning with this `U32` and ending with the other `U32`.
 			## (Use [U32.until] instead to end with the other `U32` minus one.)
 			## Returns an empty iterator if this `U32` is greater than the other.
@@ -9626,9 +9789,9 @@ Builtin :: [].{
 				)
 
 			## Build a [U32] from a list of base-10 digits, most significant first.
-			## Each element of the list must be a digit in the range `0` to `9`.
+			## Each item of the list must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in a
-			## [U32] (`0` to `4294967295`), or if any element is not a valid digit.
+			## [U32] (`0` to `4294967295`), or if any item is not a valid digit.
 			## ```roc
 			## expect U32.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
@@ -10353,6 +10516,32 @@ Builtin :: [].{
 			## ```
 			count_one_bits : I32 -> U8
 
+			## Read a little-endian [I32] from the four bytes at the given byte
+			## index. Returns `Err(OutOfBounds)` unless
+			## `index + 4 <= List.len(bytes)`.
+			## ```roc
+			## expect I32.from_le_bytes([0x00, 0x00, 0x00, 0x80], 0) == Ok(I32.lowest)
+			##
+			## expect I32.from_le_bytes([0x00, 0x00, 0x00], 0) == Err(OutOfBounds)
+			## ```
+			from_le_bytes : List(U8), U64 -> Try(I32, [OutOfBounds, ..])
+			from_le_bytes = |bytes, index| {
+				len = List.len(bytes)
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 4` and `len - 4` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 4` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 4`.
+				if len < 4 or index > len.minus_wrap(4) {
+					Err(OutOfBounds)
+				} else {
+					Ok(i32_from_le_bytes_unchecked(bytes, index))
+				}
+			}
+
 			## Iterator of integers beginning with this `I32` and ending with the other `I32`.
 			## (Use [I32.until] instead to end with the other `I32` minus one.)
 			## Returns an empty iterator if this `I32` is greater than the other.
@@ -10420,9 +10609,9 @@ Builtin :: [].{
 				)
 
 			## Build an [I32] from a list of base-10 digits, most significant first.
-			## Each element of the list must be a digit in the range `0` to `9`.
+			## Each item of the list must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in an
-			## [I32] (`-2147483648` to `2147483647`), or if any element is not a valid digit.
+			## [I32] (`-2147483648` to `2147483647`), or if any item is not a valid digit.
 			## The result is always non-negative; to build a negative value, [I32.negate]
 			## the result.
 			## ```roc
@@ -11099,6 +11288,32 @@ Builtin :: [].{
 			## ```
 			count_one_bits : U64 -> U8
 
+			## Read a little-endian [U64] from the eight bytes at the given byte
+			## index. Returns `Err(OutOfBounds)` unless
+			## `index + 8 <= List.len(bytes)`.
+			## ```roc
+			## expect U64.from_le_bytes([1, 0, 0, 0, 0, 0, 0, 0], 0) == Ok(1)
+			##
+			## expect U64.from_le_bytes([1, 0, 0, 0, 0, 0, 0], 0) == Err(OutOfBounds)
+			## ```
+			from_le_bytes : List(U8), U64 -> Try(U64, [OutOfBounds, ..])
+			from_le_bytes = |bytes, index| {
+				len = List.len(bytes)
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 8` and `len - 8` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 8` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 8`.
+				if len < 8 or index > len.minus_wrap(8) {
+					Err(OutOfBounds)
+				} else {
+					Ok(u64_from_le_bytes_unchecked(bytes, index))
+				}
+			}
+
 			## Iterator of integers beginning with this `U64` and ending with the other `U64`.
 			## (Use [U64.until] instead to end with the other `U64` minus one.)
 			## Returns an empty iterator if this `U64` is greater than the other.
@@ -11169,9 +11384,9 @@ Builtin :: [].{
 				)
 
 			## Build a [U64] from a list of base-10 digits, most significant first.
-			## Each element of the list must be a digit in the range `0` to `9`.
+			## Each item of the list must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in a
-			## [U64] (`0` to `18446744073709551615`), or if any element is not a valid digit.
+			## [U64] (`0` to `18446744073709551615`), or if any item is not a valid digit.
 			## ```roc
 			## expect U64.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
@@ -11935,6 +12150,32 @@ Builtin :: [].{
 			## ```
 			count_one_bits : I64 -> U8
 
+			## Read a little-endian [I64] from the eight bytes at the given byte
+			## index. Returns `Err(OutOfBounds)` unless
+			## `index + 8 <= List.len(bytes)`.
+			## ```roc
+			## expect I64.from_le_bytes([0, 0, 0, 0, 0, 0, 0, 0x80], 0) == Ok(I64.lowest)
+			##
+			## expect I64.from_le_bytes([0, 0, 0, 0, 0, 0, 0], 0) == Err(OutOfBounds)
+			## ```
+			from_le_bytes : List(U8), U64 -> Try(I64, [OutOfBounds, ..])
+			from_le_bytes = |bytes, index| {
+				len = List.len(bytes)
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 8` and `len - 8` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 8` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 8`.
+				if len < 8 or index > len.minus_wrap(8) {
+					Err(OutOfBounds)
+				} else {
+					Ok(i64_from_le_bytes_unchecked(bytes, index))
+				}
+			}
+
 			## Iterator of integers beginning with this `I64` and ending with the other `I64`.
 			## (Use [I64.until] instead to end with the other `I64` minus one.)
 			## Returns an empty iterator if this `I64` is greater than the other.
@@ -12011,10 +12252,10 @@ Builtin :: [].{
 				)
 
 			## Build an [I64] from a list of base-10 digits, most significant first.
-			## Each element of the list must be a digit in the range `0` to `9`.
+			## Each item of the list must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in an
 			## [I64] (`-9223372036854775808` to `9223372036854775807`), or if any
-			## element is not a valid digit. The result is always non-negative; to
+			## item is not a valid digit. The result is always non-negative; to
 			## build a negative value, [I64.negate] the result.
 			## ```roc
 			## expect I64.from_int_digits([1, 2, 3]) == Ok(123)
@@ -12709,6 +12950,32 @@ Builtin :: [].{
 			## ```
 			count_one_bits : U128 -> U8
 
+			## Read a little-endian [U128] from the sixteen bytes at the given
+			## byte index. Returns `Err(OutOfBounds)` unless
+			## `index + 16 <= List.len(bytes)`.
+			## ```roc
+			## expect U128.from_le_bytes(List.repeat(0.U8, 16), 0) == Ok(0)
+			##
+			## expect U128.from_le_bytes(List.repeat(0.U8, 15), 0) == Err(OutOfBounds)
+			## ```
+			from_le_bytes : List(U8), U64 -> Try(U128, [OutOfBounds, ..])
+			from_le_bytes = |bytes, index| {
+				len = List.len(bytes)
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
+					Err(OutOfBounds)
+				} else {
+					Ok(u128_from_le_bytes_unchecked(bytes, index))
+				}
+			}
+
 			## Iterator of integers beginning with this `U128` and ending with the other `U128`.
 			## (Use [U128.until] instead to end with the other `U128` minus one.)
 			## Returns an empty iterator if this `U128` is greater than the other.
@@ -12785,10 +13052,10 @@ Builtin :: [].{
 				)
 
 			## Build a [U128] from a list of base-10 digits, most significant first.
-			## Each element of the list must be a digit in the range `0` to `9`.
+			## Each item of the list must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in a
 			## [U128] (`0` to `340282366920938463463374607431768211455`), or if any
-			## element is not a valid digit.
+			## item is not a valid digit.
 			## ```roc
 			## expect U128.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
@@ -13590,6 +13857,32 @@ Builtin :: [].{
 			## ```
 			count_one_bits : I128 -> U8
 
+			## Read a little-endian [I128] from the sixteen bytes at the given
+			## byte index. Returns `Err(OutOfBounds)` unless
+			## `index + 16 <= List.len(bytes)`.
+			## ```roc
+			## expect I128.from_le_bytes(List.repeat(0.U8, 16), 0) == Ok(0)
+			##
+			## expect I128.from_le_bytes(List.repeat(0.U8, 15), 0) == Err(OutOfBounds)
+			## ```
+			from_le_bytes : List(U8), U64 -> Try(I128, [OutOfBounds, ..])
+			from_le_bytes = |bytes, index| {
+				len = List.len(bytes)
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
+					Err(OutOfBounds)
+				} else {
+					Ok(i128_from_le_bytes_unchecked(bytes, index))
+				}
+			}
+
 			## Iterator of integers beginning with this `I128` and ending with the other `I128`.
 			## (Use [I128.until] instead to end with the other `I128` minus one.)
 			## Returns an empty iterator if this `I128` is greater than the other.
@@ -13672,10 +13965,10 @@ Builtin :: [].{
 				)
 
 			## Build an [I128] from a list of base-10 digits, most significant first.
-			## Each element of the list must be a digit in the range `0` to `9`.
+			## Each item of the list must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in an
 			## [I128] (`-170141183460469231731687303715884105728` to
-			## `170141183460469231731687303715884105727`), or if any element is not
+			## `170141183460469231731687303715884105727`), or if any item is not
 			## a valid digit. The result is always non-negative; to build a negative
 			## value, [I128.negate] the result.
 			## ```roc
@@ -14512,9 +14805,9 @@ Builtin :: [].{
 			ceiling_to_u128_try = |self| Dec.to_u128_try(dec_ceiling_to_whole(self))
 
 			## Build a [Dec] from a list of base-10 digits, most significant
-			## first. Each element of the list must be a digit in the range `0`
+			## first. Each item of the list must be a digit in the range `0`
 			## to `9`. Returns `Err(OutOfRange)` if the resulting value does not
-			## fit in a [Dec], or if any element is not a valid digit. The result is always
+			## fit in a [Dec], or if any item is not a valid digit. The result is always
 			## non-negative; to build a negative value, [Dec.negate] the result.
 			## ```roc
 			## expect Dec.from_int_digits([1, 2, 3]) == Ok(123.0)
@@ -14524,9 +14817,9 @@ Builtin :: [].{
 
 			## Build a [Dec] from a tuple of (integer digits, fractional digits),
 			## each as a list of base-10 digits most significant first. Each
-			## element of both lists must be a digit in the range `0` to `9`.
+			## item of both lists must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in a
-			## [Dec], or if any element is not a valid digit. The result is
+			## [Dec], or if any item is not a valid digit. The result is
 			## always non-negative; to build a negative value, [Dec.negate] the
 			## result.
 			## ```roc
@@ -15513,9 +15806,9 @@ Builtin :: [].{
 			ceiling_to_u128_try = |self| F32.to_u128_try(f32_ceiling_unsafe(self))
 
 			## Build an [F32] from a list of base-10 digits, most significant
-			## first. Each element of the list must be a digit in the range `0`
+			## first. Each item of the list must be a digit in the range `0`
 			## to `9`. Returns `Err(OutOfRange)` if the resulting value does not
-			## fit in an [F32], or if any element is not a valid digit. The
+			## fit in an [F32], or if any item is not a valid digit. The
 			## result is always non-negative; to build a negative value, [F32.negate]
 			## the result.
 			## ```roc
@@ -15526,9 +15819,9 @@ Builtin :: [].{
 
 			## Build an [F32] from a tuple of (integer digits, fractional digits),
 			## each as a list of base-10 digits most significant first. Each
-			## element of both lists must be a digit in the range `0` to `9`.
+			## item of both lists must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in an
-			## [F32], or if any element is not a valid digit. The result is
+			## [F32], or if any item is not a valid digit. The result is
 			## always non-negative; to build a negative value, [F32.negate] the
 			## result.
 			## ```roc
@@ -16460,9 +16753,9 @@ Builtin :: [].{
 			ceiling_to_u128_try = |self| F64.to_u128_try(f64_ceiling_unsafe(self))
 
 			## Build an [F64] from a list of base-10 digits, most significant
-			## first. Each element of the list must be a digit in the range `0`
+			## first. Each item of the list must be a digit in the range `0`
 			## to `9`. Returns `Err(OutOfRange)` if the resulting value does not
-			## fit in an [F64], or if any element is not a valid digit. The
+			## fit in an [F64], or if any item is not a valid digit. The
 			## result is always non-negative; to build a negative value, [F64.negate]
 			## the result.
 			## ```roc
@@ -16473,9 +16766,9 @@ Builtin :: [].{
 
 			## Build an [F64] from a tuple of (integer digits, fractional digits),
 			## each as a list of base-10 digits most significant first. Each
-			## element of both lists must be a digit in the range `0` to `9`.
+			## item of both lists must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in an
-			## [F64], or if any element is not a valid digit. The result is
+			## [F64], or if any item is not a valid digit. The result is
 			## always non-negative; to build a negative value, [F64.negate] the
 			## result.
 			## ```roc
@@ -17168,7 +17461,8 @@ Builtin :: [].{
 			## For each lane of `indices`: the lane of `table` it names, or 0
 			## if the index is 16 or greater. This dynamic byte shuffle powers
 			## palette lookups, nibble-table tricks, and byte rearrangement
-			## with runtime patterns.
+			## with runtime patterns. Other libraries call this operation a
+			## swizzle, a shuffle, or a permute.
 			##
 			## Lowers to `pshufb` plus a one-instruction fixup on x86-64
 			## (`pshufb` alone wraps indices 16-127), `tbl` on AArch64 NEON,
@@ -17259,9 +17553,15 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(U8x16, [OutOfBounds, ..])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u8x16_load_16_unchecked(bytes, index))
@@ -17278,9 +17578,15 @@ Builtin :: [].{
 			store : U8x16, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u8x16_store_16_unchecked(vector, bytes, index))
@@ -17302,7 +17608,15 @@ Builtin :: [].{
 					0.U64,
 					Known(chunk_count),
 					|start|
-						if len - start >= 16 {
+					# Compare the index against a limit rather than subtracting from it.
+					# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+					# reads repeatedly hoists them out and keeps just the one comparison of
+					# `start` against a precomputed bound. Subtracting the other way round --
+					# `len - start < 16` -- reads the same but depends on `start`, so all of it
+					# stays in the loop.
+					#
+					# Wrapping is safe because the first check has already ruled out `len < 16`.
+						if len >= 16 and start <= len.minus_wrap(16) {
 							Ok((simd_u8x16_load_16_unchecked(bytes, start), start + 16))
 						} else {
 							Err(NoMore)
@@ -17747,9 +18061,15 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(I8x16, [OutOfBounds, ..])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i8x16_load_16_unchecked(bytes, index))
@@ -17766,9 +18086,15 @@ Builtin :: [].{
 			store : I8x16, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i8x16_store_16_unchecked(vector, bytes, index))
@@ -18227,9 +18553,15 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(U16x8, [OutOfBounds, ..])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u16x8_load_16_unchecked(bytes, index))
@@ -18246,9 +18578,15 @@ Builtin :: [].{
 			store : U16x8, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u16x8_store_16_unchecked(vector, bytes, index))
@@ -18753,9 +19091,15 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(I16x8, [OutOfBounds, ..])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i16x8_load_16_unchecked(bytes, index))
@@ -18772,9 +19116,15 @@ Builtin :: [].{
 			store : I16x8, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i16x8_store_16_unchecked(vector, bytes, index))
@@ -19179,9 +19529,15 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(U32x4, [OutOfBounds, ..])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u32x4_load_16_unchecked(bytes, index))
@@ -19198,9 +19554,15 @@ Builtin :: [].{
 			store : U32x4, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u32x4_store_16_unchecked(vector, bytes, index))
@@ -19633,9 +19995,15 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(I32x4, [OutOfBounds, ..])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i32x4_load_16_unchecked(bytes, index))
@@ -19652,9 +20020,15 @@ Builtin :: [].{
 			store : I32x4, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i32x4_store_16_unchecked(vector, bytes, index))
@@ -19987,9 +20361,15 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(U64x2, [OutOfBounds, ..])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u64x2_load_16_unchecked(bytes, index))
@@ -20006,9 +20386,15 @@ Builtin :: [].{
 			store : U64x2, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u64x2_store_16_unchecked(vector, bytes, index))
@@ -20350,9 +20736,15 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(I64x2, [OutOfBounds, ..])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i64x2_load_16_unchecked(bytes, index))
@@ -20369,9 +20761,15 @@ Builtin :: [].{
 			store : I64x2, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				if index > len {
-					Err(OutOfBounds)
-				} else if len - index < 16 {
+				# Compare the index against a limit rather than subtracting from it.
+				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+				# reads repeatedly hoists them out and keeps just the one comparison of
+				# `index` against a precomputed bound. Subtracting the other way round --
+				# `len - index < 16` -- reads the same but depends on `index`, so all of it
+				# stays in the loop.
+				#
+				# Wrapping is safe because the first check has already ruled out `len < 16`.
+				if len < 16 or index > len.minus_wrap(16) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i64x2_store_16_unchecked(vector, bytes, index))
@@ -21174,6 +21572,25 @@ u8_list_len : List(U8) -> U64
 u8_list_with_capacity : U64 -> List(U8)
 
 u8_list_get_unsafe : List(U8), U64 -> U8
+
+# Little-endian integer loads out of a byte list. Each requires the caller to
+# have already proven that the full width is in range; the bounds check lives
+# in the `from_le_bytes` wrapper on each numeric type.
+u16_from_le_bytes_unchecked : List(U8), U64 -> U16
+
+i16_from_le_bytes_unchecked : List(U8), U64 -> I16
+
+u32_from_le_bytes_unchecked : List(U8), U64 -> U32
+
+i32_from_le_bytes_unchecked : List(U8), U64 -> I32
+
+u64_from_le_bytes_unchecked : List(U8), U64 -> U64
+
+i64_from_le_bytes_unchecked : List(U8), U64 -> I64
+
+u128_from_le_bytes_unchecked : List(U8), U64 -> U128
+
+i128_from_le_bytes_unchecked : List(U8), U64 -> I128
 
 u8_list_append_unsafe : List(U8), U8 -> List(U8)
 
@@ -22088,7 +22505,7 @@ str_drop_first_bytes_unsafe = |s, count| {
 }
 
 # Implemented by the compiler. Returns 1 (otherwise 0) when List.map may reuse
-# the input list's allocation for its output: the input and output element
+# the input list's allocation for its output: the input and output item
 # layouts are interchangeable, and at runtime the list is uniquely owned and
 # not a seamless slice. Lowered to a constant 0 when the layouts are not
 # interchangeable, which lets lowering drop the in-place branch entirely.
@@ -22096,21 +22513,21 @@ str_drop_first_bytes_unsafe = |s, count| {
 list_map_can_reuse : List(input), (input -> output) -> U8
 
 # Implemented by the compiler. Retypes a unique, non-slice list in place so
-# List.map can overwrite its elements without allocating a new list. Must only
+# List.map can overwrite its items without allocating a new list. Must only
 # be called on a list for which list_map_can_reuse returned 1.
 list_map_cast_unsafe : List(input) -> List(output)
 
-# Implemented by the compiler. Moves ownership of the element at the given
+# Implemented by the compiler. Moves ownership of the item at the given
 # index out of the list's buffer; the slot keeps stale bytes until
 # list_map_write_unsafe stores its replacement. No bounds checks.
 list_map_extract_unsafe : List(output), U64 -> input
 
-# Implemented by the compiler. Stores an owned element into the slot at the
+# Implemented by the compiler. Stores an owned item into the slot at the
 # given index, which must have been vacated by list_map_extract_unsafe.
 # No bounds checks.
 list_map_write_unsafe : List(output), U64, output -> List(output)
 
-# Implemented by the compiler, ensures at least spare additional elements of capacity
+# Implemented by the compiler, ensures at least spare additional items of capacity
 list_reserve : List(item), U64 -> List(item)
 
 # Implemented by the compiler, trims unused list capacity

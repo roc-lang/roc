@@ -246,12 +246,60 @@ pub const MethodKey = struct {
     method: canonical.MethodNameId,
 };
 
-/// Public `ProcedureMethodTarget` declaration.
+/// Producer-authored runtime category for an exact procedure method target.
+pub const ProcedureRuntimeTarget = union(enum(u8)) {
+    /// A normal Roc procedure specialization.
+    procedure,
+    /// One exact producer-authored low-level operation. Monotype emits this
+    /// operation directly and must not request a procedure specialization.
+    low_level: base.LowLevel,
+    /// A compiler-authored operation whose runtime representation must
+    /// participate in Monotype's graph protocol. The optional procedure
+    /// identity selects an exact iterator construction/lowering protocol;
+    /// representation-sensitive consumers such as methods on `Iter` and
+    /// `Stream` require the graph without selecting such a protocol.
+    /// Consumers must not infer this category from a callable's body or result
+    /// shape.
+    graph_participating: GraphParticipatingTarget,
+
+    pub fn iteratorProcedure(self: ProcedureRuntimeTarget) ?IteratorProcedureId {
+        return switch (self) {
+            .graph_participating => |target| target.iterator_procedure,
+            .procedure, .low_level => null,
+        };
+    }
+};
+
+/// Producer-authored graph requirements for a representation-sensitive target.
+pub const GraphParticipatingTarget = struct {
+    iterator_procedure: ?IteratorProcedureId = null,
+};
+
+/// Exact checked procedure selected for a method registry entry.
 pub const ProcedureMethodTarget = struct {
     proc: canonical.ProcedureValueRef,
     template: canonical.ProcedureTemplateRef,
-    iterator_procedure: ?IteratorProcedureId = null,
+    runtime_target: ProcedureRuntimeTarget = .procedure,
 };
+
+fn procedureRuntimeTargetForDef(
+    module: TypedCIR.Module,
+    def_idx: CIR.Def.Idx,
+    method_owner: MethodOwner,
+) ProcedureRuntimeTarget {
+    if (iteratorProcedureForDef(module, def_idx)) |iterator| return .{ .graph_participating = .{
+        .iterator_procedure = iterator,
+    } };
+    switch (method_owner) {
+        .builtin => |owner| switch (owner) {
+            .iter, .stream => return .{ .graph_participating = .{} },
+            else => {},
+        },
+        .nominal => {},
+    }
+    if (module.moduleEnvConst().providedLowLevelForDef(def_idx)) |op| return .{ .low_level = op };
+    return .procedure;
+}
 
 /// Public `LocalProcedureMethodTarget` declaration.
 pub const LocalProcedureMethodTarget = struct {
@@ -355,6 +403,12 @@ pub const MethodRegistry = struct {
                 unreachable;
             };
             const def_idx = entry.value.def_idx;
+            const method_owner = try methodOwnerForRegistryEntry(
+                module,
+                names,
+                available_artifacts,
+                entry.key.ownerIdent(),
+            );
             var referenced_callable_var: ?Var = null;
             const target_kind: MethodTargetKind = if (generatedStructuralTargetForMethodBinding(module, entry.value)) |generated|
                 .{ .structural = generated }
@@ -374,13 +428,19 @@ pub const MethodRegistry = struct {
                         break :blk .{ .procedure = .{
                             .proc = .{ .artifact = template.artifact, .proc_base = proc_base },
                             .template = template,
-                            .iterator_procedure = iteratorProcedureForDef(module, def_idx),
+                            .runtime_target = procedureRuntimeTargetForDef(module, def_idx, method_owner),
                         } };
                     },
                 }
             } else if (localProcedureTargetForMethodBinding(module, checked_bodies, entry.key.owner, entry.value)) |local|
                 .{ .local_proc = local }
-            else if (referencedProcedureTargetForMethodBinding(module, local_templates, checked_bodies, entry.value)) |referenced| blk: {
+            else if (referencedProcedureTargetForMethodBinding(
+                module,
+                local_templates,
+                checked_bodies,
+                entry.value,
+                method_owner,
+            )) |referenced| blk: {
                 referenced_callable_var = referenced.callable_var;
                 break :blk referenced.kind;
             } else
@@ -392,7 +452,7 @@ pub const MethodRegistry = struct {
 
             try entries.append(allocator, .{
                 .key = .{
-                    .owner = try methodOwnerForRegistryEntry(module, names, available_artifacts, entry.key.ownerIdent()),
+                    .owner = method_owner,
                     .method = try names.internMethodIdent(idents, entry.key.methodIdent()),
                 },
                 .target = .{
@@ -556,6 +616,7 @@ fn referencedProcedureTargetForMethodBinding(
     local_templates: *const ProcedureTemplateLookup,
     checked_bodies: anytype,
     binding: ModuleEnv.MethodBinding,
+    method_owner: MethodOwner,
 ) ?ReferencedProcedureTarget {
     const module_env = module.moduleEnvConst();
     var expr_idx = methodBindingExpr(module, binding) orelse return null;
@@ -574,7 +635,7 @@ fn referencedProcedureTargetForMethodBinding(
                         .callable => .{ .procedure = .{
                             .proc = .{ .artifact = template_entry.template.artifact, .proc_base = template_entry.template.proc_base },
                             .template = template_entry.template,
-                            .iterator_procedure = iteratorProcedureForDef(module, target_def_idx),
+                            .runtime_target = procedureRuntimeTargetForDef(module, target_def_idx, method_owner),
                         } },
                         .structural => |kind| .{ .structural = kind },
                     },
@@ -1084,15 +1145,28 @@ pub const EvidenceParamRecord = struct {
     path: artifact_serialize.Span = .{},
 };
 
-/// Public `StaticDispatchResolution` declaration.
-pub const StaticDispatchResolution = union(enum) {
-    /// Checking proved the concrete target (with nested evidence for the
-    /// target's own obligations). Later stages must call this target directly
-    /// instead of rediscovering it from source or type names.
-    direct: EvidenceNodeId,
+/// Exact CheckedModule payload for a direct call. The evidence node owns
+/// the target identity, its fixed nested evidence, and (for local procedures)
+/// the producer-authored lexical/capture context.
+pub const DirectCall = struct {
+    evidence: EvidenceNodeId,
+};
+
+/// Public checked call classification. CheckedModule construction first records
+/// `direct_pending` while solving evidence, then replaces every such value with
+/// one of the two durable direct categories after the exact target callable has
+/// been instantiated. A serialized artifact can never contain
+/// `direct_pending`.
+pub const CheckedCallResolution = union(enum) {
+    direct_pending: EvidenceNodeId,
+    /// Exact target and a fully closed, structurally interned callable type.
+    direct_closed: DirectCall,
+    /// Exact target, but the callable still contains checked identity variables
+    /// supplied by an enclosing specialization.
+    direct_parametric: DirectCall,
     /// The dispatcher is one of the enclosing callable's constrained scheme
     /// vars; each specialization edge supplies the target as evidence.
-    constraint: EvidenceChainIndex,
+    evidence_dependent: EvidenceChainIndex,
     /// The checker chose a compiler-derived structural implementation.
     structural: StructuralDerivation,
     /// Checking rejected this site; lowering must never consume the plan.
@@ -1101,7 +1175,7 @@ pub const StaticDispatchResolution = union(enum) {
     /// supply (not an evidence param of any enclosing callable and not a
     /// defaulting literal): the dispatch is statically unreachable and lowers
     /// to an explicit crash.
-    unreachable_dispatch,
+    @"unreachable",
 };
 
 /// Public `StaticDispatchCallPlan` declaration.
@@ -1114,9 +1188,9 @@ pub const StaticDispatchCallPlan = struct {
     /// Range into `StaticDispatchPlanTable.operand_pool` (transform B).
     args: artifact_serialize.Span = .{},
     result_mode: StaticDispatchResultMode,
-    /// Assigned by `resolveTotalDispatchPlans` at publication; the default is
+    /// Assigned by `resolveTotalDispatchPlans` during CheckedModule construction; the default is
     /// a construction placeholder the pass overwrites for every plan.
-    resolution: StaticDispatchResolution = .checked_error,
+    resolution: CheckedCallResolution = .checked_error,
 
     /// The plan's operands within its table's pool.
     pub fn argsSlice(self: StaticDispatchCallPlan, table: *const StaticDispatchPlanTable) []const StaticDispatchOperand {
@@ -1144,9 +1218,9 @@ pub const IteratorDispatchCall = struct {
     dispatcher_arg_index: u32,
     /// Range into `StaticDispatchPlanTable.iter_operand_pool` (transform B).
     args: artifact_serialize.Span = .{},
-    /// Assigned by `resolveTotalDispatchPlans` at publication; the default is
+    /// Assigned by `resolveTotalDispatchPlans` during CheckedModule construction; the default is
     /// a construction placeholder the pass overwrites for every plan.
-    resolution: StaticDispatchResolution = .checked_error,
+    resolution: CheckedCallResolution = .checked_error,
 
     pub fn argsSlice(self: IteratorDispatchCall, table: *const StaticDispatchPlanTable) []const IteratorDispatchOperand {
         return table.iter_operand_pool[self.args.start .. self.args.start + self.args.len];
@@ -1247,7 +1321,15 @@ pub const StaticDispatchPlanTable = struct {
     iterator_topologies: []IteratorRepresentationTopology = &.{},
     /// `CIR.Node.Idx` -> `IteratorForPlanId`, sorted by key.
     iterator_for_by_node: []PlanKV = &.{},
+    /// Build-time collection of every plan referenced by each template.
+    /// CheckedModule construction consumes this to resolve evidence, then outputs the
+    /// category-specific pools below for post-check consumers.
     template_refs: []StaticDispatchPlanId = &.{},
+    /// Direct calls grouped by checked procedure template.
+    direct_template_refs: []StaticDispatchPlanId = &.{},
+    /// Evidence-dependent or representation-sensitive relations grouped by
+    /// checked procedure template.
+    dispatch_relation_refs: []StaticDispatchPlanId = &.{},
     /// Shared flat pool of plan operands (transform-B side list).
     operand_pool: []const StaticDispatchOperand = &.{},
     /// Shared flat pool of iterator-plan operands.
@@ -1268,6 +1350,8 @@ pub const StaticDispatchPlanTable = struct {
         iterator_topologies: SerializedSlice(IteratorRepresentationTopology) = .{},
         iterator_for_by_node: SerializedSlice(PlanKV) = .{},
         template_refs: SerializedSlice(StaticDispatchPlanId) = .{},
+        direct_template_refs: SerializedSlice(StaticDispatchPlanId) = .{},
+        dispatch_relation_refs: SerializedSlice(StaticDispatchPlanId) = .{},
         operand_pool: SerializedSlice(StaticDispatchOperand) = .{},
         iter_operand_pool: SerializedSlice(IteratorDispatchOperand) = .{},
         evidence_nodes: SerializedSlice(EvidenceNode) = .{},
@@ -1275,9 +1359,9 @@ pub const StaticDispatchPlanTable = struct {
         site_evidence: SerializedSlice(SiteEvidenceEntry) = .{},
 
         comptime {
-            // 13 side lists → 13 base-pointer fixups on deserialize, never a
+            // 15 side lists → 15 base-pointer fixups on deserialize, never a
             // function of how many plans/operands the table holds.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 13);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 15);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(StaticDispatchPlanTable, @This());
@@ -1292,13 +1376,6 @@ pub const StaticDispatchPlanTable = struct {
         checked_types: anytype,
         checked_bodies: anytype,
         build_data: *PlanTableBuildData,
-        /// Answers whether a checked literal expression's target type is a
-        /// CONCRETE builtin (such literals convert at Monotype lowering and
-        /// need no runtime literal-dispatch plan; still-open defaultable
-        /// targets keep a plan for potential custom instantiations).
-        /// Duck-typed to avoid a circular import with the checked artifact's
-        /// type-store view.
-        literal_targets: anytype,
     ) Allocator.Error!StaticDispatchPlanTable {
         var plans = std.ArrayList(StaticDispatchCallPlan).empty;
         errdefer plans.deinit(allocator);
@@ -1458,6 +1535,13 @@ pub const StaticDispatchPlanTable = struct {
         const module_env = module.moduleEnvConst();
         for (module_env.store.literalDispatchPlans()) |numeral_plan| {
             if (numeral_plan.dispatchKind() != .numeral) continue;
+            switch (numeral_plan.dispatchResolution()) {
+                .builtin_direct, .checked_error => continue,
+                .custom_dispatch, .specialization_dispatch => {},
+                .unresolved => if (@import("builtin").mode == .Debug) {
+                    std.debug.panic("unresolved numeral dispatch plan reached checked publication", .{});
+                } else unreachable,
+            }
             const node: CIR.Node.Idx = @enumFromInt(numeral_plan.node_idx);
             const checked_expr = checked_bodies.exprIdAtRawNode(numeral_plan.node_idx) orelse
                 checked_bodies.numeralConversionExprAtRawNode(numeral_plan.node_idx) orelse
@@ -1475,16 +1559,6 @@ pub const StaticDispatchPlanTable = struct {
                     unreachable;
                 },
             }
-            // Concrete builtin-targeted literals get their bits at monotype
-            // lowering; non-builtin (custom `from_numeral`) targets need a
-            // plan, and so does a literal whose target is still an OPEN
-            // defaultable variable — a generalized literal can be
-            // instantiated at a custom from_numeral type later (issue: a
-            // generic `|x| x.plus(1)` called with a custom number type
-            // panicked lowering with a plan-less from_numeral call). When
-            // every instantiation lands on a builtin, the recorded plan is
-            // simply never consulted.
-            if (literal_targets.literalTargetIsConcreteBuiltin(checked_expr)) continue;
             const literal = module_env.numeralLiteralForNode(node) orelse {
                 if (@import("builtin").mode == .Debug) {
                     std.debug.panic(
@@ -1525,38 +1599,25 @@ pub const StaticDispatchPlanTable = struct {
 
         for (module_env.store.literalDispatchPlans()) |quote_plan| {
             if (quote_plan.dispatchKind() != .quote) continue;
+            switch (quote_plan.dispatchResolution()) {
+                .builtin_direct, .checked_error => continue,
+                .custom_dispatch, .specialization_dispatch => {},
+                .unresolved => if (@import("builtin").mode == .Debug) {
+                    std.debug.panic("unresolved quote dispatch plan reached checked publication", .{});
+                } else unreachable,
+            }
             const node: CIR.Node.Idx = @enumFromInt(quote_plan.node_idx);
             const checked_expr = checked_bodies.exprIdAtRawNode(quote_plan.node_idx) orelse
                 checked_bodies.numeralConversionExprAtRawNode(quote_plan.node_idx) orelse
                 continue;
             const literal = switch (checked_bodies.expr(checked_expr).data) {
-                .str_from_quote => |quote| blk: {
-                    if (literal_targets.literalTargetIsConcreteBuiltin(checked_expr)) {
-                        if (@import("builtin").mode == .Debug) {
-                            std.debug.panic(
-                                "checked static dispatch invariant violated: concrete builtin quote target {d} retained a from_quote expression",
-                                .{quote_plan.node_idx},
-                            );
-                        }
-                        unreachable;
-                    }
-                    break :blk quote.literal;
-                },
-                // Only a target already proven builtin may keep the direct
-                // string encoding. An open generalized target needs the plan
-                // for potential custom from_quote instantiations.
-                .str, .str_segment => {
-                    if (!literal_targets.literalTargetIsConcreteBuiltin(checked_expr)) {
-                        if (@import("builtin").mode == .Debug) {
-                            std.debug.panic(
-                                "checked static dispatch invariant violated: open quote target {d} lost its from_quote expression",
-                                .{quote_plan.node_idx},
-                            );
-                        }
-                        unreachable;
-                    }
-                    continue;
-                },
+                .str_from_quote => |quote| quote.literal,
+                .str, .str_segment => if (@import("builtin").mode == .Debug) {
+                    std.debug.panic(
+                        "checked static dispatch invariant violated: non-builtin quote target {d} lost its from_quote expression",
+                        .{quote_plan.node_idx},
+                    );
+                } else unreachable,
                 .runtime_error => continue,
                 else => {
                     if (@import("builtin").mode == .Debug) {
@@ -1746,6 +1807,8 @@ pub const StaticDispatchPlanTable = struct {
     /// mutators.)
     pub fn deinit(self: *StaticDispatchPlanTable, allocator: Allocator) void {
         allocator.free(self.template_refs);
+        allocator.free(self.direct_template_refs);
+        allocator.free(self.dispatch_relation_refs);
         allocator.free(self.by_expr);
         allocator.free(self.numeral_by_node);
         allocator.free(self.quote_by_node);
@@ -2232,7 +2295,7 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
     // The fixup count is fixed by the number of serialized base pointers, never
     // by how much data each pool holds. The two tables below differ in operand
     // count by three orders of magnitude yet relocate identically.
-    comptime std.debug.assert(@typeInfo(StaticDispatchPlanTable.Serialized).@"struct".fields.len == 13);
+    comptime std.debug.assert(@typeInfo(StaticDispatchPlanTable.Serialized).@"struct".fields.len == 15);
 
     inline for (.{ @as(u32, 4), @as(u32, 4000) }) |operand_count| {
         const operands = try gpa.alloc(StaticDispatchOperand, operand_count);

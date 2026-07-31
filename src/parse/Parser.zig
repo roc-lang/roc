@@ -431,14 +431,13 @@ fn recordStatementDecl(
             .region = .{ .start = v.region.start, .end = v.region.end },
         },
         .import => |i| blk: {
-            if (self.tok_buf.resolveIdentifier(i.module_name_tok)) |module_name| {
-                try self.decl_index.addImport(.{
-                    .module_name = module_name,
-                    .qualifier = if (i.qualifier_tok) |qualifier_tok| self.tok_buf.resolveIdentifier(qualifier_tok) else null,
-                    .nested = i.nested_import,
-                    .region = .{ .start = i.region.start, .end = i.region.end },
-                });
-            }
+            const module_name = try self.importModulePathIdent(i.module_name_tok, i.nested_import);
+            try self.decl_index.addImport(.{
+                .module_name = module_name,
+                .qualifier = if (i.qualifier_tok) |qualifier_tok| self.tok_buf.resolveIdentifier(qualifier_tok) else null,
+                .nested = i.nested_import,
+                .region = .{ .start = i.region.start, .end = i.region.end },
+            });
             break :blk DeclIndex.Decl{
                 .scope = scope_idx,
                 .statement = @intFromEnum(statement_idx),
@@ -629,6 +628,35 @@ fn addTypeDeclStatement(
 fn tokenText(self: *const Parser, token: Token.Idx) []const u8 {
     const region = self.tok_buf.resolve(token);
     return self.tok_buf.env.source[region.start.offset..region.end.offset];
+}
+
+/// Intern the normalized module path selected by import parsing, excluding a
+/// lowercase package qualifier. Building from tokens keeps layout whitespace
+/// out of the semantic path.
+fn importModulePathIdent(self: *Parser, module_name_tok: Token.Idx, nested_import: bool) std.mem.Allocator.Error!base.Ident.Idx {
+    var path = std.ArrayList(u8).empty;
+    defer path.deinit(self.gpa);
+
+    const first_raw = self.tokenText(module_name_tok);
+    const first = if (first_raw.len > 0 and first_raw[0] == '.') first_raw[1..] else first_raw;
+    try path.appendSlice(self.gpa, first);
+
+    if (!nested_import) {
+        var tok = module_name_tok + 1;
+        while (tok < self.tok_buf.tokens.len) : (tok += 1) {
+            switch (self.tok_buf.tokens.items(.tag)[tok]) {
+                .NoSpaceDotUpperIdent, .DotUpperIdent => {
+                    const raw = self.tokenText(tok);
+                    const segment = if (raw.len > 0 and raw[0] == '.') raw[1..] else raw;
+                    try path.append(self.gpa, '.');
+                    try path.appendSlice(self.gpa, segment);
+                },
+                else => break,
+            }
+        }
+    }
+
+    return try self.tok_buf.env.insertIdent(self.gpa, base.Ident.for_text(path.items));
 }
 
 fn recordPackageHeaderModules(self: *Parser, exposes: AST.ExposedItem.Span) std.mem.Allocator.Error!void {
@@ -1046,9 +1074,11 @@ fn parseImportStatementTokens(self: *Parser) std.mem.Allocator.Error!AST.Stateme
     } });
     self.store.setCollectionLayout(statement_idx, exposes_layout);
     if (qualifier == null and !nested_import) {
-        if (self.tok_buf.resolveIdentifier(module_name_tok)) |module_ident| {
-            try self.decl_index.addExplicitUnqualifiedImport(module_ident);
-        }
+        const introduced_name_tok = alias_tok orelse last_upper_tok;
+        const raw_name = self.tokenText(introduced_name_tok);
+        const introduced_name = if (raw_name.len > 0 and raw_name[0] == '.') raw_name[1..] else raw_name;
+        const introduced_ident = try self.tok_buf.env.insertIdent(self.gpa, base.Ident.for_text(introduced_name));
+        try self.decl_index.addExplicitUnqualifiedImport(introduced_ident);
     }
     return statement_idx;
 }
@@ -3186,7 +3216,15 @@ fn runExprStatementKernel(
                         });
                         expr_state = .{ .start = self.pos, .min_bp = 0 };
                         continue :expr_kernel .prefix;
-                    } else if (self.peek() == .LowerIdent and (self.peekNext() == .Comma or self.peekNext() == .OpColon)) {
+                    } else if (self.peek() == .LowerIdent and
+                        (self.peekNext() == .Comma or
+                            self.peekNext() == .OpColon or
+                            (self.peekNext() == .CloseCurly and open_syntax.peekExpr() == .expr_record_field)))
+                    {
+                        // A punned single-field record is otherwise ambiguous
+                        // with a do-nothing block. When it is directly nested as
+                        // a record field value, the surrounding record provides
+                        // the same unambiguous nesting as `{ { field } }`.
                         var is_block = false;
                         if (self.peekNext() == .OpColon) {
                             var lookahead_pos = self.pos + 2;

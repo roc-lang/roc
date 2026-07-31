@@ -386,20 +386,6 @@ pub const Module = struct {
         return self.typeStoreConst().resolveVar(self.exprType(idx)).desc.content == .err;
     }
 
-    pub fn exprDefaultsToDec(self: @This(), idx: CIR.Expr.Idx) bool {
-        const resolved = self.typeStoreConst().resolveVar(self.exprType(idx));
-        return switch (resolved.desc.content) {
-            .flex => |flex| blk: {
-                const constraints = self.typeStoreConst().sliceStaticDispatchConstraints(flex.constraints);
-                for (constraints) |constraint| {
-                    if (constraint.origin == .from_literal) break :blk true;
-                }
-                break :blk false;
-            },
-            else => false,
-        };
-    }
-
     /// Flatten a checked function type into its argument list and final return var.
     pub fn fnShape(self: @This(), fn_var: Var) Allocator.Error!FnShape {
         var args = std.ArrayList(Var).empty;

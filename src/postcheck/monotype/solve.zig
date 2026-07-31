@@ -2157,6 +2157,14 @@ pub const InstGraph = struct {
         }
     }
 
+    /// Structural root of a function-shaped request node. Callable request
+    /// identity is structural: a transparent named wrapper names the same
+    /// function interface as its backing, so requests resolve to the backing
+    /// before they become specialization keys or sealed function types.
+    pub fn functionRequestRoot(self: *InstGraph, node: NodeId) Allocator.Error!NodeId {
+        return self.shapeRoot(node, "function request", .inspectable);
+    }
+
     /// Project a function-shaped live node without materializing a Monotype.
     pub fn functionNodes(self: *InstGraph, node: NodeId) Allocator.Error!FunctionNodes {
         return switch (self.content(try self.shapeRoot(node, "function", .inspectable))) {

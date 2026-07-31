@@ -84,26 +84,102 @@ pub const TargetConfig = struct {
 /// Thread-safe timing totals for the checked-to-LIR pipeline.
 pub const Timing = struct {
     std_io: std.Io,
+    detailed_monotype_body: bool = false,
     monotype_ns: TimingCounter = .{},
-    postcheck_to_lir_ns: TimingCounter = .{},
-    lir_passes_arc_ns: TimingCounter = .{},
+    monotype_setup_ns: TimingCounter = .{},
+    monotype_procedure_specialization_ns: TimingCounter = .{},
+    monotype_procedure_root_wrapper_ns: TimingCounter = .{},
+    monotype_procedure_lookup_reservation_ns: TimingCounter = .{},
+    monotype_procedure_dispatch_evidence_ns: TimingCounter = .{},
+    monotype_procedure_body_graph_setup_ns: TimingCounter = .{},
+    monotype_procedure_body_lowering_ns: TimingCounter = .{},
+    monotype_procedure_body_type_graph_ns: TimingCounter = .{},
+    monotype_procedure_body_call_dispatch_ns: TimingCounter = .{},
+    monotype_procedure_body_draft_ir_ns: TimingCounter = .{},
+    monotype_procedure_body_reachability_ns: TimingCounter = .{},
+    monotype_procedure_body_source_mapping_ns: TimingCounter = .{},
+    monotype_procedure_body_local_proc_context_ns: TimingCounter = .{},
+    monotype_procedure_body_finalization_ns: TimingCounter = .{},
+    monotype_procedure_completion_ns: TimingCounter = .{},
+    monotype_layout_requests_ns: TimingCounter = .{},
+    monotype_static_data_requests_ns: TimingCounter = .{},
+    monotype_finalization_ns: TimingCounter = .{},
+    lift_ns: TimingCounter = .{},
+    spec_constr_ns: TimingCounter = .{},
+    lambda_solve_ns: TimingCounter = .{},
+    inline_plan_ns: TimingCounter = .{},
+    lir_gen_ns: TimingCounter = .{},
+    lir_passes_ns: TimingCounter = .{},
+    arc_ns: TimingCounter = .{},
 
     pub fn init(std_io: std.Io) Timing {
         return .{ .std_io = std_io };
     }
 
+    /// Enable fine-grained, per-node Monotype body timing. This is opt-in
+    /// because timestamping interleaved body work has measurable overhead.
+    pub fn enableDetailedMonotypeBody(self: *Timing) void {
+        self.detailed_monotype_body = true;
+    }
+
     pub fn snapshot(self: *const Timing) TimingSnapshot {
         return .{
             .monotype_ns = self.monotype_ns.load(),
-            .postcheck_to_lir_ns = self.postcheck_to_lir_ns.load(),
-            .lir_passes_arc_ns = self.lir_passes_arc_ns.load(),
+            .monotype_setup_ns = self.monotype_setup_ns.load(),
+            .monotype_procedure_specialization_ns = self.monotype_procedure_specialization_ns.load(),
+            .monotype_procedure_root_wrapper_ns = self.monotype_procedure_root_wrapper_ns.load(),
+            .monotype_procedure_lookup_reservation_ns = self.monotype_procedure_lookup_reservation_ns.load(),
+            .monotype_procedure_dispatch_evidence_ns = self.monotype_procedure_dispatch_evidence_ns.load(),
+            .monotype_procedure_body_graph_setup_ns = self.monotype_procedure_body_graph_setup_ns.load(),
+            .monotype_procedure_body_lowering_ns = self.monotype_procedure_body_lowering_ns.load(),
+            .monotype_procedure_body_type_graph_ns = self.monotype_procedure_body_type_graph_ns.load(),
+            .monotype_procedure_body_call_dispatch_ns = self.monotype_procedure_body_call_dispatch_ns.load(),
+            .monotype_procedure_body_draft_ir_ns = self.monotype_procedure_body_draft_ir_ns.load(),
+            .monotype_procedure_body_reachability_ns = self.monotype_procedure_body_reachability_ns.load(),
+            .monotype_procedure_body_source_mapping_ns = self.monotype_procedure_body_source_mapping_ns.load(),
+            .monotype_procedure_body_local_proc_context_ns = self.monotype_procedure_body_local_proc_context_ns.load(),
+            .monotype_procedure_body_finalization_ns = self.monotype_procedure_body_finalization_ns.load(),
+            .monotype_procedure_completion_ns = self.monotype_procedure_completion_ns.load(),
+            .monotype_layout_requests_ns = self.monotype_layout_requests_ns.load(),
+            .monotype_static_data_requests_ns = self.monotype_static_data_requests_ns.load(),
+            .monotype_finalization_ns = self.monotype_finalization_ns.load(),
+            .lift_ns = self.lift_ns.load(),
+            .spec_constr_ns = self.spec_constr_ns.load(),
+            .lambda_solve_ns = self.lambda_solve_ns.load(),
+            .inline_plan_ns = self.inline_plan_ns.load(),
+            .lir_gen_ns = self.lir_gen_ns.load(),
+            .lir_passes_ns = self.lir_passes_ns.load(),
+            .arc_ns = self.arc_ns.load(),
         };
     }
 
     pub fn addSnapshot(self: *Timing, snapshot_value: TimingSnapshot) void {
         self.monotype_ns.add(snapshot_value.monotype_ns);
-        self.postcheck_to_lir_ns.add(snapshot_value.postcheck_to_lir_ns);
-        self.lir_passes_arc_ns.add(snapshot_value.lir_passes_arc_ns);
+        self.monotype_setup_ns.add(snapshot_value.monotype_setup_ns);
+        self.monotype_procedure_specialization_ns.add(snapshot_value.monotype_procedure_specialization_ns);
+        self.monotype_procedure_root_wrapper_ns.add(snapshot_value.monotype_procedure_root_wrapper_ns);
+        self.monotype_procedure_lookup_reservation_ns.add(snapshot_value.monotype_procedure_lookup_reservation_ns);
+        self.monotype_procedure_dispatch_evidence_ns.add(snapshot_value.monotype_procedure_dispatch_evidence_ns);
+        self.monotype_procedure_body_graph_setup_ns.add(snapshot_value.monotype_procedure_body_graph_setup_ns);
+        self.monotype_procedure_body_lowering_ns.add(snapshot_value.monotype_procedure_body_lowering_ns);
+        self.monotype_procedure_body_type_graph_ns.add(snapshot_value.monotype_procedure_body_type_graph_ns);
+        self.monotype_procedure_body_call_dispatch_ns.add(snapshot_value.monotype_procedure_body_call_dispatch_ns);
+        self.monotype_procedure_body_draft_ir_ns.add(snapshot_value.monotype_procedure_body_draft_ir_ns);
+        self.monotype_procedure_body_reachability_ns.add(snapshot_value.monotype_procedure_body_reachability_ns);
+        self.monotype_procedure_body_source_mapping_ns.add(snapshot_value.monotype_procedure_body_source_mapping_ns);
+        self.monotype_procedure_body_local_proc_context_ns.add(snapshot_value.monotype_procedure_body_local_proc_context_ns);
+        self.monotype_procedure_body_finalization_ns.add(snapshot_value.monotype_procedure_body_finalization_ns);
+        self.monotype_procedure_completion_ns.add(snapshot_value.monotype_procedure_completion_ns);
+        self.monotype_layout_requests_ns.add(snapshot_value.monotype_layout_requests_ns);
+        self.monotype_static_data_requests_ns.add(snapshot_value.monotype_static_data_requests_ns);
+        self.monotype_finalization_ns.add(snapshot_value.monotype_finalization_ns);
+        self.lift_ns.add(snapshot_value.lift_ns);
+        self.spec_constr_ns.add(snapshot_value.spec_constr_ns);
+        self.lambda_solve_ns.add(snapshot_value.lambda_solve_ns);
+        self.inline_plan_ns.add(snapshot_value.inline_plan_ns);
+        self.lir_gen_ns.add(snapshot_value.lir_gen_ns);
+        self.lir_passes_ns.add(snapshot_value.lir_passes_ns);
+        self.arc_ns.add(snapshot_value.arc_ns);
     }
 
     fn start(self: *const Timing) i64 {
@@ -115,45 +191,79 @@ pub const Timing = struct {
         const elapsed_ns: u64 = @intCast(@max(0, finished_ns - started_ns));
         switch (phase) {
             .monotype => self.monotype_ns.add(elapsed_ns),
-            .postcheck_to_lir => self.postcheck_to_lir_ns.add(elapsed_ns),
-            .lir_passes_arc => self.lir_passes_arc_ns.add(elapsed_ns),
+            .lift => self.lift_ns.add(elapsed_ns),
+            .spec_constr => self.spec_constr_ns.add(elapsed_ns),
+            .lambda_solve => self.lambda_solve_ns.add(elapsed_ns),
+            .inline_plan => self.inline_plan_ns.add(elapsed_ns),
+            .lir_gen => self.lir_gen_ns.add(elapsed_ns),
+            .lir_passes => self.lir_passes_ns.add(elapsed_ns),
+            .arc => self.arc_ns.add(elapsed_ns),
         }
     }
+
+    fn addMonotypeSnapshot(self: *Timing, snapshot_value: postcheck.Monotype.Lower.TimingSnapshot) void {
+        self.monotype_setup_ns.add(snapshot_value.setup_ns);
+        self.monotype_procedure_specialization_ns.add(snapshot_value.procedure_specialization_ns);
+        self.monotype_procedure_root_wrapper_ns.add(snapshot_value.procedure_root_wrapper_ns);
+        self.monotype_procedure_lookup_reservation_ns.add(snapshot_value.procedure_lookup_reservation_ns);
+        self.monotype_procedure_dispatch_evidence_ns.add(snapshot_value.procedure_dispatch_evidence_ns);
+        self.monotype_procedure_body_graph_setup_ns.add(snapshot_value.procedure_body_graph_setup_ns);
+        self.monotype_procedure_body_lowering_ns.add(snapshot_value.procedure_body_lowering_ns);
+        self.monotype_procedure_body_type_graph_ns.add(snapshot_value.procedure_body_type_graph_ns);
+        self.monotype_procedure_body_call_dispatch_ns.add(snapshot_value.procedure_body_call_dispatch_ns);
+        self.monotype_procedure_body_draft_ir_ns.add(snapshot_value.procedure_body_draft_ir_ns);
+        self.monotype_procedure_body_reachability_ns.add(snapshot_value.procedure_body_reachability_ns);
+        self.monotype_procedure_body_source_mapping_ns.add(snapshot_value.procedure_body_source_mapping_ns);
+        self.monotype_procedure_body_local_proc_context_ns.add(snapshot_value.procedure_body_local_proc_context_ns);
+        self.monotype_procedure_body_finalization_ns.add(snapshot_value.procedure_body_finalization_ns);
+        self.monotype_procedure_completion_ns.add(snapshot_value.procedure_completion_ns);
+        self.monotype_layout_requests_ns.add(snapshot_value.layout_requests_ns);
+        self.monotype_static_data_requests_ns.add(snapshot_value.static_data_requests_ns);
+        self.monotype_finalization_ns.add(snapshot_value.finalization_ns);
+    }
 };
 
-const TimingCounter = if (base.parallel.is_freestanding or builtin.target.cpu.arch == .wasm32) struct {
-    value: u64 = 0,
-
-    fn load(self: *const @This()) u64 {
-        return self.value;
-    }
-
-    fn add(self: *@This(), value: u64) void {
-        self.value +%= value;
-    }
-} else struct {
-    value: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
-
-    fn load(self: *const @This()) u64 {
-        return self.value.load(.monotonic);
-    }
-
-    fn add(self: *@This(), value: u64) void {
-        _ = self.value.fetchAdd(value, .monotonic);
-    }
-};
+const TimingCounter = base.ConcurrentU64;
 
 /// Immutable checked-to-LIR timings for progress reporting.
 pub const TimingSnapshot = struct {
     monotype_ns: u64 = 0,
-    postcheck_to_lir_ns: u64 = 0,
-    lir_passes_arc_ns: u64 = 0,
+    monotype_setup_ns: u64 = 0,
+    monotype_procedure_specialization_ns: u64 = 0,
+    monotype_procedure_root_wrapper_ns: u64 = 0,
+    monotype_procedure_lookup_reservation_ns: u64 = 0,
+    monotype_procedure_dispatch_evidence_ns: u64 = 0,
+    monotype_procedure_body_graph_setup_ns: u64 = 0,
+    monotype_procedure_body_lowering_ns: u64 = 0,
+    monotype_procedure_body_type_graph_ns: u64 = 0,
+    monotype_procedure_body_call_dispatch_ns: u64 = 0,
+    monotype_procedure_body_draft_ir_ns: u64 = 0,
+    monotype_procedure_body_reachability_ns: u64 = 0,
+    monotype_procedure_body_source_mapping_ns: u64 = 0,
+    monotype_procedure_body_local_proc_context_ns: u64 = 0,
+    monotype_procedure_body_finalization_ns: u64 = 0,
+    monotype_procedure_completion_ns: u64 = 0,
+    monotype_layout_requests_ns: u64 = 0,
+    monotype_static_data_requests_ns: u64 = 0,
+    monotype_finalization_ns: u64 = 0,
+    lift_ns: u64 = 0,
+    spec_constr_ns: u64 = 0,
+    lambda_solve_ns: u64 = 0,
+    inline_plan_ns: u64 = 0,
+    lir_gen_ns: u64 = 0,
+    lir_passes_ns: u64 = 0,
+    arc_ns: u64 = 0,
 };
 
 const TimingPhase = enum {
     monotype,
-    postcheck_to_lir,
-    lir_passes_arc,
+    lift,
+    spec_constr,
+    lambda_solve,
+    inline_plan,
+    lir_gen,
+    lir_passes,
+    arc,
 };
 
 fn timingNowNs(std_io: std.Io) i64 {
@@ -314,6 +424,13 @@ pub fn lowerCheckedModulesToLir(
     defer allocator.free(static_data_requests);
 
     const monotype_started_ns = if (target.timing) |timing| timing.start() else 0;
+    var monotype_timing: ?postcheck.Monotype.Lower.Timing = if (target.timing) |timing|
+        postcheck.Monotype.Lower.Timing.init(timing.std_io)
+    else
+        null;
+    if (monotype_timing) |*detail| {
+        detail.body_work_timing_enabled = target.timing.?.detailed_monotype_body;
+    }
     var mono = try postcheck.Monotype.Lower.run(
         allocator,
         checkedModules(modules),
@@ -327,13 +444,17 @@ pub fn lowerCheckedModulesToLir(
                 .run => .run,
                 .omit => .omit,
             },
+            .timing = if (monotype_timing) |*timing| timing else null,
         },
     );
-    if (target.timing) |timing| timing.finish(monotype_started_ns, .monotype);
+    if (target.timing) |timing| {
+        timing.finish(monotype_started_ns, .monotype);
+        if (monotype_timing) |*detail| timing.addMonotypeSnapshot(detail.snapshot());
+    }
     var mono_owned = true;
     errdefer if (mono_owned) mono.deinit();
 
-    const postcheck_started_ns = if (target.timing) |timing| timing.start() else 0;
+    const lift_started_ns = if (target.timing) |timing| timing.start() else 0;
 
     // Each post-check transform consumes its input even when it returns an
     // error. Transfer ownership before entering the transform so its cleanup
@@ -344,22 +465,34 @@ pub fn lowerCheckedModulesToLir(
     var lifted = try postcheck.MonotypeLifted.Lift.run(allocator, mono_input);
     var lifted_owned = true;
     errdefer if (lifted_owned) lifted.deinit();
+    if (target.timing) |timing| timing.finish(lift_started_ns, .lift);
 
     if (target.inline_mode != .none) {
+        const spec_constr_started_ns = if (target.timing) |timing| timing.start() else 0;
         try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted);
+        if (target.timing) |timing| timing.finish(spec_constr_started_ns, .spec_constr);
     }
-    try postcheck.MonotypeLifted.Lift.recomputeCaptures(allocator, &lifted);
 
+    const lambda_solve_started_ns = if (target.timing) |timing| timing.start() else 0;
     const lifted_input = lifted;
     lifted_owned = false;
     lifted = undefined;
     var solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted_input);
     var solved_owned = true;
     errdefer if (solved_owned) solved.deinit();
+    if (target.timing) |timing| timing.finish(lambda_solve_started_ns, .lambda_solve);
 
+    const inline_plan_started_ns = if (target.inline_mode != .none)
+        if (target.timing) |timing| timing.start() else 0
+    else
+        0;
     var inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, &solved);
     defer inline_plan.deinit();
+    if (target.inline_mode != .none) {
+        if (target.timing) |timing| timing.finish(inline_plan_started_ns, .inline_plan);
+    }
 
+    const lir_gen_started_ns = if (target.timing) |timing| timing.start() else 0;
     const solved_input = solved;
     solved_owned = false;
     solved = undefined;
@@ -376,7 +509,7 @@ pub fn lowerCheckedModulesToLir(
         .test_plan_metadata = roots.test_plan_metadata,
         .debug_materialized_out = target.debug_materialized_out,
     });
-    if (target.timing) |timing| timing.finish(postcheck_started_ns, .postcheck_to_lir);
+    if (target.timing) |timing| timing.finish(lir_gen_started_ns, .lir_gen);
     errdefer lowered.deinit();
 
     const lir_passes_started_ns = if (target.timing) |timing| timing.start() else 0;
@@ -393,12 +526,14 @@ pub fn lowerCheckedModulesToLir(
         try TagReachability.run(&lowered.lir_result);
     }
     try ReachableProcs.run(&lowered.lir_result);
+    if (target.timing) |timing| timing.finish(lir_passes_started_ns, .lir_passes);
 
+    const arc_started_ns = if (target.timing) |timing| timing.start() else 0;
     try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts, .{
         .roots = lowered.lir_result.root_procs.items,
         .specialize = target.inline_mode != .none,
     });
-    if (target.timing) |timing| timing.finish(lir_passes_started_ns, .lir_passes_arc);
+    if (target.timing) |timing| timing.finish(arc_started_ns, .arc);
 
     if (roots.requests.len != 0 and lowered.lir_result.root_procs.items.len == 0) {
         checkedPipelineInvariant("explicit root set produced no LIR roots");

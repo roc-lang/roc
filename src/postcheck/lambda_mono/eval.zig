@@ -1185,6 +1185,7 @@ pub const Evaluator = struct {
             .num_count_leading_zero_bits => self.numBitCount(args, arg_types, .count_leading_zeros),
             .num_count_trailing_zero_bits => self.numBitCount(args, arg_types, .count_trailing_zeros),
 
+            .num_from_le_bytes_unchecked => self.evalNumFromLeBytes(args, result_ty),
             .simd_load_16_unchecked => self.evalSimdLoad(args, result_ty),
             .simd_store_16_unchecked => self.evalSimdStore(args),
             .simd_append_16 => self.evalSimdAppend(args),
@@ -1777,6 +1778,29 @@ pub const Evaluator = struct {
         const result_bits = builtins.simd.eval(simd_op, source, destination, operands[0], operands[1], operands[2]);
         if (destination_kind != null) return .{ .int = @bitCast(result_bits) };
         return self.canonicalInt(result_prim, @bitCast(result_bits));
+    }
+
+    /// Read a little-endian integer out of a byte list. The result type gives
+    /// the width; the bounds check already happened in the Roc wrapper.
+    fn evalNumFromLeBytes(self: *Evaluator, args: []const Value, result_ty: Type.TypeId) EvalError!Value {
+        const prim = self.primitiveOf(result_ty) orelse return self.unsupported_("from_le_bytes result without primitive type");
+        const bytes = switch (args[0]) {
+            .list => |list| list,
+            else => return self.unsupported_("from_le_bytes from non-list value"),
+        };
+        const index: usize = @intCast(valueBits(args[1]) catch return self.unsupported_("from_le_bytes index without integer bits"));
+        return switch (prim) {
+            inline .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => |p| blk: {
+                const T = intType(p);
+                var value: u128 = 0;
+                for (0..@sizeOf(T)) |i| {
+                    const byte_bits = valueBits(bytes[index + i]) catch return self.unsupported_("from_le_bytes byte without integer bits");
+                    value |= @as(u128, @as(u8, @truncate(byte_bits))) << @intCast(i * 8);
+                }
+                break :blk makeInt(T, @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(T)), @truncate(value))));
+            },
+            else => self.unsupported_("from_le_bytes on non-multi-byte-integer type"),
+        };
     }
 
     fn evalSimdLoad(self: *Evaluator, args: []const Value, result_ty: Type.TypeId) EvalError!Value {
