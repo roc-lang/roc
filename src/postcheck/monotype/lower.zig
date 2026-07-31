@@ -1577,6 +1577,8 @@ const Builder = struct {
     bool_ty: ?Type.TypeId = null,
     /// Bounded count of recorded seam divergences (Debug measurement only).
     seam_divergences_noted: usize = 0,
+    /// Whether this lowering has already named its modules for the census.
+    module_names_dumped: bool = false,
     /// Debug/probe-only widened population sink (reunify.md section 9, Slice 7
     /// Stage A): connected to the type store's `committed_census` while the
     /// directed-translation probe runs, so it accumulates every committed final
@@ -3900,7 +3902,31 @@ const Builder = struct {
     /// a sealed type's provenance module, which — for an imported declaration
     /// whose defining view never reaches lowering — may not be present; the probe
     /// records that as a skip rather than aborting the compile.
+    /// Debug/probe-only: name every module this lowering sees, so a census line
+    /// keyed by a module digest can be read as a module name.
+    fn dumpModuleNames(self: *Builder) void {
+        if (comptime !census.enabled) return;
+        if (self.module_names_dumped) return;
+        self.module_names_dumped = true;
+        const raw_path = std.c.getenv("ROC_REUNIFY_CENSUS") orelse return;
+        self.dumpOneModuleName(raw_path, moduleView(self.root_view));
+        for (self.modules.imports) |imported| self.dumpOneModuleName(raw_path, moduleView(imported));
+        for (self.modules.root.relation_modules) |relation| self.dumpOneModuleName(raw_path, moduleView(relation));
+    }
+
+    fn dumpOneModuleName(self: *Builder, raw_path: [*:0]const u8, view: ModuleView) void {
+        const module_hex = std.fmt.bytesToHex(view.key.bytes[0..8].*, .lower);
+        const line = std.fmt.allocPrint(
+            self.allocator,
+            "module_name module={s} name={s}\n",
+            .{ &module_hex, view.module_env.module_name },
+        ) catch return;
+        defer self.allocator.free(line);
+        census.appendToFile(raw_path, line);
+    }
+
     fn moduleForDigestOrNull(self: *Builder, module_bytes: [32]u8) ?ModuleView {
+        self.dumpModuleNames();
         if (moduleBytesEqual(module_bytes, self.root_view.key.bytes)) return moduleView(self.root_view);
         for (self.modules.imports) |imported| {
             if (moduleBytesEqual(module_bytes, imported.key.bytes)) return moduleView(imported);

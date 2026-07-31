@@ -461,6 +461,12 @@ pub const Census = struct {
     unlisted_variable_disposed_uninhabited: Counter = Counter.init(0),
     unlisted_variable_disposed_contextual: Counter = Counter.init(0),
     unlisted_variable_under_a_recorded_root: Counter = Counter.init(0),
+    // Whether a position this specialization emitted unbound is one a walk
+    // supplies, asked the same way as the seam's divergences.
+    mismatch_unbound_position_is_ground: Counter = Counter.init(0),
+    mismatch_unbound_inside_the_backing_that_binds_it: Counter = Counter.init(0),
+    mismatch_unbound_inside_its_own_scheme_root: Counter = Counter.init(0),
+    mismatch_unbound_no_frame_will_bind_it: Counter = Counter.init(0),
     unlisted_variable_no_root_reaches_it: Counter = Counter.init(0),
     ground_divergence_judged_against_checking: Counter = Counter.init(0),
     sealed_vs_checked_position_is_a_variable: Counter = Counter.init(0),

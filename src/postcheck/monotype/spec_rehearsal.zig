@@ -1243,6 +1243,9 @@ pub const Rehearsal = struct {
     translator: direct_translate.Translator,
     engine: closure.Engine,
     lookup: ModuleLookup,
+    /// How many unbound-with-no-frame positions have been named, so the dump
+    /// cannot fill the census file.
+    unbound_no_frame_dumped: usize = 0,
     frames: std.ArrayList(Frame),
     /// The open request scopes, innermost last. The seam opens one around every
     /// request it makes and closes it when the request finishes, so the edge a
@@ -2357,7 +2360,9 @@ pub const Rehearsal = struct {
         // DECLARATION'S OWN BACKING reach this position? If it does, the
         // position lives inside the very type whose formals the walk binds, so
         // every walk that enters this nominal supplies it.
-        if (self.checkedReaches(cursor, declaration.backing, position)) {
+        if (self.checkedReaches(cursor, declaration.backing, position) or
+            self.checkedReaches(cursor, declaration.declaration_root, position))
+        {
             census.bump("nominal_param_supplied_by_walk_into_backing");
             census.bump("nominal_param_inside_the_backing_that_binds_it");
             return;
@@ -2511,6 +2516,116 @@ pub const Rehearsal = struct {
         return cursor.view.schemes[frame.scheme.scheme].root;
     }
 
+    /// Debug/probe-only: does the position this specialization emitted unbound
+    /// lie inside the root whose binder a walk binds - a nominal declaration's
+    /// backing, or the root of the scheme that generalizes the variable? If it
+    /// does, the position is supplied whenever a walk enters that root, and its
+    /// standalone emission states nothing production asks (reunify.md 13.2c).
+    fn noteWhetherAFrameWillBindIt(
+        self: *Rehearsal,
+        address: CheckedAddress,
+        sealed: Type.TypeId,
+    ) void {
+        if (comptime !census.enabled) return;
+        const cursor = self.lookup.cursor(address.module_bytes) orelse return;
+        const position: checked.CheckedTypeId = @enumFromInt(address.type_id);
+        const free = self.firstFreeVariable(cursor.view, position, null) orelse {
+            census.bump("mismatch_unbound_position_is_ground");
+            return;
+        };
+        for (cursor.view.nominal_declarations) |declaration| {
+            for (declaration.formalArgs(cursor.view)) |formal| {
+                if (formal != free) continue;
+                // The declaration's own root states the applied form the formals
+                // belong to, and its backing states what that form stands for. A
+                // walk binds the formals for both, so either reaching the
+                // position means a frame supplies it.
+                if (self.checkedReaches(cursor, declaration.backing, position) or
+                    self.checkedReaches(cursor, declaration.declaration_root, position))
+                {
+                    census.bump("mismatch_unbound_inside_the_backing_that_binds_it");
+                    return;
+                }
+            }
+        }
+        for (cursor.view.schemes) |scheme| {
+            for (scheme.generalizedVars(cursor.view)) |binder| {
+                if (binder != free) continue;
+                if (scheme.root == position or self.checkedReaches(cursor, scheme.root, position)) {
+                    census.bump("mismatch_unbound_inside_its_own_scheme_root");
+                    return;
+                }
+            }
+        }
+        census.bump("mismatch_unbound_no_frame_will_bind_it");
+        self.dumpUnboundWithNoFrame(cursor, address, free, position, sealed);
+    }
+
+    /// Debug/probe-only: name the positions no frame will bind, so the last
+    /// class can be read as source rather than as a count.
+    fn dumpUnboundWithNoFrame(
+        self: *Rehearsal,
+        cursor: direct_translate.ModuleCursor,
+        address: CheckedAddress,
+        free: checked.CheckedTypeId,
+        position: checked.CheckedTypeId,
+        sealed: Type.TypeId,
+    ) void {
+        if (self.unbound_no_frame_dumped >= 32) return;
+        self.unbound_no_frame_dumped += 1;
+        const raw_path = std.c.getenv("ROC_REUNIFY_CENSUS") orelse return;
+        const module_hex = std.fmt.bytesToHex(address.module_bytes[0..8].*, .lower);
+        var root_count: usize = 0;
+        var root_names: std.ArrayList(u8) = .empty;
+        defer root_names.deinit(self.allocator);
+        for (cursor.view.roots) |root| {
+            if (root.id != position and !self.checkedReaches(cursor, root.id, position)) continue;
+            root_count += 1;
+            if (root_names.items.len > 120) continue;
+            root_names.append(self.allocator, '/') catch {};
+            switch (cursor.view.payload(root.id)) {
+                .nominal => |n| root_names.appendSlice(
+                    self.allocator,
+                    cursor.source_names.typeNameText(n.name),
+                ) catch {},
+                else => |other| root_names.appendSlice(self.allocator, @tagName(other)) catch {},
+            }
+        }
+        // Name whatever nominal the position or its enclosing roots mention, so
+        // the class can be located in source rather than by id.
+        var nominal_name: []const u8 = "-";
+        if (cursor.view.payload(position) == .nominal) {
+            nominal_name = cursor.source_names.typeNameText(cursor.view.payload(position).nominal.name);
+        } else {
+            for (cursor.view.roots) |root| {
+                if (!self.checkedReaches(cursor, root.id, position)) continue;
+                if (cursor.view.payload(root.id) == .nominal) {
+                    nominal_name = cursor.source_names.typeNameText(cursor.view.payload(root.id).nominal.name);
+                    break;
+                }
+            }
+        }
+        const line = std.fmt.allocPrint(
+            self.allocator,
+            "unbound_no_frame module={s} checked_ty={d} payload={s} nominal={s} free={d} free_payload={s} sealed={s} roots_reaching={d} root_kinds={s} schemes={d} decls={d}\n",
+            .{
+                &module_hex,
+                address.type_id,
+                @tagName(cursor.view.payload(position)),
+                nominal_name,
+                @intFromEnum(free),
+                @tagName(cursor.view.payload(free)),
+                @tagName(self.types.get(sealed)),
+                root_count,
+                root_names.items,
+                cursor.view.schemes.len,
+                cursor.view.nominal_declarations.len,
+            },
+        ) catch return;
+        defer self.allocator.free(line);
+        census.appendToFile(raw_path, line);
+    }
+
     /// Debug/probe-only: for the last free variables no scheme's generalized
     /// list names, say where they do live - inside a scheme's root even though
     /// that scheme does not list them, inside a nominal backing, or nowhere the
@@ -2545,7 +2660,9 @@ pub const Rehearsal = struct {
             }
         }
         for (cursor.view.nominal_declarations) |declaration| {
-            if (self.checkedReaches(cursor, declaration.backing, position)) {
+            if (self.checkedReaches(cursor, declaration.backing, position) or
+                self.checkedReaches(cursor, declaration.declaration_root, position))
+            {
                 census.bump("unlisted_variable_inside_a_nominal_backing");
                 return;
             }
@@ -5023,6 +5140,7 @@ pub const Rehearsal = struct {
                     .closed_empty_row => census.bump("rehearsal_unbound_origin_closed_empty_row"),
                 }
                 self.classifyUnboundPosition(frame, address);
+                self.noteWhetherAFrameWillBindIt(address, sealed);
             } else if (difference.left.tag != difference.right.tag) {
                 census.bump("rehearsal_type_mismatch_head_tag");
             } else if (difference.left.entries != difference.right.entries) {
