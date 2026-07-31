@@ -70,7 +70,14 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+# Basic lambda after arrow
+test1 = 10 |> (|x| x + 1)
+
+# Lambda ignoring argument
+test2 = "hello" |> (|_| "world")
+
+# Lambda with if expression
+test3 = "" |> (|s| if s.is_empty() "empty" else "not empty")
 ~~~
 # CANONICALIZE
 ~~~clojure

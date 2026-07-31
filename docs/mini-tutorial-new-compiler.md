@@ -12,7 +12,7 @@ With those disclaimers in mind, let's get into the adventure!
 
 ## Hello, World
 
-First, [grab a nightly build of the new compiler](https://github.com/roc-lang/nightlies/releases). It'll have an executable named `roc` (or `roc.exe` on Windows). You'll want to [put that executable on your PATH] - you'll know it worked if you can run `roc version` in a terminal and see it print something like `Roc compiler version release-fast-123c5d78` (the hash at the very end there will be different from this one, as it changes with each nightly release).
+First, [grab a nightly build of the new compiler](https://github.com/roc-lang/nightlies/releases). It'll have an executable named `roc` (or `roc.exe` on Windows). You'll want to [put that executable on your PATH] - you'll know it worked if you can run `roc version` in a terminal and see it print something like `Roc compiler version nightly-2026-July-31-123c5d7` (that's the tag of the nightly release, so yours will be different from this one).
 
 Next, copy/paste this into a new file named `main.roc`:
 

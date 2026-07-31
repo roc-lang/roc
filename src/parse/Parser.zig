@@ -266,6 +266,8 @@ const ExprParentKind = enum(u16) {
     expr_binary_rhs = 0x4b3c,
     expr_collection_item = 0x8375,
     expr_arrow_inner = 0x2edb,
+    expr_pipe_rhs = 0x6c71,
+    expr_pipe_inner = 0x9a24,
     expr_record_ext = 0xf61a,
     expr_record_field = 0x705e,
     expr_string = 0xad09,
@@ -2304,6 +2306,17 @@ const ExprArrowAfterInnerState = struct {
     operator: Token.Idx,
 };
 
+const ExprPipeAfterRhsState = struct {
+    start: Token.Idx,
+    min_bp: u8,
+    left: AST.Expr.Idx,
+    operator: Token.Idx,
+};
+
+const ExprPipeInnerState = struct {
+    start: Token.Idx,
+};
+
 const ExprArrowAppState = struct {
     start: Token.Idx,
     min_bp: u8,
@@ -2450,6 +2463,8 @@ const OpenSyntaxStack = struct {
     associated_kinds: std.ArrayList(AssociatedParentKind) = .empty,
     expr_after_unary: std.ArrayList(ExprAfterUnaryState) = .empty,
     expr_arrow_after_inner: std.ArrayList(ExprArrowAfterInnerState) = .empty,
+    expr_pipe_after_rhs: std.ArrayList(ExprPipeAfterRhsState) = .empty,
+    expr_pipe_inner: std.ArrayList(ExprPipeInnerState) = .empty,
     expr_string: std.ArrayList(ExprStringState) = .empty,
     expr_record_ext: std.ArrayList(ExprRecordExtState) = .empty,
     expr_record_field: std.ArrayList(ExprRecordFieldState) = .empty,
@@ -3575,6 +3590,68 @@ fn runExprStatementKernel(
                     });
                     continue :expr_kernel .collection_next;
                 }
+            } else if (tok == .OpPizza) {
+                // A pipe RHS owns its complete postfix chain. Stop before the
+                // next pipe so pipe chains remain left-associative.
+                if (open_syntax.peekExpr() == .expr_pipe_rhs) {
+                    last_expr = expr_finish_state.expr;
+                    continue :expr_kernel .complete;
+                }
+
+                const op_pos = self.pos;
+                self.advance();
+                const first_token_tag = self.peek();
+                switch (first_token_tag) {
+                    .LowerIdent, .UpperIdent, .OpenRound, .NoSpaceOpenRound => {},
+                    else => {
+                        const expr = try self.pushMalformed(AST.Expr.Idx, .expr_pipe_expects_ident, self.pos);
+                        expr_finish_state = .{ .start = expr_finish_state.start, .min_bp = expr_finish_state.min_bp, .expr = expr };
+                        continue :expr_kernel .suffix;
+                    },
+                }
+
+                try open_syntax.pushExpr(open_allocator, .expr_pipe_rhs, ExprPipeAfterRhsState, .{
+                    .start = expr_finish_state.start,
+                    .min_bp = expr_finish_state.min_bp,
+                    .left = expr_finish_state.expr,
+                    .operator = op_pos,
+                });
+
+                if (first_token_tag == .LowerIdent or first_token_tag == .UpperIdent) {
+                    const ident_start = self.pos;
+                    const qual_result = try self.readQualificationChain(.expression_value_boundary);
+                    self.pos = qual_result.final_token + 1;
+                    const is_tag = if (qual_result.qualifiers.span.len == 0)
+                        first_token_tag == .UpperIdent
+                    else
+                        qual_result.is_upper;
+                    const rhs = if (is_tag)
+                        try self.store.addExpr(.{ .tag = .{
+                            .region = .{ .start = ident_start, .end = self.pos },
+                            .token = qual_result.final_token,
+                            .qualifiers = qual_result.qualifiers,
+                        } })
+                    else
+                        try self.store.addExpr(.{ .ident = .{
+                            .region = .{ .start = ident_start, .end = self.pos },
+                            .token = qual_result.final_token,
+                            .qualifiers = qual_result.qualifiers,
+                        } });
+                    expr_finish_state = .{ .start = ident_start, .min_bp = 100, .expr = rhs };
+                    continue :expr_kernel .suffix;
+                }
+
+                // Like the legacy arrow, parentheses around a pipe target are
+                // grouping syntax rather than a one-element tuple. Once the
+                // grouped target closes, postfix calls and access still belong
+                // to the pipe RHS.
+                const inner_start = self.pos;
+                self.advance();
+                try open_syntax.pushExpr(open_allocator, .expr_pipe_inner, ExprPipeInnerState, .{
+                    .start = inner_start,
+                });
+                expr_state = .{ .start = self.pos, .min_bp = 0 };
+                continue :expr_kernel .prefix;
             } else if (tok_int <= @intFromEnum(Token.Tag.OpEquals)) {
                 const bp = getTokenBPInRange(tok);
                 if (bp.left == 0) {
@@ -3623,6 +3700,12 @@ fn runExprStatementKernel(
                 }
                 // Not an expression suffix.
             } else if (tok_int <= @intFromEnum(Token.Tag.OpFatArrow)) {
+                // Unlike `->`, `|>` parses postfix access/call syntax as part
+                // of its RHS. An arrow after that RHS starts outside the pipe.
+                if (open_syntax.peekExpr() == .expr_pipe_rhs) {
+                    last_expr = expr_finish_state.expr;
+                    continue :expr_kernel .complete;
+                }
                 if (expr_match_guard_depth != 0) {
                     last_expr = expr_finish_state.expr;
                     continue :expr_kernel .complete;
@@ -3732,6 +3815,30 @@ fn runExprStatementKernel(
                             .rhs = completed,
                         };
                         continue :expr_kernel .arrow_app_next;
+                    },
+                    .expr_pipe_rhs => {
+                        const state = open_syntax.popExprPayload(.expr_pipe_rhs, ExprPipeAfterRhsState);
+                        last_expr = null;
+                        const expr = try self.store.addExpr(.{ .arrow_call = .{
+                            .region = .{ .start = state.start, .end = self.pos },
+                            .operator = state.operator,
+                            .left = state.left,
+                            .right = completed,
+                        } });
+                        expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                        continue :expr_kernel .suffix;
+                    },
+                    .expr_pipe_inner => {
+                        const state = open_syntax.popExprPayload(.expr_pipe_inner, ExprPipeInnerState);
+                        last_expr = null;
+                        if (self.peek() != .CloseRound) {
+                            const expr = try self.pushMalformed(AST.Expr.Idx, .expected_expr_apply_close_round, self.pos);
+                            expr_finish_state = .{ .start = state.start, .min_bp = 100, .expr = expr };
+                            continue :expr_kernel .suffix;
+                        }
+                        self.advance();
+                        expr_finish_state = .{ .start = state.start, .min_bp = 100, .expr = completed };
+                        continue :expr_kernel .suffix;
                     },
                     .expr_record_ext => {
                         const state = open_syntax.popExprPayload(.expr_record_ext, ExprRecordExtState);

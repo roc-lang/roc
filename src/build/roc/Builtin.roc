@@ -4854,7 +4854,7 @@ Builtin :: [].{
 		## expect [1, 1, 2].split_on(1) == [[], [], [2]]
 		## ```
 		split_on : List(a), a -> List(List(a)) where [a.is_eq : a, a -> Bool]
-		split_on = |list, delim| list->split_if(|x| x == delim)
+		split_on = |list, delim| list |> split_if(|x| x == delim)
 
 		## Split a list into sublists using a predicate function to identify delimiters.
 		##
@@ -4921,7 +4921,7 @@ Builtin :: [].{
 		split_first : List(a), a -> Try({ before : List(a), after : List(a) }, [NotFound])
 			where [a.is_eq : a, a -> Bool]
 		split_first = |list, delim|
-			match list->find_first_index(|x| x == delim) {
+			match list |> find_first_index(|x| x == delim) {
 				Ok(index) => Ok({
 					before: list.sublist({ start: 0, len: index }),
 					after: list.drop_first(index + 1),
@@ -4936,7 +4936,7 @@ Builtin :: [].{
 		split_last : List(a), a -> Try({ before : List(a), after : List(a) }, [NotFound])
 			where [a.is_eq : a, a -> Bool]
 		split_last = |list, delim|
-			match list->find_last_index(|x| x == delim) {
+			match list |> find_last_index(|x| x == delim) {
 				Ok(index) => Ok({
 					before: list.sublist({ start: 0, len: index }),
 					after: list.drop_first(index + 1),
