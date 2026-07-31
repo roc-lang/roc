@@ -521,6 +521,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .import_must_be_top_level => reportParseProblem(ctx, "Import Must Be Top Level", "I was parsing an import, but imports are only allowed at the top level.", "Move this import after the module header and before declarations or executable statements.", .{ .example = "import Json\n\nmain = 1" }),
         .invalid_type_arg => reportParseProblem(ctx, "Expected Type Argument", "I was parsing type parameters, and I expected a lowercase type variable or `_`.", "Type declaration parameters are lowercase names, named underscores, or `_`.", .{ .example = "Result(ok, err)" }),
         .expr_arrow_expects_ident => reportParseProblem(ctx, "Expected Arrow Target", "I was parsing an arrow expression, and I expected a name or parenthesized expression after the arrow.", "The right side of this arrow form must start with a value name, tag name, or parenthesized expression.", .{ .example = "value -> next" }),
+        .expr_pipe_expects_ident => reportParseProblem(ctx, "Expected Pipe Target", "I was parsing a pipe expression, and I expected a name or parenthesized expression after `|>`.", "The right side of a pipe must start with a value name, tag name, or parenthesized expression.", .{ .example = "value |> next" }),
         .expr_double_dot_is_not_range => reportParseProblem(ctx, "Not A Range Operator", "I was parsing an expression, and `..` is not a range operator.", "Use `..<` for an exclusive range or `..=` for an inclusive range.", .{ .example = "1..<10\n1..=10", .show_found = false }),
         .var_only_allowed_in_a_body => reportParseProblem(ctx, "Var Outside Body", "I was parsing a statement, and `var` appeared outside a function or block body.", "Mutable variables are local body statements. Move this `var` into a body, or use an ordinary top-level declaration.", .{ .example = "main = {\n    var count = 0\n    count\n}" }),
         .var_must_have_ident => reportParseProblem(ctx, "Expected Var Name", "I was parsing a `var` statement, and I expected a lowercase name.", "A mutable variable declaration starts with `var`, followed by the variable name.", .{ .example = "var count = 0" }),
@@ -653,6 +654,7 @@ pub const Diagnostic = struct {
         import_must_be_top_level,
         invalid_type_arg,
         expr_arrow_expects_ident,
+        expr_pipe_expects_ident,
         /// `a..b` is not range syntax — ranges are `a..<b` (exclusive) or `a..=b` (inclusive)
         expr_double_dot_is_not_range,
         var_only_allowed_in_a_body,

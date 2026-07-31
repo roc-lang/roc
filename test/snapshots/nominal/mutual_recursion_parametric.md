@@ -117,7 +117,21 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+RBMut(k) := [
+	Empty,
+	Node(RBMut(k)),
+].{
+	delA : RBMut(k) -> RBMut(k)
+	delA = |inner| match inner {
+		RBMut.Node(x) => x |> delB
+		Empty => Empty
+	}
+	delB : RBMut(k) -> RBMut(k)
+	delB = |t| match t {
+		RBMut.Node(inner) => inner |> delA
+		_ => t
+	}
+}
 ~~~
 # CANONICALIZE
 ~~~clojure

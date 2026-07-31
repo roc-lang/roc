@@ -54,7 +54,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-a = ()->(b()())()
+a = () |> b()()()
 ~~~
 # CANONICALIZE
 ~~~clojure
