@@ -109,7 +109,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, windows-2025]
+        include:
+          - os: ubuntu-24.04
+            build_jobs_flag: ''
+          # Hosted arm64 runners drop off the network mid-`build-ci` at full
+          # parallelism ("The hosted runner lost communication with the
+          # server", no logs preserved). Debug builds fall back to LLVM on
+          # aarch64 -- Zig only self-hosts x86_64 ELF/Mach-O -- so this runner
+          # compiles ~13 artifacts through LLVM at once where the x86_64 one
+          # does not, and starves itself. Same throttle as `release_jobs_flag`
+          # in ci_zig.yml.
+          - os: ubuntu-24.04-arm
+            build_jobs_flag: '-j2'
+          - os: macos-15
+            build_jobs_flag: ''
+          - os: windows-2025
+            build_jobs_flag: ''
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
@@ -175,7 +190,7 @@ jobs:
       - name: Build MiniCI binaries
         uses: ./.github/actions/flaky-retry
         with:
-          command: zig build build-ci
+          command: zig build ${{ matrix.build_jobs_flag }} build-ci
           retry_count: 3
 
       - name: Pack MiniCI build artifact
@@ -183,6 +198,32 @@ jobs:
         run: |
           set -euo pipefail
           tar -cf minici-build.tar .zig-cache zig-out/bin zig-out/lib
+
+      # Packing is the disk high-water mark of this job: `minici-build.tar` is a
+      # second full copy of `.zig-cache` in the same workspace, and
+      # upload-artifact then stages a zip of that. Report free space and the
+      # packed size here, where the peak actually is.
+      #
+      # No threshold on the tar yet, deliberately. The only figures we have are
+      # the *compressed* uploads (2.1-2.7 GB across the four runners on
+      # 2026-07-26), and a limit invented from those would either fire on
+      # healthy runs or never fire at all. A few runs of this line give the
+      # baseline to set one from.
+      - name: Report disk headroom and packed artifact size
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -uo pipefail
+          df -h "$GITHUB_WORKSPACE" || true
+          if [ -f minici-build.tar ]; then
+            # `wc -c` over `du`: apparent size, comparable across filesystems
+            # and to the uploaded artifact size the log reports later.
+            bytes="$(wc -c < minici-build.tar)"
+            awk -v b="$bytes" 'BEGIN { printf "minici-build.tar %.1f MB (%d bytes)\n", b/1048576, b }'
+          else
+            echo "(no minici-build.tar -- packing did not complete)"
+          fi
 
       - name: Upload MiniCI build artifact
         uses: actions/upload-artifact@v7.0.1 # ratchet:actions/upload-artifact@v7.0.1
@@ -200,9 +241,23 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     env:
-      # Warning threshold for the explicit MiniCI build artifact. This is a
-      # sanity check for the artifact size, not a setup-zig setting.
-      MINICI_BUILD_ARTIFACT_WARN_MB: '10240'
+      # Warning threshold for `.zig-cache` as it stands *after* a shard runs:
+      # the cache restored from the build artifact plus everything the shard's
+      # own run-time compilation added. It is not the artifact size -- the
+      # packed artifact is measured in `zig-minici-build` -- and it is not a
+      # setup-zig setting.
+      #
+      # Observed on 2026-07-26 (roc-lang/roc run 30212177851), post-shard:
+      #   ubuntu-full 22.3 GB (unsharded, so it runs every phase and is
+      #   structurally the largest), ubuntu-arm-zig 11.4 GB, macos-core
+      #   10.8 GB, ubuntu-arm-harness 10.1 GB, macos-zig 9.6 GB,
+      #   macos-harness 8.4 GB.
+      #
+      # The previous 10240 threshold sat below four of those, so it fired every
+      # run on shards that were behaving normally and flagged nothing. This one
+      # sits ~28% above the largest observed shard: high enough to stay quiet
+      # while things are healthy, low enough that a real blowup still trips it.
+      MINICI_SHARD_ZIG_CACHE_WARN_MB: '28672'
     strategy:
       fail-fast: false
       matrix:
@@ -314,10 +369,16 @@ jobs:
         run: zig build run-test-eval -- --llvm --threads 1 --filter "exact bits agree across backends"
 
       # `.zig-cache` doubles as Zig's global cache, its local cache, and the
-      # build temp dir. It is restored from the MiniCI build artifact, so report
-      # the composition after each shard to measure artifact size and growth
-      # from run-time build work.
+      # build temp dir. It is restored from the MiniCI build artifact, so the
+      # composition after each shard is the restored cache plus whatever the
+      # shard's own run-time builds added on top. The packed artifact itself is
+      # measured in `zig-minici-build`, at pack time.
       # One level deep on purpose: o/, h/, p/, tmp/ is the whole question.
+      #
+      # `df` first: the cache lives next to the unpacked artifact, and a runner
+      # that fills its disk dies without flushing logs, which looks identical to
+      # memory exhaustion ("lost communication with the server", no logs). The
+      # free-space line is what tells the two apart afterwards.
       - name: Report .zig-cache composition
         if: always() && runner.os != 'Windows'
         continue-on-error: true
@@ -325,8 +386,9 @@ jobs:
         run: |
           set -uo pipefail
           root="${ZIG_LOCAL_CACHE_DIR:-$GITHUB_WORKSPACE/.zig-cache}"
-          limit_mb="$MINICI_BUILD_ARTIFACT_WARN_MB"
+          limit_mb="$MINICI_SHARD_ZIG_CACHE_WARN_MB"
           echo "root=$root  TMPDIR=${TMPDIR:-unset}"
+          df -h "$GITHUB_WORKSPACE" || true
           if [ ! -d "$root" ]; then echo "(no .zig-cache)"; exit 0; fi
           # `du -sk`, not `-sh`/`--block-size`: -k is POSIX and identical on BSD
           # (macOS) and GNU du, and its output can be sorted numerically.
@@ -338,7 +400,7 @@ jobs:
           awk -v k="$total_kb" -v l="$limit_mb" \
             'BEGIN { printf "%10.1f MB  TOTAL (limit %s MB)\n", k/1024, l }'
           if [ "$total_kb" -gt "$(( limit_mb * 1024 ))" ]; then
-            echo "::warning::.zig-cache is $(( total_kb / 1024 )) MB, over the ${limit_mb} MB MiniCI build-artifact warning threshold."
+            echo "::warning::.zig-cache is $(( total_kb / 1024 )) MB after this shard, over the ${limit_mb} MB post-shard warning threshold."
           fi
 
       - name: Report .zig-cache composition (Windows)
@@ -348,8 +410,13 @@ jobs:
         run: |
           $root = if ($env:ZIG_LOCAL_CACHE_DIR) { $env:ZIG_LOCAL_CACHE_DIR }
                   else { Join-Path $env:GITHUB_WORKSPACE '.zig-cache' }
-          $limitMb = [int]$env:MINICI_BUILD_ARTIFACT_WARN_MB
+          $limitMb = [int]$env:MINICI_SHARD_ZIG_CACHE_WARN_MB
           Write-Host "root=$root  TEMP=$env:TEMP"
+          # Disk headroom, for the same reason the Unix branch runs `df`.
+          Get-PSDrive -PSProvider FileSystem |
+            Select-Object Name, @{n='UsedGB';e={[math]::Round($_.Used/1GB,1)}},
+                                @{n='FreeGB';e={[math]::Round($_.Free/1GB,1)}} |
+            Format-Table -AutoSize | Out-String -Width 200 | Write-Host
           if (-not (Test-Path -LiteralPath $root)) { Write-Host '(no .zig-cache)'; exit 0 }
           # -Force is required, or dotted/hidden subdirs are silently missed.
           # -ErrorAction SilentlyContinue because deep Zig cache paths can exceed
@@ -368,7 +435,7 @@ jobs:
           $totalFiles = ($rows | Measure-Object Files -Sum).Sum
           Write-Host ("TOTAL {0} MB across {1} files (limit {2} MB)" -f $totalMb, $totalFiles, $limitMb)
           if ($totalMb -gt $limitMb) {
-            Write-Host ("::warning::.zig-cache is {0} MB, over the {1} MB MiniCI build-artifact warning threshold." -f $totalMb, $limitMb)
+            Write-Host ("::warning::.zig-cache is {0} MB after this shard, over the {1} MB post-shard warning threshold." -f $totalMb, $limitMb)
           }
 
       - name: Upload MiniCI report and logs
