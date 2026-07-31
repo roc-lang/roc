@@ -25575,6 +25575,22 @@ const BodyContext = struct {
             null;
     }
 
+    fn currentLocalBindingAtType(
+        self: *BodyContext,
+        ref_id: checked.ResolvedValueId,
+        ty: Type.TypeId,
+    ) Allocator.Error!?CurrentLocal {
+        const current = self.currentLocalBindingForResolvedValue(ref_id);
+        if (current) |binding| {
+            // `binders` is the lexical/SSA timeline, while `typed_binders`
+            // holds alternative Monotype materializations of a checked binder
+            // restored across a compile-time boundary. A same-typed mutable
+            // version must shadow that older restored materialization.
+            if (self.sameType(try self.localType(binding.local), ty)) return binding;
+        }
+        return self.currentTypedLocalBindingForResolvedValue(ref_id, ty) orelse current;
+    }
+
     fn lowerLookupExprAtType(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
@@ -25609,9 +25625,7 @@ const BodyContext = struct {
             .promoted_top_level_proc,
             => {},
         }
-        const typed_binding = self.currentTypedLocalBindingForResolvedValue(ref_id, ty);
-        const fallback_binding = if (typed_binding == null) self.currentLocalBindingForResolvedValue(ref_id) else null;
-        if (typed_binding orelse fallback_binding) |binding| {
+        if (try self.currentLocalBindingAtType(ref_id, ty)) |binding| {
             const local_id = binding.local;
             const local_ty = try self.localType(local_id);
             const binder_ty = checkedBinderType(self.view, binding.binder);
