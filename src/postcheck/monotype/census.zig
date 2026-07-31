@@ -465,6 +465,17 @@ pub const Census = struct {
     edgeless_owner_has_no_site_anywhere: Counter = Counter.init(0),
     edgeless_no_free_variable: Counter = Counter.init(0),
     edgeless_free_var_unowned: Counter = Counter.init(0),
+    // What checking holds for a variable no scheme generalizes: whether it is
+    // still a variable there, what it carries, and whether checking classified
+    // it as a residual at all.
+    unowned_var_is_flex: Counter = Counter.init(0),
+    unowned_var_is_rigid: Counter = Counter.init(0),
+    unowned_var_is_not_a_variable: Counter = Counter.init(0),
+    unowned_var_has_constraints: Counter = Counter.init(0),
+    unowned_var_has_numeric_default: Counter = Counter.init(0),
+    unowned_var_has_row_default: Counter = Counter.init(0),
+    unowned_var_has_disposition: Counter = Counter.init(0),
+    unowned_var_has_no_disposition: Counter = Counter.init(0),
     divergence_no_free_variable: Counter = Counter.init(0),
     divergence_free_var_unowned: Counter = Counter.init(0),
     // What a read naming no checked position is, by node shape.

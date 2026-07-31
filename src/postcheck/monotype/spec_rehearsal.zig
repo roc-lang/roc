@@ -1421,6 +1421,33 @@ pub const Rehearsal = struct {
         }
         const owner = owner_node orelse {
             census.bump("edgeless_free_var_unowned");
+            // No scheme generalizes this variable, so no instantiation edge can
+            // state its value. Ask what checking DOES hold for it: if it is a
+            // variable checking left unresolved and unclassified, there is
+            // nothing for checking to record and the value only exists once a
+            // specialization is chosen (reunify.md 15.2).
+            switch (cursor.view.payload(free)) {
+                .flex => |variable| {
+                    census.bump("unowned_var_is_flex");
+                    if (variable.constraints.len != 0) census.bump("unowned_var_has_constraints");
+                    if (variable.numeric_default_phase != null) census.bump("unowned_var_has_numeric_default");
+                    if (variable.row_default != null) census.bump("unowned_var_has_row_default");
+                },
+                .rigid => census.bump("unowned_var_is_rigid"),
+                else => census.bump("unowned_var_is_not_a_variable"),
+            }
+            var disposed = false;
+            for (cursor.view.residualDispositions()) |disposition| {
+                if (disposition.type_id == @intFromEnum(free)) {
+                    disposed = true;
+                    break;
+                }
+            }
+            if (disposed) {
+                census.bump("unowned_var_has_disposition");
+            } else {
+                census.bump("unowned_var_has_no_disposition");
+            }
             return;
         };
         for (cursor.view.instantiationSites()) |site| {
@@ -2054,6 +2081,23 @@ pub const Rehearsal = struct {
         start.graph.seal_probe = self;
     }
 
+    /// Debug/probe-only: name the checked position behind a divergence, once
+    /// per occurrence, so the number of DISTINCT positions needing a new
+    /// recorded entry can be counted offline. The count of reads overstates
+    /// that badly, since one position is read many times (reunify.md 15.2).
+    fn notePositionNeedingRecord(self: *Rehearsal, address: CheckedAddress) void {
+        if (comptime !census.enabled) return;
+        const raw_path = std.c.getenv("ROC_REUNIFY_CENSUS") orelse return;
+        const hex = std.fmt.bytesToHex(address.module_bytes[0..8].*, .lower);
+        const line = std.fmt.allocPrint(
+            self.allocator,
+            "needs_record {s} {d}\n",
+            .{ &hex, address.type_id },
+        ) catch return;
+        defer self.allocator.free(line);
+        census.appendToFile(raw_path, line);
+    }
+
     /// Debug/probe-only: compare one sealed type against what directed
     /// translation computes for the position the node stands for, using the
     /// position's own recorded address (reunify.md 13.2 step 2a).
@@ -2089,6 +2133,7 @@ pub const Rehearsal = struct {
         }
         census.bump("seam_direct_diverged");
         census.bump("seal_exit_diverged");
+        self.notePositionNeedingRecord(record.address);
         self.noteDivergenceEdgeSite(record.address, record.callee_context, record.request_edge);
         // Classify it the way the constraint census classifies its own
         // informative executions, so the seal exit's divergences can be
