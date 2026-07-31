@@ -14618,6 +14618,7 @@ const BodyContext = struct {
             }
         }
         instantiation.noteDivergenceEdgeSite(address, self.callee_context, entering_edge);
+        instantiation.noteDivergenceFreeVariableClass(address, graph_ty);
     }
 
     /// Debug/probe-only: compare what directed translation computes for one
@@ -14674,6 +14675,7 @@ const BodyContext = struct {
                                 }
                             }
                             instantiation.noteDivergenceEdgeSite(address, self.callee_context, entering_edge);
+                            instantiation.noteDivergenceFreeVariableClass(address, graph_ty);
                             self.builder.noteSeamDivergence(self.view, checked_ty, direct_ty, graph_ty, binding, self.callee_context);
                         }
                     }

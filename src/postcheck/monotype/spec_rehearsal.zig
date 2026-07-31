@@ -2275,18 +2275,55 @@ pub const Rehearsal = struct {
         census.appendToFile(raw_path, line);
     }
 
+    /// Debug/probe-only: is this position reachable from another position the
+    /// same specialization also reads? The seam compares one graph node at a
+    /// time, but directed translation walks a type compositionally from a root
+    /// and binds a nominal's parameters on the way in. A position only ever
+    /// reached inside such a walk is covered by it, and its standalone
+    /// comparison says nothing production would ever ask (reunify.md 13.2 2a).
+    fn noteReachableFromAnotherReadPosition(
+        self: *Rehearsal,
+        address: CheckedAddress,
+        graph: *solve.InstGraph,
+    ) void {
+        if (comptime !census.enabled) return;
+        const trace = graph.trace orelse return;
+        const cursor = self.lookup.cursor(address.module_bytes) orelse return;
+        const position: checked.CheckedTypeId = @enumFromInt(address.type_id);
+        var it = trace.contexted.iterator();
+        while (it.next()) |entry| {
+            const other = entry.value_ptr.*;
+            if (other.address.type_id == address.type_id) continue;
+            if (!std.mem.eql(u8, &other.address.module_bytes, &address.module_bytes)) continue;
+            if (self.checkedReaches(cursor, @enumFromInt(other.address.type_id), position)) {
+                census.bump("position_reachable_from_another_read");
+                return;
+            }
+        }
+        census.bump("position_only_read_standalone");
+    }
+
     /// Debug/probe-only: asked POSITION-first rather than node-first, is this
     /// position a declaration parameter that some nominal instance in the same
     /// module already supplies an argument for? The node-first form failed
     /// because most diverging nodes are created outside a backing
     /// instantiation, which describes when the graph makes nodes rather than
     /// what the checked store holds (reunify.md 7.1).
-    fn notePositionCoveredByNominalArgs(self: *Rehearsal, address: CheckedAddress) void {
+    fn notePositionCoveredByNominalArgs(
+        self: *Rehearsal,
+        address: CheckedAddress,
+        graph: *solve.InstGraph,
+        sealed: Type.TypeId,
+    ) void {
         if (comptime !census.enabled) return;
         const cursor = self.lookup.cursor(address.module_bytes) orelse return;
         const position: checked.CheckedTypeId = @enumFromInt(address.type_id);
         const free = self.firstFreeVariable(cursor.view, position, null) orelse {
+            // A ground position waits on no binding, so it is the only shape
+            // that could be a disagreement rather than a missing frame.
             census.bump("nominal_args_no_free_variable");
+            self.noteSealedAgainstChecked(address, sealed);
+            census.bump("ground_divergence_judged_against_checking");
             return;
         };
         // Which declaration, if any, declares this parameter.
@@ -2304,30 +2341,296 @@ pub const Rehearsal = struct {
             if (declaring != null) break;
         }
         const declaration = declaring orelse {
-            census.bump("nominal_args_not_a_declared_parameter");
+            self.noteWhetherASchemeFrameBindsIt(cursor, free, address, graph);
             return;
         };
-        // Does any recorded nominal instance of that declaration carry an
-        // argument in this slot?
-        var instances: usize = 0;
-        for (0..cursor.view.stored_payloads.len) |raw| {
-            switch (cursor.view.payload(@enumFromInt(raw))) {
+        // Does the root this specialization is bound under reach an INSTANCE of
+        // that declaration? Directed translation binds the declaration's formal
+        // args to an instance's args on the way into the backing, so a position
+        // only reached inside such a walk is already supplied by it, and reading
+        // it standalone asks something production never asks. The frame's own
+        // scheme root is the root production enters, so it is asked first; the
+        // recorded reads answer a weaker form of the question, for a position
+        // whose frame is not the one that reaches it.
+        // The strongest form of the question, and the one that does not depend
+        // on which frame the graph happened to be in when it sealed: does the
+        // DECLARATION'S OWN BACKING reach this position? If it does, the
+        // position lives inside the very type whose formals the walk binds, so
+        // every walk that enters this nominal supplies it.
+        if (self.checkedReaches(cursor, declaration.backing, position)) {
+            census.bump("nominal_param_supplied_by_walk_into_backing");
+            census.bump("nominal_param_inside_the_backing_that_binds_it");
+            return;
+        }
+        if (self.frameSchemeRoot(cursor, address.module_bytes)) |frame_root| {
+            if (self.reachesInstanceOfDeclaration(cursor, frame_root, declaration.id, formal_index)) {
+                census.bump("nominal_param_supplied_by_walk_into_backing");
+                census.bump("nominal_param_reached_from_frame_scheme_root");
+                return;
+            }
+        }
+        const trace = graph.trace orelse return;
+        var it = trace.contexted.iterator();
+        while (it.next()) |entry| {
+            const other = entry.value_ptr.*;
+            if (other.address.type_id == address.type_id) continue;
+            if (!std.mem.eql(u8, &other.address.module_bytes, &address.module_bytes)) continue;
+            if (self.reachesInstanceOfDeclaration(
+                cursor,
+                @enumFromInt(other.address.type_id),
+                declaration.id,
+                formal_index,
+            )) {
+                census.bump("nominal_param_supplied_by_walk_into_backing");
+                return;
+            }
+        }
+        census.bump("nominal_param_no_read_reaches_an_instance");
+    }
+
+    /// Debug/probe-only: which binding a diverging position's free variable
+    /// waits on, for the reads measured outside the seal exit. A position with
+    /// no free variable at all cannot be waiting on a frame, so it is the only
+    /// shape that could be a genuine disagreement (reunify.md 13.2 2a, 15.1b).
+    pub fn noteDivergenceFreeVariableClass(
+        self: *Rehearsal,
+        address: CheckedAddress,
+        sealed: Type.TypeId,
+    ) void {
+        if (comptime !census.enabled) return;
+        const cursor = self.lookup.cursor(address.module_bytes) orelse {
+            census.bump("outside_exit_divergence_no_cursor");
+            return;
+        };
+        const position: checked.CheckedTypeId = @enumFromInt(address.type_id);
+        const free = self.firstFreeVariable(cursor.view, position, null) orelse {
+            // Ground: it waits on no binding, so it is judged against the head
+            // checking recorded rather than left unexplained.
+            census.bump("outside_exit_divergence_is_ground");
+            self.noteSealedAgainstChecked(address, sealed);
+            return;
+        };
+        for (cursor.view.nominal_declarations) |declaration| {
+            for (declaration.formalArgs(cursor.view)) |formal| {
+                if (formal == free) {
+                    census.bump("outside_exit_divergence_nominal_param");
+                    return;
+                }
+            }
+        }
+        for (cursor.view.schemes) |scheme| {
+            for (scheme.generalizedVars(cursor.view)) |binder| {
+                if (binder == free) {
+                    census.bump("outside_exit_divergence_scheme_binder");
+                    return;
+                }
+            }
+        }
+        census.bump("outside_exit_divergence_free_but_unbound");
+    }
+
+    /// Debug/probe-only: for a free variable that no nominal declaration
+    /// declares, is it a binder of some scheme this specialization enters?
+    /// Directed translation pushes a binding frame for a scheme's ordered
+    /// binders at each instantiation site, so a position under that frame is
+    /// supplied by the walk and never read standalone (reunify.md 13.2 2a).
+    fn noteWhetherASchemeFrameBindsIt(
+        self: *Rehearsal,
+        cursor: direct_translate.ModuleCursor,
+        free: checked.CheckedTypeId,
+        address: CheckedAddress,
+        graph: *solve.InstGraph,
+    ) void {
+        var binding: ?checked.CheckedTypeScheme = null;
+        var with_binders: usize = 0;
+        for (cursor.view.schemes) |scheme| {
+            if (scheme.gv_len != 0) with_binders += 1;
+            for (scheme.generalizedVars(cursor.view)) |binder| {
+                if (binder == free) {
+                    binding = scheme;
+                    break;
+                }
+            }
+            if (binding != null) break;
+        }
+        const scheme = binding orelse {
+            if (with_binders == 0) {
+                census.bump("free_variable_unbound_no_scheme_lists_any_binder");
+            } else {
+                census.bump("free_variable_no_scheme_binds_it");
+                self.noteWhereAnUnlistedVariableLives(cursor, free, address);
+            }
+            return;
+        };
+        // Does a position this specialization reads reach that scheme's root?
+        // Framing-independent form: does the root of the scheme that GENERALIZES
+        // this variable reach the position? If it does, the position lies inside
+        // what that scheme's frame binds, so entering that scheme at any
+        // instantiation site supplies it.
+        const position: checked.CheckedTypeId = @enumFromInt(address.type_id);
+        if (scheme.root == position or self.checkedReaches(cursor, scheme.root, position)) {
+            census.bump("scheme_frame_supplies_the_position");
+            census.bump("scheme_position_inside_its_own_scheme_root");
+            return;
+        }
+        if (self.frameSchemeRoot(cursor, address.module_bytes)) |frame_root| {
+            if (frame_root == scheme.root or self.checkedReaches(cursor, frame_root, scheme.root)) {
+                census.bump("scheme_frame_supplies_the_position");
+                census.bump("scheme_reached_from_frame_scheme_root");
+                return;
+            }
+        }
+        const trace = graph.trace orelse return;
+        var it = trace.contexted.iterator();
+        while (it.next()) |entry| {
+            const other = entry.value_ptr.*;
+            if (other.address.type_id == address.type_id) continue;
+            if (!std.mem.eql(u8, &other.address.module_bytes, &address.module_bytes)) continue;
+            const from: checked.CheckedTypeId = @enumFromInt(other.address.type_id);
+            if (from == scheme.root or self.checkedReaches(cursor, from, scheme.root)) {
+                census.bump("scheme_frame_supplies_the_position");
+                return;
+            }
+        }
+        census.bump("scheme_binds_it_but_no_read_enters_the_scheme");
+    }
+
+    /// Debug/probe-only: the checked root of the scheme the innermost frame is
+    /// bound under, when that frame's module is the one asked about. This is the
+    /// root directed translation enters for this specialization (reunify.md 9.2),
+    /// so it is what a position must be reachable from to be supplied by the walk.
+    fn frameSchemeRoot(
+        self: *Rehearsal,
+        cursor: direct_translate.ModuleCursor,
+        module_bytes: [32]u8,
+    ) ?checked.CheckedTypeId {
+        if (self.frames.items.len == 0) return null;
+        const frame = &self.frames.items[self.frames.items.len - 1];
+        if (!std.mem.eql(u8, &frame.scheme.module_bytes, &module_bytes)) return null;
+        if (frame.scheme.scheme >= cursor.view.schemes.len) return null;
+        return cursor.view.schemes[frame.scheme.scheme].root;
+    }
+
+    /// Debug/probe-only: for the last free variables no scheme's generalized
+    /// list names, say where they do live - inside a scheme's root even though
+    /// that scheme does not list them, inside a nominal backing, or nowhere the
+    /// module states. Only the last shape would need checking to record more.
+    fn noteWhereAnUnlistedVariableLives(
+        self: *Rehearsal,
+        cursor: direct_translate.ModuleCursor,
+        free: checked.CheckedTypeId,
+        address: CheckedAddress,
+    ) void {
+        if (comptime !census.enabled) return;
+        const position: checked.CheckedTypeId = @enumFromInt(address.type_id);
+        // A scheme may close over a binder an enclosing scheme owns, which its
+        // own generalized list does not repeat (reunify.md 7.1).
+        for (cursor.view.schemes) |scheme| {
+            for (scheme.capturedBinders(cursor.view)) |captured| {
+                if (captured.outer_scheme == checked.captured_binder_outer_scheme_none) continue;
+                if (captured.outer_scheme >= cursor.view.schemes.len) continue;
+                const outer = cursor.view.schemes[captured.outer_scheme];
+                const outer_binders = outer.generalizedVars(cursor.view);
+                if (captured.binder_index >= outer_binders.len) continue;
+                if (outer_binders[captured.binder_index] == free) {
+                    census.bump("unlisted_variable_is_a_captured_binder");
+                    return;
+                }
+            }
+        }
+        for (cursor.view.schemes) |scheme| {
+            if (self.checkedReaches(cursor, scheme.root, position)) {
+                census.bump("unlisted_variable_inside_an_unlisting_scheme_root");
+                return;
+            }
+        }
+        for (cursor.view.nominal_declarations) |declaration| {
+            if (self.checkedReaches(cursor, declaration.backing, position)) {
+                census.bump("unlisted_variable_inside_a_nominal_backing");
+                return;
+            }
+        }
+        // A variable nothing generalizes and nothing encloses is exactly what a
+        // residual disposition states the outcome for (reunify.md 7.4), so the
+        // module may already say how it lowers even though no binder names it.
+        for (cursor.view.residualDispositions()) |disposition| {
+            if (disposition.type_id != @intFromEnum(free)) continue;
+            switch (disposition.kind) {
+                .uninhabited => census.bump("unlisted_variable_disposed_uninhabited"),
+                .contextual => census.bump("unlisted_variable_disposed_contextual"),
+            }
+            return;
+        }
+        // Last question: is the position reachable from any root the module
+        // records at all? A position no root reaches is one nothing asks for,
+        // so its standalone comparison states nothing about a walk production
+        // performs. One no root reaches AND no binder covers is the only shape
+        // that would need checking to record more.
+        for (cursor.view.roots) |root| {
+            if (root.id == position or self.checkedReaches(cursor, root.id, position)) {
+                census.bump("unlisted_variable_under_a_recorded_root");
+                return;
+            }
+        }
+        census.bump("unlisted_variable_no_root_reaches_it");
+    }
+
+    /// Debug/probe-only: does a walk from `root` reach a nominal instance of
+    /// `declaration` that carries an argument in `formal_index`? That is the
+    /// point where directed translation binds the declaration's formals to the
+    /// instance's args (`direct_translate.Walk.nominalBacking`).
+    fn reachesInstanceOfDeclaration(
+        self: *Rehearsal,
+        cursor: direct_translate.ModuleCursor,
+        root: checked.CheckedTypeId,
+        declaration: checked.CheckedNominalDeclarationId,
+        formal_index: usize,
+    ) bool {
+        var visited = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
+        defer visited.deinit();
+        var stack = std.ArrayList(checked.CheckedTypeId).empty;
+        defer stack.deinit(self.allocator);
+        stack.append(self.allocator, root) catch return false;
+        while (stack.pop()) |current| {
+            const seen = visited.getOrPut(current) catch return false;
+            if (seen.found_existing) continue;
+            switch (cursor.view.payload(current)) {
+                .alias => |alias| {
+                    for (alias.args) |arg| stack.append(self.allocator, arg) catch return false;
+                    stack.append(self.allocator, alias.backing) catch return false;
+                },
+                .record => |record| {
+                    for (record.fields) |field| stack.append(self.allocator, field.ty) catch return false;
+                    stack.append(self.allocator, record.ext) catch return false;
+                },
+                .record_unbound => |fields| for (fields) |field| {
+                    stack.append(self.allocator, field.ty) catch return false;
+                },
+                .tuple => |items| for (items) |item| {
+                    stack.append(self.allocator, item) catch return false;
+                },
                 .nominal => |nominal| {
-                    if (nominal.args.len <= formal_index) continue;
-                    const instance_declaration = cursor.view.nominalDeclarationForPayload(nominal) orelse continue;
-                    if (@intFromEnum(instance_declaration.id) != @intFromEnum(declaration.id)) continue;
-                    instances += 1;
+                    if (nominal.args.len > formal_index) {
+                        if (cursor.view.nominalDeclarationForPayload(nominal)) |found| {
+                            if (@intFromEnum(found.id) == @intFromEnum(declaration)) return true;
+                        }
+                    }
+                    for (nominal.args) |arg| stack.append(self.allocator, arg) catch return false;
+                },
+                .function => |function| {
+                    for (function.args) |arg| stack.append(self.allocator, arg) catch return false;
+                    stack.append(self.allocator, function.ret) catch return false;
+                },
+                .tag_union => |union_type| {
+                    for (union_type.tags) |tag| {
+                        for (tag.argsSlice(cursor.view)) |arg| stack.append(self.allocator, arg) catch return false;
+                    }
+                    stack.append(self.allocator, union_type.ext) catch return false;
                 },
                 else => {},
             }
         }
-        if (instances == 0) {
-            census.bump("nominal_args_no_instance_supplies_slot");
-        } else if (instances == 1) {
-            census.bump("nominal_args_exactly_one_instance");
-        } else {
-            census.bump("nominal_args_many_instances");
-        }
+        return false;
     }
 
     /// Debug/probe-only: what gave a diverging node its concrete value. The
@@ -2406,7 +2709,8 @@ pub const Rehearsal = struct {
         census.bump("seam_direct_diverged");
         census.bump("seal_exit_diverged");
         noteWhatSuppliedTheValue(record, graph, node);
-        self.notePositionCoveredByNominalArgs(record.address);
+        self.notePositionCoveredByNominalArgs(record.address, graph, sealed);
+        self.noteReachableFromAnotherReadPosition(record.address, graph);
         self.notePositionNeedingRecord(record.address);
         self.noteDivergenceEdgeSite(record.address, record.callee_context, record.request_edge);
         // Classify it the way the constraint census classifies its own
@@ -2481,14 +2785,47 @@ pub const Rehearsal = struct {
                     break :blk true;
                 },
             },
-            // A nominal's runtime shape comes from its backing, which section 10
-            // owns, so a differing head here says nothing about logical typing.
-            .nominal => {
-                census.bump("sealed_vs_checked_inconclusive");
+            // A named type carries its checked identity, so a nominal position
+            // is judged on that identity rather than on head shape. A sealed
+            // head that is not named is section 10 lowering the backing - an
+            // enum-like union to an integer, a one-field wrapper away, a
+            // zero-sized value erased - which says nothing about logical typing.
+            .nominal => |nominal| switch (self.types.get(sealed)) {
+                .named => |named| blk: {
+                    if (@intFromEnum(named.named_type.ty) == address.type_id) break :blk true;
+                    // Two checked positions may denote the same nominal, so the
+                    // identity alone does not settle it. The declared name does.
+                    const want = cursor.source_names.typeNameText(nominal.name);
+                    const got = self.program_names.typeNameText(named.def.type_name);
+                    if (std.mem.eql(u8, want, got)) {
+                        census.bump("sealed_vs_checked_same_nominal_other_position");
+                        break :blk true;
+                    }
+                    break :blk false;
+                },
+                else => {
+                    census.bump("sealed_vs_checked_nominal_lowered_by_representation");
+                    return;
+                },
+            },
+            // A rigid or flex position still carries a free variable, so the
+            // sealed side names a value the comparison has no binding for.
+            .flex, .rigid => {
+                census.bump("sealed_vs_checked_position_is_a_variable");
                 return;
             },
-            else => {
-                census.bump("sealed_vs_checked_inconclusive");
+            // An alias is transparent: section 10 may seal either the alias or
+            // what it stands for, so its head carries no logical claim.
+            .alias => {
+                census.bump("sealed_vs_checked_position_is_an_alias");
+                return;
+            },
+            .empty_record, .empty_tag_union => switch (self.types.get(sealed)) {
+                .record, .tag_union, .zst, .erased => true,
+                else => false,
+            },
+            .pending, .err => {
+                census.bump("sealed_vs_checked_position_unresolved");
                 return;
             },
         };

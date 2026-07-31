@@ -424,11 +424,53 @@ pub const Census = struct {
     supplier_class_is_alone: Counter = Counter.init(0),
     // Asked position-first: is the diverging position a declared parameter that
     // some recorded nominal instance already supplies an argument for?
-    nominal_args_exactly_one_instance: Counter = Counter.init(0),
-    nominal_args_many_instances: Counter = Counter.init(0),
-    nominal_args_no_instance_supplies_slot: Counter = Counter.init(0),
     nominal_args_not_a_declared_parameter: Counter = Counter.init(0),
     nominal_args_no_free_variable: Counter = Counter.init(0),
+    // Whether a diverging nominal parameter is already supplied by directed
+    // translation binding a declaration's formals to an instance's args.
+    nominal_param_supplied_by_walk_into_backing: Counter = Counter.init(0),
+    nominal_param_no_read_reaches_an_instance: Counter = Counter.init(0),
+    // For a free variable no nominal declaration declares: whether a scheme's
+    // binding frame supplies it during a compositional walk.
+    scheme_frame_supplies_the_position: Counter = Counter.init(0),
+    scheme_binds_it_but_no_read_enters_the_scheme: Counter = Counter.init(0),
+    free_variable_no_scheme_binds_it: Counter = Counter.init(0),
+    free_variable_unbound_no_scheme_lists_any_binder: Counter = Counter.init(0),
+    // Divergences measured away from the seal exit, classified by the binding
+    // their free variable waits on. A ground one waits on nothing.
+    outside_exit_divergence_no_cursor: Counter = Counter.init(0),
+    outside_exit_divergence_is_ground: Counter = Counter.init(0),
+    outside_exit_divergence_nominal_param: Counter = Counter.init(0),
+    outside_exit_divergence_scheme_binder: Counter = Counter.init(0),
+    outside_exit_divergence_free_but_unbound: Counter = Counter.init(0),
+    // Why a both-content divergence could not be judged against checking.
+    sealed_vs_checked_nominal_lowered_by_representation: Counter = Counter.init(0),
+    sealed_vs_checked_same_nominal_other_position: Counter = Counter.init(0),
+    // Whether the frame's own scheme root - the root production enters - is
+    // what reaches a diverging position, rather than some other recorded read.
+    nominal_param_reached_from_frame_scheme_root: Counter = Counter.init(0),
+    scheme_reached_from_frame_scheme_root: Counter = Counter.init(0),
+    // Framing-independent coverage: the position lies inside the very root
+    // whose binder the walk binds, so any entry into it supplies the position.
+    nominal_param_inside_the_backing_that_binds_it: Counter = Counter.init(0),
+    scheme_position_inside_its_own_scheme_root: Counter = Counter.init(0),
+    // Where the last free variables no generalized list names actually live.
+    unlisted_variable_is_a_captured_binder: Counter = Counter.init(0),
+    unlisted_variable_inside_an_unlisting_scheme_root: Counter = Counter.init(0),
+    unlisted_variable_inside_a_nominal_backing: Counter = Counter.init(0),
+    unlisted_variable_disposed_uninhabited: Counter = Counter.init(0),
+    unlisted_variable_disposed_contextual: Counter = Counter.init(0),
+    unlisted_variable_under_a_recorded_root: Counter = Counter.init(0),
+    unlisted_variable_no_root_reaches_it: Counter = Counter.init(0),
+    ground_divergence_judged_against_checking: Counter = Counter.init(0),
+    sealed_vs_checked_position_is_a_variable: Counter = Counter.init(0),
+    sealed_vs_checked_position_is_an_alias: Counter = Counter.init(0),
+    sealed_vs_checked_position_unresolved: Counter = Counter.init(0),
+    // Whether a diverging position is reachable from another position the same
+    // specialization reads, so a compositional walk would cover it and the
+    // standalone comparison asks something production never asks.
+    position_reachable_from_another_read: Counter = Counter.init(0),
+    position_only_read_standalone: Counter = Counter.init(0),
     // What a seal-exit divergence disagrees about, classified the same way the
     // constraint census classifies its informative executions.
     seal_diverged_direct_unbound: Counter = Counter.init(0),

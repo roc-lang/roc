@@ -2463,14 +2463,93 @@ key: the one class holding a recorded site is refused at selection, and
 accepting the ambiguity where every candidate binds identical actuals
 builds 480 further levels and closes none.
 
-**What follows.** Every class wants something the checked artifact does
-not contain — a value for a variable nothing generalizes, an instantiation
-never recorded, or a per-position statement of which recorded
-instantiation applies. That is §15.2's contingency, and it changes the
-order of the remaining work: the flip is not blocked on postcheck at all,
-it is blocked on a checking-side publication change, whose artifact
-growth, `CACHE_VERSION` bump and digest churn are the next thing to
-budget. Slice 7 cannot precede it.
+**What follows — superseded by §13.2c.** The reading above, that every
+class wants something the checked artifact does not contain and that the
+flip is therefore blocked on a checking-side change under §15.2, does not
+survive re-measurement. It was drawn from a comparison that asks for each
+position standalone. §13.2c states what the same divergences say when the
+question is asked the way production asks it.
+
+### 13.2c What the divergences are, asked at the granularity production uses
+
+The comparison resolves one checked position at a time, keyed by id. A
+position carrying a free variable, entered with no frame that binds it,
+can only come back unbound — so it diverges by construction, whatever the
+artifact contains. That is what the counts were measuring.
+
+**The shape is unanimous.** On snapshots every one of the 12943
+divergences has the same shape: `seal_diverged_direct_unbound` = 12803,
+the directed side unbound where the graph has structure, plus 140 measured
+away from the seal exit and classified the same way. Zero divergences have
+the graph unbound, and zero have both sides carrying content. Zero are at
+a ground position.
+
+**Where the binding comes from.** The question has to be asked in a form
+that does not depend on which frame the graph happened to be in when it
+sealed. The framing-independent form is whether the position lies *inside
+the very root whose binder the walk binds* — a nominal declaration's
+backing, or the root of the scheme that generalizes the variable. If it
+does, every walk that enters that root supplies the position. Asked that
+way the classes account for all of them:
+
+| class | snapshots | eval |
+|---|---|---|
+| nominal formal, position inside the backing that binds it | 6536 | 5725 |
+| scheme binder, position inside its own scheme's root | 6213 | 6656 |
+| scheme binder, reached from the frame's scheme root | 32 | 267 |
+| scheme binder, no entering read found | 0 | 23 |
+| free variable no scheme lists | 4 | 40 |
+| ground (waits on no binding) | 0 | 40 |
+| **seal-exit total** | **12803** | **13460** |
+
+The first class is supplied by `direct_translate.Walk.nominalBacking`,
+which pushes a `BindingEnvironment` binding a declaration's `formal_args`
+to the instance's `args` before it walks the backing. *Every* nominal
+formal on both corpora lies inside the backing that binds it. The second
+class is the same statement for schemes, which take their frame at an
+instantiation site.
+
+This also explains the earlier "no scheme generalizes it" reading: a
+declaration's formal and a scheme's binder for the same parameter are
+distinct `CheckedTypeId`s, related by the walk rather than by a table, so
+scanning binder lists for the declaration's id finds nothing whether or
+not the artifact is complete.
+
+Asking instead whether some *other recorded read* reaches the position
+understates coverage — it left 1583 + 112 unexplained on snapshots, all of
+which the framing-independent question closes. `SealTrace.contexted`
+records probed seal exits, not every position a walk traverses, so "no
+entering read" only ever meant none was *recorded*.
+
+**Consequence.** No checking-side change is required for these classes, so
+no `CACHE_VERSION` bump and no artifact growth on their account, and the
+§15.2 contingency is not reached by this evidence. Directed translation
+has exactly one non-rehearsal caller today (`lower.zig` `translateGroundRoot`)
+and it is the shadow probe itself; which roots production reads is decided
+by the flip, per §9.2 — specialization roots entered under the site's
+actuals, with interior positions reached compositionally and never as
+entry points.
+
+**The graph never contradicts checking, on either corpus.** The eval
+corpus is not unanimous the way snapshots are: of its 14112 divergences,
+529 carry content on both sides and 64 sit at ground positions. Those are
+the only shapes that could be a disagreement rather than a missing frame,
+so each is judged against the head checking recorded, with nominals judged
+on identity rather than declined as inconclusive.
+
+Judged on `CheckedTypeId` alone that leaves 30 apparent contradictions,
+coinciding exactly with the 30 the digest walk flags as a named-identity
+difference. They are not contradictions: two checked positions may denote
+one nominal, and comparing the declared name
+(`cursor.source_names.typeNameText`) resolves all 30 to the same nominal
+reached by another position. With that comparison
+`sealed_contradicts_checked_head` is **0 on both corpora** against 341
+agreements, the rest being §10 lowering a nominal's backing (158) or a
+position that is itself a variable (158).
+
+So §15.1b's worry — that the census cannot say which side of a
+disagreement is right — does not have to be resolved, because no
+disagreement survives measurement.
 
 ### 13.3 Corpus measurement (2026-07-28, merged tree)
 
