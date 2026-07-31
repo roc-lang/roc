@@ -416,6 +416,12 @@ pub const Census = struct {
     graph_exit_seal_node: Counter = Counter.init(0),
     graph_exit_seal_entry: Counter = Counter.init(0),
     seal_exit_diverged: Counter = Counter.init(0),
+    // What supplied a diverging node's value: another checked position joined
+    // into its class, only itself, an unnamed member, or nothing at all.
+    supplier_class_holds_another_position: Counter = Counter.init(0),
+    supplier_class_only_same_position: Counter = Counter.init(0),
+    supplier_class_has_no_named_member: Counter = Counter.init(0),
+    supplier_class_is_alone: Counter = Counter.init(0),
     // What a seal-exit divergence disagrees about, classified the same way the
     // constraint census classifies its informative executions.
     seal_diverged_direct_unbound: Counter = Counter.init(0),

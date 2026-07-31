@@ -1404,7 +1404,7 @@ pub const InstGraph = struct {
             census.bump("exit_read_no_contexted_provenance");
             return;
         };
-        probe.compareSealedAgainstDirected(record, sealed);
+        probe.compareSealedAgainstDirected(record, sealed, self, node);
     }
 
     /// Debug/probe-only: whether any node joined to this one stands for a

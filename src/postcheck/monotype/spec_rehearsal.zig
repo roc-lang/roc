@@ -2275,6 +2275,44 @@ pub const Rehearsal = struct {
         census.appendToFile(raw_path, line);
     }
 
+    /// Debug/probe-only: what gave a diverging node its concrete value. The
+    /// graph resolves by unification, so the value arrives from some other node
+    /// joined into the same class. If a class member names a DIFFERENT checked
+    /// position, that position is the source a directed replacement has to read
+    /// (reunify.md 13.2 2a).
+    fn noteWhatSuppliedTheValue(
+        record: ContextedProvenance,
+        graph: *solve.InstGraph,
+        node: solve.NodeId,
+    ) void {
+        if (comptime !census.enabled) return;
+        const trace = graph.trace orelse return;
+        var members: usize = 0;
+        var other_positions: usize = 0;
+        var same_position: usize = 0;
+        var it = graph.classMemberIterator(node);
+        while (it.next()) |member| {
+            members += 1;
+            const other = trace.contextedFor(@intFromEnum(member)) orelse continue;
+            if (other.address.type_id == record.address.type_id and
+                std.mem.eql(u8, &other.address.module_bytes, &record.address.module_bytes))
+            {
+                same_position += 1;
+            } else {
+                other_positions += 1;
+            }
+        }
+        if (members <= 1) {
+            census.bump("supplier_class_is_alone");
+        } else if (other_positions > 0) {
+            census.bump("supplier_class_holds_another_position");
+        } else if (same_position > 0) {
+            census.bump("supplier_class_only_same_position");
+        } else {
+            census.bump("supplier_class_has_no_named_member");
+        }
+    }
+
     /// Debug/probe-only: compare one sealed type against what directed
     /// translation computes for the position the node stands for, using the
     /// position's own recorded address (reunify.md 13.2 step 2a).
@@ -2282,6 +2320,8 @@ pub const Rehearsal = struct {
         self: *Rehearsal,
         record: ContextedProvenance,
         sealed: Type.TypeId,
+        graph: *solve.InstGraph,
+        node: solve.NodeId,
     ) void {
         if (comptime !census.enabled) return;
         if (self.disabled) return;
@@ -2310,6 +2350,7 @@ pub const Rehearsal = struct {
         }
         census.bump("seam_direct_diverged");
         census.bump("seal_exit_diverged");
+        noteWhatSuppliedTheValue(record, graph, node);
         self.notePositionNeedingRecord(record.address);
         self.noteDivergenceEdgeSite(record.address, record.callee_context, record.request_edge);
         // Classify it the way the constraint census classifies its own
