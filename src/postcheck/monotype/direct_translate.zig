@@ -2564,6 +2564,73 @@ test "a nominal instance carries its declaration backing, matching the sealed re
     }
 }
 
+test "a two-parameter declaration binds both formals through a nested backing" {
+    var fixture = TestFixture.init(testing.allocator);
+    defer fixture.deinit();
+
+    // Declaration Pair a b = { both: (a, b) }, so each formal is reached only
+    // BELOW the backing's own root rather than at it. This is the shape the
+    // corpus divergences take - a record over a tuple over the parameters -
+    // and it is the walk, not a table, that relates a formal to its argument
+    // (reunify.md 13.2c).
+    const first = try fixture.add(.{ .rigid = .{} });
+    const second = try fixture.add(.{ .rigid = .{} });
+    const tuple_start: u32 = @intCast(fixture.type_id_pool.items.len);
+    try fixture.type_id_pool.appendSlice(testing.allocator, &.{ first, second });
+    const inner = try fixture.add(.{ .tuple = .{ .start = tuple_start, .len = 2 } });
+
+    const both_label = try fixture.source_names.internRecordFieldLabel("both");
+    const rf_start: u32 = @intCast(fixture.record_fields.items.len);
+    try fixture.record_fields.append(testing.allocator, .{ .name = both_label, .ty = inner });
+    const backing_empty = try fixture.add(.empty_record);
+    const backing_root = try fixture.add(.{ .record = .{
+        .fields = .{ .start = rf_start, .len = 1 },
+        .ext = backing_empty,
+    } });
+
+    // Instance Pair U64 Str, whose two arguments differ so a swapped or shared
+    // binding cannot pass.
+    const u64_ty = try fixture.addPrimitiveNominal(.u64, "U64");
+    const str_ty = try fixture.addPrimitiveNominal(.str, "Str");
+    const instance = try fixture.addUserNominal("Pair", &.{ u64_ty, str_ty });
+
+    var store = initTargetStore();
+    defer store.deinit();
+    store.enableInterning();
+    var target_names = names.NameStore.init(testing.allocator);
+    defer target_names.deinit();
+
+    var backing_resolver = RecordBackingResolver{
+        .cursor = fixture.cursor(),
+        .formal_args = try testing.allocator.dupe(checked.CheckedTypeId, &.{ first, second }),
+        .backing_root = backing_root,
+    };
+    defer testing.allocator.free(backing_resolver.formal_args);
+    var translator = Translator.init(testing.allocator, &store, &target_names, backing_resolver.resolver());
+    defer translator.deinit();
+
+    var reason: SkipReason = undefined;
+    const instance_id = try translator.translateGroundRoot(fixture.cursor(), instance, &reason);
+
+    const expected_backing = expected: {
+        const u64_id = try store.internPrimitive(&target_names, .u64);
+        const str_id = try store.internPrimitive(&target_names, .str);
+        const pair_id = try store.internTuple(&target_names, &.{ u64_id, str_id });
+        const label = try target_names.internRecordFieldLabel("both");
+        break :expected try store.internRecord(&target_names, &.{.{ .name = label, .ty = pair_id }});
+    };
+
+    switch (store.get(instance_id)) {
+        .named => |named| {
+            const backing = named.backing orelse return testing.expect(false);
+            const backing_digest = store.typeDigest(&target_names, backing.ty);
+            const expected_digest = store.typeDigest(&target_names, expected_backing);
+            try testing.expectEqualSlices(u8, &expected_digest.bytes, &backing_digest.bytes);
+        },
+        else => try testing.expect(false),
+    }
+}
+
 /// Assert a stored root is a self-recursive tag union: its single tag's payload
 /// resolves back to the root id, so the cycle closed through a reserved slot.
 /// True when `root` is a single-tag, single-payload tag union whose payload
