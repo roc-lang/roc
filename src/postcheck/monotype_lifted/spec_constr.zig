@@ -5727,7 +5727,7 @@ const Cloner = struct {
         return result;
     }
 
-    const let_case_shape_arm_budget: usize = 256;
+    const let_case_shape_arm_budget: usize = 4096;
 
     /// The budget-exhausted shape: one join point whose single parameter is
     /// the branch-built value, with every already-cloned arm body threaded to
