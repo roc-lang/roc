@@ -31414,8 +31414,9 @@ const BodyContext = struct {
         return ret_node;
     }
 
-    /// Return the exact sealed result selected by checked publication for a
-    /// closed direct call. No specialization graph node is created here.
+    /// Return the sealed result type stored in a closed direct call's
+    /// producer-authored callable type. No specialization graph node is
+    /// created here.
     fn closedDirectGraphFreeResultType(
         self: *BodyContext,
         _: checked.CheckedTypeId,
