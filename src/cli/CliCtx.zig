@@ -81,8 +81,8 @@ pub const Io = struct {
         stdout_file.enableAnsiEscapeCodes(self.std_io) catch {};
         stderr_file.enableAnsiEscapeCodes(self.std_io) catch {};
 
-        self.stdout_writer = stdout_file.writer(self.std_io, &self.stdout_buffer);
-        self.stderr_writer = stderr_file.writer(self.std_io, &self.stderr_buffer);
+        self.stdout_writer = stdout_file.writerStreaming(self.std_io, &self.stdout_buffer);
+        self.stderr_writer = stderr_file.writerStreaming(self.std_io, &self.stderr_buffer);
     }
 
     /// Get the stdout writer interface
@@ -456,6 +456,48 @@ pub fn renderProblem(ctx: *CliCtx, problem: CliProblem) Allocator.Error!void {
 }
 
 // Tests
+
+const merged_stdio_helper_path_env = "ROC_CLI_IO_WRITER_TEST_HELPER";
+const merged_stdout_payload = "stdout \u{2713} issue-10465\n" ** 256;
+const merged_stderr_payload = "stderr \u{2713} issue-10465\n" ** 256;
+
+test "issue 10465 merged standard streams preserve both buffered outputs" {
+    const allocator = std.testing.allocator;
+    const test_io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var combined_file = try tmp.dir.createFile(test_io, "combined.log", .{ .read = true });
+    var combined_file_open = true;
+    defer if (combined_file_open) combined_file.close(test_io);
+
+    const helper_path_z = std.c.getenv(merged_stdio_helper_path_env) orelse return error.TestUnexpectedResult;
+    const helper_path = helper_path_z[0..std.mem.len(helper_path_z)];
+
+    var child = try std.process.spawn(test_io, .{
+        .argv = &.{helper_path},
+        .stdin = .ignore,
+        .stdout = .{ .file = combined_file },
+        .stderr = .{ .file = combined_file },
+    });
+    errdefer child.kill(test_io);
+
+    const term = try child.wait(test_io);
+    switch (term) {
+        .exited => |code| try std.testing.expectEqual(@as(u8, 0), code),
+        else => return error.TestUnexpectedResult,
+    }
+
+    combined_file.close(test_io);
+    combined_file_open = false;
+
+    const combined = try tmp.dir.readFileAlloc(test_io, "combined.log", allocator, .limited(64 * 1024));
+    defer allocator.free(combined);
+
+    try std.testing.expect(std.mem.find(u8, combined, merged_stderr_payload) != null);
+    try std.testing.expect(std.mem.find(u8, combined, merged_stdout_payload) != null);
+}
 
 test "CliCtx accumulates problems" {
     const allocator = std.testing.allocator;

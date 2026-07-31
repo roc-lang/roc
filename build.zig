@@ -5229,6 +5229,20 @@ pub fn build(b: *std.Build) void {
         .compile = trmc_lir_test,
     });
 
+    const cli_io_writer_test_helper = b.addExecutable(.{
+        .name = "cli_io_writer_test_helper",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/cli/io_writer_test_helper.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    cli_io_writer_test_helper.root_module.addImport("reporting", roc_modules.reporting);
+    cli_io_writer_test_helper.root_module.addImport("ctx", roc_modules.ctx);
+    const install_cli_io_writer_test_helper = b.addInstallArtifact(cli_io_writer_test_helper, .{});
+    const cli_io_writer_test_helper_path = b.getInstallPath(.bin, cli_io_writer_test_helper.out_filename);
+
     // Add CLI test
     const enable_cli_tests = b.option(bool, "cli-tests", "Enable cli tests") orelse true;
     if (enable_cli_tests) {
@@ -5269,6 +5283,11 @@ pub fn build(b: *std.Build) void {
             .step_suffix = "cli-main",
             .description = "Run roc CLI main Zig tests",
             .compile = cli_test,
+            .deps = &.{&install_cli_io_writer_test_helper.step},
+            .env = &.{.{
+                .key = "ROC_CLI_IO_WRITER_TEST_HELPER",
+                .value = cli_io_writer_test_helper_path,
+            }},
         });
     }
 
