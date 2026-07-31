@@ -14332,6 +14332,26 @@ Builtin :: [].{
 			tau : Dec
 			tau = 6.283185307179586476
 
+			## Convert a [Dec] to a count of attos (units of 10^-18). This operation is
+			## trivial, because a Dec is just a wrapper for an [I128] representing its
+			## value scaled by 10^18.
+			## ```roc
+			## expect Dec.to_attos(1.5) == 1500000000000000000
+			##
+			## expect Dec.to_attos(Dec.highest) == I128.highest
+			## ```
+			to_attos : Dec -> I128
+
+			## Convert a count of attos (units of 10^-18) to a [Dec]. This operation is
+			## trivial, because a Dec is just a wrapper for an [I128] representing its
+			## value scaled by 10^18.
+			## ```roc
+			## expect Dec.from_attos(1500000000000000000) == 1.5
+			##
+			## expect Dec.from_attos(Dec.to_attos(-0.25)) == -0.25
+			## ```
+			from_attos : I128 -> Dec
+
 			## Convert a [Dec] to its decimal string representation.
 			## ```roc
 			## expect Dec.to_str(42.5) == "42.5"

@@ -2594,11 +2594,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .i128_to_u32_wrap,
                 .i128_to_u64_wrap,
                 .i128_to_u128_wrap,
+                .dec_to_attos,
+                .dec_from_attos,
                 => {
                     if (args.len < 1) unreachable;
                     const src_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const src_signedness: std.builtin.Signedness = switch (ll.op) {
-                        .i128_to_i8_wrap, .i128_to_i16_wrap, .i128_to_i32_wrap, .i128_to_i64_wrap, .i128_to_u8_wrap, .i128_to_u16_wrap, .i128_to_u32_wrap, .i128_to_u64_wrap, .i128_to_u128_wrap => .signed,
+                        .i128_to_i8_wrap, .i128_to_i16_wrap, .i128_to_i32_wrap, .i128_to_i64_wrap, .i128_to_u8_wrap, .i128_to_u16_wrap, .i128_to_u32_wrap, .i128_to_u64_wrap, .i128_to_u128_wrap, .dec_from_attos, .dec_to_attos => .signed,
                         else => .unsigned,
                     };
                     const parts = try self.getI128Parts(src_loc, src_signedness);
@@ -2608,7 +2610,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .u128_to_i16_wrap, .u128_to_u16_wrap, .i128_to_i16_wrap, .i128_to_u16_wrap => 16,
                         .u128_to_i32_wrap, .u128_to_u32_wrap, .i128_to_i32_wrap, .i128_to_u32_wrap => 32,
                         .u128_to_i64_wrap, .u128_to_u64_wrap, .i128_to_i64_wrap, .i128_to_u64_wrap => 64,
-                        .u128_to_i128_wrap, .i128_to_u128_wrap => 128,
+                        .u128_to_i128_wrap, .i128_to_u128_wrap, .dec_from_attos, .dec_to_attos => 128,
                         else => unreachable,
                     };
 

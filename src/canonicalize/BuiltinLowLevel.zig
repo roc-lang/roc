@@ -453,6 +453,8 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.F32.from_bits", .{}, .f32_from_bits);
     try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.F64.to_bits", .{}, .f64_to_bits);
     try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.F64.from_bits", .{}, .f64_from_bits);
+    try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.Dec.to_attos", .{}, .dec_to_attos);
+    try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.Dec.from_attos", .{}, .dec_from_attos);
 
     // Numeric comparison operations (all numeric types)
     for (numeric_types) |num_type| {
