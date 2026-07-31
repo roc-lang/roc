@@ -4342,6 +4342,13 @@ pub const Rehearsal = struct {
             census.bump("rehearsal_type_mismatch_representation");
         } else {
             census.bump("rehearsal_type_mismatch_logical");
+            if (!difference.left.isEmptyTagUnionHead() and !difference.right.isEmptyTagUnionHead()) {
+                // Both sides carry content, so the comparison cannot say which
+                // is wrong. Checking is the authority on logical types, so ask
+                // whether the SEALED type still agrees with the head checking
+                // recorded at this position (reunify.md 15.1b).
+                self.noteSealedAgainstChecked(address, sealed);
+            }
             if (difference.left.isEmptyTagUnionHead() and !difference.right.isEmptyTagUnionHead()) {
                 beyond_residual_class = false;
                 census.bump("rehearsal_type_mismatch_unbound_residual");
