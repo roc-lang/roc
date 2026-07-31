@@ -3826,7 +3826,7 @@ Builtin :: [].{
 			$joined
 		}
 
-		## Insert a separator between every pair of elements in a list.
+		## Insert a separator between every pair of items in a list.
 		## ```roc
 		## expect [1.I64, 2, 3].intersperse(0) == [1, 0, 2, 0, 3]
 		##
