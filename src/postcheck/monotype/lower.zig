@@ -2386,7 +2386,17 @@ const Builder = struct {
         procedure: checked.ProcedureUseTemplate,
     ) Allocator.Error!Ast.DefId {
         const view = moduleView(self.root_view);
-        const template_ref = self.templateRefForProcedureUse(procedure);
+        const callable_eval = self.callableEvalForProcedureUse(procedure);
+        const template_ref = if (callable_eval) |use| blk: {
+            const raw = @intFromEnum(use.template);
+            if (raw >= use.view.callable_eval_templates.templates.len) {
+                Common.invariant("callable eval procedure use referenced a missing checked template");
+            }
+            const template = use.view.callable_eval_templates.templates[raw];
+            const wrapper = use.view.entry_wrappers.lookupByRoot(template.root) orelse
+                Common.invariant("callable eval procedure use root had no checked entry wrapper");
+            break :blk wrapper.template;
+        } else self.templateRefForProcedureUse(procedure);
         var graph_setup_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
         defer graph_setup_timing_scope.end();
         const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
@@ -2418,30 +2428,53 @@ const Builder = struct {
         graph_setup_timing_scope.end();
 
         const draft = FinalBodyOutputGuard.begin(self);
-        const callee, const completed_fn = blk: {
-            var dispatch_timing_scope = ProcedureTimingScope.begin(self.timing, .dispatch_evidence);
-            defer dispatch_timing_scope.end();
-            const selected = try ctx.draftFnSlotForProcedureUseAtNode(
-                procedure,
-                request.checked_type,
-                procedure.source_fn_ty_template,
-                root_node,
-                &.{},
-                request.root_evidence,
-            );
-            const callee_fn_node = try ctx.draftFnSlotTypeNode(selected, root_node);
-            try relateFunctionRequestInterface(graph, root_node, callee_fn_node);
-            break :blk .{ selected, try graph.functionNodes(root_node) };
-        };
         var body_timing_scope = ProcedureTimingScope.begin(self.timing, .body_lowering);
         defer body_timing_scope.end();
-        const ret_cell = DraftTypeCell.fromGraphNode(completed_fn.ret);
-        const body = try ctx.addExprWithTypeCell(ret_cell, .{
-            .call_proc = .{
-                .callee = draftProcCalleeForSlot(callee),
-                .args = try body_draft.addExprSpan(arg_exprs),
-            },
-        });
+        const body, const ret_cell = if (callable_eval) |use| blk: {
+            const callee = try ctx.lowerCallableEvalBindingValueAtNode(
+                use.view,
+                use.template,
+                root_node,
+                &.{},
+            );
+            const completed_fn = try graph.functionNodes(root_node);
+            const completed_ret = DraftTypeCell.fromGraphNode(completed_fn.ret);
+            break :blk .{
+                try ctx.addExprWithTypeCell(completed_ret, .{
+                    .call_value = .{
+                        .callee = callee,
+                        .args = try body_draft.addExprSpan(arg_exprs),
+                    },
+                }),
+                completed_ret,
+            };
+        } else blk: {
+            const callee, const completed_fn = dispatch: {
+                var dispatch_timing_scope = ProcedureTimingScope.begin(self.timing, .dispatch_evidence);
+                defer dispatch_timing_scope.end();
+                const selected = try ctx.draftFnSlotForProcedureUseAtNode(
+                    procedure,
+                    request.checked_type,
+                    procedure.source_fn_ty_template,
+                    root_node,
+                    &.{},
+                    request.root_evidence,
+                );
+                const callee_fn_node = try ctx.draftFnSlotTypeNode(selected, root_node);
+                try relateFunctionRequestInterface(graph, root_node, callee_fn_node);
+                break :dispatch .{ selected, try graph.functionNodes(root_node) };
+            };
+            const completed_ret = DraftTypeCell.fromGraphNode(completed_fn.ret);
+            break :blk .{
+                try ctx.addExprWithTypeCell(completed_ret, .{
+                    .call_proc = .{
+                        .callee = draftProcCalleeForSlot(callee),
+                        .args = try body_draft.addExprSpan(arg_exprs),
+                    },
+                }),
+                completed_ret,
+            };
+        };
         const root_def = try body_draft.reserveDef(.root);
         body_draft.setDef(root_def, .{
             .symbol = self.symbols.fresh(),
@@ -2574,6 +2607,44 @@ const Builder = struct {
             .const_node => |node| try self.restoreConstNodeAtType(view, view, node, mono_fn_ty),
             .pending => try self.lowerPendingCallableEvalBindingValue(view, template, root, mono_fn_ty),
             .expect => Common.invariant("callable eval binding root output an expect payload"),
+        };
+    }
+
+    const CallableEvalUse = struct {
+        view: ModuleView,
+        template: checked.CallableEvalTemplateId,
+    };
+
+    fn callableEvalForProcedureUse(self: *Builder, proc: checked.ProcedureUseTemplate) ?CallableEvalUse {
+        return switch (proc.binding) {
+            .top_level => |top_level| blk: {
+                const view = self.moduleForId(checked.topLevelProcedureModuleId(top_level));
+                const binding = view.top_level_procedure_bindings.get(top_level.binding);
+                break :blk switch (binding.body) {
+                    .direct_template => null,
+                    .callable_eval_template => |template| .{ .view = view, .template = template },
+                };
+            },
+            .imported => |imported| blk: {
+                const view = self.moduleForId(checked.importedProcedureModuleId(imported));
+                for (view.exported_procedure_bindings.bindings) |binding| {
+                    if (binding.binding.def != imported.def or binding.binding.pattern != imported.pattern) continue;
+                    break :blk switch (binding.body) {
+                        .direct_template => null,
+                        .callable_eval_template => |template| .{ .view = view, .template = template },
+                    };
+                }
+                Common.invariant("imported procedure binding was not exported by its checked module");
+            },
+            .hosted => null,
+            .platform_required => |required| blk: {
+                const view = self.moduleForId(checked.requiredProcedureModuleId(required));
+                const binding = view.top_level_procedure_bindings.get(required.procedure_binding);
+                break :blk switch (binding.body) {
+                    .direct_template => null,
+                    .callable_eval_template => |template| .{ .view = view, .template = template },
+                };
+            },
         };
     }
 
@@ -25986,7 +26057,7 @@ const BodyContext = struct {
         evidence: []const SpecEvidence,
         root_evidence: ?checked.CheckedEvidenceSpan,
     ) Allocator.Error!DraftExprId {
-        if (self.callableEvalForProcedureUse(proc)) |callable_eval| {
+        if (self.builder.callableEvalForProcedureUse(proc)) |callable_eval| {
             return try self.lowerCallableEvalBindingValueAtNode(
                 callable_eval.view,
                 callable_eval.template,
@@ -26046,44 +26117,6 @@ const BodyContext = struct {
             // durable signature belongs to another shard, while the active
             // graph request is already the local representation witness.
             .imported => imported_fallback,
-        };
-    }
-
-    const CallableEvalUse = struct {
-        view: ModuleView,
-        template: checked.CallableEvalTemplateId,
-    };
-
-    fn callableEvalForProcedureUse(self: *BodyContext, proc: checked.ProcedureUseTemplate) ?CallableEvalUse {
-        return switch (proc.binding) {
-            .top_level => |top_level| blk: {
-                const view = self.builder.moduleForId(checked.topLevelProcedureModuleId(top_level));
-                const binding = view.top_level_procedure_bindings.get(top_level.binding);
-                break :blk switch (binding.body) {
-                    .direct_template => null,
-                    .callable_eval_template => |template| .{ .view = view, .template = template },
-                };
-            },
-            .imported => |imported| blk: {
-                const view = self.builder.moduleForId(checked.importedProcedureModuleId(imported));
-                for (view.exported_procedure_bindings.bindings) |binding| {
-                    if (binding.binding.def != imported.def or binding.binding.pattern != imported.pattern) continue;
-                    break :blk switch (binding.body) {
-                        .direct_template => null,
-                        .callable_eval_template => |template| .{ .view = view, .template = template },
-                    };
-                }
-                Common.invariant("imported procedure binding was not exported by its checked module");
-            },
-            .hosted => null,
-            .platform_required => |required| blk: {
-                const view = self.builder.moduleForId(checked.requiredProcedureModuleId(required));
-                const binding = view.top_level_procedure_bindings.get(required.procedure_binding);
-                break :blk switch (binding.body) {
-                    .direct_template => null,
-                    .callable_eval_template => |template| .{ .view = view, .template = template },
-                };
-            },
         };
     }
 

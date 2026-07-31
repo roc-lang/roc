@@ -514,7 +514,7 @@ const Formatter = struct {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
                 }
-                const path_result = try fmt.formatModulePath(i.module_name_tok, i.qualifier_tok, i.exposes);
+                const path_result = try fmt.formatModulePath(i.module_name_tok, i.qualifier_tok);
                 const last_module_tok = path_result.last_tok;
                 if (multiline and (i.alias_tok != null or i.exposes.span.len > 0)) {
                     flushed = try fmt.flushCommentsAfter(last_module_tok);
@@ -554,10 +554,10 @@ const Formatter = struct {
                         flushed = try fmt.flushCommentsAfter(a);
                     }
                 }
-                // Output exposing clause if there are exposed items, OR if there was unusual
-                // spacing (DotUpperIdent) in the module path - in the latter case, we need
-                // to output "exposing []" to prevent auto-expose on re-format.
-                const needs_exposing = i.exposes.span.len > 0 or path_result.has_unusual_spacing;
+                // Nested imports store their final segment in `exposes`, but it is
+                // still part of the dotted source path rather than a source
+                // `exposing` clause.
+                const needs_exposing = !i.nested_import and i.exposes.span.len > 0;
                 if (needs_exposing) {
                     if (flushed) {
                         fmt.curr_indent += 1;
@@ -871,37 +871,18 @@ const Formatter = struct {
         try fmt.pushTokenText(ident);
     }
 
-    /// Formats a module path for an import statement.
-    /// For auto-expose imports (like `import A.B.C` becoming `import A.B exposing [C]`),
-    /// module_name_tok points to the second-to-last token.
-    /// For explicit clause imports (like `import A.B.C as D`), module_name_tok points to
-    /// the first token and we iterate through consecutive uppercase tokens.
+    /// Formats the complete dotted path written in an import statement.
+    ///
+    /// Whether that path selects a directory-qualified module or a nested type
+    /// is explicit on the import node and does not affect path formatting.
     const ModulePathResult = struct {
         last_tok: Token.Idx,
-        has_unusual_spacing: bool, // True if DotUpperIdent (space before dot) was encountered
     };
 
-    fn formatModulePath(fmt: *Formatter, module_name_tok: Token.Idx, qualifier: ?Token.Idx, exposes: AST.ExposedItem.Span) (Allocator.Error || error{WriteFailed})!ModulePathResult {
+    fn formatModulePath(fmt: *Formatter, module_name_tok: Token.Idx, qualifier: ?Token.Idx) (Allocator.Error || error{WriteFailed})!ModulePathResult {
         const curr_indent = fmt.curr_indent;
         defer {
             fmt.curr_indent = curr_indent;
-        }
-
-        var has_unusual_spacing = false;
-
-        // Get the first exposed token if any (for auto-expose detection)
-        var first_exposed_tok: ?Token.Idx = null;
-        if (exposes.span.len > 0) {
-            const exposed_slice = fmt.ast.store.exposedItemSlice(exposes);
-            if (exposed_slice.len > 0) {
-                const first_exposed = fmt.ast.store.getExposedItem(exposed_slice[0]);
-                first_exposed_tok = switch (first_exposed) {
-                    .lower_ident => |i| i.ident,
-                    .upper_ident => |i| i.ident,
-                    .upper_ident_star => |i| i.ident,
-                    .malformed => null,
-                };
-            }
         }
 
         // Output qualifier if present
@@ -914,11 +895,7 @@ const Formatter = struct {
         try fmt.pushTokenText(module_name_tok);
         var last_tok = module_name_tok;
 
-        // Iterate through consecutive uppercase tokens in the module path.
-        // For auto-expose, stop before the exposed token (which is part of the path).
-        // For explicit exposes, the exposed token is in the [] list, not the path, so we iterate fully.
-        // DotUpperIdent (space before dot) is formatted with a newline to preserve the structure
-        // and make malformed code visually obvious.
+        // Normalize every dotted path segment to no whitespace before the dot.
         var tok = module_name_tok + 1;
         const tags = fmt.ast.tokens.tokens.items(.tag);
         while (tok < tags.len) {
@@ -926,25 +903,13 @@ const Formatter = struct {
             if (tag != .NoSpaceDotUpperIdent and tag != .DotUpperIdent) {
                 break;
             }
-            // For auto-expose, stop before the exposed token
-            if (first_exposed_tok) |exp_tok| {
-                if (tok == exp_tok) break;
-            }
-            // DotUpperIdent has space before the dot - format with newline to preserve structure
-            if (tag == .DotUpperIdent) {
-                has_unusual_spacing = true;
-                try fmt.ensureNewline();
-                fmt.curr_indent += 1;
-                try fmt.pushIndent();
-                fmt.curr_indent -= 1;
-            }
             try fmt.push('.');
             try fmt.pushTokenText(tok);
             last_tok = tok;
             tok += 1;
         }
 
-        return .{ .last_tok = last_tok, .has_unusual_spacing = has_unusual_spacing };
+        return .{ .last_tok = last_tok };
     }
 
     const Braces = enum {
@@ -4008,10 +3973,22 @@ test "parenthesized type application with leading newline is idempotent" {
     try std.testing.expectEqualStrings("\ne : [(N()), ()]\n", result);
 }
 
-test "import alias after comment stays separated from synthetic exposing clause" {
+test "import alias after comment stays separated" {
     const result = try moduleFmtsStable(std.testing.allocator, "import A .B as#\nX", false);
     defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("import A\n\t.B as #\nX exposing []\n", result);
+    try std.testing.expectEqualStrings("import A.B as #\nX\n", result);
+}
+
+test "import path spacing is normalized" {
+    const result = try moduleFmtsStable(std.testing.allocator, "import Layout .Path as LayoutPath", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("import Layout.Path as LayoutPath\n", result);
+}
+
+test "nested import path remains nested after formatting" {
+    const result = try moduleFmtsStable(std.testing.allocator, "import Root .Nested .Leaf", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("import Root.Nested.Leaf\n", result);
 }
 
 test "issue 8894: typed integer literal formats correctly" {
