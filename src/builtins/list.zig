@@ -687,10 +687,14 @@ pub fn listAppendRangeWithin(
     const start: usize = @intCast(start_u64);
     const count: usize = @intCast(@min(count_u64, @as(u64, @intCast(std.math.maxInt(usize)))));
 
+    // Reserve one word of scratch beyond the appended range so every copy
+    // below may run in whole-word stores that overshoot the range by up to
+    // seven bytes. The scratch stays within capacity and outside the length.
+    const slop_elements: u64 = (8 + element_width - 1) / element_width;
     var output = listReserve(
         list,
         alignment,
-        count_u64,
+        count_u64 +| slop_elements,
         element_width,
         elements_refcounted,
         inc_context,
@@ -702,38 +706,34 @@ pub fn listAppendRangeWithin(
     );
     const base = output.bytes.?;
 
-    // The elements from `start` through the write cursor always hold a
-    // contiguous prefix of the repeating range, so each copy can take as
-    // much as has been materialized so far: sizes double until the tail.
     const src = base + start * element_width;
-    var dst = base + original_len * element_width;
-    var available = (original_len - start) * element_width;
-    var remaining = count * element_width;
-    if (available >= 8) {
-        // A word read at offset i touches src[i..i+8), all materialized once
-        // at least 8 bytes separate the read and write cursors. Typical
-        // ranges are a few bytes, so inline word copies beat memcpy calls.
+    const dst = base + original_len * element_width;
+    const distance = (original_len - start) * element_width;
+    const total = count * element_width;
+    if (distance >= 8) {
+        // A word read at offset i touches src[i..i+8), which stays at or
+        // behind the write cursor, so every byte read is already
+        // materialized. Typical ranges are a few bytes, so inline word
+        // copies into the scratch beat memcpy calls and a byte tail.
         var i: usize = 0;
-        while (i + 8 <= remaining) : (i += 8) {
+        while (i < total) : (i += 8) {
             dst[i..][0..8].* = src[i..][0..8].*;
         }
-        while (i < remaining) : (i += 1) {
-            dst[i] = src[i];
-        }
-    } else if (remaining <= 64) {
-        // Cursors closer than a word: byte copies materialize the repeating
-        // prefix without a word read ever outrunning the write cursor.
-        var i: usize = 0;
-        while (i < remaining) : (i += 1) {
-            dst[i] = src[i];
-        }
     } else {
-        while (remaining > 0) {
-            const chunk = @min(available, remaining);
-            @memcpy(dst[0..chunk], src[0..chunk]);
-            dst += chunk;
-            available += chunk;
-            remaining -= chunk;
+        // The range repeats with a period shorter than a word. Materialize
+        // the smallest word-sized multiple of the period byte by byte (at
+        // most 14 bytes), then copy words from one multiple back: those
+        // reads carry the same repeating values and stay behind the write
+        // cursor.
+        const period = distance * ((8 + distance - 1) / distance);
+        const head = @min(period, total);
+        var i: usize = 0;
+        while (i < head) : (i += 1) {
+            dst[i] = src[i];
+        }
+        const back = dst - period;
+        while (i < total) : (i += 8) {
+            dst[i..][0..8].* = back[i..][0..8].*;
         }
     }
 
