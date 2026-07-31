@@ -2656,6 +2656,21 @@ pub fn build(b: *std.Build) void {
     const eval_no_fork = b.option(bool, "eval-no-fork", "Run eval tests in-process instead of through fork isolation") orelse false;
     const eval_time_worker = b.option(bool, "eval-time-worker", "Print eval worker startup timing instrumentation") orelse false;
     const glue_release_tag = b.option([]const u8, "glue-release-tag", "Nightly release tag used in generated glue release metadata");
+    const compiler_version_override = b.option([]const u8, "compiler-version", "Report this string as the compiler version instead of <build mode>-<git short sha>; nightly builds pass their release tag");
+    if (compiler_version_override) |override| {
+        // The version string is also a directory name (install root, cache root), so it is
+        // restricted to characters that are a valid path component on every supported OS.
+        if (override.len == 0) {
+            std.log.err("-Dcompiler-version must not be empty", .{});
+            std.process.exit(1);
+        }
+        for (override) |c| {
+            if (!std.ascii.isAlphanumeric(c) and c != '-' and c != '.' and c != '_') {
+                std.log.err("-Dcompiler-version may only contain letters, digits, '-', '.' and '_', but got \"{s}\"", .{override});
+                std.process.exit(1);
+            }
+        }
+    }
     const enable_valgrind = b.option(bool, "valgrind", "Emit Valgrind client request support") orelse false;
     if (enable_valgrind and (builtin.target.os.tag != .linux or target.result.os.tag != .linux)) {
         std.log.err("-Dvalgrind=true requires a Linux build host and Linux target", .{});
@@ -2725,19 +2740,32 @@ pub fn build(b: *std.Build) void {
     // actual optimization level of each compiled binary. The prefix can't be baked here because
     // build_options is shared between the dev `roc` exe (whose mode follows -Doptimize) and the
     // `release` exe (always built ReleaseFast); a single build-time value can't be right for both.
-    build_options.contents.appendSlice(b.allocator,
-        \\
-        \\pub const compiler_version = @import("std").fmt.comptimePrint("{s}-{s}", .{
-        \\    switch (@import("builtin").mode) {
-        \\        .Debug => "debug",
-        \\        .ReleaseSafe => "release-safe",
-        \\        .ReleaseFast => "release-fast",
-        \\        .ReleaseSmall => "release-small",
-        \\    },
-        \\    compiler_version_git,
-        \\});
-        \\
-    ) catch @panic("OOM");
+    //
+    // -Dcompiler-version replaces the whole string, and is emitted as a string literal so that
+    // `compiler_version` keeps the same type either way. Nightly builds pass their release tag
+    // (e.g. "nightly-2026-July-31-f5556d8"), because "release-fast-<sha>" tells a user nothing
+    // about which nightly they downloaded.
+    if (compiler_version_override) |override| {
+        build_options.contents.appendSlice(b.allocator, b.fmt(
+            \\
+            \\pub const compiler_version = "{s}";
+            \\
+        , .{override})) catch @panic("OOM");
+    } else {
+        build_options.contents.appendSlice(b.allocator,
+            \\
+            \\pub const compiler_version = @import("std").fmt.comptimePrint("{s}-{s}", .{
+            \\    switch (@import("builtin").mode) {
+            \\        .Debug => "debug",
+            \\        .ReleaseSafe => "release-safe",
+            \\        .ReleaseFast => "release-fast",
+            \\        .ReleaseSmall => "release-small",
+            \\    },
+            \\    compiler_version_git,
+            \\});
+            \\
+        ) catch @panic("OOM");
+    }
     // Shared config for every first-party leak-checking DebugAllocator. Capturing a
     // stack trace per allocation dominates Debug-build runtime (~80% of `roc test`
     // wall time on macOS arm64), so traces are off unless -Ddebug-gpa-traces is
