@@ -1133,6 +1133,7 @@ const Formatter = struct {
     const ExprFormatBehavior = enum {
         normal,
         no_indent_on_access,
+        no_additional_indent_on_access,
     };
 
     fn formatStringInterpolation(fmt: *Formatter, idx: AST.Expr.Idx) FormatAstError!void {
@@ -1188,6 +1189,16 @@ const Formatter = struct {
 
     fn formatExprWithInfo(fmt: *Formatter, ei: AST.Expr.Idx) FormatAstError!FormattedExpr {
         return formatExprInner(fmt, ei, .normal);
+    }
+
+    fn adjustMultilineAccessIndent(fmt: *Formatter, format_behavior: ExprFormatBehavior) void {
+        switch (format_behavior) {
+            .normal => fmt.curr_indent += 1,
+            .no_indent_on_access => {},
+            .no_additional_indent_on_access => if (fmt.curr_indent > 0) {
+                fmt.curr_indent -= 1;
+            },
+        }
     }
 
     fn formatExpr(fmt: *Formatter, ei: AST.Expr.Idx) FormatAstError!AST.TokenizedRegion {
@@ -1252,7 +1263,7 @@ const Formatter = struct {
         const region = fmt.nodeRegion(@intFromEnum(ei));
         var formatted = FormattedExpr{ .region = region };
         const multiline = fmt.nodeWillBeMultiline(AST.Expr.Idx, ei);
-        const indent_modifier: u32 = @intFromBool(format_behavior == .no_indent_on_access and fmt.curr_indent > 0);
+        const indent_modifier: u32 = @intFromBool(format_behavior != .normal and fmt.curr_indent > 0);
         const curr_indent: u32 = fmt.curr_indent - indent_modifier;
         defer {
             fmt.curr_indent = curr_indent;
@@ -1396,7 +1407,7 @@ const Formatter = struct {
                 if (!parenthesize_receiver) {
                     const continued = try fmt.continueAfterMultilineStringLine(left);
                     if (!continued and multiline and try fmt.flushCommentsBefore(right_region.start)) {
-                        fmt.curr_indent += 1;
+                        fmt.adjustMultilineAccessIndent(format_behavior);
                         try fmt.pushIndent();
                     }
                 }
@@ -1425,7 +1436,7 @@ const Formatter = struct {
                 if (!parenthesize_receiver) {
                     const continued = try fmt.continueAfterMultilineStringLine(receiver);
                     if (!continued and multiline and try fmt.flushCommentsBefore(mc.method_token)) {
-                        fmt.curr_indent += 1;
+                        fmt.adjustMultilineAccessIndent(format_behavior);
                         try fmt.pushIndent();
                     }
                 }
@@ -1703,7 +1714,10 @@ const Formatter = struct {
                 }
             },
             .suffix_single_question => |s| {
-                const body = try fmt.formatExprWithInfo(s.expr);
+                const body = switch (format_behavior) {
+                    .normal => try fmt.formatExprWithInfo(s.expr),
+                    .no_indent_on_access, .no_additional_indent_on_access => try fmt.formatExprInner(s.expr, .no_additional_indent_on_access),
+                };
                 _ = try fmt.continueAfterMultilineStringLine(body);
                 try fmt.push('?');
             },
@@ -3438,6 +3452,7 @@ const Formatter = struct {
             .method_call => |call| fmt.exprCanStartPipeTargetUnparenthesized(call.receiver),
             .tuple_access => |access| fmt.exprCanStartPipeTargetUnparenthesized(access.expr),
             .nominal_apply => |apply| fmt.exprCanStartPipeTargetUnparenthesized(apply.mapper),
+            .suffix_single_question => |suffix| fmt.exprCanStartPipeTargetUnparenthesized(suffix.expr),
             else => false,
         };
     }
@@ -4082,6 +4097,43 @@ test "multiline pipes start indented lines" {
             "\t|> qux\n",
         result,
     );
+}
+
+test "multiline pipe targets keep their postfix chains unparenthesized" {
+    const input = "main =\n" ++
+        "\t\"./input.txt\"\n" ++
+        "\t\t|> Path.from_str()\n" ++
+        "\t.read_bytes!()?\n" ++
+        "\t\t|> Foo.from_bytes()?\n" ++
+        "\t\t|> transform(2, Much)\n" ++
+        "\t.to_bytes()?\n" ++
+        "\t\t|> Path.write_bytes!(Path.from_str(\"./output.txt\"))\n";
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(input, result);
+}
+
+test "pipe targets ending in question marks stay unparenthesized" {
+    const input = "get_iso_str : List(U8) -> Try(Str, _)\n" ++
+        "get_iso_str = |bytes| {\n" ++
+        "\tstr = bytes |> Str.from_utf8()?\n" ++
+        "\tresponse : { local_time : Str }\n" ++
+        "\tresponse = Json.parse(str)?\n" ++
+        "\tOk(response.local_time)\n" ++
+        "}\n";
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(input, result);
+}
+
+test "parenthesized pipe receivers drop direct empty target arguments" {
+    const input = "x = (foo |> bar()).baz()";
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings("x = (foo |> bar).baz()\n", result);
 }
 
 test "multiline pipes preserve comments around the operator" {
