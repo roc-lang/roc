@@ -2458,6 +2458,20 @@ pub const Rehearsal = struct {
             }
             if (binding != null) break;
         }
+        if (binding == null) {
+            for (cursor.view.importedSchemes()) |imported| {
+                for (imported.binders(cursor.view)) |binder| {
+                    if (binder != free) continue;
+                    const root = imported.localRoot();
+                    const here: checked.CheckedTypeId = @enumFromInt(address.type_id);
+                    if (root == here or self.checkedReaches(cursor, root, here)) {
+                        census.bump("scheme_frame_supplies_the_position");
+                        census.bump("position_inside_an_imported_scheme_root");
+                        return;
+                    }
+                }
+            }
+        }
         const scheme = binding orelse {
             if (with_binders == 0) {
                 census.bump("free_variable_unbound_no_scheme_lists_any_binder");
@@ -2553,6 +2567,19 @@ pub const Rehearsal = struct {
                 if (binder != free) continue;
                 if (scheme.root == position or self.checkedReaches(cursor, scheme.root, position)) {
                     census.bump("mismatch_unbound_inside_its_own_scheme_root");
+                    return;
+                }
+            }
+        }
+        // A scheme this module CONSUMES projects the defining module's binders
+        // into local ids, and a use of it binds them the same way (reunify.md
+        // 7.2). A position under such a projected root is supplied by that use.
+        for (cursor.view.importedSchemes()) |imported| {
+            for (imported.binders(cursor.view)) |binder| {
+                if (binder != free) continue;
+                const root = imported.localRoot();
+                if (root == position or self.checkedReaches(cursor, root, position)) {
+                    census.bump("mismatch_unbound_inside_an_imported_scheme_root");
                     return;
                 }
             }

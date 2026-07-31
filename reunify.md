@@ -2521,9 +2521,31 @@ which the framing-independent question closes. `SealTrace.contexted`
 records probed seal exits, not every position a walk traverses, so "no
 entering read" only ever meant none was *recorded*.
 
-**Consequence.** No checking-side change is required for these classes, so
-no `CACHE_VERSION` bump and no artifact growth on their account, and the
-§15.2 contingency is not reached by this evidence. Directed translation
+**The same decomposition at the program level.** `compareSpecialization`
+resolves positions the same way, and its logical mismatches split the same
+way: 50 of 57 on snapshots and 936 of 952 unbound residuals on eval lie
+inside the root of the scheme that generalizes them.
+
+**What is left, named rather than counted.** 7 positions on snapshots and
+16 on eval, all in the `Builtin` module, all on polymorphic function type
+roots: `List(a)` with a rigid `a`, inside a record or a tuple. Their heads
+agree with what the graph sealed — record to record, `List` to list, tuple
+to tuple — and the difference is at the element. Nothing names that rigid:
+not a local scheme's generalized list, not an imported scheme's projected
+binders, not a nominal declaration's formals (through either its backing
+or its declaration root), not a captured binder, and not a residual
+disposition. The graph gives the element a value unification supplied; the
+directed side gives the residual the rigid implies.
+
+This is the only class that would need checking to record something, and
+what it needs is coverage of an existing recorded, round-tripped mechanism
+— a scheme carrying these roots' generalized vars, or a §7.4 module-body
+disposition for the rigids — not a new structure. At 7 and 16 entries its
+storage is immaterial.
+
+**Consequence.** No checking-side change is required for the other classes,
+so no `CACHE_VERSION` bump and no artifact growth on their account, and
+§15.2's contingency is not reached by this evidence. Directed translation
 has exactly one non-rehearsal caller today (`lower.zig` `translateGroundRoot`)
 and it is the shadow probe itself; which roots production reads is decided
 by the flip, per §9.2 — specialization roots entered under the site's
