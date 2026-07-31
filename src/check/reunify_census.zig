@@ -102,6 +102,11 @@ var site_binder_unreached = std.atomic.Value(u64).init(0);
 var site_without_snapshot_value_use = std.atomic.Value(u64).init(0);
 var site_without_snapshot_nested = std.atomic.Value(u64).init(0);
 var site_without_snapshot_dispatch = std.atomic.Value(u64).init(0);
+/// Identity vars the snapshot's rank filter excludes from a scheme's binder
+/// list, by what they are. A rigid is a declared parameter of the signature.
+var snapshot_binder_skipped_rigid = std.atomic.Value(u64).init(0);
+var snapshot_binder_skipped_flex = std.atomic.Value(u64).init(0);
+var snapshot_binder_skipped_other = std.atomic.Value(u64).init(0);
 /// A static-dispatch edge whose constraint names no introducing expression, so
 /// the site it records carries node 0 as its use identity and no consumer
 /// keying on a real use expression can select it (reunify.md 7.2).
@@ -369,6 +374,26 @@ pub fn recordDispatchEdgeIntroExpr(present: bool, literal_when_absent: bool) voi
 
 /// Record one dense shared in-group instantiation site (reunify.md 7.2, Slice 2b),
 /// recorded before its scheme generalized.
+/// Record one identity var the snapshot binder capture skipped for its rank.
+pub fn recordSnapshotBinderSkippedRigid() void {
+    if (comptime !enabled) return;
+    _ = snapshot_binder_skipped_rigid.fetchAdd(1, .monotonic);
+}
+
+/// Record one flex identity var the snapshot binder capture skipped.
+pub fn recordSnapshotBinderSkippedFlex() void {
+    if (comptime !enabled) return;
+    _ = snapshot_binder_skipped_flex.fetchAdd(1, .monotonic);
+}
+
+/// Record one other identity var the snapshot binder capture skipped.
+pub fn recordSnapshotBinderSkippedOther() void {
+    if (comptime !enabled) return;
+    _ = snapshot_binder_skipped_other.fetchAdd(1, .monotonic);
+}
+
+/// Record one dense shared in-group instantiation site (reunify.md 7.2, Slice
+/// 2b), recorded before its scheme generalized.
 pub fn recordSchemeUseSiteShared() void {
     if (comptime !enabled) return;
     _ = site_recorded_shared.fetchAdd(1, .monotonic);
@@ -744,6 +769,9 @@ pub fn dumpAppend() void {
     sink.print("site_without_snapshot_value_use={d}\n", .{site_without_snapshot_value_use.load(.monotonic)});
     sink.print("site_without_snapshot_nested={d}\n", .{site_without_snapshot_nested.load(.monotonic)});
     sink.print("site_without_snapshot_dispatch={d}\n", .{site_without_snapshot_dispatch.load(.monotonic)});
+    sink.print("snapshot_binder_skipped_rigid={d}\n", .{snapshot_binder_skipped_rigid.load(.monotonic)});
+    sink.print("snapshot_binder_skipped_flex={d}\n", .{snapshot_binder_skipped_flex.load(.monotonic)});
+    sink.print("snapshot_binder_skipped_other={d}\n", .{snapshot_binder_skipped_other.load(.monotonic)});
     sink.print("dispatch_edge_with_intro_expr={d}\n", .{dispatch_edge_with_intro_expr.load(.monotonic)});
     sink.print("dispatch_edge_without_intro_expr={d}\n", .{dispatch_edge_without_intro_expr.load(.monotonic)});
     sink.print("dispatch_edge_no_intro_literal={d}\n", .{dispatch_edge_no_intro_literal.load(.monotonic)});

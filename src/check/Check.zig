@@ -3772,7 +3772,20 @@ fn captureSchemeSnapshot(self: *Self, owner_node_idx: u32, root: Var) std.mem.Al
     self.scratch_snapshot_binders.clearRetainingCapacity();
     for (identity_vars) |identity_var| {
         const resolved = self.types.resolveVar(identity_var);
-        if (resolved.desc.rank != Rank.generalized) continue;
+        if (resolved.desc.rank != Rank.generalized) {
+            // Measure what the rank filter excludes. A rigid is a declared
+            // parameter of this definition's signature, so excluding one means
+            // the binder list omits a parameter the definition owns
+            // (reunify.md 7.1).
+            if (reunify_census.active()) {
+                switch (resolved.desc.content) {
+                    .rigid => reunify_census.recordSnapshotBinderSkippedRigid(),
+                    .flex => reunify_census.recordSnapshotBinderSkippedFlex(),
+                    else => reunify_census.recordSnapshotBinderSkippedOther(),
+                }
+            }
+            continue;
+        }
         try self.scratch_snapshot_binders.append(self.gpa, .{
             .original = @intFromEnum(resolved.var_),
         });
