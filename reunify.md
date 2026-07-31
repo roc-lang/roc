@@ -2440,6 +2440,38 @@ census was re-sited onto it before the argument could be redone.
 Step 2 is the only one that can still change the answer; step 3 is the
 remaining measurement debt.
 
+### 13.2b Verdict of the seam investigation
+
+The precondition Slice 7 waits on has been measured to completion, and the
+answer is that it cannot be met from what checking publishes today.
+
+**What was established.** Coverage of the reads production lowering makes
+is 98.1% on snapshots and 98.8% on eval with no read left absent, up from
+0.25% when the two graph exits were first enumerated. At that coverage the
+comparison reports 12943 and 14112 divergences, every one of which falls
+in exactly one class with nothing unexplained: a free variable no scheme
+generalizes, an owning definition the module records several
+instantiations of with nothing saying which applies, an owning definition
+it records none of, or no free variable at all. `rehearsal_type_mismatch_logical`
+decomposes the same way, 57 of 57 and 952 of 1040.
+
+**What was ruled out.** Not the instrument: coverage is near total and
+absence is zero. Not the graph: where both sides carry content the sealed
+type never contradicts the head checking recorded, 0 contradictions
+against 251 agreements once §10's lowerings are conceded. Not a missing
+key: the one class holding a recorded site is refused at selection, and
+accepting the ambiguity where every candidate binds identical actuals
+builds 480 further levels and closes none.
+
+**What follows.** Every class wants something the checked artifact does
+not contain — a value for a variable nothing generalizes, an instantiation
+never recorded, or a per-position statement of which recorded
+instantiation applies. That is §15.2's contingency, and it changes the
+order of the remaining work: the flip is not blocked on postcheck at all,
+it is blocked on a checking-side publication change, whose artifact
+growth, `CACHE_VERSION` bump and digest churn are the next thing to
+budget. Slice 7 cannot precede it.
+
 ### 13.3 Corpus measurement (2026-07-28, merged tree)
 
 Run as `ROC_REUNIFY_SHADOW=1 ROC_REUNIFY_CENSUS=<file>` over the snapshot
