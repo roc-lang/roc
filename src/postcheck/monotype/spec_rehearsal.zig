@@ -2275,6 +2275,61 @@ pub const Rehearsal = struct {
         census.appendToFile(raw_path, line);
     }
 
+    /// Debug/probe-only: asked POSITION-first rather than node-first, is this
+    /// position a declaration parameter that some nominal instance in the same
+    /// module already supplies an argument for? The node-first form failed
+    /// because most diverging nodes are created outside a backing
+    /// instantiation, which describes when the graph makes nodes rather than
+    /// what the checked store holds (reunify.md 7.1).
+    fn notePositionCoveredByNominalArgs(self: *Rehearsal, address: CheckedAddress) void {
+        if (comptime !census.enabled) return;
+        const cursor = self.lookup.cursor(address.module_bytes) orelse return;
+        const position: checked.CheckedTypeId = @enumFromInt(address.type_id);
+        const free = self.firstFreeVariable(cursor.view, position, null) orelse {
+            census.bump("nominal_args_no_free_variable");
+            return;
+        };
+        // Which declaration, if any, declares this parameter.
+        var declaring: ?checked.CheckedNominalDeclaration = null;
+        var formal_index: usize = 0;
+        for (cursor.view.nominal_declarations) |declaration| {
+            const formals = declaration.formalArgs(cursor.view);
+            for (formals, 0..) |formal, index| {
+                if (formal == free) {
+                    declaring = declaration;
+                    formal_index = index;
+                    break;
+                }
+            }
+            if (declaring != null) break;
+        }
+        const declaration = declaring orelse {
+            census.bump("nominal_args_not_a_declared_parameter");
+            return;
+        };
+        // Does any recorded nominal instance of that declaration carry an
+        // argument in this slot?
+        var instances: usize = 0;
+        for (0..cursor.view.stored_payloads.len) |raw| {
+            switch (cursor.view.payload(@enumFromInt(raw))) {
+                .nominal => |nominal| {
+                    if (nominal.args.len <= formal_index) continue;
+                    const instance_declaration = cursor.view.nominalDeclarationForPayload(nominal) orelse continue;
+                    if (@intFromEnum(instance_declaration.id) != @intFromEnum(declaration.id)) continue;
+                    instances += 1;
+                },
+                else => {},
+            }
+        }
+        if (instances == 0) {
+            census.bump("nominal_args_no_instance_supplies_slot");
+        } else if (instances == 1) {
+            census.bump("nominal_args_exactly_one_instance");
+        } else {
+            census.bump("nominal_args_many_instances");
+        }
+    }
+
     /// Debug/probe-only: what gave a diverging node its concrete value. The
     /// graph resolves by unification, so the value arrives from some other node
     /// joined into the same class. If a class member names a DIFFERENT checked
@@ -2351,6 +2406,7 @@ pub const Rehearsal = struct {
         census.bump("seam_direct_diverged");
         census.bump("seal_exit_diverged");
         noteWhatSuppliedTheValue(record, graph, node);
+        self.notePositionCoveredByNominalArgs(record.address);
         self.notePositionNeedingRecord(record.address);
         self.noteDivergenceEdgeSite(record.address, record.callee_context, record.request_edge);
         // Classify it the way the constraint census classifies its own

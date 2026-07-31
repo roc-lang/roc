@@ -422,6 +422,13 @@ pub const Census = struct {
     supplier_class_only_same_position: Counter = Counter.init(0),
     supplier_class_has_no_named_member: Counter = Counter.init(0),
     supplier_class_is_alone: Counter = Counter.init(0),
+    // Asked position-first: is the diverging position a declared parameter that
+    // some recorded nominal instance already supplies an argument for?
+    nominal_args_exactly_one_instance: Counter = Counter.init(0),
+    nominal_args_many_instances: Counter = Counter.init(0),
+    nominal_args_no_instance_supplies_slot: Counter = Counter.init(0),
+    nominal_args_not_a_declared_parameter: Counter = Counter.init(0),
+    nominal_args_no_free_variable: Counter = Counter.init(0),
     // What a seal-exit divergence disagrees about, classified the same way the
     // constraint census classifies its informative executions.
     seal_diverged_direct_unbound: Counter = Counter.init(0),
