@@ -91,11 +91,12 @@ call = |thing, f| {
 	f(thing)
 }
 
-y = 5->call(
-	|i| {
-		i + 1
-	},
-)
+y = 5
+	|> call(
+		|i| {
+			i + 1
+		},
+	)
 
 main = "${y}"
 ~~~

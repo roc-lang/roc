@@ -1440,59 +1440,78 @@ const Formatter = struct {
             },
             .arrow_call => |ld| {
                 const left = try fmt.formatExprWithInfo(ld.left);
-                if (multiline and try fmt.flushCommentsBefore(ld.operator)) {
+                if (multiline) {
+                    const already_broke = try fmt.flushCommentsBefore(ld.operator);
                     if (format_behavior == .normal) {
                         fmt.curr_indent += 1;
+                    }
+                    if (!already_broke) {
+                        try fmt.ensureNewline();
                     }
                     try fmt.pushIndent();
                 } else {
                     _ = try fmt.continueAfterMultilineStringLine(left);
+                    try fmt.push(' ');
                 }
-                try fmt.pushAll("->");
+                try fmt.pushAll("|>");
                 if (multiline and try fmt.flushCommentsAfter(ld.operator)) {
                     try fmt.pushIndent();
-                }
-                // Always format with parens after `->` for consistency and idempotence.
-                // Without parens, `0->b.c` would parse `b.c` as a qualified identifier,
-                // but `0->b().c` unambiguously parses as field access on `0->b()`.
-                // (See issue #8851)
-                const right_expr = fmt.ast.store.getExpr(ld.right);
-                if (right_expr == .ident) {
-                    // Plain identifier: add () after it
-                    try fmt.formatExprInnerDiscard(ld.right, .no_indent_on_access);
-                    try fmt.pushAll("()");
-                } else if (right_expr == .tag) {
-                    // Tag: format normally
-                    try fmt.formatExprInnerDiscard(ld.right, .no_indent_on_access);
-                } else if (right_expr == .apply) {
-                    // The arrow parser strips the outer parens around the fn part
-                    // of an `apply` (because `->(...)` consumes the parens directly
-                    // rather than producing a tuple), so e.g. `10->(|x| x + 1)()`
-                    // parses to apply{fn=lambda, args=()}. Re-add those parens when
-                    // the fn would otherwise be ambiguous (see issue #9372).
-                    const apply = right_expr.apply;
-                    const apply_fn_idx = apply.@"fn";
-                    const apply_fn = fmt.ast.store.getExpr(apply_fn_idx);
-                    const fn_needs_parens = switch (apply_fn) {
-                        .ident, .tag => false,
-                        else => true,
-                    };
-                    if (fn_needs_parens) {
-                        try fmt.push('(');
-                        try fmt.formatExprInnerDiscard(apply_fn_idx, .no_indent_on_access);
-                        try fmt.push(')');
-                        const right_region = fmt.nodeRegion(@intFromEnum(ld.right));
-                        const fn_region = fmt.nodeRegion(@intFromEnum(apply_fn_idx));
-                        const args_region = AST.TokenizedRegion{ .start = fn_region.end, .end = right_region.end };
-                        try fmt.formatApplyArgs(args_region, fmt.ast.store.getCollectionLayout(ld.right), fmt.ast.store.exprSlice(apply.args));
-                    } else {
-                        try fmt.formatExprInnerDiscard(ld.right, .no_indent_on_access);
-                    }
                 } else {
-                    // Lambda or other expression: wrap in parens for round-trip safety
-                    try fmt.push('(');
-                    try fmt.formatExprInnerDiscard(ld.right, .no_indent_on_access);
-                    try fmt.push(')');
+                    try fmt.push(' ');
+                }
+
+                const right_expr = fmt.ast.store.getExpr(ld.right);
+                switch (right_expr) {
+                    .ident, .tag => {
+                        try fmt.formatExprInnerDiscard(ld.right, .no_indent_on_access);
+                    },
+                    .apply => |apply| {
+                        const apply_fn_idx = apply.@"fn";
+                        const apply_fn = fmt.ast.store.getExpr(apply_fn_idx);
+                        const args = fmt.ast.store.exprSlice(apply.args);
+
+                        // A direct empty argument list contributes no arguments
+                        // beyond the piped value, so remove it whenever doing so
+                        // does not expose another application as the pipe RHS.
+                        // (`value |> make()()` must remain distinct from
+                        // `value |> make()`.)
+                        if (args.len == 0 and apply_fn != .apply) {
+                            const right_region = fmt.nodeRegion(@intFromEnum(ld.right));
+                            const closing_token = right_region.end - 1;
+                            if (fmt.hasCommentBefore(closing_token) and try fmt.flushCommentsBefore(closing_token)) {
+                                try fmt.pushIndent();
+                            }
+                            const target_needs_parens = !fmt.exprCanStartPipeTargetUnparenthesized(apply_fn_idx);
+                            if (target_needs_parens) try fmt.push('(');
+                            try fmt.formatExprInnerDiscard(apply_fn_idx, .no_indent_on_access);
+                            if (target_needs_parens) try fmt.push(')');
+                        } else {
+                            // Parenthesize a non-atomic callee before printing its
+                            // argument list, preserving chains such as `fn()()`.
+                            const fn_needs_parens = !fmt.exprCanStartPipeTargetUnparenthesized(apply_fn_idx);
+                            if (fn_needs_parens) {
+                                try fmt.push('(');
+                                try fmt.formatExprInnerDiscard(apply_fn_idx, .no_indent_on_access);
+                                try fmt.push(')');
+                                const right_region = fmt.nodeRegion(@intFromEnum(ld.right));
+                                const fn_region = fmt.nodeRegion(@intFromEnum(apply_fn_idx));
+                                const args_region = AST.TokenizedRegion{ .start = fn_region.end, .end = right_region.end };
+                                try fmt.formatApplyArgs(args_region, fmt.ast.store.getCollectionLayout(ld.right), args);
+                            } else {
+                                try fmt.formatExprInnerDiscard(ld.right, .no_indent_on_access);
+                            }
+                        }
+                    },
+                    else => {
+                        // A pipe target can start with a name or grouping
+                        // parenthesis. Postfix chains rooted in a name are
+                        // therefore safe without grouping; all other ASTs need
+                        // parentheses so migrating `->` preserves valid syntax.
+                        const needs_parens = !fmt.exprCanStartPipeTargetUnparenthesized(ld.right);
+                        if (needs_parens) try fmt.push('(');
+                        try fmt.formatExprInnerDiscard(ld.right, .no_indent_on_access);
+                        if (needs_parens) try fmt.push(')');
+                    },
                 }
             },
             .int => |i| {
@@ -3411,6 +3430,18 @@ const Formatter = struct {
         };
     }
 
+    fn exprCanStartPipeTargetUnparenthesized(fmt: *Formatter, expr_idx: AST.Expr.Idx) bool {
+        return switch (fmt.ast.store.getExpr(expr_idx)) {
+            .ident, .tag => true,
+            .apply => |apply| fmt.exprCanStartPipeTargetUnparenthesized(apply.@"fn"),
+            .field_access => |access| fmt.exprCanStartPipeTargetUnparenthesized(access.left),
+            .method_call => |call| fmt.exprCanStartPipeTargetUnparenthesized(call.receiver),
+            .tuple_access => |access| fmt.exprCanStartPipeTargetUnparenthesized(access.expr),
+            .nominal_apply => |apply| fmt.exprCanStartPipeTargetUnparenthesized(apply.mapper),
+            else => false,
+        };
+    }
+
     fn nodeWillBeMultiline(fmt: *Formatter, comptime T: type, item: T) bool {
         switch (T) {
             AST.Expr.Idx => {
@@ -3888,17 +3919,17 @@ test "explicitly expanded function argument collections remain expanded" {
 }
 
 test "issue 8851: arrow call with space before field access is idempotent" {
-    // a=0->b .c() should format stably with parentheses to disambiguate
+    // Preserve the legacy grouping while migrating the arrow to a pipe.
     const result = try moduleFmtsStable(std.testing.allocator, "a=0->b .c()", false);
     defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("a = (0->b()).c()\n", result);
+    try std.testing.expectEqualStrings("a = (0 |> b).c()\n", result);
 }
 
 test "issue 8851: arrow call with chained zero-arg applies is idempotent" {
     // a = 0->b()().c() should format stably - must preserve ALL levels of function application
     const result = try moduleFmtsStable(std.testing.allocator, "a = 0->b()().c()", false);
     defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("a = (0->(b())()).c()\n", result);
+    try std.testing.expectEqualStrings("a = (0 |> b()()).c()\n", result);
 }
 
 test "issue 8851: multiline arrow call with field access is idempotent" {
@@ -3908,7 +3939,7 @@ test "issue 8851: multiline arrow call with field access is idempotent" {
         \\      .c()
     , false);
     defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("a = (0->b()).c()\n", result);
+    try std.testing.expectEqualStrings("a = (0 |> b).c()\n", result);
 }
 
 test "multiline arrow receiver in tuple is idempotent" {
@@ -3920,8 +3951,8 @@ test "multiline arrow receiver in tuple is idempotent" {
     try std.testing.expectEqualStrings(
         "a = (\n" ++
             "\t(\n" ++
-            "\t\t0(0->X)\n" ++
-            "\t\t\t->X,\n" ++
+            "\t\t0(0 |> X)\n" ++
+            "\t\t\t|> X,\n" ++
             "\t).a,\n" ++
             ")\n",
         result,
@@ -3938,14 +3969,14 @@ test "issue 8851: tuple dispatch with chained zero-arg applies is idempotent" {
     // ()->b()()() from issue comment 2
     const result = try moduleFmtsStable(std.testing.allocator, "a=()->b()()()", false);
     defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("a = ()->(b()())()\n", result);
+    try std.testing.expectEqualStrings("a = () |> b()()()\n", result);
 }
 
 test "issue 8851: chained field access after arrow call is idempotent" {
     // 0->b .c .d() - multiple field accesses, parentheses disambiguate
     const result = try moduleFmtsStable(std.testing.allocator, "a=0->b .c .d()", false);
     defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("a = (0->b()).c.d()\n", result);
+    try std.testing.expectEqualStrings("a = (0 |> b).c.d()\n", result);
 }
 
 test "issue 8851: arrow call with uppercase tag (module-like) is idempotent" {
@@ -3953,7 +3984,124 @@ test "issue 8851: arrow call with uppercase tag (module-like) is idempotent" {
     // Dispatching to a tag is invalid, parentheses disambiguate the field access
     const result = try moduleFmtsStable(std.testing.allocator, "a=0->M .c", false);
     defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("a = (0->M).c\n", result);
+    try std.testing.expectEqualStrings("a = (0 |> M).c\n", result);
+}
+
+test "formatter migrates expression arrows without changing type arrows" {
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\apply : a, (a -> b) -> b
+        \\apply = |value, fn| value->fn()
+    , false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(
+        "apply : a, (a -> b) -> b\n" ++
+            "apply = |value, fn| value |> fn\n",
+        result,
+    );
+}
+
+test "formatter migrates legacy arrows with parenthesized lambda targets" {
+    const result = try moduleFmtsStable(std.testing.allocator, "a=(10->(|x|x+1),10->(|x|x+1)())", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = (10 |> (|x| x + 1), 10 |> (|x| x + 1))\n", result);
+}
+
+test "formatter keeps non-name-rooted legacy arrow targets grouped" {
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\a=x->({f: |v|v}.f)
+        \\b=x->((f,g))
+    , false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(
+        "a = x |> ({ f: |v| v }.f)\n" ++
+            "\n" ++
+            "b = x |> ((f, g))\n",
+        result,
+    );
+}
+
+test "pipe accepts every surrounding whitespace combination and formatter inserts it" {
+    const result = try moduleFmtsStable(std.testing.allocator, "a=(1|>add(2),1 |>add(2),1|> add(2),1 |> add(2))", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = (1 |> add(2), 1 |> add(2), 1 |> add(2), 1 |> add(2))\n", result);
+}
+
+test "pipe owns the postfix chain on its right" {
+    const result = try moduleFmtsStable(std.testing.allocator, "a=foo|>bar(baz).blah()", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = foo |> bar(baz).blah()\n", result);
+}
+
+test "formatter preserves an old arrow's postfix grouping during migration" {
+    const result = try moduleFmtsStable(std.testing.allocator, "a=foo->bar(baz).blah()", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = (foo |> bar(baz)).blah()\n", result);
+}
+
+test "pipe drops direct empty target argument lists" {
+    const result = try moduleFmtsStable(std.testing.allocator, "a=(x|>foo(),x|>Ok(),x|>(|v|v)())", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = (x |> foo, x |> Ok, x |> (|v| v))\n", result);
+}
+
+test "pipe keeps comments from removed empty argument lists" {
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\a=x|>foo(
+        \\ # keep me
+        \\)
+        \\
+        \\b=x->foo(
+        \\ # keep old too
+        \\)
+    , false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(
+        "a = x\n" ++
+            "\t|>\n" ++
+            "\t# keep me\n" ++
+            "\tfoo\n" ++
+            "\n" ++
+            "b = x\n" ++
+            "\t|>\n" ++
+            "\t# keep old too\n" ++
+            "\tfoo\n",
+        result,
+    );
+}
+
+test "multiline pipes start indented lines" {
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\a=foo
+        \\ |>bar(baz)
+        \\ |>qux()
+    , false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(
+        "a = foo\n" ++
+            "\t|> bar(baz)\n" ++
+            "\t|> qux\n",
+        result,
+    );
+}
+
+test "multiline pipes preserve comments around the operator" {
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\a=foo # after lhs
+        \\ |>bar(baz)
+        \\
+        \\b=foo|> # after pipe
+        \\ bar(baz)
+    , false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(
+        "a = foo # after lhs\n" ++
+            "\t|> bar(baz)\n" ++
+            "\n" ++
+            "b = foo\n" ++
+            "\t|> # after pipe\n" ++
+            "\tbar(baz)\n",
+        result,
+    );
 }
 
 test "issue 9785: multiline string followed by tuple access formats to valid source" {
