@@ -31,7 +31,7 @@ fn rand_idx_u16(comptime T: type) T {
 /// Helper to create a `DataSpan` from raw start and length positions.
 fn rand_span() base.DataSpan {
     const start = rand.random().int(u32);
-    const len = rand.random().int(u30); // Constrain len to fit within u30 (used by ImportRhs.num_exposes)
+    const len = rand.random().int(u30);
     return base.DataSpan{
         .start = start,
         .len = len,

@@ -215,7 +215,6 @@ expect {
 ~~~
 # EXPECTED
 EXPECTED RECORD ACCESSOR - syntax_grab_bag.md:154:2:154:5
-NOT IMPLEMENTED - syntax_grab_bag.md:6:1:12:4
 MOD NOT FOUND - syntax_grab_bag.md:16:1:16:27
 MOD NOT FOUND - syntax_grab_bag.md:17:1:20:20
 UNDECLARED TYPE - syntax_grab_bag.md:36:8:36:11
@@ -293,24 +292,6 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
         pair.0
 
     I found `...` here.
-
-
-┌─────────────────┐
-│ NOT IMPLEMENTED ├─ This feature is not yet implemented: malformed import ───┐
-└┬────────────────┘  mod name contains invalid control characters.         │
- │                                                                            │
- │  import # Comment after import keyword                                     │
- │      pf # Comment after qualifier                                          │
- │          .StdoutMultiline # Comment after ident                            │
- │          exposing [ # Comment after exposing open                          │
- │              line!, # Comment after exposed item                           │
- │              write!, # Another after exposed item                          │
- │          ] # Comment after exposing close                                  │
- │                                                                            │
- └──────────────────────────────────────────────────── syntax_grab_bag.md:6:1 ┘
-
-    This error doesn't have a proper diagnostic report yet. Let us know if you
-    want to help improve Roc's error messages!
 
 
 ┌──────────────────┐
@@ -2079,7 +2060,7 @@ expect {
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 1858) (dispatcher-var 374)
+						(e-interpolation (constraint-fn-var 1857) (dispatcher-var 373)
 							(first
 								(e-literal (string "Hello, ")))
 							(parts
@@ -2097,7 +2078,7 @@ expect {
 							(e-runtime-error (tag "erroneous_value_expr")))
 						(s-reassign
 							(p-assign (ident "number"))
-							(e-dispatch-call (method "plus") (constraint-fn-var 1940)
+							(e-dispatch-call (method "plus") (constraint-fn-var 1939)
 								(receiver
 									(e-runtime-error (tag "erroneous_value_use")))
 								(args
@@ -2117,7 +2098,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 2076)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 2075)
 									(receiver
 										(e-match
 											(match
@@ -2140,7 +2121,7 @@ expect {
 														(value
 															(e-num (value "12"))))))))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 2073)
+										(e-dispatch-call (method "times") (constraint-fn-var 2072)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -2155,18 +2136,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 2109)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 2108)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 2099)
+															(e-dispatch-call (method "plus") (constraint-fn-var 2098)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 2136)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 2135)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 2126)
+															(e-dispatch-call (method "minus") (constraint-fn-var 2125)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2181,11 +2162,11 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 2173)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 2172)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 2170)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 2169)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -2200,12 +2181,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 2231)
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 2230)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 2202)
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 2201)
 																			(receiver
 																				(e-match
 																					(match
@@ -2348,7 +2329,7 @@ expect {
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "write!") (wildcard false))))
-	(s-import (mod "#malformed_import_0")
+	(s-import (mod "pf.StdoutMultiline")
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "write!") (wildcard false))))

@@ -4425,14 +4425,17 @@ pub const Coordinator = struct {
 
         env.* = try ModuleEnv.init(module_alloc, src);
         env_initialized = true;
-        try env.initCIRFields(task.module_name);
+        const display_module_name = base.module_path.getModuleBasename(task.module_name);
+        try env.initCIRFields(display_module_name);
         env.module_role = task.module_role;
 
         // Set qualified_module_ident to a package-qualified identifier (e.g., "app.main", "pf.Stdout")
         // to ensure module identity is unique across packages. Without this, two modules with
         // the same filename in different packages (e.g., app's main.roc and platform's main.roc)
         // get the same identity, causing nominal type origin_module collisions.
-        // display_module_name_idx stays as the bare name (for type module validation, error messages, etc.)
+        // display_module_name_idx stays as the bare final segment (for type
+        // module validation, error messages, etc.), while the qualified identity
+        // preserves any directory segments in task.module_name.
         {
             const qname = try std.fmt.allocPrint(task_allocs.scratch, "{s}.{s}", .{ task.package_name, task.module_name });
             env.qualified_module_ident = try env.insertIdent(base.Ident.for_text(qname));

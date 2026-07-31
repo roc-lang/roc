@@ -366,8 +366,6 @@ scratch_block_local_defs: base.Scratch(BlockLocalDef),
 scratch_local_type_decls: std.ArrayList(CIR.Statement.Idx),
 /// Module-global value definitions produced by canonicalization.
 scratch_global_value_defs: std.ArrayList(CIR.Def.Idx),
-/// Counter for generating unique malformed import placeholder names
-malformed_import_count: u32 = 0,
 /// Counter for generating unique anonymous open extension rigid var names
 anon_open_ext_count: u32 = 0,
 /// Counter for generating unique closure tag names (e.g., "Closure_addX_1", "Closure_addX_2")
@@ -554,14 +552,6 @@ fn scratchAppendSlice(self: *Self, bytes: []const u8) std.mem.Allocator.Error!vo
 
 fn scratchAppendByte(self: *Self, byte: u8) std.mem.Allocator.Error!void {
     try self.scratch_bytes.append(byte);
-}
-
-fn scratchFmt(self: *Self, comptime fmt: []const u8, args: anytype) std.mem.Allocator.Error![]const u8 {
-    const top = self.scratchBytesTop();
-    const len = std.fmt.count(fmt, args);
-    try self.scratch_bytes.items.resize(@as(usize, top) + len);
-    _ = std.fmt.bufPrint(self.scratch_bytes.items.items[top..], fmt, args) catch unreachable;
-    return self.scratchBytesFrom(top);
 }
 
 fn appendQualifiedText(scratch: *base.Scratch(u8), parent: []const u8, child: []const u8) std.mem.Allocator.Error![]const u8 {
@@ -6173,7 +6163,9 @@ fn importAliased(
     // "Exposed But Not Defined" for re-exported imports. The ident text must be
     // fetched fresh here: the import processing above interns new idents, which
     // can grow the interner's byte buffer and invalidate any earlier text slice.
-    _ = self.exposed_type_texts.remove(self.env.getIdent(module_name));
+    // Package headers expose the source-visible alias, not the dependency's
+    // complete import path.
+    _ = self.exposed_type_texts.remove(self.env.getIdent(alias));
 
     return import_idx;
 }
@@ -6245,6 +6237,44 @@ fn importUnaliased(
     return import_idx;
 }
 
+/// Intern the normalized module path selected by the parser. Import layout may
+/// put whitespace between dotted segments, so semantic names are assembled
+/// from identifier tokens instead of slicing the original source.
+fn normalizedImportModuleIdent(
+    self: *Self,
+    import_stmt: @TypeOf(@as(AST.Statement, undefined).import),
+) std.mem.Allocator.Error!Ident.Idx {
+    const scratch_top = self.scratchBytesTop();
+    defer self.clearScratchBytesFrom(scratch_top);
+
+    if (import_stmt.qualifier_tok) |qualifier_tok| {
+        try self.scratchAppendSlice(self.parse_ir.resolve(qualifier_tok));
+        try self.scratchAppendByte('.');
+    }
+
+    const first_raw = self.parse_ir.resolve(import_stmt.module_name_tok);
+    const first = if (first_raw.len > 0 and first_raw[0] == '.') first_raw[1..] else first_raw;
+    try self.scratchAppendSlice(first);
+
+    if (!import_stmt.nested_import) {
+        const tags = self.parse_ir.tokens.tokens.items(.tag);
+        var tok = import_stmt.module_name_tok + 1;
+        while (tok < tags.len) : (tok += 1) {
+            switch (tags[tok]) {
+                .NoSpaceDotUpperIdent, .DotUpperIdent => {
+                    const raw = self.parse_ir.resolve(tok);
+                    const segment = if (raw.len > 0 and raw[0] == '.') raw[1..] else raw;
+                    try self.scratchAppendByte('.');
+                    try self.scratchAppendSlice(segment);
+                },
+                else => break,
+            }
+        }
+    }
+
+    return try self.env.insertIdent(base.Ident.for_text(self.scratchBytesFrom(scratch_top)));
+}
+
 /// Canonicalize an import statement, handling both top-level file imports and statement imports
 fn canonicalizeImportStatement(
     self: *Self,
@@ -6253,64 +6283,12 @@ fn canonicalizeImportStatement(
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // 1. Build the full module name (e.g., "json.Json")
-    const module_name = blk: {
-        if (self.parse_ir.tokens.resolveIdentifier(import_stmt.module_name_tok) == null) {
-            const region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
-            const feature = try self.env.insertString("resolve import module name token");
-            try self.env.pushDiagnostic(Diagnostic{ .not_implemented = .{
-                .feature = feature,
-                .region = region,
-            } });
-            return null;
-        }
-
-        if (import_stmt.qualifier_tok) |qualifier_tok| {
-            if (self.parse_ir.tokens.resolveIdentifier(qualifier_tok) == null) {
-                const region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
-                const feature = try self.env.insertString("resolve import qualifier token");
-                try self.env.pushDiagnostic(Diagnostic{ .not_implemented = .{
-                    .feature = feature,
-                    .region = region,
-                } });
-                return null;
-            }
-
-            // Slice from original source to get "qualifier.ModuleName"
-            const qualifier_region = self.parse_ir.tokens.resolve(qualifier_tok);
-            const module_region = self.parse_ir.tokens.resolve(import_stmt.module_name_tok);
-            const full_name = self.parse_ir.env.source[qualifier_region.start.offset..module_region.end.offset];
-
-            // Validate the full_name using Ident.from_bytes
-            if (base.Ident.from_bytes(full_name)) |valid_ident| {
-                break :blk try self.env.insertIdent(valid_ident);
-            } else |err| {
-                // Invalid identifier - create diagnostic and use placeholder
-                const region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
-                const error_msg = switch (err) {
-                    base.Ident.Error.EmptyText => "malformed import module name is empty",
-                    base.Ident.Error.ContainsNullByte => "malformed import module name contains null bytes",
-                    base.Ident.Error.ContainsControlCharacters => "malformed import module name contains invalid control characters",
-                };
-                const feature = try self.env.insertString(error_msg);
-                try self.env.pushDiagnostic(Diagnostic{ .not_implemented = .{
-                    .feature = feature,
-                    .region = region,
-                } });
-
-                // Use a unique placeholder identifier that starts with '#' to ensure it can't
-                // collide with user-defined identifiers (# starts a comment in Roc)
-                const scratch_top = self.scratchBytesTop();
-                defer self.clearScratchBytesFrom(scratch_top);
-                const placeholder_text = try self.scratchFmt("#malformed_import_{d}", .{self.malformed_import_count});
-                self.malformed_import_count += 1;
-                break :blk try self.env.insertIdent(base.Ident.for_text(placeholder_text));
-            }
-        } else {
-            // No qualifier, just use the module name directly
-            break :blk self.parse_ir.tokens.resolveIdentifier(import_stmt.module_name_tok).?;
-        }
-    };
+    // 1. Build the complete module name selected by the parser.
+    if (self.parse_ir.tokens.resolveIdentifier(import_stmt.module_name_tok) == null) return null;
+    if (import_stmt.qualifier_tok) |qualifier_tok| {
+        if (self.parse_ir.tokens.resolveIdentifier(qualifier_tok) == null) return null;
+    }
+    const module_name = try self.normalizedImportModuleIdent(import_stmt);
 
     // 2. Convert exposed items to CIR
     const scratch_start = self.env.store.scratchExposedItemTop();
@@ -19860,15 +19838,11 @@ fn ensureParserImportAlias(self: *Self, alias_name: Ident.Idx) std.mem.Allocator
     };
     if (import_stmt.nested_import) return;
 
-    const base_module_name = self.parse_ir.tokens.resolveIdentifier(import_stmt.module_name_tok) orelse return;
-    const module_name = if (import_stmt.qualifier_tok) |qualifier_tok| blk: {
+    if (self.parse_ir.tokens.resolveIdentifier(import_stmt.module_name_tok) == null) return;
+    if (import_stmt.qualifier_tok) |qualifier_tok| {
         if (self.parse_ir.tokens.resolveIdentifier(qualifier_tok) == null) return;
-        const qualifier_region = self.parse_ir.tokens.resolve(qualifier_tok);
-        const module_region = self.parse_ir.tokens.resolve(import_stmt.module_name_tok);
-        const full_name = self.parse_ir.env.source[qualifier_region.start.offset..module_region.end.offset];
-        const valid_ident = base.Ident.from_bytes(full_name) catch return;
-        break :blk try self.env.insertIdent(valid_ident);
-    } else base_module_name;
+    }
+    const module_name = try self.normalizedImportModuleIdent(import_stmt);
 
     const resolved_alias = try self.resolveModuleAlias(import_stmt.alias_tok, module_name) orelse return;
     if (!resolved_alias.eql(alias_name)) return;
