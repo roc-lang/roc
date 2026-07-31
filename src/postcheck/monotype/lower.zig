@@ -11666,6 +11666,7 @@ const ActiveConstBindingScope = struct {
     previous_active: ?ActiveConstBindingId = null,
     binder: checked.PatternBinderId = undefined,
     previous_local: ?DraftLocalId = null,
+    bound_in_current_view: bool = false,
     entered: bool = false,
 };
 
@@ -25466,14 +25467,26 @@ const BodyContext = struct {
             .owner = self.draft.current_owner,
             .reservation = reservation,
         });
+        const bound_in_current_view = moduleBytesEqual(
+            checked.constModuleId(const_use).bytes,
+            self.view.key.bytes,
+        );
         scope.* = .{
             .active = active_id,
             .previous_active = self.active_const_binding,
             .binder = binder,
-            .previous_local = self.binders.get(binder),
+            .previous_local = if (bound_in_current_view) self.binders.get(binder) else null,
+            .bound_in_current_view = bound_in_current_view,
             .entered = true,
         };
-        try self.binders.put(binder, local);
+        // Pattern binder IDs are dense and local to a checked module. A const
+        // restored from another module must remain in the active-const chain so
+        // recursive uses preserve their identity, but its binder cannot be
+        // installed in this module's lexical binder map. When lowering enters
+        // the const's own module, inheritActiveConstBindingId installs it there.
+        if (bound_in_current_view) {
+            try self.binders.put(binder, local);
+        }
         self.active_const_binding = active_id;
         return true;
     }
@@ -25524,12 +25537,14 @@ const BodyContext = struct {
 
     fn leaveActiveConstBinding(self: *BodyContext, scope: *const ActiveConstBindingScope) void {
         if (!scope.entered) return;
-        if (scope.previous_local) |previous| {
-            self.binders.put(scope.binder, previous) catch |err| switch (err) {
-                error.OutOfMemory => Common.invariant("restoring a previously inserted const binder cannot reallocate"),
-            };
-        } else {
-            _ = self.binders.remove(scope.binder);
+        if (scope.bound_in_current_view) {
+            if (scope.previous_local) |previous| {
+                self.binders.put(scope.binder, previous) catch |err| switch (err) {
+                    error.OutOfMemory => Common.invariant("restoring a previously inserted const binder cannot reallocate"),
+                };
+            } else {
+                _ = self.binders.remove(scope.binder);
+            }
         }
         self.active_const_binding = scope.previous_active;
     }
@@ -25586,9 +25601,30 @@ const BodyContext = struct {
             // holds alternative Monotype materializations of a checked binder
             // restored across a compile-time boundary. A same-typed mutable
             // version must shadow that older restored materialization.
-            if (self.sameType(try self.localType(binding.local), ty)) return binding;
+            const matches = switch (self.localTypeCell(binding.local)) {
+                .sealed => |local_ty| self.sameType(local_ty, ty),
+                .graph_node => |local_node| self.graph.sameClass(
+                    local_node,
+                    try self.activeNodeFromType(ty),
+                ),
+            };
+            if (matches) return binding;
         }
         return self.currentTypedLocalBindingForResolvedValue(ref_id, ty) orelse current;
+    }
+
+    fn lowerLocalBindingAtNode(
+        self: *BodyContext,
+        binding: CurrentLocal,
+        checked_ty: checked.CheckedTypeId,
+        expected_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        const local_cell = self.localTypeCell(binding.local);
+        const local_node = try local_cell.toGraphNode(self.graph);
+        try self.constrainCheckedInterfaceToCell(checkedBinderType(self.view, binding.binder), local_cell);
+        try self.constrainCheckedInterfaceToCell(checked_ty, local_cell);
+        try relateRequestComponent(self.graph, local_node, expected_node);
+        return try self.addExprWithTypeCell(local_cell, .{ .local = binding.local });
     }
 
     fn lowerLookupExprAtType(
@@ -25627,10 +25663,17 @@ const BodyContext = struct {
         }
         if (try self.currentLocalBindingAtType(ref_id, ty)) |binding| {
             const local_id = binding.local;
-            const local_ty = try self.localType(local_id);
             const binder_ty = checkedBinderType(self.view, binding.binder);
-            if (self.localTypeCell(local_id) == .sealed and
-                self.checkedTypeIsClosed(binder_ty) and
+            const local_cell = self.localTypeCell(local_id);
+            if (local_cell == .graph_node) {
+                return try self.lowerLocalBindingAtNode(
+                    binding,
+                    checked_ty,
+                    try self.activeNodeFromType(ty),
+                );
+            }
+            const local_ty = try self.activeTypeFromCell(local_cell);
+            if (self.checkedTypeIsClosed(binder_ty) and
                 self.checkedTypeIsClosed(checked_ty) and
                 self.sameType(local_ty, ty))
             {
@@ -25768,14 +25811,10 @@ const BodyContext = struct {
         const ref_id = maybe_ref orelse Common.invariant("checked lookup reached Monotype without resolved value ref");
         const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
         if (self.currentLocalBindingForResolvedValue(ref_id)) |binding| {
-            const local_cell = self.localTypeCell(binding.local);
-            const local_node = try local_cell.toGraphNode(self.graph);
-            try self.constrainCheckedInterfaceToCell(checkedBinderType(self.view, binding.binder), local_cell);
-            try self.constrainCheckedInterfaceToCell(self.view.bodies.expr(checked_expr).ty, local_cell);
-            try relateRequestComponent(self.graph, local_node, expected_node);
-            return try self.addExprWithTypeCell(
-                local_cell,
-                .{ .local = binding.local },
+            return try self.lowerLocalBindingAtNode(
+                binding,
+                self.view.bodies.expr(checked_expr).ty,
+                expected_node,
             );
         }
         if (try self.currentConstLocalForResolvedValue(ref_id)) |local_id| {

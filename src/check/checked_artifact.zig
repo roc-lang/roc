@@ -30942,26 +30942,39 @@ test "SERIALIZED_VERSION_HASH golden value" {
 }
 
 test "closed direct evidence excludes specialization-dependent nested recipes" {
+    const evidence_0 = testIndexId(static_dispatch.EvidenceNodeId, 0);
+    const evidence_1 = testIndexId(static_dispatch.EvidenceNodeId, 1);
+    const evidence_2 = testIndexId(static_dispatch.EvidenceNodeId, 2);
+    const evidence_3 = testIndexId(static_dispatch.EvidenceNodeId, 3);
+    const evidence_4 = testIndexId(static_dispatch.EvidenceNodeId, 4);
+    const evidence_5 = testIndexId(static_dispatch.EvidenceNodeId, 5);
+    const def_0 = testIndexId(CIR.Def.Idx, 0);
+    const def_1 = testIndexId(CIR.Def.Idx, 1);
+    const callable_ty = testIndexId(CheckedTypeId, 0);
+    const local_binder = testIndexId(PatternBinderId, 0);
+    const local_expr = testIndexId(CheckedExprId, 0);
+    const context_anchor = testIndexId(CheckedStatementId, 0);
+
     var refs = [_]static_dispatch.CheckedEvidence{
         .{ .constraint = .{ .depth = 0, .index = 0 } },
-        .{ .direct = @enumFromInt(0) },
-        .{ .direct = @enumFromInt(1) },
+        .{ .direct = evidence_0 },
+        .{ .direct = evidence_1 },
     };
     const procedure_target = static_dispatch.MethodTarget{
         .module_idx = 0,
-        .def_idx = @enumFromInt(0),
+        .def_idx = def_0,
         .kind = .{ .procedure = .{ .proc = undefined, .template = undefined } },
-        .callable_ty = @enumFromInt(0),
+        .callable_ty = callable_ty,
     };
     const local_target = static_dispatch.MethodTarget{
         .module_idx = 0,
-        .def_idx = @enumFromInt(1),
+        .def_idx = def_1,
         .kind = .{ .local_proc = .{
-            .binder = @enumFromInt(0),
-            .expr = @enumFromInt(0),
-            .context_anchor = @enumFromInt(0),
+            .binder = local_binder,
+            .expr = local_expr,
+            .context_anchor = context_anchor,
         } },
-        .callable_ty = @enumFromInt(0),
+        .callable_ty = callable_ty,
     };
     var nodes = [_]static_dispatch.EvidenceNode{
         .{ .target = procedure_target, .instantiation = .monomorphic, .nested = .{ .resolved = .{} } },
@@ -30977,68 +30990,84 @@ test "closed direct evidence excludes specialization-dependent nested recipes" {
     };
     var states = [_]DirectEvidenceClosure{.unknown} ** nodes.len;
 
-    try std.testing.expect(directEvidenceIsClosed(&plans, @enumFromInt(0), &states));
-    try std.testing.expect(!directEvidenceIsClosed(&plans, @enumFromInt(1), &states));
-    try std.testing.expect(!directEvidenceIsClosed(&plans, @enumFromInt(2), &states));
-    try std.testing.expect(directEvidenceIsClosed(&plans, @enumFromInt(3), &states));
-    try std.testing.expect(!directEvidenceIsClosed(&plans, @enumFromInt(4), &states));
-    try std.testing.expect(!directEvidenceIsClosed(&plans, @enumFromInt(5), &states));
+    try std.testing.expect(directEvidenceIsClosed(&plans, evidence_0, &states));
+    try std.testing.expect(!directEvidenceIsClosed(&plans, evidence_1, &states));
+    try std.testing.expect(!directEvidenceIsClosed(&plans, evidence_2, &states));
+    try std.testing.expect(directEvidenceIsClosed(&plans, evidence_3, &states));
+    try std.testing.expect(!directEvidenceIsClosed(&plans, evidence_4, &states));
+    try std.testing.expect(!directEvidenceIsClosed(&plans, evidence_5, &states));
 }
 
 test "template dispatch classification separates direct calls from graph relations" {
     const allocator = std.testing.allocator;
+    const def_0 = testIndexId(CIR.Def.Idx, 0);
+    const def_1 = testIndexId(CIR.Def.Idx, 1);
+    const def_2 = testIndexId(CIR.Def.Idx, 2);
+    const callable_ty = testIndexId(CheckedTypeId, 0);
+    const local_binder = testIndexId(PatternBinderId, 0);
+    const local_expr = testIndexId(CheckedExprId, 0);
+    const context_anchor = testIndexId(CheckedStatementId, 0);
+    const method = testIndexId(canonical.MethodNameId, 0);
+    const evidence_0 = testIndexId(static_dispatch.EvidenceNodeId, 0);
+    const evidence_1 = testIndexId(static_dispatch.EvidenceNodeId, 1);
+    const evidence_2 = testIndexId(static_dispatch.EvidenceNodeId, 2);
+    const plan_0 = testIndexId(static_dispatch.StaticDispatchPlanId, 0);
+    const plan_1 = testIndexId(static_dispatch.StaticDispatchPlanId, 1);
+    const plan_2 = testIndexId(static_dispatch.StaticDispatchPlanId, 2);
+    const plan_3 = testIndexId(static_dispatch.StaticDispatchPlanId, 3);
+
     var evidence_nodes = [_]static_dispatch.EvidenceNode{
         .{
             .target = .{
                 .module_idx = 0,
-                .def_idx = @enumFromInt(0),
+                .def_idx = def_0,
                 .kind = .{ .procedure = .{
                     .proc = undefined,
                     .template = undefined,
                     .runtime_target = .{ .low_level = .num_plus_wrap },
                 } },
-                .callable_ty = @enumFromInt(0),
+                .callable_ty = callable_ty,
             },
             .instantiation = .monomorphic,
         },
         .{
             .target = .{
                 .module_idx = 0,
-                .def_idx = @enumFromInt(1),
+                .def_idx = def_1,
                 .kind = .{ .local_proc = .{
-                    .binder = @enumFromInt(0),
-                    .expr = @enumFromInt(0),
-                    .context_anchor = @enumFromInt(0),
+                    .binder = local_binder,
+                    .expr = local_expr,
+                    .context_anchor = context_anchor,
                 } },
-                .callable_ty = @enumFromInt(0),
+                .callable_ty = callable_ty,
             },
             .instantiation = .monomorphic,
         },
         .{
             .target = .{
                 .module_idx = 0,
-                .def_idx = @enumFromInt(2),
+                .def_idx = def_2,
                 .kind = .{ .procedure = .{
                     .proc = undefined,
                     .template = undefined,
                     .runtime_target = .{ .graph_participating = .{ .iterator_procedure = .iter_map } },
                 } },
-                .callable_ty = @enumFromInt(0),
+                .callable_ty = callable_ty,
             },
             .instantiation = .monomorphic,
         },
     };
     var call_plans = [_]static_dispatch.StaticDispatchCallPlan{
-        .{ .expr = @enumFromInt(0), .method = @enumFromInt(0), .dispatcher = .type_only, .dispatcher_ty = @enumFromInt(0), .callable_ty = @enumFromInt(0), .result_mode = .value, .resolution = .{ .direct_closed = .{ .evidence = @enumFromInt(0) } } },
-        .{ .expr = @enumFromInt(1), .method = @enumFromInt(0), .dispatcher = .type_only, .dispatcher_ty = @enumFromInt(0), .callable_ty = @enumFromInt(0), .result_mode = .value, .resolution = .{ .direct_parametric = .{ .evidence = @enumFromInt(1) } } },
-        .{ .expr = @enumFromInt(2), .method = @enumFromInt(0), .dispatcher = .type_only, .dispatcher_ty = @enumFromInt(0), .callable_ty = @enumFromInt(0), .result_mode = .value, .resolution = .{ .direct_closed = .{ .evidence = @enumFromInt(2) } } },
-        .{ .expr = @enumFromInt(3), .method = @enumFromInt(0), .dispatcher = .type_only, .dispatcher_ty = @enumFromInt(0), .callable_ty = @enumFromInt(0), .result_mode = .value, .resolution = .{ .evidence_dependent = .{ .depth = 0, .index = 0 } } },
+        .{ .expr = testIndexId(CheckedExprId, 0), .method = method, .dispatcher = .type_only, .dispatcher_ty = callable_ty, .callable_ty = callable_ty, .result_mode = .value, .resolution = .{ .direct_closed = .{ .evidence = evidence_0 } } },
+        .{ .expr = testIndexId(CheckedExprId, 1), .method = method, .dispatcher = .type_only, .dispatcher_ty = callable_ty, .callable_ty = callable_ty, .result_mode = .value, .resolution = .{ .direct_parametric = .{ .evidence = evidence_1 } } },
+        .{ .expr = testIndexId(CheckedExprId, 2), .method = method, .dispatcher = .type_only, .dispatcher_ty = callable_ty, .callable_ty = callable_ty, .result_mode = .value, .resolution = .{ .direct_closed = .{ .evidence = evidence_2 } } },
+        .{ .expr = testIndexId(CheckedExprId, 3), .method = method, .dispatcher = .type_only, .dispatcher_ty = callable_ty, .callable_ty = callable_ty, .result_mode = .value, .resolution = .{ .evidence_dependent = .{ .depth = 0, .index = 0 } } },
     };
     var refs = [_]static_dispatch.StaticDispatchPlanId{
-        @enumFromInt(0),
-        @enumFromInt(1),
-        @enumFromInt(2),
-        @enumFromInt(3),
+        plan_0,
+        plan_1,
+        plan_2,
+        plan_3,
     };
     var plans = static_dispatch.StaticDispatchPlanTable{
         .plans = &call_plans,
@@ -31076,8 +31105,8 @@ test "template dispatch classification separates direct calls from graph relatio
 
     try std.testing.expectEqual(@as(u32, 2), template_array[0].direct_dispatch_plans.len);
     try std.testing.expectEqual(@as(u32, 2), template_array[0].dispatch_relations.len);
-    try std.testing.expectEqual(@as(static_dispatch.StaticDispatchPlanId, @enumFromInt(0)), plans.direct_template_refs[0]);
-    try std.testing.expectEqual(@as(static_dispatch.StaticDispatchPlanId, @enumFromInt(1)), plans.direct_template_refs[1]);
-    try std.testing.expectEqual(@as(static_dispatch.StaticDispatchPlanId, @enumFromInt(2)), plans.dispatch_relation_refs[0]);
-    try std.testing.expectEqual(@as(static_dispatch.StaticDispatchPlanId, @enumFromInt(3)), plans.dispatch_relation_refs[1]);
+    try std.testing.expectEqual(plan_0, plans.direct_template_refs[0]);
+    try std.testing.expectEqual(plan_1, plans.direct_template_refs[1]);
+    try std.testing.expectEqual(plan_2, plans.dispatch_relation_refs[0]);
+    try std.testing.expectEqual(plan_3, plans.dispatch_relation_refs[1]);
 }
