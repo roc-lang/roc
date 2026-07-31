@@ -220,6 +220,10 @@ const llvm_externs = if (llvm_available) struct {
     // aren't a subset of the caller's. Strip them (the target machine still pins the
     // CPU/features at codegen) so the builtins become inlinable.
     extern fn LLVMRemoveStringAttributeAtIndex(fn_val: ?*anyopaque, idx: c_uint, name: [*]const u8, len: c_uint) void;
+    extern fn LLVMGetEnumAttributeKindForName(name: [*]const u8, len: usize) c_uint;
+    extern fn LLVMCreateEnumAttribute(ctx: ?*anyopaque, kind: c_uint, value: u64) ?*anyopaque;
+    extern fn LLVMGetModuleContext(module: ?*anyopaque) ?*anyopaque;
+    extern fn LLVMAddAttributeAtIndex(fn_val: ?*anyopaque, idx: c_uint, attr: ?*anyopaque) void;
     extern fn ZigLLVMRunGlobalDCE(module: ?*anyopaque) void;
 } else struct {};
 
@@ -495,11 +499,18 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
                 }
             }
 
+            // Hot list and string builtins sit right at the inliner's default
+            // threshold once a caller grows: nudge every linked builtin with
+            // inlinehint so a large decode loop keeps its append and copy
+            // helpers inline, matching how the emitted procs are declared.
+            const inlinehint_kind = externs.LLVMGetEnumAttributeKindForName("inlinehint", "inlinehint".len);
+            const inlinehint_attr = externs.LLVMCreateEnumAttribute(externs.LLVMGetModuleContext(builtins_module), inlinehint_kind, 0);
             var builtin_func = externs.LLVMGetFirstFunction(builtins_module);
             while (builtin_func) |fv| : (builtin_func = externs.LLVMGetNextFunction(fv)) {
                 if (externs.LLVMIsDeclaration(fv) != 0) continue;
                 externs.LLVMRemoveStringAttributeAtIndex(fv, LLVMAttributeFunctionIndex, "target-features", "target-features".len);
                 externs.LLVMRemoveStringAttributeAtIndex(fv, LLVMAttributeFunctionIndex, "target-cpu", "target-cpu".len);
+                externs.LLVMAddAttributeAtIndex(fv, LLVMAttributeFunctionIndex, inlinehint_attr);
 
                 var name_len: usize = 0;
                 const name_ptr = externs.LLVMGetValueName2(fv, &name_len);
