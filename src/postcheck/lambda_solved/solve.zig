@@ -278,7 +278,9 @@ const Solver = struct {
             }
             for (arg_locals, 0..) |arg, i| {
                 const local = self.lifted.locals[@intFromEnum(arg.local)];
-                if (@import("builtin").mode == .Debug and local.ty != arg.ty) {
+                if (@import("builtin").mode == .Debug and
+                    !try self.sameMonoType(local.ty, arg.ty))
+                {
                     Common.invariant("Lambda Solved function argument type differed from its local type");
                 }
                 try self.unify(self.localTy(arg.local), self.program.types.spanItem(func.args, i));
@@ -291,7 +293,9 @@ const Solver = struct {
         defer self.allocator.free(args);
         for (arg_locals, 0..) |arg, i| {
             const local = self.lifted.locals[@intFromEnum(arg.local)];
-            if (@import("builtin").mode == .Debug and local.ty != arg.ty) {
+            if (@import("builtin").mode == .Debug and
+                !try self.sameMonoType(local.ty, arg.ty))
+            {
                 Common.invariant("Lambda Solved function argument type differed from its local type");
             }
             args[i] = self.localTy(arg.local);
@@ -1638,6 +1642,7 @@ const Solver = struct {
                         if (try self.unifyIteratorOwnerStampedPublic(a, b, left_named, right_named)) return;
                         if (try self.unifyGeneratedIteratorJoin(a, b, left_named, right_named)) return;
                         if (try self.unifyPublicGeneratedIterator(a, b, left_named, right_named)) return;
+                        if (try self.unifyNominalOpaqueViews(a, b, left_named, right_named)) return;
                         Common.invariant("named type identity failed Lambda Solved unification");
                     }
                     if (left_named.backing) |left_backing| {
@@ -1666,6 +1671,69 @@ const Solver = struct {
             },
             .link, .unbound, .forall => unreachable,
         }
+    }
+
+    /// Relate the definition-private nominal and opaque interface views of one
+    /// checked definition without widening the opaque side's inspectability.
+    /// Checking and Monotype have already established the exact TypeDef
+    /// identity; Lambda Solved consumes that relation solely to propagate
+    /// callable flow through the shared runtime representation.
+    fn unifyNominalOpaqueViews(
+        self: *Solver,
+        left_ty: Type.TypeVarId,
+        right_ty: Type.TypeVarId,
+        left: anytype,
+        right: anytype,
+    ) Allocator.Error!bool {
+        if (!sameMonoTypeDef(left.def, right.def) or
+            left.builtin_owner != right.builtin_owner)
+        {
+            return false;
+        }
+        const left_is_nominal = left.kind == .nominal;
+        const right_is_nominal = right.kind == .nominal;
+        const left_is_opaque = left.kind == .@"opaque";
+        const right_is_opaque = right.kind == .@"opaque";
+        if (!((left_is_nominal and right_is_opaque) or
+            (left_is_opaque and right_is_nominal)))
+        {
+            return false;
+        }
+
+        try self.unifySpans(
+            left.args,
+            right.args,
+            "nominal/opaque type arguments failed Lambda Solved unification",
+        );
+        const left_backing = left.backing orelse
+            Common.invariant("nominal/opaque visibility relation lacked a checked runtime backing");
+        const right_backing = right.backing orelse
+            Common.invariant("nominal/opaque visibility relation lacked a checked runtime backing");
+        if (left_backing.authority != .checked_public or
+            right_backing.authority != .checked_public)
+        {
+            Common.invariant("nominal/opaque visibility relation lacked checked-public backing authority");
+        }
+        if (left_is_nominal and left_backing.use != .inspectable) {
+            Common.invariant("definition-private nominal view lacked inspectable backing authority");
+        }
+        if (right_is_nominal and right_backing.use != .inspectable) {
+            Common.invariant("definition-private nominal view lacked inspectable backing authority");
+        }
+        if (left_is_opaque and left_backing.use != .runtime_layout_only) {
+            Common.invariant("opaque interface view carried inspectable backing authority");
+        }
+        if (right_is_opaque and right_backing.use != .runtime_layout_only) {
+            Common.invariant("opaque interface view carried inspectable backing authority");
+        }
+
+        try self.unify(left_backing.ty, right_backing.ty);
+        if (left_is_opaque) {
+            self.program.types.set(right_ty, .{ .link = left_ty });
+        } else {
+            self.program.types.set(left_ty, .{ .link = right_ty });
+        }
+        return true;
     }
 
     fn unifyPublicNamedBacking(

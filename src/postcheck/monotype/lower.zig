@@ -15910,6 +15910,8 @@ const BodyContext = struct {
         defer self.allocator.free(args);
         var arg_lets = std.ArrayList(LambdaArgLet).empty;
         defer arg_lets.deinit(self.allocator);
+        var arg_literal_guards = std.ArrayList(PatternLiteralGuard).empty;
+        defer arg_literal_guards.deinit(self.allocator);
         var materialized_args = std.ArrayList(MaterializedArg).empty;
         defer materialized_args.deinit(self.allocator);
 
@@ -15945,7 +15947,11 @@ const BodyContext = struct {
                 continue;
             }
 
+            const guards_start = self.pattern_literal_guards.items.len;
             const pat = try self.lowerPatternAtNode(pattern_id, arg_node);
+            const literal_guards = try self.drainPatternLiteralGuards(guards_start);
+            defer self.allocator.free(literal_guards);
+            try arg_literal_guards.appendSlice(self.allocator, literal_guards);
             switch (self.patData(pat)) {
                 .bind => |local| args[i] = .{ .local = local, .ty = arg_cell },
                 else => {
@@ -15971,6 +15977,18 @@ const BodyContext = struct {
                 .index = 0,
                 .body = checked_body,
             } }, body_ret_cell);
+        if (arg_literal_guards.items.len != 0) {
+            const miss = try self.addExprWithTypeCell(
+                body_ret_cell,
+                .{ .crash = try self.addStringLiteral("pattern match failed") },
+            );
+            body = try self.applyPatternLiteralGuardsAtCell(
+                arg_literal_guards.items,
+                body,
+                miss,
+                body_ret_cell,
+            );
+        }
         const body_loc = self.exprLoc(body);
         const body_region_after_lowering = self.exprRegion(body);
         const saved_body_loc = self.builder.program.current_loc;
@@ -29370,13 +29388,15 @@ const BodyContext = struct {
                 return lowered;
             },
             .field_access => |field| {
-                const field_node = try self.fieldAccessTypeNode(expr.ty, field.receiver, field.field_name, field.backing_access, ty);
-                const field_ty = try self.activeTypeFromNode(field_node);
-                const lowered = try self.lowerExprWithType(checked_expr, field_ty);
-                if (!self.sameType(ty, try self.exprType(lowered))) {
-                    Common.invariant("checked field access lowered at a type different from its context type");
-                }
-                return lowered;
+                // A sealed result does not imply that the receiver is sealed:
+                // it may be a graph-backed local whose open row is constrained
+                // only at this field. Keep the receiver and field relation in
+                // the graph and let normal finalization seal the result.
+                return try self.lowerFieldAccessExprAtNode(
+                    checked_expr,
+                    field,
+                    try self.activeNodeFromType(ty),
+                );
             },
             .lambda,
             .closure,
@@ -39414,14 +39434,8 @@ const BodyContext = struct {
                 }
                 break :blk .{ .tuple = try self.lowerPatternSpanAtTypesCollectingLists(items, self.builder.tupleItemTypes(ty), checks_out) };
             },
-            .numeral_literal => |num| if (num.conversion) |conversion|
-                try self.bindLiteralGuardPattern(conversion, ty)
-            else
-                try self.numeralPatBits(num.literal, ty),
-            .str_literal => |str| if (str.conversion) |conversion|
-                try self.bindLiteralGuardPattern(conversion, ty)
-            else
-                .{ .str_lit = try self.lowerStringLiteral(str.literal) },
+            .numeral_literal => |num| try self.lowerNumeralLiteralPattern(num, ty),
+            .str_literal => |str| try self.lowerStringLiteralPattern(str, ty),
             .str_interpolation => |str| try self.lowerStrPatternCollectingLists(str, ty, checks_out),
             .underscore => .wildcard,
         };
@@ -44069,17 +44083,11 @@ const BodyContext = struct {
             },
             .numeral_literal => |num| blk: {
                 const ty = try self.activeTypeFromNode(node);
-                break :blk if (num.conversion) |conversion|
-                    try self.bindLiteralGuardPattern(conversion, ty)
-                else
-                    try self.numeralPatBits(num.literal, ty);
+                break :blk try self.lowerNumeralLiteralPattern(num, ty);
             },
             .str_literal => |str| blk: {
                 const ty = try self.activeTypeFromNode(node);
-                break :blk if (str.conversion) |conversion|
-                    try self.bindLiteralGuardPattern(conversion, ty)
-                else
-                    .{ .str_lit = try self.lowerStringLiteral(str.literal) };
+                break :blk try self.lowerStringLiteralPattern(str, ty);
             },
             .str_interpolation => |str| try self.lowerStrPattern(str, try self.activeTypeFromNode(node)),
             .underscore => .wildcard,
@@ -44159,14 +44167,8 @@ const BodyContext = struct {
                 }
                 break :blk .{ .tuple = try self.lowerTuplePattern(items, ty) };
             },
-            .numeral_literal => |num| if (num.conversion) |conversion|
-                try self.bindLiteralGuardPattern(conversion, ty)
-            else
-                try self.numeralPatBits(num.literal, ty),
-            .str_literal => |str| if (str.conversion) |conversion|
-                try self.bindLiteralGuardPattern(conversion, ty)
-            else
-                .{ .str_lit = try self.lowerStringLiteral(str.literal) },
+            .numeral_literal => |num| try self.lowerNumeralLiteralPattern(num, ty),
+            .str_literal => |str| try self.lowerStringLiteralPattern(str, ty),
             .str_interpolation => |str| try self.lowerStrPattern(str, ty),
             .underscore => .wildcard,
         };
@@ -44309,6 +44311,44 @@ const BodyContext = struct {
         return switch (self.view.bodies.pattern(pattern_id).data) {
             .underscore => true,
             else => false,
+        };
+    }
+
+    /// Specialize a checker-retained generalized numeral pattern at its
+    /// concrete Monotype. Builtin numeric primitives consume the parser-owned
+    /// exact digits directly; only a genuinely custom target executes the
+    /// checker-selected conversion and equality guard.
+    fn lowerNumeralLiteralPattern(
+        self: *BodyContext,
+        numeral: anytype,
+        ty: Type.TypeId,
+    ) Allocator.Error!BodyPatData {
+        return switch (self.builder.shapeContent(ty)) {
+            .primitive => try self.numeralPatBits(numeral.literal, ty),
+            else => if (numeral.conversion) |conversion|
+                try self.bindLiteralGuardPattern(conversion, ty)
+            else
+                Common.invariant("custom numeral pattern had no checked conversion"),
+        };
+    }
+
+    /// Specialize a checker-retained generalized quote pattern at its concrete
+    /// Monotype. Primitive Str uses the literal directly; another primitive
+    /// can never match, and a custom target uses the checked conversion guard.
+    fn lowerStringLiteralPattern(
+        self: *BodyContext,
+        str: anytype,
+        ty: Type.TypeId,
+    ) Allocator.Error!BodyPatData {
+        return switch (self.builder.shapeContent(ty)) {
+            .primitive => |primitive| if (primitive == .str)
+                .{ .str_lit = try self.lowerStringLiteral(str.literal) }
+            else
+                try self.bindNeverMatchPattern(ty),
+            else => if (str.conversion) |conversion|
+                try self.bindLiteralGuardPattern(conversion, ty)
+            else
+                Common.invariant("custom string pattern had no checked conversion"),
         };
     }
 
