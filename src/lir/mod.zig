@@ -28,6 +28,7 @@ pub const StrAppend = @import("str_append.zig");
 pub const BodyClone = @import("body_clone.zig");
 /// Struct-typed join parameters split into per-field parameters before ARC.
 pub const ScalarizeJoins = @import("scalarize_joins.zig");
+pub const LoopAppendPromote = @import("loop_append_promote.zig");
 /// Switch branch pruning from explicit possible-tag analysis.
 pub const TagReachability = @import("tag_reachability.zig");
 /// Demand-driven proc compaction before ARC and backend emission.

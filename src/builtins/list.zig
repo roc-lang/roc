@@ -805,6 +805,19 @@ pub fn listAppendSublist(
     return output;
 }
 
+/// The number of elements that can be appended in place without any further
+/// ownership or capacity check: capacity minus length when this list uniquely
+/// owns a non-slice allocation, and zero otherwise (so the caller's next
+/// append takes the checked path, which clones or grows as needed).
+pub fn listSlackUnique(
+    list: RocList,
+    roc_ops: *RocOps,
+) callconv(.c) u64 {
+    if (list.isSeamlessSlice()) return 0;
+    if (!list.isUnique(roc_ops)) return 0;
+    return @intCast(list.getCapacity() - list.len());
+}
+
 /// Append the low `count` bytes of `value` to a byte list, least significant
 /// byte first. The caller has already verified `count <= 8`. One uniqueness
 /// and capacity check covers the whole write.

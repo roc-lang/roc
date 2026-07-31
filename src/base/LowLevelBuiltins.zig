@@ -210,6 +210,7 @@ pub fn listOp(op: LowLevel) BuiltinFn {
         .list_append_range_within => .list_append_range_within,
         .list_append_sublist => .list_append_sublist,
         .list_append_le_bytes => .list_append_le_bytes,
+        .list_slack_unique => .list_slack_unique,
         .list_prepend => .list_prepend,
         .list_sublist,
         .list_drop_first,

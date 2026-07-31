@@ -5102,6 +5102,12 @@ pub const Interpreter = struct {
                 val.write(u64, @intCast(rl.len()));
                 break :blk val;
             },
+            .list_slack_unique => blk: {
+                const rl = self.valueToRocListForLayout(args[0], arg_layout);
+                const val = try self.alloc(ll.ret_layout);
+                val.write(u64, builtins.list.listSlackUnique(rl, &self.roc_ops));
+                break :blk val;
+            },
             .list_get_unsafe => blk: {
                 const rl = self.valueToRocListForLayout(args[0], arg_layout);
                 const idx = args[1].read(u64);

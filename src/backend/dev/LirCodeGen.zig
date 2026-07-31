@@ -2082,6 +2082,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
                 },
+                .list_slack_unique => {
+                    // list_slack_unique(list) -> U64
+                    if (args.len != 1) unreachable;
+                    const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
+                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+                    {
+                        // wrap(list_bytes, list_len, list_cap, roc_ops)
+                        const base_reg = frame_ptr;
+                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        try builder.addMemArg(base_reg, list_off);
+                        try builder.addMemArg(base_reg, list_off + 8);
+                        try builder.addMemArg(base_reg, list_off + 16);
+                        try builder.addRegArg(roc_ops_reg);
+                        try self.callBuiltin(&builder, LowLevelBuiltins.listOp(.list_slack_unique));
+                    }
+                    return try self.scalarRetReg();
+                },
                 .list_append_le_bytes => {
                     // list_append_le_bytes(list, value, count) -> List
                     if (args.len != 3) unreachable;

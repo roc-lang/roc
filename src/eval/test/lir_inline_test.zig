@@ -89,6 +89,7 @@ const LowerModuleOptions = struct {
     inline_expects: lir.CheckedPipeline.InlineExpectMode = .run,
     proc_debug_names: bool = false,
     tag_reachability: bool = false,
+    promote_loop_appends: bool = true,
     imports: []const helpers.ModuleSource = &.{},
 };
 
@@ -128,6 +129,7 @@ fn lowerModuleWithOptions(
             .inline_mode = inline_mode,
             .inline_expects = options.inline_expects,
             .proc_debug_names = options.proc_debug_names,
+            .promote_loop_appends = options.promote_loop_appends,
             .tag_reachability = options.tag_reachability,
         },
     );
@@ -5643,9 +5645,13 @@ test "iterdiff: tier-one map collect matches hand-written loop shape" {
         \\}
     ;
 
-    var iter_lowered = try lowerModule(allocator, iter_source, .wrappers);
+    // Append promotion rewrites qualifying checked appends into slack
+    // diamonds, and qualification legitimately differs between these two
+    // lowerings; this test compares the fused loop skeletons themselves, so
+    // it runs with promotion off.
+    var iter_lowered = try lowerModuleWithOptions(allocator, iter_source, .wrappers, .{ .promote_loop_appends = false });
     defer iter_lowered.deinit(allocator);
-    var loop_lowered = try lowerModule(allocator, loop_source, .wrappers);
+    var loop_lowered = try lowerModuleWithOptions(allocator, loop_source, .wrappers, .{ .promote_loop_appends = false });
     defer loop_lowered.deinit(allocator);
 
     const iter = &iter_lowered.lowered;
