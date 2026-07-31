@@ -3231,7 +3231,15 @@ fn runExprStatementKernel(
                         });
                         expr_state = .{ .start = self.pos, .min_bp = 0 };
                         continue :expr_kernel .prefix;
-                    } else if (self.peek() == .LowerIdent and (self.peekNext() == .Comma or self.peekNext() == .OpColon)) {
+                    } else if (self.peek() == .LowerIdent and
+                        (self.peekNext() == .Comma or
+                            self.peekNext() == .OpColon or
+                            (self.peekNext() == .CloseCurly and open_syntax.peekExpr() == .expr_record_field)))
+                    {
+                        // A punned single-field record is otherwise ambiguous
+                        // with a do-nothing block. When it is directly nested as
+                        // a record field value, the surrounding record provides
+                        // the same unambiguous nesting as `{ { field } }`.
                         var is_block = false;
                         if (self.peekNext() == .OpColon) {
                             var lookahead_pos = self.pos + 2;

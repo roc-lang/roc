@@ -1822,15 +1822,18 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
     ;
 
     try expectMonotypeSpecializationCountersWithin(try monotypeCountersForModule(allocator, source), .{
-        .template_requests = 27,
-        .template_hits = 22,
-        .template_misses = 5,
+        // The eight scalar `plus` method calls are producer-authored low-level
+        // operations, so direct publication emits them without procedure
+        // specialization requests.
+        .template_requests = 19,
+        .template_hits = 15,
+        .template_misses = 4,
         .nested_requests = 16,
         .nested_hits = 8,
         .nested_misses = 8,
         .template_lookup_candidates = 0,
         .nested_lookup_candidates = 0,
-        .specialization_type_digest_requests = 84,
+        .specialization_type_digest_requests = 74,
         .max_specialization_type_digest_cache_hits = 160,
         .max_specialization_type_digest_cache_misses = 160,
         .max_specialization_type_digest_nodes_visited = 160,
@@ -1922,6 +1925,44 @@ test "imported and local generic specialization counters reuse closed types" {
     try std.testing.expect(counters.template_misses >= 2);
     try std.testing.expect(counters.template_hits >= 2);
     try std.testing.expect(counters.template_lookup_candidates <= counters.template_requests);
+}
+
+test "closed direct method calls reuse specialization before durable key construction" {
+    const allocator = std.testing.allocator;
+    const one_call =
+        \\Thing := [Val(U64)].{
+        \\    next : Thing -> Thing
+        \\    next = |Thing.Val(n)| Thing.Val(n.plus_wrap(1))
+        \\}
+        \\
+        \\main : Thing
+        \\main = Thing.Val(0).next()
+    ;
+    const repeated_calls =
+        \\Thing := [Val(U64)].{
+        \\    next : Thing -> Thing
+        \\    next = |Thing.Val(n)| Thing.Val(n.plus_wrap(1))
+        \\}
+        \\
+        \\main : Thing
+        \\main = {
+        \\    v0 = Thing.Val(0)
+        \\    v1 = v0.next()
+        \\    v2 = v1.next()
+        \\    v3 = v2.next()
+        \\    v4 = v3.next()
+        \\    v5 = v4.next()
+        \\    v6 = v5.next()
+        \\    v7 = v6.next()
+        \\    v7.next()
+        \\}
+    ;
+
+    const one = try monotypeCountersForModule(allocator, one_call);
+    const repeated = try monotypeCountersForModule(allocator, repeated_calls);
+    try std.testing.expectEqual(one.template_requests, repeated.template_requests);
+    try std.testing.expectEqual(one.template_misses, repeated.template_misses);
+    try std.testing.expectEqual(one.specialization_type_digest_requests, repeated.specialization_type_digest_requests);
 }
 
 test "alias-heavy generic specialization count does not exceed backing types" {
@@ -5869,7 +5910,6 @@ test "spec constr keeps a same-binder scalar distinct from a substituted aggrega
     defer lifted.deinit();
 
     try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted);
-    try postcheck.MonotypeLifted.Lift.recomputeCaptures(allocator, &lifted);
 
     // The input program has no tuple nested directly inside another tuple, so a
     // nested tuple after specialization means the substituted aggregate leaked
@@ -6032,8 +6072,13 @@ test "dispatch evidence boundary validator names the method of a dangling eviden
     var corrupted_method: ?[]const u8 = null;
     for (table.plans) |*plan| {
         switch (plan.resolution) {
-            .direct => {
-                plan.resolution = .{ .direct = @enumFromInt(table.evidence_nodes.len) };
+            .direct_closed => {
+                plan.resolution = .{ .direct_closed = .{ .evidence = @enumFromInt(table.evidence_nodes.len) } };
+                corrupted_method = resources.checked_artifact.canonical_names.methodNameText(plan.method);
+                break;
+            },
+            .direct_parametric => {
+                plan.resolution = .{ .direct_parametric = .{ .evidence = @enumFromInt(table.evidence_nodes.len) } };
                 corrupted_method = resources.checked_artifact.canonical_names.methodNameText(plan.method);
                 break;
             },

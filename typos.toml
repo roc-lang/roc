@@ -40,5 +40,6 @@ WRONLY = "WRONLY" # File open mode
 
 [default.extend-identifiers]
 CMOVcc = "CMOVcc"
+autoHashStrat = "autoHashStrat" # Zig standard library identifier
 expandMemCpyAsLoop = "expandMemCpyAsLoop"
 MemCpyInst = "MemCpyInst"

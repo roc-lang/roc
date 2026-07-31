@@ -38,7 +38,7 @@ NO CHANGE
 			(e-lookup-external
 				(builtin))
 			(e-num (value "0"))))
-	(e-interpolation (constraint-fn-var 244) (dispatcher-var 8)
+	(e-interpolation (constraint-fn-var 230) (dispatcher-var 8)
 		(first
 			(e-literal (string "zero: ")))
 		(parts

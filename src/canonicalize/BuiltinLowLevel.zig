@@ -1597,6 +1597,15 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
 
                 // Track this replaced def index
                 try new_def_indices.append(gpa, def_idx);
+                if (env.provided_low_level_defs.items.items.len > 0) {
+                    const previous = env.provided_low_level_defs.items.items[env.provided_low_level_defs.items.items.len - 1];
+                    std.debug.assert(previous.def_idx < @intFromEnum(def_idx));
+                }
+                _ = try env.provided_low_level_defs.append(gpa, .{
+                    .def_idx = @intFromEnum(def_idx),
+                    .op = low_level_op,
+                    ._padding = 0,
+                });
             }
         }
     }
