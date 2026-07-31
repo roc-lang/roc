@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Derived JSON codec for a primitive-backed nominal encodes/parses as its backing scalar, and the value survives
+description=Derived JSON codec for a primitive-backed nominal encodes/parses as its backing scalar and the value survives; a fallible float backing is rejected at check time
 type=repl
 ~~~
 # SOURCE
@@ -17,6 +17,8 @@ type=repl
 » Json.to_str(Price.(19.95))
 » Token := Str.{ parser_for : _ }
 » match Json.parse("\"parsed token\"") { Ok(t) => t, Err(_) => Token.("parse failed") }
+» Money := F64.{ encoder_for : _ }
+» Json.to_str(Money.(1.5))
 ~~~
 # OUTPUT
 assigned `Username`
@@ -42,5 +44,23 @@ assigned `Price`
 assigned `Token`
 ---
 "parsed token"
+---
+assigned `Money`
+---
+**Type Mismatch**
+The `encode_f64` method on `JsonEncoding` has an incompatible type.
+**repl:8:8:8:19:**
+```roc
+main = Json.to_str(Money.(1.5))
+```
+       ^^^^^^^^^^^
+
+The method `encode_f64` has the type:
+
+    F64, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity])
+
+But I need it to have the type:
+
+    F64, JsonEncodeState -> Try(JsonEncodeState, [])
 # PROBLEMS
 NIL
