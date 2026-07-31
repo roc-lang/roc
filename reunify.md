@@ -2361,6 +2361,32 @@ census was re-sited onto it before the argument could be redone.
    today, which is §15.2's contingency rather than a defect in this
    instrument or in the graph.
 
+2a-v. **The residual, accounted for exhaustively.** Every one of the 12943
+   divergences on snapshots falls in exactly one class, summing with
+   nothing left over: **6540** whose free variable NO scheme generalizes,
+   **5377** whose owning definition the module records a site for,
+   **863** whose owning definition it records no site for anywhere, and
+   **163** that reach no free variable at all.
+
+   Only the 5377 looked like plumbing, and they are not. The site lookup
+   refuses them at selection: 5628 of them name a definition the module
+   instantiates SEVERAL times, and nothing at the position says which
+   instantiation applies. Accepting the ambiguity where every candidate
+   binds the same actual vector — so no key is needed — builds 480 more
+   levels and fixes **zero** further divergences, so even a site that is
+   unambiguous by construction does not state what these positions want.
+   Building the level from the one site a module records, where it records
+   exactly one, closes 325 on snapshots and 519 on eval and no more.
+
+   So each class wants something the checked artifact does not record: a
+   value for a variable no scheme generalizes, an instantiation never
+   recorded, or a statement of WHICH recorded instantiation belongs to a
+   position. None is an instrument gap, and none is the graph deriving a
+   wrong type — where both sides carry content the sealed type never
+   contradicts the head checking recorded. Closing them is §15.2's
+   contingency: a finalization change that publishes more, budgeted for
+   its artifact growth and digest churn, not a repair to this stage.
+
 2b. **Re-measure the logical residual at the production seam.**
    `BodyContext.typeForChecked` compares directed translation against the
    graph at every read, holds the body-walk context the isolated operands
