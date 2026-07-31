@@ -3944,7 +3944,7 @@ pub const Rehearsal = struct {
         address: CheckedAddress,
         base_env: ?*const direct_translate.BindingEnvironment,
         base_owner_node: u32,
-        edge: RequestEdgeName,
+        edge: ?RequestEdgeName,
     ) ?Type.TypeId {
         const cursor = self.lookup.cursor(address.module_bytes) orelse return null;
         const free = self.firstFreeVariable(cursor.view, @enumFromInt(address.type_id), base_env) orelse return null;
@@ -3962,8 +3962,33 @@ pub const Rehearsal = struct {
         const scheme_id = cursor.view.schemeIdForOwnerNode(owner) orelse return null;
         const scheme = cursor.view.schemeById(scheme_id) orelse return null;
         if (scheme.captured_len != 0) return null;
-        const caller = self.lookup.cursor(edge.module_bytes) orelse return null;
-        const site = self.siteQuietly(caller, edge.use_expr, owner) orelse return null;
+        const caller = if (edge) |named|
+            self.lookup.cursor(named.module_bytes) orelse return null
+        else
+            cursor;
+        // With an entering edge the site is keyed at its use expression.
+        // Without one, a definition the module instantiates EXACTLY ONCE still
+        // names its binding unambiguously; more than one and nothing says which
+        // applies, so no level is built (reunify.md 13.2 2a).
+        const site = if (edge) |named|
+            self.siteQuietly(caller, named.use_expr, owner) orelse return null
+        else site: {
+            var found: ?checked.CheckedInstantiationSite = null;
+            for (cursor.view.instantiationSites()) |candidate| {
+                if (candidate.scheme_owner_node != owner) continue;
+                if (found != null) {
+                    census.bump("unique_site_ambiguous");
+                    return null;
+                }
+                found = candidate;
+            }
+            if (found == null) {
+                census.bump("unique_site_absent");
+                return null;
+            }
+            census.bump("level_from_unique_site");
+            break :site found.?;
+        };
 
         const binders = scheme.generalizedVars(cursor.view);
         const actuals = site.actuals(caller.view);
@@ -4028,9 +4053,7 @@ pub const Rehearsal = struct {
             owner_node = frame.owner_node;
             binding.* = .frame;
         }
-        if (edge) |named| {
-            if (self.typeUnderEdgeLevel(address, env, owner_node, named)) |leveled| return leveled;
-        }
+        if (self.typeUnderEdgeLevel(address, env, owner_node, edge)) |leveled| return leveled;
         var reason: direct_translate.SkipReason = undefined;
         return self.translator.translateUnderEnvironment(
             cursor,
