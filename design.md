@@ -1583,6 +1583,25 @@ checked module does not contain target-specific runtime type payloads, value
 conversion plans, callable-set descriptors, erased callable ABI decisions,
 layout ids, runtime tag discriminants, or backend encodings.
 
+The checked type store is an interned graph, not a collection of independently
+duplicated checked type trees. During construction it maintains an exact
+checked-type-digest index for O(1) root lookup. Closed roots (roots with no
+reachable flex or rigid identity) with the same checked-type digest are one
+`CheckedTypeId`; identity-bearing roots remain distinct when their explicit
+identity instance changes checked meaning. Each root stores whether an identity
+is reachable, computed by the producer that constructs or projects it.
+Consumers use that metadata instead of repeatedly traversing the graph.
+
+Type substitution preserves this graph discipline. A substitution of a closed
+root is the original root, because no formal can occur in it. A real
+substitution is memoized by its complete source/formal/actual input and interns
+its result through the same checked-type-digest index. Dispatch callable
+instantiation additionally memoizes the complete target-callable/plan-callable
+pair, so equal checked dispatch edges share one result. Checked-type digest
+construction is memoized over already-stored child roots; cryptographic hashing
+is performed once for a new checked-type root, never as a linear search
+mechanism.
+
 This is a checked-boundary rule, not merely a pipeline rule. Any checked
 module field outside `ConstStore` whose only purpose is to feed post-check
 runtime representation is not part of the checked boundary. If later lowering
@@ -2082,6 +2101,32 @@ const DispatchPlan = struct {
     callable_ty: CheckedTypeId,
     args: []const DispatchOperand,
     result_mode: DispatchResultMode,
+    resolution: CheckedCallResolution,
+};
+
+const CheckedCallResolution = union(enum) {
+    direct_closed: DirectCall,
+    direct_parametric: DirectCall,
+    evidence_dependent: EvidenceChainIndex,
+    structural: StructuralDerivation,
+    unreachable,
+    checked_error,
+};
+
+const DirectCall = struct {
+    target: MethodTarget,
+    target_instantiated_callable: CheckedTypeId,
+    nested_evidence: EvidenceIdentity,
+    local_context: ?LocalProcedureContext,
+    runtime_target: RuntimeTarget,
+};
+
+const RuntimeTarget = union(enum) {
+    procedure,
+    low_level: LowLevel,
+    graph_participating: struct {
+        iterator_protocol: ?GraphProtocol,
+    },
 };
 
 const DispatchSite = union(enum) {
@@ -2115,6 +2160,39 @@ An append-only raw-node table that can outlive its owning literal violates the
 checked-boundary invariant even if the output step could identify and skip the
 stale entry.
 
+Every live literal-origin record leaves checking with one explicit resolution:
+
+- `builtin_direct` means checking proved the target is the corresponding
+  builtin scalar, validated the literal's exact digits or bytes, and discharged
+  the conversion without looking up or instantiating a method. Monotype
+  materializes the value directly.
+- `custom_dispatch` means checking selected and typechecked one concrete custom
+  conversion callable. `CheckedModule` construction retains its
+  dispatcher and callable types, and compile-time evaluation evaluates that
+  conversion when a checked constant is required.
+- `specialization_dispatch` means the target remains an identity variable in a
+  generalized callable. The checked plan retains this erased requirement; each
+  Monotype specialization either materializes a builtin directly or consumes
+  the callable evidence supplied for that specialization.
+- `checked_error` means checking rejected the conversion while retaining the
+  literal node for diagnostic recovery. `CheckedModule` stores no
+  callable, runtime dispatch plan, or compile-time root for it; the containing
+  checked `runtime_error` expression is the failure.
+
+`unresolved` is construction-only and may not cross the checked boundary.
+Checking finalizes each live record exactly once after constraint solving;
+diagnostic recovery either retires the record with its owner or seals it as
+`checked_error`. A residual concrete, non-builtin literal target with no
+checker-selected callable is sealed as `checked_error` only when checking has
+already reported an error; in an otherwise valid module it is an invariant
+violation, because every successful concrete conversion must have positive
+builtin or callable evidence. `CheckedModule` construction,
+compile-time-root selection, and Monotype consume this resolution directly.
+They must not inspect the checked target type to reconstruct which literal path
+checking selected. In particular, `builtin_direct` stores neither the synthetic
+conversion callable nor a runtime dispatch plan, and
+`specialization_dispatch` is not a standalone compile-time root.
+
 Source dispatch, type dispatch, method equality, and iterator `for` plans all
 use this one shape. Iterator `for` contains two plans:
 
@@ -2131,9 +2209,33 @@ find the method owner. For ordinary value dispatch, method equality, and
 iterator `.iter`/`.next`, `dispatcher` is an argument index into `args`; iterator
 `.next` uses the compiler-created iterator state operand in `args[0]`. For type
 dispatch, `dispatcher` is `type_only`, and `dispatcher_ty` is the checked type
-that determines the owner. The plan does not choose a concrete lowered call target
-for every future monomorphic specialization. Concrete target selection needs
-monomorphic type information, so it happens while producing Monotype IR.
+that determines the owner.
+
+CheckedModule construction chooses every target that checking made exact.
+It projects the target callable through the checked call relation and classifies
+the result as closed or parametric. A closed direct call has no reachable
+checked identity variables and no nested evidence forwarded from an enclosing
+specialization. A parametric direct call still has an exact target but retains
+one of those explicit specialization inputs. Evidence-dependent calls are the
+only calls whose target itself comes from an enclosing specialization.
+
+The runtime target category is producer-authored. Canonicalization records the
+exact low-level operation when it replaces a provided definition; CheckedModule
+records ordinary procedure targets and operations whose runtime
+representation must participate in a Monotype graph. Graph participation
+covers both producers and representation-sensitive consumers: for example, an
+`Iter` method that consumes a generated-private iterator must preserve that
+representation even when it returns an ordinary value. An optional exact graph
+protocol identifies operations that construct or directly interpret a compiler
+representation; other graph-sensitive procedures carry no protocol. No
+consumer may inspect a procedure body, builtin name, owner type, or result shape
+to reconstruct this category.
+
+Each checked procedure template stores separate spans of direct calls and
+dispatch relations. Evidence instantiation iterates only the relation span; it
+must not scan every direct call and branch on its resolution. The complete
+source plan span may remain as checked ownership/debug data, but is not a
+specialization worklist.
 
 The method registry is an exact table keyed by `(MethodOwner, MethodNameId)`.
 Each entry explicitly identifies either a callable target or a compiler-derived
@@ -2223,8 +2325,7 @@ generation mode:
 checked modules
   -> Monotype
   -> Monotype Lifted
-  -> optional Monotype Lifted SpecConstr
-  -> lifted capture recomputation
+  -> optional Monotype Lifted SpecConstr with capture finalization
   -> Lambda Solved
   -> explicit solved inline plan
   -> direct SolvedLirLower
@@ -2253,6 +2354,13 @@ The mode is compiler input supplied to the checked pipeline. SpecConstr and the
 solved inline analyzer consume it directly. They do not infer optimization mode
 from the target, backend, symbol names, builtin names, or emitted code. The mode
 changes optimization work, not source meaning or the stage route.
+
+Monotype Lifted closure lifting outputs complete function capture slots and
+function-reference/direct-call operands. When `.none` skips SpecConstr, the
+pipeline consumes that output directly and must not repeat capture analysis.
+SpecConstr can change free-variable use while cloning and rewriting function
+bodies, so SpecConstr owns one exact capture finalization before it returns its
+Monotype Lifted output. No later pipeline stage repeats that finalization.
 
 Optional tag reachability uses a recursive abstract value tree. A struct field
 or tag payload carries the complete nested `ValueInfo` output for the value
@@ -3106,8 +3214,9 @@ performs three jobs:
 1. Clone and instantiate checked types into monomorphic type nodes.
 2. Create exactly the monomorphic procedure/value specializations reachable
    from the requested roots.
-3. Resolve checked static-dispatch plans to direct calls or checked structural
-   equality before any source dispatch form can enter the output IR.
+3. Consume checked call resolutions, emitting direct calls/operations or the
+   checked structural derivation before any source dispatch form can enter the
+   output IR.
 
 ### Monotype Types
 
@@ -4049,11 +4158,14 @@ Static dispatch is DECIDED during checking and CONSUMED during Monotype
 lowering. Every dispatch site leaves checking with an explicit resolution on
 its plan:
 
-- `direct(evidence_node)` — checking proved the concrete target. The evidence
-  node names the target and carries evidence for the target's own
-  requirements
-  (its nested `where`-clause constraints), recursively.
-- `constraint(depth, k)` — the dispatcher is the k-th evidence param of the
+- `direct_closed(direct_call)` — checking proved the concrete target, projected
+  its exact target-instantiated callable, proved that callable and its nested
+  evidence independent of the enclosing specialization, and recorded the
+  target's explicit runtime category.
+- `direct_parametric(direct_call)` — checking proved the same exact target, but
+  the callable or its nested evidence still consumes an explicit enclosing
+  specialization identity.
+- `evidence_dependent(depth, k)` — the dispatcher is the k-th evidence param of the
   d-th enclosing generalized callable. Each specialization edge supplies the
   answer: dictionary passing resolved entirely at compile time.
 - `structural(derivation)` — the checker chose the compiler-derived structural
@@ -4063,7 +4175,7 @@ its plan:
   direct payload index.
 - `checked_error` — checking rejected the site; executing it anyway (running a
   program with reported errors) lowers to an explicit crash.
-- `unreachable_dispatch` — the dispatcher is a constrained variable no
+- `unreachable` — the dispatcher is a constrained variable no
   specialization edge can ever supply and no default applies: the dispatch is
   statically unreachable and lowers to an explicit crash.
 
@@ -4084,15 +4196,16 @@ error fences the containing value, while `rejected_static_dispatches` records
 only failures of the dispatch check itself. `EvidencePass` never infers either
 case from the constraint callable or its return type.
 
-`checked_error` and `unreachable_dispatch` are rejected, non-returning
+`checked_error` and `unreachable` are rejected, non-returning
 dispatches. Monotype lowers both to an ordinary Roc runtime crash instead of a
 call, so neither can return a dispatch result value. For `checked_error`, this is
 the crash observed if `roc run` continues after reporting the missing method and
-execution reaches the rejected dispatch. For `unreachable_dispatch`, the crash
+execution reaches the rejected dispatch. For `unreachable`, the crash
 represents the path that checking proved cannot receive a dispatcher value.
 After total plan resolution, `CheckedBodyStore` computes and stores expression
 and statement divergence through its exact operand and body dependencies. When
-a `constraint(depth, k)` becomes `checked_error` or `unreachable_value` only for
+an `evidence_dependent(depth, k)` call becomes `checked_error` or
+`unreachable_value` only for
 one specialization, Monotype supplies those exact dispatch expression ids to
 the same checked-body divergence computation before it replays type relations
 or lowers the body. Callable, dispatcher, operand, and result types may be
@@ -4105,7 +4218,17 @@ producer proof: ConstStore emits their explicit generated-runtime function kind
 only after compile-time evaluation successfully consumed the constructor
 dispatch, and intentionally stores no evidence vector for that runtime. Their
 restoration may therefore consume the checked constraint plan's callable shape,
-but must still reject a plan-level `checked_error` or `unreachable_dispatch`.
+but must still reject a plan-level `checked_error` or `unreachable`.
+
+Closed direct calls never enter dispatch-relation instantiation. Monotype
+lowers an exact low-level target directly and creates no procedure
+specialization. An ordinary procedure target requests one specialization under
+the identity `(target template, target-instantiated checked callable,
+nested-evidence identity, method scope)`. Closed checked callable and evidence
+identities are interned in CheckedModule, so the first request creates or loads
+the specialization and every repeated call is an O(1) hit before durable type
+or evidence digests are rebuilt. Graph-participating targets consume their
+producer-authored graph protocol instead of taking this sealed-interface path.
 
 Nothing else exists. Monotype lowering never derives a method owner from type
 content, never searches a registry by method name, and never intersects
@@ -4404,6 +4527,15 @@ The solver:
 - solves recursive groups as groups, not by accidental declaration order
 - verifies each lifted jump is lexically scoped and unifies its arguments with
   the corresponding join-point parameter types
+
+Monotype may carry both the definition-private nominal view and the opaque
+interface view of one checked `TypeDef`. Lambda solving relates those views only
+when their complete definition identities and builtin owners agree. It unifies
+their type arguments and checked-public runtime backings for callable flow, but
+keeps the opaque view as the representative; the relation therefore cannot
+grant structural inspectability. Different definitions, aliases, missing
+representation authority, and generated-private backings are never accepted by
+this visibility relation.
 
 The solved type graph is the callable representation source of truth. There is
 no descriptor replacement, no callable repointing, no post-demand payload
@@ -6697,9 +6829,10 @@ Roc adds language and implementation data that Cor's experiment does not need:
 
 The main language difference is static dispatch. Roc keeps static dispatch
 separate from checked types. Checking still reports every user-facing
-static-dispatch error and outputs checked dispatch plans. Monotype IR lowering
-uses those plans plus monomorphic type information to replace static dispatch
-with direct calls before any later callable/lambda stage runs.
+static-dispatch error and outputs checked call classifications. Monotype IR
+lowering consumes those classifications and only instantiates the explicit
+parametric/evidence relations before replacing dispatch with direct calls; a
+closed direct call performs no method lookup or dispatch-graph construction.
 
 Lambda sets are not stored in the checked type store or checked cache.
 They are introduced after Monotype Lifted IR, during Lambda Solved IR, exactly

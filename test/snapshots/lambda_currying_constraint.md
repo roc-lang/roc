@@ -162,10 +162,10 @@ NO CHANGE
 			(args
 				(p-assign (ident "f"))
 				(p-assign (ident "x")))
-			(e-call (constraint-fn-var 303)
+			(e-call (constraint-fn-var 289)
 				(e-lookup-local
 					(p-assign (ident "f")))
-				(e-call (constraint-fn-var 302)
+				(e-call (constraint-fn-var 288)
 					(e-lookup-local
 						(p-assign (ident "f")))
 					(e-lookup-local
@@ -183,13 +183,13 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "n")))
-			(e-call (constraint-fn-var 320)
+			(e-call (constraint-fn-var 306)
 				(e-lookup-local
 					(p-assign (ident "applyTwice")))
 				(e-lambda
 					(args
 						(p-assign (ident "x")))
-					(e-dispatch-call (method "plus") (constraint-fn-var 318)
+					(e-dispatch-call (method "plus") (constraint-fn-var 304)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))

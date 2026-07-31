@@ -67,7 +67,7 @@ bar = |f| f(dbg (42))
 		(e-lambda
 			(args
 				(p-assign (ident "f")))
-			(e-call (constraint-fn-var 240)
+			(e-call (constraint-fn-var 226)
 				(e-lookup-local
 					(p-assign (ident "f")))
 				(e-dbg

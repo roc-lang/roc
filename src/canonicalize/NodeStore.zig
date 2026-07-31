@@ -67,14 +67,27 @@ pub const LiteralDispatchPlan = extern struct {
     target_var: u32,
     fn_var: u32,
     kind: u32,
+    resolution: u32,
 
     pub const Kind = enum(u32) {
         numeral,
         quote,
     };
 
+    pub const Resolution = enum(u32) {
+        unresolved,
+        builtin_direct,
+        custom_dispatch,
+        specialization_dispatch,
+        checked_error,
+    };
+
     pub fn dispatchKind(self: LiteralDispatchPlan) Kind {
         return @enumFromInt(self.kind);
+    }
+
+    pub fn dispatchResolution(self: LiteralDispatchPlan) Resolution {
+        return @enumFromInt(self.resolution);
     }
 };
 
@@ -665,20 +678,47 @@ pub fn recordLiteralDispatchPlan(
     const node = store.nodes.get(node_idx);
     std.debug.assert(literalDispatchKindForTag(node.tag) == kind);
 
-    const plan = LiteralDispatchPlan{
+    var plan = LiteralDispatchPlan{
         .node_idx = @intFromEnum(node_idx),
         .target_var = @intFromEnum(target_var),
         .fn_var = @intFromEnum(fn_var),
         .kind = @intFromEnum(kind),
+        .resolution = @intFromEnum(LiteralDispatchPlan.Resolution.unresolved),
     };
     const plan_plus_one = literalDispatchPlanPlusOne(node);
     if (plan_plus_one != 0) {
+        plan.resolution = store.literal_dispatch_plans.get(@enumFromInt(plan_plus_one - 1)).resolution;
         store.literal_dispatch_plans.set(@enumFromInt(plan_plus_one - 1), plan);
         return;
     }
 
     const plan_idx = try store.literal_dispatch_plans.append(store.gpa, plan);
     setLiteralDispatchPlanPlusOne(store, node_idx, @intFromEnum(plan_idx) + 1);
+}
+
+/// Finalize the checker-owned resolution for a live literal plan. An
+/// unresolved record is construction state; a second, different resolution
+/// would mean checking produced contradictory evidence for one literal.
+pub fn finalizeLiteralDispatchResolution(
+    store: *NodeStore,
+    node_idx: Node.Idx,
+    resolution: LiteralDispatchPlan.Resolution,
+) void {
+    std.debug.assert(resolution != .unresolved);
+    const node = store.nodes.get(node_idx);
+    const plan_plus_one = literalDispatchPlanPlusOne(node);
+    if (plan_plus_one == 0) return;
+
+    var plan = store.literal_dispatch_plans.get(@enumFromInt(plan_plus_one - 1)).*;
+    const previous = plan.dispatchResolution();
+    if (previous != .unresolved and previous != resolution) {
+        std.debug.panic(
+            "literal dispatch plan for node {d} finalized twice ({s}, then {s})",
+            .{ @intFromEnum(node_idx), @tagName(previous), @tagName(resolution) },
+        );
+    }
+    plan.resolution = @intFromEnum(resolution);
+    store.literal_dispatch_plans.set(@enumFromInt(plan_plus_one - 1), plan);
 }
 
 /// Return the checked dispatch evidence owned by a literal node, if any.
@@ -705,7 +745,10 @@ pub fn literalDispatchPlans(store: *const NodeStore) []const LiteralDispatchPlan
     return store.literal_dispatch_plans.items.items;
 }
 
-fn detachLiteralDispatchPlan(store: *NodeStore, node_idx: Node.Idx) void {
+/// Retire the literal plan owned by `node_idx`, if any. Error recovery calls
+/// this for every expression discarded with a replaced subtree, so no plan can
+/// outlive the source node that would execute it.
+pub fn retireLiteralDispatchPlan(store: *NodeStore, node_idx: Node.Idx) void {
     const node = store.nodes.get(node_idx);
     const plan_plus_one = literalDispatchPlanPlusOne(node);
     if (plan_plus_one == 0) return;
@@ -1798,7 +1841,7 @@ pub fn replaceExprWithRuntimeError(
     diagnostic_idx: CIR.Diagnostic.Idx,
 ) void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-    store.detachLiteralDispatchPlan(node_idx);
+    store.retireLiteralDispatchPlan(node_idx);
     var node = Node.init(.malformed);
     node.setPayload(.{ .diag_single_value = .{
         .value = @intFromEnum(diagnostic_idx),
@@ -5641,6 +5684,7 @@ test "NodeStore basic CompactWriter roundtrip" {
     });
     const node1_idx = try original.nodes.append(gpa, node1);
     try original.recordLiteralDispatchPlan(node1_idx, .numeral, @enumFromInt(7), @enumFromInt(9));
+    original.finalizeLiteralDispatchResolution(node1_idx, .builtin_direct);
 
     // Add a region
     const region = Region{
@@ -5690,6 +5734,7 @@ test "NodeStore basic CompactWriter roundtrip" {
     try testing.expectEqual(LiteralDispatchPlan.Kind.numeral, literal_plan.dispatchKind());
     try testing.expectEqual(@as(u32, 7), literal_plan.target_var);
     try testing.expectEqual(@as(u32, 9), literal_plan.fn_var);
+    try testing.expectEqual(LiteralDispatchPlan.Resolution.builtin_direct, literal_plan.dispatchResolution());
 
     // Verify regions
     try testing.expectEqual(@as(usize, 1), deserialized.regions.len());
