@@ -6679,4 +6679,56 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "8" },
     },
+    .{
+        .name = "low_level - Dec.to_attos reads the stored i128",
+        .source =
+        \\{
+        \\x : Dec
+        \\x = 1.5
+        \\x.to_attos()
+        \\}
+        ,
+        .expected = .{ .inspect_str = "1500000000000000000" },
+    },
+    .{
+        .name = "low_level - Dec.from_attos reinterprets rather than converts",
+        .source =
+        \\{
+        \\Dec.from_attos(1500000000000000000).to_str()
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"1.5\"" },
+    },
+    .{
+        .name = "low_level - Dec atto roundtrip preserves a negative value",
+        .source =
+        \\{
+        \\x : Dec
+        \\x = -0.25
+        \\Dec.from_attos(x.to_attos()) == x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - Dec and I128 meet at both extremes",
+        .source =
+        \\{
+        \\Dec.to_attos(Dec.highest) == I128.highest
+        \\    and Dec.to_attos(Dec.lowest) == I128.lowest
+        \\    and Dec.from_attos(I128.highest) == Dec.highest
+        \\    and Dec.from_attos(I128.lowest) == Dec.lowest
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - one atto is Dec's smallest step",
+        .source =
+        \\{
+        \\Dec.to_attos(0.000000000000000001) == 1
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
 };

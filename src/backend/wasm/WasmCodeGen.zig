@@ -14203,6 +14203,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         .u128_to_i128_wrap,
         .i128_to_u128_wrap,
+        .dec_to_attos,
+        .dec_from_attos,
         => {
             // Same representation — just pass through (pointer stays the same)
             try self.emitProcLocal(GuardedList.at(args, 0));

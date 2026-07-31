@@ -257,6 +257,8 @@ pub const LowLevel = enum(u16) {
     u128_from_str,
     i128_from_str,
     dec_from_str,
+    dec_to_attos,
+    dec_from_attos,
     f32_from_str,
     f64_from_str,
 
@@ -1011,6 +1013,8 @@ pub const LowLevel = enum(u16) {
             .f32_from_bits,
             .f64_to_bits,
             .f64_from_bits,
+            .dec_to_attos,
+            .dec_from_attos,
             .num_shift_left_by,
             .num_shift_right_by,
             .num_shift_right_zf_by,

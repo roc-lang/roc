@@ -3043,6 +3043,7 @@ pub const MonoLlvmCodeGen = struct {
             .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str => try self.emitIntToStr(target, GuardedList.at(arg_locals, 0)),
             .f32_to_str, .f64_to_str => try self.emitFloatToStr(target, GuardedList.at(arg_locals, 0)),
             .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits => try self.emitFloatBitCast(target, op, GuardedList.at(arg_locals, 0)),
+            .dec_from_attos, .dec_to_attos => try self.emitDecAttosMove(target, GuardedList.at(arg_locals, 0)),
             .dec_to_str => try self.emitDecToStr(target, GuardedList.at(arg_locals, 0)),
             .num_to_str => try self.emitNumToStr(target, GuardedList.at(arg_locals, 0)),
             .box_box => try self.emitBoxBox(target, GuardedList.at(arg_locals, 0)),
@@ -4684,6 +4685,11 @@ pub const MonoLlvmCodeGen = struct {
                 builder.intValue(.i32, info.value_offset) catch return error.OutOfMemory,
             },
         );
+    }
+
+    fn emitDecAttosMove(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
+        const value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
+        try self.storeScalar(self.slot(target).ptr, self.localLayout(target), value);
     }
 
     fn emitF64ToF32TryUnsafeConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
