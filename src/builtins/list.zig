@@ -636,15 +636,18 @@ pub fn listReserve(
     const original_len = list.len();
 
     const cap = @as(u64, @intCast(list.getCapacity()));
-    const desired_cap = @as(u64, @intCast(original_len)) +| spare;
 
-    if (list.isExclusive(update_mode, roc_ops) and cap >= desired_cap) {
+    // A list's length never exceeds its capacity, so the slack subtraction
+    // cannot wrap and the hot no-growth check needs no saturating add.
+    std.debug.assert(original_len <= cap);
+    if (list.isExclusive(update_mode, roc_ops) and spare <= cap - @as(u64, @intCast(original_len))) {
         // For seamless slices, getCapacity() is the visible window length. This
         // branch can therefore only fire for a slice when no growth was
         // requested, so returning the unchanged slice touches no allocation.
-        std.debug.assert(!list.isSeamlessSlice() or desired_cap <= @as(u64, @intCast(original_len)));
+        std.debug.assert(!list.isSeamlessSlice() or spare == 0);
         return list;
     } else {
+        const desired_cap = @as(u64, @intCast(original_len)) +| spare;
         // Make sure on 32-bit targets we don't accidentally wrap when we cast our U64 desired capacity to U32.
         const reserve_size: u64 = @min(desired_cap, @as(u64, @intCast(std.math.maxInt(usize))));
 
