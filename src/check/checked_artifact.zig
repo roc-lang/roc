@@ -7811,6 +7811,9 @@ const ResidualDispositionScan = struct {
     /// constrained flex), accumulated across every body walk so the census counts
     /// each once.
     undisposed: *std.AutoHashMap(CheckedTypeId, void),
+    /// Of `undisposed`, the ones that are rigids no generalized list names, as
+    /// opposed to flexes whose dispatch constraints decide their outcome.
+    stray_rigids: *std.AutoHashMap(CheckedTypeId, void),
 
     pub fn visit(self: *@This(), traversal: anytype, root: CheckedTypeId) Allocator.Error!bool {
         const payload = self.store.payload(root);
@@ -7828,6 +7831,7 @@ const ResidualDispositionScan = struct {
             .rigid => |v| {
                 if (!self.binders.contains(root) and v.numeric_default_phase == null and v.row_default == null) {
                     try self.undisposed.put(root, {});
+                    try self.stray_rigids.put(root, {});
                 }
                 return true;
             },
@@ -7975,6 +7979,8 @@ fn publishResidualDispositions(allocator: Allocator, store: *CheckedTypeStore) A
     defer residual_seen.deinit();
     var undisposed_seen = std.AutoHashMap(CheckedTypeId, void).init(allocator);
     defer undisposed_seen.deinit();
+    var stray_rigid_seen = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    defer stray_rigid_seen.deinit();
     // Residual type ids disposed under a scheme owner in pass one, so pass two
     // records only the body-expression residuals no scheme type reached.
     var pass_one_residual_ids = std.AutoHashMap(CheckedTypeId, void).init(allocator);
@@ -7991,6 +7997,7 @@ fn publishResidualDispositions(allocator: Allocator, store: *CheckedTypeStore) A
             .allocator = allocator,
             .residuals = &residuals,
             .undisposed = &undisposed_seen,
+            .stray_rigids = &stray_rigid_seen,
         };
         {
             var traversal = checked_traverse.BoolPredicateTraversal(CheckedTypeId, ResidualDispositionScan).init(allocator, &scan);
@@ -8027,6 +8034,7 @@ fn publishResidualDispositions(allocator: Allocator, store: *CheckedTypeStore) A
             .allocator = allocator,
             .residuals = &residuals,
             .undisposed = &undisposed_seen,
+            .stray_rigids = &stray_rigid_seen,
         };
         var traversal = checked_traverse.BoolPredicateTraversal(CheckedTypeId, ResidualDispositionScan).init(allocator, &scan);
         defer traversal.deinit();
@@ -8050,7 +8058,14 @@ fn publishResidualDispositions(allocator: Allocator, store: *CheckedTypeStore) A
 
     if (census_on) {
         var undisposed_iter = undisposed_seen.keyIterator();
-        while (undisposed_iter.next()) |_| reunify_census.recordResidualDisposition(.undisposed);
+        while (undisposed_iter.next()) |id| {
+            reunify_census.recordResidualDisposition(.undisposed);
+            if (stray_rigid_seen.contains(id.*)) {
+                reunify_census.recordResidualDisposition(.undisposed_stray_rigid);
+            } else {
+                reunify_census.recordResidualDisposition(.undisposed_constrained_flex);
+            }
+        }
     }
 }
 

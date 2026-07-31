@@ -469,6 +469,15 @@ pub const Census = struct {
     mismatch_unbound_inside_an_imported_scheme_root: Counter = Counter.init(0),
     position_inside_an_imported_scheme_root: Counter = Counter.init(0),
     mismatch_unbound_no_frame_will_bind_it: Counter = Counter.init(0),
+    // Whether a diverging position is one this lowering instantiated, or a
+    // template's own position that a use edge's actuals would make concrete.
+    diverged_position_is_instantiated: Counter = Counter.init(0),
+    diverged_position_is_a_template: Counter = Counter.init(0),
+    // The same question settled once lowering has finished and the cache is complete.
+    settled_diverged_position_is_instantiated: Counter = Counter.init(0),
+    settled_diverged_position_is_a_template: Counter = Counter.init(0),
+    unbound_no_frame_position_is_instantiated: Counter = Counter.init(0),
+    unbound_no_frame_position_is_a_template: Counter = Counter.init(0),
     unlisted_variable_no_root_reaches_it: Counter = Counter.init(0),
     ground_divergence_judged_against_checking: Counter = Counter.init(0),
     sealed_vs_checked_position_is_a_variable: Counter = Counter.init(0),

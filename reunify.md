@@ -2537,11 +2537,26 @@ or its declaration root), not a captured binder, and not a residual
 disposition. The graph gives the element a value unification supplied; the
 directed side gives the residual the rigid implies.
 
-This is the only class that would need checking to record something, and
-what it needs is coverage of an existing recorded, round-tripped mechanism
-— a scheme carrying these roots' generalized vars, or a §7.4 module-body
-disposition for the rigids — not a new structure. At 7 and 16 entries its
-storage is immaterial.
+**No class needs checking to record anything, including that one.** The
+question the comparison never asked is whether a diverging position is one
+the lowering *instantiated* at all. `collectProbePopulation` already asks
+it — it declines to compare a root whose checked source is not a
+`type_cache` key, because a template's own position is exactly what a use
+edge's actuals make concrete — but the seal exit did not.
+
+Asked at the seal exit, and settled again after lowering finishes so the
+answer is not merely "not instantiated yet", **every diverging position is
+a template**: 2955 distinct positions on snapshots and 2596 on eval, none
+of them instantiated on either corpus. The 7 and 16 above are templates
+too.
+
+So the seam was comparing, position by position, exactly the positions
+production never reads as roots. Recording a disposition for them would
+have been wrong on its own terms: the rigid in Builtin's `List(a)` is not
+uninhabited, it is generic, and a use edge supplies it. Checking already
+counts these as `undisposed` — 5818 stray non-binder rigids against 14
+dispatcher-constrained flexes on snapshots — and is right not to dispose
+them.
 
 **Consequence.** No checking-side change is required for the other classes,
 so no `CACHE_VERSION` bump and no artifact growth on their account, and

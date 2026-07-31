@@ -154,6 +154,8 @@ var annotation_scheme_owner_diverged = std.atomic.Value(u64).init(0);
 var disposition_contextual = std.atomic.Value(u64).init(0);
 var disposition_uninhabited = std.atomic.Value(u64).init(0);
 var residual_undisposed = std.atomic.Value(u64).init(0);
+var residual_undisposed_stray_rigid = std.atomic.Value(u64).init(0);
+var residual_undisposed_constrained_flex = std.atomic.Value(u64).init(0);
 var disposition_adopted_from_dispatch = std.atomic.Value(u64).init(0);
 
 // Slice 2 boundary verifier (reunify.md 7.5). The verifier hard-asserts the
@@ -539,7 +541,18 @@ pub fn recordAnnotationSchemeOwner(aliased: bool) void {
 /// plain unconstrained residual, so left unclassified), or
 /// `adopted_from_dispatch` (an `uninhabited` disposition a resolved dispatch
 /// target's own signature later replaced with `contextual`).
-pub const DispositionCensus = enum { contextual, uninhabited, undisposed, adopted_from_dispatch };
+pub const DispositionCensus = enum {
+    contextual,
+    uninhabited,
+    undisposed,
+    adopted_from_dispatch,
+    /// A rigid no scheme's generalized list names. Nothing can supply a value
+    /// for it, so it is the shape a module-body disposition would state.
+    undisposed_stray_rigid,
+    /// A flex carrying dispatch constraints, whose outcome those constraints
+    /// decide rather than a body-context disposition.
+    undisposed_constrained_flex,
+};
 
 /// Record one residual-variable disposition decision (reunify.md 7.4, Slice 2 phase
 /// one) into the matching census counter.
@@ -549,6 +562,8 @@ pub fn recordResidualDisposition(kind: DispositionCensus) void {
         .contextual => _ = disposition_contextual.fetchAdd(1, .monotonic),
         .uninhabited => _ = disposition_uninhabited.fetchAdd(1, .monotonic),
         .undisposed => _ = residual_undisposed.fetchAdd(1, .monotonic),
+        .undisposed_stray_rigid => _ = residual_undisposed_stray_rigid.fetchAdd(1, .monotonic),
+        .undisposed_constrained_flex => _ = residual_undisposed_constrained_flex.fetchAdd(1, .monotonic),
         .adopted_from_dispatch => _ = disposition_adopted_from_dispatch.fetchAdd(1, .monotonic),
     }
 }
@@ -797,6 +812,8 @@ pub fn dumpAppend() void {
     sink.print("disposition_contextual={d}\n", .{disposition_contextual.load(.monotonic)});
     sink.print("disposition_uninhabited={d}\n", .{disposition_uninhabited.load(.monotonic)});
     sink.print("residual_undisposed={d}\n", .{residual_undisposed.load(.monotonic)});
+    sink.print("residual_undisposed_stray_rigid={d}\n", .{residual_undisposed_stray_rigid.load(.monotonic)});
+    sink.print("residual_undisposed_constrained_flex={d}\n", .{residual_undisposed_constrained_flex.load(.monotonic)});
     sink.print("disposition_adopted_from_dispatch={d}\n", .{disposition_adopted_from_dispatch.load(.monotonic)});
     sink.print("site_actuals_len_matches_binders={d}\n", .{site_actuals_len_matches_binders.load(.monotonic)});
     sink.print("site_actuals_len_diverges_from_binders={d}\n", .{site_actuals_len_diverges_from_binders.load(.monotonic)});

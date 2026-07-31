@@ -659,9 +659,18 @@ pub const SealTrace = struct {
 pub const ModuleLookup = struct {
     context: *anyopaque,
     cursor_for_module: *const fn (context: *anyopaque, module_bytes: [32]u8) ?direct_translate.ModuleCursor,
+    /// Whether this lowering has an instantiated stored type for a checked
+    /// position. A position with none is a template's own, which a use edge's
+    /// actuals make concrete; the production probe compares only the
+    /// instantiated ones, so a probe elsewhere can ask the same question.
+    position_is_instantiated: *const fn (context: *anyopaque, address: CheckedAddress) bool,
 
     fn cursor(self: ModuleLookup, module_bytes: [32]u8) ?direct_translate.ModuleCursor {
         return self.cursor_for_module(self.context, module_bytes);
+    }
+
+    fn instantiated(self: ModuleLookup, address: CheckedAddress) bool {
+        return self.position_is_instantiated(self.context, address);
     }
 };
 
@@ -1246,6 +1255,9 @@ pub const Rehearsal = struct {
     /// How many unbound-with-no-frame positions have been named, so the dump
     /// cannot fill the census file.
     unbound_no_frame_dumped: usize = 0,
+    /// Positions the seam reported a divergence at, so whether each is a
+    /// template can be settled after lowering rather than mid-seal.
+    diverged_addresses: std.AutoHashMapUnmanaged(CheckedAddress, void) = .empty,
     frames: std.ArrayList(Frame),
     /// The open request scopes, innermost last. The seam opens one around every
     /// request it makes and closes it when the request finishes, so the edge a
@@ -1342,6 +1354,7 @@ pub const Rehearsal = struct {
         self.dumpDetails();
         for (self.frames.items) |*frame| self.releaseFrame(frame);
         self.frames.deinit(self.allocator);
+        self.diverged_addresses.deinit(self.allocator);
         self.details.deinit(self.allocator);
         self.unresolved_details.deinit(self.allocator);
         self.slot_descriptors.deinit(self.allocator);
@@ -2585,6 +2598,11 @@ pub const Rehearsal = struct {
             }
         }
         census.bump("mismatch_unbound_no_frame_will_bind_it");
+        if (self.lookup.instantiated(address)) {
+            census.bump("unbound_no_frame_position_is_instantiated");
+        } else {
+            census.bump("unbound_no_frame_position_is_a_template");
+        }
         self.dumpUnboundWithNoFrame(cursor, address, free, position, sealed);
     }
 
@@ -2818,6 +2836,22 @@ pub const Rehearsal = struct {
     /// Debug/probe-only: compare one sealed type against what directed
     /// translation computes for the position the node stands for, using the
     /// position's own recorded address (reunify.md 13.2 step 2a).
+    /// Settle, once lowering has finished and the stored type cache is complete,
+    /// whether the positions the seam diverged at are ones this lowering
+    /// instantiated or template positions a use edge's actuals make concrete.
+    /// The production probe compares only the instantiated ones.
+    pub fn reportDivergedPositionKinds(self: *Rehearsal) void {
+        if (comptime !census.enabled) return;
+        var it = self.diverged_addresses.keyIterator();
+        while (it.next()) |address| {
+            if (self.lookup.instantiated(address.*)) {
+                census.bump("settled_diverged_position_is_instantiated");
+            } else {
+                census.bump("settled_diverged_position_is_a_template");
+            }
+        }
+    }
+
     pub fn compareSealedAgainstDirected(
         self: *Rehearsal,
         record: ContextedProvenance,
@@ -2852,6 +2886,17 @@ pub const Rehearsal = struct {
         }
         census.bump("seam_direct_diverged");
         census.bump("seal_exit_diverged");
+        if (self.lookup.instantiated(record.address)) {
+            census.bump("diverged_position_is_instantiated");
+        } else {
+            census.bump("diverged_position_is_a_template");
+        }
+        // Asked here, `type_cache` is still filling, so the answer is only that
+        // the position was not instantiated YET. Keep the address so the same
+        // question can be settled once lowering has finished.
+        if (self.diverged_addresses.count() < 4096) {
+            self.diverged_addresses.put(self.allocator, record.address, {}) catch {};
+        }
         noteWhatSuppliedTheValue(record, graph, node);
         self.notePositionCoveredByNominalArgs(record.address, graph, sealed);
         self.noteReachableFromAnotherReadPosition(record.address, graph);

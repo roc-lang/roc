@@ -4078,6 +4078,17 @@ const Builder = struct {
         return directTranslateCursor(view);
     }
 
+    /// Whether this lowering already holds an instantiated stored type for a
+    /// checked position, which is the same question the probe population asks
+    /// before it compares a root (reunify.md 13.2c).
+    fn rehearsalPositionIsInstantiated(context: *anyopaque, address: spec_rehearsal.CheckedAddress) bool {
+        const self: *Builder = @ptrCast(@alignCast(context));
+        return self.type_cache.contains(.{
+            .module_bytes = address.module_bytes,
+            .type_id = address.type_id,
+        });
+    }
+
     /// Build the per-specialization instantiation state this lowering run reads
     /// checked positions through (reunify.md sections 9, 11).
     fn createRehearsal(self: *Builder) Allocator.Error!*spec_rehearsal.Rehearsal {
@@ -4086,7 +4097,11 @@ const Builder = struct {
             &self.program.types,
             &self.program.names,
             .{ .context = self, .vtable = &direct_translate_vtable },
-            .{ .context = self, .cursor_for_module = rehearsalCursorForModule },
+            .{
+                .context = self,
+                .cursor_for_module = rehearsalCursorForModule,
+                .position_is_instantiated = rehearsalPositionIsInstantiated,
+            },
         );
     }
 
@@ -4340,6 +4355,11 @@ const Builder = struct {
         };
         var translator = direct_translate.Translator.init(self.allocator, &snapshot, &self.program.names, resolver);
         defer translator.deinit();
+
+        // The stored type cache is complete here, so the seam's diverging
+        // positions can now be told apart into ones this lowering instantiated
+        // and template positions a use edge's actuals make concrete.
+        if (self.rehearsal) |rehearsal| rehearsal.reportDivergedPositionKinds();
 
         var population = std.AutoHashMap(Type.TypeId, ProbeEntry).init(self.allocator);
         defer population.deinit();
