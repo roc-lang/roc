@@ -1360,6 +1360,25 @@ pub const MonoLlvmCodeGen = struct {
         defer attrs_wip.deinit(builder);
         try self.addGeneratedFunctionStackProbeAttrs(&attrs_wip);
         try attrs_wip.addFnAttr(.inlinehint, builder);
+        // Every parameter except the return slot is a distinct object no
+        // callee can reach another way: RocOps is host-provided and never
+        // stored in a Roc value, the argument pack is a fresh caller-local
+        // area holding by-value copies, and a capture record's bytes are
+        // never also passed as an argument. The return slot stays
+        // unannotated: a return-slot variant can aim it at a reused box
+        // interior that an argument value also reaches.
+        const ret_param_index: usize = if (proc.abi == .erased_callable and self.host_call_mode == .vtable)
+            2
+        else if (proc.abi == .erased_callable)
+            1
+        else if (self.host_call_mode == .extern_symbols)
+            0
+        else
+            2;
+        for (0..params.len) |param_index| {
+            if (param_index == ret_param_index) continue;
+            try attrs_wip.addParamAttr(param_index, .@"noalias", builder);
+        }
         if (self.enable_default_platform_runtime or self.enable_default_platform_diagnostics) {
             if (self.enable_default_platform_runtime) {
                 try attrs_wip.addFnAttr(.{ .string = .{
@@ -7866,6 +7885,90 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn emitListReserve(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
+        const abi = self.layouts().builtinListAbi(self.localLayout(GuardedList.at(args, 0)));
+        // Zero-sized elements make the capacity bookkeeping degenerate; leave
+        // them entirely to the builtin.
+        if (abi.elem_size == 0) {
+            return self.emitListReserveCall(target, args, unique_args);
+        }
+
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const usize_ty = self.ptrSizedIntType();
+
+        // The no-growth outcome is the hot one, so its checks are emitted
+        // inline where this backend controls their shape; growth and shared
+        // lists fall through to the builtin. This mirrors listReserve's fast
+        // path exactly: exclusive ownership and spare <= capacity - length,
+        // where a seamless slice's capacity is its visible window length.
+        const list_ptr = self.slot(GuardedList.at(args, 0)).ptr;
+        const bytes = try self.loadPointer(list_ptr);
+        const len = try self.loadUsize(try self.offsetPtr(list_ptr, self.rocListLenOffset()));
+        const cap_word = try self.loadUsize(try self.offsetPtr(list_ptr, self.rocListCapacityOffset()));
+        // The spare count is a u64 regardless of target width; compare in 64
+        // bits so a huge request on a 32-bit target is not truncated into a
+        // satisfiable one.
+        const spare = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), .i64, false);
+
+        const zero = builder.intValue(usize_ty, 0) catch return error.OutOfMemory;
+        const one = builder.intValue(usize_ty, 1) catch return error.OutOfMemory;
+        const slice_tag = wip.bin(.@"and", cap_word, one, "") catch return error.OutOfMemory;
+        const is_slice = wip.icmp(.ne, slice_tag, zero, "") catch return error.OutOfMemory;
+        const decoded_cap = wip.bin(.lshr, cap_word, one, "") catch return error.OutOfMemory;
+        const capacity = wip.select(.normal, is_slice, len, decoded_cap, "") catch return error.OutOfMemory;
+        const slack = wip.bin(.sub, capacity, len, "") catch return error.OutOfMemory;
+        const slack_wide = try self.coerceScalar(slack, .i64, false);
+        const slack_ok = wip.icmp(.ule, spare, slack_wide, "") catch return error.OutOfMemory;
+
+        const fast_block = wip.block(0, "list_reserve_fast") catch return error.OutOfMemory;
+        const slow_block = wip.block(0, "list_reserve_grow") catch return error.OutOfMemory;
+        const merge_block = wip.block(0, "list_reserve_done") catch return error.OutOfMemory;
+
+        if ((unique_args & 1) != 0) {
+            // Statically in place: ownership needs no runtime evidence.
+            _ = wip.brCond(slack_ok, fast_block, slow_block, .then_likely) catch return error.OutOfMemory;
+        } else {
+            const check_rc_block = wip.block(0, "list_reserve_check_rc") catch return error.OutOfMemory;
+            _ = wip.brCond(slack_ok, check_rc_block, slow_block, .then_likely) catch return error.OutOfMemory;
+
+            // Unique when the list owns no allocation at all (capacity zero
+            // and not a slice), or the allocation's refcount is one. A slice
+            // stores its backing allocation's data pointer in the capacity
+            // word with the tag bit set, so subtracting the tag recovers it.
+            wip.cursor = .{ .block = check_rc_block };
+            const cap_zero = wip.icmp(.eq, capacity, zero, "") catch return error.OutOfMemory;
+            const not_slice = wip.icmp(.eq, slice_tag, zero, "") catch return error.OutOfMemory;
+            const unallocated = wip.bin(.@"and", cap_zero, not_slice, "") catch return error.OutOfMemory;
+            const load_rc_block = wip.block(0, "list_reserve_load_rc") catch return error.OutOfMemory;
+            _ = wip.brCond(unallocated, fast_block, load_rc_block, .none) catch return error.OutOfMemory;
+
+            wip.cursor = .{ .block = load_rc_block };
+            const untagged_alloc = wip.bin(.sub, cap_word, slice_tag, "") catch return error.OutOfMemory;
+            const bytes_int = wip.cast(.ptrtoint, bytes, usize_ty, "") catch return error.OutOfMemory;
+            const alloc_int = wip.select(.normal, is_slice, untagged_alloc, bytes_int, "") catch return error.OutOfMemory;
+            const alloc_ptr = wip.cast(.inttoptr, alloc_int, try self.ptrType(), "") catch return error.OutOfMemory;
+            const word_bytes: i64 = @intCast(self.rocListLenOffset());
+            const rc_ptr = try self.offsetPtrValue(alloc_ptr, builder.intValue(usize_ty, -word_bytes) catch return error.OutOfMemory);
+            const rc = try self.loadUsize(rc_ptr);
+            const rc_is_one = wip.icmp(.eq, rc, one, "") catch return error.OutOfMemory;
+            _ = wip.brCond(rc_is_one, fast_block, slow_block, .then_likely) catch return error.OutOfMemory;
+        }
+
+        wip.cursor = .{ .block = fast_block };
+        const out_ptr = self.slot(target).ptr;
+        try self.storePointer(out_ptr, bytes);
+        try self.storeUsize(try self.offsetPtr(out_ptr, self.rocListLenOffset()), len);
+        try self.storeUsize(try self.offsetPtr(out_ptr, self.rocListCapacityOffset()), cap_word);
+        _ = wip.br(merge_block) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = slow_block };
+        try self.emitListReserveCall(target, args, unique_args);
+        _ = wip.br(merge_block) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = merge_block };
+    }
+
+    fn emitListReserveCall(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const abi = self.layouts().builtinListAbi(self.localLayout(GuardedList.at(args, 0)));
         var call_args = try self.rocListArgs1(GuardedList.at(args, 0));
