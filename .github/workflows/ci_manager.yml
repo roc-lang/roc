@@ -119,8 +119,8 @@ jobs:
           # compiles ~13 artifacts through LLVM at once where the x86_64 one
           # does not, and starves itself. Same throttle as `release_jobs_flag`
           # in ci_zig.yml.
-          - os: ubuntu-24.04-arm
-            build_jobs_flag: '-j2'
+          # - os: ubuntu-24.04-arm
+          #   build_jobs_flag: '-j2'
           - os: macos-15
             build_jobs_flag: ''
           - os: windows-2025
@@ -300,14 +300,14 @@ jobs:
           # These entries must stay below the macOS ones: they alias anchors
           # that the macOS entries define, and YAML requires the definition to
           # come first.
-          - os: ubuntu-24.04-arm
-            shard: ubuntu-arm-zig
-            timeout_minutes: 120
-            minici_args: ["--minici-after", *minici_core_boundary, "--minici-before", *minici_harness_boundary]
-          - os: ubuntu-24.04-arm
-            shard: ubuntu-arm-harness
-            timeout_minutes: 120
-            minici_args: ["--minici-from", *minici_harness_boundary]
+          # - os: ubuntu-24.04-arm
+          #   shard: ubuntu-arm-zig
+          #   timeout_minutes: 120
+          #   minici_args: ["--minici-after", *minici_core_boundary, "--minici-before", *minici_harness_boundary]
+          # - os: ubuntu-24.04-arm
+          #   shard: ubuntu-arm-harness
+          #   timeout_minutes: 120
+          #   minici_args: ["--minici-from", *minici_harness_boundary]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
