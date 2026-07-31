@@ -468,6 +468,26 @@ pub const Census = struct {
     // What checking holds for a variable no scheme generalizes: whether it is
     // still a variable there, what it carries, and whether checking classified
     // it as a residual at all.
+    // Whether a rigid no binder list holds is reachable from the root of the
+    // definition being specialized, which says whether its binder list omits a
+    // parameter of its own signature.
+    // Whether the rigid appears in ANY definition's signature in the module.
+    unowned_rigid_in_some_scheme_root: Counter = Counter.init(0),
+    unowned_rigid_in_no_scheme_root: Counter = Counter.init(0),
+    // Whether a rigid in no LOCAL signature is a parameter of an IMPORTED
+    // definition: already among the projected binders, present in a projected
+    // root but missing from its binder list, or in no signature anywhere.
+    unowned_rigid_is_imported_binder: Counter = Counter.init(0),
+    unowned_rigid_in_imported_root_not_binders: Counter = Counter.init(0),
+    unowned_rigid_in_no_root_at_all: Counter = Counter.init(0),
+    // Whether the parameter stands in a scheme's PRISTINE snapshot root even
+    // though the final recorded root no longer mentions it.
+    unowned_rigid_in_pristine_root_only: Counter = Counter.init(0),
+    unowned_rigid_in_no_pristine_root_either: Counter = Counter.init(0),
+    unowned_rigid_reachable_from_frame_scheme: Counter = Counter.init(0),
+    unowned_rigid_outside_frame_scheme: Counter = Counter.init(0),
+    unowned_frame_owner_has_no_scheme: Counter = Counter.init(0),
+    unowned_no_frame_for_module: Counter = Counter.init(0),
     unowned_var_is_flex: Counter = Counter.init(0),
     unowned_var_is_rigid: Counter = Counter.init(0),
     unowned_var_is_not_a_variable: Counter = Counter.init(0),

@@ -1392,6 +1392,58 @@ pub const Rehearsal = struct {
     /// position entered through. The read's own use expression never carries
     /// that site; the edge's might, and that is the difference between building
     /// a level for the definition and having nothing to build it from.
+    /// Debug/probe-only: whether `needle` is reachable from `root` in a checked
+    /// type, with an explicit visited set so a recursive type terminates
+    /// (reunify.md 15.10).
+    fn checkedReaches(
+        self: *Rehearsal,
+        cursor: direct_translate.ModuleCursor,
+        root: checked.CheckedTypeId,
+        needle: checked.CheckedTypeId,
+    ) bool {
+        var visited = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
+        defer visited.deinit();
+        var stack = std.ArrayList(checked.CheckedTypeId).empty;
+        defer stack.deinit(self.allocator);
+        stack.append(self.allocator, root) catch return false;
+        while (stack.pop()) |current| {
+            if (current == needle) return true;
+            const seen = visited.getOrPut(current) catch return false;
+            if (seen.found_existing) continue;
+            switch (cursor.view.payload(current)) {
+                .alias => |alias| {
+                    for (alias.args) |arg| stack.append(self.allocator, arg) catch return false;
+                    stack.append(self.allocator, alias.backing) catch return false;
+                },
+                .record => |record| {
+                    for (record.fields) |field| stack.append(self.allocator, field.ty) catch return false;
+                    stack.append(self.allocator, record.ext) catch return false;
+                },
+                .record_unbound => |fields| for (fields) |field| {
+                    stack.append(self.allocator, field.ty) catch return false;
+                },
+                .tuple => |items| for (items) |item| {
+                    stack.append(self.allocator, item) catch return false;
+                },
+                .nominal => |nominal| {
+                    for (nominal.args) |arg| stack.append(self.allocator, arg) catch return false;
+                },
+                .function => |function| {
+                    for (function.args) |arg| stack.append(self.allocator, arg) catch return false;
+                    stack.append(self.allocator, function.ret) catch return false;
+                },
+                .tag_union => |union_type| {
+                    for (union_type.tags) |tag| {
+                        for (tag.argsSlice(cursor.view)) |arg| stack.append(self.allocator, arg) catch return false;
+                    }
+                    stack.append(self.allocator, union_type.ext) catch return false;
+                },
+                else => {},
+            }
+        }
+        return false;
+    }
+
     /// Debug/probe-only: for a divergence that entered through no request edge,
     /// whether any recorded site in the position's own module names the
     /// definition its unbound variable belongs to (reunify.md 13.2 2a).
@@ -1426,6 +1478,93 @@ pub const Rehearsal = struct {
             // variable checking left unresolved and unclassified, there is
             // nothing for checking to record and the value only exists once a
             // specialization is chosen (reunify.md 15.2).
+            // A rigid is a declared parameter of some signature. If no scheme's
+            // binder list holds it, ask whether it is REACHABLE from the root
+            // of the definition being specialized: if it is, that definition's
+            // binder list omits a parameter its own signature contains, which
+            // is a capture gap; if it is not, the parameter belongs to some
+            // definition this specialization never names (reunify.md 7.1).
+            // The decisive question: is this rigid in ANY definition's signature
+            // in the module? If it is, that definition's binder list omits a
+            // parameter of its own signature and checking can record it. If it
+            // is in none, it is a parameter no signature carries, and there is
+            // nothing for checking to attach it to (reunify.md 7.1, 15.2).
+            {
+                var found_in_some_scheme = false;
+                for (cursor.view.schemes) |scheme| {
+                    if (self.checkedReaches(cursor, scheme.root, free)) {
+                        found_in_some_scheme = true;
+                        break;
+                    }
+                }
+                if (found_in_some_scheme) {
+                    census.bump("unowned_rigid_in_some_scheme_root");
+                } else {
+                    census.bump("unowned_rigid_in_no_scheme_root");
+                    // Local schemes are only half the definitions. A parameter
+                    // of an IMPORTED definition lives in the projected
+                    // imported-scheme table, whose binder list is separate
+                    // (reunify.md 7.1).
+                    var in_imported_binders = false;
+                    for (cursor.view.importedSchemeBinders()) |binder| {
+                        if (binder == free) {
+                            in_imported_binders = true;
+                            break;
+                        }
+                    }
+                    if (in_imported_binders) {
+                        census.bump("unowned_rigid_is_imported_binder");
+                    } else {
+                        var in_imported_root = false;
+                        for (cursor.view.importedSchemes()) |imported| {
+                            if (self.checkedReaches(cursor, imported.localRoot(), free)) {
+                                in_imported_root = true;
+                                break;
+                            }
+                        }
+                        if (in_imported_root) {
+                            census.bump("unowned_rigid_in_imported_root_not_binders");
+                        } else {
+                            census.bump("unowned_rigid_in_no_root_at_all");
+                            // A scheme's recorded `root` is the FINAL root,
+                            // whose free variables may have been unified after
+                            // generalization; `snapshot_root` is the pristine
+                            // scheme at the boundary. A parameter substituted
+                            // away in the former still stands in the latter
+                            // (reunify.md 7.1).
+                            var in_pristine = false;
+                            for (cursor.view.schemes) |scheme| {
+                                if (scheme.snapshot_root == checked.scheme_snapshot_root_none) continue;
+                                const pristine: checked.CheckedTypeId = @enumFromInt(scheme.snapshot_root);
+                                if (self.checkedReaches(cursor, pristine, free)) {
+                                    in_pristine = true;
+                                    break;
+                                }
+                            }
+                            if (in_pristine) {
+                                census.bump("unowned_rigid_in_pristine_root_only");
+                            } else {
+                                census.bump("unowned_rigid_in_no_pristine_root_either");
+                            }
+                        }
+                    }
+                }
+            }
+            if (self.frameForModule(address.module_bytes)) |frame| {
+                if (cursor.view.schemeIdForOwnerNode(frame.owner_node)) |frame_scheme_id| {
+                    if (cursor.view.schemeById(frame_scheme_id)) |frame_scheme| {
+                        if (self.checkedReaches(cursor, frame_scheme.root, free)) {
+                            census.bump("unowned_rigid_reachable_from_frame_scheme");
+                        } else {
+                            census.bump("unowned_rigid_outside_frame_scheme");
+                        }
+                    }
+                } else {
+                    census.bump("unowned_frame_owner_has_no_scheme");
+                }
+            } else {
+                census.bump("unowned_no_frame_for_module");
+            }
             switch (cursor.view.payload(free)) {
                 .flex => |variable| {
                     census.bump("unowned_var_is_flex");
