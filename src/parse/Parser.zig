@@ -1179,10 +1179,21 @@ fn parseRecordFieldCollectionTokens(
     open_error: AST.Diagnostic.Tag,
     close_error: AST.Diagnostic.Tag,
 ) std.mem.Allocator.Error!AST.Collection.Idx {
-    const fields_start = self.pos;
-    self.expect(.OpenCurly) catch {
+    if (self.peek() != .OpenCurly) {
         return try self.pushMalformed(AST.Collection.Idx, open_error, start);
-    };
+    }
+    return self.parseOpenedRecordFieldCollectionTokens(start, collection_tag, close_error);
+}
+
+fn parseOpenedRecordFieldCollectionTokens(
+    self: *Parser,
+    start: Token.Idx,
+    collection_tag: Node.Tag,
+    close_error: AST.Diagnostic.Tag,
+) std.mem.Allocator.Error!AST.Collection.Idx {
+    const fields_start = self.pos;
+    std.debug.assert(self.peek() == .OpenCurly);
+    self.advance();
     const scratch_top = self.store.scratchRecordFieldTop();
     while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
         try self.store.addScratchRecordField(try self.parseRecordFieldTokens());
@@ -1242,12 +1253,18 @@ fn parsePackageHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Id
         .malformed => |bad| return try self.pushMalformed(AST.Header.Idx, bad.tag, bad.pos),
     };
     try self.recordPackageHeaderModules(exposed.span);
-    const packages = try self.parseRecordFieldCollectionTokens(
-        start,
-        .collection_packages,
-        .expected_package_platform_open_curly,
-        .expected_package_platform_close_curly,
-    );
+    const packages = if (self.peek() == .OpenCurly)
+        try self.parseOpenedRecordFieldCollectionTokens(
+            start,
+            .collection_packages,
+            .expected_package_platform_close_curly,
+        )
+    else
+        try self.store.addCollection(.collection_packages, .{
+            .span = base.DataSpan.empty(),
+            .region = .{ .start = self.pos, .end = self.pos },
+            .layout = .compact,
+        });
 
     return try self.store.addHeader(.{ .package = .{
         .exposes = exposed.collection,
@@ -1269,7 +1286,7 @@ fn parseAppHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
 
     const packages_start = self.pos;
     self.expect(.OpenCurly) catch {
-        return try self.pushMalformed(AST.Header.Idx, .expected_package_platform_open_curly, start);
+        return try self.pushMalformed(AST.Header.Idx, .expected_app_open_curly, start);
     };
     const fields_scratch_top = self.store.scratchRecordFieldTop();
     while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
