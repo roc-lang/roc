@@ -250,23 +250,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 		(e-lambda
 			(args
 				(p-assign (ident "result")))
-			(e-match
-				(match
-					(cond
-						(e-runtime-error (tag "erroneous_value_expr")))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-empty_list)))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-empty_list)))))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "Try") (builtin)
@@ -293,7 +277,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call (constraint-fn-var 371)
+			(e-call (constraint-fn-var 350)
 				(e-runtime-error (tag "erroneous_value_expr"))
 				(e-tag (name "Ok")
 					(args

@@ -398,6 +398,39 @@ test "unifyWriteNoReport - detects mismatch without recording or poisoning" {
     try std.testing.expect(env.module_env.types.resolveVar(b).desc.content != .err);
 }
 
+test "unifyWriteNoReport - keeps successful child unifications before a later mismatch" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const expected_child = try env.module_env.types.freshFromContent(.{ .flex = Flex.init() });
+    const actual_child = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const expected_mismatch = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const actual_mismatch = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
+
+    const expected = try env.module_env.types.freshFromContent(try env.mkTuple(&.{ expected_child, expected_mismatch }));
+    const actual = try env.module_env.types.freshFromContent(try env.mkTuple(&.{ actual_child, actual_mismatch }));
+
+    const result = try env.unifyWriteNoReport(expected, actual);
+
+    try std.testing.expectEqual(Result.mismatch, result);
+    try std.testing.expectEqual(@as(usize, 0), env.problems.problems.items.len);
+
+    // Tuple children are processed in order. The first pair committed before
+    // the second pair rejected the relation, and write_no_report preserves it.
+    const expected_child_resolved = env.module_env.types.resolveVar(expected_child);
+    const actual_child_resolved = env.module_env.types.resolveVar(actual_child);
+    try std.testing.expectEqual(expected_child_resolved.var_, actual_child_resolved.var_);
+    try std.testing.expectEqual(Content{ .structure = .empty_record }, expected_child_resolved.desc.content);
+
+    // The rejected tuple roots themselves remain distinct and unpoisoned.
+    const expected_resolved = env.module_env.types.resolveVar(expected);
+    const actual_resolved = env.module_env.types.resolveVar(actual);
+    try std.testing.expect(expected_resolved.var_ != actual_resolved.var_);
+    try std.testing.expect(expected_resolved.desc.content != .err);
+    try std.testing.expect(actual_resolved.desc.content != .err);
+}
+
 // unification - aliases //
 
 test "unify - aliases with different names but same backing" {
