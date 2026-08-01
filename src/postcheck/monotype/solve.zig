@@ -2693,10 +2693,22 @@ pub const InstGraph = struct {
                     if (public_row.tags.len != request_row.tags.len) {
                         Common.invariant("request container join received tag unions with different tag counts");
                     }
-                    for (public_row.tags, request_row.tags) |public_tag, request_tag| {
-                        if (!Ident.textEql(self.tagLabelText(public_tag.name), self.tagLabelText(request_tag.name)) or
-                            public_tag.payloads.len != request_tag.payloads.len)
-                        {
+                    // The two roots carry one tag set, not one order: a
+                    // checked-instantiated row keeps its checked order while a
+                    // store-shaped row is text-sorted, so each tag is matched
+                    // by label. Equal counts plus no duplicate labels make the
+                    // per-label match a bijection.
+                    for (public_row.tags) |public_tag| {
+                        var matched = false;
+                        for (request_row.tags) |request_tag| {
+                            if (Ident.textEql(self.tagLabelText(public_tag.name), self.tagLabelText(request_tag.name)) and
+                                public_tag.payloads.len == request_tag.payloads.len)
+                            {
+                                matched = true;
+                                break;
+                            }
+                        }
+                        if (!matched) {
                             Common.invariant("request container join received tag unions with different tags");
                         }
                     }
