@@ -550,34 +550,39 @@ const BuiltinsObjects = struct {
     }
 };
 
-const DefaultPlatformRuntimeObjects = struct {
-    const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/roc_default_platform.o");
-    const arm64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64musl/roc_default_platform.o");
-    const x64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64glibc/roc_default_platform.o");
-    const arm64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64glibc/roc_default_platform.o");
-    const x64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/roc_default_platform.o");
-    const arm64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/roc_default_platform.o");
-    const x64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/roc_default_platform.obj");
-    const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/roc_default_platform.obj");
+fn DefaultPlatformObjects(comptime base_name: []const u8) type {
+    return struct {
+        const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/" ++ base_name ++ ".o");
+        const arm64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64musl/" ++ base_name ++ ".o");
+        const x64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64glibc/" ++ base_name ++ ".o");
+        const arm64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64glibc/" ++ base_name ++ ".o");
+        const x64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/" ++ base_name ++ ".o");
+        const arm64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/" ++ base_name ++ ".o");
+        const x64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/" ++ base_name ++ ".obj");
+        const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/" ++ base_name ++ ".obj");
 
-    pub fn forTarget(target: RocTarget) ?[]const u8 {
-        return switch (target) {
-            .x64musl => x64musl,
-            .arm64musl => arm64musl,
-            .x64glibc, .x64linux => x64glibc,
-            .arm64glibc, .arm64linux => arm64glibc,
-            .x64mac => x64mac,
-            .arm64mac => arm64mac,
-            .x64win => x64win,
-            .arm64win => arm64win,
-            else => null,
-        };
-    }
+        pub fn forTarget(target: RocTarget) ?[]const u8 {
+            return switch (target) {
+                .x64musl => x64musl,
+                .arm64musl => arm64musl,
+                .x64glibc, .x64linux => x64glibc,
+                .arm64glibc, .arm64linux => arm64glibc,
+                .x64mac => x64mac,
+                .arm64mac => arm64mac,
+                .x64win => x64win,
+                .arm64win => arm64win,
+                else => null,
+            };
+        }
 
-    pub fn filename(target: RocTarget) []const u8 {
-        return if (target.isWindows()) "roc_default_platform.obj" else "roc_default_platform.o";
-    }
-};
+        pub fn filename(target: RocTarget) []const u8 {
+            return if (target.isWindows()) base_name ++ ".obj" else base_name ++ ".o";
+        }
+    };
+}
+
+const DefaultPlatformRuntimeObjects = DefaultPlatformObjects("roc_default_runtime");
+const DefaultPlatformExecutableObjects = DefaultPlatformObjects("roc_default_platform");
 
 // Workaround for Zig standard library compilation issue on macOS ARM64.
 //
@@ -7625,6 +7630,16 @@ fn writeDefaultPlatformRuntimeObject(ctx: *CliCtx, artifact_dir: []const u8, tar
     return runtime_path;
 }
 
+fn writeDefaultPlatformExecutableObject(ctx: *CliCtx, artifact_dir: []const u8, target: RocTarget) CliMainError!?[]const u8 {
+    const bytes = DefaultPlatformExecutableObjects.forTarget(target) orelse return null;
+    const runtime_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, DefaultPlatformExecutableObjects.filename(target) });
+    backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, bytes) catch |err| {
+        std.log.err("Failed to write default platform executable object {s}: {}", .{ runtime_path, err });
+        return err;
+    };
+    return runtime_path;
+}
+
 /// The host inputs of a link, in link order.
 fn hostInputPaths(ctx: *CliCtx, link_inputs: PlatformLinkInputs) std.mem.Allocator.Error![]const []const u8 {
     var paths = try std.array_list.Managed([]const u8).initCapacity(
@@ -8951,7 +8966,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     } else {
         reporter.begin("LLVM IR Generation");
         const hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
-        const enable_default_platform_runtime = args.synthetic_default_platform and DefaultPlatformRuntimeObjects.forTarget(target) != null;
+        const enable_default_platform_runtime = args.synthetic_default_platform and DefaultPlatformExecutableObjects.forTarget(target) != null;
 
         const app_object = try compileLlvmAppObject(
             ctx,
@@ -8998,7 +9013,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
             try object_files.append(path);
         }
         if (enable_default_platform_runtime) {
-            if (try writeDefaultPlatformRuntimeObject(ctx, app_object.artifact_dir, target)) |runtime_path| {
+            if (try writeDefaultPlatformExecutableObject(ctx, app_object.artifact_dir, target)) |runtime_path| {
                 try object_files.append(runtime_path);
             } else {
                 return error.UnsupportedTarget;
@@ -9290,7 +9305,6 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     }
 
     var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
-    object_compiler.enable_default_platform_runtime = args.synthetic_default_platform;
     var backend_timing = backend.ObjectFileCompiler.Timing.init(ctx.io.std_io);
     object_compiler.timing = &backend_timing;
 
@@ -9332,7 +9346,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     try object_files.append(obj_path);
     try object_files.append(builtins_path);
     if (args.synthetic_default_platform) {
-        if (try writeDefaultPlatformRuntimeObject(ctx, build_scratch_dir, target)) |runtime_path| {
+        if (try writeDefaultPlatformExecutableObject(ctx, build_scratch_dir, target)) |runtime_path| {
             try object_files.append(runtime_path);
         } else {
             return error.UnsupportedTarget;

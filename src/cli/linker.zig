@@ -686,6 +686,7 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             try args.append("/defaultlib:kernel32");
             try args.append("/defaultlib:ntdll");
             try args.append("/defaultlib:msvcrt");
+            try args.append("/defaultlib:shell32");
 
             // Suppress warnings using Windows style
             try args.append("/ignore:4217"); // Ignore locally defined symbol imported warnings
