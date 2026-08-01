@@ -894,6 +894,7 @@ pub const Translator = struct {
             .scheme_owner_node = scheme_owner_node,
             .active = std.AutoHashMap(ActiveNode, void).init(self.allocator),
             .recursion_slots = null,
+            .slot_journal = null,
             .nominal_instances = null,
             .skip_reason = skip_reason,
         };
@@ -1011,6 +1012,8 @@ pub const Translator = struct {
     ) WalkError!TypeId {
         var slots = std.AutoHashMap(ActiveNode, TypeId).init(self.allocator);
         defer slots.deinit();
+        var journal = std.ArrayList(ActiveNode).empty;
+        defer journal.deinit(self.allocator);
         var instances = NominalInstances.init(self.allocator);
         defer instances.deinit();
         var walk = Walk{
@@ -1021,6 +1024,7 @@ pub const Translator = struct {
             .scheme_owner_node = scheme_owner_node,
             .active = std.AutoHashMap(ActiveNode, void).init(self.allocator),
             .recursion_slots = &slots,
+            .slot_journal = &journal,
             .nominal_instances = &instances,
             .skip_reason = skip_reason,
             .emitting_representation = true,
@@ -1273,6 +1277,17 @@ const Walk = struct {
     scheme_owner_node: u32,
     active: std.AutoHashMap(ActiveNode, void),
     recursion_slots: ?*std.AutoHashMap(ActiveNode, TypeId),
+    /// Reserve-order journal of every key added to `recursion_slots`, so a
+    /// binder frame can retract the entries its backing descent recorded when
+    /// it pops (`nominalBacking`). A declaration holds ONE checked backing
+    /// root and every instance walks that root under its own binder frame, so
+    /// an entry recorded under one instance's substitution must not resolve
+    /// another instance's walk of the same checked address (reunify.md
+    /// sections 8.3, 9.2). Entries recorded outside any frame — the reserved
+    /// nominal positions themselves — stay for the whole walk, which is what
+    /// closes a recursive minted backing onto its own position. Null in eager
+    /// mode, like `recursion_slots`.
+    slot_journal: ?*std.ArrayList(ActiveNode),
     /// The nominal instances this reserve-fill walk already reserved a slot for,
     /// keyed by declaration and translated arguments. Null in eager mode.
     nominal_instances: ?*NominalInstances,
@@ -1292,6 +1307,24 @@ const Walk = struct {
     fn skip(self: *Walk, reason: SkipReason) WalkError {
         self.skip_reason.* = reason;
         return error.Skip;
+    }
+
+    /// Record one reserved slot and journal the key, so the binder frame this
+    /// reservation was made under can retract it when the frame pops.
+    fn recordSlot(self: *Walk, key: ActiveNode, reserved: TypeId) Allocator.Error!void {
+        try self.recursion_slots.?.put(key, reserved);
+        try self.slot_journal.?.append(self.owner.allocator, key);
+    }
+
+    /// Retract every slot recorded after `mark`, restoring the map to the
+    /// state the enclosing frame saw. Journal and map move together, so the
+    /// retraction is exact.
+    fn retractSlots(self: *Walk, mark: usize) void {
+        const journal = self.slot_journal orelse return;
+        while (journal.items.len > mark) {
+            const key = journal.pop().?;
+            _ = self.recursion_slots.?.remove(key);
+        }
     }
 
     fn activeKey(self: *Walk, checked_ty: checked.CheckedTypeId) ActiveNode {
@@ -1377,7 +1410,7 @@ const Walk = struct {
             p: checked.CheckedTypePayload,
 
             fn fill(ctx: @This(), reserved: TypeId) Allocator.Error!MonoType.Content {
-                try ctx.walk.recursion_slots.?.put(ctx.key, reserved);
+                try ctx.walk.recordSlot(ctx.key, reserved);
                 return ctx.walk.payloadContent(ctx.checked_ty, ctx.p) catch |err| switch (err) {
                     // `skip_reason` is already recorded; signal the skip through
                     // the walk so `nodeReserveFill` re-raises it after the slot is
@@ -1442,7 +1475,7 @@ const Walk = struct {
             args: []const TypeId,
 
             fn fill(ctx: @This(), reserved: TypeId) Allocator.Error!MonoType.Content {
-                try ctx.walk.recursion_slots.?.put(ctx.address, reserved);
+                try ctx.walk.recordSlot(ctx.address, reserved);
                 try ctx.walk.nominal_instances.?.record(
                     ctx.source.cursor.module_bytes,
                     ctx.source.declaration,
@@ -2029,7 +2062,15 @@ const Walk = struct {
         const saved_env = self.binding_env;
         self.cursor = source.cursor;
         self.binding_env = &frame;
+        // Slots reserved during this backing descent belong to this frame's
+        // substitution: another instance of the same declaration walks the
+        // same checked backing root under different bindings, and must not
+        // resolve through these entries. The position's own slot was recorded
+        // before this frame opened, so a recursive backing still closes onto
+        // it (reunify.md sections 8.3, 9.2).
+        const slot_mark: usize = if (self.slot_journal) |journal| journal.items.len else 0;
         defer {
+            self.retractSlots(slot_mark);
             self.cursor = saved_cursor;
             self.binding_env = saved_env;
         }
