@@ -195,6 +195,12 @@ pub const MonoLlvmCodeGen = struct {
 
     proc_registry: std.AutoHashMap(u32, LlvmBuilder.Function.Index),
     builtin_functions: std.StringHashMap(LlvmBuilder.Function.Index),
+    /// Shims that give cold-path builtin calls the preserve_most convention,
+    /// keyed by builtin symbol name. See `callBuiltin`.
+    cold_shims: std.StringHashMap(ColdShim),
+    /// How many enclosing cold switch arms the statement being emitted sits
+    /// under. Non-zero routes builtin calls through preserve_most shims.
+    cold_depth: u32 = 0,
     static_bytes: std.StringHashMap(LlvmBuilder.Value),
     static_data_globals: std.AutoHashMap(u32, LlvmBuilder.Value),
     runtime_error_func: ?LlvmBuilder.Function.Index = null,
@@ -348,6 +354,7 @@ pub const MonoLlvmCodeGen = struct {
             .store = store,
             .proc_registry = std.AutoHashMap(u32, LlvmBuilder.Function.Index).init(allocator),
             .builtin_functions = std.StringHashMap(LlvmBuilder.Function.Index).init(allocator),
+            .cold_shims = std.StringHashMap(ColdShim).init(allocator),
             .static_bytes = std.StringHashMap(LlvmBuilder.Value).init(allocator),
             .static_data_globals = std.AutoHashMap(u32, LlvmBuilder.Value).init(allocator),
             .rc_helpers = std.AutoHashMap(u64, RcHelperEntry).init(allocator),
@@ -390,6 +397,7 @@ pub const MonoLlvmCodeGen = struct {
         self.debug_inline_subprograms.deinit();
         self.proc_registry.deinit();
         self.builtin_functions.deinit();
+        self.cold_shims.deinit();
         self.clearStaticBytes();
         self.static_bytes.deinit();
         self.static_data_globals.deinit();
@@ -406,6 +414,8 @@ pub const MonoLlvmCodeGen = struct {
     pub fn reset(self: *MonoLlvmCodeGen) void {
         self.proc_registry.clearRetainingCapacity();
         self.builtin_functions.clearRetainingCapacity();
+        self.cold_shims.clearRetainingCapacity();
+        self.cold_depth = 0;
         self.clearStaticBytes();
         self.static_data_globals.clearRetainingCapacity();
         self.rc_helpers.clearRetainingCapacity();
@@ -675,6 +685,7 @@ pub const MonoLlvmCodeGen = struct {
             _ = try self.declareRcHelper(helper_key, .atomic);
         }
         try self.compilePendingRcHelpers();
+        try self.compilePendingColdShims();
 
         for (entrypoints) |entrypoint| {
             try self.generateEntrypointWrapper(
@@ -2088,6 +2099,16 @@ pub const MonoLlvmCodeGen = struct {
         branch_blocks: []LlvmBuilder.Function.Block.Index,
         default_block: LlvmBuilder.Function.Block.Index,
         default_branch: CFStmtId,
+        default_is_cold: bool,
+    };
+
+    /// A preserve_most wrapper around one builtin, so a call on a cold path
+    /// clobbers almost no registers in its (hot-loop) caller.
+    const ColdShim = struct {
+        shim: LlvmBuilder.Function.Index,
+        target: LlvmBuilder.Function.Index,
+        fn_ty: LlvmBuilder.Type,
+        compiled: bool,
     };
 
     const InitializedPayloadSwitchState = struct {
@@ -2123,6 +2144,7 @@ pub const MonoLlvmCodeGen = struct {
         switch_branch: struct { state: *SwitchState, index: u32 },
         switch_default: *SwitchState,
         switch_free: *SwitchState,
+        cold_region_end,
         initialized_payload_branch: struct { state: *InitializedPayloadSwitchState, initialized: bool },
         initialized_payload_free: *InitializedPayloadSwitchState,
         join_after_remainder: *JoinState,
@@ -2154,8 +2176,18 @@ pub const MonoLlvmCodeGen = struct {
                     const wip = self.wip orelse return error.CompilationFailed;
                     wip.cursor = .{ .block = state.default_block };
                     try work.append(wa, .{ .switch_free = state });
+                    if (state.default_is_cold) {
+                        // The default subtree is emitted before this marker
+                        // pops, bracketing the region exactly: a jump out to a
+                        // join ends the arm, and the join's own body is queued
+                        // by its `join_after_remainder`, which sits below the
+                        // marker on the stack.
+                        self.cold_depth += 1;
+                        try work.append(wa, .cold_region_end);
+                    }
                     try work.append(wa, .{ .node = state.default_branch });
                 },
+                .cold_region_end => self.cold_depth -= 1,
                 .switch_free => |state| {
                     self.allocator.free(state.branch_blocks);
                     self.allocator.destroy(state);
@@ -4921,6 +4953,7 @@ pub const MonoLlvmCodeGen = struct {
             .branch_blocks = branch_blocks,
             .default_block = default_block,
             .default_branch = sw.default_branch,
+            .default_is_cold = sw.default_is_cold,
         };
         if (branches.len == 0) {
             try work.append(wa, .{ .switch_default = state });
@@ -10235,8 +10268,70 @@ pub const MonoLlvmCodeGen = struct {
     ) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
+        if (self.cold_depth > 0) {
+            // A call on a cold path still clobbers the whole caller-saved
+            // register set, which forces the register allocator to spill any
+            // loop-carried value alive across it -- in the hot loop, not the
+            // cold arm. Routing the call through a noinline preserve_most
+            // wrapper moves those saves into the wrapper, so the hot loop
+            // keeps its values in registers.
+            const shim = try self.declareColdShim(name, ret_type, param_types);
+            return wip.call(.normal, .preserve_mostcc, .none, shim.fn_ty, shim.shim.toValue(builder), args, "") catch return error.OutOfMemory;
+        }
         const func = try self.declareBuiltin(name, ret_type, param_types);
         return wip.call(.normal, .ccc, .none, func.typeOf(builder), func.toValue(builder), args, "") catch return error.OutOfMemory;
+    }
+
+    fn declareColdShim(self: *MonoLlvmCodeGen, name: []const u8, ret_type: LlvmBuilder.Type, param_types: []const LlvmBuilder.Type) Error!ColdShim {
+        const builder = self.builder orelse return error.CompilationFailed;
+        if (self.cold_shims.get(name)) |shim| return shim;
+        const target = try self.declareBuiltin(name, ret_type, param_types);
+        const fn_ty = builder.fnType(ret_type, param_types, .normal) catch return error.OutOfMemory;
+        const shim_name = try std.fmt.allocPrint(self.allocator, "roc_cold_shim.{s}", .{name});
+        defer self.allocator.free(shim_name);
+        const func = builder.addFunction(fn_ty, builder.strtabString(shim_name) catch return error.OutOfMemory, .default) catch return error.OutOfMemory;
+        func.setLinkage(.internal, builder);
+        func.setCallConv(.preserve_mostcc, builder);
+        {
+            var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
+            defer attrs_wip.deinit(builder);
+            try attrs_wip.addFnAttr(.@"noinline", builder);
+            try attrs_wip.addFnAttr(.cold, builder);
+            func.setAttributes(attrs_wip.finish(builder) catch return error.OutOfMemory, builder);
+        }
+        const shim = ColdShim{ .shim = func, .target = target, .fn_ty = fn_ty, .compiled = false };
+        try self.cold_shims.put(name, shim);
+        return shim;
+    }
+
+    /// Emit the body of every cold shim declared while compiling procs: a
+    /// plain call to the wrapped builtin and a return. Runs after the procs,
+    /// when no function is mid-emission.
+    fn compilePendingColdShims(self: *MonoLlvmCodeGen) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        var iter = self.cold_shims.valueIterator();
+        while (iter.next()) |shim| {
+            if (shim.compiled) continue;
+            shim.compiled = true;
+
+            var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = shim.shim, .strip = true }) catch return error.OutOfMemory;
+            defer wip.deinit();
+            const entry = wip.block(0, "entry") catch return error.OutOfMemory;
+            wip.cursor = .{ .block = entry };
+
+            const param_count = shim.fn_ty.functionParameters(builder).len;
+            const args = try self.allocator.alloc(LlvmBuilder.Value, param_count);
+            defer self.allocator.free(args);
+            for (args, 0..) |*arg, i| arg.* = wip.arg(@intCast(i));
+
+            const result = wip.call(.normal, .ccc, .none, shim.target.typeOf(builder), shim.target.toValue(builder), args, "") catch return error.OutOfMemory;
+            if (shim.fn_ty.functionReturn(builder) == .void) {
+                _ = wip.retVoid() catch return error.OutOfMemory;
+            } else {
+                _ = wip.ret(result) catch return error.OutOfMemory;
+            }
+            wip.finish() catch return error.OutOfMemory;
+        }
     }
 
     fn callBuiltinVoid(self: *MonoLlvmCodeGen, name: []const u8, param_types: []const LlvmBuilder.Type, args: []const LlvmBuilder.Value) Error!void {
