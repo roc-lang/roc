@@ -16117,7 +16117,7 @@ const BodyContext = struct {
 
         const declared_ret_node = try ret_cell.toGraphNode(self.graph);
         const body_ret_cell = if (try self.nodeIsProvenUninhabited(declared_ret_node))
-            DraftTypeCell.fromGraphNode(try self.lowerTypeNode(self.view.bodies.expr(checked_body).ty))
+            DraftTypeCell{ .sealed = try self.typeForChecked(self.view.bodies.expr(checked_body).ty) }
         else
             ret_cell;
         self.current_return_target = .{ .lambda = lambda_id, .cell = body_ret_cell };
@@ -43019,8 +43019,10 @@ const BodyContext = struct {
         if (checked_pattern.data != .assign) {
             Common.invariant("checked uninitialized variable pattern was not a binder");
         }
-        const node = try self.lowerTypeNode(checked_pattern.ty);
-        return try self.lowerShapeFreePatternAtCell(pattern, DraftTypeCell.fromGraphNode(node));
+        return try self.lowerShapeFreePatternAtCell(
+            pattern,
+            .{ .sealed = try self.typeForChecked(checked_pattern.ty) },
+        );
     }
 
     fn lowerPatternStatement(
