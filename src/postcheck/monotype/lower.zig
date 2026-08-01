@@ -166,12 +166,10 @@ pub fn run(
 
     // The per-specialization instantiation state (reunify.md sections 9/10/11).
     // It runs alongside lowering because a specialization's binder environment
-    // only exists while that specialization is being lowered.
-    // Only the seam comparison reads this today, and that comparison is
-    // compiled out outside Debug, so building the environment chains and site
-    // indexes would be work no one reads. It becomes unconditional when
-    // directed instantiation takes over the seam.
-    if (comptime census.enabled) builder.rehearsal = try builder.createRehearsal();
+    // only exists while that specialization is being lowered. Directed
+    // instantiation reads its environments in every build mode, so it is
+    // unconditional; only the Debug seam comparison also compares through it.
+    builder.rehearsal = try builder.createRehearsal();
     defer if (builder.rehearsal) |rehearsal| rehearsal.destroy();
 
     for (roots.requests) |request| {
