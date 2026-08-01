@@ -1492,16 +1492,17 @@ pub fn scanParsedHeader(
                 return error.HeaderParseFailed;
             }
             // The packages collection includes the platform field, which is
-            // already recorded above as the platform edge.
-            try appendPackagesCollection(allocator, ast, a.packages, a.platform_idx, &deps);
+            // already recorded above as the platform edge, and the compiler
+            // version pin, which is not a dependency at all.
+            try appendPackagesCollection(allocator, ast, a.packages, a.platform_idx, a.roc_version, &deps);
             break :blk .app;
         },
         .package => |p| blk: {
-            try appendPackagesCollection(allocator, ast, p.packages, null, &deps);
+            try appendPackagesCollection(allocator, ast, p.packages, null, p.roc_version, &deps);
             break :blk .package;
         },
         .platform => |p| blk: {
-            try appendPackagesCollection(allocator, ast, p.packages, null, &deps);
+            try appendPackagesCollection(allocator, ast, p.packages, null, p.roc_version, &deps);
             break :blk .platform;
         },
         .module, .hosted, .type_module, .default_app => .module,
@@ -1540,13 +1541,17 @@ fn appendPackagesCollection(
     allocator: Allocator,
     ast: *parse.AST,
     packages: parse.AST.Collection.Idx,
-    skip_field: ?parse.AST.RecordField.Idx,
+    skip_platform: ?parse.AST.RecordField.Idx,
+    skip_roc_version: ?parse.AST.RecordField.Idx,
     deps: *std.ArrayListUnmanaged(ScannedDep),
 ) error{ OutOfMemory, HeaderParseFailed }!void {
     const coll = ast.store.getCollection(packages);
     const fields = ast.store.recordFieldSlice(.{ .span = coll.span });
     for (fields) |idx| {
-        if (skip_field) |skip| {
+        if (skip_platform) |skip| {
+            if (idx == skip) continue;
+        }
+        if (skip_roc_version) |skip| {
             if (idx == skip) continue;
         }
         const field = ast.store.getRecordField(idx);

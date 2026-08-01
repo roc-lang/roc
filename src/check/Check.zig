@@ -21924,10 +21924,26 @@ fn literalTargetIsBuiltinDirect(
 /// method-instantiation table is positive evidence for a concrete custom
 /// target; an identity-bearing target remains a specialization obligation.
 fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
+    const plans = self.cir.store.literalDispatchPlans();
+    if (plans.len == 0) return;
+
     var visited = std.AutoHashMap(Var, void).init(self.gpa);
     defer visited.deinit();
 
-    const plans = self.cir.store.literalDispatchPlans();
+    // Evidence is recorded under each discharged constraint's raw fn_var, but
+    // same-name literal constraints deduplicate when their receivers unify
+    // (e.g. two elements of one list): the callable vars are unified and only
+    // one raw fn_var survives on the merged constraint. Solving is settled
+    // here, so comparing resolved roots recovers every literal's share of that
+    // one discharged edge.
+    var evidence_fn_roots = std.AutoHashMap(Var, void).init(self.gpa);
+    defer evidence_fn_roots.deinit();
+    try evidence_fn_roots.ensureTotalCapacity(self.dispatch_target_instantiation_by_fn_var.count());
+    var evidence_key_it = self.dispatch_target_instantiation_by_fn_var.keyIterator();
+    while (evidence_key_it.next()) |evidence_fn_var| {
+        try evidence_fn_roots.put(self.types.resolveVar(evidence_fn_var.*).var_, {});
+    }
+
     var plan_index: usize = 0;
     while (plan_index < plans.len) : (plan_index += 1) {
         // Finalization mutates only the record's resolution field and cannot
@@ -21970,7 +21986,7 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
             if (try self.literalTargetContainsIdentity(target_var, &visited)) {
                 break :resolution .specialization_dispatch;
             }
-            if (self.dispatch_target_instantiation_by_fn_var.contains(fn_var)) {
+            if (evidence_fn_roots.contains(self.types.resolveVar(fn_var).var_)) {
                 break :resolution .custom_dispatch;
             }
 
@@ -22058,6 +22074,33 @@ test "literal dispatch finalization records custom callable resolution" {
         found = true;
     }
     try std.testing.expect(found);
+}
+
+test "literal dispatch finalization resolves every literal of one merged dispatch edge" {
+    // Two literals in one list unify their receivers, which merges their
+    // from_quote constraints down to a single raw fn_var. Every literal's plan
+    // must still find the evidence recorded for that one discharged edge.
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\MyStr := [Wrap(Str)].{
+        \\    from_quote : Str -> Try(MyStr, [BadQuotedBytes(Str)])
+        \\    from_quote = |str| Ok(Wrap(str))
+        \\}
+        \\
+        \\values : List(MyStr)
+        \\values = ["a", "b"]
+    ;
+    var test_env = try TestEnv.init("LiteralResolution", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    var quote_plan_count: usize = 0;
+    for (test_env.module_env.store.literalDispatchPlans()) |plan| {
+        if (plan.dispatchKind() != .quote) continue;
+        try std.testing.expectEqual(can.NodeStore.LiteralDispatchPlan.Resolution.custom_dispatch, plan.dispatchResolution());
+        quote_plan_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), quote_plan_count);
 }
 
 test "literal dispatch finalization preserves generalized specialization obligations" {

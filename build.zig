@@ -6488,6 +6488,7 @@ fn addMainExe(
         .root_source_file = b.path("src/shim_host_abi.zig"),
     });
     shim_host_abi_module.addImport("builtins", roc_modules.builtins);
+    shim_host_abi_module.addImport("roc_args", roc_modules.roc_args);
 
     // Create LIR interpreter shim static library at build time - fully static without libc
     //
@@ -6742,13 +6743,15 @@ fn addMainExe(
         exe.step.dependOn(&copy_cross_builtins_extern.step);
 
         if (!cross_is_wasm) {
+            const default_platform_root_source = if (cross_target.query.os_tag == .linux)
+                b.path("src/default_platform/linux_runtime.zig")
+            else
+                b.path("src/default_platform/c_runtime.zig");
+
             const default_platform_runtime_obj = b.addObject(.{
-                .name = b.fmt("roc_default_platform_{s}", .{cross_target.name}),
+                .name = b.fmt("roc_default_runtime_{s}", .{cross_target.name}),
                 .root_module = b.createModule(.{
-                    .root_source_file = if (cross_target.query.os_tag == .linux)
-                        b.path("src/default_platform/linux_runtime.zig")
-                    else
-                        b.path("src/default_platform/c_runtime.zig"),
+                    .root_source_file = default_platform_root_source,
                     .target = cross_resolved_target,
                     .optimize = .ReleaseFast,
                     .strip = false,
@@ -6758,19 +6761,54 @@ fn addMainExe(
                 }),
             });
             default_platform_runtime_obj.root_module.addImport("roc_str_view", roc_modules.roc_str_view);
+            default_platform_runtime_obj.root_module.addImport("roc_args", roc_modules.roc_args);
             default_platform_runtime_obj.root_module.addImport("shim_symbols", roc_modules.shim_symbols);
+            const default_platform_runtime_options = b.addOptions();
+            default_platform_runtime_options.addOption(bool, "include_process_entrypoint", false);
+            default_platform_runtime_obj.root_module.addOptions("default_platform_options", default_platform_runtime_options);
             default_platform_runtime_obj.root_module.stack_check = false;
             default_platform_runtime_obj.root_module.link_libc = false;
             default_platform_runtime_obj.bundle_compiler_rt = false;
             configureBackend(default_platform_runtime_obj, cross_resolved_target);
 
             const copy_default_platform_runtime = b.addUpdateSourceFiles();
-            const default_platform_ext = if (cross_target.query.os_tag == .windows) "roc_default_platform.obj" else "roc_default_platform.o";
+            const default_runtime_ext = if (cross_target.query.os_tag == .windows) "roc_default_runtime.obj" else "roc_default_runtime.o";
             copy_default_platform_runtime.addCopyFileToSource(
                 default_platform_runtime_obj.getEmittedBin(),
-                b.pathJoin(&.{ "src/cli/targets", cross_target.name, default_platform_ext }),
+                b.pathJoin(&.{ "src/cli/targets", cross_target.name, default_runtime_ext }),
             );
             exe.step.dependOn(&copy_default_platform_runtime.step);
+
+            const default_platform_executable_obj = b.addObject(.{
+                .name = b.fmt("roc_default_platform_{s}", .{cross_target.name}),
+                .root_module = b.createModule(.{
+                    .root_source_file = default_platform_root_source,
+                    .target = cross_resolved_target,
+                    .optimize = .ReleaseFast,
+                    .strip = false,
+                    .omit_frame_pointer = false,
+                    .pic = true,
+                    .single_threaded = true,
+                }),
+            });
+            default_platform_executable_obj.root_module.addImport("roc_str_view", roc_modules.roc_str_view);
+            default_platform_executable_obj.root_module.addImport("roc_args", roc_modules.roc_args);
+            default_platform_executable_obj.root_module.addImport("shim_symbols", roc_modules.shim_symbols);
+            const default_platform_executable_options = b.addOptions();
+            default_platform_executable_options.addOption(bool, "include_process_entrypoint", true);
+            default_platform_executable_obj.root_module.addOptions("default_platform_options", default_platform_executable_options);
+            default_platform_executable_obj.root_module.stack_check = false;
+            default_platform_executable_obj.root_module.link_libc = false;
+            default_platform_executable_obj.bundle_compiler_rt = false;
+            configureBackend(default_platform_executable_obj, cross_resolved_target);
+
+            const copy_default_platform_executable = b.addUpdateSourceFiles();
+            const default_platform_ext = if (cross_target.query.os_tag == .windows) "roc_default_platform.obj" else "roc_default_platform.o";
+            copy_default_platform_executable.addCopyFileToSource(
+                default_platform_executable_obj.getEmittedBin(),
+                b.pathJoin(&.{ "src/cli/targets", cross_target.name, default_platform_ext }),
+            );
+            exe.step.dependOn(&copy_default_platform_executable.step);
         }
     }
 

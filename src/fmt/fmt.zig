@@ -3,6 +3,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
+const base = @import("base");
 const parse = @import("parse");
 const collections = @import("collections");
 const can = @import("can");
@@ -34,6 +35,20 @@ const FormatFlags = enum {
     no_debug,
 };
 
+/// Knobs for formatting that depend on the compiler doing it rather than on
+/// the source being formatted.
+pub const Options = struct {
+    /// Version string of the compiler that is running. When it is a nightly
+    /// newer than the one a header pins with `roc: "..."`, formatting rewrites
+    /// that pin to name it — see `base.roc_version.shouldUpgrade`.
+    ///
+    /// Null leaves every pin exactly as written, which is what tools that
+    /// format for inspection want: the snapshot tool, the playground and the
+    /// formatter's own round-trip tests must not produce output that changes
+    /// with whichever compiler built them.
+    compiler_version: ?[]const u8 = null,
+};
+
 /// Report of the result of formatting Roc files including the count of successes, failures, and any files that need to be reformatted
 pub const FormattingResult = struct {
     success: usize,
@@ -51,7 +66,7 @@ pub const FormattingResult = struct {
 /// Formats all roc files in the specified path.
 /// Handles both single files and directories
 /// Returns the number of files successfully formatted and that failed to format.
-pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: std.Io.Dir, path: []const u8, check: bool, io: std.Io, stderr: *std.Io.Writer) FormatPathError!FormattingResult {
+pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: std.Io.Dir, path: []const u8, check: bool, options: Options, io: std.Io, stderr: *std.Io.Writer) FormatPathError!FormattingResult {
     // TODO: update this to use the filesystem abstraction
     // When doing so, add a mock filesystem and some tests.
 
@@ -69,7 +84,7 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
         defer walker.deinit();
         while (try walker.next(io)) |entry| {
             if (entry.kind == .file) {
-                if (formatFilePath(gpa, entry.dir, entry.basename, if (unformatted_files) |*to_reformat| to_reformat else null, io, stderr)) |_| {
+                if (formatFilePath(gpa, entry.dir, entry.basename, if (unformatted_files) |*to_reformat| to_reformat else null, options, io, stderr)) |_| {
                     success_count += 1;
                 } else |err| switch (err) {
                     error.NotRocFile => {},
@@ -81,7 +96,7 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
             }
         }
     } else |_| {
-        if (formatFilePath(gpa, base_dir, path, if (unformatted_files) |*to_reformat| to_reformat else null, io, stderr)) |_| {
+        if (formatFilePath(gpa, base_dir, path, if (unformatted_files) |*to_reformat| to_reformat else null, options, io, stderr)) |_| {
             success_count += 1;
         } else |err| switch (err) {
             error.NotRocFile => {},
@@ -132,7 +147,7 @@ fn binarySearch(
 
 /// Formats a single roc file at the specified path.
 /// Returns errors on failure and files that don't end in `.roc`
-pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []const u8, unformatted_files: ?*std.array_list.Managed([]const u8), io: std.Io, stderr: *std.Io.Writer) FormatFileError!void {
+pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []const u8, unformatted_files: ?*std.array_list.Managed([]const u8), options: Options, io: std.Io, stderr: *std.Io.Writer) FormatFileError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -199,7 +214,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []cons
     if (unformatted_files != null) {
         var formatted: std.Io.Writer.Allocating = .init(gpa);
         defer formatted.deinit();
-        try formatAst(parse_ast.*, &formatted.writer);
+        try formatAstWithOptions(parse_ast.*, &formatted.writer, options);
         if (!std.mem.eql(u8, formatted.written(), module_env.common.source)) {
             try unformatted_files.?.append(path);
         }
@@ -208,12 +223,12 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []cons
         defer output_file.close(io);
         var output_buffer: [4096]u8 = undefined;
         var output_writer = output_file.writer(io, &output_buffer);
-        try formatAst(parse_ast.*, &output_writer.interface);
+        try formatAstWithOptions(parse_ast.*, &output_writer.interface, options);
     }
 }
 
 /// Format the contents of stdin and output the result to stdout
-pub fn formatStdin(gpa: std.mem.Allocator, io: std.Io, stdin: std.Io.File, stdout: std.Io.File, stderr: *std.Io.Writer) FormatStdinError!void {
+pub fn formatStdin(gpa: std.mem.Allocator, options: Options, io: std.Io, stdin: std.Io.File, stdout: std.Io.File, stderr: *std.Io.Writer) FormatStdinError!void {
     const contents = blk: {
         var read_buf: [4096]u8 = undefined;
         var stdin_reader = stdin.readerStreaming(io, &read_buf);
@@ -246,7 +261,7 @@ pub fn formatStdin(gpa: std.mem.Allocator, io: std.Io, stdin: std.Io.File, stdou
 
     var stdout_buffer: [4096]u8 = undefined;
     var stdout_writer = stdout.writer(io, &stdout_buffer);
-    try formatAst(parse_ast.*, &stdout_writer.interface);
+    try formatAstWithOptions(parse_ast.*, &stdout_writer.interface, options);
 }
 
 fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST, stderr: *std.Io.Writer) (Allocator.Error || error{WriteFailed})!void {
@@ -285,11 +300,11 @@ fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST, 
     }
 }
 
-fn formatIRNode(ast: AST, writer: *std.Io.Writer, formatter: *const fn (*Formatter) FormatAstError!void) FormatAstError!void {
+fn formatIRNode(ast: AST, writer: *std.Io.Writer, options: Options, formatter: *const fn (*Formatter) FormatAstError!void) FormatAstError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    var fmt = try Formatter.init(ast, writer);
+    var fmt = try Formatter.init(ast, writer, options);
     defer fmt.deinit();
 
     try formatter(&fmt);
@@ -299,13 +314,19 @@ fn formatIRNode(ast: AST, writer: *std.Io.Writer, formatter: *const fn (*Formatt
 /// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is a file.
 /// Only returns an error if the underlying writer returns an error.
 pub fn formatAst(ast: AST, writer: *std.Io.Writer) FormatAstError!void {
-    return formatIRNode(ast, writer, Formatter.formatFile);
+    return formatAstWithOptions(ast, writer, .{});
+}
+
+/// `formatAst`, but for callers that know which compiler is running and so can
+/// have a header's `roc` version pin brought up to date. See `Options`.
+pub fn formatAstWithOptions(ast: AST, writer: *std.Io.Writer, options: Options) FormatAstError!void {
+    return formatIRNode(ast, writer, options, Formatter.formatFile);
 }
 
 /// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is a header.
 /// Only returns an error if the underlying writer returns an error.
 pub fn formatHeader(ast: AST, writer: *std.Io.Writer) FormatAstError!void {
-    return formatIRNode(ast, writer, formatHeaderInner);
+    return formatIRNode(ast, writer, .{}, formatHeaderInner);
 }
 
 fn formatHeaderInner(fmt: *Formatter) FormatAstError!void {
@@ -315,7 +336,7 @@ fn formatHeaderInner(fmt: *Formatter) FormatAstError!void {
 /// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is a statement.
 /// Only returns an error if the underlying writer returns an error.
 pub fn formatStatement(ast: AST, writer: *std.Io.Writer) FormatAstError!void {
-    return formatIRNode(ast, writer, formatStatementInner);
+    return formatIRNode(ast, writer, .{}, formatStatementInner);
 }
 
 fn formatStatementInner(fmt: *Formatter) FormatAstError!void {
@@ -325,7 +346,7 @@ fn formatStatementInner(fmt: *Formatter) FormatAstError!void {
 /// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is an expression.
 /// Only returns an error if the underlying writer returns an error.
 pub fn formatExpr(ast: AST, writer: *std.Io.Writer) FormatAstError!void {
-    return formatIRNode(ast, writer, formatExprNode);
+    return formatIRNode(ast, writer, .{}, formatExprNode);
 }
 
 fn formatExprNode(fmt: *Formatter) FormatAstError!void {
@@ -340,10 +361,20 @@ const Formatter = struct {
         expanded,
     };
 
+    /// A header's `roc` version pin that this run of the formatter is
+    /// rewriting, rather than echoing back what the source says.
+    const RocVersionUpgrade = struct {
+        field: AST.RecordField.Idx,
+        version: []const u8,
+    };
+
     ast: AST,
     writer: *std.Io.Writer,
     /// Cached output layout for type annotations and their record fields.
     type_layouts: []TypeLayout,
+    options: Options,
+    /// Set while formatting a header whose version pin is out of date.
+    roc_version_upgrade: ?RocVersionUpgrade = null,
     curr_indent: u32 = 0,
     flags: FormatFlags = .no_debug,
     // This starts true since beginning of file is considered a newline.
@@ -352,7 +383,7 @@ const Formatter = struct {
     pending_spaces: usize = 0,
 
     /// Creates a new Formatter for the given parse IR.
-    fn init(ast: AST, writer: *std.Io.Writer) Allocator.Error!Formatter {
+    fn init(ast: AST, writer: *std.Io.Writer, options: Options) Allocator.Error!Formatter {
         const type_layouts = try ast.gpa.alloc(TypeLayout, ast.store.nodeCount());
         @memset(type_layouts, .unknown);
 
@@ -360,6 +391,7 @@ const Formatter = struct {
             .ast = ast,
             .writer = writer,
             .type_layouts = type_layouts,
+            .options = options,
         };
     }
 
@@ -1114,6 +1146,18 @@ const Formatter = struct {
         const field = fmt.ast.store.getRecordField(idx);
         var ends_with_multiline_string_line = false;
         try fmt.pushTokenText(field.name);
+        if (fmt.roc_version_upgrade) |upgrade| {
+            if (idx == upgrade.field) {
+                // Write the running compiler's version rather than the stale
+                // one in the source. Planning the upgrade already parsed that
+                // version as a nightly tag, so it is alphanumerics and `-`
+                // only and needs no escaping inside the quotes.
+                try fmt.pushAll(": \"");
+                try fmt.pushAll(upgrade.version);
+                try fmt.push('"');
+                return .{ .region = field.region, .ends_with_multiline_string_line = false };
+            }
+        }
         if (field.value) |v| {
             try fmt.pushAll(": ");
             const formatted_value = try fmt.formatExprWithInfo(v);
@@ -2473,11 +2517,28 @@ const Formatter = struct {
         }
     }
 
+    /// Which of the header's dependency-record entries pins a compiler version
+    /// that this compiler should replace with its own, if any.
+    fn plannedRocVersionUpgrade(fmt: *Formatter, header: AST.Header) ?RocVersionUpgrade {
+        const current = fmt.options.compiler_version orelse return null;
+        const field_idx = switch (header) {
+            .app => |h| h.roc_version,
+            .package => |h| h.roc_version,
+            .platform => |h| h.roc_version,
+            else => null,
+        } orelse return null;
+        const pinned = fmt.ast.rocVersionText(field_idx) orelse return null;
+        if (!base.roc_version.shouldUpgrade(pinned, current)) return null;
+        return .{ .field = field_idx, .version = current };
+    }
+
     fn formatHeader(fmt: *Formatter, hi: AST.Header.Idx) FormatAstError!void {
         const header = fmt.ast.store.getHeader(hi);
         const start_indent = fmt.curr_indent;
+        fmt.roc_version_upgrade = fmt.plannedRocVersionUpgrade(header);
         defer {
             fmt.curr_indent = start_indent;
+            fmt.roc_version_upgrade = null;
         }
 
         const multiline = fmt.nodeWillBeMultiline(AST.Header.Idx, hi);
@@ -4757,4 +4818,138 @@ test "blank line inserted before doc comments following code" {
         \\
     ;
     try std.testing.expectEqualStrings(expected, result);
+}
+
+/// Format `input` as a compiler reporting itself as `compiler_version` would,
+/// so that tests of the `roc` version pin do not depend on how this binary was
+/// built. Asserts that formatting the result again is a no-op, since a pin
+/// that has just been brought up to date must have nothing left to upgrade.
+fn fmtAsCompiler(gpa: std.mem.Allocator, input: []const u8, compiler_version: []const u8) FormatTestError![]const u8 {
+    const options: Options = .{ .compiler_version = compiler_version };
+
+    var module_env = try ModuleEnv.init(gpa, input);
+    defer module_env.deinit();
+    const parse_ast = try parse.file(gpa, &module_env.common);
+    defer parse_ast.deinit();
+    std.testing.expectEqualSlices(AST.Diagnostic, &[_]AST.Diagnostic{}, parse_ast.parse_diagnostics.items) catch {
+        return error.ParseFailed;
+    };
+
+    var result: std.Io.Writer.Allocating = .init(gpa);
+    defer result.deinit();
+    try formatAstWithOptions(parse_ast.*, &result.writer, options);
+
+    var stable_env = try ModuleEnv.init(gpa, result.written());
+    defer stable_env.deinit();
+    const stable_ast = try parse.file(gpa, &stable_env.common);
+    defer stable_ast.deinit();
+    var stable: std.Io.Writer.Allocating = .init(gpa);
+    defer stable.deinit();
+    try formatAstWithOptions(stable_ast.*, &stable.writer, options);
+    std.testing.expectEqualStrings(result.written(), stable.written()) catch {
+        return error.FormattingNotStable;
+    };
+
+    return try result.toOwnedSlice();
+}
+
+test "fmt upgrades an app's roc version pin to a newer nightly" {
+    const result = try fmtAsCompiler(
+        std.testing.allocator,
+        \\app [main!] { pf: platform "../platform/main.roc", roc: "nightly-2026-July-30-aaaaaaa" }
+        \\
+        \\main! = |_| {}
+    ,
+        "nightly-2026-August-1-bbbbbbb",
+    );
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(
+        \\app [main!] { pf: platform "../platform/main.roc", roc: "nightly-2026-August-1-bbbbbbb" }
+        \\
+        \\main! = |_| {}
+        \\
+    , result);
+}
+
+test "fmt upgrades a package's roc version pin" {
+    const result = try fmtAsCompiler(
+        std.testing.allocator,
+        \\package [Foo] { roc: "nightly-2026-July-30-aaaaaaa" }
+    ,
+        "nightly-2026-August-1-bbbbbbb",
+    );
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(
+        \\package [Foo] { roc: "nightly-2026-August-1-bbbbbbb" }
+        \\
+    , result);
+}
+
+test "fmt upgrades a roc version pin written across several lines" {
+    const result = try fmtAsCompiler(
+        std.testing.allocator,
+        "app [main!] {\n" ++
+            "\tpf: platform \"../platform/main.roc\",\n" ++
+            "\troc: \"nightly-2026-July-30-aaaaaaa\",\n" ++
+            "}\n\nmain! = |_| {}",
+        "nightly-2026-August-1-bbbbbbb",
+    );
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(
+        "app [main!] {\n" ++
+            "\tpf: platform \"../platform/main.roc\",\n" ++
+            "\troc: \"nightly-2026-August-1-bbbbbbb\",\n" ++
+            "}\n\nmain! = |_| {}\n",
+        result,
+    );
+}
+
+test "fmt leaves a roc version pin alone when it must not be upgraded" {
+    const gpa = std.testing.allocator;
+    const cases = [_]struct { pinned: []const u8, running: []const u8 }{
+        // Running an older nightly than the pin.
+        .{ .pinned = "nightly-2026-August-1-aaaaaaa", .running = "nightly-2026-July-30-bbbbbbb" },
+        // A release pin is deliberate, so a nightly must not overwrite it.
+        .{ .pinned = "0.1.0", .running = "nightly-2026-July-30-bbbbbbb" },
+        // A local development build is not a version a header may pin.
+        .{ .pinned = "nightly-2026-July-30-aaaaaaa", .running = "debug-c6dfe61b" },
+    };
+
+    for (cases) |case| {
+        const input = try std.fmt.allocPrint(gpa, "package [Foo] {{ roc: \"{s}\" }}\n", .{case.pinned});
+        defer gpa.free(input);
+
+        const result = try fmtAsCompiler(gpa, input, case.running);
+        defer gpa.free(result);
+
+        try std.testing.expectEqualStrings(input, result);
+    }
+}
+
+test "fmt leaves a roc version pin alone when the compiler is unknown" {
+    const input =
+        \\package [Foo] { roc: "nightly-2026-July-30-aaaaaaa" }
+        \\
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(input, result);
+}
+
+test "fmt upgrades a roc version pin that has a comment written inside it" {
+    // The formatter drops a comment written between a header field's `:` and
+    // its value whether or not the field is a version pin, so upgrading such a
+    // pin loses nothing that would otherwise have survived.
+    const input = "package [Foo] {\n" ++
+        "\troc: # pinned deliberately\n" ++
+        "\t\t\"nightly-2026-July-30-aaaaaaa\",\n" ++
+        "}\n";
+    const result = try fmtAsCompiler(std.testing.allocator, input, "nightly-2026-August-1-bbbbbbb");
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expect(std.mem.find(u8, result, "nightly-2026-August-1-bbbbbbb") != null);
 }

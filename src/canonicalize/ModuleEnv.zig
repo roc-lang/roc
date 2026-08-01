@@ -3068,6 +3068,37 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .roc_version_mismatch => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            const pinned_bytes = self.getIdent(data.pinned);
+            const running_bytes = self.getIdent(data.running);
+
+            var report = try Report.init(allocator, "Roc Version Mismatch", "", .warning);
+            const pinned = try report.addOwnedString(pinned_bytes);
+            const running = try report.addOwnedString(running_bytes);
+            try report.headline.addReflowingText("This header pins Roc version ");
+            try report.headline.addInlineCode(pinned);
+            try report.headline.addReflowingText(", but you are running ");
+            try report.headline.addInlineCode(running);
+            try report.headline.addReflowingText(".");
+
+            try report.document.addReflowingText("Run ");
+            try report.document.addInlineCode("roc fmt");
+            try report.document.addReflowingText(" to update the pin, or switch to the pinned version of the compiler.");
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .warning_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         .redundant_expose_main_type => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 

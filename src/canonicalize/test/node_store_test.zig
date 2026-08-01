@@ -867,6 +867,14 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
+        .roc_version_mismatch = .{
+            .pinned = rand_ident_idx(),
+            .running = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
         .redundant_expose_main_type = .{
             .type_name = rand_ident_idx(),
             .module_name = rand_ident_idx(),

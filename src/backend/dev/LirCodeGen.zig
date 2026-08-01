@@ -675,10 +675,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// participate in the hot-reload code reference protocol.
         enable_hot_reload: bool = false,
 
-        /// Whether object-file entrypoints should use the synthetic default
-        /// platform runtime contract.
-        enable_default_platform_runtime: bool = false,
-
         /// Compiler-internal hooks enabled only for native compile-time
         /// evaluation. Normal dev backend output leaves these null.
         comptime_hooks: ?ComptimeHooks = null,
@@ -19286,7 +19282,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// 6. Returns `void`
         pub fn generateEntrypointWrapper(
             self: *Self,
-            symbol_name: []const u8,
+            _: []const u8,
             entry_proc: lir.LIR.LirProcSpecId,
             arg_layouts: []const layout.Idx,
             ret_layout: layout.Idx,
@@ -19339,11 +19335,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // ABI. The incoming sret pointer (if any) is captured into
                     // X20 inside generateEntrypointBodyCAbi before X19 is
                     // written.
-                    if (self.useDefaultPlatformLinuxStart(symbol_name)) {
-                        try self.generateDefaultPlatformLinuxStartBody(entry_proc, arg_layouts, ret_layout);
-                    } else {
-                        try self.generateEntrypointBodyCAbi(entry_proc, arg_layouts, ret_layout, .X20, &incoming_stack_copies);
-                    }
+                    try self.generateEntrypointBodyCAbi(entry_proc, arg_layouts, ret_layout, .X20, &incoming_stack_copies);
                 }
 
                 const body_epilogue_offset = self.codegen.currentOffset();
@@ -19437,11 +19429,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // ABI. The incoming sret pointer (if any) is captured into
                     // RBX inside generateEntrypointBodyCAbi before R12 is
                     // written.
-                    if (self.useDefaultPlatformLinuxStart(symbol_name)) {
-                        try self.generateDefaultPlatformLinuxStartBody(entry_proc, arg_layouts, ret_layout);
-                    } else {
-                        try self.generateEntrypointBodyCAbi(entry_proc, arg_layouts, ret_layout, .RBX, &incoming_stack_copies);
-                    }
+                    try self.generateEntrypointBodyCAbi(entry_proc, arg_layouts, ret_layout, .RBX, &incoming_stack_copies);
                 }
 
                 const body_epilogue_offset = self.codegen.currentOffset();
@@ -19695,74 +19683,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             size: u32,
             ptr_off: i32,
         };
-
-        fn useDefaultPlatformLinuxStart(self: *const Self, symbol_name: []const u8) bool {
-            if (!self.enable_default_platform_runtime) return false;
-            if (self.generation_mode != .object_file) return false;
-            if (comptime target.toOsTag() != .linux) return false;
-            return std.mem.eql(u8, symbol_name, "_start");
-        }
-
-        fn generateDefaultPlatformLinuxStartBody(
-            self: *Self,
-            entry_proc: lir.LIR.LirProcSpecId,
-            arg_layouts: []const layout.Idx,
-            ret_layout: layout.Idx,
-        ) Allocator.Error!void {
-            const compiled = try self.compiledProcForId(entry_proc);
-            if (compiled.code_start == unresolved_proc_code_start) {
-                if (std.debug.runtime_safety) {
-                    std.debug.panic(
-                        "default platform entrypoint proc {d} was not compiled before wrapper generation",
-                        .{@intFromEnum(entry_proc)},
-                    );
-                }
-                unreachable;
-            }
-
-            for (arg_layouts) |arg_layout| {
-                if (self.getLayoutSize(arg_layout) != 0) {
-                    if (builtin.mode == .Debug) {
-                        std.debug.panic(
-                            "default platform _start invariant violated: expected only zero-sized args, got layout {d}",
-                            .{@intFromEnum(arg_layout)},
-                        );
-                    }
-                    unreachable;
-                }
-            }
-
-            const null_ops_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X19 else .R12;
-            try self.codegen.emitLoadImm(null_ops_reg, 0);
-            self.roc_ops_reg = null_ops_reg;
-
-            {
-                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                try builder.callRelocatable(builtins.shim_symbols.roc_default_runtime_init, self.allocator, &self.codegen.relocations);
-            }
-
-            const arg_infos_start = self.scratch_arg_infos.top();
-            defer self.scratch_arg_infos.clearFrom(arg_infos_start);
-            for (arg_layouts) |arg_layout| {
-                try self.scratch_arg_infos.append(.{
-                    .loc = .{ .immediate_i64 = 0 },
-                    .layout_idx = arg_layout,
-                    .num_regs = 0,
-                });
-            }
-
-            const arg_infos = self.scratch_arg_infos.sliceFromStart(arg_infos_start);
-            const result_loc = try self.callCompiledOffsetWithArgInfos(compiled.code_start, arg_infos, ret_layout);
-
-            const exit_code_reg = self.getArgumentRegister(0);
-            try self.moveToReg(result_loc, exit_code_reg);
-            {
-                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                try builder.addRegArg(exit_code_reg);
-                try builder.callRelocatable(builtins.shim_symbols.roc_default_exit, self.allocator, &self.codegen.relocations);
-            }
-            try self.emitTrap();
-        }
 
         /// Generate the body of a natural C-ABI entrypoint wrapper: capture
         /// the incoming C-ABI arguments into stack slots, call the compiled
