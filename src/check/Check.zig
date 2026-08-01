@@ -17491,11 +17491,12 @@ fn beginProbe(self: *Self) std.mem.Allocator.Error!Probe {
 /// A speculative scope whose SUCCESS is committed in place instead of being
 /// rolled back and redone. Unlike a plain `Probe` (whose unifications run against
 /// throwaway problem/snapshot stores precisely because they never survive), a
-/// commit-probe runs its unifications through the REAL `unify` wrapper — full
+/// commit-probe runs its unifications through the REAL `runUnify` wrapper — full
 /// bookkeeping: fresh vars ranked into the caller env's var pool, regions
-/// stamped, deferred dispatch constraints copied out, mismatch problems recorded
-/// with snapshots. On failure it must therefore also rewind what that bookkeeping
-/// grew:
+/// stamped, and deferred dispatch constraints copied out. A caller that owns its
+/// mismatch diagnostic uses `.write_no_report`, because occurrence-directed
+/// mismatch poisoning cannot run under a type-store savepoint. On failure the
+/// probe must rewind everything that bookkeeping grew:
 ///   - problems / snapshots recorded by failed in-probe unifications (the
 ///     store savepoint already un-poisons the `.err`-merged vars themselves;
 ///     this drops the reports, restoring the throwaway-store behavior);
@@ -19037,9 +19038,9 @@ fn staticDispatchConstraintAcceptsCandidate(
 
     // The real unify wrapper, not the throwaway-store probe unify: on the commit
     // path this merge (and its rank/region/deferred-constraint bookkeeping) is
-    // kept. A mismatch records a problem and poisons the operands, all of which the
-    // commit-probe rollback rewinds.
-    const result = try self.unify(method_var, constraint.fn_var, env);
+    // kept. The probe owns failure, so a mismatch must not run occurrence-directed
+    // poisoning while the store savepoint is active.
+    const result = try self.runUnify(method_var, constraint.fn_var, env, .{ .on_mismatch = .write_no_report });
     return result.isOk();
 }
 
@@ -20395,23 +20396,70 @@ fn recordInterpolationPartTypeMismatch(self: *Self, expected_var: Var, actual_va
     } });
 }
 
+/// Under an open commit-probe, validate the constraints already attached to an
+/// interpolation part against builtin Str. Str discharges its primitive quote
+/// and interpolation conversions directly; every other obligation must resolve
+/// through the ordinary static-dispatch acceptance rule.
+fn interpolationPartConstraintsAcceptBuiltinStr(
+    self: *Self,
+    probe: *CommitProbe,
+    constraints_range: StaticDispatchConstraint.SafeList.Range,
+    expected_str_var: Var,
+    env: *Env,
+) Allocator.Error!bool {
+    var constraints = self.types.iterStaticDispatchConstraints(constraints_range);
+    while (constraints.next()) |constraint| {
+        switch (constraint.origin) {
+            .from_literal => |literal| switch (literal) {
+                .quote, .interpolation => continue,
+                .numeral => return false,
+            },
+            else => {},
+        }
+
+        if (!try self.staticDispatchConstraintAcceptsCandidate(probe, constraint, expected_str_var, env)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 fn constrainInterpolationPartToStr(self: *Self, part: InterpolationPartMetadata, expected_str_var: Var, env: *Env) Allocator.Error!bool {
     const resolved_expr = self.types.resolveVar(part.var_);
     if (resolved_expr.desc.content == .err) return false;
 
+    const constraints_range = switch (resolved_expr.desc.content) {
+        .flex => |flex| flex.constraints,
+        .rigid => |rigid| rigid.constraints,
+        else => StaticDispatchConstraint.SafeList.Range.empty(),
+    };
+
     const compatible = blk: {
-        var probe = try self.beginProbe();
-        defer probe.rollback();
-        break :blk try self.probeUnifyWithoutRecordingProblems(expected_str_var, part.var_);
+        var probe = try self.beginCommitProbe(env);
+        var committed = false;
+        defer if (!committed) probe.rollback();
+
+        // Keep successful writes for the commit path, but leave mismatch
+        // reporting and recovery to this function after the probe rolls back.
+        const result = try self.runUnify(expected_str_var, part.var_, env, .{ .on_mismatch = .write_no_report });
+        if (!result.isOk()) break :blk false;
+        if (!try self.interpolationPartConstraintsAcceptBuiltinStr(&probe, constraints_range, expected_str_var, env)) {
+            break :blk false;
+        }
+
+        committed = true;
+        probe.commit();
+        break :blk true;
     };
 
     if (!compatible) {
         try self.recordInterpolationPartTypeMismatch(expected_str_var, part.var_, part.region);
+        for (self.types.sliceStaticDispatchConstraints(constraints_range)) |constraint| {
+            try self.markStaticDispatchRejected(constraint);
+        }
         return true;
     }
 
-    const result = try self.unify(expected_str_var, part.var_, env);
-    std.debug.assert(result.isOk());
     return false;
 }
 
