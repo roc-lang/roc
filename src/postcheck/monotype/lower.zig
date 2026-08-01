@@ -24883,7 +24883,7 @@ const BodyContext = struct {
             .platform_required_const => |required| return try self.constUseTypeNode(checked_ty, required.const_use),
             else => {},
         }
-        return try self.activeNodeFromType(try self.lookupExprMonoType(checked_ty, ref_id));
+        return try self.lowerTypeNode(checked_ty);
     }
 
     fn lookupExprMonoType(
