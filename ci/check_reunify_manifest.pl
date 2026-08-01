@@ -111,7 +111,7 @@ my @categories = (
             # `unifyRowWithEmpty`), reached only while executing a relation a
             # $LOWER site already named. They delete with the unifier.
             { label => '.unify(', re => qr/\.unify\(/,
-              counts => { $SOLVE => 19, $LOWER => 42, $RMIRR => 2 } },
+              counts => { $SOLVE => 19, $LOWER => 41, $RMIRR => 2 } },
             { label => 'unifyRoots', re => qr/\bunifyRoots\b/,
               counts => { $SOLVE => 2 } },
             { label => 'unifyConcrete', re => qr/\bunifyConcrete\b/,
@@ -149,7 +149,7 @@ my @categories = (
         exempt  => [],
         patterns => [
             { label => 'measureUnifySite', re => qr/\bmeasureUnifySite\b/,
-              counts => { $LOWER => 44, $SREH => 1 } },
+              counts => { $LOWER => 43, $SREH => 1 } },
             { label => 'noteUnifySite', re => qr/\bnoteUnifySite\b/,
               counts => { $LOWER => 14 } },
             { label => 'noteUnifyConstruction', re => qr/\bnoteUnifyConstruction\b/,
@@ -167,7 +167,7 @@ my @categories = (
         exempt  => [],
         patterns => [
             { label => 'importMono', re => qr/\bimportMono\b/,
-              counts => { $SOLVE => 15, $LOWER => 23 } },
+              counts => { $SOLVE => 15, $LOWER => 22 } },
         ],
     },
     {
