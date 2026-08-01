@@ -2451,6 +2451,22 @@ pub const Rehearsal = struct {
         census.bump("outside_exit_divergence_free_but_unbound");
     }
 
+    /// Whether the innermost binding for a module covers every variable a
+    /// checked position reaches: the active frame's environment leaves no free
+    /// variable, so directed instantiation under it answers with the same
+    /// binding the specialization was entered at (reunify.md 13.2d).
+    pub fn activeBindingCovers(self: *Rehearsal, address: CheckedAddress) bool {
+        if (self.disabled) return false;
+        const cursor = self.lookup.cursor(address.module_bytes) orelse return false;
+        const frame = self.frameForModule(address.module_bytes) orelse return false;
+        if (!frame.env_ready) return false;
+        return self.firstFreeVariable(
+            cursor.view,
+            @enumFromInt(address.type_id),
+            frame.environment(),
+        ) == null;
+    }
+
     /// Debug/probe-only: what a frame for a nested local scheme would need at
     /// one variable-headed leaf the flip left on the graph: which scheme owns
     /// the leaf's variable, whether a request scope is open at the leaf, and
@@ -2464,6 +2480,18 @@ pub const Rehearsal = struct {
             census.bump("nested_leaf_no_free_variable");
             return;
         };
+        // The question the arm actually needs answered: does the ACTIVE
+        // binding already cover this position? A leaf the innermost frame
+        // binds reads correctly through the directed seam today.
+        if (self.frameForModule(address.module_bytes)) |frame| {
+            if (self.firstFreeVariable(cursor.view, position, frame.environment()) == null) {
+                census.bump("nested_leaf_active_frame_binds_it");
+            } else {
+                census.bump("nested_leaf_active_frame_does_not_bind_it");
+            }
+        } else {
+            census.bump("nested_leaf_no_active_frame");
+        }
         var owner: ?checked.CheckedTypeScheme = null;
         for (cursor.view.schemes) |scheme| {
             for (scheme.generalizedVars(cursor.view)) |binder| {

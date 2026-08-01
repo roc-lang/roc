@@ -16365,11 +16365,25 @@ const BodyContext = struct {
                 // specialization's relations for now (reunify.md 13.2d).
                 switch (checkedPayload(self.view, expr.ty)) {
                     .flex, .rigid => {
-                        // Debug/probe-only: what a nested-scheme frame would
-                        // need at this leaf - whether a scheme owns the
-                        // variable, whether a request scope is open here, and
-                        // whether that scheme captures enclosing binders
-                        // (reunify.md 13.2d, nested-local-scheme frames).
+                        // A variable-headed leaf whose variables the ACTIVE
+                        // binding covers reads correctly through the directed
+                        // seam: the frame supplies exactly the values the
+                        // specialization was entered at. One the binding does
+                        // not cover belongs to a nested local scheme with no
+                        // frame yet, and resolves through its specialization's
+                        // relations until nested frames land (reunify.md 13.2d).
+                        const address = self.typeAddress(expr.ty);
+                        if (self.builder.rehearsal) |rehearsal| {
+                            if (rehearsal.activeBindingCovers(.{
+                                .module_bytes = address.module_bytes,
+                                .type_id = address.type_id,
+                            })) {
+                                return try self.lowerExprWithType(
+                                    expr_id,
+                                    try self.typeForChecked(expr.ty),
+                                );
+                            }
+                        }
                         if (comptime census.enabled) {
                             census.bump("variable_headed_leaf_kept_on_graph");
                             if (self.builder.rehearsal) |rehearsal| {
@@ -17196,6 +17210,14 @@ const BodyContext = struct {
         if (try self.lowerParseIntrinsicCallExpr(checked_expr_id, checked_ret_ty, call, null)) |expr| {
             return expr;
         }
+        // A direct call is a scheme instantiation edge; its checked expression
+        // keys the recorded site a callee frame reads (reunify.md 7.2). A call
+        // that instantiates no scheme names an edge no site matches, which
+        // still scopes correctly.
+        if (self.builder.rehearsal) |rehearsal| {
+            rehearsal.openRequestEdge(self.view.key.bytes, checked_expr_id, null);
+        }
+        defer self.closeRequestEdge();
         const lowered = try self.lowerCall(checked_ret_ty, call);
         const ret_node = try lowered.ret_ty.toGraphNode(self.graph);
         const checked_ret_node = try self.lowerExprTypeNode(checked_expr_id);

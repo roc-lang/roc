@@ -484,6 +484,9 @@ pub const Census = struct {
     // leaves the flip left on the graph.
     variable_headed_leaf_kept_on_graph: Counter = Counter.init(0),
     nested_leaf_no_free_variable: Counter = Counter.init(0),
+    nested_leaf_active_frame_binds_it: Counter = Counter.init(0),
+    nested_leaf_active_frame_does_not_bind_it: Counter = Counter.init(0),
+    nested_leaf_no_active_frame: Counter = Counter.init(0),
     nested_leaf_no_scheme_owns_it: Counter = Counter.init(0),
     nested_leaf_scheme_owned: Counter = Counter.init(0),
     nested_leaf_scheme_captures_enclosing: Counter = Counter.init(0),
