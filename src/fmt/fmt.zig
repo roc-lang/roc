@@ -1258,6 +1258,36 @@ const Formatter = struct {
         return true;
     }
 
+    fn formatParenthesizedExpr(fmt: *Formatter, region: ?AST.TokenizedRegion, expr_idx: AST.Expr.Idx, multiline: bool) FormatAstError!FormattedExpr {
+        const curr_indent = fmt.curr_indent;
+        defer fmt.curr_indent = curr_indent;
+
+        try fmt.push('(');
+        if (multiline) {
+            fmt.curr_indent += 1;
+            if (region != null) {
+                const item_region = fmt.nodeRegion(@intFromEnum(expr_idx));
+                try fmt.flushCommentsBeforeDiscard(item_region.start);
+            }
+            try fmt.ensureNewline();
+            try fmt.pushIndent();
+        }
+
+        const formatted = try fmt.formatExprWithInfo(expr_idx);
+
+        if (multiline) {
+            if (region) |r| {
+                try fmt.flushCommentsBeforeDiscard(r.end - 1);
+            }
+            fmt.curr_indent = curr_indent;
+            try fmt.ensureNewline();
+            try fmt.pushIndent();
+        }
+        try fmt.push(')');
+
+        return formatted;
+    }
+
     fn formatExprInner(fmt: *Formatter, ei: AST.Expr.Idx, format_behavior: ExprFormatBehavior) FormatAstError!FormattedExpr {
         const expr = fmt.ast.store.getExpr(ei);
         const region = fmt.nodeRegion(@intFromEnum(ei));
@@ -1389,20 +1419,10 @@ const Formatter = struct {
                 const parenthesize_receiver = left_expr == .arrow_call or fmt.exprIsNumericAccessReceiver(fa.left);
                 const expand_parenthesized_receiver = left_expr == .arrow_call and
                     fmt.nodeWillBeMultiline(AST.Expr.Idx, fa.left);
-                if (parenthesize_receiver) try fmt.push('(');
-                if (expand_parenthesized_receiver) {
-                    fmt.curr_indent += 1;
-                    try fmt.ensureNewline();
-                    try fmt.pushIndent();
-                }
-                const left = try fmt.formatExprWithInfo(fa.left);
-                if (expand_parenthesized_receiver) {
-                    try fmt.push(',');
-                    fmt.curr_indent -= 1;
-                    try fmt.ensureNewline();
-                    try fmt.pushIndent();
-                }
-                if (parenthesize_receiver) try fmt.push(')');
+                const left = if (parenthesize_receiver)
+                    try fmt.formatParenthesizedExpr(null, fa.left, expand_parenthesized_receiver)
+                else
+                    try fmt.formatExprWithInfo(fa.left);
                 const right_region = fmt.nodeRegion(@intFromEnum(fa.right));
                 if (!parenthesize_receiver) {
                     const continued = try fmt.continueAfterMultilineStringLine(left);
@@ -1419,20 +1439,10 @@ const Formatter = struct {
                 const parenthesize_receiver = left_expr == .arrow_call or fmt.exprIsNumericAccessReceiver(mc.receiver);
                 const expand_parenthesized_receiver = left_expr == .arrow_call and
                     fmt.nodeWillBeMultiline(AST.Expr.Idx, mc.receiver);
-                if (parenthesize_receiver) try fmt.push('(');
-                if (expand_parenthesized_receiver) {
-                    fmt.curr_indent += 1;
-                    try fmt.ensureNewline();
-                    try fmt.pushIndent();
-                }
-                const receiver = try fmt.formatExprWithInfo(mc.receiver);
-                if (expand_parenthesized_receiver) {
-                    try fmt.push(',');
-                    fmt.curr_indent -= 1;
-                    try fmt.ensureNewline();
-                    try fmt.pushIndent();
-                }
-                if (parenthesize_receiver) try fmt.push(')');
+                const receiver = if (parenthesize_receiver)
+                    try fmt.formatParenthesizedExpr(null, mc.receiver, expand_parenthesized_receiver)
+                else
+                    try fmt.formatExprWithInfo(mc.receiver);
                 if (!parenthesize_receiver) {
                     const continued = try fmt.continueAfterMultilineStringLine(receiver);
                     if (!continued and multiline and try fmt.flushCommentsBefore(mc.method_token)) {
@@ -1545,7 +1555,13 @@ const Formatter = struct {
                 try fmt.formatCollection(region, fmt.ast.store.getCollectionLayout(ei), .square, AST.Expr.Idx, fmt.ast.store.exprSlice(l.items), Formatter.formatExpr);
             },
             .tuple => |t| {
-                try fmt.formatCollection(region, fmt.ast.store.getCollectionLayout(ei), .round, AST.Expr.Idx, fmt.ast.store.exprSlice(t.items), Formatter.formatExpr);
+                const items = fmt.ast.store.exprSlice(t.items);
+                if (items.len == 1) {
+                    const group_multiline = fmt.regionHasInteriorComment(t.region) or fmt.groupedExprWillBeMultiline(items[0]);
+                    _ = try fmt.formatParenthesizedExpr(t.region, items[0], group_multiline);
+                } else {
+                    try fmt.formatCollection(region, fmt.ast.store.getCollectionLayout(ei), .round, AST.Expr.Idx, items, Formatter.formatExpr);
+                }
             },
             .tuple_access => |ta| {
                 // Format: expr.N (e.g., tuple.0, tuple.1)
@@ -3457,6 +3473,70 @@ const Formatter = struct {
         };
     }
 
+    fn groupedExprWillBeMultiline(fmt: *Formatter, expr_idx: AST.Expr.Idx) bool {
+        const expr = fmt.ast.store.getExpr(expr_idx);
+        if (expr == .method_call) {
+            const method = expr.method_call;
+            const receiver_region = fmt.nodeRegion(@intFromEnum(method.receiver));
+            if (fmt.ast.regionIsMultiline(.{ .start = receiver_region.start, .end = method.method_token + 1 })) {
+                return true;
+            }
+        }
+
+        const owns_collection = switch (expr) {
+            .list, .tuple, .record, .record_builder, .apply, .method_call, .nominal_apply, .lambda => true,
+            else => false,
+        };
+        if (owns_collection and fmt.regionHasInteriorComment(expr.to_tokenized_region())) return true;
+
+        return switch (expr) {
+            .block, .multiline_string, .typed_multiline_string => true,
+            .list => |l| fmt.ast.store.getCollectionLayout(expr_idx) == .expanded or
+                fmt.nodesWillBeMultiline(AST.Expr.Idx, fmt.ast.store.exprSlice(l.items)),
+            .tuple => |t| fmt.ast.store.getCollectionLayout(expr_idx) == .expanded or
+                fmt.nodesWillBeMultiline(AST.Expr.Idx, fmt.ast.store.exprSlice(t.items)),
+            .apply => |a| fmt.ast.store.getCollectionLayout(expr_idx) == .expanded or
+                fmt.groupedExprWillBeMultiline(a.@"fn") or
+                fmt.nodesWillBeMultiline(AST.Expr.Idx, fmt.ast.store.exprSlice(a.args)),
+            .bin_op => |b| fmt.groupedExprWillBeMultiline(b.left) or fmt.groupedExprWillBeMultiline(b.right),
+            .record => |r| blk: {
+                if (fmt.ast.store.getCollectionLayout(expr_idx) == .expanded) break :blk true;
+                if (r.ext) |ext| {
+                    if (fmt.groupedExprWillBeMultiline(ext)) break :blk true;
+                }
+                break :blk fmt.nodesWillBeMultiline(AST.RecordField.Idx, fmt.ast.store.recordFieldSlice(r.fields));
+            },
+            .record_builder => |rb| fmt.ast.store.getCollectionLayout(expr_idx) == .expanded or
+                fmt.nodesWillBeMultiline(AST.RecordField.Idx, fmt.ast.store.recordFieldSlice(rb.fields)),
+            .nominal_record => |nr| fmt.groupedExprWillBeMultiline(nr.mapper) or fmt.groupedExprWillBeMultiline(nr.backing),
+            .suffix_single_question => |s| fmt.groupedExprWillBeMultiline(s.expr),
+            .tuple_access => |t| fmt.groupedExprWillBeMultiline(t.expr),
+            .unary_op => |u| fmt.groupedExprWillBeMultiline(u.expr),
+            .field_access => |f| (fmt.ast.store.getExpr(f.left) == .arrow_call and fmt.nodeWillBeMultiline(AST.Expr.Idx, f.left)) or
+                fmt.groupedExprWillBeMultiline(f.left) or
+                fmt.groupedExprWillBeMultiline(f.right),
+            .method_call => |m| fmt.ast.store.getCollectionLayout(expr_idx) == .expanded or
+                (fmt.ast.store.getExpr(m.receiver) == .arrow_call and fmt.nodeWillBeMultiline(AST.Expr.Idx, m.receiver)) or
+                fmt.groupedExprWillBeMultiline(m.receiver) or
+                fmt.nodesWillBeMultiline(AST.Expr.Idx, fmt.ast.store.exprSlice(m.args)),
+            .nominal_apply => |na| fmt.ast.store.getCollectionLayout(expr_idx) == .expanded or
+                fmt.groupedExprWillBeMultiline(na.mapper) or
+                fmt.nodesWillBeMultiline(AST.Expr.Idx, fmt.ast.store.exprSlice(na.args)),
+            .lambda => |l| fmt.ast.store.getCollectionLayout(expr_idx) == .expanded or
+                fmt.groupedExprWillBeMultiline(l.body) or
+                fmt.nodesWillBeMultiline(AST.Pattern.Idx, fmt.ast.store.patternSlice(l.args)),
+            .if_then_else => |i| fmt.groupedExprWillBeMultiline(i.condition) or
+                fmt.groupedExprWillBeMultiline(i.then) or
+                fmt.groupedExprWillBeMultiline(i.@"else"),
+            .if_without_else => |i| fmt.groupedExprWillBeMultiline(i.condition) or fmt.groupedExprWillBeMultiline(i.then),
+            .arrow_call => fmt.nodeWillBeMultiline(AST.Expr.Idx, expr_idx),
+            .dbg => |d| fmt.groupedExprWillBeMultiline(d.expr),
+            .@"return" => |r| fmt.groupedExprWillBeMultiline(r.expr),
+            .for_expr => |f| fmt.groupedExprWillBeMultiline(f.expr) or fmt.groupedExprWillBeMultiline(f.body),
+            else => false,
+        };
+    }
+
     fn nodeWillBeMultiline(fmt: *Formatter, comptime T: type, item: T) bool {
         switch (T) {
             AST.Expr.Idx => {
@@ -3967,8 +4047,8 @@ test "multiline arrow receiver in tuple is idempotent" {
         "a = (\n" ++
             "\t(\n" ++
             "\t\t0(0 |> X)\n" ++
-            "\t\t\t|> X,\n" ++
-            "\t).a,\n" ++
+            "\t\t\t|> X\n" ++
+            "\t).a\n" ++
             ")\n",
         result,
     );
@@ -3977,7 +4057,7 @@ test "multiline arrow receiver in tuple is idempotent" {
 test "integer field receiver separated by carriage return is idempotent" {
     const result = try moduleFmtsStable(std.testing.allocator, "a=(0\r.e)\n", false);
     defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("a = (\n\t(0).e,\n)\n", result);
+    try std.testing.expectEqualStrings("a = ((0).e)\n", result);
 }
 
 test "issue 8851: tuple dispatch with chained zero-arg applies is idempotent" {
@@ -4134,6 +4214,26 @@ test "parenthesized pipe receivers drop direct empty target arguments" {
     defer std.testing.allocator.free(result);
 
     try std.testing.expectEqualStrings("x = (foo |> bar).baz()\n", result);
+}
+
+test "issue 10478: multiline legacy arrow receiver groups without tuple comma" {
+    // Repro for https://github.com/roc-lang/roc/issues/10478
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\x = a
+        \\    .b()
+        \\    ->C.d()
+        \\    .e()
+    , false);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(
+        "x = (\n" ++
+            "\ta\n" ++
+            "\t\t.b()\n" ++
+            "\t\t|> C.d\n" ++
+            ").e()\n",
+        result,
+    );
 }
 
 test "multiline pipes preserve comments around the operator" {
@@ -4484,6 +4584,33 @@ test "multiline platform symbol map remains multiline after comments are discard
         "\t\t\"\": r,\n" ++
         "\t}\n";
     try std.testing.expectEqualStrings(expected, result);
+}
+
+test "issue 10445: package header without dependencies formats successfully" {
+    // Repro for https://github.com/roc-lang/roc/issues/10445
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\package [
+        \\    Date,
+        \\    DateTime,
+        \\    Duration,
+        \\    Time,
+        \\    Now,
+        \\]
+    , false);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(
+        "package\n" ++
+            "\t[\n" ++
+            "\t\tDate,\n" ++
+            "\t\tDateTime,\n" ++
+            "\t\tDuration,\n" ++
+            "\t\tTime,\n" ++
+            "\t\tNow,\n" ++
+            "\t]\n" ++
+            "\t{}\n",
+        result,
+    );
 }
 
 test "issue 8989: platform header targets section is preserved" {

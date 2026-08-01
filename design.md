@@ -3077,15 +3077,15 @@ Builtin quote and interpolation literal constraints are discharged directly by
 `Str`. A numeral literal constraint is rejected because builtin `Str` does not
 materialize numerals, and every non-literal constraint uses the ordinary static
 dispatch method-acceptance rule. Rejecting a constrained part retires its copied
-dispatch obligations together with the erroneous interpolation so no unresolved
-obligation can cross the checked boundary.
+static-dispatch constraints together with the erroneous interpolation so no
+unresolved static-dispatch constraint can cross the checked boundary.
 
 Both sides are pinned by tests: accepted —
 test/cli/issue_10204_imported_interpolation_metadata/Main.roc (an imported
 interpolation instantiated with `Str` checks successfully); rejected —
 test/cli/issue_10474_record_field_interpolation.roc (a generalized numeral
 record field cannot be instantiated as `Str` by interpolation and reports a
-type mismatch without a publication panic).
+type mismatch without `CheckedModule` construction panicking).
 
 ### Rewrite Inventory
 

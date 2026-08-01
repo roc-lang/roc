@@ -17416,11 +17416,12 @@ fn beginProbe(self: *Self) std.mem.Allocator.Error!Probe {
 /// A speculative scope whose SUCCESS is committed in place instead of being
 /// rolled back and redone. Unlike a plain `Probe` (whose unifications run against
 /// throwaway problem/snapshot stores precisely because they never survive), a
-/// commit-probe runs its unifications through the REAL `unify` wrapper — full
+/// commit-probe runs its unifications through the REAL `runUnify` wrapper — full
 /// bookkeeping: fresh vars ranked into the caller env's var pool, regions
-/// stamped, deferred dispatch constraints copied out, mismatch problems recorded
-/// with snapshots. On failure it must therefore also rewind what that bookkeeping
-/// grew:
+/// stamped, and deferred dispatch constraints copied out. A caller that owns its
+/// mismatch diagnostic uses `.write_no_report`, because occurrence-directed
+/// mismatch poisoning cannot run under a type-store savepoint. On failure the
+/// probe must rewind everything that bookkeeping grew:
 ///   - problems / snapshots recorded by failed in-probe unifications (the
 ///     store savepoint already un-poisons the `.err`-merged vars themselves;
 ///     this drops the reports, restoring the throwaway-store behavior);
@@ -18962,9 +18963,9 @@ fn staticDispatchConstraintAcceptsCandidate(
 
     // The real unify wrapper, not the throwaway-store probe unify: on the commit
     // path this merge (and its rank/region/deferred-constraint bookkeeping) is
-    // kept. A mismatch records a problem and poisons the operands, all of which the
-    // commit-probe rollback rewinds.
-    const result = try self.unify(method_var, constraint.fn_var, env);
+    // kept. The probe owns failure, so a mismatch must not run occurrence-directed
+    // poisoning while the store savepoint is active.
+    const result = try self.runUnify(method_var, constraint.fn_var, env, .{ .on_mismatch = .write_no_report });
     return result.isOk();
 }
 
@@ -20357,7 +20358,9 @@ fn constrainInterpolationPartToStr(self: *Self, part: InterpolationPartMetadata,
         var committed = false;
         defer if (!committed) probe.rollback();
 
-        const result = try self.unify(expected_str_var, part.var_, env);
+        // Keep successful writes for the commit path, but leave mismatch
+        // reporting and recovery to this function after the probe rolls back.
+        const result = try self.runUnify(expected_str_var, part.var_, env, .{ .on_mismatch = .write_no_report });
         if (!result.isOk()) break :blk false;
         if (!try self.interpolationPartConstraintsAcceptBuiltinStr(&probe, constraints_range, expected_str_var, env)) {
             break :blk false;
