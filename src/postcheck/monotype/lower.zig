@@ -14563,9 +14563,7 @@ const BodyContext = struct {
     }
 
     fn resolvedCheckedTypeView(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
-        const graph_ty = try self.resolvedTypeViewForNode(try self.lowerTypeNode(checked_ty));
-        self.measureSeamRead(checked_ty, graph_ty);
-        return graph_ty;
+        return try self.typeForChecked(checked_ty);
     }
 
     /// The Monotype this specialization gives a checked type: the single seam
@@ -17021,6 +17019,14 @@ const BodyContext = struct {
     }
 
     fn checkedPatternIsProvenUninhabited(self: *BodyContext, pattern_id: checked.CheckedPatternId) Allocator.Error!bool {
+        // Stays on the graph walk for now: this predicate can run at a program
+        // point that does not hold the binding the pattern's position needs, and
+        // an unbound residual materializes as the empty tag union, which reads
+        // as proven-uninhabited here and eliminates a live branch. The node walk
+        // treats an unresolved variable as unproven, which is the conservative
+        // direction this predicate requires. It moves off the graph when
+        // pattern lowering reads its expected type from the scrutinee's final
+        // type, where the binding is necessarily in scope (reunify.md 13.2d).
         const pattern = self.view.bodies.pattern(pattern_id);
         if (try self.nodeIsProvenUninhabited(try self.instNode(pattern.ty))) return true;
         return switch (pattern.data) {
