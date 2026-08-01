@@ -105,7 +105,7 @@ const Pass = struct {
     layouts: *const layout_mod.Store,
     append_kind: std.AutoHashMap(LIR.LirProcSpecId, ?ProcKind),
 
-    // ── Helper-proc classification ──────────────────────────────────────
+    // Helper-proc classification
 
     /// Symbolic value of a local inside a linear helper body.
     const Abstract = union(enum) {
@@ -252,7 +252,7 @@ const Pass = struct {
         };
     }
 
-    // ── Proc scan: flow edges, use accounting, joins ────────────────────
+    // Proc scan: flow edges, use accounting, joins
 
     const JoinInfo = struct {
         stmt: CFStmtId,
@@ -585,7 +585,7 @@ const Pass = struct {
         return false;
     }
 
-    // ── Per-parameter qualification and rewrite ─────────────────────────
+    // Per-parameter qualification and rewrite
 
     fn transformProc(self: *Pass, proc_id: LIR.LirProcSpecId) ResourceError!void {
         const proc = self.store.getProcSpec(proc_id);
@@ -780,7 +780,7 @@ const Pass = struct {
         return true;
     }
 
-    // ── Rewrite ─────────────────────────────────────────────────────────
+    // Rewrite
 
     fn freshLocal(self: *Pass, layout_idx: layout_mod.Idx, new_locals: *std.ArrayList(LocalId)) ResourceError!LocalId {
         const local = try self.store.addLocal(.{ .layout_idx = layout_idx });
@@ -1213,7 +1213,7 @@ const Pass = struct {
     }
 };
 
-// ── Tests ───────────────────────────────────────────────────────────────
+// Tests
 
 const testing = std.testing;
 

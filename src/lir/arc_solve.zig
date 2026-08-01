@@ -3151,7 +3151,7 @@ fn computeUniquenessDetailed(
 
     // Join parameters inherit uniqueness from their writes: a parameter
     // whose every `initialize_join_param` write moves in a unique value is
-    // itself unique — the loop-carried accumulator rebound from an
+    // itself unique—the loop-carried accumulator rebound from an
     // append-style result each iteration is the shape this serves. A
     // parameter with any other definition (a proc argument entering a
     // tail-call header, a plain edge assignment, an alias) stays foreign.

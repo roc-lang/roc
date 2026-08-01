@@ -770,15 +770,17 @@ pub fn roc_builtins_list_append_range_within_unsafe(out: *RocList, list_bytes: ?
     }
 }
 
-/// Wrapper: listAppendSublist(RocList, RocList src, start, len, alignment, element_width, ..., *RocOps) -> RocList.
-/// The source list is borrowed: only copied elements gain references. The
-/// update mode is forwarded to the destination's uniqueness check; `.InPlace`
-/// skips it.
+/// Wrapper: listSlackUnique(RocList, *RocOps) -> U64: elements appendable in
+/// place without any further ownership or capacity check.
 pub fn roc_builtins_list_slack_unique(list_bytes: ?[*]u8, list_len: usize, list_cap: usize, roc_ops: *RocOps) callconv(.c) u64 {
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     return list.listSlackUnique(l, roc_ops);
 }
 
+/// Wrapper: listAppendSublist(RocList, RocList src, start, len, alignment, element_width, ..., *RocOps) -> RocList.
+/// The source list is borrowed: only copied elements gain references. The
+/// update mode is forwarded to the destination's uniqueness check; `.InPlace`
+/// skips it.
 pub fn roc_builtins_list_append_sublist(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, src_bytes: ?[*]u8, src_len: usize, src_cap: usize, start: u64, len: u64, alignment: u32, element_width: usize, elements_refcounted: bool, element_incref: ?RcIncFn, element_decref: ?RcDropFn, update_mode: utils.UpdateMode, roc_ops: *RocOps) callconv(.c) void {
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     const src = RocList{ .bytes = src_bytes, .length = src_len, .capacity_or_alloc_ptr = src_cap };

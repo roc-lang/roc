@@ -669,8 +669,8 @@ pub fn listReserve(
 }
 
 /// Ensure capacity for `spare` more elements ahead of an append. Unlike
-/// `listReserve` — the explicit user reserve, which trusts the request and
-/// sizes the allocation exactly — growth here takes at least the geometric
+/// `listReserve`—the explicit user reserve, which trusts the request and
+/// sizes the allocation exactly—growth here takes at least the geometric
 /// step, so a loop of appends stays amortized-linear instead of reallocating
 /// on every call once the list runs tight.
 fn listReserveForAppend(
