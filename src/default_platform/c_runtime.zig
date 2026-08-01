@@ -46,18 +46,13 @@ const SourceFrame = extern struct {
     column: u32,
 };
 
-const WindowsStartupInfo = extern struct {
-    newmode: c_int,
-};
-
 const windows = if (builtin.os.tag == .windows) struct {
-    extern fn __wgetmainargs(
+    extern "kernel32" fn GetCommandLineW() callconv(.winapi) [*:0]u16;
+    extern "shell32" fn CommandLineToArgvW(
+        command_line: [*:0]const u16,
         argc: *c_int,
-        argv: *[*][*:0]u16,
-        env: *[*][*:0]u16,
-        expand_wildcards: c_int,
-        startup_info: *WindowsStartupInfo,
-    ) callconv(.c) c_int;
+    ) callconv(.winapi) ?[*][*:0]u16;
+    extern "kernel32" fn LocalFree(memory: ?*anyopaque) callconv(.winapi) ?*anyopaque;
 } else struct {};
 
 comptime {
@@ -106,10 +101,8 @@ fn cMain(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
 
 fn windowsArgs() ?RocList {
     var argc: c_int = 0;
-    var argv: [*][*:0]u16 = undefined;
-    var env: [*][*:0]u16 = undefined;
-    var startup_info: WindowsStartupInfo = .{ .newmode = 0 };
-    if (windows.__wgetmainargs(&argc, &argv, &env, 0, &startup_info) < 0) return null;
+    const argv = windows.CommandLineToArgvW(windows.GetCommandLineW(), &argc) orelse return null;
+    defer _ = windows.LocalFree(@ptrCast(argv));
     return roc_args.fromWindowsArgv(@intCast(@max(argc, 0)), argv, &rocAlloc);
 }
 
