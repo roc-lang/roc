@@ -67,6 +67,7 @@ test "NodeStore round trip - Headers" {
             .packages = rand_idx(random, AST.Collection.Idx),
             .platform_idx = rand_idx(random, AST.RecordField.Idx),
             .provides = rand_idx(random, AST.Collection.Idx),
+            .roc_version = @enumFromInt(7),
             .region = rand_region(random),
         },
     });
@@ -82,6 +83,7 @@ test "NodeStore round trip - Headers" {
         .package = .{
             .exposes = rand_idx(random, AST.Collection.Idx),
             .packages = rand_idx(random, AST.Collection.Idx),
+            .roc_version = null,
             .region = rand_region(random),
         },
     });
@@ -95,6 +97,7 @@ test "NodeStore round trip - Headers" {
             .hosted = .{ .span = rand_span(random), .layout = .expanded },
             .requires_entries = .{ .span = .{ .start = 0, .len = 0 } },
             .targets = null,
+            .roc_version = @enumFromInt(3),
             .region = rand_region(random),
         },
     });
@@ -1073,6 +1076,7 @@ test "NodeStore rejects unaddressable extra data reservations in release builds"
             .hosted = .{ .span = .{ .start = 0, .len = 0 } },
             .requires_entries = .{ .span = .{ .start = 0, .len = 0 } },
             .targets = null,
+            .roc_version = null,
             .region = .{ .start = 0, .end = 0 },
         },
     }));

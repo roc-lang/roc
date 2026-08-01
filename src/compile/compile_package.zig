@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const base = @import("base");
 const parse = @import("parse");
 const can = @import("can");
@@ -457,6 +458,7 @@ pub fn canonicalizeModuleWithSiblings(
             .builtin_indices = builtin_indices,
         },
         .imported_modules = &module_envs_map,
+        .compiler_version = build_options.compiler_version,
     });
     czer.source_dir = root_dir;
     try czer.canonicalizeFile();

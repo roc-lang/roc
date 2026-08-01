@@ -1271,8 +1271,60 @@ fn parsePackageHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Id
     return try self.store.addHeader(.{ .package = .{
         .exposes = exposed.collection,
         .packages = packages,
+        .roc_version = try self.takeRocVersionField(packages, null),
         .region = .{ .start = start, .end = self.pos },
     } });
+}
+
+/// The dependency-record key reserved for pinning the compiler version.
+const roc_version_key = "roc";
+
+/// Find the optional `roc: "<version>"` entry in a header's dependency record.
+///
+/// The entry stays in the record alongside the real dependencies — the same way
+/// an app's platform entry does — so that comment attachment and formatting of
+/// the record need no special cases. What this returns is which of those fields
+/// pins the compiler version, so that later phases can tell it apart from a
+/// dependency without re-deriving the rule from field names.
+///
+/// A pin whose value is not a version the compiler recognizes is still reported
+/// as the version field: a malformed pin is a bad pin, not a package named
+/// `roc`, and reporting it as both would be two errors for one mistake.
+fn takeRocVersionField(
+    self: *Parser,
+    packages: AST.Collection.Idx,
+    platform_idx: ?AST.RecordField.Idx,
+) std.mem.Allocator.Error!?AST.RecordField.Idx {
+    const collection = self.store.getCollection(packages);
+    var found: ?AST.RecordField.Idx = null;
+
+    for (self.store.recordFieldSlice(.{ .span = collection.span })) |field_idx| {
+        const field = self.store.getRecordField(field_idx);
+        if (!std.mem.eql(u8, self.tokenText(field.name), roc_version_key)) continue;
+
+        if (platform_idx) |platform| {
+            if (field_idx == platform) {
+                try self.pushDiagnostic(.roc_version_key_is_reserved, field.region);
+                continue;
+            }
+        }
+        if (found != null) {
+            try self.pushDiagnostic(.duplicate_roc_version, field.region);
+            continue;
+        }
+        found = field_idx;
+
+        const version_is_valid = blk: {
+            const value = field.value orelse break :blk false;
+            const token = self.store.singleStringPartToken(value) orelse break :blk false;
+            break :blk base.roc_version.parse(self.tokenText(token)) != null;
+        };
+        if (!version_is_valid) {
+            try self.pushDiagnostic(.invalid_roc_version, field.region);
+        }
+    }
+
+    return found;
 }
 
 fn parseAppHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
@@ -1370,6 +1422,7 @@ fn parseAppHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
             .platform_idx = platform_idx,
             .provides = provided.collection,
             .packages = packages,
+            .roc_version = try self.takeRocVersionField(packages, platform_idx),
             .region = .{ .start = start, .end = self.pos },
         } });
     }
@@ -1968,6 +2021,7 @@ fn parsePlatformHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.I
         .requires_entries = requires_entries,
         .exposes = exposes,
         .packages = packages,
+        .roc_version = try self.takeRocVersionField(packages, null),
         .provides = provides,
         .hosted = hosted,
         .targets = targets,

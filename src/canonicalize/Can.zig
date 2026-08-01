@@ -63,6 +63,14 @@ pub const ModuleInitContext = struct {
     builtin_types: BuiltinTypeContext,
     imported_modules: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType) = null,
     explicit_root_names: []const []const u8 = &.{},
+    /// Version string of the compiler that is running, used to check a
+    /// header's `roc` version pin against it. Null skips that check.
+    ///
+    /// Real builds pass `build_options.compiler_version`. It is a parameter
+    /// rather than something canonicalization reads for itself so that tools
+    /// which canonicalize for inspection — the snapshot tool above all —
+    /// produce output that does not change with whichever compiler built them.
+    compiler_version: ?[]const u8 = null,
 };
 
 /// A definition requested by an explicit-roots caller.
@@ -262,6 +270,9 @@ placeholder_idents: std.AutoHashMapUnmanaged(Ident.Idx, PlaceholderInfo) = .{},
 /// Definitions requested by the caller as explicit post-check roots.
 explicit_root_names: []const []const u8 = &.{},
 explicit_root_defs: std.ArrayListUnmanaged(ExplicitRootDef) = .empty,
+/// Version of the compiler that is running, or null to skip checking the
+/// header's `roc` version pin. See `ModuleInitContext.compiler_version`.
+compiler_version: ?[]const u8 = null,
 /// Platform provides declarations awaiting local-definition resolution after
 /// all top-level declarations have been canonicalized.
 pending_provides_entries: std.ArrayListUnmanaged(PendingProvidesEntry) = .empty,
@@ -707,6 +718,7 @@ fn initInternal(
         .globally_resolvable_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .explicit_module_envs = if (maybe_context) |context| context.imported_modules else null,
         .explicit_root_names = if (maybe_context) |context| context.explicit_root_names else &.{},
+        .compiler_version = if (maybe_context) |context| context.compiler_version else null,
         .import_indices = std.AutoHashMapUnmanaged(Ident.Idx, Import.Idx){},
         .alias_cycle_references = std.AutoHashMapUnmanaged(AST.Statement.Idx, AST.Statement.Idx){},
         .alias_cycle_scopes = std.AutoHashMapUnmanaged(AST.DeclIndex.ScopeIdx, void){},
@@ -4101,10 +4113,12 @@ pub fn canonicalizeFile(
         },
         .package => |h| {
             self.env.module_kind = .package;
+            try self.checkRocVersionPin(h.roc_version);
             try self.createExposedScope(h.exposes);
         },
         .platform => |h| {
             self.env.module_kind = .platform;
+            try self.checkRocVersionPin(h.roc_version);
             try self.createExposedScope(h.exposes);
             // Also add the 'provides' items (what platform provides to the host, e.g., main_for_host!)
             // These need to be in the exposed scope so they become exports
@@ -4122,6 +4136,7 @@ pub fn canonicalizeFile(
         },
         .app => |h| {
             self.env.module_kind = .app;
+            try self.checkRocVersionPin(h.roc_version);
             // App modules may have platform requirements that should constrain numeric literals
             // before defaulting to Dec, so defer numeric defaults until after platform checking
             // App headers have 'provides' instead of 'exposes'
@@ -5209,6 +5224,25 @@ fn introduceExistingPatternBindingsIntoScope(
         const ident_idx = self.boundPatternIdent(pattern_idx) orelse continue;
         _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false, true);
     }
+}
+
+/// Warn when the header pins a compiler version other than the one running.
+///
+/// Does nothing when the caller did not say which compiler is running, when
+/// the header pins no version, or when the pin is one the parser already
+/// rejected as unreadable.
+fn checkRocVersionPin(self: *Self, roc_version: ?AST.RecordField.Idx) std.mem.Allocator.Error!void {
+    const running = self.compiler_version orelse return;
+    const field_idx = roc_version orelse return;
+    const field = self.parse_ir.store.getRecordField(field_idx);
+    const pinned = self.parse_ir.rocVersionText(field_idx) orelse return;
+    if (!base.roc_version.isMismatch(pinned, running)) return;
+
+    try self.env.pushDiagnostic(Diagnostic{ .roc_version_mismatch = .{
+        .pinned = try self.env.insertIdent(base.Ident.for_text(pinned)),
+        .running = try self.env.insertIdent(base.Ident.for_text(running)),
+        .region = self.parse_ir.tokenizedRegionToRegion(field.region),
+    } });
 }
 
 fn createExposedScope(
