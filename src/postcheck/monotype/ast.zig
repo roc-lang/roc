@@ -1298,11 +1298,13 @@ pub const ProgramBuilder = struct {
     current_region: base.Region,
 
     pub fn init(allocator: std.mem.Allocator) ProgramBuilder {
+        var interned_types = Type.Store.init(allocator);
+        interned_types.enableInterning();
         return .{
             .allocator = allocator,
             .names = names.NameStore.init(allocator),
             .next_symbol = 0,
-            .types = Type.Store.init(allocator),
+            .types = interned_types,
             .specs = .empty,
             .imported_fns = .empty,
             .fns = .empty,
