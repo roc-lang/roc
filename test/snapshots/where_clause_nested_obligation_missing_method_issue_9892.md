@@ -133,7 +133,11 @@ main = run(Wrap.W(42.U8))
 			(args
 				(p-nominal
 					(p-applied-tag)))
-			(e-runtime-error (tag "erroneous_value_expr")))
+			(e-dispatch-call (method "frobnicate") (constraint-fn-var 275)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "x"))))
+				(args)))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "Wrap") (local)
@@ -165,13 +169,7 @@ main = run(Wrap.W(42.U8))
 					(ty-lookup (name "Str") (builtin))))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 306)
-			(e-lookup-local
-				(p-assign (ident "run")))
-			(e-nominal (nominal "Wrap")
-				(e-tag (name "W")
-					(args
-						(e-typed-int (value "42") (type "U8"))))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "Str") (builtin))))
 	(s-nominal-decl
