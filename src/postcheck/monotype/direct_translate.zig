@@ -798,6 +798,21 @@ pub const Translator = struct {
         self.emission.inputs.clearRetainingCapacity();
     }
 
+    /// How many representation inputs are declared right now. A caller opening
+    /// a scoped declaration reads this before declaring and hands the value to
+    /// `truncateRepresentationInputs` when its scope closes, so declarations
+    /// nest with the request scopes that made them.
+    pub fn representationInputCount(self: *const Translator) usize {
+        return self.emission.inputs.items.len;
+    }
+
+    /// Retract every representation input declared after `count` was read: the
+    /// scoped counterpart of `clearRepresentationInputs`, for declarations tied
+    /// to a request scope's lifetime.
+    pub fn truncateRepresentationInputs(self: *Translator, count: usize) void {
+        self.emission.inputs.shrinkRetainingCapacity(count);
+    }
+
     /// How many positions this translator has opened a representation slot at.
     /// A caller comparing one emitted root against another stage's type for the
     /// same position reads this before and after that root: a growth says the
@@ -2281,6 +2296,35 @@ const RecordBackingResolver = struct {
 
 fn initTargetStore() MonoType.Store {
     return MonoType.Store.init(testing.allocator);
+}
+
+test "representation inputs retract to a scope's count" {
+    var fixture = TestFixture.init(testing.allocator);
+    defer fixture.deinit();
+    var store = initTargetStore();
+    defer store.deinit();
+    var target_names = names.NameStore.init(testing.allocator);
+    defer target_names.deinit();
+    var resolver = NoBackingResolver{};
+    var translator = Translator.init(testing.allocator, &store, &target_names, resolver.resolver());
+    defer translator.deinit();
+
+    const outer = translator.representationInputCount();
+    try translator.declareRepresentationInput(.{
+        .position = .{ .module_bytes = fixture.module_hash, .type_id = 1 },
+        .representation = .{ .iterator_representation = .minted },
+    });
+    const inner = translator.representationInputCount();
+    try translator.declareRepresentationInput(.{
+        .position = .{ .module_bytes = fixture.module_hash, .type_id = 2 },
+        .representation = .{ .iterator_representation = .forced_dynamic },
+    });
+    try testing.expectEqual(@as(usize, 2), translator.representationInputCount());
+
+    translator.truncateRepresentationInputs(inner);
+    try testing.expectEqual(@as(usize, 1), translator.representationInputCount());
+    translator.truncateRepresentationInputs(outer);
+    try testing.expectEqual(@as(usize, 0), translator.representationInputCount());
 }
 
 test "primitive builtin nominals translate to the same stored primitive id" {
