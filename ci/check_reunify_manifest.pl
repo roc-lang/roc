@@ -397,10 +397,12 @@ my @categories = (
             # over a position that opens, closes, and seals a representation slot
             # — including the issue-10170 recursive minted backing and a producer
             # input that places minted components and a generated backing. It
-            # stays inert
+            # grew 28 -> 29 with the two-parameter declaration whose backing
+            # reaches each formal several levels down, which is the shape the
+            # corpus divergences take. It stays inert
             # (probe-only) until Stage E repoints the seam.
             { label => 'translateGroundRoot', re => qr/\btranslateGroundRoot\b/,
-              counts => { $DTRAN => 28, $LOWER => 1 } },
+              counts => { $DTRAN => 29, $LOWER => 1 } },
             { label => 'instantiateStoredScheme', re => qr/\binstantiateStoredScheme\b/,
               counts => { $DTRAN => 4 } },
             { label => 'runDirectTranslateProbe', re => qr/\brunDirectTranslateProbe\b/,
