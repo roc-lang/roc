@@ -20314,23 +20314,68 @@ fn recordInterpolationPartTypeMismatch(self: *Self, expected_var: Var, actual_va
     } });
 }
 
+/// Under an open commit-probe, validate the constraints already attached to an
+/// interpolation part against builtin Str. Str discharges its primitive quote
+/// and interpolation conversions directly; every other obligation must resolve
+/// through the ordinary static-dispatch acceptance rule.
+fn interpolationPartConstraintsAcceptBuiltinStr(
+    self: *Self,
+    probe: *CommitProbe,
+    constraints_range: StaticDispatchConstraint.SafeList.Range,
+    expected_str_var: Var,
+    env: *Env,
+) Allocator.Error!bool {
+    var constraints = self.types.iterStaticDispatchConstraints(constraints_range);
+    while (constraints.next()) |constraint| {
+        switch (constraint.origin) {
+            .from_literal => |literal| switch (literal) {
+                .quote, .interpolation => continue,
+                .numeral => return false,
+            },
+            else => {},
+        }
+
+        if (!try self.staticDispatchConstraintAcceptsCandidate(probe, constraint, expected_str_var, env)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 fn constrainInterpolationPartToStr(self: *Self, part: InterpolationPartMetadata, expected_str_var: Var, env: *Env) Allocator.Error!bool {
     const resolved_expr = self.types.resolveVar(part.var_);
     if (resolved_expr.desc.content == .err) return false;
 
+    const constraints_range = switch (resolved_expr.desc.content) {
+        .flex => |flex| flex.constraints,
+        .rigid => |rigid| rigid.constraints,
+        else => StaticDispatchConstraint.SafeList.Range.empty(),
+    };
+
     const compatible = blk: {
-        var probe = try self.beginProbe();
-        defer probe.rollback();
-        break :blk try self.probeUnifyWithoutRecordingProblems(expected_str_var, part.var_);
+        var probe = try self.beginCommitProbe(env);
+        var committed = false;
+        defer if (!committed) probe.rollback();
+
+        const result = try self.unify(expected_str_var, part.var_, env);
+        if (!result.isOk()) break :blk false;
+        if (!try self.interpolationPartConstraintsAcceptBuiltinStr(&probe, constraints_range, expected_str_var, env)) {
+            break :blk false;
+        }
+
+        committed = true;
+        probe.commit();
+        break :blk true;
     };
 
     if (!compatible) {
         try self.recordInterpolationPartTypeMismatch(expected_str_var, part.var_, part.region);
+        for (self.types.sliceStaticDispatchConstraints(constraints_range)) |constraint| {
+            try self.markStaticDispatchRejected(constraint);
+        }
         return true;
     }
 
-    const result = try self.unify(expected_str_var, part.var_, env);
-    std.debug.assert(result.isOk());
     return false;
 }
 
