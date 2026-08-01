@@ -31460,7 +31460,7 @@ const BodyContext = struct {
         named_type.ty = @enumFromInt(0);
         var def = named.def;
         def.generated = null;
-        const canonical = types.internNamed(&self.builder.program.names, .{
+        const flavor_erased = types.internNamed(&self.builder.program.names, .{
             .named_type = named_type,
             .def = def,
             .kind = named.kind,
@@ -31469,7 +31469,7 @@ const BodyContext = struct {
             .backing = named.backing,
             .declared_order = order_buf[0..order_len],
         }) catch return null;
-        return types.typeDigest(&self.builder.program.names, canonical);
+        return types.typeDigest(&self.builder.program.names, flavor_erased);
     }
 
     /// Debug/probe-only: the identity attributes a named head hashes that the
