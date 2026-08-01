@@ -4039,6 +4039,21 @@ pub const GraphTypeFinals = struct {
         switch (self.mode) {
             .active_snapshot => return built,
             .committed => {
+                // A generated occurrence's sealed id carries evidence
+                // attachments of its own; hash-consing two occurrences onto
+                // one id severs them. A node with generated provenance keeps
+                // its distinct id until the identity cutover reclassifies its
+                // consumers (reunify.md 8.5).
+                const occurrence_held = switch (self.graph.content(node)) {
+                    .named => |named| named.generated_iterator != null,
+                    else => false,
+                };
+                if (occurrence_held) {
+                    try self.graph.types.excludeFromDedup(built);
+                    try self.graph.types.noteCommittedSeal(built);
+                    if (self.graph.trace) |trace| trace.noteSealed(@intFromEnum(node), built);
+                    return built;
+                }
                 const shared = try self.graph.types.internFilledNode(self.graph.name_store, built);
                 if (shared != built) try self.sealed.put(node, shared);
                 // Debug/probe-only: record the committed final seal so the Slice 7
