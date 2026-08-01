@@ -16365,6 +16365,20 @@ const BodyContext = struct {
                 // specialization's relations for now (reunify.md 13.2d).
                 switch (checkedPayload(self.view, expr.ty)) {
                     .flex, .rigid => {
+                        // Debug/probe-only: what a nested-scheme frame would
+                        // need at this leaf - whether a scheme owns the
+                        // variable, whether a request scope is open here, and
+                        // whether that scheme captures enclosing binders
+                        // (reunify.md 13.2d, nested-local-scheme frames).
+                        if (comptime census.enabled) {
+                            census.bump("variable_headed_leaf_kept_on_graph");
+                            if (self.builder.rehearsal) |rehearsal| {
+                                rehearsal.noteNestedLeafBindingNeeds(.{
+                                    .module_bytes = self.view.key.bytes,
+                                    .type_id = @intFromEnum(expr.ty),
+                                });
+                            }
+                        }
                         const expr_node = try self.lowerExprTypeNode(expr_id);
                         if (!try self.graph.typeIsResolved(expr_node)) {
                             try self.graph.materializeLiteralDefault(expr_node);
@@ -25397,10 +25411,16 @@ const BodyContext = struct {
             .promoted_top_level_proc,
             .platform_required_proc,
             => rehearsal.openRequestEdge(self.view.key.bytes, record.expr, null),
+            // A value-bound local function is a scheme instantiation edge
+            // exactly as a procedure use is; its use expression keys the
+            // recorded site a nested scheme's frame reads. A value that
+            // instantiates no scheme names an edge no site matches, which
+            // still scopes correctly.
             .local_param,
             .local_value,
             .local_mutable_version,
             .pattern_binder,
+            => rehearsal.openRequestEdge(self.view.key.bytes, record.expr, null),
             .selected_hoisted_const,
             .top_level_const,
             .imported_const,

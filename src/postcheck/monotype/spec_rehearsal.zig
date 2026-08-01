@@ -1257,6 +1257,8 @@ pub const Rehearsal = struct {
     /// How many unbound-with-no-frame positions have been named, so the dump
     /// cannot fill the census file.
     unbound_no_frame_dumped: usize = 0,
+    /// How many failed edge-to-site joins have been dumped in detail.
+    nested_leaf_dumped: usize = 0,
     /// Positions the seam reported a divergence at, so whether each is a
     /// template can be settled after lowering rather than mid-seal.
     diverged_addresses: std.AutoHashMapUnmanaged(CheckedAddress, void) = .empty,
@@ -2447,6 +2449,140 @@ pub const Rehearsal = struct {
             }
         }
         census.bump("outside_exit_divergence_free_but_unbound");
+    }
+
+    /// Debug/probe-only: what a frame for a nested local scheme would need at
+    /// one variable-headed leaf the flip left on the graph: which scheme owns
+    /// the leaf's variable, whether a request scope is open at the leaf, and
+    /// whether that scheme captures enclosing binders and so needs its frame
+    /// chained onto the enclosing one (reunify.md 13.2d).
+    pub fn noteNestedLeafBindingNeeds(self: *Rehearsal, address: CheckedAddress) void {
+        if (comptime !census.enabled) return;
+        const cursor = self.lookup.cursor(address.module_bytes) orelse return;
+        const position: checked.CheckedTypeId = @enumFromInt(address.type_id);
+        const free = self.firstFreeVariable(cursor.view, position, null) orelse {
+            census.bump("nested_leaf_no_free_variable");
+            return;
+        };
+        var owner: ?checked.CheckedTypeScheme = null;
+        for (cursor.view.schemes) |scheme| {
+            for (scheme.generalizedVars(cursor.view)) |binder| {
+                if (binder == free) {
+                    owner = scheme;
+                    break;
+                }
+            }
+            if (owner != null) break;
+        }
+        const scheme = owner orelse {
+            census.bump("nested_leaf_no_scheme_owns_it");
+            return;
+        };
+        census.bump("nested_leaf_scheme_owned");
+        if (scheme.captured_len != 0) {
+            census.bump("nested_leaf_scheme_captures_enclosing");
+        }
+        if (self.requests.items.len != 0) {
+            census.bump("nested_leaf_request_scope_open");
+        } else {
+            census.bump("nested_leaf_no_request_scope");
+        }
+        // Which open scope's edge names a recorded site of the owning scheme:
+        // the innermost, a deeper one, or none. The frame construction reads
+        // whichever one answers.
+        var innermost_answers = false;
+        var any_answers = false;
+        var index: usize = self.requests.items.len;
+        while (index > 0) {
+            index -= 1;
+            const edge = switch (self.requests.items[index]) {
+                .checked => |checked_edge| checked_edge,
+                .none, .generated => continue,
+            };
+            if (!std.mem.eql(u8, &edge.module_bytes, &address.module_bytes)) continue;
+            var found = false;
+            for (cursor.view.instantiationSites()) |site| {
+                if (site.scheme_owner_node != scheme.owner_node) continue;
+                if (site.use_expr != @intFromEnum(edge.use_expr)) continue;
+                found = true;
+                break;
+            }
+            if (found) {
+                any_answers = true;
+                if (index == self.requests.items.len - 1) innermost_answers = true;
+                break;
+            }
+        }
+        if (innermost_answers) {
+            census.bump("nested_leaf_innermost_edge_names_site");
+        } else if (any_answers) {
+            census.bump("nested_leaf_outer_edge_names_site");
+        } else {
+            census.bump("nested_leaf_no_open_edge_names_site");
+            self.dumpNestedLeafDetail(cursor, address, scheme);
+        }
+    }
+
+    /// Debug/probe-only: the raw ids behind one failed edge-to-site join, so
+    /// the key relationship is read from data rather than guessed.
+    fn dumpNestedLeafDetail(
+        self: *Rehearsal,
+        cursor: direct_translate.ModuleCursor,
+        address: CheckedAddress,
+        scheme: checked.CheckedTypeScheme,
+    ) void {
+        if (self.nested_leaf_dumped >= 8) return;
+        self.nested_leaf_dumped += 1;
+        const raw_path = std.c.getenv("ROC_REUNIFY_CENSUS") orelse return;
+        var line: std.ArrayList(u8) = .empty;
+        defer line.deinit(self.allocator);
+        const module_hex = std.fmt.bytesToHex(address.module_bytes[0..8].*, .lower);
+        line.print(
+            self.allocator,
+            "nested_leaf_detail module={s} leaf={d} scheme_owner={d} open_edges=[",
+            .{ &module_hex, address.type_id, scheme.owner_node },
+        ) catch return;
+        for (self.requests.items) |scope| switch (scope) {
+            .checked => |edge| {
+                if (!std.mem.eql(u8, &edge.module_bytes, &address.module_bytes)) {
+                    line.appendSlice(self.allocator, "othermod,") catch return;
+                    continue;
+                }
+                line.print(self.allocator, "{d},", .{@intFromEnum(edge.use_expr)}) catch return;
+            },
+            .none => line.appendSlice(self.allocator, "none,") catch return,
+            .generated => |generated| line.print(
+                self.allocator,
+                "gen:{s},",
+                .{@tagName(generated.edge.rule)},
+            ) catch return,
+        };
+        line.appendSlice(self.allocator, "] site_uses=[") catch return;
+        var shown: usize = 0;
+        for (cursor.view.instantiationSites()) |site| {
+            if (site.scheme_owner_node != scheme.owner_node) continue;
+            if (shown >= 10) {
+                line.appendSlice(self.allocator, "...,") catch return;
+                break;
+            }
+            line.print(self.allocator, "{d},", .{site.use_expr}) catch return;
+            shown += 1;
+        }
+        line.appendSlice(self.allocator, "]\n") catch return;
+        census.appendToFile(raw_path, line.items);
+        if (cursor.view.instantiationSites().len != 0) {
+            var sites: usize = 0;
+            for (cursor.view.instantiationSites()) |site| {
+                if (site.scheme_owner_node == scheme.owner_node) sites += 1;
+            }
+            if (sites == 0) {
+                census.bump("nested_leaf_scheme_has_no_recorded_site");
+            } else if (sites == 1) {
+                census.bump("nested_leaf_scheme_has_one_site");
+            } else {
+                census.bump("nested_leaf_scheme_has_many_sites");
+            }
+        }
     }
 
     /// Debug/probe-only: for a free variable that no nominal declaration
