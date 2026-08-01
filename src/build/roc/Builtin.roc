@@ -4731,6 +4731,34 @@ Builtin :: [].{
 		## ```
 		sublist : List(a), { start : U64, len : U64 } -> List(a)
 
+		## Split a list into chunks of at most `chunk_size` items, in order. The
+		## final chunk is shorter when the length is not a multiple of `chunk_size`,
+		## and a `chunk_size` of 0 produces an empty list.
+		## ```roc
+		## expect [1.I64, 2, 3, 4, 5].chunks_of(2) == [[1, 2], [3, 4], [5]]
+		##
+		## expect [1.I64, 2, 3].chunks_of(10) == [[1, 2, 3]]
+		## ```
+		chunks_of : List(a), U64 -> List(List(a))
+		chunks_of = |list, chunk_size| {
+			len = List.len(list)
+
+			if chunk_size == 0 or len == 0 {
+				[]
+			} else {
+				# `(len - 1) / chunk_size + 1` is an overflow-safe ceil of `len / chunk_size`,
+				# counting exactly the chunks appended below so every unchecked append stays
+				# in bounds.
+				var $chunks = List.with_capacity((len - 1) / chunk_size + 1)
+				var $start = 0
+				while ($start < len) {
+					$chunks = list_append_unsafe($chunks, List.sublist(list, { start: $start, len: chunk_size }))
+					$start = $start + chunk_size
+				}
+				$chunks
+			}
+		}
+
 		## Return the first `n` items of the list. If the list has fewer than `n`
 		## items, the entire list is returned.
 		## ```roc
