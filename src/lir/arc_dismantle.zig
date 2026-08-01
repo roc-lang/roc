@@ -574,6 +574,8 @@ pub fn compute(
     const FlowFrame = struct { cursor: LIR.CFStmtId, state: FlowState };
     var flow_frames = std.ArrayList(FlowFrame).empty;
     defer flow_frames.deinit(gpa);
+    var exit_musts = std.ArrayList(u64).empty;
+    defer exit_musts.deinit(gpa);
 
     var it = analysis.candidates.iterator();
     candidates: while (it.next()) |entry| {
@@ -653,6 +655,7 @@ pub fn compute(
         if (candidate_mask == 0) continue;
 
         var poison: u64 = 0;
+        exit_musts.clearRetainingCapacity();
         join_bodies.clearRetainingCapacity();
         body_states.clearRetainingCapacity();
         flow_frames.clearRetainingCapacity();
@@ -707,6 +710,7 @@ pub fn compute(
                         // visited, which keeps their fields residual.
                         const body = join_bodies.get(@intFromEnum(stmt.target)) orelse {
                             poison |= state.may & ~state.must;
+                            try exit_musts.append(gpa, state.must);
                             break :chain;
                         };
                         const slot = try body_states.getOrPut(gpa, body);
@@ -740,6 +744,7 @@ pub fn compute(
                     // point's residual is the same however it was reached.
                     .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {
                         poison |= state.may & ~state.must;
+                        try exit_musts.append(gpa, state.must);
                         break :chain;
                     },
                 }
@@ -752,7 +757,18 @@ pub fn compute(
         while (kinds_it.next()) |kind| {
             if (!kind.visited) poison |= kind.bit;
         }
-        const taken_mask: u64 = candidate_mask & ~poison;
+
+        // One static residual serves every death point, so a field is taken
+        // only if every exit the flow reached agrees its take ran: an exit a
+        // taken field's take did not dominate would be under-released. Bits
+        // only ever leave the set, so this converges.
+        var taken_mask: u64 = candidate_mask & ~poison;
+        while (taken_mask != 0) {
+            var missing: u64 = 0;
+            for (exit_musts.items) |must| missing |= taken_mask & ~must;
+            if (missing == 0) break;
+            taken_mask &= ~missing;
+        }
         if (taken_mask == 0) continue;
 
         // Accepted. Record the takes and the residual: every refcounted
