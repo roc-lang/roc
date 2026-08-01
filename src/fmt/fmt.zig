@@ -4586,6 +4586,33 @@ test "multiline platform symbol map remains multiline after comments are discard
     try std.testing.expectEqualStrings(expected, result);
 }
 
+test "issue 10445: package header without dependencies formats successfully" {
+    // Repro for https://github.com/roc-lang/roc/issues/10445
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\package [
+        \\    Date,
+        \\    DateTime,
+        \\    Duration,
+        \\    Time,
+        \\    Now,
+        \\]
+    , false);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(
+        "package\n" ++
+            "\t[\n" ++
+            "\t\tDate,\n" ++
+            "\t\tDateTime,\n" ++
+            "\t\tDuration,\n" ++
+            "\t\tTime,\n" ++
+            "\t\tNow,\n" ++
+            "\t]\n" ++
+            "\t{}\n",
+        result,
+    );
+}
+
 test "issue 8989: platform header targets section is preserved" {
     // Platform header with targets section should preserve the targets after formatting
     const input =
