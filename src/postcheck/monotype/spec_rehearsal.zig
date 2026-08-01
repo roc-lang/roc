@@ -374,6 +374,10 @@ pub const RequestEdge = struct {
     /// rule states where the binder values come from in the second case and is
     /// never consulted in the first.
     covering_rule: ?GeneratedEdge = null,
+    /// Where the translator's declared representation inputs stood when a
+    /// callee under this scope declared its own; closing the scope retracts
+    /// back to it, exactly as a generated scope does.
+    input_floor: ?usize = null,
     /// The requesting body's own binding at the moment the request was made. A
     /// request that reserves is lowered later, from a completely different frame
     /// stack, so the environment a symbolic actual resolves under travels with
@@ -431,6 +435,11 @@ const CalleeLevel = struct {
 const GeneratedRequest = struct {
     edge: GeneratedEdge,
     caller: ?CapturedEnvironment,
+    /// Where the translator's declared representation inputs stood when a
+    /// callee under this scope declared its own; closing the scope retracts
+    /// back to it. The scope outlives the callee level, and the consumers of
+    /// the declared representation read after that level closes.
+    input_floor: ?usize = null,
 };
 
 /// What one open request scope names: nothing, the checked use site the request
@@ -1759,8 +1768,16 @@ pub const Rehearsal = struct {
         const open = self.requests.pop() orelse return;
         switch (open) {
             .none => {},
-            .generated => |request| self.releaseGeneratedRequest(request),
+            .generated => |request| {
+                if (request.input_floor) |floor| {
+                    self.translator.truncateRepresentationInputs(floor);
+                }
+                self.releaseGeneratedRequest(request);
+            },
             .checked => |edge| {
+                if (edge.input_floor) |floor| {
+                    self.translator.truncateRepresentationInputs(floor);
+                }
                 census.bump("rehearsal_request_edge_unclaimed");
                 self.releaseEdge(edge);
             },
@@ -1813,18 +1830,47 @@ pub const Rehearsal = struct {
         caller_env: ?*const direct_translate.BindingEnvironment,
         caller_owner_node: u32,
     ) ?usize {
-        if (declared.rule != .iterator_dispatch_receiver) return null;
-        const source = declared.source orelse return null;
-        const procedure = source.procedure orelse return null;
-        const kind = kindForIteratorProcedure(procedure) orelse return null;
+        census.bump("iter_declare_attempt");
+        if (declared.rule != .iterator_dispatch_receiver) {
+            census.bump("iter_declare_not_iterator_rule");
+            return null;
+        }
+        const source = declared.source orelse {
+            census.bump("iter_declare_no_source");
+            return null;
+        };
+        const procedure = source.procedure orelse {
+            census.bump("iter_declare_no_procedure");
+            return null;
+        };
+        const kind = kindForIteratorProcedure(procedure) orelse {
+            census.bump("iter_declare_nonminting_procedure");
+            return null;
+        };
         const function = switch (defining.view.payload(scheme.root)) {
             .function => |function| function,
-            else => return null,
+            else => {
+                census.bump("iter_declare_root_not_function");
+                return null;
+            },
         };
-        const caller = self.lookup.cursor(source.module_bytes) orelse return null;
-        const topology_lookup = self.lookup.iterator_topology orelse return null;
-        const topology_ids = topology_lookup(self.lookup.context, source.module_bytes) orelse return null;
-        const topology = self.internTopology(caller, topology_ids) orelse return null;
+        const caller = self.lookup.cursor(source.module_bytes) orelse {
+            census.bump("iter_declare_no_caller_cursor");
+            return null;
+        };
+        const topology_lookup = self.lookup.iterator_topology orelse {
+            census.bump("iter_declare_no_topology_lookup");
+            return null;
+        };
+        const topology_ids = topology_lookup(self.lookup.context, source.module_bytes) orelse {
+            census.bump("iter_declare_no_topology_ids");
+            return null;
+        };
+        const topology = self.internTopology(caller, topology_ids) orelse {
+            census.bump("iter_declare_topology_intern_failed");
+            return null;
+        };
+        census.bump("iter_declare_declared");
 
         // The receiver's minted depth under the requesting binding decides this
         // mint's depth; a chain past the cap runs forced-dynamic instead.
@@ -1866,6 +1912,55 @@ pub const Rehearsal = struct {
             },
             .representation = representation,
         }) catch return null;
+        // The requesting side reads its own return position, which the
+        // callable witness names in the caller's module; the same minted
+        // representation holds there.
+        switch (source.witness) {
+            .callable => |callable_ty| switch (caller.view.payload(callable_ty)) {
+                .function => |caller_function| {
+                    self.translator.declareRepresentationInput(.{
+                        .position = .{
+                            .module_bytes = source.module_bytes,
+                            .type_id = @intFromEnum(caller_function.ret),
+                        },
+                        .representation = representation,
+                    }) catch return null;
+                    census.bump("iter_declare_caller_ret_declared");
+                    if (self.unbound_no_frame_dumped < 8) {
+                        self.unbound_no_frame_dumped += 1;
+                        if (std.c.getenv("ROC_REUNIFY_CENSUS")) |raw_path| {
+                            const module_hex = std.fmt.bytesToHex(source.module_bytes[0..8].*, .lower);
+                            var line_buf: [160]u8 = undefined;
+                            if (std.fmt.bufPrint(&line_buf, "declare_ids module={s} callee_ret={d} caller_ret={d}\n", .{
+                                &module_hex,
+                                @intFromEnum(function.ret),
+                                @intFromEnum(caller_function.ret),
+                            })) |line| {
+                                census.appendToFile(raw_path, line);
+                            } else |_| {}
+                        }
+                    }
+                },
+                else => census.bump("iter_declare_witness_not_function"),
+            },
+            .receiver_at_argument => census.bump("iter_declare_witness_receiver_only"),
+        }
+        // The consumers of this declaration read after the callee level
+        // closes, so the enclosing generated request scope carries the
+        // retraction when one is open; the level carries it otherwise.
+        if (self.requests.items.len != 0) {
+            switch (self.requests.items[self.requests.items.len - 1]) {
+                .generated => |*request| {
+                    if (request.input_floor == null) request.input_floor = floor;
+                    return null;
+                },
+                .checked => |*edge| {
+                    if (edge.input_floor == null) edge.input_floor = floor;
+                    return null;
+                },
+                .none => {},
+            }
+        }
         return floor;
     }
 
@@ -2006,6 +2101,13 @@ pub const Rehearsal = struct {
                 .owner_node = scheme.owner_node,
                 .chain = chain,
                 .ready = true,
+                .input_floor = if (rule) |declared_rule| self.declareIteratorProducerInput(
+                    defining,
+                    scheme,
+                    declared_rule,
+                    caller_env,
+                    caller_owner_node,
+                ) else null,
             };
         }
 
@@ -5169,6 +5271,72 @@ pub const Rehearsal = struct {
             @enumFromInt(address.type_id),
             &reason,
         ) catch null;
+    }
+
+    /// Declare, at a consumer's own address, the producer representation one
+    /// generated rule states, returning the floor to retract to after the
+    /// consumer's read. The rule derivation is the same one a callee binding
+    /// runs; only the address is the consumer's (reunify.md 13.2e).
+    pub fn declareConsumerInputAt(
+        self: *Rehearsal,
+        address: CheckedAddress,
+        declared: GeneratedEdge,
+    ) ?usize {
+        const source = declared.source orelse return null;
+        const procedure = source.procedure orelse return null;
+        const kind = kindForIteratorProcedure(procedure) orelse return null;
+        const caller = self.lookup.cursor(source.module_bytes) orelse return null;
+        const topology_lookup = self.lookup.iterator_topology orelse return null;
+        const topology_ids = topology_lookup(self.lookup.context, source.module_bytes) orelse return null;
+        const topology = self.internTopology(caller, topology_ids) orelse return null;
+        var depth: u8 = 0;
+        var reason: direct_translate.SkipReason = undefined;
+        if (self.translator.translateUnderEnvironment(
+            caller,
+            if (self.frameForModule(source.module_bytes)) |frame| frame.environment() else null,
+            checked.checked_residual_disposition_module_body_owner,
+            source.receiver.checked_ty,
+            &reason,
+        )) |receiver_ty| {
+            switch (self.types.get(receiver_ty)) {
+                .named => |named| depth = named.def.iterator_depth,
+                else => {},
+            }
+        } else |_| {}
+        const over_cap = depth >= max_minted_chain_depth;
+        const representation: direct_translate.ProducerRepresentation = if (over_cap) .{
+            .iterator_representation = .forced_dynamic,
+            .iterator_kind = .forced_dynamic,
+            .iterator_depth = 0,
+            .topology = topology,
+            .minting = .{ .callable_evidence = null },
+        } else .{
+            .iterator_representation = .minted,
+            .iterator_kind = kind,
+            .iterator_depth = depth + 1,
+            .topology = topology,
+            .minting = .{ .callable_evidence = null },
+        };
+        const floor = self.translator.representationInputCount();
+        self.translator.declareRepresentationInput(.{
+            .position = .{ .module_bytes = address.module_bytes, .type_id = address.type_id },
+            .representation = representation,
+        }) catch return null;
+        return floor;
+    }
+
+    /// Retract consumer-declared inputs back to the floor their read opened.
+    pub fn retractConsumerInputs(self: *Rehearsal, floor: usize) void {
+        self.translator.truncateRepresentationInputs(floor);
+    }
+
+    /// Debug/probe-only: whether the translator currently holds a declared
+    /// representation input at one position.
+    pub fn hasDeclaredInputAt(self: *const Rehearsal, address: CheckedAddress) bool {
+        return self.translator.hasRepresentationInputAt(.{
+            .module_bytes = address.module_bytes,
+            .type_id = address.type_id,
+        });
     }
 
     /// The Monotype this lowering gives one checked position, as production

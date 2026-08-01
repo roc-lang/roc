@@ -30659,10 +30659,16 @@ const BodyContext = struct {
             try self.lowerTypeNode(checked_ret_ty);
         _ = try checkedMonoRequestNode(self.graph, checked_result_node, plan_ret_node);
         const call_data = try self.lowerResolvedDispatchAtNode(plan, resolved, callable_node, self, pre_lowered.items);
-        const call_ret_cell = if (try self.graph.containsGeneratedPrivate(plan_ret_node))
-            DraftTypeCell.fromGraphNode(plan_ret_node)
-        else
-            expected_ret_cell orelse DraftTypeCell.fromGraphNode(plan_ret_node);
+        const call_ret_cell = if (try self.graph.containsGeneratedPrivate(plan_ret_node)) blk: {
+            // A plan return still unresolved here resolves later in the body;
+            // the parity question only exists once the graph has an answer.
+            if (try self.graph.typeIsResolved(plan_ret_node)) {
+                self.measureDispatchReturnParity(checked_ret_ty, plan, try self.activeTypeFromNode(plan_ret_node));
+            } else {
+                census.bump("dispatch_return_parity_unresolved_at_cell");
+            }
+            break :blk DraftTypeCell.fromGraphNode(plan_ret_node);
+        } else expected_ret_cell orelse DraftTypeCell.fromGraphNode(plan_ret_node);
         const call_expr = try self.addExprWithTypeCell(
             call_ret_cell,
             call_data,
@@ -31429,6 +31435,104 @@ const BodyContext = struct {
         return try self.activeTypeFromNode(ret_node);
     }
 
+    /// Debug/probe-only: whether directed emission now produces the same
+    /// return the graph produces at a dispatch result, position by position.
+    /// This is the certification the constraint census never gave the
+    /// representation-movement class: it classified those executions, it did
+    /// not compare their outcomes (reunify.md 13.2e).
+    fn measureDispatchReturnParity(
+        self: *BodyContext,
+        checked_ret_ty: checked.CheckedTypeId,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        graph_ty: Type.TypeId,
+    ) void {
+        if (comptime !census.enabled) return;
+        const rehearsal = self.builder.rehearsal orelse return;
+        const address = self.typeAddress(checked_ret_ty);
+        // The consumer states the producer representation at ITS OWN address:
+        // the callee-side declaration lands on the callable's component ids,
+        // and no id-keyed table relates two checked ids for one logical
+        // return (reunify.md 13.2c). Scoped to this read.
+        const consumer_floor: ?usize = floor: {
+            const resolution = self.evidenceResolution(plan) orelse break :floor null;
+            const lookup = switch (resolution) {
+                .target => |target_lookup| target_lookup,
+                .structural => break :floor null,
+            };
+            const hint = self.iteratorProducerHint(lookup, plan) orelse break :floor null;
+            break :floor rehearsal.declareConsumerInputAt(
+                .{ .module_bytes = address.module_bytes, .type_id = address.type_id },
+                hint,
+            );
+        };
+        defer if (consumer_floor) |floor| rehearsal.retractConsumerInputs(floor);
+        // Measurement never panics: the probing read declines where the
+        // authoritative one would stop, and the decline is counted.
+        var binding: spec_rehearsal.Rehearsal.PositionBinding = .none;
+        const probed = rehearsal.typeForCheckedPositionWithEdge(
+            .{ .module_bytes = address.module_bytes, .type_id = address.type_id },
+            self.callee_context,
+            &binding,
+            rehearsal.innermostRequestEdge(),
+        ) catch {
+            census.bump("dispatch_return_parity_directed_error");
+            return;
+        };
+        const directed = probed orelse {
+            census.bump("dispatch_return_parity_directed_declined");
+            return;
+        };
+        const types = &self.builder.program.types;
+        const name_store = &self.builder.program.names;
+        const left = types.typeDigest(name_store, directed);
+        const right = types.typeDigest(name_store, graph_ty);
+        if (std.mem.eql(u8, &left.bytes, &right.bytes)) {
+            census.bump("dispatch_return_parity_agree");
+            return;
+        }
+        census.bump("dispatch_return_parity_diverge");
+        if (rehearsal.hasDeclaredInputAt(.{
+            .module_bytes = address.module_bytes,
+            .type_id = address.type_id,
+        })) {
+            census.bump("dispatch_return_parity_input_present");
+        } else {
+            census.bump("dispatch_return_parity_input_absent");
+            if (self.builder.seam_divergences_noted < 8) {
+                self.builder.seam_divergences_noted += 1;
+                if (std.c.getenv("ROC_REUNIFY_CENSUS")) |raw_path| {
+                    const module_hex = std.fmt.bytesToHex(address.module_bytes[0..8].*, .lower);
+                    var line_buf: [128]u8 = undefined;
+                    const line = std.fmt.bufPrint(&line_buf, "parity_absent module={s} probe_ret={d}\n", .{ &module_hex, address.type_id }) catch return;
+                    census.appendToFile(raw_path, line);
+                }
+            }
+        }
+        const directed_named = switch (types.get(directed)) {
+            .named => |named| named,
+            else => {
+                census.bump("dispatch_return_parity_directed_not_named");
+                return;
+            },
+        };
+        const graph_named = switch (types.get(graph_ty)) {
+            .named => |named| named,
+            else => {
+                census.bump("dispatch_return_parity_graph_not_named");
+                return;
+            },
+        };
+        if (directed_named.def.iterator_representation != graph_named.def.iterator_representation) {
+            census.bump("dispatch_return_parity_tier_differs");
+        } else if (directed_named.def.iterator_depth != graph_named.def.iterator_depth) {
+            census.bump("dispatch_return_parity_depth_differs");
+        } else if (directed_named.def.iterator_kind != graph_named.def.iterator_kind) {
+            census.bump("dispatch_return_parity_kind_differs");
+        } else {
+            census.bump("dispatch_return_parity_content_differs");
+        }
+    }
+
     fn dispatchResultTypeNode(
         self: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
@@ -31495,7 +31599,11 @@ const BodyContext = struct {
                     // Debug/probe-only: bind the selected callee scheme from the
                     // plan's own edge while its signature is instantiated
                     // (reunify.md sections 7.2, 9.1, 9.6).
-                    const bound = self.openDispatchTargetBinding(lookup, plan.expr, self.dispatchPlanCoveringRule(plan));
+                    const bound = self.openDispatchTargetBinding(
+                        lookup,
+                        plan.expr,
+                        self.dispatchPlanCoveringRule(plan) orelse self.iteratorProducerHint(lookup, plan),
+                    );
                     defer if (bound) {
                         if (self.builder.rehearsal) |rehearsal| rehearsal.closeCalleeBinding();
                     };
@@ -32037,6 +32145,27 @@ const BodyContext = struct {
     /// recorded no site for it: a `where`-constrained method call chooses its
     /// callee per specialization edge, so the callee scheme is not known where
     /// the site would be written (reunify.md sections 7.2, 9.6).
+    /// The iterator rule's edge for a dispatch whose target is an iterator
+    /// procedure, stated even where checking recorded a site: the site supplies
+    /// the binder values, and this states the producer representation the
+    /// procedure mints at its result (reunify.md 13.2e).
+    fn iteratorProducerHint(
+        self: *BodyContext,
+        lookup: MethodLookup,
+        plan: static_dispatch.StaticDispatchCallPlan,
+    ) ?spec_rehearsal.GeneratedEdge {
+        const procedure = self.iteratorProcedureForMethodTarget(lookup.target) orelse return null;
+        return .{
+            .rule = .iterator_dispatch_receiver,
+            .source = .{
+                .module_bytes = self.view.key.bytes,
+                .receiver = .{ .checked_ty = plan.dispatcher_ty },
+                .witness = .{ .callable = plan.callable_ty },
+                .procedure = procedure,
+            },
+        };
+    }
+
     fn dispatchPlanCoveringRule(
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
