@@ -4038,12 +4038,6 @@ Builtin :: [].{
 			Try.Err(OutOfBounds)
 		}
 
-		## Returns the element at `index` without a bounds check. The caller
-		## guarantees `index` is less than the list's length; passing an
-		## out-of-bounds index reads out of bounds.
-		get_unchecked : List(item), U64 -> item
-		get_unchecked = |list, index| list_get_unsafe(list, index)
-
 		## Alias for [List.get], enabling the future `list[index]` subscript operator.
 		## Returns an item from a list at the given index.
 		##
