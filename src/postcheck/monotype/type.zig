@@ -1047,6 +1047,21 @@ pub const Store = struct {
             for (bucket.items) |existing| {
                 if (self.dedup_excluded.contains(existing)) continue;
                 if (try self.typeEql(name_store, existing, candidate)) {
+                    // Function, named and tag-union ids carry occurrence-keyed
+                    // consumers - callable identity, generated-instance
+                    // evidence, and step-row associations - so their hits hold
+                    // distinct ids until those consumers reclassify onto
+                    // structural identity; each class measured independently causal
+                    // for the step_by family (reunify.md 8.5). Structural
+                    // content hash-conses.
+                    switch (self.get(candidate)) {
+                        .func, .named, .tag_union => {
+                            try bucket.append(self.allocator, candidate);
+                            census.bump("intern_hit_occurrence_held");
+                            return candidate;
+                        },
+                        .record, .tuple, .list, .box, .primitive, .erased, .zst => {},
+                    }
                     self.restore(mark_);
                     census.bump("intern_hit");
                     return existing;

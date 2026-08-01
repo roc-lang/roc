@@ -512,6 +512,7 @@ pub const Census = struct {
     dispatch_return_parity_canonical_agrees: Counter = Counter.init(0),
     dispatch_return_parity_canonical_differs: Counter = Counter.init(0),
     // The generated dispatch return's production route.
+    intern_hit_occurrence_held: Counter = Counter.init(0),
     generated_dispatch_return_directed: Counter = Counter.init(0),
     generated_dispatch_return_node: Counter = Counter.init(0),
     // What a nested-local-scheme frame would need at the variable-headed
