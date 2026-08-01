@@ -16257,7 +16257,10 @@ const BodyContext = struct {
             .lookup_required => |resolved| try self.lookupExprMonoType(expr.ty, resolved),
             .lambda => |lambda| try self.lambdaFunctionType(expr.ty, lambda),
             .closure => |closure| try self.closureFunctionType(closure),
-            .field_access => |field| try self.activeTypeFromNode(try self.fieldAccessTypeNode(expr.ty, field.receiver, field.field_name, field.backing_access, null)),
+            // A field access's own checked position carries its type; the
+            // graph derived the same thing from the receiver, which is the
+            // re-derivation this seam retires.
+            .field_access => try self.typeForChecked(expr.ty),
             else => try self.typeForChecked(expr.ty),
         };
     }
