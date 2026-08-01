@@ -2887,6 +2887,9 @@ fn mergeFromNumeralLiteralInfo(
 pub const DeferredConstraintCheck = struct {
     var_: Var,
     constraints: StaticDispatchConstraint.SafeList.Range,
+    /// The expression whose instantiation created this obligation. Ordinary
+    /// definition-site constraints have no owner and report at their provenance.
+    failure_expr: StaticDispatchConstraint.Provenance.OptExprIdx = .none,
     /// True when the constraint's method target resolved to an unchecked,
     /// unannotated local def and the checker re-deferred it for resolution at
     /// the enclosing binding group's generalization boundary. Such an entry is
