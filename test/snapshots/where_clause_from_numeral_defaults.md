@@ -143,7 +143,7 @@ sum = |iter| {
 	$s
 }
 
-total = (1..=10)->sum()
+total = (1..=10) |> sum
 
 main! = |_| {}
 ~~~

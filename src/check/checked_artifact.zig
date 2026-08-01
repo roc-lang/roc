@@ -31301,7 +31301,7 @@ test "checked diagnostic-error fact propagates through body dependencies and typ
 
     var checked_types = CheckedTypeStore{};
     defer checked_types.deinit(gpa);
-    const ty_ok: CheckedTypeId = @enumFromInt(0);
+    const ty_ok = testIndexId(CheckedTypeId, 0);
     const ty_err: CheckedTypeId = @enumFromInt(1);
     try checked_types.payloads.append(gpa, .empty_record);
     try checked_types.payloads.append(gpa, .err);
@@ -31309,15 +31309,15 @@ test "checked diagnostic-error fact propagates through body dependencies and typ
     var store = CheckedBodyStore{};
     defer store.deinit(gpa);
 
-    const p0: CheckedPatternId = @enumFromInt(0);
-    const e0: CheckedExprId = @enumFromInt(0);
+    const p0 = testIndexId(CheckedPatternId, 0);
+    const e0 = testIndexId(CheckedExprId, 0);
     const e1: CheckedExprId = @enumFromInt(1);
     const e2: CheckedExprId = @enumFromInt(2);
     const e3: CheckedExprId = @enumFromInt(3);
     const e4: CheckedExprId = @enumFromInt(4);
     const e5: CheckedExprId = @enumFromInt(5);
     const e6: CheckedExprId = @enumFromInt(6);
-    const s0: CheckedStatementId = @enumFromInt(0);
+    const s0 = testIndexId(CheckedStatementId, 0);
     const region = base.Region.zero();
 
     const list_items = [_]CheckedExprId{e0};

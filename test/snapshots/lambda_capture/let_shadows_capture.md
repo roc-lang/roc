@@ -61,7 +61,7 @@ EndOfFile,
 		|_| {
 			x = 10
 			x
-		},
+		}
 	)({}) # Inner `x` should be used; outer `x` is not captured (it should be a shadowing warning)
 	y
 }

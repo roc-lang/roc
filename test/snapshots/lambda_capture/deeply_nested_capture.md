@@ -77,9 +77,9 @@ EndOfFile,
 					b_loc = a_loc + b
 					|c| b_loc + c
 				}
-			},
-		)(100),
-	)(20),
+			}
+		)(100)
+	)(20)
 )(3)
 ~~~
 # CANONICALIZE

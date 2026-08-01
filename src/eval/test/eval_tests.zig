@@ -34,6 +34,36 @@ const core_tests = [_]TestCase{
     .{ .name = "problem: F64.is_eq is intentionally unavailable", .source = "F64.is_eq(1.0.F64, 1.0.F64)", .expected = .{ .problem = {} } },
     .{ .name = "inspect: F32 opts in to receiver is_eq dispatch", .source = "1.0.F32.is_eq(1.0.F32)", .expected = .{ .inspect_str = "True" } },
     .{
+        .name = "pipe inserts its lhs and accepts optional direct empty parens",
+        .source_kind = .module,
+        .source =
+        \\add_one : I64 -> I64
+        \\add_one = |value| value + 1
+        \\
+        \\add : I64, I64 -> I64
+        \\add = |left, right| left + right
+        \\
+        \\main = (1->add(2), 1|>add(2), 1->add_one(), 1|>add_one, 1 |> add_one(), 1 |> (|value| value + 1), 1 |> (|value| value + 1)(), 2 |> Ok, 2 |> Ok())
+        ,
+        .expected = .{ .inspect_str = "(3, 3, 2, 2, 2, 2.0, 2.0, Ok(2.0), Ok(2.0))" },
+    },
+    .{
+        .name = "pipe RHS includes its postfix method chain",
+        .source_kind = .module,
+        .source =
+        \\Holder := { n : I64 }.{
+        \\    blah : Holder -> (I64 -> I64)
+        \\    blah = |holder| |value| value + holder.n
+        \\}
+        \\
+        \\bar : I64 -> Holder
+        \\bar = |n| Holder.{ n: n }
+        \\
+        \\main = 2 |> bar(3).blah()
+        ,
+        .expected = .{ .inspect_str = "5" },
+    },
+    .{
         .name = "problem: annotation-only top-level value is not a runtime value",
         .source_kind = .module,
         .source =
