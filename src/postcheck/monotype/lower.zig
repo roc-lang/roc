@@ -14543,7 +14543,10 @@ const BodyContext = struct {
     }
 
     fn lowerTypeCell(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!DraftTypeCell {
-        return DraftTypeCell.fromGraphNode(try self.lowerTypeNode(checked_ty));
+        // Born sealed: the position's type is directed instantiation's answer,
+        // final on arrival. A consumer that carries the cell back into a
+        // relation imports that final as a constant the relation must hold at.
+        return .{ .sealed = try self.typeForChecked(checked_ty) };
     }
 
     fn resolvedTypeViewForNode(self: *BodyContext, node: NodeId) Allocator.Error!Type.TypeId {
