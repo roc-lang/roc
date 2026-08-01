@@ -437,6 +437,9 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
     return switch (diagnostic.tag) {
         .multiple_platforms => reportParseProblem(ctx, "Multiple Platforms", "I was parsing an app header, and it names more than one platform.", "An app can use exactly one `platform` entry. Keep the platform entry you want to run with, and make every other dependency a normal package string.", .{ .example = "app [main] { pf: platform \"../platform/main.roc\", json: \"../json/main.roc\" }" }),
         .no_platform => reportParseProblem(ctx, "Missing Platform", "I was parsing an app header, and I could not find a platform entry.", "App headers must include one field whose value starts with `platform`. That platform tells Roc how to run the app.", .{ .example = "app [main] { pf: platform \"../basic-cli/platform.roc\" }" }),
+        .invalid_roc_version => reportParseProblem(ctx, "Invalid Roc Version", "I was parsing the `roc` entry of a header, and I did not recognize this version.", "The `roc` entry pins the version of the Roc compiler this file is written for. It must be a string holding either a nightly tag or a release version.", .{ .example = "roc: \"nightly-2026-July-31-123c5d7\"", .show_found = false }),
+        .duplicate_roc_version => reportParseProblem(ctx, "Duplicate Roc Version", "I was parsing a header, and it pins the `roc` version more than once.", "A header can pin at most one compiler version. Remove the extra `roc` entries.", .{ .example = "roc: \"nightly-2026-July-31-123c5d7\"", .show_found = false }),
+        .roc_version_key_is_reserved => reportParseProblem(ctx, "Reserved Dependency Name", "I was parsing a dependency record, and `roc` is used as the name of a platform or package.", "The `roc` name is reserved for pinning the compiler version, so it cannot name a dependency. Pick a different name for this one.", .{ .example = "pf: platform \"../platform/main.roc\"", .show_found = false }),
         .missing_arrow => reportParseProblem(ctx, "Missing Arrow", "I was parsing a function type, and I expected an arrow here.", "Function types use `->` between arguments and return values. Add the missing arrow or wrap the surrounding type in parentheses if a different grouping was intended.", .{ .example = "Str -> U64" }),
         .expected_exposes => reportParseProblem(ctx, "Expected Exposes", "I was parsing a platform header, and I expected the `exposes` section.", "A platform header must list the values it exposes before the package and provides sections.", .{ .example = "exposes [main]" }),
         .expected_exposes_close_square => reportParseProblem(ctx, "Expected Closing Bracket", "I was parsing an `exposes` list, and I expected a closing `]`.", "Every exposes list starts with `[` and ends with `]`. Add the closing bracket after the last exposed name.", .{ .example = "exposes [main, helper]" }),
@@ -569,6 +572,9 @@ pub const Diagnostic = struct {
     pub const Tag = enum {
         multiple_platforms,
         no_platform,
+        invalid_roc_version,
+        duplicate_roc_version,
+        roc_version_key_is_reserved,
         missing_arrow,
         expected_exposes,
         expected_exposes_close_square,
@@ -744,6 +750,19 @@ pub fn hasMainBangDecl(self: *const AST) bool {
 pub fn resolve(self: *const AST, token: Token.Idx) []const u8 {
     const range = self.tokens.resolve(token);
     return self.env.source[@intCast(range.start.offset)..@intCast(range.end.offset)];
+}
+
+/// The compiler version a header pins, exactly as written in the source.
+///
+/// `field_idx` is a header's `roc_version` field. Returns null when its value
+/// is not a plain string literal — the parser has already reported that as
+/// `invalid_roc_version`, and every later phase treats an unreadable pin as no
+/// pin at all rather than guessing at what was meant.
+pub fn rocVersionText(self: *const AST, field_idx: RecordField.Idx) ?[]const u8 {
+    const field = self.store.getRecordField(field_idx);
+    const value = field.value orelse return null;
+    const token = self.store.singleStringPartToken(value) orelse return null;
+    return self.resolve(token);
 }
 
 /// Resolves a fully qualified name from a chain of qualifier tokens and a final token.
@@ -1732,6 +1751,9 @@ pub const Header = union(enum) {
         provides: Collection.Idx,
         platform_idx: RecordField.Idx,
         packages: Collection.Idx,
+        /// The optional `roc: "<version>"` entry of `packages`. Like
+        /// `platform_idx`, this still appears in `packages` too.
+        roc_version: ?RecordField.Idx,
         region: TokenizedRegion,
     },
     module: struct {
@@ -1741,6 +1763,9 @@ pub const Header = union(enum) {
     package: struct {
         exposes: Collection.Idx,
         packages: Collection.Idx,
+        /// The optional `roc: "<version>"` entry of `packages`, which still
+        /// appears in `packages` too.
+        roc_version: ?RecordField.Idx,
         region: TokenizedRegion,
     },
     platform: struct {
@@ -1748,6 +1773,9 @@ pub const Header = union(enum) {
         requires_entries: RequiresEntry.Span, // [Model : model] for main : () -> { ... }
         exposes: Collection.Idx,
         packages: Collection.Idx,
+        /// The optional `roc: "<version>"` entry of `packages`, which still
+        /// appears in `packages` too.
+        roc_version: ?RecordField.Idx,
         provides: SymbolMapEntry.Span, // provides { "roc_main": main_for_host! }
         hosted: SymbolMapEntry.Span, // hosted { "roc_stdout_line": Stdout.line! }
         targets: ?TargetsSection.Idx, // Required for new platforms, optional during migration
@@ -1775,12 +1803,25 @@ pub const Header = union(enum) {
 
     pub const AppHeaderRhs = packed struct { num_packages: u10, num_provides: u22 };
 
+    /// Record which dependency-record entry pins the compiler version. The
+    /// entry also appears under `packages`; this says it was recognized as the
+    /// pin rather than as a dependency named `roc`.
+    fn pushRocVersionToSExprTree(
+        roc_version: ?RecordField.Idx,
+        ast: *const AST,
+        tree: *SExprTree,
+    ) std.mem.Allocator.Error!void {
+        const field_idx = roc_version orelse return;
+        try tree.pushStringPair("roc-version", ast.rocVersionText(field_idx) orelse "");
+    }
+
     pub fn pushToSExprTree(self: @This(), gpa: std.mem.Allocator, env: *const CommonEnv, ast: *const AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         switch (self) {
             .app => |a| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("app");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                try pushRocVersionToSExprTree(a.roc_version, ast, tree);
                 const attrs = tree.beginNode();
 
                 // Provides
@@ -1839,6 +1880,7 @@ pub const Header = union(enum) {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("package");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                try pushRocVersionToSExprTree(a.roc_version, ast, tree);
                 const attrs = tree.beginNode();
 
                 // Exposes
@@ -1873,6 +1915,7 @@ pub const Header = union(enum) {
                 try tree.pushStaticAtom("platform");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 try tree.pushStringPair("name", ast.resolve(a.name));
+                try pushRocVersionToSExprTree(a.roc_version, ast, tree);
                 const attrs = tree.beginNode();
 
                 // Requires Entries (for-clause syntax)

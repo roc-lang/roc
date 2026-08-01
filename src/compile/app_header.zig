@@ -123,6 +123,12 @@ pub fn parseAppHeader(
     const packages_coll = ast.store.getCollection(app.packages);
     const fields = ast.store.recordFieldSlice(.{ .span = packages_coll.span });
     for (fields) |field_idx| {
+        // The compiler version pin shares the packages record with the real
+        // dependencies, but is not one of them.
+        if (app.roc_version) |roc_version_idx| {
+            if (field_idx == roc_version_idx) continue;
+        }
+
         const field = ast.store.getRecordField(field_idx);
         const key_region = ast.tokens.resolve(field.name);
         const shorthand = source[key_region.start.offset..key_region.end.offset];

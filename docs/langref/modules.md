@@ -513,6 +513,34 @@ app [main!] {
 }
 ```
 
+### Pinning a Roc version
+
+Any app, package or platform header may pin the version of the Roc compiler it
+is written for, using the reserved `roc` entry in its packages record:
+
+```roc
+app [main!] {
+    pf: platform "../basic-cli/main.roc",
+    roc: "nightly-2026-July-31-123c5d7"
+}
+```
+
+This is optional. When present, the value must be a version string of the kind
+`roc version` prints: either a nightly tag such as
+`nightly-2026-July-31-123c5d7` or a release version such as `0.1.0`. Because
+`roc` names the compiler version, it cannot also be used as the shorthand for a
+platform or package.
+
+Compiling a file whose pin names a different compiler than the one you are
+running reports a warning; it does not stop the build.
+
+`roc fmt` keeps a pinned nightly up to date: when the compiler running it is a
+nightly at least as new as the pin, it rewrites the pin to name that compiler.
+A pinned release version is left alone, since pinning a release is a deliberate
+choice rather than a snapshot of whatever nightly was current. Because this is
+part of formatting, `roc fmt --check` reports a file whose nightly pin is out
+of date as needing formatting.
+
 ### Nominal type identity across packages
 
 A nominal type's identity is determined by the *content* of the module that

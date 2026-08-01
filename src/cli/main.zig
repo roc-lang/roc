@@ -13793,8 +13793,11 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
 
     const stdout = ctx.io.stdout();
     const stderr = ctx.io.stderr();
+    // Formatting a file brings its `roc` version pin up to date when this
+    // compiler is a newer nightly than the one it names.
+    const format_options: fmt.Options = .{ .compiler_version = build_options.compiler_version };
     if (args.stdin) {
-        fmt.formatStdin(ctx.gpa, ctx.io.std_io, std.Io.File.stdin(), std.Io.File.stdout(), stderr) catch |err| return err;
+        fmt.formatStdin(ctx.gpa, format_options, ctx.io.std_io, std.Io.File.stdin(), std.Io.File.stdout(), stderr) catch |err| return err;
         return;
     }
 
@@ -13808,7 +13811,7 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
         defer unformatted_files.deinit(ctx.gpa);
 
         for (args.paths) |path| {
-            var result = try fmt.formatPath(ctx.gpa, ctx.arena, std.Io.Dir.cwd(), path, true, ctx.io.std_io, stderr);
+            var result = try fmt.formatPath(ctx.gpa, ctx.arena, std.Io.Dir.cwd(), path, true, format_options, ctx.io.std_io, stderr);
             defer result.deinit();
             if (result.unformatted_files) |files| {
                 try unformatted_files.appendSlice(ctx.gpa, files.items);
@@ -13834,7 +13837,7 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
     } else {
         var success_count: usize = 0;
         for (args.paths) |path| {
-            const result = try fmt.formatPath(ctx.gpa, ctx.arena, std.Io.Dir.cwd(), path, false, ctx.io.std_io, stderr);
+            const result = try fmt.formatPath(ctx.gpa, ctx.arena, std.Io.Dir.cwd(), path, false, format_options, ctx.io.std_io, stderr);
             success_count += result.success;
             failure_count += result.failure;
         }

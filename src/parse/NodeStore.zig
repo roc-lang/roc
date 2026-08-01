@@ -434,7 +434,12 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!
             node.main_token = @intFromEnum(app.platform_idx);
             // Store provides collection
             node.data.lhs = @intFromEnum(app.provides);
-            node.data.rhs = @intFromEnum(app.packages);
+            // `packages` and the optional `roc` version pin do not both fit in
+            // the node, so they share an extra_data record.
+            const ed_start = try store.reserveExtraDataStart(2);
+            store.extra_data.appendAssumeCapacity(@intFromEnum(app.packages));
+            store.extra_data.appendAssumeCapacity(try packOptionalIndex(app.roc_version));
+            node.data.rhs = ed_start;
             node.region = app.region;
         },
         .module => |mod| {
@@ -451,13 +456,16 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!
             node.tag = .package_header;
             node.data.lhs = @intFromEnum(package.exposes);
             node.data.rhs = @intFromEnum(package.packages);
+            // A package header has no name token, so the optional `roc`
+            // version pin fits in main_token without an extra_data record.
+            node.main_token = try packOptionalIndex(package.roc_version);
             node.region = package.region;
         },
         .platform => |platform| {
             node.tag = .platform_header;
             node.main_token = platform.name;
 
-            const ed_start = try store.reserveExtraDataStart(14);
+            const ed_start = try store.reserveExtraDataStart(15);
             // Store requires_entries span (start and len)
             store.extra_data.appendAssumeCapacity(platform.requires_entries.span.start);
             store.extra_data.appendAssumeCapacity(platform.requires_entries.span.len);
@@ -475,9 +483,10 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!
                 (@as(u32, @intFromEnum(platform.hosted.layout)) << 8);
             store.extra_data.appendAssumeCapacity(symbol_map_layouts);
             store.extra_data.appendAssumeCapacity(try packOptionalIndex(platform.targets));
+            store.extra_data.appendAssumeCapacity(try packOptionalIndex(platform.roc_version));
 
             node.data.lhs = ed_start;
-            node.data.rhs = 14;
+            node.data.rhs = 15;
 
             node.region = platform.region;
         },
@@ -1455,10 +1464,12 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
     const node = store.nodes.get(@enumFromInt(@intFromEnum(header_idx)));
     switch (node.tag) {
         .app_header => {
+            const ed_start = node.data.rhs;
             return .{ .app = .{
                 .platform_idx = @enumFromInt(node.main_token),
                 .provides = @enumFromInt(node.data.lhs),
-                .packages = @enumFromInt(node.data.rhs),
+                .packages = @enumFromInt(store.extra_data.items[ed_start]),
+                .roc_version = unpackOptionalIndex(AST.RecordField.Idx, store.extra_data.items[ed_start + 1]),
                 .region = node.region,
             } };
         },
@@ -1478,16 +1489,18 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
             return .{ .package = .{
                 .exposes = @enumFromInt(node.data.lhs),
                 .packages = @enumFromInt(node.data.rhs),
+                .roc_version = unpackOptionalIndex(AST.RecordField.Idx, node.main_token),
                 .region = node.region,
             } };
         },
         .platform_header => {
             const ed_start = node.data.lhs;
-            std.debug.assert(node.data.rhs == 14);
+            std.debug.assert(node.data.rhs == 15);
 
             const symbol_map_layouts = store.extra_data.items[ed_start + 12];
             const targets_val = store.extra_data.items[ed_start + 13];
             const targets = unpackOptionalIndex(AST.TargetsSection.Idx, targets_val);
+            const roc_version = unpackOptionalIndex(AST.RecordField.Idx, store.extra_data.items[ed_start + 14]);
 
             return .{ .platform = .{
                 .name = node.main_token,
@@ -1497,6 +1510,7 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
                 } },
                 .exposes = @enumFromInt(store.extra_data.items[ed_start + 2]),
                 .packages = @enumFromInt(store.extra_data.items[ed_start + 3]),
+                .roc_version = roc_version,
                 .provides = .{ .span = .{
                     .start = store.extra_data.items[ed_start + 4],
                     .len = store.extra_data.items[ed_start + 5],
@@ -2277,6 +2291,26 @@ pub fn getRecordField(store: *const NodeStore, field_idx: AST.RecordField.Idx) A
         .name = name,
         .value = value,
         .region = node.region,
+    };
+}
+
+/// The token holding the whole text of a string literal that is made of
+/// exactly one literal part, i.e. a plain string with no interpolation.
+///
+/// Returns null for any other expression, and for strings whose text is split
+/// across several parts (interpolation, escapes, line continuations) — callers
+/// use this to read short literals like a pinned compiler version straight out
+/// of the source, which is only sound when the source says it verbatim.
+pub fn singleStringPartToken(store: *const NodeStore, expr_idx: AST.Expr.Idx) ?Token.Idx {
+    const string = switch (store.getExpr(expr_idx)) {
+        .string => |string| string,
+        else => return null,
+    };
+    const parts = store.exprSlice(string.parts);
+    if (parts.len != 1) return null;
+    return switch (store.getExpr(parts[0])) {
+        .string_part => |part| part.token,
+        else => null,
     };
 }
 
