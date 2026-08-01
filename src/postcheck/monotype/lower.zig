@@ -16358,40 +16358,46 @@ const BodyContext = struct {
             // demanded; enclosing constructors must wait for it rather than
             // requesting an active view of their still-unresolved payload.
             .numeral, .str_from_quote => {
-                const expr_node = try self.lowerExprTypeNode(expr_id);
-                if (!try self.graph.typeIsResolved(expr_node)) {
-                    try self.graph.materializeLiteralDefault(expr_node);
+                // A leaf whose checked position is concrete takes checking's
+                // answer directly. One whose position is still a variable at
+                // its head belongs to a nested local scheme's binding, which
+                // no frame carries yet, so it resolves through its
+                // specialization's relations for now (reunify.md 13.2d).
+                switch (checkedPayload(self.view, expr.ty)) {
+                    .flex, .rigid => {
+                        const expr_node = try self.lowerExprTypeNode(expr_id);
+                        if (!try self.graph.typeIsResolved(expr_node)) {
+                            try self.graph.materializeLiteralDefault(expr_node);
+                        }
+                        const expr_ty = try self.resolvedTypeViewForNode(expr_node);
+                        return try self.lowerExprWithType(expr_id, expr_ty);
+                    },
+                    else => return try self.lowerExprWithType(
+                        expr_id,
+                        try self.typeForChecked(expr.ty),
+                    ),
                 }
-                const expr_ty = try self.resolvedTypeViewForNode(expr_node);
-                return try self.lowerExprWithType(expr_id, expr_ty);
             },
             .str => |segments| {
-                const expr_node = try self.lowerExprTypeNode(expr_id);
-                // A string literal whose node the surrounding context already
-                // pinned to a different primitive is a reported
-                // literal-conversion mismatch; like a numeral that cannot fit
-                // its target, it lowers to the conversion's failure mapping
-                // instead of a value the target cannot hold. Checking reports
-                // every such literal, so this is reachable only while running
-                // a program with reported errors.
-                switch (self.graph.content(expr_node)) {
+                // A string literal whose checked position resolved to a
+                // different primitive is a reported literal-conversion
+                // mismatch; like a numeral that cannot fit its target, it
+                // lowers to the conversion's failure mapping instead of a
+                // value the target cannot hold. Checking reports every such
+                // literal, so this is reachable only while running a program
+                // with reported errors.
+                const expr_ty = try self.typeForChecked(expr.ty);
+                switch (self.builder.program.types.get(expr_ty)) {
                     .primitive => |primitive| if (primitive != .str) {
                         return try self.addExprWithTypeCell(
-                            DraftTypeCell.fromGraphNode(expr_node),
+                            .{ .sealed = expr_ty },
                             .{ .crash = try self.addStringLiteral("invalid string literal") },
                         );
                     },
                     else => {},
                 }
-                const str_ty = try self.builder.primitiveType(.str);
-                self.measureUnifySite(
-                    .str_literal_expr_to_primitive,
-                    self.checkedUnifyOperand(self.view.bodies.expr(expr_id).ty),
-                    .{ .sealed = str_ty },
-                );
-                try self.graph.unify(expr_node, try self.graph.importMono(str_ty));
                 return try self.addExprWithTypeCell(
-                    DraftTypeCell.fromGraphNode(expr_node),
+                    .{ .sealed = try self.builder.primitiveType(.str) },
                     try self.lowerStr(segments),
                 );
             },
