@@ -30660,8 +30660,13 @@ const BodyContext = struct {
         _ = try checkedMonoRequestNode(self.graph, checked_result_node, plan_ret_node);
         const call_data = try self.lowerResolvedDispatchAtNode(plan, resolved, callable_node, self, pre_lowered.items);
         const call_ret_cell = if (try self.graph.containsGeneratedPrivate(plan_ret_node)) blk: {
-            // A plan return still unresolved here resolves later in the body;
-            // the parity question only exists once the graph has an answer.
+            // Stays on the graph node until the section 8 identity cutover:
+            // sealing the consumer-declared emission here severs the occurrence
+            // identity downstream evidence still keys on - 36 iterator eval
+            // tests crashed when tried - even though the emitted content is
+            // certified equal up to that identity (reunify.md 13.2e). The
+            // authority transfer for generated returns FOLLOWS the interner,
+            // it cannot precede it.
             if (try self.graph.typeIsResolved(plan_ret_node)) {
                 self.measureDispatchReturnParity(checked_ret_ty, plan, try self.activeTypeFromNode(plan_ret_node));
             } else {
@@ -31435,6 +31440,39 @@ const BodyContext = struct {
         return try self.activeTypeFromNode(ret_node);
     }
 
+    /// The directed final for a generated dispatch return, under the
+    /// consumer-declared producer representation, or null where the emission
+    /// declines and the graph's node stands (reunify.md 13.2e). The scoped
+    /// declaration retracts before returning.
+    fn generatedDispatchReturnFinal(
+        self: *BodyContext,
+        checked_ret_ty: checked.CheckedTypeId,
+        plan: static_dispatch.StaticDispatchCallPlan,
+    ) ?Type.TypeId {
+        const rehearsal = self.builder.rehearsal orelse return null;
+        const address = self.typeAddress(checked_ret_ty);
+        const resolution = self.evidenceResolution(plan) orelse return null;
+        const lookup = switch (resolution) {
+            .target => |target_lookup| target_lookup,
+            .structural => return null,
+        };
+        const hint = self.iteratorProducerHint(lookup, plan) orelse return null;
+        const floor = rehearsal.declareConsumerInputAt(
+            .{ .module_bytes = address.module_bytes, .type_id = address.type_id },
+            hint,
+        ) orelse return null;
+        defer rehearsal.retractConsumerInputs(floor);
+        var binding: spec_rehearsal.Rehearsal.PositionBinding = .none;
+        const emitted = rehearsal.typeForCheckedPositionWithEdge(
+            .{ .module_bytes = address.module_bytes, .type_id = address.type_id },
+            self.callee_context,
+            &binding,
+            rehearsal.innermostRequestEdge(),
+        ) catch return null;
+        const unstamped = emitted orelse return null;
+        return rehearsal.stampGeneratedIdentity(unstamped, null);
+    }
+
     /// Debug/probe-only: the digest of a named head with its checked-id
     /// occurrence flavor and generated digest erased, so two types that differ
     /// only there compare equal (reunify.md 8.5).
@@ -31503,42 +31541,13 @@ const BodyContext = struct {
         graph_ty: Type.TypeId,
     ) void {
         if (comptime !census.enabled) return;
-        const rehearsal = self.builder.rehearsal orelse return;
-        const address = self.typeAddress(checked_ret_ty);
-        // The consumer states the producer representation at ITS OWN address:
-        // the callee-side declaration lands on the callable's component ids,
-        // and no id-keyed table relates two checked ids for one logical
-        // return (reunify.md 13.2c). Scoped to this read.
-        const consumer_floor: ?usize = floor: {
-            const resolution = self.evidenceResolution(plan) orelse break :floor null;
-            const lookup = switch (resolution) {
-                .target => |target_lookup| target_lookup,
-                .structural => break :floor null,
-            };
-            const hint = self.iteratorProducerHint(lookup, plan) orelse break :floor null;
-            break :floor rehearsal.declareConsumerInputAt(
-                .{ .module_bytes = address.module_bytes, .type_id = address.type_id },
-                hint,
-            );
-        };
-        defer if (consumer_floor) |floor| rehearsal.retractConsumerInputs(floor);
-        // Measurement never panics: the probing read declines where the
-        // authoritative one would stop, and the decline is counted.
-        var binding: spec_rehearsal.Rehearsal.PositionBinding = .none;
-        const probed = rehearsal.typeForCheckedPositionWithEdge(
-            .{ .module_bytes = address.module_bytes, .type_id = address.type_id },
-            self.callee_context,
-            &binding,
-            rehearsal.innermostRequestEdge(),
-        ) catch {
-            census.bump("dispatch_return_parity_directed_error");
-            return;
-        };
-        const unstamped = probed orelse {
+        // The consumer-declared read is the same one the post-interner
+        // authority transfer performs; the probe measures it and never panics,
+        // counting a decline instead.
+        const directed = self.generatedDispatchReturnFinal(checked_ret_ty, plan) orelse {
             census.bump("dispatch_return_parity_directed_declined");
             return;
         };
-        const directed = rehearsal.stampGeneratedIdentity(unstamped, null);
         const types = &self.builder.program.types;
         const name_store = &self.builder.program.names;
         const left = types.typeDigest(name_store, directed);
@@ -31548,23 +31557,6 @@ const BodyContext = struct {
             return;
         }
         census.bump("dispatch_return_parity_diverge");
-        if (rehearsal.hasDeclaredInputAt(.{
-            .module_bytes = address.module_bytes,
-            .type_id = address.type_id,
-        })) {
-            census.bump("dispatch_return_parity_input_present");
-        } else {
-            census.bump("dispatch_return_parity_input_absent");
-            if (self.builder.seam_divergences_noted < 8) {
-                self.builder.seam_divergences_noted += 1;
-                if (std.c.getenv("ROC_REUNIFY_CENSUS")) |raw_path| {
-                    const module_hex = std.fmt.bytesToHex(address.module_bytes[0..8].*, .lower);
-                    var line_buf: [128]u8 = undefined;
-                    const line = std.fmt.bufPrint(&line_buf, "parity_absent module={s} probe_ret={d}\n", .{ &module_hex, address.type_id }) catch return;
-                    census.appendToFile(raw_path, line);
-                }
-            }
-        }
         const directed_named = switch (types.get(directed)) {
             .named => |named| named,
             else => {
