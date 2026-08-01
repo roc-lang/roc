@@ -120,7 +120,7 @@ const Printer = struct {
                     try self.writeTarget(s.target, indent, writer);
                     try writer.print("call_erased l{d}(", .{@intFromEnum(s.closure)});
                     try self.writeLocals(s.args, writer);
-                    try writer.writeAll(")\n");
+                    try writer.writeAll(if (s.reuse_closure) ") reuse_closure\n" else ")\n");
                     current = s.next;
                 },
                 .assign_packed_erased_fn => |s| {

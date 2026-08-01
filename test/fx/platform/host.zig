@@ -967,11 +967,12 @@ fn callBoxedI64ToI64(ops: *builtins.host_abi.RocOps, boxed: ?[*]u8, arg0: i64) i
         @ptrCast(&result),
         @ptrCast(&call_args),
         builtins.erased_callable.capturePtr(payload_ptr),
+        null,
     );
     return result;
 }
 
-fn hostAddCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+fn hostAddCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8, _: ?[*]u8) callconv(.c) void {
     const capture = capturePtrAs(AddCapture, capture_ptr);
     writeI64Result(ret, readI64ToI64Arg(args) + capture.amount);
 }
@@ -994,7 +995,7 @@ fn hostedHostBoxedAdd(amount: i64) callconv(.c) ?[*]u8 {
     return ret;
 }
 
-fn hostNestedRecordCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+fn hostNestedRecordCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8, _: ?[*]u8) callconv(.c) void {
     const capture = capturePtrAs(NestedRecordCapture, capture_ptr);
     const x = readI64ToI64Arg(args);
     writeI64Result(ret, x + capture.inner.base + capture.adjustment + @as(i64, @intCast(capture.inner.label.asSlice().len)));
@@ -1098,7 +1099,7 @@ fn hostTreeSum(tree: *const HostTree) i64 {
     };
 }
 
-fn hostTreeCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+fn hostTreeCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8, _: ?[*]u8) callconv(.c) void {
     const capture = capturePtrAs(TreeCapture, capture_ptr);
     writeI64Result(ret, readI64ToI64Arg(args) + hostTreeSum(&capture.tree));
 }
@@ -1126,7 +1127,7 @@ fn hostedHostBoxedRecursiveTree(tree: HostTree) callconv(.c) ?[*]u8 {
     return ret;
 }
 
-fn hostBoxedCaptureCallable(ops: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+fn hostBoxedCaptureCallable(ops: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8, _: ?[*]u8) callconv(.c) void {
     const capture = capturePtrAs(BoxedCallableCapture, capture_ptr);
     const x = readI64ToI64Arg(args);
     writeI64Result(ret, callBoxedI64ToI64(ops, capture.inner, x) + capture.bonus);

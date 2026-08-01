@@ -7825,6 +7825,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     },
                     .assign_call_erased => |assign| {
                         try locals.put(localKey(assign.closure), assign.closure);
+                        if (assign.reuse_source) |reuse_source| try locals.put(localKey(reuse_source), reuse_source);
                         const args = self.store.getLocalSpan(assign.args);
                         for (0..args.len) |arg_index| {
                             const arg = GuardedList.at(args, arg_index);
@@ -8002,6 +8003,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .assign_call_erased => |assign| {
                         try locals.put(localKey(assign.target), assign.target);
                         try locals.put(localKey(assign.closure), assign.closure);
+                        if (assign.reuse_source) |reuse_source| try locals.put(localKey(reuse_source), reuse_source);
                         const args = self.store.getLocalSpan(assign.args);
                         for (0..args.len) |arg_index| {
                             const arg = GuardedList.at(args, arg_index);
@@ -13423,6 +13425,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             closure_local: LocalId,
             call_args: LocalSpan,
             ret_layout: layout.Idx,
+            reuse_closure: bool,
         ) Allocator.Error!ValueLocation {
             try self.spillAllVectorLocals();
             const closure_layout = self.localLayout(closure_local);
@@ -13507,6 +13510,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addLeaArg(frame_ptr, args_slot);
             }
             try builder.addMemArg(frame_ptr, capture_stack_offset);
+            if (reuse_closure) {
+                try builder.addMemArg(frame_ptr, closure_ptr_slot);
+            } else {
+                try builder.addImmArg(0);
+            }
 
             const comptime_call_entered = if (self.comptime_hooks) |hooks|
                 try self.emitComptimeCallEnter(hooks)
@@ -17253,11 +17261,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        /// Save one pointer from the internal ABI into a stable local stack slot.
+        /// Pointer arguments beyond the target's register bank are read from the
+        /// caller's outgoing stack-argument area.
+        fn saveIncomingPointerArg(self: *Self, local_offset: i32, arg_index: u8) Allocator.Error!void {
+            if (arg_index < max_arg_regs) {
+                try self.codegen.emitStoreStack(.w64, local_offset, self.getArgumentRegister(arg_index));
+            } else {
+                const stack_offset = incoming_stack_arg_base_offset + @as(i32, arg_index - max_arg_regs) * 8;
+                try self.copyFromCallerStack(self.callerStackArgBaseReg(), stack_offset, local_offset, 1);
+            }
+        }
+
         fn bindErasedCallableAdapterParams(self: *Self, params: LocalSpan) Allocator.Error!void {
             const locals = self.store.getLocalSpan(params);
-            if (locals.len == 0) {
+            if (locals.len < 2) {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("Dev/codegen invariant violated: erased callable adapter has no hidden capture arg", .{});
+                    std.debug.panic("Dev/codegen invariant violated: erased callable adapter requires hidden capture and reuse args", .{});
                 }
                 unreachable;
             }
@@ -17274,11 +17294,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const args_ptr_slot = self.codegen.allocStackSlot(8);
             const capture_ptr_slot = self.codegen.allocStackSlot(8);
-            try self.codegen.emitStoreStack(.w64, args_ptr_slot, self.getArgumentRegister(2));
-            try self.codegen.emitStoreStack(.w64, capture_ptr_slot, self.getArgumentRegister(3));
+            const reuse_ptr_slot = self.codegen.allocStackSlot(8);
+            try self.saveIncomingPointerArg(args_ptr_slot, 2);
+            try self.saveIncomingPointerArg(capture_ptr_slot, 3);
+            try self.saveIncomingPointerArg(reuse_ptr_slot, 4);
 
             var arg_offset: u32 = 0;
-            const explicit_count = locals.len - 1;
+            const explicit_count = locals.len - 2;
             for (0..explicit_count) |local_index| {
                 const local = GuardedList.at(locals, local_index);
                 const local_layout = self.localLayout(local);
@@ -17318,6 +17340,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitStore(.w64, frame_ptr, capture_stack, capture_arg_reg);
             self.codegen.freeGeneral(capture_arg_reg);
             try self.local_locations.put(localKey(capture_local), self.stackLocationForLayout(.opaque_ptr, capture_stack));
+
+            const reuse_local = GuardedList.at(locals, explicit_count + 1);
+            try self.local_locations.put(localKey(reuse_local), self.stackLocationForLayout(self.localLayout(reuse_local), reuse_ptr_slot));
         }
 
         fn bindProcParams(self: *Self, params: LocalSpan, initial_reg_idx: u8) Allocator.Error!void {
@@ -17958,6 +17983,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 assign.closure,
                                 assign.args,
                                 self.localLayout(assign.target),
+                                assign.reuse_closure,
                             );
                             try self.bindAssignedLocal(assign.target, value_loc);
                             try work.append(wa, .{ .node = assign.next });
@@ -20640,6 +20666,31 @@ test "Windows internal proc ABI reads stack arguments after shadow space" {
     try codegen.bindProcParams(args, 0);
 
     _ = codegen.local_locations.get(@intFromEnum(list)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(codegen.codegen.getCode().len > 0);
+}
+
+test "Windows erased callable ABI reads reuse pointer from caller stack" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const WinCodeGen = LirCodeGen(.x64win);
+    const explicit_arg = try addLocal(&store, .u64);
+    const capture_arg = try addLocal(&store, .opaque_ptr);
+    const reuse_arg = try addLocal(&store, .opaque_ptr);
+    const args = try store.addLocalSpan(&.{ explicit_arg, capture_arg, reuse_arg });
+
+    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve);
+    defer codegen.deinit();
+
+    const InnerCodeGen = @TypeOf(codegen.codegen);
+    codegen.codegen.stack_offset = -InnerCodeGen.CALLEE_SAVED_AREA_SIZE;
+
+    try codegen.bindErasedCallableAdapterParams(args);
+
+    _ = codegen.local_locations.get(@intFromEnum(reuse_arg)) orelse return error.TestUnexpectedResult;
     try std.testing.expect(codegen.codegen.getCode().len > 0);
 }
 

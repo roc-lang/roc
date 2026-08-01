@@ -188,6 +188,7 @@ pub const MonoLlvmCodeGen = struct {
     ret_ptr_arg: ?LlvmBuilder.Value = null,
     args_ptr_arg: ?LlvmBuilder.Value = null,
     capture_ptr_arg: ?LlvmBuilder.Value = null,
+    reuse_ptr_arg: ?LlvmBuilder.Value = null,
     current_ret_layout: layout.Idx = .zst,
     /// Source statement whose machine instructions are currently being emitted.
     /// Default-platform crash lowering consumes its explicit inline-scope chain.
@@ -443,7 +444,7 @@ pub const MonoLlvmCodeGen = struct {
         result_layout: layout.Idx,
     ) Error!GenerateResult {
         const proc = self.store.getProcSpec(root_proc);
-        const arg_layouts = try self.procArgLayouts(proc, proc.abi == .erased_callable);
+        const arg_layouts = try self.procArgLayouts(proc, .explicit);
         defer self.allocator.free(arg_layouts);
         const EvalEntrypoint = struct {
             symbol_name: []const u8,
@@ -1265,6 +1266,7 @@ pub const MonoLlvmCodeGen = struct {
         const outer_ret = self.ret_ptr_arg;
         const outer_args = self.args_ptr_arg;
         const outer_capture = self.capture_ptr_arg;
+        const outer_reuse = self.reuse_ptr_arg;
         const outer_ret_layout = self.current_ret_layout;
         const outer_slots = self.local_slots;
         defer {
@@ -1274,6 +1276,7 @@ pub const MonoLlvmCodeGen = struct {
             self.ret_ptr_arg = outer_ret;
             self.args_ptr_arg = outer_args;
             self.capture_ptr_arg = outer_capture;
+            self.reuse_ptr_arg = outer_reuse;
             self.current_ret_layout = outer_ret_layout;
             self.local_slots = outer_slots;
         }
@@ -1286,6 +1289,7 @@ pub const MonoLlvmCodeGen = struct {
         self.ret_ptr_arg = null;
         self.args_ptr_arg = null;
         self.capture_ptr_arg = null;
+        self.reuse_ptr_arg = null;
         self.current_ret_layout = .zst;
         self.local_slots = &.{};
 
@@ -1301,11 +1305,11 @@ pub const MonoLlvmCodeGen = struct {
         // In-process evaluation threads its explicit test invocation context
         // through erased callables as well as ordinary procedures. The symbol
         // ABI has no such context, so its callable convention remains
-        // (ops, ret, args, capture).
+        // (ops, ret, args, capture, reuse).
         const params: []const LlvmBuilder.Type = if (proc.abi == .erased_callable and self.host_call_mode == .vtable)
-            &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty }
+            &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty }
         else if (proc.abi == .erased_callable)
-            &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty }
+            &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty }
         else if (self.host_call_mode == .extern_symbols)
             &.{ ptr_ty, ptr_ty }
         else
@@ -1384,6 +1388,7 @@ pub const MonoLlvmCodeGen = struct {
         const outer_ret = self.ret_ptr_arg;
         const outer_args = self.args_ptr_arg;
         const outer_capture = self.capture_ptr_arg;
+        const outer_reuse = self.reuse_ptr_arg;
         const outer_ret_layout = self.current_ret_layout;
         const outer_slots = self.local_slots;
         const outer_deferred_str_captures = self.deferred_str_captures;
@@ -1394,6 +1399,7 @@ pub const MonoLlvmCodeGen = struct {
             self.ret_ptr_arg = outer_ret;
             self.args_ptr_arg = outer_args;
             self.capture_ptr_arg = outer_capture;
+            self.reuse_ptr_arg = outer_reuse;
             self.current_ret_layout = outer_ret_layout;
             self.local_slots = outer_slots;
             self.deferred_str_captures = outer_deferred_str_captures;
@@ -1465,6 +1471,7 @@ pub const MonoLlvmCodeGen = struct {
             self.ret_ptr_arg = wip.arg(0);
             self.args_ptr_arg = wip.arg(1);
             self.capture_ptr_arg = null;
+            self.reuse_ptr_arg = null;
         } else {
             self.roc_ops_arg = wip.arg(0);
             if (proc.abi == .erased_callable) {
@@ -1473,17 +1480,20 @@ pub const MonoLlvmCodeGen = struct {
                     self.ret_ptr_arg = wip.arg(2);
                     self.args_ptr_arg = wip.arg(3);
                     self.capture_ptr_arg = wip.arg(4);
+                    self.reuse_ptr_arg = wip.arg(5);
                 } else {
                     self.test_context_arg = null;
                     self.ret_ptr_arg = wip.arg(1);
                     self.args_ptr_arg = wip.arg(2);
                     self.capture_ptr_arg = wip.arg(3);
+                    self.reuse_ptr_arg = wip.arg(4);
                 }
             } else {
                 self.test_context_arg = wip.arg(1);
                 self.ret_ptr_arg = wip.arg(2);
                 self.args_ptr_arg = wip.arg(3);
                 self.capture_ptr_arg = null;
+                self.reuse_ptr_arg = null;
             }
         }
         self.current_ret_layout = proc.ret_layout;
@@ -1825,9 +1835,25 @@ pub const MonoLlvmCodeGen = struct {
         return builder.toBitcode(self.allocator, producer) catch return error.OutOfMemory;
     }
 
-    fn procArgLayouts(self: *MonoLlvmCodeGen, proc: LirProcSpec, exclude_erased_capture: bool) Error![]layout.Idx {
+    const ProcArgLayoutScope = enum {
+        all,
+        explicit,
+    };
+
+    const erased_callable_hidden_param_count = 2;
+
+    fn explicitProcParamCount(abi: lir.LIR.ProcAbi, param_count: usize) Error!usize {
+        if (abi != .erased_callable) return param_count;
+        if (param_count < erased_callable_hidden_param_count) return error.CompilationFailed;
+        return param_count - erased_callable_hidden_param_count;
+    }
+
+    fn procArgLayouts(self: *MonoLlvmCodeGen, proc: LirProcSpec, scope: ProcArgLayoutScope) Error![]layout.Idx {
         const params = self.store.getLocalSpan(proc.args);
-        const count = if (exclude_erased_capture and params.len != 0) params.len - 1 else params.len;
+        const count = switch (scope) {
+            .all => params.len,
+            .explicit => try explicitProcParamCount(proc.abi, params.len),
+        };
         const result = try self.allocator.alloc(layout.Idx, count);
         for (0..count) |i| {
             const local = GuardedList.at(params, i);
@@ -1921,8 +1947,8 @@ pub const MonoLlvmCodeGen = struct {
 
     fn unpackProcArgs(self: *MonoLlvmCodeGen, proc: LirProcSpec) Error!void {
         const params = self.store.getLocalSpan(proc.args);
-        const explicit_count = if (proc.abi == .erased_callable and params.len != 0) params.len - 1 else params.len;
-        const arg_layouts = try self.procArgLayouts(proc, proc.abi == .erased_callable);
+        const explicit_count = try explicitProcParamCount(proc.abi, params.len);
+        const arg_layouts = try self.procArgLayouts(proc, .explicit);
         defer self.allocator.free(arg_layouts);
         const offsets = try self.computeArgOffsets(arg_layouts, true);
         defer self.allocator.free(offsets);
@@ -1937,16 +1963,19 @@ pub const MonoLlvmCodeGen = struct {
             try self.copyBytes(param_slot.ptr, src, param_slot.size, param_slot.alignment);
         }
 
-        if (proc.abi == .erased_callable and params.len != 0) {
-            const capture_param = GuardedList.at(params, params.len - 1);
+        if (proc.abi == .erased_callable) {
+            const capture_param = GuardedList.at(params, params.len - 2);
             const capture_ptr = self.capture_ptr_arg orelse return error.CompilationFailed;
             try self.storePointer(self.slot(capture_param).ptr, capture_ptr);
+            const reuse_param = GuardedList.at(params, params.len - 1);
+            const reuse_ptr = self.reuse_ptr_arg orelse return error.CompilationFailed;
+            try self.storePointer(self.slot(reuse_param).ptr, reuse_ptr);
         }
     }
 
     fn emitHostedProcBody(self: *MonoLlvmCodeGen, hosted: lir.LIR.HostedProc, proc: LirProcSpec) Error!void {
         const params = self.store.getLocalSpan(proc.args);
-        const arg_layouts = try self.procArgLayouts(proc, false);
+        const arg_layouts = try self.procArgLayouts(proc, .all);
         defer self.allocator.free(arg_layouts);
         const arg_ptrs = try self.allocator.alloc(LlvmBuilder.Value, params.len);
         defer self.allocator.free(arg_ptrs);
@@ -2351,7 +2380,7 @@ pub const MonoLlvmCodeGen = struct {
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_call_erased => |assign| {
-                try self.emitErasedCall(assign.target, assign.closure, assign.args);
+                try self.emitErasedCall(assign.target, assign.closure, assign.args, assign.reuse_closure);
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_packed_erased_fn => |assign| {
@@ -2578,7 +2607,7 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
-    fn emitErasedCall(self: *MonoLlvmCodeGen, target: LocalId, closure: LocalId, args: LocalSpan) Error!void {
+    fn emitErasedCall(self: *MonoLlvmCodeGen, target: LocalId, closure: LocalId, args: LocalSpan, reuse_closure: bool) Error!void {
         try self.prepareLocalWrite(target);
         try self.materializeLocalIfDeferred(closure);
         const builder = self.builder orelse return error.CompilationFailed;
@@ -2587,6 +2616,7 @@ pub const MonoLlvmCodeGen = struct {
         const closure_ptr = try self.loadPointer(self.slot(closure).ptr);
         const fn_ptr = try self.loadPointer(closure_ptr);
         const capture_ptr = try self.offsetPtr(closure_ptr, builtins.erased_callable.capture_offset);
+        const reuse_ptr = if (reuse_closure) closure_ptr else builder.nullValue(ptr_ty) catch return error.OutOfMemory;
         const arg_locals = self.store.getLocalSpan(args);
         try self.materializeLocalSpanIfDeferred(arg_locals);
         const arg_layouts = try self.allocator.alloc(layout.Idx, arg_locals.len);
@@ -2607,11 +2637,11 @@ pub const MonoLlvmCodeGen = struct {
         else
             self.slot(target).ptr;
         if (self.host_call_mode == .vtable) {
-            const fn_ty = builder.fnType(.void, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty }, .normal) catch return error.OutOfMemory;
-            _ = wip.call(.normal, .ccc, .none, fn_ty, fn_ptr, &.{ self.rocOps(), self.testInvocationContext(), ret_ptr, args_buf, capture_ptr }, "") catch return error.OutOfMemory;
+            const fn_ty = builder.fnType(.void, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty }, .normal) catch return error.OutOfMemory;
+            _ = wip.call(.normal, .ccc, .none, fn_ty, fn_ptr, &.{ self.rocOps(), self.testInvocationContext(), ret_ptr, args_buf, capture_ptr, reuse_ptr }, "") catch return error.OutOfMemory;
         } else {
-            const fn_ty = builder.fnType(.void, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty }, .normal) catch return error.OutOfMemory;
-            _ = wip.call(.normal, .ccc, .none, fn_ty, fn_ptr, &.{ self.rocOps(), ret_ptr, args_buf, capture_ptr }, "") catch return error.OutOfMemory;
+            const fn_ty = builder.fnType(.void, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty }, .normal) catch return error.OutOfMemory;
+            _ = wip.call(.normal, .ccc, .none, fn_ty, fn_ptr, &.{ self.rocOps(), ret_ptr, args_buf, capture_ptr, reuse_ptr }, "") catch return error.OutOfMemory;
         }
     }
 
@@ -2646,27 +2676,52 @@ pub const MonoLlvmCodeGen = struct {
             },
             .interpreter_context_drop => return error.CompilationFailed,
         };
+        const capture_src = if (capture != null and capture_size > 0) self.slot(capture.?).ptr else null_ptr;
+        const reuse_strategy = erasedCallableReuseStrategy(reuse != null, reuse_unique);
 
         if (reuse) |reuse_local| {
-            const update_mode = if (reuse_unique) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
-            const capture_src = if (capture != null and capture_size > 0) self.slot(capture.?).ptr else null_ptr;
-            const data_ptr = try self.callBuiltin(
+            const reuse_ptr = try self.loadPointer(self.slot(reuse_local).ptr);
+            if (reuse_strategy == .compile_time_unique) {
+                try self.emitErasedCallableInPlaceRepack(reuse_ptr, proc_fn.toValue(builder), on_drop_value, capture_src, capture_layout, capture_size);
+                try self.storePointer(self.slot(target).ptr, reuse_ptr);
+                return;
+            }
+            std.debug.assert(reuse_strategy == .runtime_checked);
+
+            const wip = self.wip orelse return error.CompilationFailed;
+            const unique_block = wip.block(0, "erased_callable_repack_unique") catch return error.OutOfMemory;
+            const shared_block = wip.block(0, "erased_callable_repack_shared") catch return error.OutOfMemory;
+            const after_block = wip.block(0, "erased_callable_repack_after") catch return error.OutOfMemory;
+            const is_unique = try self.emitErasedCallableIsUnique(reuse_ptr);
+            _ = wip.brCond(is_unique, unique_block, shared_block, .then_likely) catch return error.OutOfMemory;
+
+            wip.cursor = .{ .block = unique_block };
+            try self.emitErasedCallableInPlaceRepack(reuse_ptr, proc_fn.toValue(builder), on_drop_value, capture_src, capture_layout, capture_size);
+            try self.storePointer(self.slot(target).ptr, reuse_ptr);
+            _ = wip.br(after_block) catch return error.OutOfMemory;
+
+            wip.cursor = .{ .block = shared_block };
+            const shared_ptr = try self.callBuiltin(
                 builtinSymbol(.erased_callable_repack),
                 ptr_ty,
                 &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, self.ptrSizedIntType(), .i8, ptr_ty },
                 &.{
-                    try self.loadPointer(self.slot(reuse_local).ptr),
+                    reuse_ptr,
                     proc_fn.toValue(builder),
                     on_drop_value,
                     capture_src,
                     builder.intValue(self.ptrSizedIntType(), capture_size) catch return error.OutOfMemory,
-                    builder.intValue(.i8, @intFromEnum(update_mode)) catch return error.OutOfMemory,
+                    builder.intValue(.i8, @intFromEnum(builtins.utils.UpdateMode.Immutable)) catch return error.OutOfMemory,
                     self.rocOps(),
                 },
             );
-            try self.storePointer(self.slot(target).ptr, data_ptr);
+            try self.storePointer(self.slot(target).ptr, shared_ptr);
+            _ = wip.br(after_block) catch return error.OutOfMemory;
+
+            wip.cursor = .{ .block = after_block };
             return;
         }
+        std.debug.assert(reuse_strategy == .allocate);
 
         const payload_size: u64 = builtins.erased_callable.payloadSize(capture_size);
         const data_ptr = try self.callBuiltin(
@@ -2689,6 +2744,66 @@ pub const MonoLlvmCodeGen = struct {
             }
         }
         try self.storePointer(self.slot(target).ptr, data_ptr);
+    }
+
+    fn emitErasedCallableIsUnique(self: *MonoLlvmCodeGen, data_ptr: LlvmBuilder.Value) Error!LlvmBuilder.Value {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const usize_ty = self.ptrSizedIntType();
+        const data_addr = wip.cast(.ptrtoint, data_ptr, usize_ty, "") catch return error.OutOfMemory;
+        const untag_mask = builder.intValue(usize_ty, -@as(i64, erasedCallableTagMask(self.target.ptrBitWidth())) - 1) catch return error.OutOfMemory;
+        const untagged_addr = wip.bin(.@"and", data_addr, untag_mask, "") catch return error.OutOfMemory;
+        const untagged_ptr = wip.cast(.inttoptr, untagged_addr, try self.ptrType(), "") catch return error.OutOfMemory;
+        const refcount_ptr = try self.offsetPtrValue(
+            untagged_ptr,
+            builder.intValue(usize_ty, -@as(i64, self.targetWordSize())) catch return error.OutOfMemory,
+        );
+        const refcount = try self.loadUsize(refcount_ptr);
+        return wip.icmp(.eq, refcount, builder.intValue(usize_ty, 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+    }
+
+    fn emitErasedCallableInPlaceRepack(
+        self: *MonoLlvmCodeGen,
+        data_ptr: LlvmBuilder.Value,
+        proc_fn: LlvmBuilder.Value,
+        on_drop: LlvmBuilder.Value,
+        capture_src: LlvmBuilder.Value,
+        capture_layout: ?layout.Idx,
+        capture_size: u32,
+    ) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const ptr_ty = try self.ptrType();
+        const old_on_drop = try self.loadPointer(try self.offsetPtr(data_ptr, self.targetWordSize()));
+        const has_old_on_drop = wip.icmp(.ne, old_on_drop, builder.nullValue(ptr_ty) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const drop_block = wip.block(0, "erased_callable_repack_drop_old") catch return error.OutOfMemory;
+        const rewrite_block = wip.block(0, "erased_callable_repack_rewrite") catch return error.OutOfMemory;
+        _ = wip.brCond(has_old_on_drop, drop_block, rewrite_block, .else_likely) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = drop_block };
+        const on_drop_ty = builder.fnType(.void, &.{ ptr_ty, ptr_ty }, .normal) catch return error.OutOfMemory;
+        _ = wip.call(
+            .normal,
+            .ccc,
+            .none,
+            on_drop_ty,
+            old_on_drop,
+            &.{ try self.offsetPtr(data_ptr, builtins.erased_callable.capture_offset), self.rocOps() },
+            "",
+        ) catch return error.OutOfMemory;
+        _ = wip.br(rewrite_block) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = rewrite_block };
+        try self.storePointer(data_ptr, proc_fn);
+        try self.storePointer(try self.offsetPtr(data_ptr, self.targetWordSize()), on_drop);
+        if (capture_size > 0) {
+            try self.copyBytes(
+                try self.offsetPtr(data_ptr, builtins.erased_callable.capture_offset),
+                capture_src,
+                capture_size,
+                self.alignmentForLayout(capture_layout orelse return error.CompilationFailed),
+            );
+        }
     }
 
     fn emitListLiteral(self: *MonoLlvmCodeGen, target: LocalId, elems: LocalSpan) Error!void {
@@ -8338,6 +8453,7 @@ pub const MonoLlvmCodeGen = struct {
         const outer_ret = self.ret_ptr_arg;
         const outer_args = self.args_ptr_arg;
         const outer_capture = self.capture_ptr_arg;
+        const outer_reuse = self.reuse_ptr_arg;
         const outer_ret_layout = self.current_ret_layout;
         const outer_slots = self.local_slots;
         defer {
@@ -8347,6 +8463,7 @@ pub const MonoLlvmCodeGen = struct {
             self.ret_ptr_arg = outer_ret;
             self.args_ptr_arg = outer_args;
             self.capture_ptr_arg = outer_capture;
+            self.reuse_ptr_arg = outer_reuse;
             self.current_ret_layout = outer_ret_layout;
             self.local_slots = outer_slots;
         }
@@ -8358,6 +8475,7 @@ pub const MonoLlvmCodeGen = struct {
         self.ret_ptr_arg = null;
         self.args_ptr_arg = null;
         self.capture_ptr_arg = null;
+        self.reuse_ptr_arg = null;
         self.current_ret_layout = .zst;
         self.local_slots = &.{};
 
@@ -10080,4 +10198,41 @@ fn repeatedByte(byte: u8, width: u8) u128 {
         result |= @as(u128, byte) << @intCast(byte_i * 8);
     }
     return result;
+}
+
+const ErasedCallableReuseStrategy = enum {
+    allocate,
+    compile_time_unique,
+    runtime_checked,
+};
+
+fn erasedCallableReuseStrategy(has_reuse: bool, reuse_unique: bool) ErasedCallableReuseStrategy {
+    if (!has_reuse) return .allocate;
+    return if (reuse_unique) .compile_time_unique else .runtime_checked;
+}
+
+fn erasedCallableTagMask(ptr_bit_width: u16) u8 {
+    return switch (ptr_bit_width) {
+        64 => 0b111,
+        16, 32 => 0b11,
+        else => unreachable,
+    };
+}
+
+test "LLVM erased callable explicit arguments exclude capture and reuse" {
+    try std.testing.expectEqual(@as(usize, 3), try MonoLlvmCodeGen.explicitProcParamCount(.erased_callable, 5));
+    try std.testing.expectEqual(@as(usize, 5), try MonoLlvmCodeGen.explicitProcParamCount(.roc, 5));
+    try std.testing.expectError(error.CompilationFailed, MonoLlvmCodeGen.explicitProcParamCount(.erased_callable, 1));
+}
+
+test "LLVM erased callable repack selects allocate, proven unique, and runtime checked paths" {
+    try std.testing.expectEqual(ErasedCallableReuseStrategy.allocate, erasedCallableReuseStrategy(false, false));
+    try std.testing.expectEqual(ErasedCallableReuseStrategy.compile_time_unique, erasedCallableReuseStrategy(true, true));
+    try std.testing.expectEqual(ErasedCallableReuseStrategy.runtime_checked, erasedCallableReuseStrategy(true, false));
+}
+
+test "LLVM erased callable runtime uniqueness uses target-width tag masks" {
+    try std.testing.expectEqual(@as(u8, 0b11), erasedCallableTagMask(16));
+    try std.testing.expectEqual(@as(u8, 0b11), erasedCallableTagMask(32));
+    try std.testing.expectEqual(@as(u8, 0b111), erasedCallableTagMask(64));
 }

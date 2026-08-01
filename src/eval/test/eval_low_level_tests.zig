@@ -2,6 +2,16 @@
 
 const TestCase = @import("parallel_runner.zig").TestCase;
 
+const erased_callable_same_capture_reuse_source =
+    \\{
+    \\    make_boxed : Box(I64) -> Box(({} -> ({} -> I64)))
+    \\    make_boxed = |state| Box.box(|_| |_| Box.unbox(state))
+    \\
+    \\    value = Box.unbox(make_boxed(Box.box(42)))({})({})
+    \\    if value == 42 { "ok" } else { "wrong" }
+    \\}
+;
+
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
@@ -5129,6 +5139,19 @@ pub const tests = [_]TestCase{
         \\main = make_adder(5)(10)
         ,
         .expected = .{ .inspect_str = "15" },
+    },
+    .{
+        .name = "boxed lambda round trip: same-shape refcounted erased result is correct across backends",
+        .source = erased_callable_same_capture_reuse_source,
+        .expected = .{ .inspect_str = "\"ok\"" },
+    },
+    .{
+        .name = "boxed lambda round trip: same-shape refcounted erased result reuses allocation",
+        .source = erased_callable_same_capture_reuse_source,
+        .expected = .{ .allocations_at_most = .{
+            .output = "ok",
+            .max_allocations = 2,
+        } },
     },
     .{
         .name = "boxed lambda round trip: erased record callable field transform",

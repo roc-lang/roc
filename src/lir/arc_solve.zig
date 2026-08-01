@@ -1782,8 +1782,15 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             }
         },
         .assign_call_erased => |assign| {
+            if (!LIR.erasedCallReuseFieldsMatch(assign)) {
+                solveInvariant("erased call reuse flag and ownership source disagreed");
+            }
             try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
-            try solver.binding_facts.append(allocator, .{ .demand = assign.closure });
+            if (assign.reuse_source) |reuse_source| {
+                try solver.binding_facts.append(allocator, .{ .demand = reuse_source });
+            } else {
+                try solver.binding_facts.append(allocator, .{ .demand = assign.closure });
+            }
             const args = store.getLocalSpan(assign.args);
             for (0..GuardedList.borrowLen(args)) |index| {
                 const arg = GuardedList.at(args, index);
@@ -1793,7 +1800,11 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             try liftVisibilitySeed(solver, assign.closure);
             try liftVisibilitySeed(solver, assign.target);
             try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
-            try solver.unique_facts.append(allocator, .{ .destroy = assign.closure });
+            if (assign.reuse_source) |reuse_source| {
+                try solver.unique_facts.append(allocator, .{ .consume = reuse_source });
+            } else {
+                try solver.unique_facts.append(allocator, .{ .destroy = assign.closure });
+            }
             for (0..GuardedList.borrowLen(args)) |index| {
                 try solver.unique_facts.append(allocator, .{ .destroy = GuardedList.at(args, index) });
             }
@@ -2464,6 +2475,7 @@ fn computeVisibilityFromLift(
                 // The callee is unknown; the boundary is treated like a
                 // pinned signature.
                 seedLocal(&visible, rc_local, @intFromEnum(assign.closure));
+                if (assign.reuse_source) |reuse_source| seedLocal(&visible, rc_local, @intFromEnum(reuse_source));
                 const args = store.getLocalSpan(assign.args);
                 for (0..GuardedList.borrowLen(args)) |arg_index| {
                     const arg = GuardedList.at(args, arg_index);
@@ -3128,7 +3140,11 @@ fn computeUniquenessDetailed(
             .assign_call_erased => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 marks.destroy(&foreign_def, assign.target);
-                marks.destroy(&destroyed, assign.closure);
+                if (assign.reuse_source) |reuse_source| {
+                    marks.consume(&consumed_once, &destroyed, reuse_source);
+                } else {
+                    marks.destroy(&destroyed, assign.closure);
+                }
                 const args = store.getLocalSpan(assign.args);
                 for (0..GuardedList.borrowLen(args)) |index| {
                     const arg = GuardedList.at(args, index);

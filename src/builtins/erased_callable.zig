@@ -16,12 +16,14 @@ pub const RocOps = utils.RocOps;
 /// `args` points at the generated fixed-arity argument struct for this erased
 /// call signature, or is null for arity 0. `ret` points at caller-owned result
 /// storage, or is null for zero-sized results. `capture` is always the pointer
-/// returned by `capturePtr(payload_data_ptr)`.
+/// returned by `capturePtr(payload_data_ptr)`. `reuse` is the consumed callable
+/// data pointer when the result is another erased callable, otherwise null.
 pub const ErasedCallableFn = *const fn (
     ops: *RocOps,
     ret: ?[*]u8,
     args: ?[*]const u8,
     capture: ?[*]u8,
+    reuse: ?[*]u8,
 ) callconv(.c) void;
 
 /// Stored function-pointer field type in `Payload`.
@@ -230,7 +232,7 @@ const RepackTestState = struct {
         old_drop_first_byte = 0;
     }
 
-    fn callable(_: *RocOps, _: ?[*]u8, _: ?[*]const u8, _: ?[*]u8) callconv(.c) void {}
+    fn callable(_: *RocOps, _: ?[*]u8, _: ?[*]const u8, _: ?[*]u8, _: ?[*]u8) callconv(.c) void {}
 
     fn oldDrop(capture: ?[*]u8, _: *RocOps) callconv(.c) void {
         old_drop_count += 1;

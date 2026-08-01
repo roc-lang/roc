@@ -457,6 +457,15 @@ pub const CFStmt = union(enum) {
         target: LocalId,
         closure: LocalId,
         args: LocalSpan,
+        /// Consume `closure` as the destination for an erased-callable result.
+        /// The erased callee may repack it when the returned capture payload has
+        /// the same committed size and alignment; otherwise it releases the
+        /// consumed allocation and returns a fresh one.
+        reuse_closure: bool = false,
+        /// Ownership source consumed by `reuse_closure`. This may be an outer
+        /// transparent nominal/tag wrapper of `closure`; both denote the same
+        /// erased-callable allocation, while this local carries its owned unit.
+        reuse_source: ?LocalId = null,
         next: CFStmtId,
     },
     assign_packed_erased_fn: struct {
@@ -673,6 +682,12 @@ pub const CFStmt = union(enum) {
         msg: StringLiteral.Idx,
     },
 };
+
+/// Return whether an erased call's reuse flag and consumed ownership source
+/// describe the same optional reuse operation.
+pub fn erasedCallReuseFieldsMatch(assign: anytype) bool {
+    return assign.reuse_closure == (assign.reuse_source != null);
+}
 
 /// Lowered proc specification rooted either at a statement body or at explicit
 /// hosted-proc metadata.

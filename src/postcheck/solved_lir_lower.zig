@@ -223,12 +223,28 @@ const CaptureTypeId = struct {
     }
 };
 
+const ErasedReturnReuse = union(enum) {
+    none,
+    erased_callable: ?Type.TypeId,
+
+    fn enabled(self: ErasedReturnReuse) bool {
+        return switch (self) {
+            .none => false,
+            .erased_callable => true,
+        };
+    }
+};
+
 const FnSpec = struct {
     source: Lifted.FnId,
     solved_fn_ty: SolvedType.TypeVarId,
     abi: CaptureAbi,
     captures: CaptureSpanId,
     capture_ty: ?Type.TypeId,
+    /// Optional erased-callable destination threaded through an internal
+    /// finite proc. The payload records the capture type already resident in
+    /// that destination; `null` means an enabled destination with no captures.
+    return_reuse: ErasedReturnReuse,
 };
 
 const FnSpecContext = struct {
@@ -245,6 +261,13 @@ const FnSpecContext = struct {
         } else {
             std.hash.autoHash(&hasher, @as(u32, std.math.maxInt(u32)));
         }
+        switch (spec.return_reuse) {
+            .none => std.hash.autoHash(&hasher, @as(u8, 0)),
+            .erased_callable => |capture_ty| {
+                std.hash.autoHash(&hasher, @as(u8, 1));
+                std.hash.autoHash(&hasher, if (capture_ty) |ty| @intFromEnum(ty) else std.math.maxInt(u32));
+            },
+        }
         return hasher.final();
     }
 
@@ -255,7 +278,8 @@ const FnSpecContext = struct {
             lhs.captures.source == rhs.captures.source and
             lhs.captures.start == rhs.captures.start and
             lhs.captures.len == rhs.captures.len and
-            lhs.capture_ty == rhs.capture_ty;
+            lhs.capture_ty == rhs.capture_ty and
+            std.meta.eql(lhs.return_reuse, rhs.return_reuse);
     }
 };
 
@@ -385,10 +409,13 @@ const Lowerer = struct {
     next_join_point: u32 = 0,
     loop_stack: std.ArrayList(LoopContext),
     join_stack: std.ArrayList(JoinContext),
+    return_forwarding_joins: std.ArrayList(ReturnForwardingJoin),
     current_ret_ty: ?Type.TypeId = null,
     current_proc_locals: ?*ProcLocalSet = null,
     current_fn: ?Type.FnId = null,
     current_proc: ?LIR.LirProcSpecId = null,
+    current_erased_reuse: ?LIR.LocalId = null,
+    current_return_target: ?LIR.LocalId = null,
     erased_capture_ptr_ty: ?Type.TypeId = null,
     debug_materialized_out: ?*?LambdaMono.Program = null,
 
@@ -408,6 +435,11 @@ const Lowerer = struct {
         join_id: LIR.JoinPointId,
         params: LIR.LocalSpan,
         param_tys: []const Type.TypeId,
+    };
+
+    const ReturnForwardingJoin = struct {
+        id: LIR.JoinPointId,
+        result: LIR.LocalId,
     };
 
     fn init(
@@ -482,11 +514,13 @@ const Lowerer = struct {
             .comptime_site_map = comptime_site_map,
             .loop_stack = .empty,
             .join_stack = .empty,
+            .return_forwarding_joins = .empty,
         };
     }
 
     fn deinit(self: *Lowerer) void {
         self.folded_map_matches.deinit(self.allocator);
+        self.return_forwarding_joins.deinit(self.allocator);
         self.join_stack.deinit(self.allocator);
         self.loop_stack.deinit(self.allocator);
         self.allocator.free(self.comptime_site_map);
@@ -530,6 +564,7 @@ const Lowerer = struct {
             .runtime_schemas = self.runtime_schemas,
         };
         self.folded_map_matches.deinit(self.allocator);
+        self.return_forwarding_joins.deinit(self.allocator);
         self.join_stack.deinit(self.allocator);
         self.loop_stack.deinit(self.allocator);
         self.allocator.free(self.comptime_site_map);
@@ -578,6 +613,7 @@ const Lowerer = struct {
         self.comptime_site_map = &.{};
         self.loop_stack = .empty;
         self.join_stack = .empty;
+        self.return_forwarding_joins = .empty;
         self.folded_map_matches = .empty;
         return output;
     }
@@ -733,6 +769,7 @@ const Lowerer = struct {
         const ret_local = try self.addLocalForLayout(ret_layout);
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
         const body = try self.lowerExprIntoAtType(ret_local, initializer.expr, initializer.ty, ret_stmt);
+        try self.resolveProcErasedCallReuseSources(body);
         const frame_locals = try self.writeFrameLocals(&proc_locals);
         const proc = self.result.store.getProcSpecPtr(initializer.proc);
         proc.body = body;
@@ -775,15 +812,16 @@ const Lowerer = struct {
 
         switch (spec.abi) {
             .finite => {
+                const expected_args = lifted_args.len +
+                    @as(usize, @intFromBool(spec.capture_ty != null)) +
+                    @as(usize, @intFromBool(spec.return_reuse.enabled()));
+                if (proc_args.len != expected_args) Common.invariant("finite proc placeholder had wrong internal arity");
                 if (spec.capture_ty) |capture_ty| {
-                    if (proc_args.len != lifted_args.len + 1) Common.invariant("finite capture proc placeholder had wrong arity");
                     try self.bindCaptureRecord(spec.captures, capture_ty, .{ .record = GuardedList.at(proc_args, lifted_args.len) });
-                } else if (proc_args.len != lifted_args.len) {
-                    Common.invariant("finite non-capturing proc placeholder had wrong arity");
                 }
             },
             .erased => {
-                if (proc_args.len != lifted_args.len + 1) Common.invariant("erased proc placeholder had wrong arity");
+                if (proc_args.len != lifted_args.len + 2) Common.invariant("erased proc placeholder had wrong arity");
                 if (spec.capture_ty) |capture_ty| {
                     try self.bindCaptureRecord(spec.captures, capture_ty, .{ .erased_ptr = GuardedList.at(proc_args, lifted_args.len) });
                 }
@@ -796,6 +834,7 @@ const Lowerer = struct {
                 const saved_proc_locals = self.current_proc_locals;
                 const saved_current_fn = self.current_fn;
                 const saved_current_proc = self.current_proc;
+                const saved_erased_reuse = self.current_erased_reuse;
                 var proc_locals: ProcLocalSet = .{};
                 defer proc_locals.deinit(self.allocator);
 
@@ -803,15 +842,24 @@ const Lowerer = struct {
                 self.current_ret_ty = entry.ret;
                 self.current_fn = fn_id;
                 self.current_proc = proc_id;
+                self.current_erased_reuse = switch (spec.abi) {
+                    .erased => GuardedList.at(proc_args, lifted_args.len + 1),
+                    .finite => if (spec.return_reuse.enabled())
+                        GuardedList.at(proc_args, lifted_args.len + @as(usize, @intFromBool(spec.capture_ty != null)))
+                    else
+                        null,
+                };
                 defer {
                     self.current_ret_ty = saved_ret_ty;
                     self.current_proc_locals = saved_proc_locals;
                     self.current_fn = saved_current_fn;
                     self.current_proc = saved_current_proc;
+                    self.current_erased_reuse = saved_erased_reuse;
                 }
 
                 try self.noteLocalSpan(self.result.store.getProcSpec(proc_id).args);
                 const body = try self.lowerExprReturn(body_expr, entry.ret);
+                try self.resolveProcErasedCallReuseSources(body);
 
                 const frame_locals = try self.writeFrameLocals(&proc_locals);
                 const proc = self.result.store.getProcSpecPtr(proc_id);
@@ -854,7 +902,26 @@ const Lowerer = struct {
             .func => {},
             else => Common.invariant("direct Lambda Mono function table contains a non-function type"),
         }
-        return try self.ensureFnSpec(fn_id, solved_fn_ty, abi, try self.ownCaptureSpanForFn(fn_id));
+        return try self.ensureFnSpec(fn_id, solved_fn_ty, abi, try self.ownCaptureSpanForFn(fn_id), .none);
+    }
+
+    fn ensureOwnFnSpecWithErasedReturnReuse(
+        self: *Lowerer,
+        fn_id: Lifted.FnId,
+        capture_ty: ?Type.TypeId,
+    ) Common.LowerError!Type.FnId {
+        const solved_fn_ty = self.solved.types.root(self.solved.fn_tys.items[@intFromEnum(fn_id)]);
+        switch (self.solved.types.rootContent(solved_fn_ty)) {
+            .func => {},
+            else => Common.invariant("direct Lambda Mono function table contains a non-function type"),
+        }
+        return try self.ensureFnSpec(
+            fn_id,
+            solved_fn_ty,
+            .finite,
+            try self.ownCaptureSpanForFn(fn_id),
+            .{ .erased_callable = capture_ty },
+        );
     }
 
     fn ensureFnSpec(
@@ -863,6 +930,7 @@ const Lowerer = struct {
         solved_fn_ty: SolvedType.TypeVarId,
         abi: CaptureAbi,
         captures: CaptureSpanId,
+        return_reuse: ErasedReturnReuse,
     ) Common.LowerError!Type.FnId {
         const capture_items = self.captureSpan(captures);
         const root_fn_ty = self.solved.types.root(solved_fn_ty);
@@ -872,6 +940,7 @@ const Lowerer = struct {
             .abi = abi,
             .captures = captures,
             .capture_ty = if (capture_items.len == 0) null else try self.captureRecordType(captures, root_fn_ty),
+            .return_reuse = return_reuse,
         };
 
         const result = try self.fn_spec_map.getOrPut(spec);
@@ -939,11 +1008,19 @@ const Lowerer = struct {
         var entry = self.fn_entries.items[index];
         const spec = entry.spec;
         const source_fn = self.solved.lifted.getFn(spec.source);
+        if (spec.return_reuse.enabled()) switch (source_fn.body) {
+            .roc => {},
+            .hosted => Common.invariant("hosted function acquired an internal erased-return reuse ABI"),
+        };
         const arg_tys = self.types.span(entry.args);
         const lifted_args = self.solved.lifted.typedLocalSpan(source_fn.args);
         if (arg_tys.len != lifted_args.len) Common.invariant("direct Lambda Mono function arity changed after Lambda Solved");
 
-        const arg_count = lifted_args.len + if (entry.capture_arg_ty == null) @as(usize, 0) else 1;
+        const arg_count = lifted_args.len + switch (spec.abi) {
+            .finite => (if (entry.capture_arg_ty == null) @as(usize, 0) else 1) +
+                @as(usize, @intFromBool(spec.return_reuse.enabled())),
+            .erased => 2,
+        };
         const arg_locals = try self.allocator.alloc(LIR.LocalId, arg_count);
         defer self.allocator.free(arg_locals);
 
@@ -953,6 +1030,18 @@ const Lowerer = struct {
         }
         if (entry.capture_arg_ty) |capture_arg_ty| {
             arg_locals[lifted_args.len] = try self.addLocalForLayout(try self.layoutOfType(capture_arg_ty));
+        }
+        if (spec.abi == .finite and spec.return_reuse.enabled()) {
+            const reuse_index = lifted_args.len + @as(usize, @intFromBool(entry.capture_arg_ty != null));
+            arg_locals[reuse_index] = try self.addLocalForLayout(try self.result.layouts.insertErasedCallable());
+        }
+        if (spec.abi == .erased) {
+            if (spec.return_reuse.enabled()) Common.invariant("erased proc carried a second return-reuse specialization");
+            const reuse_layout = if (self.hasErasedCallableRuntimeRepresentation(entry.ret))
+                try self.result.layouts.insertErasedCallable()
+            else
+                try self.layoutOfType(try self.erasedCapturePtrType());
+            arg_locals[lifted_args.len + 1] = try self.addLocalForLayout(reuse_layout);
         }
 
         const saved_loc = self.result.store.current_loc;
@@ -1383,6 +1472,7 @@ const Lowerer = struct {
                 root_fn_ty,
                 abi,
                 CaptureSpanId.fromSolved(member.captures),
+                .none,
             );
             variants[i] = .{
                 .id = undefined,
@@ -1405,6 +1495,7 @@ const Lowerer = struct {
                 self.solved.types.root(self.solved.fn_tys.items[@intFromEnum(source)]),
                 abi,
                 CaptureSpanId.fromSolved(member.captures),
+                .none,
             );
             variants[i] = .{
                 .id = undefined,
@@ -2241,13 +2332,6 @@ const Lowerer = struct {
         materialized: *const LambdaMono.Program,
         identities: []const LambdaMonoLower.SpecializationIdentity,
     ) Common.LowerError!void {
-        var reachable_count: usize = 0;
-        for (self.fn_reachable.items) |reachable| {
-            if (reachable) reachable_count += 1;
-        }
-        if (reachable_count > materialized.fnCount()) {
-            Common.invariant("debug Lambda Mono verifier saw too many direct function specs");
-        }
         const materialized_fns = materialized.fnsView();
         if (identities.len != materialized_fns.len) {
             Common.invariant("debug Lambda Mono verifier saw a specialization identity count mismatch");
@@ -2367,6 +2451,9 @@ const Lowerer = struct {
         const ret_local = try self.addLocalForLayout(ret_layout);
         try self.local_types.put(ret_local, ret_ty);
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
+        const saved_return_target = self.current_return_target;
+        self.current_return_target = ret_local;
+        defer self.current_return_target = saved_return_target;
         return try self.lowerExprIntoAtType(ret_local, expr_id, ret_ty, ret_stmt);
     }
 
@@ -2830,6 +2917,11 @@ const Lowerer = struct {
             } });
 
         if (payloads.len == 1) {
+            const saved_return_target = self.current_return_target;
+            if (saved_return_target == target and self.tagUnionTags(ty).len == 1) {
+                self.current_return_target = payload_local;
+            }
+            defer self.current_return_target = saved_return_target;
             return try self.lowerExprIntoAtType(
                 payload_local,
                 GuardedList.at(payloads, 0),
@@ -2865,6 +2957,11 @@ const Lowerer = struct {
         const backing_layout = try self.layoutOfType(backing_ty);
         const backing_local = try self.addLocalForLayout(backing_layout);
         const assign = try self.assignNominalBoundaryAtTypes(target, nominal_ty, backing_local, backing_ty, backing_layout, next);
+        const saved_return_target = self.current_return_target;
+        if (saved_return_target == target and self.result.store.getLocal(target).layout_idx == backing_layout) {
+            self.current_return_target = backing_local;
+        }
+        defer self.current_return_target = saved_return_target;
         return try self.lowerExprIntoAtType(backing_local, backing, backing_ty, assign);
     }
 
@@ -3562,13 +3659,17 @@ const Lowerer = struct {
         }
         const capture = if (capture_ty) |ty| try self.addTemp(ty) else null;
         const capture_layout = if (capture) |local| self.result.store.getLocal(local).layout_idx else null;
-
         const assign = try self.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
             .target = target,
             .proc = try self.markReachableFn(fn_id),
             .capture = capture,
             .capture_layout = capture_layout,
             .on_drop = self.erasedCallableOnDrop(capture_layout),
+            .reuse = if (try self.sameErasedCaptureShapeForCurrentProc(capture_layout) and
+                self.valueFlowsToCurrentReturn(target, next))
+                self.current_erased_reuse
+            else
+                null,
             .next = next,
         } });
         if (capture_ty) |ty| return try self.lowerCaptureRecordFromCaptureExprsInto(capture.?, captures, capture_operands, ty, assign);
@@ -3585,6 +3686,125 @@ const Lowerer = struct {
             .{ .rc_helper = helper_key };
     }
 
+    fn sameErasedCaptureShapeForCurrentProc(self: *Lowerer, new_layout: ?layout.Idx) Common.LowerError!bool {
+        const fn_id = self.current_fn orelse return false;
+        const spec = self.fn_entries.items[@intFromEnum(fn_id)].spec;
+        const old_capture_ty = switch (spec.abi) {
+            .erased => spec.capture_ty,
+            .finite => switch (spec.return_reuse) {
+                .none => return false,
+                .erased_callable => |capture_ty| capture_ty,
+            },
+        };
+        const old_layout = if (old_capture_ty) |capture_ty| try self.layoutOfType(capture_ty) else null;
+        if (old_layout == null or new_layout == null) return old_layout == null and new_layout == null;
+        const old_size_align = self.result.layouts.layoutSizeAlign(self.result.layouts.getLayout(old_layout.?));
+        const new_size_align = self.result.layouts.layoutSizeAlign(self.result.layouts.getLayout(new_layout.?));
+        return old_size_align.size == new_size_align.size and
+            old_size_align.alignment.toByteUnits() == new_size_align.alignment.toByteUnits();
+    }
+
+    fn valueFlowsToCurrentReturn(self: *Lowerer, initial_value: LIR.LocalId, next: LIR.CFStmtId) bool {
+        if (self.current_return_target == null) return false;
+        var value = initial_value;
+        var current = next;
+        for (0..32) |_| {
+            switch (self.result.store.getCFStmt(current)) {
+                .assign_ref => |assign| {
+                    const source = switch (assign.op) {
+                        .local => |source| source,
+                        .nominal => |nominal| nominal.backing_ref,
+                        else => return false,
+                    };
+                    if (source != value) return false;
+                    value = assign.target;
+                    current = assign.next;
+                },
+                .assign_tag => |assign| {
+                    if (assign.payload == null or assign.payload.? != value) return false;
+                    const target_layout = self.result.layouts.getLayout(self.result.store.getLocal(assign.target).layout_idx);
+                    if (target_layout.tag != .tag_union) return false;
+                    const data = self.result.layouts.getTagUnionData(target_layout.getTagUnion().idx);
+                    if (data.discriminant_size != 0 or assign.variant_index != 0) return false;
+                    value = assign.target;
+                    current = assign.next;
+                },
+                .ret => |ret| {
+                    return ret.value == value;
+                },
+                .jump => |jump| {
+                    for (self.return_forwarding_joins.items) |forwarding| {
+                        if (forwarding.id == jump.target) return forwarding.result == value;
+                    }
+                    return false;
+                },
+                else => return false,
+            }
+        }
+        return false;
+    }
+
+    fn pushReturnForwardingJoin(
+        self: *Lowerer,
+        join_id: LIR.JoinPointId,
+        result: LIR.LocalId,
+        body: LIR.CFStmtId,
+    ) Common.LowerError!bool {
+        if (!self.valueFlowsToCurrentReturn(result, body)) return false;
+        try self.return_forwarding_joins.append(self.allocator, .{ .id = join_id, .result = result });
+        return true;
+    }
+
+    fn popReturnForwardingJoin(self: *Lowerer, pushed: bool) void {
+        if (pushed) _ = self.return_forwarding_joins.pop();
+    }
+
+    /// Whether this logical result has exactly one runtime path to an erased
+    /// callable allocation. Nominal and single-constructor wrappers are
+    /// representation-transparent here; an ordinary outer `Box` is only the
+    /// erased-callable allocation when its element is directly an erased
+    /// callable through aliases, matching LayoutGraphBuilder's rule.
+    fn hasErasedCallableRuntimeRepresentation(self: *Lowerer, ty: Type.TypeId) bool {
+        var current = ty;
+        for (0..self.types.typeCount()) |_| {
+            switch (self.types.get(current)) {
+                .erased_fn => return true,
+                .named => |named| {
+                    const backing = named.backing orelse return false;
+                    current = backing.ty;
+                },
+                .tag_union => |tags_span| {
+                    const tags = self.types.tagSpan(tags_span);
+                    if (tags.len != 1) return false;
+                    const payloads = self.types.span(GuardedList.at(tags, 0).payloads);
+                    if (payloads.len != 1) return false;
+                    current = GuardedList.at(payloads, 0);
+                },
+                .box => |elem| return self.isDirectErasedCallableValueType(elem),
+                else => return false,
+            }
+        }
+        // A deterministic representation-transparent path longer than the
+        // type store can only have revisited a type.
+        return false;
+    }
+
+    fn isDirectErasedCallableValueType(self: *Lowerer, ty: Type.TypeId) bool {
+        var current = ty;
+        for (0..self.types.typeCount()) |_| {
+            switch (self.types.get(current)) {
+                .erased_fn => return true,
+                .named => |named| {
+                    if (named.kind != .alias) return false;
+                    const backing = named.backing orelse Common.invariant("transparent alias reached erased callable result lowering without a backing type");
+                    current = backing.ty;
+                },
+                else => return false,
+            }
+        }
+        return false;
+    }
+
     fn lowerDirectProcCallInto(
         self: *Lowerer,
         target: LIR.LocalId,
@@ -3595,7 +3815,20 @@ const Lowerer = struct {
         is_cold: bool,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
-        const target_fn = try self.ensureOwnFnSpec(callee, .finite);
+        const callee_is_hosted = switch (self.solved.lifted.getFn(callee).body) {
+            .roc => false,
+            .hosted => true,
+        };
+        const return_reuse = if (!callee_is_hosted and
+            self.hasErasedCallableRuntimeRepresentation(result_ty) and
+            self.valueFlowsToCurrentReturn(target, next))
+            self.currentErasedReturnReuse()
+        else
+            ErasedReturnReuse.none;
+        const target_fn = switch (return_reuse) {
+            .none => try self.ensureOwnFnSpec(callee, .finite),
+            .erased_callable => |capture_ty| try self.ensureOwnFnSpecWithErasedReturnReuse(callee, capture_ty),
+        };
         const captures = try self.capturesForFn(callee);
         const capture_items = self.captureSpan(captures);
         if (capture_items.len == 0) {
@@ -3646,14 +3879,26 @@ const Lowerer = struct {
             }
         }
 
-        const call_args = if (capture_arg) |capture_local| blk: {
-            const values = try self.allocator.alloc(LIR.LocalId, lowered.ids.len + 1);
+        const callee_spec = self.fn_entries.items[@intFromEnum(callee)].spec;
+        const has_return_reuse = callee_spec.return_reuse.enabled();
+        const extra_arg_count = @as(usize, @intFromBool(capture_arg != null)) +
+            @as(usize, @intFromBool(has_return_reuse));
+        const call_args = if (extra_arg_count > 0) blk: {
+            const values = try self.allocator.alloc(LIR.LocalId, lowered.ids.len + extra_arg_count);
             errdefer self.allocator.free(values);
             @memcpy(values[0..lowered.ids.len], lowered.ids);
-            values[lowered.ids.len] = capture_local;
+            var index = lowered.ids.len;
+            if (capture_arg) |capture_local| {
+                values[index] = capture_local;
+                index += 1;
+            }
+            if (has_return_reuse) {
+                values[index] = self.current_erased_reuse orelse
+                    Common.invariant("destination-specialized direct call lacked a current erased return destination");
+            }
             break :blk values;
         } else lowered.ids;
-        defer if (capture_arg != null) self.allocator.free(call_args);
+        defer if (extra_arg_count > 0) self.allocator.free(call_args);
         var current = try self.result.store.addCFStmt(.{ .assign_call = .{
             .target = call_target,
             .proc = try self.markReachableFn(callee),
@@ -3663,6 +3908,16 @@ const Lowerer = struct {
         } });
         current = try self.prependExprsAtTypes(lowered, arg_tys, current);
         return current;
+    }
+
+    fn currentErasedReturnReuse(self: *Lowerer) ErasedReturnReuse {
+        if (self.current_erased_reuse == null) return .none;
+        const fn_id = self.current_fn orelse return .none;
+        const spec = self.fn_entries.items[@intFromEnum(fn_id)].spec;
+        return switch (spec.abi) {
+            .erased => .{ .erased_callable = spec.capture_ty },
+            .finite => spec.return_reuse,
+        };
     }
 
     fn lowerFnSpecArgTypes(self: *Lowerer, callee: Type.FnId) Common.LowerError![]Type.TypeId {
@@ -3777,14 +4032,210 @@ const Lowerer = struct {
             next
         else
             try self.assignTypedBoundary(target, result_ty, call_target, result_ty, next);
-        var current = try self.result.store.addCFStmt(.{ .assign_call_erased = .{
+        const reuse_closure = self.hasErasedCallableRuntimeRepresentation(result_ty);
+        const call_stmt = try self.result.store.addCFStmt(.{ .assign_call_erased = .{
             .target = call_target,
             .closure = callee,
             .args = try self.result.store.addLocalSpan(args.ids),
+            .reuse_closure = reuse_closure,
+            .reuse_source = if (reuse_closure) callee else null,
             .next = after_call,
         } });
+        var current = call_stmt;
         current = try self.prependExprsAtTypes(args, arg_tys, current);
         return try self.lowerExprIntoAtType(callee, callee_expr, callee_ty, current);
+    }
+
+    /// Resolve the ownership unit consumed by an erased call that returns an
+    /// erased callable. The pointer used to invoke the callable may have been
+    /// extracted through nominal and one-variant tag wrappers; ARC must consume
+    /// the outer owned value, not retain the borrowed extracted pointer.
+    fn resolveProcErasedCallReuseSources(self: *Lowerer, body: LIR.CFStmtId) Common.LowerError!void {
+        const local_count = self.result.store.localCount();
+        const definitions = try self.allocator.alloc(?LIR.LocalId, local_count);
+        defer self.allocator.free(definitions);
+        @memset(definitions, null);
+        const ambiguous = try self.allocator.alloc(bool, local_count);
+        defer self.allocator.free(ambiguous);
+        @memset(ambiguous, false);
+        const defined = try self.allocator.alloc(bool, local_count);
+        defer self.allocator.free(defined);
+        @memset(defined, false);
+
+        var calls = std.ArrayList(LIR.CFStmtId).empty;
+        defer calls.deinit(self.allocator);
+        var work = std.ArrayList(LIR.CFStmtId).empty;
+        defer work.deinit(self.allocator);
+        var visited = std.AutoHashMap(LIR.CFStmtId, void).init(self.allocator);
+        defer visited.deinit();
+
+        try work.append(self.allocator, body);
+        while (work.pop()) |stmt_id| {
+            const entry = try visited.getOrPut(stmt_id);
+            if (entry.found_existing) continue;
+
+            switch (self.result.store.getCFStmt(stmt_id)) {
+                .assign_ref => |assign| {
+                    self.noteErasedReuseResolverDefinition(
+                        definitions,
+                        ambiguous,
+                        defined,
+                        assign.target,
+                        self.transparentErasedOwnershipSource(assign.op, assign.target),
+                    );
+                },
+                .assign_call_erased => |call| {
+                    self.noteErasedReuseResolverDefinition(definitions, ambiguous, defined, call.target, null);
+                    if (call.reuse_closure) try calls.append(self.allocator, stmt_id);
+                },
+                inline .init_uninitialized,
+                .assign_literal,
+                .assign_call,
+                .assign_packed_erased_fn,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .set_local,
+                => |assign| self.noteErasedReuseResolverDefinition(definitions, ambiguous, defined, assign.target, null),
+                .store_struct => |store| self.noteErasedReuseResolverDefinition(definitions, ambiguous, defined, store.dest, null),
+                .store_tag => |store| self.noteErasedReuseResolverDefinition(definitions, ambiguous, defined, store.dest, null),
+                .join => |join| {
+                    const params = self.result.store.getLocalSpan(join.params);
+                    for (0..params.len) |index| {
+                        self.noteErasedReuseResolverDefinition(
+                            definitions,
+                            ambiguous,
+                            defined,
+                            GuardedList.at(params, index),
+                            null,
+                        );
+                    }
+                },
+                else => {},
+            }
+            try self.appendErasedReuseResolverSuccessors(&work, stmt_id);
+        }
+
+        for (calls.items) |stmt_id| {
+            const call = &self.result.store.getCFStmtPtr(stmt_id).assign_call_erased;
+            var source = call.closure;
+            for (0..32) |_| {
+                const index = @intFromEnum(source);
+                if (ambiguous[index]) break;
+                const parent = definitions[index] orelse break;
+                if (parent == source or parent == call.target) break;
+                source = parent;
+            }
+            const source_layout = self.result.layouts.getLayout(self.result.store.getLocal(source).layout_idx);
+            call.reuse_source = if (self.result.layouts.layoutContainsRefcounted(source_layout)) source else call.closure;
+        }
+    }
+
+    fn noteErasedReuseResolverDefinition(
+        _: *Lowerer,
+        definitions: []?LIR.LocalId,
+        ambiguous: []bool,
+        defined: []bool,
+        target: LIR.LocalId,
+        source: ?LIR.LocalId,
+    ) void {
+        const index = @intFromEnum(target);
+        if (defined[index]) {
+            ambiguous[index] = true;
+            definitions[index] = null;
+        } else {
+            defined[index] = true;
+            definitions[index] = source;
+        }
+    }
+
+    fn appendErasedReuseResolverSuccessors(
+        self: *Lowerer,
+        work: *std.ArrayList(LIR.CFStmtId),
+        stmt_id: LIR.CFStmtId,
+    ) Common.LowerError!void {
+        switch (self.result.store.getCFStmt(stmt_id)) {
+            inline .assign_ref,
+            .assign_literal,
+            .init_uninitialized,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .debug,
+            .expect,
+            .comptime_branch_taken,
+            .incref,
+            .decref,
+            .decref_if_initialized,
+            .free,
+            => |stmt| try work.append(self.allocator, stmt.next),
+            .switch_stmt => |switch_stmt| {
+                if (switch_stmt.continuation) |continuation| try work.append(self.allocator, continuation);
+                try work.append(self.allocator, switch_stmt.default_branch);
+                const branches = self.result.store.getCFSwitchBranches(switch_stmt.branches);
+                for (0..branches.len) |index| try work.append(self.allocator, GuardedList.at(branches, index).body);
+            },
+            .switch_initialized_payload => |switch_stmt| {
+                try work.append(self.allocator, switch_stmt.initialized_branch);
+                try work.append(self.allocator, switch_stmt.uninitialized_branch);
+            },
+            .str_match => |match| {
+                try work.append(self.allocator, match.on_match);
+                try work.append(self.allocator, match.on_miss);
+            },
+            .str_match_set => |match| {
+                const arms = self.result.store.getStrMatchArms(match.arms);
+                for (0..arms.len) |index| try work.append(self.allocator, GuardedList.at(arms, index).on_match);
+                try work.append(self.allocator, match.on_miss);
+            },
+            .join => |join| {
+                try work.append(self.allocator, join.body);
+                try work.append(self.allocator, join.remainder);
+            },
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .expect_err,
+            .loop_continue,
+            .loop_break,
+            .jump,
+            .ret,
+            .crash,
+            => {},
+        }
+    }
+
+    fn transparentErasedOwnershipSource(self: *Lowerer, op: LIR.RefOp, target: LIR.LocalId) ?LIR.LocalId {
+        const source = switch (op) {
+            .local => |local| local,
+            .nominal => |nominal| nominal.backing_ref,
+            inline .tag_payload, .tag_payload_struct => |payload| blk: {
+                if (payload.variant_index != 0) break :blk null;
+                const source_layout = self.result.layouts.getLayout(self.result.store.getLocal(payload.source).layout_idx);
+                if (source_layout.tag != .tag_union) break :blk null;
+                const data = self.result.layouts.getTagUnionData(source_layout.getTagUnion().idx);
+                if (data.discriminant_size != 0) break :blk null;
+                break :blk payload.source;
+            },
+            else => null,
+        } orelse return null;
+        return if (self.sameTransparentPointerRepresentation(source, target)) source else null;
+    }
+
+    fn sameTransparentPointerRepresentation(self: *Lowerer, source: LIR.LocalId, target: LIR.LocalId) bool {
+        const source_layout = self.result.store.getLocal(source).layout_idx;
+        const target_layout = self.result.store.getLocal(target).layout_idx;
+        const source_size_align = self.result.layouts.layoutSizeAlign(self.result.layouts.getLayout(source_layout));
+        const target_size_align = self.result.layouts.layoutSizeAlign(self.result.layouts.getLayout(target_layout));
+        return source_size_align.size == self.result.layouts.targetUsize().size() and
+            source_size_align.size == target_size_align.size;
     }
 
     fn lowerCallableValueCallInto(
@@ -3799,6 +4250,8 @@ const Lowerer = struct {
     ) Common.LowerError!LIR.CFStmtId {
         const callee = try self.addTemp(callee_ty);
         const done = self.freshJoinPointId();
+        const forwards_return = try self.pushReturnForwardingJoin(done, target, next);
+        defer self.popReturnForwardingJoin(forwards_return);
         // Branch lowering can lower argument types that append more variants to
         // self.types, so keep this iteration independent of the store backing.
         const variants = try GuardedList.dupe(self.allocator, Type.FnVariant, self.types.fnVariantSpan(variants_span));
@@ -4120,6 +4573,8 @@ const Lowerer = struct {
         const branches = try GuardedList.dupe(self.allocator, Lifted.Branch, self.solved.lifted.branchSpan(branches_span));
         defer self.allocator.free(branches);
         const done = self.freshJoinPointId();
+        const forwards_return = try self.pushReturnForwardingJoin(done, target, next);
+        defer self.popReturnForwardingJoin(forwards_return);
         const branch_chain = try self.lowerBranchTree(scrutinee_local, scrutinee_ty, branches, target, result_ty, done, comptime_site);
         const remainder = try self.lowerExprIntoAtType(scrutinee_local, scrutinee, scrutinee_ty, branch_chain);
         return try self.result.store.addCFStmt(.{ .join = .{
@@ -4173,6 +4628,8 @@ const Lowerer = struct {
     ) Common.LowerError!LIR.CFStmtId {
         const branches = self.solved.lifted.ifBranchSpan(branches_span);
         const done = self.freshJoinPointId();
+        const forwards_return = try self.pushReturnForwardingJoin(done, target, next);
+        defer self.popReturnForwardingJoin(forwards_return);
         var current = try self.lowerExprIntoAtType(target, final_else, result_ty, try self.joinJump(done));
         var i = branches.len;
         while (i > 0) {
@@ -4198,6 +4655,8 @@ const Lowerer = struct {
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const done = self.freshJoinPointId();
+        const forwards_return = try self.pushReturnForwardingJoin(done, target, next);
+        defer self.popReturnForwardingJoin(forwards_return);
         const branch_done = try self.joinJump(done);
         var initialized_body: LIR.CFStmtId = undefined;
         var uninitialized_body: LIR.CFStmtId = undefined;
@@ -4710,6 +5169,9 @@ const Lowerer = struct {
         const ret_ty = self.current_ret_ty orelse Common.invariant("return expression reached LIR lowering outside a function");
         const ret_local = try self.addTemp(ret_ty);
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
+        const saved_return_target = self.current_return_target;
+        self.current_return_target = ret_local;
+        defer self.current_return_target = saved_return_target;
         return try self.lowerExprIntoAtType(ret_local, ret.value, ret_ty, ret_stmt);
     }
 

@@ -637,7 +637,7 @@ fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.Local
         .assign_ref => |a| a.target == needle or refOpReadsLocal(a.op, needle),
         .assign_literal => |a| a.target == needle,
         .assign_call => |a| a.target == needle or spanHasLocal(store, a.args, needle),
-        .assign_call_erased => |a| a.target == needle or a.closure == needle or spanHasLocal(store, a.args, needle),
+        .assign_call_erased => |a| a.target == needle or a.closure == needle or (a.reuse_source != null and a.reuse_source.? == needle) or spanHasLocal(store, a.args, needle),
         .assign_packed_erased_fn => |a| a.target == needle or (a.capture != null and a.capture.? == needle) or (a.reuse != null and a.reuse.? == needle),
         .assign_low_level => |a| a.target == needle or spanHasLocal(store, a.args, needle),
         .assign_list => |a| a.target == needle or spanHasLocal(store, a.elems, needle),
@@ -1937,6 +1937,7 @@ const Certifier = struct {
                 .assign_call_erased => |assign| {
                     try self.noteProcLocal(assign.target);
                     try self.noteProcLocal(assign.closure);
+                    if (assign.reuse_source) |reuse_source| try self.noteProcLocal(reuse_source);
                     try self.noteProcLocalSpan(assign.args);
                     try stack.append(self.allocator, assign.next);
                 },
@@ -2345,6 +2346,7 @@ const Certifier = struct {
                 },
                 .assign_call_erased => |assign| {
                     self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, assign.closure);
+                    if (assign.reuse_source) |reuse_source| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, reuse_source);
                     self.noteExposedReadSpan(&graph.nodes.items[node_index].reads, assign.args);
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
@@ -2887,8 +2889,16 @@ const Certifier = struct {
                     cursor = assign.next;
                 },
                 .assign_call_erased => |assign| {
+                    if (!LIR.erasedCallReuseFieldsMatch(assign)) {
+                        return self.fail("erased call reuse flag and ownership source disagreed", .{});
+                    }
                     _ = try self.requireLive(&state, assign.closure);
+                    const reuse_value = if (assign.reuse_source) |reuse_source|
+                        try self.requireLive(&state, reuse_source)
+                    else
+                        no_value;
                     try self.applyCall(&state, assign.target, arc_sig.RcSig.all_owned, assign.args);
+                    if (assign.reuse_source) |reuse_source| try self.consumeUnit(&state, reuse_value, reuse_source);
                     cursor = assign.next;
                 },
                 .assign_packed_erased_fn => |assign| {
@@ -3566,6 +3576,48 @@ test "certify accepts owned binding released once" {
     const body = try f.assignStr(value, result_assign);
     _ = try f.addProc(&.{}, body, .i64);
     try f.certify();
+}
+
+test "certify rejects inconsistent erased call reuse fields" {
+    {
+        var f = try CertifyTest.init(testing.allocator);
+        defer f.deinit();
+        const erased_callable = try f.layouts.insertErasedCallable();
+        const closure = try f.local(erased_callable);
+        const result = try f.local(erased_callable);
+        const ret = try f.ret(result);
+        const body = try f.store.addCFStmt(.{ .assign_call_erased = .{
+            .target = result,
+            .closure = closure,
+            .args = LIR.LocalSpan.empty(),
+            .reuse_closure = true,
+            .reuse_source = null,
+            .next = ret,
+        } });
+        _ = try f.addProc(&.{closure}, body, erased_callable);
+        try testing.expectError(error.Certification, f.certify());
+        try testing.expect(std.mem.find(u8, f.diag.message(), "reuse flag and ownership source disagreed") != null);
+    }
+
+    {
+        var f = try CertifyTest.init(testing.allocator);
+        defer f.deinit();
+        const erased_callable = try f.layouts.insertErasedCallable();
+        const closure = try f.local(erased_callable);
+        const result = try f.local(erased_callable);
+        const ret = try f.ret(result);
+        const body = try f.store.addCFStmt(.{ .assign_call_erased = .{
+            .target = result,
+            .closure = closure,
+            .args = LIR.LocalSpan.empty(),
+            .reuse_closure = false,
+            .reuse_source = closure,
+            .next = ret,
+        } });
+        _ = try f.addProc(&.{closure}, body, erased_callable);
+        try testing.expectError(error.Certification, f.certify());
+        try testing.expect(std.mem.find(u8, f.diag.message(), "reuse flag and ownership source disagreed") != null);
+    }
 }
 
 test "certify flags a leaked binding" {

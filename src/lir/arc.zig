@@ -1373,11 +1373,13 @@ const Inserter = struct {
                 } });
             },
             .assign_call_erased => |assign| blk: {
-                next = try self.releaseLocalIfRc(assign.closure, next);
+                if (!assign.reuse_closure) next = try self.releaseLocalIfRc(assign.closure, next);
                 break :blk try self.store.addCFStmt(.{ .assign_call_erased = .{
                     .target = assign.target,
                     .closure = assign.closure,
                     .args = assign.args,
+                    .reuse_closure = assign.reuse_closure,
+                    .reuse_source = assign.reuse_source,
                     .next = next,
                 } });
             },
@@ -1638,12 +1640,20 @@ const Inserter = struct {
                 .assign_call_erased => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     const transfer = try self.transferForCall(&segment.owned, null, arc_sig.RcSig.all_owned, false, assign.args, assign.next, assign.target, assign.closure, segment.ctx.loop_keep);
+                    var preserve_reuse_source = false;
+                    if (assign.reuse_closure) {
+                        if (assign.closure == assign.target) arcInvariant("owned erased call cannot consume and rebind the same local");
+                        const reuse_source = assign.reuse_source orelse arcInvariant("owned erased call lacked its explicit reuse ownership source");
+                        preserve_reuse_source = try self.groupUsedInPath(assign.next, reuse_source, segment.ctx.loop_keep);
+                        if (!preserve_reuse_source) _ = self.takeUnit(&segment.owned, reuse_source);
+                    }
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     try step.pre_retain.appendSlice(self.solve_allocator, transfer.args.retain_args);
-                    try step.pre_retain.append(self.solve_allocator, assign.closure);
+                    if (!assign.reuse_closure) try step.pre_retain.append(self.solve_allocator, assign.closure);
+                    if (preserve_reuse_source) try step.pre_retain.append(self.solve_allocator, assign.reuse_source.?);
                     self.death_scratch.clearRetainingCapacity();
                     try self.noteCallResultDeathIfUnused(&segment.owned, assign.target, .owned, assign.next, segment.ctx.loop_keep, self.death_scratch);
-                    const singles = [_]LIR.LocalId{assign.closure};
+                    const singles = [_]LIR.LocalId{ assign.closure, assign.reuse_source orelse assign.closure };
                     try self.postStmtDeaths(&segment.owned, &singles, assign.args, assign.next, segment.ctx.loop_keep, self.death_scratch);
                     try self.copyDeathScratchToStep(step);
                     segment.cursor = assign.next;
@@ -3835,6 +3845,7 @@ const Inserter = struct {
                 },
                 .assign_call_erased => |assign| {
                     self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.closure);
+                    if (assign.reuse_source) |reuse_source| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, reuse_source);
                     self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.args);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
@@ -5661,6 +5672,126 @@ test "ARC runtime-checks erased callable repack from an ordinary parameter" {
         }
     }
     return error.MissingPackedErasedFn;
+}
+
+test "ARC transfers erased call ownership from an explicit outer source" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const owned_callable = try f.local(erased_callable);
+    const extracted_callable = try f.local(erased_callable);
+    const next_callable = try f.local(erased_callable);
+
+    const ret = try f.ret(next_callable);
+    const call = try f.store.addCFStmt(.{ .assign_call_erased = .{
+        .target = next_callable,
+        .closure = extracted_callable,
+        .args = LIR.LocalSpan.empty(),
+        .reuse_closure = true,
+        .reuse_source = owned_callable,
+        .next = ret,
+    } });
+    const body = try f.assignRefLocal(extracted_callable, owned_callable, call);
+    const caller = try f.addProc(&.{owned_callable}, body, erased_callable);
+
+    try f.run();
+
+    try testing.expectEqual(@as(usize, 0), f.countRc(owned_callable, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(owned_callable, .decref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(extracted_callable, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(extracted_callable, .decref));
+
+    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var remaining = f.store.cfStmtCount() + 1;
+    while (remaining > 0) : (remaining -= 1) {
+        switch (f.store.getCFStmt(cursor)) {
+            .assign_call_erased => |assign| {
+                try testing.expect(assign.reuse_closure);
+                try testing.expectEqual(owned_callable, assign.reuse_source.?);
+                return;
+            },
+            inline .assign_ref, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
+            else => return error.UnexpectedStatement,
+        }
+    }
+    return error.MissingErasedCall;
+}
+
+test "ARC retains an erased call reuse source that is read after the call" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const owned_callable = try f.local(erased_callable);
+    const extracted_callable = try f.local(erased_callable);
+    const next_callable = try f.local(erased_callable);
+
+    const ret = try f.ret(next_callable);
+    const later_use = try f.expectStmt(owned_callable, ret);
+    const call = try f.store.addCFStmt(.{ .assign_call_erased = .{
+        .target = next_callable,
+        .closure = extracted_callable,
+        .args = LIR.LocalSpan.empty(),
+        .reuse_closure = true,
+        .reuse_source = owned_callable,
+        .next = later_use,
+    } });
+    const body = try f.assignRefLocal(extracted_callable, owned_callable, call);
+    const caller = try f.addProc(&.{owned_callable}, body, erased_callable);
+
+    try f.run();
+
+    try testing.expectEqual(@as(usize, 1), f.countRc(owned_callable, .incref));
+    try testing.expectEqual(@as(usize, 1), f.countRc(owned_callable, .decref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(extracted_callable, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(extracted_callable, .decref));
+
+    var saw_retain = false;
+    var saw_call = false;
+    var saw_later_use = false;
+    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var remaining = f.store.cfStmtCount() + 1;
+    while (remaining > 0) : (remaining -= 1) {
+        switch (f.store.getCFStmt(cursor)) {
+            .assign_ref => |assign| cursor = assign.next,
+            .incref => |rc| {
+                if (rc.value == owned_callable) {
+                    try testing.expect(!saw_call);
+                    saw_retain = true;
+                }
+                cursor = rc.next;
+            },
+            .assign_call_erased => |assign| {
+                try testing.expect(saw_retain);
+                try testing.expect(assign.reuse_closure);
+                try testing.expectEqual(owned_callable, assign.reuse_source.?);
+                saw_call = true;
+                cursor = assign.next;
+            },
+            .expect => |expect_stmt| {
+                if (expect_stmt.condition == owned_callable) {
+                    try testing.expect(saw_call);
+                    saw_later_use = true;
+                }
+                cursor = expect_stmt.next;
+            },
+            .decref => |rc| {
+                if (rc.value == owned_callable) try testing.expect(saw_later_use);
+                cursor = rc.next;
+            },
+            .decref_if_initialized => |rc| {
+                if (rc.value == owned_callable) try testing.expect(saw_later_use);
+                cursor = rc.next;
+            },
+            .free => |rc| cursor = rc.next,
+            .ret => break,
+            else => return error.UnexpectedStatement,
+        }
+    }
+    try testing.expect(saw_retain);
+    try testing.expect(saw_call);
+    try testing.expect(saw_later_use);
 }
 
 test "ARC retains an erased callable whose repack input is used later" {

@@ -1701,7 +1701,7 @@ pub const Interpreter = struct {
             const arg = args[i];
             const arg_layout = arg_layouts[i];
             const param_layout = self.store.getLocal(param).layout_idx;
-            if (proc_spec.abi == .erased_callable and i + 1 == params.len) {
+            if (proc_spec.abi == .erased_callable and i + 2 == params.len) {
                 if (param_layout != .opaque_ptr or arg_layout != .opaque_ptr) {
                     return self.invariantFailedError(
                         "LIR/interpreter invariant violated: erased callable proc {d} hidden capture parameter was not opaque_ptr",
@@ -1885,6 +1885,7 @@ pub const Interpreter = struct {
                         arg_values,
                         try self.localLayouts(arg_locals),
                         self.store.getLocal(assign.target).layout_idx,
+                        assign.reuse_closure,
                     ) catch |err| {
                         self.recordCallerFailureLocForCalleeError(call_loc, call_region, call_inline_scope, err);
                         return err;
@@ -2901,11 +2902,12 @@ pub const Interpreter = struct {
         ret: ?[*]u8,
         args: ?[*]const u8,
         capture: ?[*]u8,
+        reuse: ?[*]u8,
     ) callconv(.c) void {
         const resolved = resolveTrampolineCallable(ops, capture);
         const self = resolved.interpreter;
         const callable = resolved.callable;
-        self.callInterpreterErasedCallable(callable.proc_id, callable.capture_value_ptr, ret, args) catch |err| switch (err) {
+        self.callInterpreterErasedCallable(callable.proc_id, callable.capture_value_ptr, reuse, ret, args) catch |err| switch (err) {
             error.OutOfMemory => ops.crash("LIR/interpreter erased callable trampoline ran out of memory"),
             error.RuntimeError => ops.crash("LIR/interpreter erased callable trampoline hit runtime error"),
             error.ComptimeExhaustiveness => ops.crash("LIR/interpreter erased callable trampoline hit compile-time exhaustiveness marker"),
@@ -3003,19 +3005,20 @@ pub const Interpreter = struct {
         self: *LirInterpreter,
         proc_id: LIR.LirProcSpecId,
         capture_value_ptr: [*]u8,
+        reuse_ptr: ?[*]u8,
         ret: ?[*]u8,
         args: ?[*]const u8,
     ) Error!void {
         const proc_spec = self.store.getProcSpec(proc_id);
         const proc_arg_locals = self.store.getLocalSpan(proc_spec.args);
-        if (proc_arg_locals.len == 0) {
+        if (proc_arg_locals.len < 2) {
             return self.invariantFailedError(
-                "LIR/interpreter invariant violated: erased callable proc {d} has no hidden capture argument",
+                "LIR/interpreter invariant violated: erased callable proc {d} lacks hidden capture/reuse arguments",
                 .{@intFromEnum(proc_id)},
             );
         }
 
-        const explicit_arg_count = proc_arg_locals.len - 1;
+        const explicit_arg_count = proc_arg_locals.len - 2;
         var proc_args = try self.arena.allocator().alloc(Value, proc_arg_locals.len);
         var proc_arg_layouts = try self.arena.allocator().alloc(layout_mod.Idx, proc_arg_locals.len);
 
@@ -3039,6 +3042,9 @@ pub const Interpreter = struct {
 
         proc_args[explicit_arg_count] = try self.allocPointerIntValue(@intFromPtr(capture_value_ptr));
         proc_arg_layouts[explicit_arg_count] = .opaque_ptr;
+        const reuse_index = explicit_arg_count + 1;
+        proc_args[reuse_index] = try self.allocPointerIntValue(if (reuse_ptr) |ptr| @intFromPtr(ptr) else 0);
+        proc_arg_layouts[reuse_index] = self.store.getLocal(GuardedList.at(proc_arg_locals, reuse_index)).layout_idx;
 
         const result = try self.evalProcById(proc_id, proc_args, proc_arg_layouts);
         const ret_size = self.helper.sizeOf(proc_spec.ret_layout);
@@ -3060,6 +3066,7 @@ pub const Interpreter = struct {
         args: []const Value,
         arg_layouts: []const layout_mod.Idx,
         ret_layout: layout_mod.Idx,
+        reuse_closure: bool,
     ) Error!ErasedCallResult {
         const closure_layout = self.store.getLocal(closure_local).layout_idx;
         const closure_value = try self.getLocalChecked(frame, closure_local);
@@ -3117,6 +3124,7 @@ pub const Interpreter = struct {
             ret_ptr,
             if (arg_bytes) |bytes| @ptrCast(bytes.ptr) else null,
             builtins.erased_callable.capturePtr(closure_ptr),
+            if (reuse_closure) closure_ptr else null,
         );
 
         return .{

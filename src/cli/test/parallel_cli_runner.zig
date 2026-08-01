@@ -8253,6 +8253,7 @@ fn customGlueRust(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: 
         "pub unsafe fn decref_box_with",
         "pub unsafe fn allocate_box",
         "pub unsafe fn decref_erased_callable",
+        "pub type RocErasedCallableFn = extern \"C\" fn(*mut RocHost, *mut u8, *const u8, *mut u8, *mut u8);",
         "impl HostTree",
         "pub unsafe fn decref(self, roc_host: &RocHost)",
         "extern \"C\" fn decref_box_payload_type",
@@ -8505,7 +8506,7 @@ fn customGlueZigBoxHelperTest(
         \\    env_ref.callback_rc = refcountPtr(data_ptr orelse unreachable).*;
         \\}
         \\
-        \\fn erasedCallableFn(_: *abi.RocHost, _: ?[*]u8, _: ?[*]const u8, _: ?[*]u8) callconv(.c) void {}
+        \\fn erasedCallableFn(_: *abi.RocHost, _: ?[*]u8, _: ?[*]const u8, _: ?[*]u8, _: ?[*]u8) callconv(.c) void {}
         \\
         \\fn erasedDrop(_: ?[*]u8, host: *abi.RocHost) callconv(.c) void {
         \\    const env_ref: *Env = @ptrCast(@alignCast(host.env));
