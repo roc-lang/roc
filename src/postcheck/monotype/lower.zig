@@ -31435,6 +31435,62 @@ const BodyContext = struct {
         return try self.activeTypeFromNode(ret_node);
     }
 
+    /// Debug/probe-only: the digest of a named head with its checked-id
+    /// occurrence flavor and generated digest erased, so two types that differ
+    /// only there compare equal (reunify.md 8.5).
+    fn canonicalizedHeadDigest(self: *BodyContext, ty: Type.TypeId) ?names.TypeDigest {
+        const types = &self.builder.program.types;
+        const named = switch (types.get(ty)) {
+            .named => |named| named,
+            else => return null,
+        };
+        var arg_buf: [17]Type.TypeId = undefined;
+        const args = types.span(named.args);
+        const arg_len = GuardedList.borrowLen(args);
+        if (arg_len > arg_buf.len) return null;
+        var index: usize = 0;
+        while (index < arg_len) : (index += 1) arg_buf[index] = GuardedList.at(args, index);
+        var order_buf: [32]Type.DeclaredField = undefined;
+        const order = types.declaredFieldSpan(named.declared_order);
+        const order_len = GuardedList.borrowLen(order);
+        if (order_len > order_buf.len) return null;
+        index = 0;
+        while (index < order_len) : (index += 1) order_buf[index] = GuardedList.at(order, index);
+        var named_type = named.named_type;
+        named_type.ty = @enumFromInt(0);
+        var def = named.def;
+        def.generated = null;
+        const canonical = types.internNamed(&self.builder.program.names, .{
+            .named_type = named_type,
+            .def = def,
+            .kind = named.kind,
+            .builtin_owner = named.builtin_owner,
+            .args = arg_buf[0..arg_len],
+            .backing = named.backing,
+            .declared_order = order_buf[0..order_len],
+        }) catch return null;
+        return types.typeDigest(&self.builder.program.names, canonical);
+    }
+
+    /// Debug/probe-only: the identity attributes a named head hashes that the
+    /// structural renderer does not draw, for locating a digest difference the
+    /// rendering cannot show.
+    fn describeNamedAttrs(types: *const Type.Store, ty: Type.TypeId, buf: []u8) []const u8 {
+        const named = switch (types.get(ty)) {
+            .named => |named| named,
+            else => return "not-named",
+        };
+        const module_hex = std.fmt.bytesToHex(named.named_type.module.bytes[0..4].*, .lower);
+        return std.fmt.bufPrint(buf, "ntmod={s} ntty={d} kind={s} dep={d} gen={s} own={s}", .{
+            &module_hex,
+            @intFromEnum(named.named_type.ty),
+            @tagName(named.def.iterator_kind),
+            named.def.iterator_depth,
+            if (named.def.generated != null) "Y" else "-",
+            if (named.builtin_owner) |owner| @tagName(owner) else "-",
+        }) catch "fmt-err";
+    }
+
     /// Debug/probe-only: whether directed emission now produces the same
     /// return the graph produces at a dispatch result, position by position.
     /// This is the certification the constraint census never gave the
@@ -31478,10 +31534,11 @@ const BodyContext = struct {
             census.bump("dispatch_return_parity_directed_error");
             return;
         };
-        const directed = probed orelse {
+        const unstamped = probed orelse {
             census.bump("dispatch_return_parity_directed_declined");
             return;
         };
+        const directed = rehearsal.stampGeneratedIdentity(unstamped, null);
         const types = &self.builder.program.types;
         const name_store = &self.builder.program.names;
         const left = types.typeDigest(name_store, directed);
@@ -31530,6 +31587,49 @@ const BodyContext = struct {
             census.bump("dispatch_return_parity_kind_differs");
         } else {
             census.bump("dispatch_return_parity_content_differs");
+            const left_unfolded = types.unfoldedDigest(name_store, directed);
+            const right_unfolded = types.unfoldedDigest(name_store, graph_ty);
+            if (std.mem.eql(u8, &left_unfolded.bytes, &right_unfolded.bytes)) {
+                census.bump("dispatch_return_parity_unfolded_agrees");
+            } else {
+                census.bump("dispatch_return_parity_unfolded_differs");
+            }
+            // Whether the two sides are one type up to the occurrence flavor
+            // of the named head's checked id: directed emission canonicalizes
+            // the head to the declaration, the graph stamps each occurrence's
+            // id, and section 8.5 owns that difference. Both heads re-stamped
+            // to a fixed id and re-digested says whether anything ELSE differs.
+            const left_canon = self.canonicalizedHeadDigest(directed);
+            const right_canon = self.canonicalizedHeadDigest(graph_ty);
+            if (left_canon != null and right_canon != null and
+                std.mem.eql(u8, &left_canon.?.bytes, &right_canon.?.bytes))
+            {
+                census.bump("dispatch_return_parity_canonical_agrees");
+            } else {
+                census.bump("dispatch_return_parity_canonical_differs");
+            }
+            if (self.builder.seam_divergences_noted < 2) {
+                self.builder.seam_divergences_noted += 1;
+                if (std.c.getenv("ROC_REUNIFY_CENSUS")) |raw_path| {
+                    var directed_text: std.ArrayList(u8) = .empty;
+                    defer directed_text.deinit(self.allocator);
+                    var graph_text: std.ArrayList(u8) = .empty;
+                    defer graph_text.deinit(self.allocator);
+                    self.builder.describeMonoType(&directed_text, directed, 0) catch return;
+                    self.builder.describeMonoType(&graph_text, graph_ty, 0) catch return;
+                    var directed_attr_buf: [192]u8 = undefined;
+                    var graph_attr_buf: [192]u8 = undefined;
+                    const directed_attrs = describeNamedAttrs(types, directed, &directed_attr_buf);
+                    const graph_attrs = describeNamedAttrs(types, graph_ty, &graph_attr_buf);
+                    const line = std.fmt.allocPrint(
+                        self.allocator,
+                        "parity_pair directed[{s}]={s} ||| graph[{s}]={s}\n",
+                        .{ directed_attrs, directed_text.items, graph_attrs, graph_text.items },
+                    ) catch return;
+                    defer self.allocator.free(line);
+                    census.appendToFile(raw_path, line);
+                }
+            }
         }
     }
 

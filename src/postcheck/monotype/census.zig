@@ -509,6 +509,10 @@ pub const Census = struct {
     dispatch_return_parity_depth_differs: Counter = Counter.init(0),
     dispatch_return_parity_kind_differs: Counter = Counter.init(0),
     dispatch_return_parity_content_differs: Counter = Counter.init(0),
+    dispatch_return_parity_unfolded_agrees: Counter = Counter.init(0),
+    dispatch_return_parity_unfolded_differs: Counter = Counter.init(0),
+    dispatch_return_parity_canonical_agrees: Counter = Counter.init(0),
+    dispatch_return_parity_canonical_differs: Counter = Counter.init(0),
     // What a nested-local-scheme frame would need at the variable-headed
     // leaves the flip left on the graph.
     variable_headed_leaf_kept_on_graph: Counter = Counter.init(0),

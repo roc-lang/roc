@@ -1277,6 +1277,10 @@ pub const Rehearsal = struct {
     /// How many unbound-with-no-frame positions have been named, so the dump
     /// cannot fill the census file.
     unbound_no_frame_dumped: usize = 0,
+    /// Backing storage for component slices this rehearsal declares as
+    /// representation inputs. Slices stay valid while declared; the pool
+    /// resets only when every declaration has been retracted.
+    component_pool: std.ArrayList(Type.TypeId) = .empty,
     /// How many failed edge-to-site joins have been dumped in detail.
     nested_leaf_dumped: usize = 0,
     /// Positions the seam reported a divergence at, so whether each is a
@@ -1378,6 +1382,7 @@ pub const Rehearsal = struct {
         self.dumpDetails();
         for (self.frames.items) |*frame| self.releaseFrame(frame);
         self.frames.deinit(self.allocator);
+        self.component_pool.deinit(self.allocator);
         self.diverged_addresses.deinit(self.allocator);
         self.details.deinit(self.allocator);
         self.unresolved_details.deinit(self.allocator);
@@ -1875,6 +1880,7 @@ pub const Rehearsal = struct {
         // The receiver's minted depth under the requesting binding decides this
         // mint's depth; a chain past the cap runs forced-dynamic instead.
         var depth: u8 = 0;
+        var receiver: ?Type.TypeId = null;
         var reason: direct_translate.SkipReason = undefined;
         if (self.translator.translateUnderEnvironment(
             caller,
@@ -1883,11 +1889,13 @@ pub const Rehearsal = struct {
             source.receiver.checked_ty,
             &reason,
         )) |receiver_ty| {
+            receiver = receiver_ty;
             switch (self.types.get(receiver_ty)) {
                 .named => |named| depth = named.def.iterator_depth,
                 else => {},
             }
         } else |_| {}
+        const components = self.pooledReceiverComponents(receiver);
 
         const over_cap = depth >= max_minted_chain_depth;
         const representation: direct_translate.ProducerRepresentation = if (over_cap) .{
@@ -1902,6 +1910,7 @@ pub const Rehearsal = struct {
             .iterator_depth = depth + 1,
             .topology = topology,
             .minting = .{ .callable_evidence = null },
+            .components = components,
         };
 
         const floor = self.translator.representationInputCount();
@@ -1962,6 +1971,26 @@ pub const Rehearsal = struct {
             }
         }
         return floor;
+    }
+
+    /// The minted components the receiver carries past its public item, pooled
+    /// so the slice stays valid while declared. A list longer than the engine
+    /// models is left undeclared rather than answered from a prefix.
+    fn pooledReceiverComponents(self: *Rehearsal, receiver_ty: ?Type.TypeId) []const Type.TypeId {
+        const ty = receiver_ty orelse return &.{};
+        const named = switch (self.types.get(ty)) {
+            .named => |named| named,
+            else => return &.{},
+        };
+        const args = self.types.span(named.args);
+        const len = GuardedList.borrowLen(args);
+        if (len <= 1 or len - 1 > 16) return &.{};
+        const start = self.component_pool.items.len;
+        var index: usize = 1;
+        while (index < len) : (index += 1) {
+            self.component_pool.append(self.allocator, GuardedList.at(args, index)) catch return &.{};
+        }
+        return self.component_pool.items[start..];
     }
 
     /// The longest minted-iterator chain a producer builds before running the
@@ -3470,6 +3499,11 @@ pub const Rehearsal = struct {
 
     /// Finish one specialization: detach the trace and pop the environment.
     pub fn endSpecialization(self: *Rehearsal, graph: *solve.InstGraph) void {
+        if (self.requests.items.len == 0 and self.callees.items.len == 0 and
+            self.translator.representationInputCount() == 0)
+        {
+            self.component_pool.clearRetainingCapacity();
+        }
         graph.trace = null;
         graph.seal_probe = null;
         if (self.frames.items.len == 0) return;
@@ -5290,6 +5324,7 @@ pub const Rehearsal = struct {
         const topology_ids = topology_lookup(self.lookup.context, source.module_bytes) orelse return null;
         const topology = self.internTopology(caller, topology_ids) orelse return null;
         var depth: u8 = 0;
+        var receiver: ?Type.TypeId = null;
         var reason: direct_translate.SkipReason = undefined;
         if (self.translator.translateUnderEnvironment(
             caller,
@@ -5298,11 +5333,13 @@ pub const Rehearsal = struct {
             source.receiver.checked_ty,
             &reason,
         )) |receiver_ty| {
+            receiver = receiver_ty;
             switch (self.types.get(receiver_ty)) {
                 .named => |named| depth = named.def.iterator_depth,
                 else => {},
             }
         } else |_| {}
+        const components = self.pooledReceiverComponents(receiver);
         const over_cap = depth >= max_minted_chain_depth;
         const representation: direct_translate.ProducerRepresentation = if (over_cap) .{
             .iterator_representation = .forced_dynamic,
@@ -5316,6 +5353,7 @@ pub const Rehearsal = struct {
             .iterator_depth = depth + 1,
             .topology = topology,
             .minting = .{ .callable_evidence = null },
+            .components = components,
         };
         const floor = self.translator.representationInputCount();
         self.translator.declareRepresentationInput(.{
@@ -5323,6 +5361,71 @@ pub const Rehearsal = struct {
             .representation = representation,
         }) catch return null;
         return floor;
+    }
+
+    /// Stamp the generated-owner digest a finished minted representation
+    /// records, mirroring the graph's finalize pass on the emission side: the
+    /// digest is computed over the pre-stamp form, with the callable evidence
+    /// the representation was minted under folded in when one exists
+    /// (reunify.md 13.2e). A head that is not a finished generated iterator
+    /// returns unchanged.
+    pub fn stampGeneratedIdentity(
+        self: *Rehearsal,
+        ty: Type.TypeId,
+        callable_evidence: ?names.TypeDigest,
+    ) Type.TypeId {
+        const named = switch (self.types.get(ty)) {
+            .named => |named| named,
+            else => return ty,
+        };
+        if (named.def.generated != null) return ty;
+        if (named.def.iterator_topology == null) return ty;
+        switch (named.def.iterator_representation) {
+            .minted, .forced_dynamic => {},
+            else => return ty,
+        }
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        if (named.def.iterator_representation == .forced_dynamic) {
+            const args = self.types.span(named.args);
+            if (GuardedList.borrowLen(args) != 1) return ty;
+            const item_digest = self.types.typeDigest(self.program_names, GuardedList.at(args, 0));
+            hasher.update("roc.generated_iterator.forced_dynamic_identity");
+            hasher.update(&item_digest.bytes);
+        } else {
+            const shape = self.types.typeDigest(self.program_names, ty);
+            hasher.update("roc.generated_iterator.final_identity");
+            hasher.update(&shape.bytes);
+            if (callable_evidence) |evidence| {
+                hasher.update("callable_evidence");
+                hasher.update(&evidence.bytes);
+            }
+        }
+        var def = named.def;
+        def.generated = .{ .bytes = hasher.finalResult() };
+
+        var arg_buf: [17]Type.TypeId = undefined;
+        const args = self.types.span(named.args);
+        const arg_len = GuardedList.borrowLen(args);
+        if (arg_len > arg_buf.len) return ty;
+        var index: usize = 0;
+        while (index < arg_len) : (index += 1) arg_buf[index] = GuardedList.at(args, index);
+
+        var order_buf: [32]Type.DeclaredField = undefined;
+        const order = self.types.declaredFieldSpan(named.declared_order);
+        const order_len = GuardedList.borrowLen(order);
+        if (order_len > order_buf.len) return ty;
+        index = 0;
+        while (index < order_len) : (index += 1) order_buf[index] = GuardedList.at(order, index);
+
+        return self.types.internNamed(self.program_names, .{
+            .named_type = named.named_type,
+            .def = def,
+            .kind = named.kind,
+            .builtin_owner = named.builtin_owner,
+            .args = arg_buf[0..arg_len],
+            .backing = named.backing,
+            .declared_order = order_buf[0..order_len],
+        }) catch ty;
     }
 
     /// Retract consumer-declared inputs back to the floor their read opened.
