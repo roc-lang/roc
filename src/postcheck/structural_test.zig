@@ -103,6 +103,7 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
     const lower_expr_type = sourceSliceBetween(lower_source, "fn lowerExprType", "fn lowerExpr(self:");
     const lower_expr_at_type = sourceSliceBetween(lower_source, "fn lowerExprAtType", "fn sameType");
     const lower_lookup_at_type = sourceSliceBetween(lower_source, "fn lowerLookupExprAtType", "fn lowerProcedureUseValue");
+    const lookup_type_node = sourceSliceBetween(lower_source, "fn lookupExprTypeNode", "fn lookupExprMonoType");
 
     try expectContains(lower_call, "if (try self.indirectCalleeMonoType(call.func, call.args, expected_ret_ty)) |fn_ty| {");
     try expectContains(lower_call, "var fn_node = try call_ctx.instantiateCallNodeFromCallerAtNode(");
@@ -111,6 +112,8 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
 
     try expectContains(lower_expr_type, ".lookup_required => |resolved| try self.lookupExprTypeNode(expr.ty, resolved)");
     try expectContains(lower_expr_at_type, ".lookup_required => |resolved| return try self.lowerLookupExprAtType(expr.ty, resolved, ty)");
+    try expectContains(lookup_type_node, "return try self.lowerTypeNode(checked_ty);");
+    try std.testing.expect(std.mem.find(u8, lookup_type_node, "lookupExprMonoType") == null);
     try expectContains(lower_lookup_at_type, ".platform_required_const => |required| return try self.restoreConstUseAtType(");
     try expectContains(lower_lookup_at_type, "required.const_use,\n                ty,\n                try self.evidenceForUseSite(record.expr),");
     try expectContains(lower_lookup_at_type, ".platform_required_proc => |proc| try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), proc.root_evidence)");
