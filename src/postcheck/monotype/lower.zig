@@ -42075,6 +42075,7 @@ const BodyContext = struct {
                 .module_bytes = self.view.key.bytes,
                 .receiver = .{ .checked_ty = plan.dispatcher_ty },
                 .witness = .{ .callable = plan.callable_ty },
+                .procedure = self.iteratorProcedureForMethodTarget(lookup.target),
             },
         };
         const target_node = target: {

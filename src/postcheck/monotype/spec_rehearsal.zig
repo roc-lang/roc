@@ -275,6 +275,10 @@ pub const GeneratedSource = struct {
     module_bytes: [32]u8,
     receiver: GeneratedReceiver,
     witness: GeneratedWitness,
+    /// For the iterator rule: which iterator procedure the callee is, which
+    /// decides the minted representation's kind. The generating site knows it;
+    /// nothing else can derive it (reunify.md 13.2e).
+    procedure: ?checked.IteratorProcedureId = null,
 };
 
 /// How many declared steps one rule's emitted path carries. A generated
