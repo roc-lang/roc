@@ -82,6 +82,7 @@ pub const LirLoweringOptions = struct {
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
     inline_mode: lir.CheckedPipeline.InlineMode = .none,
     list_in_place_map: bool = false,
+    proc_debug_names: bool = false,
 };
 
 /// Lower an app whose body is `app_body` (everything after the platform header
@@ -275,6 +276,7 @@ fn lowerAppPathToLir(
             .target_usize = opts.target_usize,
             .inline_mode = opts.inline_mode,
             .list_in_place_map = opts.list_in_place_map,
+            .proc_debug_names = opts.proc_debug_names,
         },
     );
     defer lowered.deinit();
