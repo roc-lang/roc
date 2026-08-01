@@ -27,17 +27,19 @@
 //! engine-input skip class bound exactly the representation content the flip's
 //! body discovery must supply.
 //!
-//! State isolation: this module owns its own Monotype store and its own closure
-//! engine, writes no lowering state, allocates no id in the output type pool, and
-//! resolves names through the same interning the graph itself uses so a
-//! rehearsal type is name-identical to a graph-sealed one. It is compiled out
-//! unless `census.enabled` and turned on only by `ROC_REUNIFY_SHADOW`; every
-//! internal failure disables it instead of affecting lowering.
+//! This module maintains, for every lowering run in every build mode, the
+//! per-specialization binding environments, request scopes, and callee
+//! bindings that directed instantiation reads (reunify.md sections 9 and 11).
+//! Its translator interns into the program's own type store, so an id it
+//! returns is a production id. The graph comparison it can also run is Debug
+//! measurement only, turned on by `ROC_REUNIFY_SHADOW`, and selects nothing;
+//! a failure inside the measurement disables the measurement, never lowering.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const check = @import("check");
+const Common = @import("../common.zig");
 const collections = @import("collections");
 
 const Type = @import("type.zig");
@@ -4864,6 +4866,55 @@ pub const Rehearsal = struct {
             @enumFromInt(address.type_id),
             &reason,
         ) catch null;
+    }
+
+    /// The Monotype this lowering gives one checked position, as production
+    /// authority: directed instantiation of the position under the innermost
+    /// binding recorded for it, with no logical solving. Total or fatal - a
+    /// position this cannot answer is a compiler defect named by its reason,
+    /// never a silent decline (reunify.md 13.2d).
+    pub fn typeForCheckedAuthoritative(
+        self: *Rehearsal,
+        address: CheckedAddress,
+        under_callee: bool,
+        edge: ?RequestEdgeName,
+    ) Allocator.Error!Type.TypeId {
+        if (self.disabled) {
+            Common.invariant("directed instantiation state was disabled while holding production authority");
+        }
+        const cursor = self.lookup.cursor(address.module_bytes) orelse
+            Common.invariant("directed instantiation read a checked position of an unloaded module");
+        var env: ?*const direct_translate.BindingEnvironment = null;
+        var owner_node = checked.checked_residual_disposition_module_body_owner;
+        const callee = if (under_callee) self.innermostCallee(address.module_bytes) else null;
+        if (callee) |level| {
+            env = level.chain.innermost();
+            owner_node = level.owner_node;
+        } else if (self.frameForModule(address.module_bytes)) |frame| {
+            env = frame.environment();
+            owner_node = frame.owner_node;
+        }
+        if (self.typeUnderEdgeLevel(address, env, owner_node, edge)) |leveled| return leveled;
+        var reason: direct_translate.SkipReason = undefined;
+        return self.translator.translateUnderEnvironment(
+            cursor,
+            env,
+            owner_node,
+            @enumFromInt(address.type_id),
+            &reason,
+        ) catch |err| switch (err) {
+            error.Skip => switch (reason) {
+                .recursive_cycle => Common.invariant("directed instantiation could not close a recursive cycle"),
+                .pending_or_err => Common.invariant("directed instantiation read a pending or erroneous checked position"),
+                .numeric_default_unresolved => Common.invariant("directed instantiation read an unresolved numeric default"),
+                .open_row => Common.invariant("directed instantiation read an open row"),
+                .malformed_builtin_arity => Common.invariant("directed instantiation read a builtin with malformed arity"),
+                .binder_not_found => Common.invariant("directed instantiation read a binder no environment names"),
+                .missing_backing => Common.invariant("directed instantiation read a nominal with no backing source"),
+                .engine_input_needed => Common.invariant("directed instantiation left a representation position unemitted"),
+            },
+            else => |other| other,
+        };
     }
 
     pub fn typeForCheckedPosition(

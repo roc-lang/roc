@@ -14570,14 +14570,19 @@ const BodyContext = struct {
 
     /// The Monotype this specialization gives a checked type: the single seam
     /// every body-lowering consumer that only wants to READ a type goes through
-    /// (reunify.md sections 9, 13 Slice 7). Directed instantiation of the checked
+    /// (reunify.md sections 9, 13.2d). Directed instantiation of the checked
     /// type under the binding the checker recorded for this specialization, with
     /// no logical solving: given a checked type and the active specialization,
     /// hand back the type at that position.
     fn typeForChecked(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
-        const graph_ty = try self.activeTypeFromNode(try self.instNode(checked_ty));
-        self.measureSeamRead(checked_ty, graph_ty);
-        return graph_ty;
+        const rehearsal = self.builder.rehearsal orelse
+            Common.invariant("body lowering read a checked type with no instantiation state");
+        const address = self.typeAddress(checked_ty);
+        return try rehearsal.typeForCheckedAuthoritative(
+            .{ .module_bytes = address.module_bytes, .type_id = address.type_id },
+            self.callee_context,
+            rehearsal.innermostRequestEdge(),
+        );
     }
 
     /// Debug/probe-only: measure one read at a graph exit against directed
