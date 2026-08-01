@@ -16734,6 +16734,26 @@ pub const CheckedProcedureTemplate = struct {
     evidence_params: artifact_serialize.Span = .{},
 };
 
+/// Whether a checked type is the closed tag row required by hosted `Try`
+/// question-mark widening. This mirrors the checker's accepted actual-row
+/// shapes: transparent aliases and tag-row tails must end at `empty_tag_union`.
+fn checkedTypeIsClosedTagRow(checked_types: *const CheckedTypeStore, root: CheckedTypeId) bool {
+    var remaining = checked_types.payloads.items.len;
+    var current = root;
+    while (true) {
+        switch (checked_types.payload(current)) {
+            .alias => |alias| current = alias.backing,
+            .tag_union => |tag_union| current = tag_union.ext,
+            .empty_tag_union => return true,
+            else => return false,
+        }
+        if (remaining == 0) {
+            checkedArtifactInvariant("hosted Try error row was cyclic", .{});
+        }
+        remaining -= 1;
+    }
+}
+
 fn hostedTryAdapterCapabilityForRoot(
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
@@ -16770,6 +16790,7 @@ fn hostedTryAdapterCapabilityForRoot(
     if (nominal.args.len != 2) {
         checkedArtifactInvariant("Builtin.Try checked type did not have exactly two type arguments", .{});
     }
+    if (!checkedTypeIsClosedTagRow(checked_types, nominal.args[1])) return null;
     const idents = module.commonIdents();
     return .{
         .nominal = checkedNominalTypeKey(nominal),
@@ -30146,6 +30167,25 @@ test "checked type store reuses closed equivalent payload roots" {
     try std.testing.expectEqual(@as(usize, 1), store.roots.items.len);
     try std.testing.expectEqual(@as(usize, 1), store.payloads.items.len);
     try std.testing.expectEqual(CheckedTypePayload.empty_record, store.payload(first));
+}
+
+test "hosted Try adapter capability requires a closed tag-row error" {
+    const allocator = std.testing.allocator;
+
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+
+    const closed_error = try appendExplicitCheckedTypePayload(allocator, &names, &store, .empty_tag_union);
+    const record_error = try appendExplicitCheckedTypePayload(allocator, &names, &store, .empty_record);
+    const unresolved_error = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(67), true);
+    try store.fillSyntheticTypeRoot(allocator, unresolved_error, .{ .flex = .{} });
+
+    try std.testing.expect(checkedTypeIsClosedTagRow(&store, closed_error));
+    try std.testing.expect(!checkedTypeIsClosedTagRow(&store, record_error));
+    try std.testing.expect(!checkedTypeIsClosedTagRow(&store, unresolved_error));
 }
 
 test "checked type substitution reuses a closed source root without cloning" {
