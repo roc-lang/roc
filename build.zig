@@ -5742,6 +5742,33 @@ pub fn build(b: *std.Build) void {
         } else final_static_data_host_step;
         b.getInstallStep().dependOn(final_static_data_platform_step);
 
+        const final_provided_callable_host_step = buildAndCopyTestPlatformHostLib(
+            b,
+            "provided-callable-host",
+            fx_host_target,
+            static_data_host_target_dir,
+            optimize,
+            roc_modules,
+            strip,
+            omit_frame_pointer,
+        );
+        b.getInstallStep().dependOn(final_provided_callable_host_step);
+
+        const final_provided_callable_platform_step: *Step = if (std.mem.endsWith(u8, static_data_host_target_dir, "musl")) blk: {
+            const copy_musl_runtime = b.addUpdateSourceFiles();
+            copy_musl_runtime.addCopyFileToSource(
+                b.path(b.pathJoin(&.{ "test/fx/platform/targets", static_data_host_target_dir, "crt1.o" })),
+                b.pathJoin(&.{ "test/provided-callable-host/platform/targets", static_data_host_target_dir, "crt1.o" }),
+            );
+            copy_musl_runtime.addCopyFileToSource(
+                b.path(b.pathJoin(&.{ "test/fx/platform/targets", static_data_host_target_dir, "libc.a" })),
+                b.pathJoin(&.{ "test/provided-callable-host/platform/targets", static_data_host_target_dir, "libc.a" }),
+            );
+            copy_musl_runtime.step.dependOn(final_provided_callable_host_step);
+            break :blk &copy_musl_runtime.step;
+        } else final_provided_callable_host_step;
+        b.getInstallStep().dependOn(final_provided_callable_platform_step);
+
         const fx_platform_test = b.addTest(.{
             .name = "fx_platform_test",
             .root_module = b.createModule(.{
@@ -5763,6 +5790,7 @@ pub fn build(b: *std.Build) void {
                 // The host library must be copied AND fixed before the test runs.
                 final_fx_host_step,
                 final_static_data_platform_step,
+                final_provided_callable_platform_step,
                 // The tests shell out to the roc CLI.
                 build_roc_step,
             },

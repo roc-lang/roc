@@ -343,10 +343,10 @@ fn expectProvidedBoxedCallableDrop(opt_flag: []const u8, output_basename: []cons
     const allocator = testing.allocator;
     const run_result = try runNativeBackendHostSelfTest(
         allocator,
-        "test/fx/hello_world.roc",
+        "test/provided-callable-host/app.roc",
         opt_flag,
         output_basename,
-        "--host-test-provided-boxed-callable-drop",
+        "--run-provided-boxed-callable-drop",
     );
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);

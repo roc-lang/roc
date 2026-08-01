@@ -167,7 +167,6 @@ const HostSelfTest = enum {
     none,
     stack_overflow,
     division_by_zero,
-    provided_boxed_callable_drop,
 };
 
 fn installRuntimeSignalHandlers() void {
@@ -184,7 +183,7 @@ fn triggerSelfTest(mode: HostSelfTest) noreturn {
     switch (mode) {
         .stack_overflow => triggerSelfTestStackOverflow(),
         .division_by_zero => triggerSelfTestDivisionByZero(),
-        .none, .provided_boxed_callable_drop => unreachable,
+        .none => unreachable,
     }
 }
 
@@ -484,8 +483,6 @@ fn rocCrashedFn(ops: *builtins.host_abi.RocOps, bytes: [*]const u8, len: usize) 
 // External symbols provided by the Roc runtime object file
 // Follows RocCall ABI: ops, ret_ptr, then argument pointers
 extern fn roc_main() callconv(.c) void;
-extern fn roc_test_make_boxed_callable(offset: u64) callconv(.c) ?[*]u8;
-extern fn roc_test_drop_boxed_callable(callable: ?[*]u8) callconv(.c) void;
 
 // OS-specific entry point handling
 comptime {
@@ -533,22 +530,20 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
             self_test = .stack_overflow;
         } else if (std.mem.eql(u8, arg, "--host-test-division-by-zero")) {
             self_test = .division_by_zero;
-        } else if (std.mem.eql(u8, arg, "--host-test-provided-boxed-callable-drop")) {
-            self_test = .provided_boxed_callable_drop;
         } else if (arg.len >= 2 and arg[0] == '-' and arg[1] == '-') {
             std.debug.print("{s}", .{"Error: unknown flag '"});
             std.debug.print("{s}", .{arg});
             std.debug.print("{s}", .{"'\n"});
-            std.debug.print("{s}", .{"Usage: <app> [--test <spec>] [--test-verbose <spec>] [--host-test-stack-overflow] [--host-test-division-by-zero] [--host-test-provided-boxed-callable-drop]\n"});
+            std.debug.print("{s}", .{"Usage: <app> [--test <spec>] [--test-verbose <spec>] [--host-test-stack-overflow] [--host-test-division-by-zero]\n"});
             return 1;
         }
     }
 
-    if (self_test == .stack_overflow or self_test == .division_by_zero) {
+    if (self_test != .none) {
         triggerSelfTest(self_test);
     }
 
-    const exit_code = platform_main(test_spec, test_verbose, self_test) catch |err| {
+    const exit_code = platform_main(test_spec, test_verbose) catch |err| {
         std.debug.print("{s}", .{"HOST ERROR: "});
         std.debug.print("{s}", .{@errorName(err)});
         std.debug.print("{s}", .{"\n"});
@@ -1268,7 +1263,7 @@ fn getOps() *builtins.host_abi.RocOps {
 }
 
 /// Platform host entrypoint
-fn platform_main(test_spec: ?[]const u8, test_verbose: bool, self_test: HostSelfTest) (Allocator.Error || error{InvalidSpecFormat})!c_int {
+fn platform_main(test_spec: ?[]const u8, test_verbose: bool) (Allocator.Error || error{InvalidSpecFormat})!c_int {
     // Install signal handlers for stack overflow, access violations, and division by zero
     // This allows us to display helpful error messages instead of crashing
     installRuntimeSignalHandlers();
@@ -1367,28 +1362,6 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool, self_test: HostSelf
     };
 
     g_roc_ops = &roc_ops;
-
-    if (self_test == .provided_boxed_callable_drop) {
-        const live_before = host_env.roc_allocations.items.len;
-        const allocations_before = host_env.alloc_count;
-        const callable = roc_test_make_boxed_callable(41) orelse {
-            std.debug.print("provided boxed callable maker returned null\n", .{});
-            return 1;
-        };
-        if (host_env.alloc_count <= allocations_before or host_env.roc_allocations.items.len <= live_before) {
-            std.debug.print("provided boxed callable maker did not allocate\n", .{});
-            return 1;
-        }
-
-        roc_test_drop_boxed_callable(callable);
-        if (host_env.roc_allocations.items.len != live_before) {
-            std.debug.print("provided boxed callable drop did not restore the live allocation count\n", .{});
-            return 1;
-        }
-
-        std.debug.print("provided boxed callable drop ok\n", .{});
-        return 0;
-    }
 
     // Call the app's main! entrypoint with its natural C ABI.
     roc_main();
