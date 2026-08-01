@@ -127,6 +127,19 @@ fn pathIsWithinRoot(candidate: []const u8, root: []const u8) bool {
     return root.len > 0 and std.fs.path.isSep(root[root.len - 1]);
 }
 
+/// Compare filesystem path spelling exactly, except that Windows defines `/`
+/// and `\` as equivalent separators. Component spelling remains byte-exact so
+/// case mismatches are still rejected on case-insensitive filesystems.
+fn pathsHaveExactSpelling(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |a_byte, b_byte| {
+        if (a_byte == b_byte) continue;
+        if (builtin.os.tag == .windows and std.fs.path.isSep(a_byte) and std.fs.path.isSep(b_byte)) continue;
+        return false;
+    }
+    return true;
+}
+
 const CheckedModuleArtifact = check.CheckedArtifact.CheckedModuleArtifact;
 const CheckedArtifact = check.CheckedArtifact;
 const canonical = check.CanonicalNames;
@@ -3644,7 +3657,7 @@ pub const Coordinator = struct {
 
         const lexical_path = try std.fs.path.resolve(self.gpa, &.{path});
         defer self.gpa.free(lexical_path);
-        if (!std.mem.eql(u8, canonical_path, lexical_path)) {
+        if (!pathsHaveExactSpelling(canonical_path, lexical_path)) {
             if (pkg.source_entries == null) {
                 pkg.source_entries = self.roc_ctx.listDir(package_root, self.gpa) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
@@ -3654,7 +3667,7 @@ pub const Coordinator = struct {
 
             var has_exact_spelling = false;
             for (pkg.source_entries.?) |entry| {
-                if (std.mem.eql(u8, entry.path, path)) {
+                if (pathsHaveExactSpelling(entry.path, path)) {
                     has_exact_spelling = true;
                     break;
                 }
@@ -7204,4 +7217,15 @@ test "PackageState keeps public names separate from logical module identity" {
     try std.testing.expectEqual(private_id, pkg.getModuleId("Parser").?);
     try std.testing.expectEqual(public_target_id, pkg.getPublicModuleId("Parser").?);
     try std.testing.expect(pkg.getPublicModuleId("Internal/Parser") == null);
+}
+
+test "exact path spelling preserves case and honors platform separators" {
+    try std.testing.expect(pathsHaveExactSpelling("Dir/Module.roc", "Dir/Module.roc"));
+    try std.testing.expect(!pathsHaveExactSpelling("Dir/Module.roc", "dir/Module.roc"));
+
+    if (builtin.os.tag == .windows) {
+        try std.testing.expect(pathsHaveExactSpelling("Dir/Module.roc", "Dir\\Module.roc"));
+    } else {
+        try std.testing.expect(!pathsHaveExactSpelling("Dir/Module.roc", "Dir\\Module.roc"));
+    }
 }
