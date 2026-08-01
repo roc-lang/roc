@@ -5268,7 +5268,7 @@ fn customBuildDefaultAppArgs(
 
     if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{ executable_path, "aaa", "bbb", "ccc" }, env.dirs.work_dir, .{
         .args = &.{},
-        .stdout_exact = "aaa\nbbb\nccc\n",
+        .stdout_exact = "[aaa][bbb][ccc]",
         .stderr_exact = "",
     })) |failure| return failure;
 
