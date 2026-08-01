@@ -7644,6 +7644,45 @@ test "uniqueness: specialized variant elides the check on a unique dying argumen
     try testing.expectEqual(@as(u64, 1), try f.uniqueArgsInProc(variant, appended));
 }
 
+test "uniqueness: specialized body clones do not poison local births" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Both the base and specialized callee bodies bind `first`. The first
+    // checked op always returns a unique outer list, so the second op can be
+    // check-free in each body independently even though the cloned bodies
+    // deliberately share their source LocalIds.
+    const param = try f.local(f.list_i64);
+    const first = try f.local(f.list_i64);
+    const second = try f.local(f.list_i64);
+    const callee_ret = try f.ret(second);
+    const second_op = try f.assignLowLevel(second, &.{first}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), callee_ret);
+    const first_op = try f.assignLowLevel(first, &.{param}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), second_op);
+    const callee = try f.addProc(&.{param}, first_op, f.list_i64);
+
+    // A dying fresh argument requests the unique-parameter specialization.
+    const list = try f.local(f.list_i64);
+    const got = try f.local(f.list_i64);
+    const caller_ret = try f.ret(got);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = got,
+        .proc = callee,
+        .args = try f.span(&.{list}),
+        .next = caller_ret,
+    } });
+    const caller_body = try f.assignList(list, &.{}, call);
+    _ = try f.addProc(&.{}, caller_body, f.list_i64);
+
+    const base_proc_count = f.store.procSpecCount();
+    try insert(&f.store, &f.layouts, .{ .specialize = true });
+
+    const variant: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(base_proc_count)));
+    try testing.expectEqual(@as(u64, 0), try f.uniqueArgsInProc(callee, first));
+    try testing.expectEqual(@as(u64, 1), try f.uniqueArgsInProc(callee, second));
+    try testing.expectEqual(@as(u64, 1), try f.uniqueArgsInProc(variant, first));
+    try testing.expectEqual(@as(u64, 1), try f.uniqueArgsInProc(variant, second));
+}
+
 test "uniqueness: without specialization the dying unique argument keeps the callee's check" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();

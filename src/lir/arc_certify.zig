@@ -252,9 +252,9 @@ fn certifyRcAtomicity(
 /// pure same-value alias whose source is born unique, or a parameter the
 /// containing proc's signature seeds born-unique. The balance and borrow
 /// conditions behind the claim are enforced by the per-value certification;
-/// this rule covers the unique-origin claim. Variants share parameter
-/// locals with their source proc, so claims are checked per proc body
-/// against that proc's signature.
+/// this rule covers the unique-origin claim. Variants share all source
+/// LocalIds while cloning the body statements, so origins are re-derived
+/// per proc body and parameter seeds use that proc's signature.
 fn certifyUniqueArgs(
     allocator: Allocator,
     store: *const LirStore,
@@ -262,18 +262,18 @@ fn certifyUniqueArgs(
     sigs: arc_sig.SigTable,
     diag: *Diagnostic,
 ) CertifyError!void {
-    var uniqueness = try arc_solve.computeUniqueness(allocator, store, rc_local, sigs);
-    defer uniqueness.deinit(allocator);
-
     var visited = std.AutoHashMap(LIR.CFStmtId, void).init(allocator);
     defer visited.deinit();
     var stack = std.ArrayList(LIR.CFStmtId).empty;
     defer stack.deinit(allocator);
 
     for (0..store.procSpecCount()) |proc_index| {
-        const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+        const proc = store.getProcSpec(proc_id);
         const body = proc.body orelse continue;
-        const sig = sigs.get(@enumFromInt(@as(u32, @intCast(proc_index))));
+        const sig = sigs.get(proc_id);
+        var uniqueness = try arc_solve.computeProcUniqueness(allocator, store, rc_local, sigs, proc_id);
+        defer uniqueness.deinit(allocator);
         const params = store.getLocalSpan(proc.args);
         visited.clearRetainingCapacity();
         stack.clearRetainingCapacity();
@@ -3563,7 +3563,108 @@ const CertifyTest = struct {
     fn certifyWith(self: *CertifyTest, sigs: arc_sig.SigTable) CertifyError!void {
         return certifyStore(self.allocator, &self.store, &self.layouts, sigs, &.{}, &self.diag);
     }
+
+    fn certifyUniqueArgsOnly(self: *CertifyTest) CertifyError!void {
+        const rc_local = try self.allocator.alloc(bool, self.store.localCount());
+        defer self.allocator.free(rc_local);
+        for (0..self.store.localCount()) |index| {
+            const lir_local = self.store.getLocal(@enumFromInt(@as(u32, @intCast(index))));
+            rc_local[index] = self.layouts.layoutContainsRefcounted(self.layouts.getLayout(lir_local.layout_idx));
+        }
+        return certifyUniqueArgs(self.allocator, &self.store, rc_local, arc_sig.SigTable.all_owned, &self.diag);
+    }
 };
+
+test "unique-argument certification isolates shared locals between procedures" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+
+    const left = try f.local(.str);
+    const right = try f.local(.str);
+    const fresh = try f.local(.str);
+    const result = try f.local(.str);
+    const args = try f.store.addLocalSpan(&.{ left, right });
+    const checked_args = try f.store.addLocalSpan(&.{ fresh, right });
+
+    // Model base and specialized ARC emissions: both procedure bodies bind
+    // the same source LocalIds, but each body has its own statement clones.
+    // A sibling's definitions and uses must not turn this procedure's one
+    // fresh binding into a flow-sensitive multi-definition.
+    for (0..2) |_| {
+        const ret = try f.ret(result);
+        const checked = try f.store.addCFStmt(.{ .assign_low_level = .{
+            .target = result,
+            .op = .str_concat,
+            .rc_effect = LIR.LowLevel.str_concat.rcEffect(),
+            .args = checked_args,
+            .unique_args = 1,
+            .next = ret,
+        } });
+        const birth = try f.store.addCFStmt(.{ .assign_low_level = .{
+            .target = fresh,
+            .op = .str_concat,
+            .rc_effect = LIR.LowLevel.str_concat.rcEffect(),
+            .args = args,
+            .next = checked,
+        } });
+        _ = try f.addProc(&.{ left, right }, birth, .str);
+    }
+
+    // An unrelated sibling may bind that shared numeric LocalId from a
+    // foreign/static origin. Its origin is irrelevant to the two procedures
+    // above and must not poison their check-free claims.
+    const foreign_ret = try f.ret(fresh);
+    const foreign_body = try f.assignStr(fresh, foreign_ret);
+    _ = try f.addProc(&.{}, foreign_body, .str);
+
+    try f.certifyUniqueArgsOnly();
+}
+
+test "unique-argument certification rejects multiple births in one procedure" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+
+    const cond = try f.local(.bool);
+    const left = try f.local(.str);
+    const right = try f.local(.str);
+    const fresh = try f.local(.str);
+    const result = try f.local(.str);
+    const args = try f.store.addLocalSpan(&.{ left, right });
+    const checked_args = try f.store.addLocalSpan(&.{ fresh, right });
+    const ret = try f.ret(result);
+    const checked = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = result,
+        .op = .str_concat,
+        .rc_effect = LIR.LowLevel.str_concat.rcEffect(),
+        .args = checked_args,
+        .unique_args = 1,
+        .next = ret,
+    } });
+    const first_birth = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = fresh,
+        .op = .str_concat,
+        .rc_effect = LIR.LowLevel.str_concat.rcEffect(),
+        .args = args,
+        .next = checked,
+    } });
+    const second_birth = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = fresh,
+        .op = .str_concat,
+        .rc_effect = LIR.LowLevel.str_concat.rcEffect(),
+        .args = args,
+        .next = checked,
+    } });
+    const body = try f.store.addCFStmt(.{ .switch_stmt = .{
+        .cond = cond,
+        .branches = try f.store.addCFSwitchBranches(&.{.{ .value = 1, .body = first_birth }}),
+        .default_branch = second_birth,
+        .continuation = checked,
+    } });
+    _ = try f.addProc(&.{ cond, left, right }, body, .str);
+
+    try testing.expectError(error.Certification, f.certifyUniqueArgsOnly());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "without a unique birth") != null);
+}
 
 test "certify accepts owned binding released once" {
     var f = try CertifyTest.init(testing.allocator);

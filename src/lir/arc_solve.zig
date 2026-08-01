@@ -690,7 +690,7 @@ pub fn solve(
         if (dense_uniqueness.destroyed.isSet(arc_index)) unique_destroyed.set(local);
     }
     if (builtin.mode == .Debug) {
-        var independently_unique = try computeUniquenessDetailed(allocator, store, rc_local, .{ .sigs = solver.sigs }, null, solver.proc_stmts);
+        var independently_unique = try computeUniquenessDetailed(allocator, store, rc_local, .{ .sigs = solver.sigs }, null, solver.proc_stmts, null);
         defer independently_unique.deinit(allocator);
         if (!unique.eql(independently_unique.unique) or !unique_destroyed.eql(independently_unique.destroyed)) {
             solveInvariant("typed uniqueness facts disagreed with independent LIR analysis");
@@ -1356,15 +1356,23 @@ fn appendStructuralSuccessors(
 
 /// Exact reachable statement set used by independent ARC certifier mirrors.
 /// The main solver retains the stronger per-proc inventory from its one lift.
-fn reachableStatementSet(allocator: Allocator, store: *const LirStore) SolveError!std.bit_set.DynamicBitSetUnmanaged {
+fn reachableStatementSet(
+    allocator: Allocator,
+    store: *const LirStore,
+    only_proc: ?LIR.LirProcSpecId,
+) SolveError!std.bit_set.DynamicBitSetUnmanaged {
     var reachable = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, store.cfStmtCount());
     errdefer reachable.deinit(allocator);
     var stack = std.ArrayList(LIR.CFStmtId).empty;
     defer stack.deinit(allocator);
 
-    for (0..store.procSpecCount()) |proc_index| {
-        const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
-        if (proc.body) |body| try stack.append(allocator, body);
+    if (only_proc) |proc_id| {
+        if (store.getProcSpec(proc_id).body) |body| try stack.append(allocator, body);
+    } else {
+        for (0..store.procSpecCount()) |proc_index| {
+            const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+            if (proc.body) |body| try stack.append(allocator, body);
+        }
     }
     while (stack.pop()) |current| {
         const stmt_index = @intFromEnum(current);
@@ -2077,7 +2085,7 @@ pub fn computePinnedProcs(
     var pinned = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, store.procSpecCount());
     errdefer pinned.deinit(allocator);
     fillPinnedProcContracts(store, roots, &pinned);
-    var reachable = try reachableStatementSet(allocator, store);
+    var reachable = try reachableStatementSet(allocator, store, null);
     defer reachable.deinit(allocator);
     var iter = reachable.iterator(.{});
     while (iter.next()) |stmt_index| switch (store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))))) {
@@ -2897,7 +2905,7 @@ fn computeUniquenessFromFacts(
 /// Marks every local whose value's outermost allocation provably has count 1
 /// at the local's definition with nothing later adding a holder: born unique
 /// by a fresh allocation or a direct call to a unique-returning callee,
-/// destroyed by any occurrence that can create another handle to the
+/// destroyed by any occurrence in the analyzed procedure set that can create another handle to the
 /// allocation — an incref, an aggregate or capture operand, a `set_local`
 /// value or target, or a second consuming use. Consuming uses (a consumed
 /// low-level argument, an owned-position direct-call argument, a return)
@@ -2913,18 +2921,32 @@ fn computeUniquenessFromFacts(
 /// flow-insensitive — destroys the target's uniqueness (a read elsewhere
 /// forces emission to give the alias its own unit, holding the count above
 /// 1). A multi-bound alias target never inherits. Variant parameter seeds
-/// are not applied here: variants share parameter locals with their source
-/// proc, so emission and the certifier overlay `RcSig.unique_params` per
-/// proc. Only reachable statements contribute; the solver consumes its
-/// shared per-proc lift and the independent certifier mirror derives the
-/// same reachable set from the completed store.
+/// are not applied here: emission and the certifier overlay
+/// `RcSig.unique_params` per proc. Only reachable statements contribute;
+/// the solver consumes its shared per-proc lift, while final-LIR
+/// certification analyzes one emitted proc at a time because base and
+/// specialized bodies deliberately share every source LocalId.
 pub fn computeUniqueness(
     allocator: Allocator,
     store: *const LirStore,
     rc_local: []const bool,
     sigs: arc_sig.SigTable,
 ) SolveError!Uniqueness {
-    return computeUniquenessDetailed(allocator, store, rc_local, sigs, null, null);
+    return computeUniquenessDetailed(allocator, store, rc_local, sigs, null, null, null);
+}
+
+/// Re-derives uniqueness from exactly one emitted procedure body. ARC
+/// variants deliberately share the source procedure's LocalIds, so a final
+/// store must not let definitions or uses in a sibling body affect this
+/// procedure's proof.
+pub fn computeProcUniqueness(
+    allocator: Allocator,
+    store: *const LirStore,
+    rc_local: []const bool,
+    sigs: arc_sig.SigTable,
+    proc: LIR.LirProcSpecId,
+) SolveError!Uniqueness {
+    return computeUniquenessDetailed(allocator, store, rc_local, sigs, null, null, proc);
 }
 
 fn computeUniquenessDetailed(
@@ -2934,16 +2956,21 @@ fn computeUniquenessDetailed(
     sigs: arc_sig.SigTable,
     origin_facts: ?*UniqueOriginFacts,
     proc_stmts: ?[]const std.ArrayList(LIR.CFStmtId),
+    only_proc: ?LIR.LirProcSpecId,
 ) SolveError!Uniqueness {
     const local_count = store.localCount();
 
     var reachable = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, store.cfStmtCount());
     defer reachable.deinit(allocator);
     if (proc_stmts) |by_proc| {
-        for (by_proc) |stmts| for (stmts.items) |stmt| reachable.set(@intFromEnum(stmt));
+        if (only_proc) |proc_id| {
+            for (by_proc[@intFromEnum(proc_id)].items) |stmt| reachable.set(@intFromEnum(stmt));
+        } else {
+            for (by_proc) |stmts| for (stmts.items) |stmt| reachable.set(@intFromEnum(stmt));
+        }
     } else {
         reachable.deinit(allocator);
-        reachable = try reachableStatementSet(allocator, store);
+        reachable = try reachableStatementSet(allocator, store, only_proc);
     }
 
     var born = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
@@ -3064,6 +3091,9 @@ fn computeUniquenessDetailed(
     };
 
     for (0..store.procSpecCount()) |proc_index| {
+        if (only_proc) |proc_id| {
+            if (proc_index != @intFromEnum(proc_id)) continue;
+        }
         const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
         const params = store.getLocalSpan(proc.args);
         for (0..GuardedList.borrowLen(params)) |param_index| {
@@ -3074,8 +3104,8 @@ fn computeUniquenessDetailed(
         }
     }
 
-    for (0..store.cfStmtCount()) |stmt_index| {
-        if (!reachable.isSet(stmt_index)) continue;
+    var reachable_iter = reachable.iterator(.{});
+    while (reachable_iter.next()) |stmt_index| {
         const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
         if (origin_facts) |facts| try collectUniqueOriginStmt(facts, store, stmt);
         switch (stmt) {
