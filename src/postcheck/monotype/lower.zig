@@ -14766,7 +14766,12 @@ const BodyContext = struct {
         arg_tys: []const Type.TypeId,
         ret_ty: Type.TypeId,
     ) Allocator.Error!DraftTypeCell {
-        return DraftTypeCell.fromGraphNode(try self.graphFunctionNodeFromMono(arg_tys, ret_ty));
+        // Final components intern to a final function type; no node stands in.
+        return .{ .sealed = try self.builder.program.types.internFunc(
+            &self.builder.program.names,
+            arg_tys,
+            ret_ty,
+        ) };
     }
 
     fn hashFnTypeCell(self: *BodyContext, value_ty: Type.TypeId, hasher_ty: Type.TypeId) Allocator.Error!DraftTypeCell {
@@ -24913,8 +24918,14 @@ const BodyContext = struct {
         arg_tys: []const Type.TypeId,
         ret_ty: Type.TypeId,
     ) Allocator.Error!Type.TypeId {
-        const fn_node = try self.instantiateTargetCallNodeFromMonoArgs(source_fn_ty, arg_tys, ret_ty);
-        return try self.activeTypeFromNode(fn_node);
+        // Every component is already a final stored type, so the function type
+        // is their interning; the checked template supplies only the arity to
+        // hold the caller to.
+        const function = self.checkedFunctionType(source_fn_ty);
+        if (function.args.len != arg_tys.len) {
+            Common.invariant("checked synthetic dispatch target arity differs from its function type");
+        }
+        return try self.builder.program.types.internFunc(&self.builder.program.names, arg_tys, ret_ty);
     }
 
     fn instantiateTargetCallNodeFromMonoArgs(
