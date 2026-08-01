@@ -8,6 +8,7 @@
 
 const seamless_slice_tag: usize = 1;
 
+/// ABI-compatible view of the canonical `builtins.list.RocList` representation.
 pub const RocList = extern struct {
     bytes: ?[*]u8,
     length: usize,

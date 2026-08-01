@@ -10,6 +10,7 @@ const abi = @import("roc_str_view");
 const RocList = abi.RocList;
 const RocStr = abi.RocStr;
 
+/// C-compatible allocator used by the standalone default-platform runtimes.
 pub const AllocFn = *const fn (usize, usize) callconv(.c) ?*anyopaque;
 
 const replacement = "\xef\xbf\xbd";
