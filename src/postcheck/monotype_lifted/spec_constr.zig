@@ -432,8 +432,21 @@ const Spec = struct {
     written: bool = false,
 };
 
+const BodySize = union(enum) {
+    exact: usize,
+    over_limit,
+
+    fn admits(self: BodySize) bool {
+        return switch (self) {
+            .exact => true,
+            .over_limit => false,
+        };
+    }
+};
+
 const FnPlan = struct {
     used_args: []bool,
+    body_size: BodySize,
     specs: std.ArrayList(Spec),
 
     fn deinit(self: *FnPlan, allocator: Allocator) void {
@@ -653,6 +666,23 @@ const CodeGrowthBudget = struct {
     }
 };
 
+const SpecAdmission = enum {
+    admitted,
+    denied_body_size,
+    denied_spec_count,
+};
+
+/// GHC-style body-size admission for SpecConstr work. A large source body is
+/// left shared instead of being cloned into a worker or inlined into callers.
+/// Small iterator and stream step functions stay well below this threshold, so
+/// long fusion chains can still inline transitively through many small bodies.
+const spec_constr_body_expr_threshold: usize = 200;
+
+/// Maximum number of constructor-call-pattern workers for one source function.
+/// Additional patterns keep the ordinary shared call, bounding generated worker
+/// count without changing any shape proof.
+const spec_constr_specialization_count: usize = 3;
+
 const ActiveJoinClone = struct {
     source: Ast.JoinPointId,
     target: Ast.JoinPointId,
@@ -746,6 +776,7 @@ const Pass = struct {
             @memset(used_args, false);
             plan.* = .{
                 .used_args = used_args,
+                .body_size = fnBodySizeWithin(program, fn_.body, spec_constr_body_expr_threshold),
                 .specs = .empty,
             };
         }
@@ -1226,8 +1257,11 @@ const Pass = struct {
             var cloner = Cloner.initForRewrite(self);
             cloner.rewrite_call_patterns = false;
             cloner.emit_callable_workers = false;
-            // Generic analysis follows only existing constructor evidence.
-            // A used argument below requests result shape explicitly instead.
+            // Generic analysis follows only existing constructor evidence from
+            // source syntax and local substitution. It must not synthesize new
+            // evidence by inlining callees; result-shape demand does that in
+            // production clones where emitted-code admission is enforced.
+            cloner.inline_direct_calls = false;
             cloner.inline_direct_requires_known_arg = true;
             defer cloner.deinit();
             try cloner.collectCallPatternsInExpr(fn_id, body);
@@ -1624,8 +1658,24 @@ const Pass = struct {
         }
     }
 
+    fn newSpecAdmission(self: *const Pass, raw: usize) SpecAdmission {
+        if (!self.plans[raw].body_size.admits()) return .denied_body_size;
+        if (self.plans[raw].specs.items.len >= spec_constr_specialization_count) return .denied_spec_count;
+        return .admitted;
+    }
+
+    fn inlineBodyAdmission(self: *const Pass, fn_id: Ast.FnId, body: Ast.ExprId) SpecAdmission {
+        const raw = @intFromEnum(fn_id);
+        const body_size = if (raw < self.plans.len)
+            self.plans[raw].body_size
+        else
+            exprBodySizeWithin(self.program, body, spec_constr_body_expr_threshold);
+        return if (body_size.admits()) .admitted else .denied_body_size;
+    }
+
     fn recordCallPattern(self: *Pass, fn_id: Ast.FnId, args_span: Ast.Span(Ast.ExprId)) Allocator.Error!void {
         const raw = @intFromEnum(fn_id);
+        if (self.newSpecAdmission(raw) != .admitted) return;
         const args = try GuardedList.dupe(self.allocator, Ast.ExprId, self.program.exprSpan(args_span));
         defer self.allocator.free(args);
         const fn_args = self.program.typedLocalSpan(self.program.getFnAt(raw).args);
@@ -1658,8 +1708,11 @@ const Pass = struct {
     }
 
     fn recordCallPatternForValues(self: *Pass, fn_id: Ast.FnId, values: []const Value) Common.LowerError!void {
-        const pattern = (try self.callPatternForValues(fn_id, values)) orelse return;
         const raw = @intFromEnum(fn_id);
+        if (raw >= self.plans.len) return;
+        if (self.newSpecAdmission(raw) != .admitted) return;
+
+        const pattern = (try self.callPatternForValues(fn_id, values)) orelse return;
         for (self.plans[raw].specs.items) |spec| {
             if (patternEql(self.program, spec.pattern, pattern)) return;
         }
@@ -1670,11 +1723,15 @@ const Pass = struct {
     }
 
     fn ensureCallPatternForValues(self: *Pass, fn_id: Ast.FnId, values: []const Value) Common.LowerError!void {
-        const pattern = (try self.callPatternForValues(fn_id, values)) orelse return;
         const raw = @intFromEnum(fn_id);
+        if (raw >= self.plans.len) return;
+        if (!self.plans[raw].body_size.admits()) return;
+
+        const pattern = (try self.callPatternForValues(fn_id, values)) orelse return;
         for (self.plans[raw].specs.items) |spec| {
             if (patternEql(self.program, spec.pattern, pattern)) return;
         }
+        if (self.newSpecAdmission(raw) != .admitted) return;
 
         const source_fn = self.program.getFnAt(raw);
         const symbol = self.symbols.fresh();
@@ -4133,9 +4190,6 @@ const Cloner = struct {
     /// budget runs out the rewrite retains the plain shared join, which never
     /// re-clones arm bodies.
     let_case_shape_growth: CodeGrowthBudget,
-    /// Expression count of the program when this clone operation began;
-    /// inlining stops once `inline_expr_budget` expressions have been added.
-    start_expr_count: usize,
     /// Active let-of-case join rewrites, innermost last. Cloning a jump whose
     /// target belongs to one of these frames records the jump site's symbolic
     /// argument values for later parameter decomposition instead of cloning
@@ -4178,14 +4232,6 @@ const Cloner = struct {
 
     const case_of_case_work_budget: u32 = 256;
 
-    /// Total expressions one top-level clone operation may append through
-    /// call inlining. Inlining is demand-driven and transitively re-enters
-    /// callee bodies, so one specialization over deeply composed known-shape
-    /// values can otherwise multiply the whole reachable call graph into its
-    /// body. Once the budget is spent, remaining calls clone as plain calls,
-    /// which every shape matcher already treats as opaque.
-    const inline_expr_budget: usize = 50_000;
-
     fn init(pass: *Pass, source_fn: Ast.FnId, pattern: CallPattern) Cloner {
         return .{
             .pass = pass,
@@ -4198,7 +4244,6 @@ const Cloner = struct {
             .loop_exit_stack = .empty,
             .selected_loop_exit_tys = std.AutoHashMap(Ast.ExprId, Type.TypeId).init(pass.allocator),
             .join_stack = .empty,
-            .start_expr_count = pass.program.exprCount(),
             .let_case_shape_growth = .init(let_case_shape_arm_budget),
             .let_case_builds = .empty,
             .active_recursive_value_locals = std.AutoHashMap(Ast.LocalId, void).init(pass.allocator),
@@ -4229,7 +4274,6 @@ const Cloner = struct {
             .loop_exit_stack = .empty,
             .selected_loop_exit_tys = std.AutoHashMap(Ast.ExprId, Type.TypeId).init(pass.allocator),
             .join_stack = .empty,
-            .start_expr_count = pass.program.exprCount(),
             .let_case_shape_growth = .init(let_case_shape_arm_budget),
             .let_case_builds = .empty,
             .active_recursive_value_locals = std.AutoHashMap(Ast.LocalId, void).init(pass.allocator),
@@ -4307,13 +4351,16 @@ const Cloner = struct {
                 try self.collectCallPatternsInCaptureOperandSpan(owner, call.captures);
 
                 const callee = Ast.localDirectCallee(call) orelse return;
+                const callee_raw = @intFromEnum(callee);
+                if (callee_raw >= self.pass.plans.len) return;
+                if (self.pass.newSpecAdmission(callee_raw) != .admitted) return;
+
                 const args = try GuardedList.dupe(self.pass.allocator, Ast.ExprId, self.pass.program.exprSpan(call.args));
                 defer self.pass.allocator.free(args);
 
                 const values = try self.pass.allocator.alloc(Value, args.len);
                 defer self.pass.allocator.free(values);
                 for (args, 0..) |arg, index| {
-                    const callee_raw = @intFromEnum(callee);
                     const demand_shape = callee_raw < self.pass.plans.len and
                         index < self.pass.plans[callee_raw].used_args.len and
                         self.pass.plans[callee_raw].used_args[index];
@@ -7770,10 +7817,6 @@ const Cloner = struct {
         };
     }
 
-    fn inlineGrowthExhausted(self: *const Cloner) bool {
-        return self.pass.program.exprCount() - self.start_expr_count > inline_expr_budget;
-    }
-
     fn inlineCallableCallValue(
         self: *Cloner,
         ty: Type.TypeId,
@@ -7783,7 +7826,32 @@ const Cloner = struct {
         result_shape_demanded: bool,
         bindings: *BindingChain,
     ) Common.LowerError!Value {
-        if (self.inlineGrowthExhausted()) {
+        const source_fn = self.pass.program.getFn(callable.fn_id);
+        // Replacing the call with its body transfers the body's result value
+        // directly into the caller. Independently specialized Monotype graphs
+        // can make those types related but representation-distinct; only exact
+        // closed-type identity proves that no representation boundary would be
+        // erased by the inline.
+        if (!sameType(self.pass.program, ty, source_fn.ret)) {
+            return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
+                .callee = try self.materialize(.{ .callable = callable }),
+                .args = try self.cloneExprSpan(args_span),
+            } } }) };
+        }
+        const body = switch (source_fn.body) {
+            .roc => |body| body,
+            .hosted => return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
+                .callee = try self.materialize(.{ .callable = callable }),
+                .args = try self.cloneExprSpan(args_span),
+            } } }) },
+        };
+        if (self.pass.inlineBodyAdmission(callable.fn_id, body) != .admitted) {
+            return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
+                .callee = try self.materialize(.{ .callable = callable }),
+                .args = try self.cloneExprSpan(args_span),
+            } } }) };
+        }
+        if (exprContainsReturn(self.pass.program, body)) {
             return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
                 .callee = try self.materialize(.{ .callable = callable }),
                 .args = try self.cloneExprSpan(args_span),
@@ -7806,32 +7874,6 @@ const Cloner = struct {
                     .args = try self.cloneExprSpan(args_span),
                 } } }) };
             }
-        }
-
-        const source_fn = self.pass.program.getFn(callable.fn_id);
-        // Replacing the call with its body transfers the body's result value
-        // directly into the caller. Independently specialized Monotype graphs
-        // can make those types related but representation-distinct; only exact
-        // closed-type identity proves that no representation boundary would be
-        // erased by the inline.
-        if (!sameType(self.pass.program, ty, source_fn.ret)) {
-            return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
-                .callee = try self.materialize(.{ .callable = callable }),
-                .args = try self.cloneExprSpan(args_span),
-            } } }) };
-        }
-        const body = switch (source_fn.body) {
-            .roc => |body| body,
-            .hosted => return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
-                .callee = try self.materialize(.{ .callable = callable }),
-                .args = try self.cloneExprSpan(args_span),
-            } } }) },
-        };
-        if (exprContainsReturn(self.pass.program, body)) {
-            return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
-                .callee = try self.materialize(.{ .callable = callable }),
-                .args = try self.cloneExprSpan(args_span),
-            } } }) };
         }
 
         const source_args = try GuardedList.dupe(self.pass.allocator, Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.args));
@@ -7900,18 +7942,6 @@ const Cloner = struct {
         result_shape_demanded: bool,
         bindings: *BindingChain,
     ) Common.LowerError!Value {
-        if (self.inlineGrowthExhausted()) {
-            return .{ .expr = try self.cloneExprPlain(original_expr) };
-        }
-        const direct_call_size = self.argsKnownConstructorSize(args_span).plus(self.captureOperandsKnownConstructorSize(captures_span));
-        const exact_call_size = direct_call_size.exactValue() orelse return .{ .expr = try self.cloneExprPlain(original_expr) };
-        for (self.inline_stack.items) |active| {
-            if (active.fn_id != callee) continue;
-            if (exact_call_size == 0 or exact_call_size >= active.known_size) {
-                return .{ .expr = try self.cloneExprPlain(original_expr) };
-            }
-        }
-
         const source_fn = self.pass.program.getFn(callee);
         const result_ty = self.pass.program.getExpr(original_expr).ty;
         // A call and its independently specialized callee can be related
@@ -7924,8 +7954,19 @@ const Cloner = struct {
             .roc => |body| body,
             .hosted => return .{ .expr = try self.cloneExprPlain(original_expr) },
         };
+        if (self.pass.inlineBodyAdmission(callee, body) != .admitted) {
+            return .{ .expr = try self.cloneExprPlain(original_expr) };
+        }
         if (exprContainsReturn(self.pass.program, body)) {
             return .{ .expr = try self.cloneExprPlain(original_expr) };
+        }
+        const direct_call_size = self.argsKnownConstructorSize(args_span).plus(self.captureOperandsKnownConstructorSize(captures_span));
+        const exact_call_size = direct_call_size.exactValue() orelse return .{ .expr = try self.cloneExprPlain(original_expr) };
+        for (self.inline_stack.items) |active| {
+            if (active.fn_id != callee) continue;
+            if (exact_call_size == 0 or exact_call_size >= active.known_size) {
+                return .{ .expr = try self.cloneExprPlain(original_expr) };
+            }
         }
         const source_args = try GuardedList.dupe(self.pass.allocator, Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.args));
         defer self.pass.allocator.free(source_args);
@@ -9410,6 +9451,171 @@ fn localExpr(program: *const Ast.Program, expr_id: Ast.ExprId) ?Ast.LocalId {
     };
 }
 
+fn fnBodySizeWithin(program: *const Ast.Program, body: Ast.FnBody, limit: usize) BodySize {
+    return switch (body) {
+        .roc => |expr| exprBodySizeWithin(program, expr, limit),
+        .hosted => .{ .exact = 0 },
+    };
+}
+
+fn exprBodySizeWithin(program: *const Ast.Program, expr_id: Ast.ExprId, limit: usize) BodySize {
+    var counter = BodySizeCounter{
+        .program = program,
+        .remaining = limit,
+    };
+    counter.countExpr(expr_id);
+    return if (counter.over_limit) .over_limit else .{ .exact = limit - counter.remaining };
+}
+
+const BodySizeCounter = struct {
+    program: *const Ast.Program,
+    remaining: usize,
+    over_limit: bool = false,
+
+    fn spend(self: *BodySizeCounter) bool {
+        if (self.over_limit) return false;
+        if (self.remaining == 0) {
+            self.over_limit = true;
+            return false;
+        }
+        self.remaining -= 1;
+        return true;
+    }
+
+    fn countExprSpan(self: *BodySizeCounter, span: Ast.Span(Ast.ExprId)) void {
+        const exprs = self.program.exprSpan(span);
+        for (0..exprs.len) |index| self.countExpr(GuardedList.at(exprs, index));
+    }
+
+    fn countCaptureOperandSpan(self: *BodySizeCounter, span: Ast.Span(Ast.CaptureOperand)) void {
+        const operands = self.program.captureOperandSpan(span);
+        for (0..operands.len) |index| self.countExpr(GuardedList.at(operands, index).value);
+    }
+
+    fn countStmt(self: *BodySizeCounter, stmt_id: Ast.StmtId) void {
+        switch (self.program.getStmt(stmt_id)) {
+            .let_ => |let_| self.countExpr(let_.value),
+            .expr,
+            .expect,
+            .dbg,
+            => |expr| self.countExpr(expr),
+            .return_ => |ret| self.countExpr(ret.value),
+            .uninitialized, .crash => {},
+        }
+    }
+
+    fn countExpr(self: *BodySizeCounter, expr_id: Ast.ExprId) void {
+        if (!self.spend()) return;
+        switch (self.program.getExpr(expr_id).data) {
+            .local,
+            .unit,
+            .@"unreachable",
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .bytes_lit,
+            .crash,
+            .comptime_exhaustiveness_failed,
+            .uninitialized,
+            .uninitialized_payload,
+            => {},
+            .fn_ref => |fn_ref| self.countCaptureOperandSpan(fn_ref.captures),
+            .list,
+            .tuple,
+            => |items| self.countExprSpan(items),
+            .record => |fields| {
+                const field_exprs = self.program.fieldExprSpan(fields);
+                for (0..field_exprs.len) |index| self.countExpr(GuardedList.at(field_exprs, index).value);
+            },
+            .tag => |tag| self.countExprSpan(tag.payloads),
+            .static_data_candidate => |candidate| self.countExpr(candidate.runtime_expr),
+            .nominal,
+            .dbg,
+            .expect,
+            => |child| self.countExpr(child),
+            .return_ => |ret| self.countExpr(ret.value),
+            .expect_err => |expect_err| self.countExpr(expect_err.msg),
+            .comptime_branch_taken => |taken| self.countExpr(taken.body),
+            .let_ => |let_| {
+                self.countExpr(let_.value);
+                self.countExpr(let_.rest);
+            },
+            .lambda,
+            .def_ref,
+            .fn_def,
+            => Common.invariant("pre-lift function expression reached SpecConstr body-size counting"),
+            .call_value => |call| {
+                self.countExpr(call.callee);
+                self.countExprSpan(call.args);
+            },
+            .call_proc => |call| {
+                self.countExprSpan(call.args);
+                self.countCaptureOperandSpan(call.captures);
+            },
+            .low_level => |call| self.countExprSpan(call.args),
+            .field_access => |field| self.countExpr(field.receiver),
+            .tuple_access => |access| self.countExpr(access.tuple),
+            .structural_eq => |eq| {
+                self.countExpr(eq.lhs);
+                self.countExpr(eq.rhs);
+            },
+            .structural_hash => |hash| {
+                self.countExpr(hash.value);
+                self.countExpr(hash.hasher);
+            },
+            .match_ => |match| {
+                self.countExpr(match.scrutinee);
+                const branches = self.program.branchSpan(match.branches);
+                for (0..branches.len) |index| {
+                    const branch = GuardedList.at(branches, index);
+                    if (branch.guard) |guard| self.countExpr(guard);
+                    self.countExpr(branch.body);
+                }
+            },
+            .if_ => |if_| {
+                const branches = self.program.ifBranchSpan(if_.branches);
+                for (0..branches.len) |index| {
+                    const branch = GuardedList.at(branches, index);
+                    self.countExpr(branch.cond);
+                    self.countExpr(branch.body);
+                }
+                self.countExpr(if_.final_else);
+            },
+            .if_initialized_payload => |payload_switch| {
+                self.countExpr(payload_switch.cond);
+                self.countExpr(payload_switch.initialized);
+                self.countExpr(payload_switch.uninitialized);
+            },
+            .try_sequence => |sequence| {
+                self.countExpr(sequence.try_expr);
+                self.countExpr(sequence.ok_body);
+            },
+            .try_record_sequence => |sequence| {
+                self.countExpr(sequence.try_expr);
+                self.countExpr(sequence.ok_body);
+            },
+            .block => |block| {
+                const statements = self.program.stmtSpan(block.statements);
+                for (0..statements.len) |index| self.countStmt(GuardedList.at(statements, index));
+                self.countExpr(block.final_expr);
+            },
+            .loop_ => |loop| {
+                self.countExprSpan(loop.initial_values);
+                self.countExpr(loop.body);
+            },
+            .break_ => |maybe| if (maybe) |value| self.countExpr(value),
+            .continue_ => |continue_| self.countExprSpan(continue_.values),
+            .join_point => |join_point| {
+                self.countExpr(join_point.body);
+                self.countExpr(join_point.remainder);
+            },
+            .jump => |jump| self.countExprSpan(jump.args),
+        }
+    }
+};
+
 const FnUseSummary = struct {
     external_calls: usize = 0,
     external_call_expr: ?Ast.ExprId = null,
@@ -10815,6 +11021,140 @@ test "issue 10313 value-aware call-pattern collection does not append lifted IR"
     try std.testing.expectEqual(symbol_before_collect, pass.symbols.next);
     try std.testing.expectEqual(join_before_collect, pass.next_join_point);
     try std.testing.expectEqual(@as(usize, 0), pass.arena.queryCapacity());
+}
+
+test "SpecConstr admission uses body size and worker count before cloning" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const unit_ty = try program.types.add(.zst);
+    const unit_expr = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+    const one_let_pat = try program.addPat(.{ .ty = unit_ty, .data = .wildcard });
+    const one_let = try program.addExpr(.{ .ty = unit_ty, .data = .{ .let_ = .{
+        .bind = one_let_pat,
+        .value = unit_expr,
+        .rest = unit_expr,
+    } } });
+
+    switch (exprBodySizeWithin(&program, one_let, 3)) {
+        .exact => |count| try std.testing.expectEqual(@as(usize, 3), count),
+        .over_limit => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqual(BodySize.over_limit, exprBodySizeWithin(&program, one_let, 2));
+
+    var large_body = unit_expr;
+    for (0..(spec_constr_body_expr_threshold / 2 + 1)) |_| {
+        const pat = try program.addPat(.{ .ty = unit_ty, .data = .wildcard });
+        large_body = try program.addExpr(.{ .ty = unit_ty, .data = .{ .let_ = .{
+            .bind = pat,
+            .value = unit_expr,
+            .rest = large_body,
+        } } });
+    }
+
+    _ = try program.addFn(.{
+        .symbol = @enumFromInt(1),
+        .args = Ast.Span(Ast.TypedLocal).empty(),
+        .captures = Ast.Span(Ast.TypedLocal).empty(),
+        .body = .{ .roc = unit_expr },
+        .ret = unit_ty,
+    });
+    _ = try program.addFn(.{
+        .symbol = @enumFromInt(2),
+        .args = Ast.Span(Ast.TypedLocal).empty(),
+        .captures = Ast.Span(Ast.TypedLocal).empty(),
+        .body = .{ .roc = large_body },
+        .ret = unit_ty,
+    });
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+
+    try std.testing.expectEqual(SpecAdmission.admitted, pass.newSpecAdmission(0));
+    for (0..spec_constr_specialization_count) |_| {
+        try pass.plans[0].specs.append(allocator, .{ .pattern = .{ .args = &.{} } });
+    }
+    try std.testing.expectEqual(SpecAdmission.denied_spec_count, pass.newSpecAdmission(0));
+    try std.testing.expectEqual(SpecAdmission.denied_body_size, pass.newSpecAdmission(1));
+    try std.testing.expectEqual(SpecAdmission.denied_body_size, pass.inlineBodyAdmission(@enumFromInt(1), large_body));
+}
+
+test "value-aware call-pattern collection only follows existing constructor evidence" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const unit_ty = try program.types.add(.zst);
+    const tuple_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ unit_ty, unit_ty }) });
+    const unit_expr = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+    const tuple_expr = try program.addExpr(.{
+        .ty = tuple_ty,
+        .data = .{ .tuple = try program.addExprSpan(&.{ unit_expr, unit_expr }) },
+    });
+
+    const producer = try program.addFn(.{
+        .symbol = @enumFromInt(1),
+        .args = Ast.Span(Ast.TypedLocal).empty(),
+        .captures = Ast.Span(Ast.TypedLocal).empty(),
+        .body = .{ .roc = tuple_expr },
+        .ret = tuple_ty,
+    });
+
+    const consumer_arg = try program.addLocal(@enumFromInt(2), tuple_ty);
+    const consumer = try program.addFn(.{
+        .symbol = @enumFromInt(3),
+        .args = try program.addTypedLocalSpan(&.{.{ .local = consumer_arg, .ty = tuple_ty }}),
+        .captures = Ast.Span(Ast.TypedLocal).empty(),
+        .body = .{ .roc = unit_expr },
+        .ret = unit_ty,
+    });
+
+    const producer_call = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .call_proc = .{
+        .callee = .{ .lifted = producer },
+        .args = Ast.Span(Ast.ExprId).empty(),
+    } } });
+    const inline_arg_consumer_call = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+        .callee = .{ .lifted = consumer },
+        .args = try program.addExprSpan(&.{producer_call}),
+    } } });
+    _ = try program.addFn(.{
+        .symbol = @enumFromInt(4),
+        .args = Ast.Span(Ast.TypedLocal).empty(),
+        .captures = Ast.Span(Ast.TypedLocal).empty(),
+        .body = .{ .roc = inline_arg_consumer_call },
+        .ret = unit_ty,
+    });
+
+    const bound_tuple_local = try program.addLocal(@enumFromInt(5), tuple_ty);
+    const bound_tuple_ref = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .local = bound_tuple_local } });
+    const let_arg_consumer_call = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+        .callee = .{ .lifted = consumer },
+        .args = try program.addExprSpan(&.{bound_tuple_ref}),
+    } } });
+    const bind_tuple = try program.addPat(.{ .ty = tuple_ty, .data = .{ .bind = bound_tuple_local } });
+    const let_body = try program.addExpr(.{ .ty = unit_ty, .data = .{ .let_ = .{
+        .bind = bind_tuple,
+        .value = tuple_expr,
+        .rest = let_arg_consumer_call,
+    } } });
+    _ = try program.addFn(.{
+        .symbol = @enumFromInt(6),
+        .args = Ast.Span(Ast.TypedLocal).empty(),
+        .captures = Ast.Span(Ast.TypedLocal).empty(),
+        .body = .{ .roc = let_body },
+        .ret = unit_ty,
+    });
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    pass.plans[@intFromEnum(consumer)].used_args[0] = true;
+
+    try pass.collectValueAwareCallPatterns(3);
+    try std.testing.expectEqual(@as(usize, 0), pass.plans[@intFromEnum(consumer)].specs.items.len);
+
+    try pass.collectValueAwareCallPatterns(4);
+    try std.testing.expectEqual(@as(usize, 1), pass.plans[@intFromEnum(consumer)].specs.items.len);
 }
 
 test "generic value cloning preserves a call until its result shape is demanded" {

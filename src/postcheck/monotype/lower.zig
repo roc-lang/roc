@@ -3228,6 +3228,12 @@ const Builder = struct {
             try source_ctx.codecLexicalContextKey()
         else
             null;
+        const local_evidence_owner = specEvidenceLocalOwner(source_ctx.draft, evidence);
+        const local_context_dependent = local_evidence_owner != null or structural_lexical_dependent;
+        const lexical_owner = local_evidence_owner orelse if (structural_lexical_dependent)
+            source_ctx.draft.current_owner
+        else
+            null;
 
         // Draft specialization identity stays graph-native for the entire
         // relation-production phase. Even a currently resolved request can
@@ -3236,6 +3242,19 @@ const Builder = struct {
         var selection = DraftOpenCandidateSelection{};
         const resolved_request_ty: ?Type.TypeId = if (try source_ctx.graph.typeIsResolved(request_fn_node))
             try source_ctx.activeTypeFromNode(request_fn_node)
+        else
+            null;
+        // An unresolved procedure interface is not yet a durable
+        // specialization key. Its callee body must contribute all of its
+        // checked constraints before this graph applies row defaults, so the
+        // entire connected open dependency group lowers in this graph and
+        // seals together. The initial open shape is still an explicit
+        // graph-local identity for reusing a completed member of that group.
+        const open_group_member = resolved_request_ty == null and
+            !local_context_dependent and
+            template.target != .hosted;
+        const open_request_shape_key: ?names.TypeDigest = if (open_group_member)
+            try source_ctx.graph.openFunctionInterfaceShapeDigest(request_fn_node)
         else
             null;
         // Resolved requests key directly on their structural type digest, so a
@@ -3247,6 +3266,12 @@ const Builder = struct {
             .request_kind = 0,
             .request_fn_key = self.specializationTypeDigest(request_fn_ty).bytes,
         } else null;
+        const open_shape_lookup_address: ?DraftTemplateLookupAddress = if (open_request_shape_key) |shape_key| .{
+            .family = family,
+            .evidence_digest = evidence_digest.bytes,
+            .request_kind = 2,
+            .request_fn_key = shape_key.bytes,
+        } else null;
         if (resolved_lookup_address) |address| {
             if (source_ctx.draft.template_spec_lookup.get(address)) |candidates| {
                 for (candidates.items) |raw_spec| {
@@ -3257,6 +3282,22 @@ const Builder = struct {
                     const spec_fn_ty = try source_ctx.activeTypeFromNode(spec.request_fn_node);
                     if (!try self.program.types.typeEql(&self.program.names, spec_fn_ty, resolved_request_ty.?)) continue;
                     if (!selection.add(raw_spec, true)) unreachable;
+                }
+            }
+        }
+        if (selection.selected() == null) {
+            if (open_shape_lookup_address) |address| {
+                if (source_ctx.draft.template_spec_lookup.get(address)) |candidates| {
+                    for (candidates.items) |raw_spec| {
+                        const spec = &source_ctx.draft.template_specs.items[raw_spec];
+                        if (spec.state != .lowered) continue;
+                        if (!spec.open_group_member) continue;
+                        if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
+                        if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
+                        const spec_shape_key = spec.open_request_shape_key orelse continue;
+                        if (!std.mem.eql(u8, spec_shape_key[0..], open_request_shape_key.?.bytes[0..])) continue;
+                        if (!selection.add(raw_spec, true)) unreachable;
+                    }
                 }
             }
         }
@@ -3372,6 +3413,9 @@ const Builder = struct {
             if (resolved_lookup_address) |address| {
                 try registerTemplateSpecLookup(source_ctx.draft, self.allocator, address, raw_spec);
             }
+            if (open_shape_lookup_address) |address| {
+                try registerTemplateSpecLookup(source_ctx.draft, self.allocator, address, raw_spec);
+            }
             return .{ .local = .{ .draft = spec.fn_id } };
         }
         const is_local = moduleBytesEqual(view.key.bytes, names.procTemplateModuleDigest(template_ref).bytes);
@@ -3399,25 +3443,11 @@ const Builder = struct {
             },
             .signature_relation = signature_relation,
         });
-        const local_evidence_owner = specEvidenceLocalOwner(source_ctx.draft, evidence);
-        const local_context_dependent = local_evidence_owner != null or structural_lexical_dependent;
-        // An unresolved procedure interface is not yet a valid durable
-        // specialization key. Its callee body must contribute all of its
-        // checked constraints before this graph applies row defaults, so the
-        // entire connected open dependency group lowers in this graph and
-        // seals together. A resolved interface remains eligible for the
-        // independent specialization-graph path below.
-        const open_group_member = resolved_request_ty == null and
-            !local_context_dependent and
-            template.target != .hosted;
         self.count("template_misses");
-        const lexical_owner = local_evidence_owner orelse if (structural_lexical_dependent)
-            source_ctx.draft.current_owner
-        else
-            null;
         if (local_context_dependent and template.target == .hosted) {
             Common.invariant("hosted template specialization depended on a local procedure context");
         }
+        const spec_index = source_ctx.draft.template_specs.items.len;
         const lexical = if (local_context_dependent)
             try source_ctx.captureCodecLexicalContext()
         else
@@ -3429,7 +3459,6 @@ const Builder = struct {
                 self.allocator.free(captured.local_procs);
             }
         };
-        const spec_index = source_ctx.draft.template_specs.items.len;
         const demand_boundary: u32 = @intCast(source_ctx.draft.runtime_value_demands.items.len);
         try source_ctx.draft.template_specs.append(self.allocator, .{
             .state = if (local_context_dependent or open_group_member) .lowering else .deferred,
@@ -3451,6 +3480,7 @@ const Builder = struct {
             .lexical_context_key = lexical_context_key,
             .fn_id = fn_id,
             .open_group_member = open_group_member,
+            .open_request_shape_key = if (open_request_shape_key) |shape_key| shape_key.bytes else null,
         });
         try source_ctx.draft.template_spec_by_fn.put(fn_id, @intCast(spec_index));
         lexical_needs_cleanup = false;
@@ -3471,6 +3501,9 @@ const Builder = struct {
             try lookup_entry.value_ptr.append(self.allocator, @intCast(spec_index));
         }
         if (resolved_lookup_address) |address| {
+            try registerTemplateSpecLookup(source_ctx.draft, self.allocator, address, @intCast(spec_index));
+        }
+        if (open_shape_lookup_address) |address| {
             try registerTemplateSpecLookup(source_ctx.draft, self.allocator, address, @intCast(spec_index));
         }
 
@@ -4922,6 +4955,16 @@ const Builder = struct {
             .request_kind = 0,
             .request_fn_key = self.specializationTypeDigest(request_fn_ty).bytes,
         } else null;
+        const open_request_shape_key: ?names.TypeDigest = if (resolved_request_ty == null)
+            try source_ctx.graph.openFunctionInterfaceShapeDigest(request_fn_node)
+        else
+            null;
+        const open_shape_lookup_address: ?DraftNestedLookupAddress = if (open_request_shape_key) |shape_key| .{
+            .family = family,
+            .evidence_digest = evidence_digest.bytes,
+            .request_kind = 2,
+            .request_fn_key = shape_key.bytes,
+        } else null;
         // Nested draft requests use the same graph-native identity discipline
         // as template requests; no resolved node becomes a durable cache key
         // before the graph freezes.
@@ -4943,6 +4986,28 @@ const Builder = struct {
                     const spec_fn_ty = spec.request_fn_ty orelse continue;
                     if (!try self.program.types.typeEql(&self.program.names, spec_fn_ty, resolved_request_ty.?)) continue;
                     if (!selection.add(raw_spec, true)) unreachable;
+                }
+            }
+        }
+        if (selection.selected() == null) {
+            if (open_shape_lookup_address) |address| {
+                if (source_ctx.draft.nested_spec_lookup.get(address)) |candidates| {
+                    for (candidates.items) |raw_spec| {
+                        const spec = &source_ctx.draft.nested_specs.items[raw_spec];
+                        if (spec.state != .lowered) continue;
+                        if (spec.request_fn_ty != null) continue;
+                        if (!evidenceChainEql(spec.evidence, requested_evidence)) continue;
+                        if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
+                        if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
+                        if (signature_relation == .exact_graph and
+                            source_ctx.draft.fns.items[@intFromEnum(spec.fn_id)].signature_relation != .exact_graph)
+                        {
+                            continue;
+                        }
+                        const spec_shape_key = spec.open_request_shape_key orelse continue;
+                        if (!std.mem.eql(u8, spec_shape_key[0..], open_request_shape_key.?.bytes[0..])) continue;
+                        if (!selection.add(raw_spec, true)) unreachable;
+                    }
                 }
             }
         }
@@ -5138,6 +5203,7 @@ const Builder = struct {
             .local_context_dependent = evidenceChainRequiresLocalContext(requested_evidence),
             .symbol = symbol,
             .fn_id = fn_id,
+            .open_request_shape_key = if (open_request_shape_key) |shape_key| shape_key.bytes else null,
         });
         var indexed_nodes = std.AutoHashMap(NodeId, void).init(self.allocator);
         defer indexed_nodes.deinit();
@@ -5154,6 +5220,9 @@ const Builder = struct {
             const lookup_entry = try source_ctx.draft.nested_spec_lookup.getOrPut(lookup_address);
             if (!lookup_entry.found_existing) lookup_entry.value_ptr.* = .empty;
             try lookup_entry.value_ptr.append(self.allocator, @intCast(spec_index));
+        }
+        if (open_shape_lookup_address) |address| {
+            try registerNestedSpecLookup(source_ctx.draft, self.allocator, address, @intCast(spec_index));
         }
 
         const owner_scope = try source_ctx.draft.enterOwner(.{ .draft_fn = fn_id });
@@ -9556,6 +9625,10 @@ const DraftTemplateSpec = struct {
     /// This context-free specialization joined its requester's live solve
     /// group because its interface was not closed enough to be a durable key.
     open_group_member: bool,
+    /// Alpha-normalized shape of the unresolved request before this
+    /// specialization body contributed its relations. This is graph-local and
+    /// never participates in durable specialization identity.
+    open_request_shape_key: ?[32]u8 = null,
     root_def: ?DraftDefId = null,
     resolved_slot: ?Ast.FnSlot = null,
 };
@@ -9935,6 +10008,10 @@ const DraftNestedSpec = struct {
     local_context_dependent: bool,
     symbol: Common.Symbol,
     fn_id: DraftFnId,
+    /// Alpha-normalized shape of the unresolved request before this nested body
+    /// contributed its relations. This is graph-local and never participates
+    /// in durable specialization identity.
+    open_request_shape_key: ?[32]u8 = null,
 };
 
 /// One reuse of a completed (or actively lowering) draft specialization from a
