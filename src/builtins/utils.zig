@@ -859,20 +859,27 @@ pub inline fn calculateCapacity(
         return requested_length;
     }
 
-    var new_capacity: usize = 0;
     if (element_width == 0) {
         return requested_length;
-    } else if (old_capacity == 0) {
-        new_capacity = 64 / element_width;
-    } else if (old_capacity < 4096 / element_width) {
-        new_capacity = old_capacity * 2;
-    } else if (old_capacity > 4096 * 32 / element_width) {
-        new_capacity = old_capacity * 2;
-    } else {
-        new_capacity = (old_capacity * 3 + 1) / 2;
     }
+    return @max(geometricGrowth(old_capacity, element_width), requested_length);
+}
 
-    return @max(new_capacity, requested_length);
+/// The next capacity step in the geometric growth progression. Appends that
+/// outgrow the current capacity reserve at least this much so a run of them
+/// stays amortized-linear.
+pub inline fn geometricGrowth(old_capacity: usize, element_width: usize) usize {
+    if (element_width == 0) {
+        return old_capacity;
+    } else if (old_capacity == 0) {
+        return 64 / element_width;
+    } else if (old_capacity < 4096 / element_width) {
+        return old_capacity * 2;
+    } else if (old_capacity > 4096 * 32 / element_width) {
+        return old_capacity * 2;
+    } else {
+        return (old_capacity * 3 + 1) / 2;
+    }
 }
 
 /// Allocates memory with space for a reference count, for C compatibility

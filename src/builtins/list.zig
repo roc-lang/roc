@@ -668,6 +668,53 @@ pub fn listReserve(
     }
 }
 
+/// Ensure capacity for `spare` more elements ahead of an append. Unlike
+/// `listReserve` — the explicit user reserve, which trusts the request and
+/// sizes the allocation exactly — growth here takes at least the geometric
+/// step, so a loop of appends stays amortized-linear instead of reallocating
+/// on every call once the list runs tight.
+fn listReserveForAppend(
+    list: RocList,
+    alignment: u32,
+    spare: u64,
+    element_width: usize,
+    elements_refcounted: bool,
+    inc_context: ?*anyopaque,
+    inc: Inc,
+    dec_context: ?*anyopaque,
+    dec: Dec,
+    update_mode: UpdateMode,
+    roc_ops: *RocOps,
+) RocList {
+    const original_len = list.len();
+    const cap = @as(u64, @intCast(list.getCapacity()));
+
+    std.debug.assert(original_len <= cap);
+    if (list.isExclusive(update_mode, roc_ops) and spare <= cap - @as(u64, @intCast(original_len))) {
+        std.debug.assert(!list.isSeamlessSlice() or spare == 0);
+        return list;
+    }
+
+    const needed = @as(u64, @intCast(original_len)) +| spare;
+    const clamped: usize = @intCast(@min(needed, @as(u64, @intCast(std.math.maxInt(usize)))));
+    const desired = @max(clamped, utils.geometricGrowth(@as(usize, @intCast(cap)), element_width));
+
+    var output = list.reallocate(
+        alignment,
+        desired,
+        element_width,
+        elements_refcounted,
+        inc_context,
+        inc,
+        dec_context,
+        dec,
+        update_mode,
+        roc_ops,
+    );
+    output.length = original_len;
+    return output;
+}
+
 /// Append `count` elements copied from the list itself beginning at `start`.
 /// The copy reads through its own freshly appended elements, so a range past
 /// the original end repeats the elements from `start` onward. The caller has
@@ -690,11 +737,11 @@ pub fn listAppendRangeWithin(
     const start: usize = @intCast(start_u64);
     const count: usize = @intCast(@min(count_u64, @as(u64, @intCast(std.math.maxInt(usize)))));
 
-    // Reserve one word of scratch beyond the appended range so every copy
-    // below may run in whole-word stores that overshoot the range by up to
-    // seven bytes. The scratch stays within capacity and outside the length.
-    const slop_elements: u64 = (8 + element_width - 1) / element_width;
-    var output = listReserve(
+    // Reserve scratch beyond the appended range so every copy below may run
+    // in bursts of whole-word stores that overshoot the range, by up to 39
+    // bytes. The scratch stays within capacity and outside the length.
+    const slop_elements: u64 = (40 + element_width - 1) / element_width;
+    var output = listReserveForAppend(
         list,
         alignment,
         count_u64 +| slop_elements,
@@ -709,34 +756,69 @@ pub fn listAppendRangeWithin(
     );
     const base = output.bytes.?;
 
-    const src = base + start * element_width;
-    const dst = base + original_len * element_width;
+    var src = base + start * element_width;
+    var dst = base + original_len * element_width;
     const distance = (original_len - start) * element_width;
     const total = count * element_width;
+    const end = dst + total;
     if (distance >= 8) {
         // A word read at offset i touches src[i..i+8), which stays at or
         // behind the write cursor, so every byte read is already
-        // materialized. Typical ranges are a few bytes, so inline word
-        // copies into the scratch beat memcpy calls and a byte tail.
-        var i: usize = 0;
-        while (i < total) : (i += 8) {
-            dst[i..][0..8].* = src[i..][0..8].*;
+        // materialized. An unconditional five-word burst covers most ranges
+        // without a branch; longer ranges continue in five-word strides.
+        inline for (0..5) |_| {
+            dst[0..8].* = src[0..8].*;
+            src += 8;
+            dst += 8;
+        }
+        while (@intFromPtr(dst) < @intFromPtr(end)) {
+            inline for (0..5) |_| {
+                dst[0..8].* = src[0..8].*;
+                src += 8;
+                dst += 8;
+            }
+        }
+    } else if (distance == 1) {
+        // A run of one repeated byte: broadcast it and store whole words,
+        // no loads at all.
+        const v: u64 = @as(u64, 0x0101010101010101) *% src[0];
+        inline for (0..4) |_| {
+            dst[0..8].* = @bitCast(v);
+            dst += 8;
+        }
+        while (@intFromPtr(dst) < @intFromPtr(end)) {
+            inline for (0..4) |_| {
+                dst[0..8].* = @bitCast(v);
+                dst += 8;
+            }
         }
     } else {
-        // The range repeats with a period shorter than a word. Materialize
-        // the smallest word-sized multiple of the period byte by byte (at
-        // most 14 bytes), then copy words from one multiple back: those
-        // reads carry the same repeating values and stay behind the write
-        // cursor.
-        const period = distance * ((8 + distance - 1) / distance);
-        const head = @min(period, total);
-        var i: usize = 0;
-        while (i < head) : (i += 1) {
-            dst[i] = src[i];
+        // The range repeats with a period of 2-7 bytes. First materialize a
+        // whole word of repeats with stores that advance by the period: each
+        // store writes a full word but only its leading `distance` bytes are
+        // final, so bytes before the cursor never change once written. The
+        // trailing garbage of the last store sits at or past the cursor and
+        // is overwritten below or left in the slop.
+        var materialized: usize = 0;
+        while (materialized < 8) {
+            dst[0..8].* = src[0..8].*;
+            src += distance;
+            dst += distance;
+            materialized += distance;
         }
-        const back = dst - period;
-        while (i < total) : (i += 8) {
-            dst[i..][0..8].* = back[i..][0..8].*;
+        // Everything before the cursor is now final and repeats with a
+        // word-sized period, so the rest runs in the same five-word bursts
+        // as the long-distance case, reading one period multiple back.
+        if (@intFromPtr(dst) < @intFromPtr(end)) {
+            src = dst - materialized;
+            while (true) {
+                inline for (0..5) |_| {
+                    dst[0..8].* = src[0..8].*;
+                    src += 8;
+                    dst += 8;
+                }
+                if (@intFromPtr(dst) >= @intFromPtr(end)) break;
+            }
         }
     }
 
@@ -774,7 +856,7 @@ pub fn listAppendSublist(
     const original_len = list.len();
     const start: usize = @intCast(start_u64);
 
-    var output = listReserve(
+    var output = listReserveForAppend(
         list,
         alignment,
         len_u64,
@@ -833,7 +915,7 @@ pub fn listAppendLeBytes(
     if (count == 0) return list;
     const original_len = list.len();
 
-    var output = listReserve(
+    var output = listReserveForAppend(
         list,
         alignment,
         count_u64,
