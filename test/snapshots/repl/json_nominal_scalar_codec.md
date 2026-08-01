@@ -17,8 +17,8 @@ type=repl
 » Json.to_str(Price.(19.95))
 » Token := Str.{ parser_for : _ }
 » match Json.parse("\"parsed token\"") { Ok(t) => t, Err(_) => Token.("parse failed") }
-» Ratio := F64.{ encoder_for : _ }
-» Json.to_str(Ratio.(1.5))
+» Latitude := F64.{ encoder_for : _ }
+» Json.to_str(Latitude.(51.5))
 ~~~
 # OUTPUT
 assigned `Username`
@@ -45,13 +45,13 @@ assigned `Token`
 ---
 "parsed token"
 ---
-assigned `Ratio`
+assigned `Latitude`
 ---
 **Type Mismatch**
 The `encode_f64` method on `JsonEncoding` has an incompatible type.
 **repl:8:8:8:19:**
 ```roc
-main = Json.to_str(Ratio.(1.5))
+main = Json.to_str(Latitude.(51.5))
 ```
        ^^^^^^^^^^^
 
