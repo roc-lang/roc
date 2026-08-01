@@ -6186,12 +6186,17 @@ const Builder = struct {
         ctx.current_fn_key = boundary.current_fn_key;
         try ctx.restoreCodecLexicalContext(boundary.lexical);
 
-        var method_calls = std.AutoHashMap(Type.TypeId, DraftFnSlot).init(self.allocator);
+        var method_calls = std.AutoHashMap(names.TypeDigest, DraftFnSlot).init(self.allocator);
         defer method_calls.deinit();
         for (body_draft.structural_eq_method_calls.items) |planned| {
             if (planned.boundary != boundary_index) continue;
             const component_ty = try sealer.sealNode(planned.node);
-            const entry = try method_calls.getOrPut(component_ty);
+            // Content identity, not id identity: an occurrence-held class
+            // mints a fresh id per construction, so the frozen walk's
+            // reconstruction of the same component cannot be asked to
+            // reproduce the plan's id (reunify.md 8.5).
+            const component_digest = self.program.types.typeDigest(&self.program.names, component_ty);
+            const entry = try method_calls.getOrPut(component_digest);
             if (entry.found_existing) {
                 if (!std.meta.eql(entry.value_ptr.*, planned.callee)) {
                     Common.invariant("deferred structural equality plan assigned two callees to one component type");
@@ -11732,7 +11737,7 @@ const BodyContext = struct {
     /// Frozen Phase-B lookup from each sealed equality component with an exact
     /// method to the procedure slot reserved while relations were still being
     /// produced.
-    frozen_equality_method_calls: ?*const std.AutoHashMap(Type.TypeId, DraftFnSlot) = null,
+    frozen_equality_method_calls: ?*const std.AutoHashMap(names.TypeDigest, DraftFnSlot) = null,
     /// Frozen Phase-B lookup from a sealed inspected nominal type to the
     /// attached `to_inspect` slot reserved while relations were still open.
     frozen_inspect_method_calls: ?*const std.AutoHashMap(Type.TypeId, DraftFnSlot) = null,
@@ -38789,7 +38794,8 @@ const BodyContext = struct {
         const edge: MethodCallEdge = .{ .generated = rule };
         const callee = planned: {
             if (self.frozen_equality_method_calls) |planned_calls| {
-                break :planned planned_calls.get(ty) orelse
+                const ty_digest = self.builder.program.types.typeDigest(&self.builder.program.names, ty);
+                break :planned planned_calls.get(ty_digest) orelse
                     Common.invariant("frozen structural derivation emission reached an unplanned component method");
             }
             const arg_tys = D.methodArgTypes(ty, ctx.result_ty);
