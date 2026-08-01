@@ -20,7 +20,7 @@ const util = @import("util.zig");
 const fx_test_specs = @import("fx_test_specs.zig");
 
 const FxPlatformTestError = util.RocRunError || util.ChildTimeoutError || util.ResultCheckError || std.mem.Allocator.Error || std.Io.Dir.RealPathFileAllocError || std.Io.Dir.CreateDirPathError || std.Io.Dir.ReadFileAllocError || error{
-    DevBackendBuildFailed,
+    NativeBackendBuildFailed,
     DivisionByZeroNotHandled,
     StackOverflowNotHandled,
     StaticDataHostBinaryContainsComptimeOnlyString,
@@ -38,9 +38,11 @@ comptime {
     std.testing.refAllDecls(fx_test_specs);
 }
 
-fn runDevBackendHostSelfTest(
+fn runNativeBackendHostSelfTest(
     allocator: std.mem.Allocator,
     roc_file: []const u8,
+    opt_flag: []const u8,
+    output_basename: []const u8,
     self_test_flag: []const u8,
 ) FxPlatformTestError!std.process.RunResult {
     var tmp_dir = testing.tmpDir(.{});
@@ -49,7 +51,7 @@ fn runDevBackendHostSelfTest(
     const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
 
-    const output_path = try std.fs.path.join(allocator, &.{ tmp_path, "fx_dev_host_test" });
+    const output_path = try std.fs.path.join(allocator, &.{ tmp_path, output_basename });
     defer allocator.free(output_path);
 
     const cache_path = try std.fs.path.join(allocator, &.{ tmp_path, "roc-cache" });
@@ -78,7 +80,7 @@ fn runDevBackendHostSelfTest(
     const build_result = try util.runChildWithTimeout(std.testing.io, allocator, &[_][]const u8{
         util.roc_binary_path,
         "build",
-        "--opt=dev",
+        opt_flag,
         output_arg,
         roc_file,
     }, .{
@@ -91,17 +93,17 @@ fn runDevBackendHostSelfTest(
     switch (build_result.term) {
         .exited => |code| {
             if (code != 0) {
-                std.debug.print("roc build --opt=dev failed with exit code {}\n", .{code});
+                std.debug.print("roc build {s} failed with exit code {}\n", .{ opt_flag, code });
                 std.debug.print("STDOUT: {s}\n", .{build_result.stdout});
                 std.debug.print("STDERR: {s}\n", .{build_result.stderr});
-                return error.DevBackendBuildFailed;
+                return error.NativeBackendBuildFailed;
             }
         },
         else => {
-            std.debug.print("roc build --opt=dev terminated abnormally: {}\n", .{build_result.term});
+            std.debug.print("roc build {s} terminated abnormally: {}\n", .{ opt_flag, build_result.term });
             std.debug.print("STDOUT: {s}\n", .{build_result.stdout});
             std.debug.print("STDERR: {s}\n", .{build_result.stderr});
-            return error.DevBackendBuildFailed;
+            return error.NativeBackendBuildFailed;
         },
     }
 
@@ -170,14 +172,14 @@ fn buildAndRunDevBackendApp(
                 std.debug.print("roc build --opt=dev failed with exit code {}\n", .{code});
                 std.debug.print("STDOUT: {s}\n", .{build_result.stdout});
                 std.debug.print("STDERR: {s}\n", .{build_result.stderr});
-                return error.DevBackendBuildFailed;
+                return error.NativeBackendBuildFailed;
             }
         },
         else => {
             std.debug.print("roc build --opt=dev terminated abnormally: {}\n", .{build_result.term});
             std.debug.print("STDOUT: {s}\n", .{build_result.stdout});
             std.debug.print("STDERR: {s}\n", .{build_result.stderr});
-            return error.DevBackendBuildFailed;
+            return error.NativeBackendBuildFailed;
         },
     }
 
@@ -219,9 +221,11 @@ fn expectInterpreterRuntimeStackOverflow() FxPlatformTestError!void {
 fn expectDevRuntimeStackOverflow() FxPlatformTestError!void {
     const allocator = testing.allocator;
 
-    const run_result = try runDevBackendHostSelfTest(
+    const run_result = try runNativeBackendHostSelfTest(
         allocator,
         "test/fx/hello_world.roc",
+        "--opt=dev",
+        "fx_dev_host_test",
         "--host-test-stack-overflow",
     );
     defer allocator.free(run_result.stdout);
@@ -335,12 +339,54 @@ fn runIoSpecTest(comptime opt_flag: []const u8, spec: fx_test_specs.TestSpec) Fx
     };
 }
 
+fn expectProvidedBoxedCallableDrop(opt_flag: []const u8, output_basename: []const u8) FxPlatformTestError!void {
+    const allocator = testing.allocator;
+    const run_result = try runNativeBackendHostSelfTest(
+        allocator,
+        "test/provided-callable-host/app.roc",
+        opt_flag,
+        output_basename,
+        "--run-provided-boxed-callable-drop",
+    );
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    switch (run_result.term) {
+        .exited => |code| {
+            if (code != 0) {
+                std.debug.print("provided boxed callable drop test exited with code {}\n", .{code});
+                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+                return error.UnexpectedExitCode;
+            }
+        },
+        else => {
+            std.debug.print("provided boxed callable drop test terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.UnexpectedTermination;
+        },
+    }
+
+    try testing.expect(std.mem.find(u8, run_result.stderr, "provided boxed callable drop ok") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "[Roc Memory Info]") == null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "panic") == null);
+}
+
 test "fx platform boxed erased callable host boundary (interpreter)" {
     try runIoSpecTest("--opt=interpreter", fx_test_specs.host_boxed_fn_boundary_test);
 }
 
 test "fx platform boxed erased callable host boundary (dev backend)" {
     try runIoSpecTest("--opt=dev", fx_test_specs.host_boxed_fn_boundary_test);
+}
+
+test "fx platform provided root drops boxed callable (dev backend)" {
+    try expectProvidedBoxedCallableDrop("--opt=dev", "fx_provided_boxed_callable_drop_dev");
+}
+
+test "fx platform provided root drops boxed callable (speed backend)" {
+    try expectProvidedBoxedCallableDrop("--opt=speed", "fx_provided_boxed_callable_drop_speed");
 }
 
 test "fx platform direct run preserves RocOps after F32.abs before list allocation" {

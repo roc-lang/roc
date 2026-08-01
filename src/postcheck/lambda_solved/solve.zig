@@ -185,6 +185,8 @@ const Solver = struct {
             try self.solveFn(fn_id, fn_);
         }
 
+        try self.markAbiBoundaryCallables();
+
         try self.program.layout_requests.ensureTotalCapacity(self.allocator, self.lifted.layout_requests.len);
         for (self.lifted.layout_requests) |request| {
             const ty = if (request.fn_id) |fn_id|
@@ -344,6 +346,42 @@ const Solver = struct {
             },
             .hosted => {},
         }
+    }
+
+    /// Host-facing function schemas use the erased callable representation for
+    /// every callable value reachable from an argument or result. Seed that
+    /// explicit boundary requirement after ordinary body constraints have
+    /// unified, but before unresolved callable slots are closed as finite.
+    fn markAbiBoundaryCallables(self: *Solver) Allocator.Error!void {
+        for (self.lifted.fns, 0..) |fn_, index| {
+            if (fn_.body != .hosted) continue;
+            const fn_id: Lifted.FnId = @enumFromInt(@as(u32, @intCast(index)));
+            try self.markErasedCallablesAtFunctionBoundary(self.program.fn_tys.items[@intFromEnum(fn_id)]);
+        }
+
+        for (self.lifted.roots) |root| {
+            switch (root.request.abi) {
+                .platform, .hosted => {
+                    const index = @intFromEnum(root.fn_id);
+                    if (index >= self.program.fn_tys.items.len) {
+                        Common.invariant("Lambda Solved ABI root referenced a missing function");
+                    }
+                    try self.markErasedCallablesAtFunctionBoundary(self.program.fn_tys.items[index]);
+                },
+                .roc, .test_expect, .compile_time => {},
+            }
+        }
+    }
+
+    fn markErasedCallablesAtFunctionBoundary(self: *Solver, fn_ty: Type.TypeVarId) Allocator.Error!void {
+        const func = switch (try self.resolvedContent(fn_ty)) {
+            .func => |func| func,
+            else => Common.invariant("Lambda Solved ABI boundary referenced a non-function"),
+        };
+        for (self.program.types.span(func.args)) |arg| {
+            try self.markErasedCallablesReachedByType(arg);
+        }
+        try self.markErasedCallablesReachedByType(func.ret);
     }
 
     fn closeUnfilledCallableSlots(self: *Solver) Allocator.Error!void {
