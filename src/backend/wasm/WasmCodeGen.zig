@@ -765,6 +765,11 @@ fn hostBuiltinImports(self: *const Self) HostBuiltinImports {
             .list_append_unsafe => self.list_append_unsafe_import,
             .list_concat => self.list_concat_import,
             .list_append_range_within => self.list_append_range_within_import,
+            // The host-import test mode never reaches the unsafe variant:
+            // list_slack_unique answers zero there, so promoted appends
+            // always take the checked path; its codegen calls the checked
+            // import for validation's sake.
+            .list_append_range_within_unsafe => null,
             .list_append_sublist => self.list_append_sublist_import,
             .list_append_le_bytes => self.list_append_le_bytes_import,
             // The host-import test mode never calls this builtin: its code
@@ -12049,6 +12054,10 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // list_concat(list_a, list_b) -> concatenated list
             try self.generateLLListConcat(args, ll.ret_layout, ll.unique_args);
         },
+        .list_append_range_within_unsafe => {
+            // list_append_range_within_unsafe(list, start, count) -> extended list
+            try self.generateLLListAppendRangeWithinUnsafe(args, ll.ret_layout);
+        },
         .list_append_range_within => {
             // list_append_range_within(list, start, count) -> extended list
             try self.generateLLListAppendRangeWithin(args, ll.ret_layout, ll.unique_args);
@@ -18445,6 +18454,72 @@ fn generateLLListAppendRangeWithin(self: *Self, args: anytype, ret_layout: layou
             try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_range_within)), null);
         },
         .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_append_range_within", .{}),
+    }
+    try self.emitFpOffset(result_offset);
+}
+
+/// Generate LowLevel list_append_range_within_unsafe: the loop-append
+/// promotion pass proved the list uniquely owned with capacity for the range
+/// plus copy scratch. The host-import test mode cannot take this path at
+/// runtime (its slack is always zero), so it emits a call to the checked
+/// import purely to keep the function well-typed.
+fn generateLLListAppendRangeWithinUnsafe(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
+    const list_abi = self.builtinInternalListAbi("wasm.generateLLListAppendRangeWithinUnsafe.builtin_list_abi", ret_layout);
+    const elem_size = list_abi.elem_size;
+    const elem_align = list_abi.elem_align;
+
+    try self.emitProcLocal(GuardedList.at(args, 0));
+    const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(list_ptr);
+
+    const start_local = try self.materializeListIndex(GuardedList.at(args, 1));
+    const count_local = try self.materializeListIndex(GuardedList.at(args, 2));
+
+    const result_offset = try self.allocStackMemory(12, 4);
+
+    if (elem_size == 0) {
+        // ZST elements: only the length grows.
+        const len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitLocalGet(list_ptr);
+        try self.emitLoadOp(.i32, 4);
+        try self.emitLocalGet(count_local);
+        self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+        self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+        try self.emitLocalSet(len);
+
+        const zero = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+        WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
+        try self.emitLocalSet(zero);
+
+        try self.buildRocListWithCap(zero, len, len);
+        return;
+    }
+
+    switch (self.external_calls) {
+        .host_imports => {
+            try self.emitLocalGet(list_ptr);
+            try self.emitI32Const(@intCast(elem_size));
+            try self.emitI32Const(@intCast(elem_align));
+            try self.emitLocalGet(start_local);
+            try self.emitLocalGet(count_local);
+            try self.emitFpOffset(result_offset);
+            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_range_within)), self.list_append_range_within_import);
+        },
+        .builtin_relocs => {
+            const fields = try self.loadRocListFields(list_ptr);
+            const callbacks = try self.listElementCallbacks(list_abi);
+            try self.emitFpOffset(result_offset);
+            try self.emitRocListFields(fields);
+            try self.emitLocalGet(start_local);
+            try self.emitLocalGet(count_local);
+            try self.emitI32Const(@intCast(elem_size));
+            try self.emitI32Const(@intCast(callbacks.elements_refcounted));
+            try self.emitI32Const(@intCast(callbacks.incref_table_idx));
+            try self.emitLocalGet(self.roc_ops_local);
+            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_range_within_unsafe)), null);
+        },
+        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_append_range_within_unsafe", .{}),
     }
     try self.emitFpOffset(result_offset);
 }

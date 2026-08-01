@@ -755,6 +755,21 @@ pub fn roc_builtins_list_append_range_within(out: *RocList, list_bytes: ?[*]u8, 
     }
 }
 
+/// Wrapper: listAppendRangeWithinUnsafe(RocList, start, count, element_width, ..., *RocOps) -> RocList.
+/// Every ownership and capacity check is already discharged by the caller.
+pub fn roc_builtins_list_append_range_within_unsafe(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, start: u64, count: u64, element_width: usize, elements_refcounted: bool, element_incref: ?RcIncFn, roc_ops: *RocOps) callconv(.c) void {
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    if (elements_refcounted) {
+        var inc_ctx = CallbackElementIncrefContext{
+            .callback = element_incref orelse unreachable,
+            .roc_ops = roc_ops,
+        };
+        out.* = list.listAppendRangeWithinUnsafe(l, start, count, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, roc_ops);
+    } else {
+        out.* = list.listAppendRangeWithinUnsafe(l, start, count, element_width, false, null, @ptrCast(&rcNone), roc_ops);
+    }
+}
+
 /// Wrapper: listAppendSublist(RocList, RocList src, start, len, alignment, element_width, ..., *RocOps) -> RocList.
 /// The source list is borrowed: only copied elements gain references. The
 /// update mode is forwarded to the destination's uniqueness check; `.InPlace`

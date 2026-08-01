@@ -733,7 +733,6 @@ pub fn listAppendRangeWithin(
     update_mode: UpdateMode,
     roc_ops: *RocOps,
 ) callconv(.c) RocList {
-    const original_len = list.len();
     const start: usize = @intCast(start_u64);
     const count: usize = @intCast(@min(count_u64, @as(u64, @intCast(std.math.maxInt(usize)))));
 
@@ -754,6 +753,50 @@ pub fn listAppendRangeWithin(
         update_mode,
         roc_ops,
     );
+    appendRangeWithinCore(&output, start, count, element_width, elements_refcounted, inc_context, inc);
+    return output;
+}
+
+/// Append `count` elements copied from the list itself beginning at `start`,
+/// with every check already discharged by the caller: the list uniquely owns
+/// a non-slice allocation whose capacity covers the appended range plus the
+/// word-copy scratch. The loop-append promotion pass emits this on its hot
+/// path after proving exactly those facts through its slack counter.
+pub fn listAppendRangeWithinUnsafe(
+    list: RocList,
+    start_u64: u64,
+    count_u64: u64,
+    element_width: usize,
+    elements_refcounted: bool,
+    inc_context: ?*anyopaque,
+    inc: Inc,
+    roc_ops: *RocOps,
+) callconv(.c) RocList {
+    const start: usize = @intCast(start_u64);
+    const count: usize = @intCast(count_u64);
+
+    std.debug.assert(!list.isSeamlessSlice());
+    std.debug.assert(list.isUnique(roc_ops));
+    std.debug.assert(list.getCapacity() * element_width >=
+        (list.len() + count) * element_width + 40);
+
+    var output = list;
+    appendRangeWithinCore(&output, start, count, element_width, elements_refcounted, inc_context, inc);
+    return output;
+}
+
+/// The copy-and-lengthen half of a range-within append. The capacity for the
+/// range plus the overshoot scratch is already reserved.
+inline fn appendRangeWithinCore(
+    output: *RocList,
+    start: usize,
+    count: usize,
+    element_width: usize,
+    elements_refcounted: bool,
+    inc_context: ?*anyopaque,
+    inc: Inc,
+) void {
+    const original_len = output.len();
     const base = output.bytes.?;
 
     var src = base + start * element_width;
@@ -830,7 +873,6 @@ pub fn listAppendRangeWithin(
     }
 
     output.length = original_len + count;
-    return output;
 }
 
 /// Append `len` elements of `src` beginning at `start` to `list`. The caller

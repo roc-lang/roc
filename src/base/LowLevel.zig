@@ -61,6 +61,7 @@ pub const LowLevel = enum(u16) {
     list_append_unsafe,
     list_concat,
     list_append_range_within,
+    list_append_range_within_unsafe,
     list_append_sublist,
     list_append_le_bytes,
     list_slack_unique,
@@ -856,6 +857,12 @@ pub const LowLevel = enum(u16) {
             .list_prepend => RcEffect.runtimeUniquenessRetainingArgs(argMask(&.{0}), argMask(&.{1})),
 
             .list_append_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), argMask(&.{1})),
+
+            // Like `list_append_unsafe`: mutates a list the loop-append
+            // promotion pass proved uniquely owned with enough capacity, so
+            // there is nothing to check at runtime. Copied refcounted
+            // elements gain their references inside the builtin.
+            .list_append_range_within_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), 0),
 
             // Reads the list's refcount (and slice bit) without changing it.
             .list_map_can_reuse => RcEffect.none(),

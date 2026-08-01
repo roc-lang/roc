@@ -86,6 +86,8 @@ const EdgeKind = enum {
     append_call,
     /// A kept list operation returning the (possibly reallocated) list.
     refresh_op,
+    /// A matched range-within append: `target = list_append_range_within(source, start, count)`.
+    range_append,
     /// `set param := source` with initialize-join-param mode.
     param_write,
 };
@@ -379,8 +381,13 @@ const Pass = struct {
                         else => false,
                     };
                     if (rebinds and list_arg0 and self.isListLocal(assign.target)) {
+                        // Range-within appends promote to a slack-guarded
+                        // diamond of their own; zero-sized elements have no
+                        // bytes to copy, so they keep the checked call.
+                        const elem_size = self.layouts.builtinListAbi(self.store.getLocal(assign.target).layout_idx).elem_size;
+                        const kind: EdgeKind = if (assign.op == .list_append_range_within and elem_size != 0) .range_append else .refresh_op;
                         try scan.edges.append(allocator, .{
-                            .kind = .refresh_op,
+                            .kind = kind,
                             .stmt = current,
                             .source = GuardedList.at(args, 0),
                             .target = assign.target,
@@ -885,6 +892,14 @@ const Pass = struct {
                         try slack_of.put(edge.target, slack_out);
                         resolving = true;
                     },
+                    .range_append => {
+                        const slack_in = slack_of.get(edge.source) orelse continue;
+                        try rewritten.put(edge.stmt, {});
+                        const slack_out = shared_slack.get(edge.target) orelse try self.freshLocal(.u64, new_locals);
+                        try self.rewriteRangeAppendSite(edge, slack_in, slack_out, max_join_id, new_locals);
+                        try slack_of.put(edge.target, slack_out);
+                        resolving = true;
+                    },
                     .refresh_op => {
                         try rewritten.put(edge.stmt, {});
                         const assign = self.store.getCFStmt(edge.stmt).assign_low_level;
@@ -1073,6 +1088,127 @@ const Pass = struct {
             .params = try self.store.addLocalSpan(&.{ merged_list, merged_slack }),
             .body = unsafe_append,
             .remainder = one_lit,
+        } };
+    }
+
+    /// Rewrite `target = list_append_range_within(list, start, count); next`
+    /// into a slack-guarded diamond. The hot path runs the unchecked variant
+    /// and pays a subtraction; the cold path keeps the checked call (which
+    /// uniquifies and grows, reserving the copy scratch itself) and measures
+    /// the slack fresh. The guard demands `slack >= count + slop` where slop
+    /// covers the unchecked copy's overshooting word stores, phrased as two
+    /// compares joined by an AND so a huge `count` cannot wrap the sum: the
+    /// subtraction in the second compare may wrap, but only when the first
+    /// compare already vetoes the fast path.
+    fn rewriteRangeAppendSite(
+        self: *Pass,
+        edge: Edge,
+        slack_in: LocalId,
+        slack_out: LocalId,
+        max_join_id: *u32,
+        new_locals: *std.ArrayList(LocalId),
+    ) ResourceError!void {
+        const call = self.store.getCFStmt(edge.stmt).assign_low_level;
+        const args = self.store.getLocalSpan(call.args);
+        const list_arg = GuardedList.at(args, 0);
+        const count_arg = GuardedList.at(args, 2);
+
+        const elem_size = self.layouts.builtinListAbi(self.store.getLocal(list_arg).layout_idx).elem_size;
+        std.debug.assert(elem_size != 0);
+        const slop_elements: u64 = (40 + elem_size - 1) / elem_size;
+
+        const slop = try self.freshLocal(.u64, new_locals);
+        const enough_for_slop = try self.freshLocal(.bool, new_locals);
+        const adjusted = try self.freshLocal(.u64, new_locals);
+        const enough_for_count = try self.freshLocal(.bool, new_locals);
+        const fits = try self.freshLocal(.bool, new_locals);
+
+        const join_id: LIR.JoinPointId = @enumFromInt(max_join_id.*);
+        max_join_id.* += 1;
+
+        // Hot path: the unchecked append, then the slack drops by the count.
+        const hot_jump = try self.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        const hot_sub = try self.store.addCFStmt(.{ .assign_low_level = .{
+            .target = slack_out,
+            .op = .num_minus,
+            .rc_effect = LowLevelOp.num_minus.rcEffect(),
+            .args = try self.store.addLocalSpan(&.{ slack_in, count_arg }),
+            .next = hot_jump,
+        } });
+        const hot_append = try self.store.addCFStmt(.{ .assign_low_level = .{
+            .target = call.target,
+            .op = .list_append_range_within_unsafe,
+            .rc_effect = LowLevelOp.list_append_range_within_unsafe.rcEffect(),
+            .args = call.args,
+            .next = hot_sub,
+        } });
+
+        // Cold path: the original checked call, then a fresh measurement.
+        const cold_jump = try self.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        const cold_measure = try self.store.addCFStmt(.{ .assign_low_level = .{
+            .target = slack_out,
+            .op = .list_slack_unique,
+            .rc_effect = LowLevelOp.list_slack_unique.rcEffect(),
+            .args = try self.store.addLocalSpan(&.{call.target}),
+            .next = cold_jump,
+        } });
+        const cold_append = try self.store.addCFStmt(.{ .assign_low_level = .{
+            .target = call.target,
+            .op = call.op,
+            .rc_effect = call.rc_effect,
+            .args = call.args,
+            .next = cold_measure,
+        } });
+
+        // Dispatch: only `fits == 1` takes the unchecked path.
+        const branches = try self.store.addCFSwitchBranches(&.{.{ .value = 1, .body = hot_append }});
+        const dispatch = try self.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = fits,
+            .branches = branches,
+            .default_branch = cold_append,
+            .default_is_cold = true,
+            .continuation = null,
+        } });
+        const combine = try self.store.addCFStmt(.{ .assign_low_level = .{
+            .target = fits,
+            .op = .num_bitwise_and,
+            .rc_effect = LowLevelOp.num_bitwise_and.rcEffect(),
+            .args = try self.store.addLocalSpan(&.{ enough_for_slop, enough_for_count }),
+            .next = dispatch,
+        } });
+        const compare_count = try self.store.addCFStmt(.{ .assign_low_level = .{
+            .target = enough_for_count,
+            .op = .num_is_gte,
+            .rc_effect = LowLevelOp.num_is_gte.rcEffect(),
+            .args = try self.store.addLocalSpan(&.{ adjusted, count_arg }),
+            .next = combine,
+        } });
+        const subtract_slop = try self.store.addCFStmt(.{ .assign_low_level = .{
+            .target = adjusted,
+            .op = .num_minus,
+            .rc_effect = LowLevelOp.num_minus.rcEffect(),
+            .args = try self.store.addLocalSpan(&.{ slack_in, slop }),
+            .next = compare_count,
+        } });
+        const compare_slop = try self.store.addCFStmt(.{ .assign_low_level = .{
+            .target = enough_for_slop,
+            .op = .num_is_gte,
+            .rc_effect = LowLevelOp.num_is_gte.rcEffect(),
+            .args = try self.store.addLocalSpan(&.{ slack_in, slop }),
+            .next = subtract_slop,
+        } });
+        const slop_lit = try self.store.addCFStmt(.{ .assign_literal = .{
+            .target = slop,
+            .value = .{ .i64_literal = .{ .value = @intCast(slop_elements), .layout_idx = .u64 } },
+            .next = compare_slop,
+        } });
+
+        // The call statement becomes the whole construct in place.
+        self.store.getCFStmtPtr(edge.stmt).* = .{ .join = .{
+            .id = join_id,
+            .params = try self.store.addLocalSpan(&.{}),
+            .body = call.next,
+            .remainder = slop_lit,
         } };
     }
 };

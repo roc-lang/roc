@@ -3074,6 +3074,7 @@ pub const MonoLlvmCodeGen = struct {
             .list_append_unsafe => try self.emitListAppendUnsafe(target, arg_locals),
             .list_concat => try self.emitListConcat(target, arg_locals, unique_args),
             .list_append_range_within => try self.emitListAppendRangeWithin(target, arg_locals, unique_args),
+            .list_append_range_within_unsafe => try self.emitListAppendRangeWithinUnsafe(target, arg_locals),
             .list_append_sublist => try self.emitListAppendSublist(target, arg_locals, unique_args),
             .list_append_le_bytes => try self.emitListAppendLeBytes(target, arg_locals, unique_args),
             .list_slack_unique => try self.emitListSlackUnique(target, arg_locals),
@@ -7642,6 +7643,30 @@ pub const MonoLlvmCodeGen = struct {
         try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
         try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.listOp(.list_append_range_within)), call_args.types.items, call_args.values.items);
+    }
+
+    fn emitListAppendRangeWithinUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const abi = self.layouts().builtinListAbi(self.localLayout(target));
+        if (abi.elem_size == 0) {
+            const count = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 2)).ptr, self.localLayout(GuardedList.at(args, 2))), self.ptrSizedIntType(), false);
+            const len = try self.loadUsize(try self.offsetPtr(self.slot(GuardedList.at(args, 0)).ptr, self.rocListLenOffset()));
+            const total_len = (self.wip orelse return error.CompilationFailed).bin(.add, len, count, "") catch return error.OutOfMemory;
+            const null_ptr = builder.nullValue(try self.ptrType()) catch return error.OutOfMemory;
+            try self.storePointer(self.slot(target).ptr, null_ptr);
+            try self.storeListLen(self.slot(target).ptr, total_len);
+            try self.storeListCapacity(self.slot(target).ptr, builder.intValue(self.ptrSizedIntType(), 0) catch return error.OutOfMemory);
+            return;
+        }
+        var call_args = try self.rocListArgs1(GuardedList.at(args, 0));
+        defer call_args.deinit(self.allocator);
+        try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
+        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), .i64, false));
+        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 2)).ptr, self.localLayout(GuardedList.at(args, 2))), .i64, false));
+        try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
+        try self.appendListElementRcArgs(&call_args, abi, true, false);
+        try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
+        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.listOp(.list_append_range_within_unsafe)), call_args.types.items, call_args.values.items);
     }
 
     fn emitListAppendLeBytes(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
