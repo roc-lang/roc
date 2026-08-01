@@ -1999,6 +1999,22 @@ test "RocList empty list creation" {
     try std.testing.expect(empty_list.isEmpty());
 }
 
+test "default-platform RocList view matches canonical RocList layout" {
+    const View = @import("roc_str_view").RocList;
+
+    try std.testing.expectEqual(@sizeOf(RocList), @sizeOf(View));
+    try std.testing.expectEqual(@alignOf(RocList), @alignOf(View));
+
+    const canonical_fields = @typeInfo(RocList).@"struct".fields;
+    const view_fields = @typeInfo(View).@"struct".fields;
+    try std.testing.expectEqual(canonical_fields.len, view_fields.len);
+    inline for (canonical_fields, view_fields) |canonical, view| {
+        try std.testing.expect(std.mem.eql(u8, canonical.name, view.name));
+        try std.testing.expectEqual(canonical.type, view.type);
+        try std.testing.expectEqual(@offsetOf(RocList, canonical.name), @offsetOf(View, view.name));
+    }
+}
+
 test "RocList fromSlice basic functionality" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();

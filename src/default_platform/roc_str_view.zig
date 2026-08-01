@@ -1,15 +1,22 @@
-//! Minimal read-only view of `builtins.str.RocStr` for the freestanding
+//! Minimal ABI views of Roc values for the freestanding
 //! default-platform runtimes.
 //!
 //! `c_runtime.zig` and `linux_runtime.zig` are compiled as standalone objects
 //! (freestanding, no libc, no compiler-rt) without the `builtins` module, so
-//! they cannot import `builtins.str.RocStr` directly the way `echo_platform` and
-//! the glue host do. This file is the one place the host-boundary `RocStr`
-//! encoding those runtimes depend on is written down. `src/builtins/str.zig`
-//! carries a test asserting this view's size, alignment, and field layout match
-//! the canonical `RocStr`, so the two definitions cannot drift.
+//! they cannot import the canonical builtins types directly. The builtins tests
+//! assert these views stay byte-for-byte identical to their canonical structs.
 
 const seamless_slice_tag: usize = 1;
+
+pub const RocList = extern struct {
+    bytes: ?[*]u8,
+    length: usize,
+    capacity_or_alloc_ptr: usize,
+
+    pub fn empty() RocList {
+        return .{ .bytes = null, .length = 0, .capacity_or_alloc_ptr = 0 };
+    }
+};
 
 /// Read-only view over a host-boundary `RocStr`, exposing only the byte access
 /// and reference-count release that the default-platform runtimes need. The
