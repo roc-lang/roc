@@ -420,6 +420,9 @@ const CalleeLevel = struct {
     owner_node: u32,
     chain: EnvironmentChain,
     ready: bool,
+    /// Where the translator's declared representation inputs stood when this
+    /// level declared its own; closing the level retracts back to it.
+    input_floor: ?usize = null,
 };
 
 /// One declared generated edge together with the requesting body's own binding
@@ -665,6 +668,10 @@ pub const SealTrace = struct {
 pub const ModuleLookup = struct {
     context: *anyopaque,
     cursor_for_module: *const fn (context: *anyopaque, module_bytes: [32]u8) ?direct_translate.ModuleCursor,
+    /// The module's unique iterator representation topology, for the callee
+    /// derivation that states a minted producer representation (reunify.md
+    /// 13.2e). Null when the host exposes none.
+    iterator_topology: ?*const fn (context: *anyopaque, module_bytes: [32]u8) ?static_dispatch.IteratorRepresentationTopology = null,
     /// Whether this lowering has an instantiated stored type for a checked
     /// position. A position with none is a template's own, which a use edge's
     /// actuals make concrete; the production probe compares only the
@@ -1781,6 +1788,11 @@ pub const Rehearsal = struct {
         // Once this state disables itself no binding is opened, so none is
         // closed either and the stack stays balanced across the transition.
         if (self.disabled) return;
+        if (self.callees.items.len != 0) {
+            if (self.callees.items[self.callees.items.len - 1].input_floor) |floor| {
+                self.translator.truncateRepresentationInputs(floor);
+            }
+        }
         var level = self.callees.pop() orelse return;
         level.chain.release(self.allocator);
     }
@@ -1788,6 +1800,122 @@ pub const Rehearsal = struct {
     /// Resolve one callee scheme's dense binding from the checked data the
     /// requesting body named. Every way the data fails to supply one leaves the
     /// level unresolved: the binding is read, never inferred.
+    /// State the producer representation the iterator rule mints at the
+    /// callee's result position, so directed emission under this binding
+    /// carries the minted tier the graph's generator would have minted
+    /// (reunify.md 13.2e). Returns the translator's input floor to retract to
+    /// when the level closes, or null when the rule mints nothing here.
+    fn declareIteratorProducerInput(
+        self: *Rehearsal,
+        defining: direct_translate.ModuleCursor,
+        scheme: checked.CheckedTypeScheme,
+        declared: GeneratedEdge,
+        caller_env: ?*const direct_translate.BindingEnvironment,
+        caller_owner_node: u32,
+    ) ?usize {
+        if (declared.rule != .iterator_dispatch_receiver) return null;
+        const source = declared.source orelse return null;
+        const procedure = source.procedure orelse return null;
+        const kind = kindForIteratorProcedure(procedure) orelse return null;
+        const function = switch (defining.view.payload(scheme.root)) {
+            .function => |function| function,
+            else => return null,
+        };
+        const caller = self.lookup.cursor(source.module_bytes) orelse return null;
+        const topology_lookup = self.lookup.iterator_topology orelse return null;
+        const topology_ids = topology_lookup(self.lookup.context, source.module_bytes) orelse return null;
+        const topology = self.internTopology(caller, topology_ids) orelse return null;
+
+        // The receiver's minted depth under the requesting binding decides this
+        // mint's depth; a chain past the cap runs forced-dynamic instead.
+        var depth: u8 = 0;
+        var reason: direct_translate.SkipReason = undefined;
+        if (self.translator.translateUnderEnvironment(
+            caller,
+            caller_env,
+            caller_owner_node,
+            source.receiver.checked_ty,
+            &reason,
+        )) |receiver_ty| {
+            switch (self.types.get(receiver_ty)) {
+                .named => |named| depth = named.def.iterator_depth,
+                else => {},
+            }
+        } else |_| {}
+
+        const over_cap = depth >= max_minted_chain_depth;
+        const representation: direct_translate.ProducerRepresentation = if (over_cap) .{
+            .iterator_representation = .forced_dynamic,
+            .iterator_kind = .forced_dynamic,
+            .iterator_depth = 0,
+            .topology = topology,
+            .minting = .{ .callable_evidence = null },
+        } else .{
+            .iterator_representation = .minted,
+            .iterator_kind = kind,
+            .iterator_depth = depth + 1,
+            .topology = topology,
+            .minting = .{ .callable_evidence = null },
+        };
+
+        const floor = self.translator.representationInputCount();
+        self.translator.declareRepresentationInput(.{
+            .position = .{
+                .module_bytes = defining.module_bytes,
+                .type_id = @intFromEnum(function.ret),
+            },
+            .representation = representation,
+        }) catch return null;
+        return floor;
+    }
+
+    /// The longest minted-iterator chain a producer builds before running the
+    /// tail forced-dynamic, matching the generator's own cap.
+    const max_minted_chain_depth: u8 = 16;
+
+    /// Intern one module's iterator topology names into the program's stores.
+    fn internTopology(
+        self: *Rehearsal,
+        caller: direct_translate.ModuleCursor,
+        ids: static_dispatch.IteratorRepresentationTopology,
+    ) ?Type.IteratorTopology {
+        const source_names = caller.source_names;
+        const interned: Type.IteratorTopology = .{
+            .len_field = self.program_names.internRecordFieldLabel(source_names.recordFieldLabelText(ids.len_field)) catch return null,
+            .step_field = self.program_names.internRecordFieldLabel(source_names.recordFieldLabelText(ids.step_field)) catch return null,
+            .known_tag = self.program_names.internTagLabel(source_names.tagLabelText(ids.known_tag)) catch return null,
+            .unknown_tag = self.program_names.internTagLabel(source_names.tagLabelText(ids.unknown_tag)) catch return null,
+            .done_tag = self.program_names.internTagLabel(source_names.tagLabelText(ids.done_tag)) catch return null,
+            .one_tag = self.program_names.internTagLabel(source_names.tagLabelText(ids.one_tag)) catch return null,
+            .skip_tag = self.program_names.internTagLabel(source_names.tagLabelText(ids.skip_tag)) catch return null,
+            .item_field = self.program_names.internRecordFieldLabel(source_names.recordFieldLabelText(ids.item_field)) catch return null,
+            .rest_field = self.program_names.internRecordFieldLabel(source_names.recordFieldLabelText(ids.rest_field)) catch return null,
+        };
+        return interned;
+    }
+
+    /// Which minted kind one iterator procedure produces. A procedure that
+    /// mints nothing - a pass-through, a consumer, or a constructor whose
+    /// expected return already carries the representation - maps to null.
+    fn kindForIteratorProcedure(procedure: checked.IteratorProcedureId) ?Type.IteratorKind {
+        return switch (procedure) {
+            .list_iter => .list,
+            .str_iter_utf8 => .str,
+            .iter_single => .single,
+            .iter_map => .map,
+            .iter_keep_if => .keep_if,
+            .iter_drop_if => .drop_if,
+            .iter_take_first => .take_first,
+            .iter_drop_first => .drop_first,
+            .iter_concat => .concat,
+            .iter_append => .append,
+            .iter_custom => .custom,
+            .iter_exclusive_range, .numeric_range_exclusive => .range_exclusive,
+            .iter_inclusive_range, .numeric_range_inclusive => .range_inclusive,
+            .iter_iter, .iter_next, .iter_from_step, .range_done => null,
+        };
+    }
+
     fn resolveCalleeBinding(self: *Rehearsal, binding: CalleeBinding) CalleeLevel {
         const unresolved = CalleeLevel{
             .module_bytes = binding.defining_module_bytes,
@@ -1904,6 +2032,13 @@ pub const Rehearsal = struct {
             .owner_node = scheme.owner_node,
             .chain = chain,
             .ready = true,
+            .input_floor = self.declareIteratorProducerInput(
+                defining,
+                scheme,
+                declared,
+                caller_env,
+                caller_owner_node,
+            ),
         };
     }
 

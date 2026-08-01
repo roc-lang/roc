@@ -4076,6 +4076,16 @@ const Builder = struct {
         return directTranslateCursor(view);
     }
 
+    /// The module's unique iterator representation topology, for the callee
+    /// derivation stating a minted producer representation (reunify.md 13.2e).
+    fn rehearsalIteratorTopology(context: *anyopaque, module_bytes: [32]u8) ?static_dispatch.IteratorRepresentationTopology {
+        const self: *Builder = @ptrCast(@alignCast(context));
+        const view = self.moduleForDigestOrNull(module_bytes) orelse return null;
+        const topologies = view.static_dispatch_plans.iterator_topologies;
+        if (topologies.len != 1) return null;
+        return topologies[0];
+    }
+
     /// Whether this lowering already holds an instantiated stored type for a
     /// checked position, which is the same question the probe population asks
     /// before it compares a root (reunify.md 13.2c).
@@ -4099,6 +4109,7 @@ const Builder = struct {
                 .context = self,
                 .cursor_for_module = rehearsalCursorForModule,
                 .position_is_instantiated = rehearsalPositionIsInstantiated,
+                .iterator_topology = rehearsalIteratorTopology,
             },
         );
     }
