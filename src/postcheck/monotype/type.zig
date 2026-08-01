@@ -279,6 +279,13 @@ pub const Store = struct {
     /// both modes; only dedup is gated by this field. Defaults to null so a
     /// store cloned by field-wise copy starts as a plain (non-interning) store.
     intern_buckets: ?std.AutoHashMap(InternerLookupDigest, std.ArrayList(TypeId)) = null,
+    /// Whether function, named and tag-union hits keep distinct ids while
+    /// their occurrence-keyed consumers reclassify onto structural identity
+    /// (reunify.md section 8.5). Production stores hold; a store that exists
+    /// to state structural identity itself — the shadow's logical store and
+    /// the reference `Interner` — lifts the holds through
+    /// `liftOccurrenceHolds`.
+    intern_occurrence_holds: bool = true,
     /// Ids that must never be returned as a dedup result. An id read by a live
     /// instantiation-graph node is recorded here (by the graph, when it binds
     /// the id to a node) so no later intern hands it back as a shared type: a
@@ -326,6 +333,12 @@ pub const Store = struct {
     /// Whether this store's constructors dedup structurally equal nodes.
     pub fn internEnabled(self: *const Store) bool {
         return self.intern_buckets != null;
+    }
+
+    /// Dedup every class by content, including the occurrence-held ones. Only
+    /// for stores whose ids never carry occurrence-keyed consumers.
+    pub fn liftOccurrenceHolds(self: *Store) void {
+        self.intern_occurrence_holds = false;
     }
 
     /// Record that `ty` must never be handed back as a shared dedup result, so
@@ -1054,13 +1067,15 @@ pub const Store = struct {
                     // structural identity; each class measured independently causal
                     // for the step_by family (reunify.md 8.5). Structural
                     // content hash-conses.
-                    switch (self.get(candidate)) {
-                        .func, .named, .tag_union => {
-                            try bucket.append(self.allocator, candidate);
-                            census.bump("intern_hit_occurrence_held");
-                            return candidate;
-                        },
-                        .record, .tuple, .list, .box, .primitive, .erased, .zst => {},
+                    if (self.intern_occurrence_holds) {
+                        switch (self.get(candidate)) {
+                            .func, .named, .tag_union => {
+                                try bucket.append(self.allocator, candidate);
+                                census.bump("intern_hit_occurrence_held");
+                                return candidate;
+                            },
+                            .record, .tuple, .list, .box, .primitive, .erased, .zst => {},
+                        }
                     }
                     self.restore(mark_);
                     census.bump("intern_hit");
@@ -2578,6 +2593,7 @@ pub const Interner = opaque {
             .store = Store.init(allocator),
         };
         state_.store.enableInterning();
+        state_.store.liftOccurrenceHolds();
         return @ptrCast(state_);
     }
 
@@ -4895,6 +4911,7 @@ test "reintern canonicalizes empty row and head forms" {
 
     var dest = Store.init(std.testing.allocator);
     dest.enableInterning();
+    dest.liftOccurrenceHolds();
     defer dest.deinit();
 
     const reint_record = try reintern(&dest, &name_store, source.view(), empty_record);

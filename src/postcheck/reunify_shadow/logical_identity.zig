@@ -207,6 +207,7 @@ pub const LogicalStore = struct {
     pub fn init(allocator: Allocator) LogicalStore {
         var store = MonoType.Store.init(allocator);
         store.enableInterning();
+        store.liftOccurrenceHolds();
         return .{
             .allocator = allocator,
             .shadow_names = names.NameStore.init(allocator),

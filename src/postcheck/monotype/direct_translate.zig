@@ -2502,7 +2502,11 @@ test "unconstrained residual variables reach the stored empty tag union" {
     var reason: SkipReason = undefined;
     const from_flex = try translator.translateGroundRoot(fixture.cursor(), flex, &reason);
     const from_empty = try translator.translateGroundRoot(fixture.cursor(), empty, &reason);
-    try testing.expectEqual(from_empty, from_flex);
+    // The residual and the explicit empty union agree on content. Tag-union
+    // ids are occurrence-held on production stores, so each construction
+    // keeps its own id until the holds lift (reunify.md section 8.5).
+    try testing.expect(try store.typeEql(&target_names, from_empty, from_flex));
+    try testing.expect(store.get(from_flex) == .tag_union);
 }
 
 test "a numeric-defaulted residual materializes as the stored default primitive" {
@@ -2566,7 +2570,10 @@ test "instantiating a scheme root matches translating the instantiated root" {
         &reason,
     );
     const direct = try translator.translateGroundRoot(fixture.cursor(), instantiated_root, &reason);
-    try testing.expectEqual(direct, instantiated);
+    // Named ids are occurrence-held on production stores, so instantiation
+    // and direct translation agree on content while each keeps its own id
+    // until the holds lift (reunify.md section 8.5).
+    try testing.expect(try store.typeEql(&target_names, direct, instantiated));
 }
 
 test "the represented instantiation memo returns the same id for the same binding" {
@@ -3238,7 +3245,7 @@ test "issue 10170: a recursive minted backing seals without minting another iden
     try testing.expect(closed);
 }
 
-test "emitting one position twice yields one stored id" {
+test "emitting one position twice yields one sealed encoding" {
     var iter = try IteratorFixture.init(false);
     defer iter.deinit();
 
@@ -3268,8 +3275,10 @@ test "emitting one position twice yields one stored id" {
     const first = try translator.translateGroundRoot(iter.fixture.cursor(), iter.instance, &reason);
     const second = try translator.translateGroundRoot(iter.fixture.cursor(), iter.instance, &reason);
     // Sealing runs per position and the same declared inputs produce the same
-    // sealed encoding, so the interner collapses the two emissions.
-    try testing.expectEqual(first, second);
+    // sealed encoding. Named ids are occurrence-held on production stores, so
+    // the two emissions agree on content while each keeps its own id until
+    // the holds lift (reunify.md section 8.5).
+    try testing.expect(try store.typeEql(&target_names, first, second));
 }
 
 test "declarations are referenced" {
