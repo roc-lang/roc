@@ -3826,6 +3826,34 @@ Builtin :: [].{
 			$joined
 		}
 
+		## Insert a separator between every pair of items in a list.
+		## ```roc
+		## expect [1.I64, 2, 3].intersperse(0) == [1, 0, 2, 0, 3]
+		##
+		## expect [1.I64].intersperse(0) == [1]
+		## ```
+		intersperse : List(a), a -> List(a)
+		intersperse = |list, separator| {
+			len = List.len(list)
+
+			if len < 2 {
+				list
+			} else {
+				# `2 * len - 1` counts exactly the items appended below, so every
+				# unchecked append stays in bounds.
+				var $new_list = List.with_capacity(2 * len - 1)
+				var $index = 0
+				for item in list {
+					if $index > 0 {
+						$new_list = list_append_unsafe($new_list, separator)
+					}
+					$new_list = list_append_unsafe($new_list, item)
+					$index = $index + 1
+				}
+				$new_list
+			}
+		}
+
 		## Create a list with space for at least capacity items
 		with_capacity : U64 -> List(item)
 
