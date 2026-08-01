@@ -71,8 +71,8 @@ EndOfFile,
 a = (
 	(
 		0(0 |> X)
-			|> X,
-	).a,
+			|> X
+	).a
 )
 ~~~
 # CANONICALIZE

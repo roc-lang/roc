@@ -204,7 +204,52 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+package
+	[]
+	{
+		x: \\Multiline
+		,
+	}
+
+value1 = \\This is a "string" with just one line
+
+value2 =
+	\\This is a "string" with just one line
+
+value3 = \\This is a string
+	\\With multiple lines
+	\\${value1}
+
+value4 =
+	\\This is a string
+	# A comment in between
+	\\With multiple lines
+	\\${value2}
+
+value5 = {
+	a: \\Multiline
+	,
+	b: (
+		\\Multiline
+		,
+		\\Multiline
+		,
+	),
+	c: [
+		\\multiline
+		,
+	],
+	d: (
+		0 - \\
+	),
+	e: !\\
+	,
+}
+
+x = {
+	\\
+	\\
+}
 ~~~
 # CANONICALIZE
 ~~~clojure

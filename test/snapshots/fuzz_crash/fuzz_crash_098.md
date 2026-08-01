@@ -50,9 +50,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-a = (
-	(0).e,
-)
+a = ((0).e)
 ~~~
 # CANONICALIZE
 ~~~clojure
