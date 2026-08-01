@@ -495,7 +495,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .expected_lower_name_after_exposed_item_as => reportParseProblem(ctx, "Expected Lowercase Alias", "I was parsing an exposed value alias, and I expected a lowercase name after `as`.", "Aliases for exposed lowercase values must also be lowercase value names.", .{ .example = "package [oldName as newName]" }),
         .expected_upper_name_after_exposed_item_as => reportParseProblem(ctx, "Expected Uppercase Alias", "I was parsing an exposed type or tag alias, and I expected an uppercase name after `as`.", "Aliases for exposed uppercase names must also start with an uppercase letter.", .{ .example = "package [Result as Outcome]" }),
         .exposed_item_unexpected_token => reportParseProblem(ctx, "Expected Exposed Name", "I was parsing an exposing list, and I expected an exposed name.", "Exposing lists contain lowercase values, uppercase types or tags, and `Type.*` entries.", .{ .example = "package [main, Result, Result.*]" }),
-        .expected_upper_name_after_import_as => reportParseProblem(ctx, "Expected Import Alias", "I was parsing an import alias, and I expected an uppercase module name after `as`.", "Import aliases rename modules, so they must start with an uppercase letter.", .{ .example = "import Json.Decode as Decode" }),
+        .expected_upper_name_after_import_as => reportParseProblem(ctx, "Expected Import Alias", "I was parsing an import alias, and I expected an uppercase name after `as`.", "Import aliases must start with an uppercase letter.", .{ .example = "import Json/Decode as Decode" }),
         .expected_colon_after_type_annotation => reportParseProblem(ctx, "Type Application Needs Parentheses", "I was parsing a type annotation, and I found a type argument without parentheses.", "Roc type applications use parentheses around their arguments. Write `List(U8)`, not `List U8`.", .{ .example = "List(U8)" }),
         .expected_lower_ident_pat_field_name => reportParseProblem(ctx, "Expected Pattern Field", "I was parsing a record pattern, and I expected a lowercase field name.", "Record pattern fields start with lowercase names. You can bind the field directly or write `name: pattern`.", .{ .example = "{ name, age: years }" }),
         .expected_colon_after_pat_field_name => reportParseProblem(ctx, "Expected Pattern Field Colon", "I was parsing a record pattern field, and I expected `:` after the field name.", "Use a colon when a record pattern field has a nested pattern instead of just punning the field name.", .{ .example = "{ point: { x, y } }" }),
@@ -536,7 +536,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .expected_expr_comma => reportParseProblem(ctx, "Expected Comma", "I was parsing a record update, and I expected `,` before the fields.", "A record update writes the base record after `..`, then a comma, then the updated fields.", .{ .example = "{ ..person, name: \"Ada\" }" }),
         .expected_expr_close_curly => reportParseProblem(ctx, "Expected Closing Brace", "I was parsing a block expression, and I expected `}` before the file ended.", "Close the block after its final statement or expression.", .{ .example = "{\n    answer = 42\n    answer\n}" }),
         .expr_dot_suffix_not_allowed => reportParseProblem(ctx, "Expected Record Accessor", "I was parsing access after `.`, and I expected a field name or tuple index.", "Record access uses a lowercase field name like `.name`. Tuple access uses a number like `.0`. Uppercase names, malformed names, and a bare `.` are not valid accessors.", .{ .example = "person.name\npair.0" }),
-        .incomplete_import => reportParseProblem(ctx, "Incomplete Import", "I was parsing an import, and the module path is incomplete.", "Imports must name a module, optionally with a qualifier and exposing list.", .{ .example = "import Json.Decode exposing [decode]" }),
+        .incomplete_import => reportParseProblem(ctx, "Incomplete Import", "I was parsing an import, and the module path is incomplete.", "Imports must name a module, optionally with a qualifier and exposing list.", .{ .example = "import Json/Decode exposing [decode]" }),
         .file_import_expected_as => reportParseProblem(ctx, "Expected File Import Name", "I was parsing a file import, and I expected `as` after the path.", "File imports give the file contents a local name using `as`.", .{ .example = "import \"data.txt\" as data : Str" }),
         .file_import_expected_name => reportParseProblem(ctx, "Expected File Import Binding", "I was parsing a file import, and I expected a lowercase binding name.", "The name after `as` is the local value that will contain the imported file contents.", .{ .example = "import \"data.txt\" as data : Str" }),
         .file_import_expected_type => reportParseProblem(ctx, "Expected File Import Type", "I was parsing a file import, and I expected a type annotation.", "File imports must say whether the imported contents are `Str` or `List(U8)`.", .{ .example = "import \"data.bin\" as bytes : List(U8)" }),
@@ -785,40 +785,52 @@ pub fn resolveQualifiedName(
     }
 }
 
-/// Resolves the module path selected by the parser for an import statement.
-///
-/// A nested import such as `import Url.ParseErr` resolves to module `Url`.
-/// An import with an explicit clause, such as
-/// `import Src.Widget exposing [message]`, resolves to module `Src.Widget`.
-pub fn resolveImportModulePath(self: *const AST, module_name_tok: Token.Idx, qualifier_tok: ?Token.Idx, nested_import: bool) []const u8 {
-    const tags = self.tokens.tokens.items(.tag);
-
-    // Get start position (qualifier or first module segment)
-    const start_offset: usize = if (qualifier_tok) |q|
-        self.tokens.resolve(q).start.offset
-    else
-        self.tokens.resolve(module_name_tok).start.offset;
-
-    // Find the end token
-    var end_tok = module_name_tok;
-    if (!nested_import) {
-        var tok = module_name_tok + 1;
-        while (tok < tags.len) {
-            const tag = tags[tok];
-            if (tag == .NoSpaceDotUpperIdent or tag == .DotUpperIdent) {
-                end_tok = tok;
-                tok += 1;
-            } else {
-                break;
-            }
-        }
-    }
-
-    // Get end position
-    const end_offset = self.tokens.resolve(end_tok).end.offset;
-
+/// Resolves the complete target spelling selected by import parsing.
+pub fn resolveImportTarget(self: *const AST, target: ImportTarget) []const u8 {
+    const start_offset: usize = self.tokens.resolve(target.start_tok).start.offset;
+    const end_offset: usize = self.tokens.resolve(target.lastToken()).end.offset;
     return self.env.source[start_offset..end_offset];
 }
+
+/// Identifies whether an import resolves within the current package or through
+/// a declared package qualifier.
+pub const ImportOrigin = enum(u1) {
+    local,
+    package,
+};
+
+/// The explicit anchor from which a local import path is resolved.
+pub const LocalImportBase = enum(u2) {
+    importer,
+    package_root,
+    parent,
+};
+
+/// The two import hierarchies are explicit parser output. `module_name_tok`
+/// ends the source-module path; `nested_start_tok` and `nested_len` describe
+/// only the nested type path after that file boundary.
+pub const ImportTarget = struct {
+    origin: ImportOrigin,
+    base: LocalImportBase,
+    parent_count: u16,
+    start_tok: Token.Idx,
+    path_start_tok: Token.Idx,
+    module_name_tok: Token.Idx,
+    qualifier_tok: ?Token.Idx,
+    nested_start_tok: ?Token.Idx,
+    nested_len: u16,
+
+    pub fn hasNestedTypes(self: ImportTarget) bool {
+        return self.nested_len != 0;
+    }
+
+    pub fn lastToken(self: ImportTarget) Token.Idx {
+        if (self.nested_start_tok) |start| {
+            return start + self.nested_len - 1;
+        }
+        return self.module_name_tok;
+    }
+};
 
 /// Contains properties of the thing to the right of the `import` keyword.
 pub const ImportRhs = packed struct {
@@ -826,9 +838,10 @@ pub const ImportRhs = packed struct {
     aliased: u1,
     /// 1 in case the import is qualified, e.g. `pf` in `import pf.Stdout ...`
     qualified: u1,
-    /// 1 when the final uppercase segment is an auto-exposed nested type.
-    nested: u1,
-    reserved: u29 = 0,
+    has_nested: u1,
+    origin: u1,
+    base: u2,
+    reserved: u26 = 0,
 };
 
 // Check that all packed structs are 4 bytes size as they as cast to
@@ -908,13 +921,9 @@ pub const Statement = union(enum) {
         region: TokenizedRegion,
     },
     import: struct {
-        module_name_tok: Token.Idx,
-        qualifier_tok: ?Token.Idx,
+        target: ImportTarget,
         alias_tok: ?Token.Idx,
         exposes: ExposedItem.Span,
-        /// True when importing like `import json.Parser.Config` where Config is auto-exposed
-        /// but Parser should not become an alias (unlike `import json.Parser exposing [Config]`)
-        nested_import: bool,
         region: TokenizedRegion,
     },
     /// File import: `import "path" as name : Type`
@@ -999,7 +1008,7 @@ pub const Statement = union(enum) {
                 try ast.appendRegionInfoToSexprTree(env, tree, import.region);
 
                 // Reconstruct full qualified module name using the new helper
-                const full_module_name = ast.resolveImportModulePath(import.module_name_tok, import.qualifier_tok, import.nested_import);
+                const full_module_name = ast.resolveImportTarget(import.target);
                 try tree.pushStringPair("raw", full_module_name);
 
                 // alias e.g. `OUT` in `import pf.Stdout as OUT`

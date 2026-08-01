@@ -31,16 +31,16 @@ EXPECTED IMPORT ALIAS - fuzz_crash_038.md:1:2:1:8
 
 ┌───────────────────────┐
 │ EXPECTED IMPORT ALIAS ├─ I was parsing an import alias, and I expected an ──┐
-└┬──────────────────────┘  uppercase mod name after `as`.                  │
+└┬──────────────────────┘  uppercase name after `as`.                         │
  │                                                                            │
  │  *import B as                                                              │
  │   ‾‾‾‾‾‾                                                                   │
  └───────────────────────────────────────────────────── fuzz_crash_038.md:1:2 ┘
 
-    Import aliases rename mods, so they must start with an uppercase letter.
+    Import aliases must start with an uppercase letter.
 
     For example:
-        import Json.Decode as Decode
+        import Json/Decode as Decode
 
     I found `import` here.
     That word is reserved by Roc, so it cannot be used as a name in this

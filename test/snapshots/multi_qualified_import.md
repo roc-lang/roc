@@ -21,7 +21,7 @@ data = json.Core.Utf8.encode("hello")
 # EXPECTED
 EXPECTED RECORD ACCESSOR - multi_qualified_import.md:12:12:12:17
 EXPECTED RECORD ACCESSOR - multi_qualified_import.md:12:17:12:22
-UNDECLARED TYPE - multi_qualified_import.md:3:16:3:23
+MOD NOT FOUND - multi_qualified_import.md:3:16:3:23
 DOES NOT EXIST - multi_qualified_import.md:4:16:4:45
 MOD NOT IMPORTED - multi_qualified_import.md:7:11:7:33
 UNUSED VARIABLE - multi_qualified_import.md:8:12:8:19
@@ -71,9 +71,9 @@ UNRECOGNIZED SYNTAX - multi_qualified_import.md:12:8:12:38
     mod names in Roc.
 
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Encoder` is not declared in this scope. ───────┐
-└┬────────────────┘                                                           │
+┌──────────────────┐
+│ MOD NOT FOUND ├─ This `Encoder` type is declared to be in `json.Core`, ──┐
+└┬─────────────────┘  which does not exist.                                   │
  │                                                                            │
  │  json_encoder : Encoder                                                    │
  │                 ‾‾‾‾‾‾‾                                                    │
@@ -219,9 +219,10 @@ data = .encode("hello")
 		(e-runtime-error (tag "expr_not_canonicalized"))
 		(annotation
 			(ty-malformed)))
-	(s-import (mod "json.Core.Utf8")
+	(s-import (mod "json.Core")
 		(exposes
-			(exposed (name "Encoder") (wildcard false)))))
+			(exposed (name "Utf8") (alias "Utf8") (wildcard false))
+			(exposed (name "Utf8.Encoder") (alias "Encoder") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure

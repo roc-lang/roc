@@ -382,11 +382,12 @@ pub fn canonicalizeModuleWithSiblings(
     // Canonicalization consumes concrete exposed-node data from dependencies.
     const sibling_imports = try module_discovery.extractImportsFromDeclIndex(parse_ast, gpa);
     defer {
-        for (sibling_imports) |imp| gpa.free(imp);
+        for (sibling_imports) |imp| gpa.free(imp.import_name);
         gpa.free(sibling_imports);
     }
 
-    for (sibling_imports) |sibling_name| {
+    for (sibling_imports) |sibling_import| {
+        const sibling_name = sibling_import.import_name;
         // Skip self
         if (std.mem.eql(u8, sibling_name, env.module_name)) continue;
 

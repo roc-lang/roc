@@ -1,3 +1,3 @@
 package [Widget] {}
 
-import Src.Widget as Widget
+import Src/Widget as Widget

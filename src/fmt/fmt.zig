@@ -506,7 +506,7 @@ const Formatter = struct {
                 var flushed = false;
                 try fmt.pushAll("import");
                 if (multiline) {
-                    flushed = try fmt.flushCommentsBefore(if (i.qualifier_tok) |q| q else i.module_name_tok);
+                    flushed = try fmt.flushCommentsBefore(i.target.start_tok);
                 }
                 if (!flushed) {
                     try fmt.push(' ');
@@ -514,7 +514,7 @@ const Formatter = struct {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
                 }
-                const path_result = try fmt.formatModulePath(i.module_name_tok, i.qualifier_tok);
+                const path_result = try fmt.formatImportTarget(i.target);
                 const last_module_tok = path_result.last_tok;
                 if (multiline and (i.alias_tok != null or i.exposes.span.len > 0)) {
                     flushed = try fmt.flushCommentsAfter(last_module_tok);
@@ -554,10 +554,7 @@ const Formatter = struct {
                         flushed = try fmt.flushCommentsAfter(a);
                     }
                 }
-                // Nested imports store their final segment in `exposes`, but it is
-                // still part of the dotted source path rather than a source
-                // `exposing` clause.
-                const needs_exposing = !i.nested_import and i.exposes.span.len > 0;
+                const needs_exposing = i.exposes.span.len > 0;
                 if (needs_exposing) {
                     if (flushed) {
                         fmt.curr_indent += 1;
@@ -871,42 +868,32 @@ const Formatter = struct {
         try fmt.pushTokenText(ident);
     }
 
-    /// Formats the complete dotted path written in an import statement.
-    ///
-    /// Whether that path selects a directory-qualified module or a nested type
-    /// is explicit on the import node and does not affect path formatting.
+    /// Formats an explicit import target without whitespace around separators.
     const ModulePathResult = struct {
         last_tok: Token.Idx,
     };
 
-    fn formatModulePath(fmt: *Formatter, module_name_tok: Token.Idx, qualifier: ?Token.Idx) (Allocator.Error || error{WriteFailed})!ModulePathResult {
+    fn formatImportTarget(fmt: *Formatter, target: AST.ImportTarget) (Allocator.Error || error{WriteFailed})!ModulePathResult {
         const curr_indent = fmt.curr_indent;
         defer {
             fmt.curr_indent = curr_indent;
         }
 
-        // Output qualifier if present
-        if (qualifier) |q| {
-            try fmt.pushTokenText(q);
-            try fmt.push('.');
-        }
-
-        // Output the first uppercase token
-        try fmt.pushTokenText(module_name_tok);
-        var last_tok = module_name_tok;
-
-        // Normalize every dotted path segment to no whitespace before the dot.
-        var tok = module_name_tok + 1;
         const tags = fmt.ast.tokens.tokens.items(.tag);
-        while (tok < tags.len) {
-            const tag = tags[tok];
-            if (tag != .NoSpaceDotUpperIdent and tag != .DotUpperIdent) {
-                break;
+        const last_tok = target.lastToken();
+        var tok = target.start_tok;
+        while (tok <= last_tok) : (tok += 1) {
+            switch (tags[tok]) {
+                .NoSpaceDotUpperIdent, .DotUpperIdent => {
+                    try fmt.push('.');
+                    try fmt.pushTokenText(tok);
+                },
+                .OpSlash => try fmt.push('/'),
+                .Dot => try fmt.push('.'),
+                .DoubleDot => try fmt.pushAll(".."),
+                .UpperIdent, .LowerIdent => try fmt.pushTokenText(tok),
+                else => {},
             }
-            try fmt.push('.');
-            try fmt.pushTokenText(tok);
-            last_tok = tok;
-            tok += 1;
         }
 
         return .{ .last_tok = last_tok };
@@ -4274,15 +4261,15 @@ test "parenthesized type application with leading newline is idempotent" {
 }
 
 test "import alias after comment stays separated" {
-    const result = try moduleFmtsStable(std.testing.allocator, "import A .B as#\nX", false);
+    const result = try moduleFmtsStable(std.testing.allocator, "import A / B as#\nX", false);
     defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("import A.B as #\nX\n", result);
+    try std.testing.expectEqualStrings("import A/B as #\nX\n", result);
 }
 
 test "import path spacing is normalized" {
-    const result = try moduleFmtsStable(std.testing.allocator, "import Layout .Path as LayoutPath", false);
+    const result = try moduleFmtsStable(std.testing.allocator, "import Layout / Path as LayoutPath", false);
     defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("import Layout.Path as LayoutPath\n", result);
+    try std.testing.expectEqualStrings("import Layout/Path as LayoutPath\n", result);
 }
 
 test "nested import path remains nested after formatting" {

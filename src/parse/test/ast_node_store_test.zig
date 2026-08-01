@@ -214,44 +214,76 @@ test "NodeStore round trip - Statement" {
     try statements.append(gpa, AST.Statement{
         .import = .{
             .alias_tok = null,
-            .module_name_tok = rand_token_idx(random),
-            .qualifier_tok = null,
+            .target = .{
+                .origin = .local,
+                .base = .importer,
+                .parent_count = 0,
+                .start_tok = rand_token_idx(random),
+                .path_start_tok = rand_token_idx(random),
+                .module_name_tok = rand_token_idx(random),
+                .qualifier_tok = null,
+                .nested_start_tok = null,
+                .nested_len = 0,
+            },
             .region = rand_region(random),
             .exposes = AST.ExposedItem.Span{ .span = rand_span(random) },
-            .nested_import = false,
         },
     });
     // Import with alias
     try statements.append(gpa, AST.Statement{
         .import = .{
             .alias_tok = rand_token_idx(random),
-            .module_name_tok = rand_token_idx(random),
-            .qualifier_tok = null,
+            .target = .{
+                .origin = .local,
+                .base = .package_root,
+                .parent_count = 0,
+                .start_tok = rand_token_idx(random),
+                .path_start_tok = rand_token_idx(random),
+                .module_name_tok = rand_token_idx(random),
+                .qualifier_tok = null,
+                .nested_start_tok = null,
+                .nested_len = 0,
+            },
             .region = rand_region(random),
             .exposes = AST.ExposedItem.Span{ .span = rand_span(random) },
-            .nested_import = false,
         },
     });
     // Import with qualifier but no alias
     try statements.append(gpa, AST.Statement{
         .import = .{
             .alias_tok = null,
-            .module_name_tok = rand_token_idx(random),
-            .qualifier_tok = rand_token_idx(random),
+            .target = .{
+                .origin = .package,
+                .base = .importer,
+                .parent_count = 0,
+                .start_tok = rand_token_idx(random),
+                .path_start_tok = rand_token_idx(random),
+                .module_name_tok = rand_token_idx(random),
+                .qualifier_tok = rand_token_idx(random),
+                .nested_start_tok = rand_token_idx(random),
+                .nested_len = 1,
+            },
             .region = rand_region(random),
             .exposes = AST.ExposedItem.Span{ .span = rand_span(random) },
-            .nested_import = true,
         },
     });
     // Import with both qualifier and alias
     try statements.append(gpa, AST.Statement{
         .import = .{
             .alias_tok = rand_token_idx(random),
-            .module_name_tok = rand_token_idx(random),
-            .qualifier_tok = rand_token_idx(random),
+            .target = .{
+                .origin = .package,
+                .base = .importer,
+                .parent_count = 0,
+                .start_tok = rand_token_idx(random),
+                .path_start_tok = rand_token_idx(random),
+                .module_name_tok = rand_token_idx(random),
+                .qualifier_tok = rand_token_idx(random),
+                .nested_start_tok = null,
+                .nested_len = 0,
+            },
             .region = rand_region(random),
             .exposes = AST.ExposedItem.Span{ .span = rand_span(random) },
-            .nested_import = false,
         },
     });
     try statements.append(gpa, AST.Statement{
