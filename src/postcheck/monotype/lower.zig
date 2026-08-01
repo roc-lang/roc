@@ -16255,7 +16255,10 @@ const BodyContext = struct {
             .lookup_local => |lookup| try self.lookupExprMonoType(expr.ty, lookup.resolved),
             .lookup_external => |resolved| try self.lookupExprMonoType(expr.ty, resolved),
             .lookup_required => |resolved| try self.lookupExprMonoType(expr.ty, resolved),
-            .lambda => |lambda| try self.lambdaFunctionType(expr.ty, lambda),
+            // A lambda's own checked position states its function type; the
+            // argument-interface relations its node twin establishes only feed
+            // the graph, and binder locals already read directed finals.
+            .lambda => try self.typeForChecked(expr.ty),
             .closure => |closure| try self.closureFunctionType(closure),
             // A field access's own checked position carries its type; the
             // graph derived the same thing from the receiver, which is the
@@ -30273,10 +30276,6 @@ const BodyContext = struct {
             .lambda => |lambda_data| try self.lambdaFunctionNode(lambda.ty, lambda_data),
             else => Common.invariant("checked closure did not point at a lambda expression"),
         };
-    }
-
-    fn lambdaFunctionType(self: *BodyContext, source_fn_ty: checked.CheckedTypeId, lambda: anytype) Allocator.Error!Type.TypeId {
-        return try self.activeTypeFromNode(try self.lambdaFunctionNode(source_fn_ty, lambda));
     }
 
     fn lambdaFunctionNode(self: *BodyContext, source_fn_ty: checked.CheckedTypeId, lambda: anytype) Allocator.Error!NodeId {
