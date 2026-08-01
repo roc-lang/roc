@@ -20316,6 +20316,13 @@ const BodyContext = struct {
         ret_ty: Type.TypeId,
         precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!DraftExprId {
+        // A nominal opaque with a scalar backing and no custom parser (e.g. `Username := Str`)
+        // parses its backing scalar, then rewraps the value in the nominal.
+        if (self.builder.nominalExprBackingType(shape_ty)) |backing_ty| {
+            if (self.parseScalarMethodName(backing_ty) != null) {
+                return try self.lowerParseNominalScalarFromState(shape_ty, backing_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan);
+            }
+        }
         const selected = self.parseShapeSelection(shape_ty);
         if (Ident.textEql(selected.tag_text, "Record")) {
             const precomputed = if (precomputed_plan) |plan| self.parserPlanGet(plan, shape_ty) else null;
@@ -20392,6 +20399,42 @@ const BodyContext = struct {
                 .captures = try self.methodTargetCaptureSpan(parse_lookup),
             } },
         });
+    }
+
+    fn lowerParseNominalScalarFromState(
+        self: *BodyContext,
+        nominal_ty: Type.TypeId,
+        backing_ty: Type.TypeId,
+        encoding_expr: DraftExprId,
+        encoding_ty: Type.TypeId,
+        state_expr: DraftExprId,
+        state_ty: Type.TypeId,
+        ret_ty: Type.TypeId,
+        precomputed_plan: ?*const ParserPrecomputedPlan,
+    ) Allocator.Error!DraftExprId {
+        const ret_info = self.tryInfo(ret_ty);
+        const backing_parse_ok_ty = try self.parseResultOkType(backing_ty, state_ty);
+        const backing_parse_ret_ty = try self.tryTypeLike(ret_ty, backing_parse_ok_ty, ret_info.err_ty);
+        const backing_parse = try self.lowerParseShapeHelperCall(
+            backing_ty,
+            encoding_expr,
+            encoding_ty,
+            state_expr,
+            state_ty,
+            backing_parse_ret_ty,
+            precomputed_plan,
+        );
+
+        const value_name = try self.builder.program.names.internRecordFieldLabel("value");
+        const rest_name = try self.builder.program.names.internRecordFieldLabel("rest");
+        const backing_local = try self.addLocal(self.builder.symbols.fresh(), backing_ty);
+        const rest_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+        const nominal_value = try self.addExpr(.{
+            .ty = nominal_ty,
+            .data = .{ .nominal = try self.localExpr(backing_local, backing_ty) },
+        });
+        const ok_body = try self.parseResultOk(ret_ty, nominal_value, try self.localExpr(rest_local, state_ty), state_ty);
+        return try self.sequenceTryRecord(backing_parse, backing_parse_ret_ty, backing_local, value_name, rest_local, rest_name, ok_body, ret_ty);
     }
 
     fn lowerParseRecordFromState(
@@ -33374,7 +33417,11 @@ const BodyContext = struct {
         if (runtime_arg_tys.len != 1) Common.invariant("structural parser runtime function must have one state argument");
 
         const top_level_null_try = self.tryNullInfo(shape_ty);
-        if (self.parseScalarMethodName(shape_ty) == null and top_level_null_try == null) {
+        const nominal_scalar_backing = if (self.builder.nominalExprBackingType(shape_ty)) |backing_ty|
+            self.parseScalarMethodName(backing_ty) != null
+        else
+            false;
+        if (self.parseScalarMethodName(shape_ty) == null and top_level_null_try == null and !nominal_scalar_backing) {
             if (self.setPayloadType(shape_ty)) |elem_ty| {
                 if (!try self.parseFieldTypeIsSupported(elem_ty, false)) Common.invariant("structural parser set element type was not supported");
             } else if (self.dictEntryShape(shape_ty)) |dict| {
@@ -33641,6 +33688,34 @@ const BodyContext = struct {
         }
         if (self.encodeScalarMethodName(shape_ty)) |method_name| {
             return try self.lowerEncodeFormatMethod(method_name, &.{ value_expr, state_expr }, &.{ shape_ty, state_ty }, encoding_ty, ret_ty);
+        }
+        // A nominal opaque with a scalar backing and no custom encoder (e.g. `Username := Str`)
+        // encodes as its backing: unwrap one nominal layer and encode the scalar.
+        if (self.builder.nominalExprBackingType(shape_ty)) |backing_ty| {
+            if (self.encodeScalarMethodName(backing_ty) != null) {
+                const value_local = try self.addLocal(self.builder.symbols.fresh(), shape_ty);
+                const backing_local = try self.addLocal(self.builder.symbols.fresh(), backing_ty);
+                const encoded_backing = try self.lowerEncodeShapeToState(
+                    backing_ty,
+                    try self.localExpr(backing_local, backing_ty),
+                    encoding_expr,
+                    encoding_ty,
+                    state_expr,
+                    state_ty,
+                    ret_ty,
+                    precomputed_plan,
+                );
+                const unwrap_pat = try self.addPat(.{
+                    .ty = shape_ty,
+                    .data = .{ .nominal = try self.bindPat(backing_local, backing_ty) },
+                });
+                const branch = DraftBranch{ .pat = unwrap_pat, .body = encoded_backing };
+                const matched = try self.addExpr(.{ .ty = ret_ty, .data = .{ .match_ = .{
+                    .scrutinee = try self.localExpr(value_local, shape_ty),
+                    .branches = try self.addBranchSpan(&[_]DraftBranch{branch}),
+                } } });
+                return try self.wrapLet(value_local, shape_ty, value_expr, matched, ret_ty);
+            }
         }
         return switch (self.builder.shapeContent(shape_ty)) {
             .record, .zst => try self.lowerEncodeRecordToState(shape_ty, value_expr, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan),
@@ -35590,6 +35665,9 @@ const BodyContext = struct {
             return try self.parseFieldTypeIsSupported(info.ok_payload_ty, false);
         }
         if ((try self.customParserLookup(ty)) != null) return true;
+        if (self.builder.nominalExprBackingType(ty)) |backing_ty| {
+            if (self.parseScalarMethodName(backing_ty) != null) return true;
+        }
         if (self.setPayloadType(ty)) |payload_ty| return try self.parseFieldTypeIsSupported(payload_ty, false);
         if (self.dictEntryShape(ty)) |dict| {
             const key_ok = self.dictKeyIsStringRendered(dict.key_ty) or try self.parseFieldTypeIsSupported(dict.key_ty, false);
@@ -35638,6 +35716,9 @@ const BodyContext = struct {
             return try self.encodeFieldTypeIsSupported(info.ok_payload_ty, encoding_ty);
         }
         if ((try self.customEncoderForLookup(ty)) != null) return true;
+        if (self.builder.nominalExprBackingType(ty)) |backing_ty| {
+            if (self.encodeScalarMethodName(backing_ty) != null) return true;
+        }
         if (self.setPayloadType(ty)) |payload_ty| return try self.encodeFieldTypeIsSupported(payload_ty, encoding_ty);
         if (self.dictEntryShape(ty)) |dict| {
             const key_ok = self.dictKeyIsStringRendered(dict.key_ty) or try self.encodeFieldTypeIsSupported(dict.key_ty, encoding_ty);
@@ -37530,6 +37611,21 @@ const BodyContext = struct {
                 boundary_callable_node,
                 method_name,
             );
+        }
+
+        // A nominal opaque with a scalar backing (e.g. `Username := Str`) prepares the codec for
+        // its backing scalar; the encoder/parser reaches it after unwrapping the nominal.
+        switch (self.graph.content(shape_node)) {
+            .named => |named| if (named.backing) |backing| {
+                const backing_is_scalar = if (kind == .parser)
+                    self.graphJsonParseScalarMethodName(backing.node) != null
+                else
+                    self.graphJsonEncodeScalarMethodName(backing.node) != null;
+                if (backing_is_scalar) {
+                    return try self.prepareCustomCodecCallsAtNode(boundary_expr, kind, backing.node, boundary_callable_node, seen);
+                }
+            },
+            else => {},
         }
 
         if (self.graphNodeIsBuiltinTry(shape_node)) {
