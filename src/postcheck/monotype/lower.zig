@@ -9775,7 +9775,7 @@ fn activeConstNodeAddress(
         .module = store_view.key.bytes,
         .node = node,
         .sealed_digest = switch (representation) {
-            .sealed => |ty| builder.program.types.typeDigest(&builder.program.names, ty),
+            .sealed => |ty| builder.program.types.typeDigestCached(&builder.program.names, ty, null),
             .graph => null,
         },
     };
@@ -9788,10 +9788,17 @@ const ActiveConstNodeBinding = struct {
     module: checked.ModuleId,
     node: checked.ConstNodeId,
     representation: ActiveConstNodeRepresentation,
+    previous_same_address: ?u32,
     owner: DraftOwner,
     cell: DraftTypeCell,
     local: ?DraftLocalId = null,
     used: bool = false,
+};
+
+const MaterializedConstNode = struct {
+    representation: ActiveConstNodeRepresentation,
+    expr: DraftExprId,
+    previous_same_address: ?u32,
 };
 
 /// One deferred structural derivation over an operand whose graph node may
@@ -10238,7 +10245,8 @@ const BodyDraftStore = struct {
     active_callable_eval_bindings: std.ArrayList(ActiveCallableEvalBinding),
     active_const_node_bindings: std.ArrayList(ActiveConstNodeBinding),
     active_const_node_binding_indices: std.AutoHashMap(ActiveConstNodeAddress, u32),
-    materialized_const_nodes: std.AutoHashMap(MaterializedConstNodeAddress, DraftExprId),
+    materialized_const_nodes: std.ArrayList(MaterializedConstNode),
+    materialized_const_node_indices: std.AutoHashMap(MaterializedConstNodeAddress, u32),
     active_const_bindings: std.ArrayList(ActiveConstBinding),
     deferred_const_uses: std.ArrayList(DraftDeferredConstUse),
     deferred_structural_eqs: std.ArrayList(DraftDeferredStructuralEq),
@@ -10312,7 +10320,8 @@ const BodyDraftStore = struct {
             .active_callable_eval_bindings = .empty,
             .active_const_node_bindings = .empty,
             .active_const_node_binding_indices = std.AutoHashMap(ActiveConstNodeAddress, u32).init(allocator),
-            .materialized_const_nodes = std.AutoHashMap(MaterializedConstNodeAddress, DraftExprId).init(allocator),
+            .materialized_const_nodes = .empty,
+            .materialized_const_node_indices = std.AutoHashMap(MaterializedConstNodeAddress, u32).init(allocator),
             .active_const_bindings = .empty,
             .deferred_const_uses = .empty,
             .deferred_structural_eqs = .empty,
@@ -10445,7 +10454,8 @@ const BodyDraftStore = struct {
         self.active_callable_eval_bindings.deinit(self.allocator);
         self.active_const_node_bindings.deinit(self.allocator);
         self.active_const_node_binding_indices.deinit();
-        self.materialized_const_nodes.deinit();
+        self.materialized_const_nodes.deinit(self.allocator);
+        self.materialized_const_node_indices.deinit();
         self.active_const_bindings.deinit(self.allocator);
         self.string_bytes.deinit(self.allocator);
         self.string_literals.deinit(self.allocator);
@@ -17804,33 +17814,38 @@ const BodyContext = struct {
         request_cell: DraftTypeCell,
     ) Allocator.Error!?DraftExprId {
         const address = activeConstNodeAddress(self.builder, store_view, node, representation);
-        const index = self.draft.active_const_node_binding_indices.get(address) orelse return null;
-        if (index >= self.draft.active_const_node_bindings.items.len) {
-            Common.invariant("active ConstStore node index was outside its binding stack");
-        }
-        const active = self.draft.active_const_node_bindings.items[index];
-        if (!std.meta.eql(activeConstNodeAddress(self.builder, store_view, node, active.representation), address)) {
-            Common.invariant("active ConstStore node index selected a different representation");
+        var cursor = self.draft.active_const_node_binding_indices.get(address);
+        while (cursor) |index| {
+            if (index >= self.draft.active_const_node_bindings.items.len) {
+                Common.invariant("active ConstStore node index was outside its binding stack");
+            }
+            const active = self.draft.active_const_node_bindings.items[index];
+            if (!try self.constNodeRepresentationsEql(active.representation, representation)) {
+                cursor = active.previous_same_address;
+                continue;
+            }
+
+            try relateRequestComponent(
+                self.graph,
+                try active.cell.toGraphNode(self.graph),
+                try request_cell.toGraphNode(self.graph),
+            );
+            const local = active.local orelse blk: {
+                const owner_scope = try self.draft.enterOwner(active.owner);
+                defer owner_scope.leave();
+                const reserved = try self.addLocalWithBinderCell(
+                    self.builder.symbols.fresh(),
+                    active.cell,
+                    null,
+                );
+                self.draft.active_const_node_bindings.items[index].local = reserved;
+                break :blk reserved;
+            };
+            self.draft.active_const_node_bindings.items[index].used = true;
+            return try self.addExprWithTypeCell(request_cell, .{ .local = local });
         }
 
-        try relateRequestComponent(
-            self.graph,
-            try active.cell.toGraphNode(self.graph),
-            try request_cell.toGraphNode(self.graph),
-        );
-        const local = active.local orelse blk: {
-            const owner_scope = try self.draft.enterOwner(active.owner);
-            defer owner_scope.leave();
-            const reserved = try self.addLocalWithBinderCell(
-                self.builder.symbols.fresh(),
-                active.cell,
-                null,
-            );
-            self.draft.active_const_node_bindings.items[index].local = reserved;
-            break :blk reserved;
-        };
-        self.draft.active_const_node_bindings.items[index].used = true;
-        return try self.addExprWithTypeCell(request_cell, .{ .local = local });
+        return null;
     }
 
     fn materializedConstNodeExpr(
@@ -17846,13 +17861,46 @@ const BodyContext = struct {
             .owner = self.draft.current_owner,
             .static_data_const_locator = static_data_const_locator,
         };
-        const existing = self.draft.materialized_const_nodes.get(address) orelse return null;
-        try relateRequestComponent(
-            self.graph,
-            try self.exprTypeCell(existing).toGraphNode(self.graph),
-            try request_cell.toGraphNode(self.graph),
-        );
-        return existing;
+        var cursor = self.draft.materialized_const_node_indices.get(address);
+        while (cursor) |index| {
+            if (index >= self.draft.materialized_const_nodes.items.len) {
+                Common.invariant("materialized ConstStore node index was outside its entry list");
+            }
+            const existing = self.draft.materialized_const_nodes.items[index];
+            if (!try self.constNodeRepresentationsEql(existing.representation, representation)) {
+                cursor = existing.previous_same_address;
+                continue;
+            }
+            try relateRequestComponent(
+                self.graph,
+                try self.exprTypeCell(existing.expr).toGraphNode(self.graph),
+                try request_cell.toGraphNode(self.graph),
+            );
+            return existing.expr;
+        }
+        return null;
+    }
+
+    fn constNodeRepresentationsEql(
+        self: *BodyContext,
+        left: ActiveConstNodeRepresentation,
+        right: ActiveConstNodeRepresentation,
+    ) Allocator.Error!bool {
+        return switch (left) {
+            .sealed => |left_ty| switch (right) {
+                .sealed => |right_ty| left_ty == right_ty or
+                    try self.builder.program.types.typeEql(
+                        &self.builder.program.names,
+                        left_ty,
+                        right_ty,
+                    ),
+                .graph => false,
+            },
+            .graph => switch (right) {
+                .sealed => false,
+                .graph => true,
+            },
+        };
     }
 
     fn reserveConstNodeBinding(
@@ -17863,19 +17911,17 @@ const BodyContext = struct {
         cell: DraftTypeCell,
     ) Allocator.Error!void {
         const index = self.draft.active_const_node_bindings.items.len;
+        const address = activeConstNodeAddress(self.builder, store_view, node, representation);
+        const previous_same_address = self.draft.active_const_node_binding_indices.get(address);
         try self.draft.active_const_node_bindings.append(self.allocator, .{
             .module = store_view.key,
             .node = node,
             .representation = representation,
+            .previous_same_address = previous_same_address,
             .owner = self.draft.current_owner,
             .cell = cell,
         });
-        const address = activeConstNodeAddress(self.builder, store_view, node, representation);
-        const entry = try self.draft.active_const_node_binding_indices.getOrPut(address);
-        if (entry.found_existing) {
-            Common.invariant("ConstStore node was reserved twice in one materialization graph");
-        }
-        entry.value_ptr.* = @intCast(index);
+        try self.draft.active_const_node_binding_indices.put(address, @intCast(index));
     }
 
     fn finishConstNodeBinding(
@@ -17886,6 +17932,7 @@ const BodyContext = struct {
         cell: DraftTypeCell,
         lowered: DraftExprId,
     ) Allocator.Error!DraftExprId {
+        const index = self.draft.active_const_node_bindings.items.len - 1;
         const active = self.draft.active_const_node_bindings.pop().?;
         if (!moduleBytesEqual(active.module.bytes, store_view.key.bytes) or
             active.node != node or
@@ -17893,8 +17940,16 @@ const BodyContext = struct {
         {
             Common.invariant("ConstStore node reservation changed before materialization completed");
         }
-        if (!self.draft.active_const_node_binding_indices.remove(activeConstNodeAddress(self.builder, store_view, node, representation))) {
+        const address = activeConstNodeAddress(self.builder, store_view, node, representation);
+        const current = self.draft.active_const_node_binding_indices.getPtr(address) orelse
             Common.invariant("completed ConstStore node had no active reservation index");
+        if (current.* != index) {
+            Common.invariant("completed ConstStore node was not its address bucket head");
+        }
+        if (active.previous_same_address) |previous| {
+            current.* = previous;
+        } else if (!self.draft.active_const_node_binding_indices.remove(address)) {
+            Common.invariant("completed ConstStore node address could not be removed");
         }
         if (!active.used) return lowered;
 
@@ -17920,7 +17975,13 @@ const BodyContext = struct {
             .owner = self.draft.current_owner,
             .static_data_const_locator = static_data_const_locator,
         };
-        try self.draft.materialized_const_nodes.put(address, expr);
+        const index = self.draft.materialized_const_nodes.items.len;
+        try self.draft.materialized_const_nodes.append(self.allocator, .{
+            .representation = representation,
+            .expr = expr,
+            .previous_same_address = self.draft.materialized_const_node_indices.get(address),
+        });
+        try self.draft.materialized_const_node_indices.put(address, @intCast(index));
     }
 
     fn lowerInspectOnlyCall(
