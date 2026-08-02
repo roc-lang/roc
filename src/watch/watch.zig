@@ -274,6 +274,7 @@ pub const Watcher = struct {
         .macos => MacOSData,
         .linux => LinuxData,
         .windows => WindowsData,
+        .freebsd, .openbsd, .netbsd, .dragonfly => KqueueData,
         else => @compileError("Unsupported platform for file watching"),
     },
 
@@ -290,6 +291,22 @@ pub const Watcher = struct {
         const WatchDescriptor = struct {
             wd: i32,
             path: []const u8,
+        };
+    };
+
+    /// BSD vnode events are delivered per open file descriptor rather than per
+    /// path, and a directory descriptor only reports changes to the directory's
+    /// own entry list. Detecting writes to an existing file therefore requires a
+    /// descriptor for that file as well, so this holds one registration per
+    /// watched directory and per watched file.
+    const KqueueData = struct {
+        kq: i32,
+        watches: std.array_list.Managed(VnodeWatch),
+
+        const VnodeWatch = struct {
+            fd: i32,
+            path: []const u8,
+            is_dir: bool,
         };
     };
 
@@ -379,6 +396,10 @@ pub const Watcher = struct {
                     .overlapped_data = std.array_list.Managed(WindowsData.OverlappedData).init(allocator),
                     .stop_event = null,
                 },
+                .freebsd, .openbsd, .netbsd, .dragonfly => KqueueData{
+                    .kq = -1,
+                    .watches = std.array_list.Managed(KqueueData.VnodeWatch).init(allocator),
+                },
                 else => unreachable,
             },
         };
@@ -444,6 +465,10 @@ pub const Watcher = struct {
                 }
                 self.impl.overlapped_data.deinit();
                 self.impl.handles.deinit();
+            },
+            .freebsd, .openbsd, .netbsd, .dragonfly => {
+                // stop() already closed the descriptors and emptied the list.
+                self.impl.watches.deinit();
             },
             else => {},
         }
@@ -530,6 +555,14 @@ pub const Watcher = struct {
                 }
                 self.impl.overlapped_data.clearRetainingCapacity();
             },
+            .freebsd, .openbsd, .netbsd, .dragonfly => {
+                if (self.impl.kq >= 0) {
+                    const kq = self.impl.kq;
+                    self.impl.kq = -1;
+                    _ = std.c.close(kq);
+                }
+                self.clearKqueueWatchData();
+            },
             else => {},
         }
     }
@@ -539,6 +572,7 @@ pub const Watcher = struct {
             .macos => self.watchLoopMacOS(),
             .linux => self.watchLoopLinux(),
             .windows => self.watchLoopWindows(),
+            .freebsd, .openbsd, .netbsd, .dragonfly => self.watchLoopKqueue(),
             else => unreachable,
         }
     }
@@ -875,6 +909,246 @@ pub const Watcher = struct {
                 defer self.allocator.free(subdir_path);
                 try self.addWatchRecursiveLinux(subdir_path);
             }
+        }
+    }
+
+    fn watchLoopKqueue(self: *Watcher) void {
+        const kq = std.c.kqueue();
+        if (kq < 0) {
+            std.log.warn("kqueue failed: {}", .{std.posix.errno(kq)});
+            self.markStartupFailed();
+            return;
+        }
+        self.impl.kq = kq;
+
+        for (self.paths) |path| {
+            self.addWatchRecursiveKqueue(path, .silent) catch |err| {
+                std.log.warn("Failed to watch {s}: {}", .{ path, err });
+                self.markStartupFailed();
+                return;
+            };
+        }
+
+        // Signal that we're ready to receive events
+        self.markReady();
+
+        var events: [16]std.c.Kevent = undefined;
+        var no_changes: [0]std.c.Kevent = .{};
+        const timeout = std.c.timespec{ .sec = 0, .nsec = 50 * std.time.ns_per_ms };
+
+        while (!self.should_stop.load(.seq_cst)) {
+            const count = std.c.kevent(kq, &no_changes, 0, &events, events.len, &timeout);
+            if (count < 0) {
+                const err = std.posix.errno(count);
+                if (err == .INTR) continue;
+                std.log.err("kevent error: {}", .{err});
+                continue;
+            }
+
+            for (events[0..@intCast(count)]) |event| {
+                self.processKqueueEvent(&event);
+            }
+        }
+    }
+
+    fn clearKqueueWatchData(self: *Watcher) void {
+        for (self.impl.watches.items) |watch| {
+            _ = std.c.close(watch.fd);
+            self.allocator.free(watch.path);
+        }
+        self.impl.watches.clearRetainingCapacity();
+    }
+
+    fn processKqueueEvent(self: *Watcher, event: *const std.c.Kevent) void {
+        const fd: i32 = @intCast(event.ident);
+        const index = self.findKqueueWatch(fd) orelse return;
+
+        // Copied out because adding watches below can reallocate the list. The
+        // path bytes themselves are separately allocated, so the slice stays
+        // valid until this watch is removed.
+        const watch = self.impl.watches.items[index];
+        const gone = event.fflags & (std.c.NOTE.DELETE | std.c.NOTE.RENAME) != 0;
+
+        if (watch.is_dir) {
+            // A directory reported as written and removed in the same batch has
+            // nothing left to scan.
+            if (!gone and event.fflags & (std.c.NOTE.WRITE | std.c.NOTE.EXTEND) != 0) {
+                self.rescanKqueueDir(watch.path);
+            }
+        } else if (gone or event.fflags & (std.c.NOTE.WRITE | std.c.NOTE.EXTEND) != 0) {
+            if (self.shouldEmitPath(watch.path, false)) {
+                self.emitEvent(.{ .path = watch.path });
+            }
+        }
+
+        // A deleted or renamed vnode never reports again under its old path, and
+        // closing the descriptor is what unregisters it from the kqueue. Watches
+        // under a directory that moved keep reporting, but their recorded paths
+        // no longer name the file that would change, so they go too.
+        if (gone) {
+            if (watch.is_dir) self.removeKqueueWatchTree(watch.path) else self.removeKqueueWatch(fd);
+        }
+    }
+
+    /// Re-read a directory whose entry list changed, registering anything that
+    /// appeared since the last scan. Entries that vanished are reported through
+    /// their own descriptors, so they are not diffed here.
+    fn rescanKqueueDir(self: *Watcher, dir_path: []const u8) void {
+        var dir = std.Io.Dir.openDirAbsolute(self.std_io, dir_path, .{ .iterate = true }) catch |err| {
+            std.log.warn("Failed to reopen watched directory {s}: {}", .{ dir_path, err });
+            return;
+        };
+        defer dir.close(self.std_io);
+
+        var it = dir.iterate();
+        while (it.next(self.std_io) catch null) |entry| {
+            const full_path = std.fs.path.join(self.allocator, &.{ dir_path, entry.name }) catch |err| switch (err) {
+                error.OutOfMemory => {
+                    std.log.err("Out of memory building path for directory entry: {s}", .{entry.name});
+                    return;
+                },
+            };
+            defer self.allocator.free(full_path);
+
+            if (self.findKqueueWatchByPath(full_path) != null) continue;
+
+            switch (entry.kind) {
+                .directory => self.addWatchRecursiveKqueue(full_path, .emit) catch |err| {
+                    std.log.err("Failed to watch new directory {s}: {}", .{ full_path, err });
+                },
+                .file => {
+                    if (!self.shouldEmitPath(entry.name, false)) continue;
+                    self.registerKqueueWatch(full_path, false) catch |err| {
+                        std.log.err("Failed to watch new file {s}: {}", .{ full_path, err });
+                        continue;
+                    };
+                    self.emitEvent(.{ .path = full_path });
+                },
+                else => {},
+            }
+        }
+    }
+
+    /// Whether files discovered while adding watches are reported as events.
+    /// Files present when watching starts are not changes; files found inside a
+    /// directory that just appeared are.
+    const KqueueScanMode = enum { silent, emit };
+
+    fn addWatchRecursiveKqueue(
+        self: *Watcher,
+        path: []const u8,
+        mode: KqueueScanMode,
+    ) (Allocator.Error || std.Io.Dir.OpenError || std.Io.Dir.Iterator.Error || error{ WatchOpenFailed, KeventFailed })!void {
+        try self.registerKqueueWatch(path, true);
+
+        var dir = try std.Io.Dir.openDirAbsolute(self.std_io, path, .{ .iterate = true });
+        defer dir.close(self.std_io);
+
+        var it = dir.iterate();
+        while (try it.next(self.std_io)) |entry| {
+            const child_path = try std.fs.path.join(self.allocator, &.{ path, entry.name });
+            defer self.allocator.free(child_path);
+
+            switch (entry.kind) {
+                .directory => try self.addWatchRecursiveKqueue(child_path, mode),
+                .file => {
+                    if (!self.shouldEmitPath(entry.name, false)) continue;
+                    try self.registerKqueueWatch(child_path, false);
+                    if (mode == .emit) self.emitEvent(.{ .path = child_path });
+                },
+                else => {},
+            }
+        }
+    }
+
+    fn registerKqueueWatch(
+        self: *Watcher,
+        path: []const u8,
+        is_dir: bool,
+    ) (Allocator.Error || error{ WatchOpenFailed, KeventFailed })!void {
+        const path_z = try self.allocator.dupeZ(u8, path);
+        defer self.allocator.free(path_z);
+
+        const fd = std.posix.openatZ(
+            std.posix.AT.FDCWD,
+            path_z,
+            .{ .ACCMODE = .RDONLY, .CLOEXEC = true },
+            0,
+        ) catch |err| {
+            std.log.warn("Failed to open {s} for watching: {}", .{ path, err });
+            return error.WatchOpenFailed;
+        };
+        errdefer _ = std.c.close(fd);
+
+        // On a directory these report entries appearing or disappearing; on a
+        // file they report writes to its contents. NOTE.ATTRIB is deliberately
+        // absent: it fires on atime updates, so reading a watched file in
+        // response to an event would generate the next event.
+        const notes = std.c.NOTE.WRITE | std.c.NOTE.EXTEND | std.c.NOTE.DELETE | std.c.NOTE.RENAME;
+
+        const change = std.c.Kevent{
+            .ident = @intCast(fd),
+            .filter = std.c.EVFILT.VNODE,
+            .flags = std.c.EV.ADD | std.c.EV.ENABLE | std.c.EV.CLEAR,
+            .fflags = notes,
+            .data = 0,
+            .udata = 0,
+        };
+
+        var no_events: [0]std.c.Kevent = .{};
+        const rc = std.c.kevent(self.impl.kq, (&change)[0..1], 1, &no_events, 0, null);
+        if (rc < 0) {
+            std.log.warn("kevent registration failed for {s}: {}", .{ path, std.posix.errno(rc) });
+            return error.KeventFailed;
+        }
+
+        const path_copy = try self.allocator.dupe(u8, path);
+        errdefer self.allocator.free(path_copy);
+
+        try self.impl.watches.append(.{
+            .fd = fd,
+            .path = path_copy,
+            .is_dir = is_dir,
+        });
+    }
+
+    fn findKqueueWatch(self: *Watcher, fd: i32) ?usize {
+        for (self.impl.watches.items, 0..) |watch, i| {
+            if (watch.fd == fd) return i;
+        }
+        return null;
+    }
+
+    fn findKqueueWatchByPath(self: *Watcher, path: []const u8) ?usize {
+        for (self.impl.watches.items, 0..) |watch, i| {
+            if (std.mem.eql(u8, watch.path, path)) return i;
+        }
+        return null;
+    }
+
+    fn removeKqueueWatch(self: *Watcher, fd: i32) void {
+        const index = self.findKqueueWatch(fd) orelse return;
+        const watch = self.impl.watches.swapRemove(index);
+        _ = std.c.close(watch.fd);
+        self.allocator.free(watch.path);
+    }
+
+    /// Drop a directory's watch along with every watch beneath it.
+    fn removeKqueueWatchTree(self: *Watcher, dir_path: []const u8) void {
+        var i: usize = 0;
+        while (i < self.impl.watches.items.len) {
+            const path = self.impl.watches.items[i].path;
+            const under_dir = path.len > dir_path.len and
+                std.mem.startsWith(u8, path, dir_path) and
+                path[dir_path.len] == std.fs.path.sep;
+
+            if (std.mem.eql(u8, path, dir_path) or under_dir) {
+                const watch = self.impl.watches.swapRemove(i);
+                _ = std.c.close(watch.fd);
+                self.allocator.free(watch.path);
+                continue;
+            }
+            i += 1;
         }
     }
 
