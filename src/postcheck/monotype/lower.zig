@@ -5388,11 +5388,11 @@ const Builder = struct {
 
             var added_intrinsic_call = false;
             var intrinsic_index: usize = 0;
-            while (intrinsic_index < body_draft.deferred_parse_intrinsics.items.len) : (intrinsic_index += 1) {
-                if (try self.prepareDraftParseIntrinsic(
+            while (intrinsic_index < body_draft.deferred_callsite_intrinsics.items.len) : (intrinsic_index += 1) {
+                if (try self.prepareDraftCallsiteIntrinsic(
                     body_draft,
                     graph,
-                    body_draft.deferred_parse_intrinsics.items[intrinsic_index],
+                    body_draft.deferred_callsite_intrinsics.items[intrinsic_index],
                 )) added_intrinsic_call = true;
             }
 
@@ -5416,9 +5416,9 @@ const Builder = struct {
                 Common.invariant("deferred structural serialization reservation was filled before final graph sealing");
             }
         }
-        for (body_draft.deferred_parse_intrinsics.items) |boundary| {
+        for (body_draft.deferred_callsite_intrinsics.items) |boundary| {
             if (body_draft.exprs.items[@intFromEnum(boundary.expr)].data != .pending_deferred) {
-                Common.invariant("deferred parse intrinsic reservation was filled before final graph sealing");
+                Common.invariant("deferred call-site intrinsic reservation was filled before final graph sealing");
             }
         }
     }
@@ -5696,7 +5696,7 @@ const Builder = struct {
         );
     }
 
-    /// Relation production for a deferred parse intrinsic. Only
+    /// Relation production for a deferred call-site intrinsic. Only
     /// `parse_tag_union` generates parser bodies whose format method calls
     /// and error-row tags must exist as graph relations before the freeze;
     /// the FieldNames/Field intrinsics only reshape already-related values.
@@ -5704,11 +5704,11 @@ const Builder = struct {
     /// a synthetic `(encoding) -> (state) -> Try` constructor node over the
     /// options' own component cells lets the structural-parser preparation
     /// helpers run unchanged.
-    fn prepareDraftParseIntrinsic(
+    fn prepareDraftCallsiteIntrinsic(
         self: *Builder,
         body_draft: *BodyDraftStore,
         graph: *InstGraph,
-        boundary: DraftDeferredParseIntrinsic,
+        boundary: DraftDeferredCallsiteIntrinsic,
     ) Allocator.Error!bool {
         if (boundary.intrinsic != .parse_tag_union) return false;
         const owner_scope = try body_draft.enterOwner(boundary.owner);
@@ -5845,13 +5845,13 @@ const Builder = struct {
     /// final graph sealing: their callable request nodes carried live row
     /// defaults during body lowering, and only the sealer may decide the
     /// final rows those intrinsic bodies are generated over.
-    fn emitDraftDeferredParseIntrinsics(
+    fn emitDraftDeferredCallsiteIntrinsics(
         self: *Builder,
         body_draft: *BodyDraftStore,
         graph: *InstGraph,
         sealer: *GraphTypeFinals,
     ) Allocator.Error!void {
-        for (body_draft.deferred_parse_intrinsics.items) |boundary| {
+        for (body_draft.deferred_callsite_intrinsics.items) |boundary| {
             const owner_scope = try body_draft.enterOwner(boundary.owner);
             defer owner_scope.leave();
 
@@ -5893,28 +5893,36 @@ const Builder = struct {
             ctx.frozen_codec_calls = frozen_codec_calls.items;
 
             const callable = try graph.functionNodes(boundary.callable_node);
-            const lowered = try ctx.lowerParseIntrinsicBodyAtCallable(
+            var checked_arg_storage: [checked.IntrinsicId.max_callsite_arity]checked.CheckedExprId = undefined;
+            const checked_args = ctx.checkedCallsiteIntrinsicArgs(
+                boundary.intrinsic,
+                boundary.operands,
+                &checked_arg_storage,
+            );
+            const lowered = try ctx.lowerCallsiteIntrinsicBodyAtCallable(
                 boundary.intrinsic,
                 boundary.checked_expr_id,
                 boundary.source_fn_ty,
-                boundary.args,
+                checked_args,
                 callable,
                 null,
                 if (boundary.pre_lowered_args) |span| ctx.exprSpan(span) else null,
             );
-            const lowered_expr = body_draft.exprs.items[@intFromEnum(lowered)];
-            const reserved_ty = try body_draft.exprs.items[@intFromEnum(boundary.expr)].ty.seal(graph, sealer);
+            var lowered_expr = body_draft.exprs.items[@intFromEnum(lowered)];
+            const reserved_cell = body_draft.exprs.items[@intFromEnum(boundary.expr)].ty;
+            const reserved_ty = try reserved_cell.seal(graph, sealer);
             const lowered_ty = try lowered_expr.ty.seal(graph, sealer);
             if (!try self.program.types.typeEql(&self.program.names, reserved_ty, lowered_ty)) {
-                Common.invariant("deferred parse intrinsic changed its sealed result type");
+                Common.invariant("deferred call-site intrinsic changed its sealed result type");
             }
+            lowered_expr.ty = reserved_cell;
             body_draft.exprs.items[@intFromEnum(boundary.expr)] = lowered_expr;
             body_draft.expr_impossibility_proofs.items[@intFromEnum(boundary.expr)] =
                 body_draft.expr_impossibility_proofs.items[@intFromEnum(lowered)];
         }
-        for (body_draft.deferred_parse_intrinsics.items) |boundary| {
+        for (body_draft.deferred_callsite_intrinsics.items) |boundary| {
             if (body_draft.exprs.items[@intFromEnum(boundary.expr)].data == .pending_deferred) {
-                Common.invariant("deferred parse intrinsic did not fill its reservation");
+                Common.invariant("deferred call-site intrinsic did not fill its reservation");
             }
         }
     }
@@ -6354,7 +6362,7 @@ const Builder = struct {
         var sealer = GraphTypeFinals.init(graph);
         defer sealer.deinit();
         try self.emitDraftDeferredStructuralSerializations(body_draft, graph, &sealer);
-        try self.emitDraftDeferredParseIntrinsics(body_draft, graph, &sealer);
+        try self.emitDraftDeferredCallsiteIntrinsics(body_draft, graph, &sealer);
         try self.emitDraftDeferredStructuralEqs(body_draft, graph, &sealer);
         try self.emitDraftDeferredInspects(body_draft, graph, &sealer);
         const sealed_root = if (root_node) |node| try sealer.sealNode(node) else null;
@@ -9650,12 +9658,17 @@ const DraftDeferredStructuralSerialization = struct {
     lexical: DraftCodecLexicalContext,
 };
 
-/// One parse intrinsic whose callable request still carried unresolved
+/// One call-site intrinsic whose callable request still carried unresolved
 /// component cells at body-lowering time (e.g. a `FieldName(shape)` whose
 /// shape row stays widenable until final sealing). The reservation keeps the
 /// callable's result node live; emission lowers the intrinsic body under the
 /// frozen final-type sealer.
-const DraftDeferredParseIntrinsic = struct {
+const CheckedIntrinsicOperands = union(enum) {
+    direct_call: []const checked.CheckedExprId,
+    dispatch: []const static_dispatch.StaticDispatchOperand,
+};
+
+const DraftDeferredCallsiteIntrinsic = struct {
     view: ModuleView,
     method_scope: ModuleView,
     owner_template: names.ProcTemplate,
@@ -9664,7 +9677,7 @@ const DraftDeferredParseIntrinsic = struct {
     intrinsic: checked.IntrinsicId,
     checked_expr_id: checked.CheckedExprId,
     source_fn_ty: checked.CheckedTypeId,
-    args: []const checked.CheckedExprId,
+    operands: CheckedIntrinsicOperands,
     pre_lowered_args: ?DraftSpan(DraftExprId),
     callable_node: NodeId,
     evidence: EvidenceChain,
@@ -10045,7 +10058,7 @@ const BodyDraftStore = struct {
     deferred_const_uses: std.ArrayList(DraftDeferredConstUse),
     deferred_structural_eqs: std.ArrayList(DraftDeferredStructuralEq),
     deferred_structural_serializations: std.ArrayList(DraftDeferredStructuralSerialization),
-    deferred_parse_intrinsics: std.ArrayList(DraftDeferredParseIntrinsic),
+    deferred_callsite_intrinsics: std.ArrayList(DraftDeferredCallsiteIntrinsic),
     prepared_codec_calls: std.ArrayList(DraftPreparedCodecCall),
     local_proc_contexts: std.ArrayList(LocalProcContext),
     deferred_inspects: std.ArrayList(DraftDeferredInspect),
@@ -10116,7 +10129,7 @@ const BodyDraftStore = struct {
             .deferred_const_uses = .empty,
             .deferred_structural_eqs = .empty,
             .deferred_structural_serializations = .empty,
-            .deferred_parse_intrinsics = .empty,
+            .deferred_callsite_intrinsics = .empty,
             .prepared_codec_calls = .empty,
             .local_proc_contexts = .empty,
             .deferred_inspects = .empty,
@@ -10190,7 +10203,7 @@ const BodyDraftStore = struct {
             self.allocator.free(boundary.lexical.binders);
             self.allocator.free(boundary.lexical.local_procs);
         }
-        for (self.deferred_parse_intrinsics.items) |boundary| {
+        for (self.deferred_callsite_intrinsics.items) |boundary| {
             self.allocator.free(boundary.lexical.binders);
             self.allocator.free(boundary.lexical.local_procs);
         }
@@ -10237,7 +10250,7 @@ const BodyDraftStore = struct {
         self.prepared_inspect_methods.deinit(self.allocator);
         self.deferred_inspects.deinit(self.allocator);
         self.deferred_structural_serializations.deinit(self.allocator);
-        self.deferred_parse_intrinsics.deinit(self.allocator);
+        self.deferred_callsite_intrinsics.deinit(self.allocator);
         self.prepared_codec_calls.deinit(self.allocator);
         self.deferred_structural_eqs.deinit(self.allocator);
         self.deferred_const_uses.deinit(self.allocator);
@@ -17039,7 +17052,7 @@ const BodyContext = struct {
         checked_ret_ty: checked.CheckedTypeId,
         call: anytype,
     ) Allocator.Error!DraftExprId {
-        if (try self.lowerParseIntrinsicCallExpr(checked_expr_id, checked_ret_ty, call, null)) |expr| {
+        if (try self.lowerCallsiteIntrinsicCallExpr(checked_expr_id, checked_ret_ty, call, null)) |expr| {
             return expr;
         }
         const lowered = try self.lowerCall(checked_ret_ty, call);
@@ -17092,14 +17105,14 @@ const BodyContext = struct {
         return self.builder.functionShape(fn_ty, "checked call function type was not a function").ret;
     }
 
-    fn lowerParseIntrinsicCallExpr(
+    fn lowerCallsiteIntrinsicCallExpr(
         self: *BodyContext,
         checked_expr_id: checked.CheckedExprId,
         checked_ret_ty: checked.CheckedTypeId,
         call: anytype,
         expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!?DraftExprId {
-        return try self.lowerParseIntrinsicCallExprAtExpectedNode(
+        return try self.lowerCallsiteIntrinsicCallExprAtExpectedNode(
             checked_expr_id,
             checked_ret_ty,
             call,
@@ -17108,14 +17121,14 @@ const BodyContext = struct {
         );
     }
 
-    fn lowerParseIntrinsicCallExprAtNode(
+    fn lowerCallsiteIntrinsicCallExprAtNode(
         self: *BodyContext,
         checked_expr_id: checked.CheckedExprId,
         checked_ret_ty: checked.CheckedTypeId,
         call: anytype,
         expected_ret_node: NodeId,
     ) Allocator.Error!?DraftExprId {
-        return try self.lowerParseIntrinsicCallExprAtExpectedNode(
+        return try self.lowerCallsiteIntrinsicCallExprAtExpectedNode(
             checked_expr_id,
             checked_ret_ty,
             call,
@@ -17124,7 +17137,7 @@ const BodyContext = struct {
         );
     }
 
-    fn lowerParseIntrinsicCallExprAtExpectedNode(
+    fn lowerCallsiteIntrinsicCallExprAtExpectedNode(
         self: *BodyContext,
         checked_expr_id: checked.CheckedExprId,
         checked_ret_ty: checked.CheckedTypeId,
@@ -17133,17 +17146,75 @@ const BodyContext = struct {
         expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!?DraftExprId {
         const target = call.direct_target orelse return null;
-        const intrinsic = self.parseIntrinsicForResolvedTarget(target) orelse return null;
+        const intrinsic = self.callsiteIntrinsicForResolvedTarget(target) orelse return null;
         const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
 
-        // The checked call instantiation owns the exact specialization cells for
-        // every argument. Consume those cells directly; expression syntax is
-        // not a type authority, and composite operands expose only these
-        // producer-owned cells.
-        var callable_node = try self.directCallTypeNode(checked_ret_ty, call, source_fn_ty, expected_ret_node);
+        const callable_node = try self.directCallTypeNode(checked_ret_ty, call, source_fn_ty, expected_ret_node);
+        return try self.lowerCallsiteIntrinsicAtCallableNode(
+            intrinsic,
+            checked_expr_id,
+            source_fn_ty,
+            .{ .direct_call = call.args },
+            callable_node,
+            expected_ret_ty,
+        );
+    }
+
+    /// Return checked expression operands for a call-site intrinsic without
+    /// allocating. Method dispatch is valid here only when every operand is a
+    /// source expression; compiler-generated dispatch operands have their own
+    /// explicit lowering protocols.
+    fn checkedCallsiteIntrinsicArgs(
+        _: *BodyContext,
+        intrinsic: checked.IntrinsicId,
+        operands: CheckedIntrinsicOperands,
+        storage: *[checked.IntrinsicId.max_callsite_arity]checked.CheckedExprId,
+    ) []const checked.CheckedExprId {
+        const expected_arity: usize = intrinsic.callsiteArity() orelse
+            Common.invariant("non-call-site intrinsic reached call-site lowering");
+        const actual_arity = switch (operands) {
+            .direct_call => |args| args.len,
+            .dispatch => |args| args.len,
+        };
+        if (actual_arity != expected_arity) {
+            Common.invariant("checked call-site intrinsic had an unexpected arity");
+        }
+        return switch (operands) {
+            .direct_call => |args| args,
+            .dispatch => |args| blk: {
+                for (args, storage.*[0..expected_arity]) |operand, *checked_arg| {
+                    checked_arg.* = switch (operand) {
+                        .checked_expr => |expr| expr,
+                        .generated_interpolation_iter,
+                        .generated_numeral,
+                        .generated_quote,
+                        => Common.invariant("call-site intrinsic had a compiler-generated dispatch operand"),
+                    };
+                }
+                break :blk storage.*[0..expected_arity];
+            },
+        };
+    }
+
+    /// Lower every syntax form for a call-site intrinsic through one exact
+    /// monomorphic body generator. The checked callable request owns the
+    /// specialization cells; neither source syntax nor the intrinsic wrapper
+    /// is a later type authority.
+    fn lowerCallsiteIntrinsicAtCallableNode(
+        self: *BodyContext,
+        intrinsic: checked.IntrinsicId,
+        checked_expr_id: checked.CheckedExprId,
+        source_fn_ty: checked.CheckedTypeId,
+        operands: CheckedIntrinsicOperands,
+        initial_callable_node: NodeId,
+        expected_ret_ty: ?Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        var checked_arg_storage: [checked.IntrinsicId.max_callsite_arity]checked.CheckedExprId = undefined;
+        const args = self.checkedCallsiteIntrinsicArgs(intrinsic, operands, &checked_arg_storage);
+        var callable_node = initial_callable_node;
         var callable = try self.graph.functionNodes(callable_node);
-        if (callable.args.len != call.args.len) {
-            Common.invariant("checked parse intrinsic call request had an unexpected arity");
+        if (callable.args.len != args.len) {
+            Common.invariant("checked call-site intrinsic request had an unexpected arity");
         }
         switch (intrinsic.requestResultSource()) {
             .declared_return => {},
@@ -17170,8 +17241,8 @@ const BodyContext = struct {
                 // Other intrinsics defer only while their request still owns
                 // live row defaults such as an open `FieldName(shape)` row.
                 const pre_lowered_args: ?DraftSpan(DraftExprId) = if (intrinsic == .parse_tag_union) blk: {
-                    try self.prepareExprSpanAtNodes(call.args, callable.args);
-                    break :blk try self.lowerPreparedExprSpanAtNodes(call.args, callable.args);
+                    try self.prepareExprSpanAtNodes(args, callable.args);
+                    break :blk try self.lowerPreparedExprSpanAtNodes(args, callable.args);
                 } else null;
                 const expr = try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(callable.ret), .pending_deferred);
                 const lexical = try self.captureCodecLexicalContext();
@@ -17180,7 +17251,7 @@ const BodyContext = struct {
                     self.allocator.free(lexical.binders);
                     self.allocator.free(lexical.local_procs);
                 };
-                try self.draft.deferred_parse_intrinsics.append(self.allocator, .{
+                try self.draft.deferred_callsite_intrinsics.append(self.allocator, .{
                     .view = self.view,
                     .method_scope = self.method_scope,
                     .owner_template = self.owner_template,
@@ -17189,7 +17260,7 @@ const BodyContext = struct {
                     .intrinsic = intrinsic,
                     .checked_expr_id = checked_expr_id,
                     .source_fn_ty = source_fn_ty,
-                    .args = call.args,
+                    .operands = operands,
                     .pre_lowered_args = pre_lowered_args,
                     .callable_node = callable_node,
                     .evidence = self.evidence,
@@ -17201,15 +17272,19 @@ const BodyContext = struct {
             }
         }
 
-        return try self.lowerParseIntrinsicBodyAtCallable(
+        const lowered = try self.lowerCallsiteIntrinsicBodyAtCallable(
             intrinsic,
             checked_expr_id,
             source_fn_ty,
-            call.args,
+            args,
             callable,
             expected_ret_ty,
             null,
         );
+        if (try self.graph.containsGeneratedPrivate(callable.ret)) {
+            self.draft.exprs.items[@intFromEnum(lowered)].ty = DraftTypeCell.fromGraphNode(callable.ret);
+        }
+        return lowered;
     }
 
     /// Synthetic `(encoding) -> (state) -> Try` constructor node over a
@@ -17229,7 +17304,7 @@ const BodyContext = struct {
     /// checked callable request nodes and lower the intrinsic body. Under
     /// frozen emission the current-phase view seals each node to its final
     /// type; during ordinary body lowering every node is already resolved.
-    fn lowerParseIntrinsicBodyAtCallable(
+    fn lowerCallsiteIntrinsicBodyAtCallable(
         self: *BodyContext,
         intrinsic: checked.IntrinsicId,
         checked_expr_id: checked.CheckedExprId,
@@ -17239,14 +17314,17 @@ const BodyContext = struct {
         expected_ret_ty: ?Type.TypeId,
         pre_lowered_args: ?[]const DraftExprId,
     ) Allocator.Error!DraftExprId {
-        const arg_tys = try self.allocator.alloc(Type.TypeId, args.len);
-        defer self.allocator.free(arg_tys);
-        for (callable.args, 0..) |arg_node, index| {
-            arg_tys[index] = try self.currentPhaseTypeForNode(arg_node);
+        if (args.len > checked.IntrinsicId.max_callsite_arity or callable.args.len != args.len) {
+            Common.invariant("call-site intrinsic body had an unexpected arity");
+        }
+        var arg_ty_storage: [checked.IntrinsicId.max_callsite_arity]Type.TypeId = undefined;
+        const arg_tys = arg_ty_storage[0..args.len];
+        for (callable.args, arg_tys) |arg_node, *arg_ty| {
+            arg_ty.* = try self.currentPhaseTypeForNode(arg_node);
         }
         const ret_ty = try self.currentPhaseTypeForNode(callable.ret);
         if (expected_ret_ty) |expected| {
-            if (!self.sameType(expected, ret_ty)) Common.invariant("checked parse intrinsic lowered at a type different from its context type");
+            if (!self.sameType(expected, ret_ty)) Common.invariant("checked call-site intrinsic lowered at a type different from its context type");
         }
 
         return switch (intrinsic) {
@@ -17261,7 +17339,7 @@ const BodyContext = struct {
         };
     }
 
-    fn lowerParseIntrinsicArgAtType(
+    fn lowerCallsiteIntrinsicArgAtType(
         self: *BodyContext,
         checked_arg: checked.CheckedExprId,
         ty: Type.TypeId,
@@ -17277,7 +17355,7 @@ const BodyContext = struct {
             if (try self.currentLocalForResolvedValue(ref_id)) |local_id| {
                 const local_ty = try self.localType(local_id);
                 if (!self.sameType(ty, local_ty)) {
-                    Common.invariant("checked parse intrinsic local argument type differed from its concrete local type");
+                    Common.invariant("checked call-site intrinsic local argument type differed from its concrete local type");
                 }
                 return try self.addExpr(.{ .ty = local_ty, .data = .{ .local = local_id } });
             }
@@ -17602,7 +17680,23 @@ const BodyContext = struct {
         };
     }
 
-    fn parseIntrinsicForResolvedTarget(self: *BodyContext, target: checked.ResolvedValueId) ?checked.IntrinsicId {
+    fn callsiteIntrinsicForMethodTarget(
+        _: *BodyContext,
+        target: static_dispatch.MethodTarget,
+    ) ?checked.IntrinsicId {
+        return switch (target.kind) {
+            .procedure => |procedure| switch (procedure.runtime_target) {
+                .intrinsic => |intrinsic| if (intrinsic.callsiteArity() != null)
+                    intrinsic
+                else
+                    Common.invariant("non-call-site intrinsic had a call-site method runtime target"),
+                .procedure, .low_level, .graph_participating => null,
+            },
+            .local_proc, .structural => null,
+        };
+    }
+
+    fn callsiteIntrinsicForResolvedTarget(self: *BodyContext, target: checked.ResolvedValueId) ?checked.IntrinsicId {
         const raw = @intFromEnum(target);
         if (raw >= self.view.resolved_refs.records.len) {
             Common.invariant("checked direct call target is outside resolved value table");
@@ -17616,17 +17710,7 @@ const BodyContext = struct {
             .platform_required_proc => |proc| proc.procedure.intrinsic,
             else => null,
         } orelse return null;
-        return switch (intrinsic) {
-            .parse_tag_union,
-            .field_names_rename_fields,
-            .field_names_shortest_name,
-            .field_names_longest_name,
-            .field_names_iter,
-            .field_names_for_size,
-            .field_name,
-            => intrinsic,
-            .str_inspect, .structural_eq => null,
-        };
+        return if (intrinsic.callsiteArity() != null) intrinsic else null;
     }
 
     fn lowerFieldNamesRenameFieldNames(
@@ -17638,8 +17722,8 @@ const BodyContext = struct {
         if (args.len != 2 or arg_tys.len != 2) Common.invariant("FieldNames.rename_fields reached Monotype with an unexpected arity");
         if (!self.sameType(arg_tys[0], ret_ty)) Common.invariant("FieldNames.rename_fields result type differed from its field set argument");
 
-        const fields_value = try self.lowerParseIntrinsicArgAtType(args[0], arg_tys[0]);
-        const rename_value = try self.lowerParseIntrinsicArgAtType(args[1], arg_tys[1]);
+        const fields_value = try self.lowerCallsiteIntrinsicArgAtType(args[0], arg_tys[0]);
+        const rename_value = try self.lowerCallsiteIntrinsicArgAtType(args[1], arg_tys[1]);
         if (self.generatedFieldNamesBackingValueFieldNames(arg_tys[0])) |backing_fields| {
             const stable_backing_fields = try GuardedList.dupe(self.allocator, Type.Field, backing_fields);
             defer self.allocator.free(stable_backing_fields);
@@ -17830,7 +17914,7 @@ const BodyContext = struct {
         const shape_ty = self.fieldsShapeType(arg_tys[0]);
         const fields = try GuardedList.dupe(self.allocator, Type.Field, self.recordFieldsForShape(shape_ty));
         defer self.allocator.free(fields);
-        const fields_value = try self.lowerParseIntrinsicArgAtType(args[0], arg_tys[0]);
+        const fields_value = try self.lowerCallsiteIntrinsicArgAtType(args[0], arg_tys[0]);
         if (self.generatedFieldNamesBackingInfo(arg_tys[0])) |info| {
             const fields_local = try self.addLocal(self.builder.symbols.fresh(), arg_tys[0]);
             const body = try self.lowerGeneratedFieldNamesNameBound(
@@ -17908,7 +17992,7 @@ const BodyContext = struct {
         const name_field = self.recordFieldByText(backing_ty, "name");
         if (!self.sameType(name_field.ty, ret_ty)) Common.invariant("Field.name backing name field differed from Str");
 
-        const field_value = try self.lowerParseIntrinsicArgAtType(args[0], field_ty);
+        const field_value = try self.lowerCallsiteIntrinsicArgAtType(args[0], field_ty);
         const field_local = try self.addLocal(self.builder.symbols.fresh(), field_ty);
         const backing_local = try self.addLocal(self.builder.symbols.fresh(), backing_ty);
         const name_expr = try self.addExpr(.{
@@ -18180,7 +18264,7 @@ const BodyContext = struct {
         }
         const field_handle_ty = self.iterItemType(ret_ty);
 
-        const fields_value = try self.lowerParseIntrinsicArgAtType(args[0], arg_tys[0]);
+        const fields_value = try self.lowerCallsiteIntrinsicArgAtType(args[0], arg_tys[0]);
         const fields_local = try self.addLocal(self.builder.symbols.fresh(), arg_tys[0]);
         const size_local: ?DraftLocalId = if (mode == .for_size) blk: {
             if (!self.typeHasBuiltinOwner(arg_tys[1], .u64)) Common.invariant("FieldNames.for_size size argument was not U64");
@@ -18232,7 +18316,7 @@ const BodyContext = struct {
             );
         };
         if (mode == .for_size) {
-            const size_value = try self.lowerParseIntrinsicArgAtType(args[1], arg_tys[1]);
+            const size_value = try self.lowerCallsiteIntrinsicArgAtType(args[1], arg_tys[1]);
             iter_expr = try self.wrapLet(size_local.?, arg_tys[1], size_value, iter_expr, ret_ty);
         }
         return try self.wrapLet(fields_local, arg_tys[0], fields_value, iter_expr, ret_ty);
@@ -23389,8 +23473,8 @@ const BodyContext = struct {
             else => Common.invariant("ParseTagUnionSpec.parse value type was not a tag union"),
         };
         const spec_ty = arg_tys[0];
-        const spec_value = if (pre_lowered_args) |lowered| lowered[0] else try self.lowerParseIntrinsicArgAtType(args[0], arg_tys[0]);
-        const options_value = if (pre_lowered_args) |lowered| lowered[1] else try self.lowerParseIntrinsicArgAtType(args[1], arg_tys[1]);
+        const spec_value = if (pre_lowered_args) |lowered| lowered[0] else try self.lowerCallsiteIntrinsicArgAtType(args[0], arg_tys[0]);
+        const options_value = if (pre_lowered_args) |lowered| lowered[1] else try self.lowerCallsiteIntrinsicArgAtType(args[1], arg_tys[1]);
         const options_ty = arg_tys[1];
         const key_ty = self.builder.recordFieldType(options_ty, try self.builder.program.names.internRecordFieldLabel("tag"));
         const encoding_ty = self.builder.recordFieldType(options_ty, try self.builder.program.names.internRecordFieldLabel("encoding"));
@@ -29259,9 +29343,9 @@ const BodyContext = struct {
         else if (try self.restoredHoistedExprAtNode(checked_expr, expected_node)) |restored|
             restored
         else if (if (producer_request) |request|
-            try self.lowerParseIntrinsicCallExprAtNode(checked_expr, expr.ty, call, request)
+            try self.lowerCallsiteIntrinsicCallExprAtNode(checked_expr, expr.ty, call, request)
         else
-            try self.lowerParseIntrinsicCallExpr(checked_expr, expr.ty, call, null)) |intrinsic|
+            try self.lowerCallsiteIntrinsicCallExpr(checked_expr, expr.ty, call, null)) |intrinsic|
             intrinsic
         else lowered: {
             // Preserve the expected result as an active graph relation. It may
@@ -29343,7 +29427,7 @@ const BodyContext = struct {
         switch (expr.data) {
             .runtime_error => return try self.lowerExprWithType(checked_expr, ty),
             .call => |call| {
-                if (try self.lowerParseIntrinsicCallExpr(checked_expr, expr.ty, call, ty)) |lowered| {
+                if (try self.lowerCallsiteIntrinsicCallExpr(checked_expr, expr.ty, call, ty)) |lowered| {
                     return lowered;
                 }
                 try self.constrainKnownType(expr.ty, ty);
@@ -30252,7 +30336,7 @@ const BodyContext = struct {
                             procedure,
                             expected_ret_cell,
                         ),
-                        .graph_participating => {},
+                        .intrinsic, .graph_participating => {},
                     },
                     .local_proc => direct_graph_call = true,
                     .structural => {},
@@ -30264,7 +30348,7 @@ const BodyContext = struct {
                     .procedure => |procedure| switch (procedure.runtime_target) {
                         .low_level => |op| direct_parametric_low_level = op,
                         .procedure => direct_graph_call = true,
-                        .graph_participating => {},
+                        .intrinsic, .graph_participating => {},
                     },
                     .local_proc => direct_graph_call = true,
                     .structural => {},
@@ -30320,6 +30404,23 @@ const BodyContext = struct {
                 }
             },
             .structural => {},
+        }
+        const callsite_intrinsic = switch (resolution) {
+            .target => |lookup| self.callsiteIntrinsicForMethodTarget(lookup.target),
+            .structural => null,
+        };
+        if (callsite_intrinsic) |intrinsic| {
+            if (plan.result_mode != .value) {
+                Common.invariant("call-site intrinsic dispatch had a non-value result mode");
+            }
+            return try self.lowerCallsiteIntrinsicAtCallableNode(
+                intrinsic,
+                plan.expr,
+                plan.callable_ty,
+                .{ .dispatch = plan_args },
+                callable_node,
+                expected_ret_ty,
+            );
         }
         const callable_graph = switch (self.graph.content(callable_node)) {
             .func => |function| function,
@@ -31491,7 +31592,7 @@ const BodyContext = struct {
             .local_proc, .structural => return null,
         };
         switch (procedure.runtime_target) {
-            .graph_participating => return null,
+            .intrinsic, .graph_participating => return null,
             .procedure, .low_level => {},
         }
 

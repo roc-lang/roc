@@ -1203,20 +1203,22 @@ test "Monotype encoding intrinsics consume producer-owned identity and result to
     const lower_source = @embedFile("monotype/lower.zig");
     const selector = sourceSliceBetween(
         lower_source,
-        "fn parseIntrinsicForResolvedTarget(",
+        "fn callsiteIntrinsicForMethodTarget(",
         "fn lowerFieldNamesRenameFieldNames(",
     );
     try expectContains(selector, "proc.intrinsic");
+    try expectContains(selector, ".intrinsic => |intrinsic|");
+    try expectContains(selector, "intrinsic.callsiteArity()");
     try expectNotContains(selector, "exportNameText");
     try expectNotContains(selector, "getIdentText");
     try expectNotContains(selector, "moduleForId");
-    try expectNotContains(lower_source, "parseIntrinsicForBuiltinText");
-    try expectNotContains(lower_source, "parseIntrinsicReturnType");
+    try expectNotContains(lower_source, "callsiteIntrinsicForBuiltinText");
+    try expectNotContains(lower_source, "callsiteIntrinsicReturnType");
 
     const intrinsic_call = sourceSliceBetween(
         lower_source,
-        "fn lowerParseIntrinsicCallExpr(",
-        "fn lowerParseIntrinsicArgAtType(",
+        "fn lowerCallsiteIntrinsicCallExpr(",
+        "fn lowerCallsiteIntrinsicArgAtType(",
     );
     try expectContains(intrinsic_call, "intrinsic.requestResultSource()");
     try expectContains(intrinsic_call, "checkedMonoRequestNode(self.graph, callable.ret, callable.args[index])");

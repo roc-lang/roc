@@ -2124,6 +2124,7 @@ const DirectCall = struct {
 const RuntimeTarget = union(enum) {
     procedure,
     low_level: LowLevel,
+    intrinsic: IntrinsicId,
     graph_participating: struct {
         iterator_protocol: ?GraphProtocol,
     },
@@ -2221,8 +2222,9 @@ only calls whose target itself comes from an enclosing specialization.
 
 The runtime target category is producer-authored. Canonicalization records the
 exact low-level operation when it replaces a provided definition; CheckedModule
-records ordinary procedure targets and operations whose runtime
-representation must participate in a Monotype graph. Graph participation
+records ordinary procedure targets, annotation-only compiler intrinsics whose
+monomorphic implementation is emitted at the checked call site, and operations
+whose runtime representation must participate in a Monotype graph. Graph participation
 covers both producers and representation-sensitive consumers: for example, an
 `Iter` method that consumes a generated-private iterator must preserve that
 representation even when it returns an ordinary value. An optional exact graph
@@ -2230,6 +2232,10 @@ protocol identifies operations that construct or directly interpret a compiler
 representation; other graph-sensitive procedures carry no protocol. No
 consumer may inspect a procedure body, builtin name, owner type, or result shape
 to reconstruct this category.
+
+Ordinary calls and method dispatches to the same intrinsic consume this exact
+identity through one Monotype lowering path. A call-site intrinsic never becomes
+an ordinary procedure specialization merely because static dispatch selected it.
 
 Each checked procedure template stores separate spans of direct calls and
 dispatch relations. Evidence instantiation iterates only the relation span; it
