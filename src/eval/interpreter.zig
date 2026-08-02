@@ -1701,6 +1701,7 @@ pub const Interpreter = struct {
             const arg = args[i];
             const arg_layout = arg_layouts[i];
             const param_layout = self.store.getLocal(param).layout_idx;
+            const is_erased_return_reuse_arg = proc_spec.erased_return_reuse_arg == param;
             if (proc_spec.abi == .erased_callable and i + 2 == params.len) {
                 if (param_layout != .opaque_ptr or arg_layout != .opaque_ptr) {
                     return self.invariantFailedError(
@@ -1745,13 +1746,20 @@ pub const Interpreter = struct {
                 arg_layout,
                 param_layout,
             );
-            try self.setLocalChecked(
-                &frame,
-                null,
-                param,
-                try self.materializeLocalValue(coerced, param_layout),
-                false,
-            );
+            const materialized = try self.materializeLocalValue(coerced, param_layout);
+            if (is_erased_return_reuse_arg and self.readBoxedDataPointer(materialized) == null) {
+                // Null is valid only for this explicitly marked ABI ownership
+                // input: it means the caller declined destination reuse.
+                if (self.layout_store.getLayout(param_layout).tag != .erased_callable) {
+                    return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: erased return reuse parameter in proc {d} did not have erased_callable layout",
+                        .{@intFromEnum(proc_id)},
+                    );
+                }
+                frame.setLocal(param, materialized);
+            } else {
+                try self.setLocalChecked(&frame, null, param, materialized, false);
+            }
         }
         const body = self.requireProcBody(proc_id, proc_spec);
         if (trace.enabled) self.debugPrintStmtChain(body, 32);
@@ -3163,24 +3171,26 @@ pub const Interpreter = struct {
         const capture_size = erased_callable_context_capture_offset + capture_value_size;
         const data_ptr = if (assign.reuse) |reuse_local| blk: {
             const reuse_value = try self.getLocalChecked(frame, reuse_local);
-            const reuse_ptr = self.readBoxedDataPointer(reuse_value) orelse {
-                return self.invariantFailedError(
-                    "LIR/interpreter invariant violated: erased callable repack reuse had null payload",
-                    .{},
+            if (self.readBoxedDataPointer(reuse_value)) |reuse_ptr| {
+                if (assign.reuse_unique or builtins.utils.isUnique(reuse_ptr, &self.roc_ops)) {
+                    self.performErasedCallableFinalDrop(reuse_ptr, .decref, 1);
+                    break :blk reuse_ptr;
+                }
+
+                const fresh = try self.allocRocDataWithRc(
+                    builtins.erased_callable.payloadSize(capture_size),
+                    builtins.erased_callable.payload_alignment,
+                    builtins.erased_callable.allocation_has_refcounted_children,
                 );
-            };
-            if (assign.reuse_unique or builtins.utils.isUnique(reuse_ptr, &self.roc_ops)) {
-                self.performErasedCallableFinalDrop(reuse_ptr, .decref, 1);
-                break :blk reuse_ptr;
+                builtins.erased_callable.decref(reuse_ptr, &self.roc_ops);
+                break :blk fresh;
             }
 
-            const fresh = try self.allocRocDataWithRc(
+            break :blk try self.allocRocDataWithRc(
                 builtins.erased_callable.payloadSize(capture_size),
                 builtins.erased_callable.payload_alignment,
                 builtins.erased_callable.allocation_has_refcounted_children,
             );
-            builtins.erased_callable.decref(reuse_ptr, &self.roc_ops);
-            break :blk fresh;
         } else try self.allocRocDataWithRc(
             builtins.erased_callable.payloadSize(capture_size),
             builtins.erased_callable.payload_alignment,

@@ -460,7 +460,8 @@ pub const CFStmt = union(enum) {
         /// Consume `closure` as the destination for an erased-callable result.
         /// The erased callee may repack it when the returned capture payload has
         /// the same committed size and alignment; otherwise it releases the
-        /// consumed allocation and returns a fresh one.
+        /// consumed allocation and returns a fresh one. At the machine ABI this
+        /// passes the callable data pointer as the nullable fifth argument.
         reuse_closure: bool = false,
         /// Ownership source consumed by `reuse_closure`. This may be an outer
         /// transparent nominal/tag wrapper of `closure`; both denote the same
@@ -474,7 +475,9 @@ pub const CFStmt = union(enum) {
         capture: ?LocalId,
         capture_layout: ?layout.Idx,
         on_drop: ErasedCallableOnDrop,
-        /// Optional consumed erased callable allocation to repack.
+        /// Optional local containing a consumed erased callable allocation to
+        /// repack. The local itself is present statically, but its runtime value
+        /// may be null when an ABI caller declined to transfer ownership.
         ///
         /// When present, this statement returns a unique erased callable with
         /// the new proc/drop/capture. If `reuse_unique` is true, ARC proved the
@@ -694,6 +697,11 @@ pub fn erasedCallReuseFieldsMatch(assign: anytype) bool {
 pub const LirProcSpec = struct {
     name: Symbol,
     args: LocalSpan,
+    /// Optional hidden ownership input for an erased-callable return
+    /// destination. Its local has erased-callable layout so ARC can track the
+    /// transferred ownership unit, but its runtime pointer may be null when
+    /// the caller declines reuse.
+    erased_return_reuse_arg: ?LocalId = null,
     frame_locals: LocalSpan = LocalSpan.empty(),
     join_points: JoinPointSpan = JoinPointSpan.empty(),
     body: ?CFStmtId = null,

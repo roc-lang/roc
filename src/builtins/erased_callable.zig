@@ -16,8 +16,17 @@ pub const RocOps = utils.RocOps;
 /// `args` points at the generated fixed-arity argument struct for this erased
 /// call signature, or is null for arity 0. `ret` points at caller-owned result
 /// storage, or is null for zero-sized results. `capture` is always the pointer
-/// returned by `capturePtr(payload_data_ptr)`. `reuse` is the consumed callable
-/// data pointer when the result is another erased callable, otherwise null.
+/// returned by `capturePtr(payload_data_ptr)`.
+///
+/// `reuse` is an optional ownership transfer from caller to callee. Null means
+/// that no ownership is transferred. Non-null transfers exactly one owned
+/// reference to that erased-callable allocation; the caller must not decref or
+/// otherwise use that ownership unit after the call. The callee must consume it
+/// on every normal return path, either by returning the allocation as the one
+/// statically selected erased-callable result slot or by decrefing it exactly
+/// once. A callee may return a fresh allocation when the transferred allocation
+/// is shared at runtime. The `capture` argument remains borrowed independently
+/// of whether `reuse` aliases its containing callable allocation.
 pub const ErasedCallableFn = *const fn (
     ops: *RocOps,
     ret: ?[*]u8,

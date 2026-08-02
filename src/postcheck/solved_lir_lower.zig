@@ -445,7 +445,6 @@ const Lowerer = struct {
     next_join_point: u32 = 0,
     loop_stack: std.ArrayList(LoopContext),
     join_stack: std.ArrayList(JoinContext),
-    return_forwarding_joins: std.ArrayList(ReturnForwardingJoin),
     current_ret_ty: ?Type.TypeId = null,
     current_proc_locals: ?*ProcLocalSet = null,
     current_fn: ?Type.FnId = null,
@@ -473,11 +472,6 @@ const Lowerer = struct {
         join_id: LIR.JoinPointId,
         params: LIR.LocalSpan,
         param_tys: []const Type.TypeId,
-    };
-
-    const ReturnForwardingJoin = struct {
-        id: LIR.JoinPointId,
-        result: LIR.LocalId,
     };
 
     fn init(
@@ -552,7 +546,6 @@ const Lowerer = struct {
             .comptime_site_map = comptime_site_map,
             .loop_stack = .empty,
             .join_stack = .empty,
-            .return_forwarding_joins = .empty,
             .erased_owner_states = .empty,
             .erased_call_owner_uses = .empty,
         };
@@ -562,7 +555,6 @@ const Lowerer = struct {
         self.folded_map_matches.deinit(self.allocator);
         self.erased_call_owner_uses.deinit(self.allocator);
         self.erased_owner_states.deinit(self.allocator);
-        self.return_forwarding_joins.deinit(self.allocator);
         self.join_stack.deinit(self.allocator);
         self.loop_stack.deinit(self.allocator);
         self.allocator.free(self.comptime_site_map);
@@ -608,7 +600,6 @@ const Lowerer = struct {
         self.folded_map_matches.deinit(self.allocator);
         self.erased_call_owner_uses.deinit(self.allocator);
         self.erased_owner_states.deinit(self.allocator);
-        self.return_forwarding_joins.deinit(self.allocator);
         self.join_stack.deinit(self.allocator);
         self.loop_stack.deinit(self.allocator);
         self.allocator.free(self.comptime_site_map);
@@ -657,7 +648,6 @@ const Lowerer = struct {
         self.comptime_site_map = &.{};
         self.loop_stack = .empty;
         self.join_stack = .empty;
-        self.return_forwarding_joins = .empty;
         self.erased_owner_states = .empty;
         self.erased_call_owner_uses = .empty;
         self.folded_map_matches = .empty;
@@ -1137,9 +1127,20 @@ const Lowerer = struct {
         };
         const args_span = try self.result.store.addLocalSpan(arg_locals);
         const ret_layout = try self.layoutOfType(entry.ret);
+        const erased_return_reuse_arg = switch (spec.abi) {
+            .erased => if (self.erasedResultDemand(entry.ret) == .single_slot)
+                arg_locals[lifted_args.len + 1]
+            else
+                null,
+            .finite => if (spec.return_reuse.enabled())
+                arg_locals[lifted_args.len + @as(usize, @intFromBool(entry.capture_arg_ty != null))]
+            else
+                null,
+        };
         const proc = try self.result.store.addProcSpec(.{
             .name = lirSymbol(entry.symbol),
             .args = args_span,
+            .erased_return_reuse_arg = erased_return_reuse_arg,
             .body = null,
             .ret_layout = ret_layout,
             .abi = if (spec.abi == .erased) .erased_callable else .roc,
@@ -3775,7 +3776,7 @@ const Lowerer = struct {
         }
         const capture = if (capture_ty) |ty| try self.addTemp(ty) else null;
         const capture_layout = if (capture) |local| self.result.store.getLocal(local).layout_idx else null;
-        const reuse = try self.erasedCallableReuseForPack(target, capture_layout, next);
+        const reuse = try self.erasedCallableReuseForPack(target, capture_layout);
         const assign = try self.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
             .target = target,
             .proc = try self.markReachableFn(fn_id),
@@ -3794,10 +3795,9 @@ const Lowerer = struct {
         self: *Lowerer,
         target: LIR.LocalId,
         capture_layout: ?layout.Idx,
-        next: LIR.CFStmtId,
     ) Common.LowerError!?LIR.LocalId {
         if (!try self.sameErasedCaptureShapeForCurrentProc(capture_layout)) return null;
-        if (!self.valueFlowsToCurrentReturn(target, next)) return null;
+        if (self.current_return_target != target) return null;
         return self.current_erased_reuse;
     }
 
@@ -3826,143 +3826,6 @@ const Lowerer = struct {
         const new_size_align = self.result.layouts.layoutSizeAlign(self.result.layouts.getLayout(new_layout.?));
         return old_size_align.size == new_size_align.size and
             old_size_align.alignment.toByteUnits() == new_size_align.alignment.toByteUnits();
-    }
-
-    fn valueFlowsToCurrentReturn(self: *Lowerer, initial_value: LIR.LocalId, next: LIR.CFStmtId) bool {
-        const return_target = self.current_return_target orelse return false;
-        var value = initial_value;
-        var current = next;
-        for (0..self.result.store.getCFStmts().len) |_| {
-            if (value == return_target) return true;
-            switch (self.result.store.getCFStmt(current)) {
-                .assign_ref => |assign| {
-                    const source = self.erasedReuseRefSource(assign.op);
-                    if (source == value) {
-                        switch (assign.op) {
-                            .local, .nominal => value = assign.target,
-                            else => return false,
-                        }
-                    } else if (assign.target == value) return false;
-                    current = assign.next;
-                },
-                .assign_literal => |assign| {
-                    if (assign.target == value) return false;
-                    current = assign.next;
-                },
-                .init_uninitialized => |assign| {
-                    if (assign.target == value) return false;
-                    current = assign.next;
-                },
-                .assign_call => |assign| {
-                    if (assign.target == value or self.localSpanContains(assign.args, value)) return false;
-                    current = assign.next;
-                },
-                .assign_call_erased => |assign| {
-                    if (assign.target == value or assign.closure == value or
-                        assign.reuse_source == value or self.localSpanContains(assign.args, value)) return false;
-                    current = assign.next;
-                },
-                .assign_packed_erased_fn => |assign| {
-                    if (assign.target == value or assign.capture == value or assign.reuse == value) return false;
-                    current = assign.next;
-                },
-                .assign_low_level => |assign| {
-                    if (assign.target == value or self.localSpanContains(assign.args, value)) return false;
-                    current = assign.next;
-                },
-                .assign_struct => |assign| {
-                    const occurrences = self.localSpanCount(assign.fields, value);
-                    if (occurrences > 1 or assign.target == value) return false;
-                    if (occurrences == 1) value = assign.target;
-                    current = assign.next;
-                },
-                .assign_tag => |assign| {
-                    if (assign.target == value) return false;
-                    if (assign.payload == value) value = assign.target;
-                    current = assign.next;
-                },
-                .assign_list => |assign| {
-                    if (assign.target == value or self.localSpanContains(assign.elems, value)) return false;
-                    current = assign.next;
-                },
-                .store_struct => |assign| {
-                    if (assign.dest == value or self.localSpanContains(assign.fields, value)) return false;
-                    current = assign.next;
-                },
-                .store_tag => |assign| {
-                    if (assign.dest == value or assign.payload == value) return false;
-                    current = assign.next;
-                },
-                .set_local => |assign| {
-                    if (assign.target == value or assign.value == value) return false;
-                    current = assign.next;
-                },
-                .debug => |stmt| {
-                    if (stmt.message == value) return false;
-                    current = stmt.next;
-                },
-                .expect => |stmt| {
-                    if (stmt.condition == value) return false;
-                    current = stmt.next;
-                },
-                .expect_err => |stmt| {
-                    _ = stmt;
-                    return false;
-                },
-                .comptime_branch_taken => |stmt| current = stmt.next,
-                .ret => |ret| {
-                    return ret.value == value;
-                },
-                .jump => |jump| {
-                    for (self.return_forwarding_joins.items) |forwarding| {
-                        if (forwarding.id == jump.target) return forwarding.result == value;
-                    }
-                    return false;
-                },
-                else => return false,
-            }
-        }
-        return false;
-    }
-
-    fn localSpanContains(self: *Lowerer, span: LIR.LocalSpan, needle: LIR.LocalId) bool {
-        return self.localSpanCount(span, needle) != 0;
-    }
-
-    fn erasedReuseRefSource(_: *Lowerer, op: LIR.RefOp) LIR.LocalId {
-        return switch (op) {
-            .local => |source| source,
-            .discriminant => |ref| ref.source,
-            .field => |ref| ref.source,
-            .tag_payload => |ref| ref.source,
-            .tag_payload_struct => |ref| ref.source,
-            .list_reinterpret => |ref| ref.backing_ref,
-            .nominal => |ref| ref.backing_ref,
-        };
-    }
-
-    fn localSpanCount(self: *Lowerer, span: LIR.LocalSpan, needle: LIR.LocalId) usize {
-        var count: usize = 0;
-        const locals = self.result.store.getLocalSpan(span);
-        for (0..GuardedList.borrowLen(locals)) |index| {
-            if (GuardedList.at(locals, index) == needle) count += 1;
-        }
-        return count;
-    }
-
-    fn pushReturnForwardingJoin(
-        self: *Lowerer,
-        join_id: LIR.JoinPointId,
-        result: LIR.LocalId,
-        body: LIR.CFStmtId,
-    ) Common.LowerError!bool {
-        if (!self.valueFlowsToCurrentReturn(result, body)) return false;
-        try self.return_forwarding_joins.append(self.allocator, .{ .id = join_id, .result = result });
-        return true;
-    }
-
-    fn popReturnForwardingJoin(self: *Lowerer, pushed: bool) void {
-        if (pushed) _ = self.return_forwarding_joins.pop();
     }
 
     /// Classify whether a result has one statically selected erased-callable
@@ -4081,22 +3944,6 @@ const Lowerer = struct {
         };
     }
 
-    fn isDirectErasedCallableValueType(self: *Lowerer, ty: Type.TypeId) bool {
-        var current = ty;
-        for (0..self.types.typeCount()) |_| {
-            switch (self.types.get(current)) {
-                .erased_fn => return true,
-                .named => |named| {
-                    if (named.kind != .alias) return false;
-                    const backing = named.backing orelse Common.invariant("transparent alias reached erased callable result lowering without a backing type");
-                    current = backing.ty;
-                },
-                else => return false,
-            }
-        }
-        return false;
-    }
-
     fn lowerDirectProcCallInto(
         self: *Lowerer,
         target: LIR.LocalId,
@@ -4113,7 +3960,7 @@ const Lowerer = struct {
         };
         const return_reuse = if (!callee_is_hosted and
             self.erasedResultDemand(result_ty) == .single_slot and
-            self.valueFlowsToCurrentReturn(target, next))
+            self.current_return_target == target)
             self.currentErasedReturnReuse()
         else
             ErasedReturnReuse.none;
@@ -4443,8 +4290,6 @@ const Lowerer = struct {
         self.noteErasedOwnerAmbiguous(target);
         const callee = try self.addTemp(callee_ty);
         const done = self.freshJoinPointId();
-        const forwards_return = try self.pushReturnForwardingJoin(done, target, next);
-        defer self.popReturnForwardingJoin(forwards_return);
         // Branch lowering can lower argument types that append more variants to
         // self.types, so keep this iteration independent of the store backing.
         const variants = try GuardedList.dupe(self.allocator, Type.FnVariant, self.types.fnVariantSpan(variants_span));
@@ -4763,8 +4608,6 @@ const Lowerer = struct {
         const branches = try GuardedList.dupe(self.allocator, Lifted.Branch, self.solved.lifted.branchSpan(branches_span));
         defer self.allocator.free(branches);
         const done = self.freshJoinPointId();
-        const forwards_return = try self.pushReturnForwardingJoin(done, target, next);
-        defer self.popReturnForwardingJoin(forwards_return);
         const branch_chain = try self.lowerBranchTree(scrutinee_local, scrutinee_ty, branches, target, result_ty, done, comptime_site);
         const remainder = try self.lowerExprIntoAtType(scrutinee_local, scrutinee, scrutinee_ty, branch_chain);
         return try self.result.store.addCFStmt(.{ .join = .{
@@ -4819,8 +4662,6 @@ const Lowerer = struct {
         self.noteErasedOwnerAmbiguous(target);
         const branches = self.solved.lifted.ifBranchSpan(branches_span);
         const done = self.freshJoinPointId();
-        const forwards_return = try self.pushReturnForwardingJoin(done, target, next);
-        defer self.popReturnForwardingJoin(forwards_return);
         var current = try self.lowerExprIntoAtType(target, final_else, result_ty, try self.joinJump(done));
         var i = branches.len;
         while (i > 0) {
@@ -4847,8 +4688,6 @@ const Lowerer = struct {
     ) Common.LowerError!LIR.CFStmtId {
         self.noteErasedOwnerAmbiguous(target);
         const done = self.freshJoinPointId();
-        const forwards_return = try self.pushReturnForwardingJoin(done, target, next);
-        defer self.popReturnForwardingJoin(forwards_return);
         const branch_done = try self.joinJump(done);
         var initialized_body: LIR.CFStmtId = undefined;
         var uninitialized_body: LIR.CFStmtId = undefined;
@@ -7748,7 +7587,7 @@ const Lowerer = struct {
                 .capture = null,
                 .capture_layout = null,
                 .on_drop = .none,
-                .reuse = try self.erasedCallableReuseForPack(target, null, next),
+                .reuse = try self.erasedCallableReuseForPack(target, null),
                 .next = next,
             } });
         }
@@ -7765,7 +7604,7 @@ const Lowerer = struct {
             .capture = capture,
             .capture_layout = capture_layout,
             .on_drop = self.erasedCallableOnDrop(capture_layout),
-            .reuse = try self.erasedCallableReuseForPack(target, capture_layout, next),
+            .reuse = try self.erasedCallableReuseForPack(target, capture_layout),
             .next = next,
         } });
         if (self.isZstLocal(source)) return try self.assignZst(capture, pack);

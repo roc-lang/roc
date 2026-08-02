@@ -5906,9 +5906,12 @@ proc:
   by appending into a caller-provided unique accumulator.
 
 These variants are keyed by proc id, result demand, and committed layouts.
-Identical keys share one variant. Root procs and ABI-pinned procs keep their
-ordinary signature; wrappers may call an internal destination variant, but the
-ABI-facing signature is not changed by this optimization.
+Identical keys share one variant. Except for erased-callable entrypoints, root
+procs and ABI-pinned procs keep their ordinary signature; wrappers may call an
+internal destination variant. An erased-callable entrypoint always has the
+uniform `(ops, ret, args, capture, reuse)` ABI described below, so every host and
+compiled caller can explicitly opt into or out of the erased-callable result
+destination without specializing the function-pointer type.
 
 `return_slot(T)` is selected by layout representation, not by source syntax.
 Scalar, pointer, and zero-sized result layouts keep ordinary returns.
@@ -5960,6 +5963,29 @@ callable payloads. Broader reuse across different capture layouts requires an
 explicit capacity or size input; it must not be guessed from the erased function
 type alone, because an arbitrary `Box(a -> b)` value does not identify the
 stored capture layout.
+
+Every erased-callable function pointer has five arguments: `ops`, caller-owned
+result storage, packed arguments, borrowed capture bytes, and a nullable reuse
+data pointer. The fifth argument is an ownership-transfer channel, not a second
+borrow of the capture. Null transfers nothing. Non-null transfers exactly one
+owned reference to the erased-callable allocation, and the caller must not use
+or decref that ownership unit after the call. On every normal return path the
+callee consumes the unit exactly once: it either moves the allocation into the
+single statically selected erased-callable result slot (repacking in place only
+when uniqueness permits) or decrefs it. This remains true for a runtime tag
+variant that does not contain a callable. A shared allocation takes the fresh
+allocation path and decrefs the transferred reference; uniqueness affects only
+whether allocation can be avoided, never the ownership contract. Capture bytes
+needed to construct the result are snapshotted before an in-place overwrite.
+
+The direct LIR builder carries the current return destination while recursively
+lowering the selected aggregate or tag payload. That producer-authored context,
+plus the explicit result-demand classification, is the only basis for selecting
+an erased return-reuse specialization. Later stages must not scan emitted LIR to
+reconstruct whether a local eventually flows to a return. A proc with this
+hidden ownership input records its exact argument local in
+`LirProcSpec.erased_return_reuse_arg`; transforms that clone proc arguments must
+preserve and remap the marker.
 
 Destination-aware aggregate construction is required for the full benefit of
 box reuse. A record update or tag construction whose result is demanded in a
@@ -7201,12 +7227,12 @@ ABI.
 
 An owning tag-union payload is never projected through a borrowed accessor
 that returns an owning value. Generated host glue exposes an unsafe raw
-consuming projection which takes mutable access to one owned union shell,
+tag payload move operation which takes mutable access to one owned union shell,
 moves the active payload out, and leaves the shell logically uninitialized.
 The caller must first validate the explicit discriminant and must neither read
 nor destroy the shell after the move. A host language with affine or RAII
 ownership puts this primitive behind a non-copying owner whose failed
-tag-specific projection returns the still-owned shell. Borrowed inspection, if
+tag-specific payload move returns the still-owned shell. Borrowed inspection, if
 needed, returns only a pointer or reference and never fabricates another owning
 payload descriptor. The 32-bit aligned-byte representation and native union
 representation provide the same move contract.

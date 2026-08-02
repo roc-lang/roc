@@ -3469,6 +3469,7 @@ const Inserter = struct {
         const variant = try self.store.addProcSpec(.{
             .name = self.store.freshSyntheticSymbol(),
             .args = source_spec.args,
+            .erased_return_reuse_arg = source_spec.erased_return_reuse_arg,
             .frame_locals = source_spec.frame_locals,
             .body = self.variants.original_bodies[@intFromEnum(callee)],
             .ret_layout = source_spec.ret_layout,

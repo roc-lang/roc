@@ -1620,6 +1620,11 @@ generate_host_abi_types =
 	\\};
 	\\
 	\\/// Private erased-callable function pointer stored in `RocErasedCallablePayload`.
+	\\///
+	\\/// The final `reuse` pointer is nullable. Non-null transfers one owned callable
+	\\/// reference to the callee; the caller must not use or decref that ownership unit
+	\\/// after the call. The callee must return it as the selected callable result or
+	\\/// decref it exactly once.
 	\\pub const RocErasedCallableFn = *const fn (*RocHost, ?[*]u8, ?[*]const u8, ?[*]u8, ?[*]u8) callconv(.c) void;
 	\\
 	\\/// Final-drop callback for inline erased-callable captures.

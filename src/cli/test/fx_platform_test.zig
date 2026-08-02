@@ -381,6 +381,10 @@ test "fx platform boxed erased callable host boundary (dev backend)" {
     try runIoSpecTest("--opt=dev", fx_test_specs.host_boxed_fn_boundary_test);
 }
 
+test "fx platform boxed erased callable host boundary (speed backend)" {
+    try runIoSpecTest("--opt=speed", fx_test_specs.host_boxed_fn_boundary_test);
+}
+
 test "fx platform provided root drops boxed callable (dev backend)" {
     try expectProvidedBoxedCallableDrop("--opt=dev", "fx_provided_boxed_callable_drop_dev");
 }

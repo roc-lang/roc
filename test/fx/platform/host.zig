@@ -880,6 +880,9 @@ const BoxedHostDropCounts = struct {
     recursive_tree: usize = 0,
     recursive_tree_child_box_releases: usize = 0,
     boxed_capture: usize = 0,
+    transition_outer: usize = 0,
+    transition_inner: usize = 0,
+    transition_nonnull_reuse: usize = 0,
 };
 
 var boxed_host_drop_counts: BoxedHostDropCounts = .{};
@@ -918,6 +921,10 @@ const TreeCapture = extern struct {
 const BoxedCallableCapture = extern struct {
     inner: ?[*]u8,
     bonus: i64,
+};
+
+const TransitionCapture = extern struct {
+    value: i64,
 };
 
 fn capturePtrAs(comptime T: type, capture_ptr: ?[*]u8) *T {
@@ -967,6 +974,40 @@ fn callBoxedI64ToI64(ops: *builtins.host_abi.RocOps, boxed: ?[*]u8, arg0: i64) i
         @ptrCast(&result),
         @ptrCast(&call_args),
         builtins.erased_callable.capturePtr(payload_ptr),
+        null,
+    );
+    return result;
+}
+
+fn callBoxedTransitionWithoutReuse(ops: *builtins.host_abi.RocOps, boxed: ?[*]u8) i64 {
+    const outer_ptr = boxed orelse {
+        ops.crash("host attempted to call a null boxed transition");
+        unreachable;
+    };
+    defer builtins.erased_callable.decref(outer_ptr, ops);
+
+    const outer_payload = builtins.erased_callable.payloadPtr(outer_ptr);
+    var inner: ?[*]u8 = null;
+    outer_payload.callable_fn_ptr(
+        ops,
+        @ptrCast(&inner),
+        null,
+        builtins.erased_callable.capturePtr(outer_ptr),
+        null,
+    );
+
+    const inner_ptr = inner orelse {
+        ops.crash("boxed transition returned a null boxed callable");
+        unreachable;
+    };
+    defer builtins.erased_callable.decref(inner_ptr, ops);
+    const inner_payload = builtins.erased_callable.payloadPtr(inner_ptr);
+    var result: i64 = undefined;
+    inner_payload.callable_fn_ptr(
+        ops,
+        @ptrCast(&result),
+        null,
+        builtins.erased_callable.capturePtr(inner_ptr),
         null,
     );
     return result;
@@ -1171,6 +1212,58 @@ fn hostedHostCallBoxed(boxed: ?[*]u8, value: i64) callconv(.c) i64 {
     return callBoxedI64ToI64(ops, boxed, value);
 }
 
+fn hostedHostCallBoxedTransition(boxed: ?[*]u8) callconv(.c) i64 {
+    return callBoxedTransitionWithoutReuse(g_roc_ops.?, boxed);
+}
+
+fn hostTransitionInnerCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, _: ?[*]const u8, capture_ptr: ?[*]u8, _: ?[*]u8) callconv(.c) void {
+    writeI64Result(ret, capturePtrAs(TransitionCapture, capture_ptr).value);
+}
+
+fn hostTransitionInnerOnDrop(_: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) void {
+    boxed_host_drop_counts.transition_inner += 1;
+}
+
+fn hostTransitionOuterCallable(
+    ops: *builtins.host_abi.RocOps,
+    ret: ?[*]u8,
+    _: ?[*]const u8,
+    capture_ptr: ?[*]u8,
+    reuse: ?[*]u8,
+) callconv(.c) void {
+    // `capture_ptr` can point inside `reuse`, so snapshot before repacking.
+    const next_capture = capturePtrAs(TransitionCapture, capture_ptr).*;
+    if (reuse != null) boxed_host_drop_counts.transition_nonnull_reuse += 1;
+    const next = builtins.erased_callable.repack(
+        reuse,
+        @ptrCast(&hostTransitionInnerCallable),
+        &hostTransitionInnerOnDrop,
+        @ptrCast(&next_capture),
+        @sizeOf(TransitionCapture),
+        .Immutable,
+        ops,
+    );
+    @as(*align(1) ?[*]u8, @ptrCast(ret orelse unreachable)).* = next;
+}
+
+fn hostTransitionOuterOnDrop(_: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) void {
+    boxed_host_drop_counts.transition_outer += 1;
+}
+
+fn hostedHostBoxedTransition(value: i64) callconv(.c) ?[*]u8 {
+    const ops = g_roc_ops.?;
+    var ret: ?[*]u8 = null;
+    writeErasedCallable(
+        TransitionCapture,
+        &ret,
+        @ptrCast(&hostTransitionOuterCallable),
+        &hostTransitionOuterOnDrop,
+        .{ .value = value },
+        ops,
+    );
+    return ret;
+}
+
 fn hostedHostReleaseStoredBoxed() callconv(.c) void {
     const ops = g_roc_ops.?;
     if (stored_boxed_callable) |boxed| {
@@ -1213,7 +1306,7 @@ fn hostedHostBoxedDropReport() callconv(.c) RocStr {
     var buf: [256]u8 = undefined;
     const report = std.fmt.bufPrint(
         &buf,
-        "drops primitive={d} nested_record={d} nested_str={d} recursive_tree={d} tree_child_boxes={d} boxed_capture={d}",
+        "drops primitive={d} nested_record={d} nested_str={d} recursive_tree={d} tree_child_boxes={d} boxed_capture={d} transition_outer={d} transition_inner={d} transition_nonnull={d}",
         .{
             boxed_host_drop_counts.primitive,
             boxed_host_drop_counts.nested_record,
@@ -1221,6 +1314,9 @@ fn hostedHostBoxedDropReport() callconv(.c) RocStr {
             boxed_host_drop_counts.recursive_tree,
             boxed_host_drop_counts.recursive_tree_child_box_releases,
             boxed_host_drop_counts.boxed_capture,
+            boxed_host_drop_counts.transition_outer,
+            boxed_host_drop_counts.transition_inner,
+            boxed_host_drop_counts.transition_nonnull_reuse,
         },
     ) catch "drops unavailable";
     return RocStr.fromSlice(report, ops);
@@ -1245,10 +1341,12 @@ comptime {
     @export(&hostedHostBoxedRecursiveTree, .{ .name = "roc_host_boxed_recursive_tree", .visibility = .hidden });
     @export(&hostedHostBoxedWithBoxedCapture, .{ .name = "roc_host_boxed_with_boxed_capture", .visibility = .hidden });
     @export(&hostedHostCallBoxed, .{ .name = "roc_host_call_boxed", .visibility = .hidden });
+    @export(&hostedHostCallBoxedTransition, .{ .name = "roc_host_call_boxed_transition", .visibility = .hidden });
     @export(&hostedHostGetGreeting, .{ .name = "roc_host_get_greeting", .visibility = .hidden });
     @export(&hostedHostReleaseStoredBoxed, .{ .name = "roc_host_release_stored_boxed", .visibility = .hidden });
     @export(&hostedHostResetBoxedDropReport, .{ .name = "roc_host_reset_boxed_drop_report", .visibility = .hidden });
     @export(&hostedHostRoundtripBoxed, .{ .name = "roc_host_roundtrip_boxed", .visibility = .hidden });
+    @export(&hostedHostBoxedTransition, .{ .name = "roc_host_boxed_transition", .visibility = .hidden });
     @export(&hostedHostStoreBoxed, .{ .name = "roc_host_store_boxed", .visibility = .hidden });
     @export(&hostedHostStoredBoxedCall, .{ .name = "roc_host_stored_boxed_call", .visibility = .hidden });
     @export(&hostedPaddedCheck, .{ .name = "roc_padded_check", .visibility = .hidden });
