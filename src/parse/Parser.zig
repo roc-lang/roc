@@ -433,18 +433,28 @@ fn recordStatementDecl(
             .region = .{ .start = v.region.start, .end = v.region.end },
         },
         .import => |i| blk: {
-            const module_name = try self.importModulePathIdent(i.module_name_tok, i.nested_import);
+            const module_name = try self.importModulePathIdent(i.target);
             try self.decl_index.addImport(.{
                 .module_name = module_name,
-                .qualifier = if (i.qualifier_tok) |qualifier_tok| self.tok_buf.resolveIdentifier(qualifier_tok) else null,
-                .nested = i.nested_import,
+                .module_binding = if (i.target.hasNestedTypes()) null else binding_blk: {
+                    if (i.alias_tok) |alias_tok| break :binding_blk self.tok_buf.resolveIdentifier(alias_tok);
+                    break :binding_blk self.tok_buf.resolveIdentifier(i.target.module_name_tok);
+                },
+                .qualifier = if (i.target.qualifier_tok) |qualifier_tok| self.tok_buf.resolveIdentifier(qualifier_tok) else null,
+                .origin = @enumFromInt(@intFromEnum(i.target.origin)),
+                .base = @enumFromInt(@intFromEnum(i.target.base)),
+                .parent_count = i.target.parent_count,
+                .nested_type_path = try self.nestedImportPathIdent(i.target),
                 .region = .{ .start = i.region.start, .end = i.region.end },
             });
             break :blk DeclIndex.Decl{
                 .scope = scope_idx,
                 .statement = @intFromEnum(statement_idx),
                 .kind = .import,
-                .name_tok = i.alias_tok orelse i.module_name_tok,
+                .name_tok = i.alias_tok orelse if (i.target.nested_start_tok) |nested_start|
+                    nested_start + i.target.nested_len - 1
+                else
+                    i.target.module_name_tok,
                 .pattern = null,
                 .anno = null,
                 .region = .{ .start = i.region.start, .end = i.region.end },
@@ -503,7 +513,7 @@ fn recordStatementDecl(
     const decl_idx = try self.decl_index.addDecl(record);
     switch (statement) {
         .import => |import_stmt| {
-            if (!import_stmt.nested_import) {
+            if (!import_stmt.target.hasNestedTypes()) {
                 if (record.name_ident) |alias_ident| {
                     try self.decl_index.addImportAliasDecl(scope_idx, alias_ident, decl_idx);
                 }
@@ -632,32 +642,55 @@ fn tokenText(self: *const Parser, token: Token.Idx) []const u8 {
     return self.tok_buf.env.source[region.start.offset..region.end.offset];
 }
 
-/// Intern the normalized module path selected by import parsing, excluding a
-/// lowercase package qualifier. Building from tokens keeps layout whitespace
-/// out of the semantic path.
-fn importModulePathIdent(self: *Parser, module_name_tok: Token.Idx, nested_import: bool) std.mem.Allocator.Error!base.Ident.Idx {
+/// Intern the source module target selected by import parsing, excluding nested
+/// types. Package targets retain their qualifier; local targets retain their
+/// explicit base spelling. Building from tokens keeps layout whitespace out of
+/// the stored path.
+fn importModulePathIdent(self: *Parser, target: AST.ImportTarget) std.mem.Allocator.Error!base.Ident.Idx {
     var path = std.ArrayList(u8).empty;
     defer path.deinit(self.gpa);
 
-    const first_raw = self.tokenText(module_name_tok);
-    const first = if (first_raw.len > 0 and first_raw[0] == '.') first_raw[1..] else first_raw;
-    try path.appendSlice(self.gpa, first);
+    if (target.origin == .package) {
+        try path.appendSlice(self.gpa, self.tokenText(target.qualifier_tok.?));
+        try path.append(self.gpa, '.');
+        const raw = self.tokenText(target.module_name_tok);
+        try path.appendSlice(self.gpa, if (raw.len > 0 and raw[0] == '.') raw[1..] else raw);
+    } else {
+        switch (target.base) {
+            .importer => if (target.start_tok != target.path_start_tok) try path.appendSlice(self.gpa, "./"),
+            .package_root => try path.append(self.gpa, '/'),
+            .parent => for (0..target.parent_count) |_| try path.appendSlice(self.gpa, "../"),
+        }
 
-    if (!nested_import) {
-        var tok = module_name_tok + 1;
-        while (tok < self.tok_buf.tokens.len) : (tok += 1) {
-            switch (self.tok_buf.tokens.items(.tag)[tok]) {
-                .NoSpaceDotUpperIdent, .DotUpperIdent => {
+        const tags = self.tok_buf.tokens.items(.tag);
+        var tok = target.path_start_tok;
+        var need_separator = false;
+        while (tok <= target.module_name_tok) : (tok += 1) {
+            switch (tags[tok]) {
+                .UpperIdent, .LowerIdent, .NoSpaceDotUpperIdent, .DotUpperIdent => {
+                    if (need_separator) try path.append(self.gpa, '/');
                     const raw = self.tokenText(tok);
-                    const segment = if (raw.len > 0 and raw[0] == '.') raw[1..] else raw;
-                    try path.append(self.gpa, '.');
-                    try path.appendSlice(self.gpa, segment);
+                    try path.appendSlice(self.gpa, if (raw.len > 0 and raw[0] == '.') raw[1..] else raw);
+                    need_separator = true;
                 },
-                else => break,
+                .OpSlash => {},
+                else => {},
             }
         }
     }
 
+    return try self.tok_buf.env.insertIdent(self.gpa, base.Ident.for_text(path.items));
+}
+
+fn nestedImportPathIdent(self: *Parser, target: AST.ImportTarget) std.mem.Allocator.Error!?base.Ident.Idx {
+    const start = target.nested_start_tok orelse return null;
+    var path = std.ArrayList(u8).empty;
+    defer path.deinit(self.gpa);
+    for (0..target.nested_len) |offset| {
+        if (offset != 0) try path.append(self.gpa, '.');
+        const raw = self.tokenText(start + @as(Token.Idx, @intCast(offset)));
+        try path.appendSlice(self.gpa, if (raw.len > 0 and raw[0] == '.') raw[1..] else raw);
+    }
     return try self.tok_buf.env.insertIdent(self.gpa, base.Ident.for_text(path.items));
 }
 
@@ -995,88 +1028,134 @@ fn parseImportStatementTokens(self: *Parser) std.mem.Allocator.Error!AST.Stateme
         } });
     }
 
+    const target_start = self.pos;
+    var origin: AST.ImportOrigin = .local;
+    var local_base: AST.LocalImportBase = .importer;
+    var parent_count: u16 = 0;
     var qualifier: ?TokenIdx = null;
     var alias_tok: ?TokenIdx = null;
-    if (self.peek() == .LowerIdent) {
+
+    if (self.peek() == .OpSlash) {
+        local_base = .package_root;
+        self.advance();
+    } else if (self.peek() == .Dot and self.peekN(1) == .OpSlash) {
+        self.advance();
+        self.advance();
+    } else {
+        while (self.peek() == .DoubleDot and self.peekN(1) == .OpSlash) {
+            local_base = .parent;
+            parent_count = std.math.add(u16, parent_count, 1) catch {
+                return try self.pushMalformed(AST.Statement.Idx, .incomplete_import, start);
+            };
+            self.advance();
+            self.advance();
+        }
+    }
+
+    const path_start = self.pos;
+    if (local_base == .importer and parent_count == 0 and self.peek() == .LowerIdent and
+        self.peekN(1) != .OpSlash)
+    {
+        origin = .package;
         qualifier = self.pos;
         self.advance();
-    }
-    if (!((qualifier == null and self.peek() == .UpperIdent) or
-        (qualifier != null and (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent))))
-    {
-        return try self.pushMalformed(AST.Statement.Idx, .incomplete_import, start);
     }
 
     var exposes = AST.ExposedItem.Span{ .span = base.DataSpan.empty() };
     var exposes_layout: AST.CollectionLayout = .compact;
-    var nested_import = false;
-    var last_upper_tok: TokenIdx = self.pos;
-    const module_name_tok = self.pos;
-    self.advance();
+    var module_name_tok: TokenIdx = self.pos;
+    var nested_start_tok: ?TokenIdx = null;
+    var nested_len: u16 = 0;
 
-    while (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent) {
-        last_upper_tok = self.pos;
+    if (origin == .package) {
+        if (self.peek() != .NoSpaceDotUpperIdent and self.peek() != .DotUpperIdent) {
+            return try self.pushMalformed(AST.Statement.Idx, .incomplete_import, start);
+        }
+        module_name_tok = self.pos;
         self.advance();
+    } else {
+        if (self.peek() != .UpperIdent and self.peek() != .LowerIdent) {
+            return try self.pushMalformed(AST.Statement.Idx, .incomplete_import, start);
+        }
+
+        module_name_tok = self.pos;
+        self.advance();
+        while (self.peek() == .OpSlash) {
+            self.advance();
+            if (self.peek() != .UpperIdent and self.peek() != .LowerIdent) {
+                return try self.pushMalformed(AST.Statement.Idx, .incomplete_import, start);
+            }
+            module_name_tok = self.pos;
+            self.advance();
+        }
+
+        if (self.tok_buf.tokens.items(.tag)[module_name_tok] != .UpperIdent) {
+            return try self.pushMalformed(AST.Statement.Idx, .incomplete_import, start);
+        }
     }
 
-    const has_explicit_clause = self.peek() == .KwAs or self.peek() == .KwExposing;
-    const has_multiple_segments = last_upper_tok != module_name_tok;
-    if (has_multiple_segments and !has_explicit_clause) {
-        nested_import = true;
-        const scratch_top = self.store.scratchExposedItemTop();
-        const exposed_item = try self.store.addExposedItem(.{ .upper_ident = .{
-            .region = .{ .start = last_upper_tok, .end = last_upper_tok },
-            .ident = last_upper_tok,
-            .as = null,
-        } });
-        try self.store.addScratchExposedItem(exposed_item);
-        exposes = try self.store.exposedItemSpanFrom(scratch_top);
-    } else {
-        if (self.peek() == .KwAs) {
-            self.advance();
-            alias_tok = self.pos;
-            self.expect(.UpperIdent) catch {
-                return try self.pushMalformed(AST.Statement.Idx, .expected_upper_name_after_import_as, start);
+    if (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent) {
+        nested_start_tok = self.pos;
+        while (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent) {
+            nested_len = std.math.add(u16, nested_len, 1) catch {
+                return try self.pushMalformed(AST.Statement.Idx, .incomplete_import, start);
             };
+            self.advance();
         }
+    }
 
-        if (self.peek() == .KwExposing) {
-            self.advance();
-            self.expect(.OpenSquare) catch {
-                return try self.pushMalformed(AST.Statement.Idx, .import_exposing_no_open, start);
-            };
-            const scratch_top = self.store.scratchExposedItemTop();
-            while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
-                try self.store.addScratchExposedItem(try self.parseExposedItemTokens());
-                if (!self.consumeComma()) {
-                    break;
-                }
+    if (self.peek() == .KwAs) {
+        self.advance();
+        alias_tok = self.pos;
+        self.expect(.UpperIdent) catch {
+            return try self.pushMalformed(AST.Statement.Idx, .expected_upper_name_after_import_as, start);
+        };
+    }
+
+    if (self.peek() == .KwExposing) {
+        self.advance();
+        self.expect(.OpenSquare) catch {
+            return try self.pushMalformed(AST.Statement.Idx, .import_exposing_no_open, start);
+        };
+        const scratch_top = self.store.scratchExposedItemTop();
+        while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+            try self.store.addScratchExposedItem(try self.parseExposedItemTokens());
+            if (!self.consumeComma()) {
+                break;
             }
-            if (self.peek() != .CloseSquare) {
-                while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
-                    self.advance();
-                }
-                self.expect(.CloseSquare) catch {};
-                self.store.clearScratchExposedItemsFrom(scratch_top);
-                return try self.pushMalformed(AST.Statement.Idx, .import_exposing_no_close, start);
-            }
-            exposes_layout = self.directCollectionLayout();
-            self.advance();
-            exposes = try self.store.exposedItemSpanFrom(scratch_top);
         }
+        if (self.peek() != .CloseSquare) {
+            while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+                self.advance();
+            }
+            self.expect(.CloseSquare) catch {};
+            self.store.clearScratchExposedItemsFrom(scratch_top);
+            return try self.pushMalformed(AST.Statement.Idx, .import_exposing_no_close, start);
+        }
+        exposes_layout = self.directCollectionLayout();
+        self.advance();
+        exposes = try self.store.exposedItemSpanFrom(scratch_top);
     }
 
     const statement_idx = try self.addStatement(.{ .import = .{
-        .module_name_tok = module_name_tok,
-        .qualifier_tok = qualifier,
+        .target = .{
+            .origin = origin,
+            .base = local_base,
+            .parent_count = parent_count,
+            .start_tok = target_start,
+            .path_start_tok = if (origin == .package) qualifier.? else path_start,
+            .module_name_tok = module_name_tok,
+            .qualifier_tok = qualifier,
+            .nested_start_tok = nested_start_tok,
+            .nested_len = nested_len,
+        },
         .alias_tok = alias_tok,
         .exposes = exposes,
-        .nested_import = nested_import,
         .region = .{ .start = start, .end = self.pos },
     } });
     self.store.setCollectionLayout(statement_idx, exposes_layout);
-    if (qualifier == null and !nested_import) {
-        const introduced_name_tok = alias_tok orelse last_upper_tok;
+    if (origin == .local and nested_len == 0) {
+        const introduced_name_tok = alias_tok orelse module_name_tok;
         const raw_name = self.tokenText(introduced_name_tok);
         const introduced_name = if (raw_name.len > 0 and raw_name[0] == '.') raw_name[1..] else raw_name;
         const introduced_ident = try self.tok_buf.env.insertIdent(self.gpa, base.Ident.for_text(introduced_name));
@@ -4310,6 +4389,12 @@ fn runExprStatementKernel(
                                 .region = .{ .start = apply_state.start, .end = self.pos },
                             } });
                             self.store.setCollectionLayout(expr, layout);
+                            // A direct target call makes the following `?` apply
+                            // to the completed pipe rather than to its RHS.
+                            if (self.peek() == .NoSpaceOpQuestion and open_syntax.peekExpr() == .expr_pipe_rhs) {
+                                last_expr = expr;
+                                continue :expr_kernel .complete;
+                            }
                             expr_finish_state = .{ .start = apply_state.start, .min_bp = apply_state.min_bp, .expr = expr };
                             continue :expr_kernel .suffix;
                         },

@@ -1930,7 +1930,7 @@ test "default app resolves a sibling type module imported with exposing" {
     try testing.expectEqualStrings("", result.stdout);
 }
 
-test "directory-qualified local modules resolve from source subdirectories" {
+test "slash-qualified imports resolve local, root, parent, nested, and package targets" {
     const allocator = testing.allocator;
 
     const app_result = try util.runRoc(
@@ -1953,4 +1953,160 @@ test "directory-qualified local modules resolve from source subdirectories" {
     defer allocator.free(package_result.stdout);
     defer allocator.free(package_result.stderr);
     try util.checkSuccess(package_result);
+
+    const path_forms_result = try util.runRoc(
+        std.testing.io,
+        allocator,
+        &.{ "check", "--no-cache" },
+        "test/fx/import_paths/package/main.roc",
+    );
+    defer allocator.free(path_forms_result.stdout);
+    defer allocator.free(path_forms_result.stderr);
+    try util.checkSuccess(path_forms_result);
+
+    const package_public_result = try util.runRoc(
+        std.testing.io,
+        allocator,
+        &.{ "check", "--no-cache" },
+        "test/fx/import_paths/consumer/main.roc",
+    );
+    defer allocator.free(package_public_result.stdout);
+    defer allocator.free(package_public_result.stderr);
+    try util.checkSuccess(package_public_result);
+}
+
+test "imports reject package-root escape and physical source aliases" {
+    const allocator = testing.allocator;
+
+    const private_result = try util.runRoc(
+        std.testing.io,
+        allocator,
+        &.{ "check", "--no-cache" },
+        "test/fx/import_paths/private_consumer/main.roc",
+    );
+    defer allocator.free(private_result.stdout);
+    defer allocator.free(private_result.stderr);
+    try util.checkFailure(private_result);
+    try testing.expect(std.mem.find(u8, private_result.stderr, "PACKAGE MODULE IS PRIVATE") != null);
+
+    var escape_tmp = testing.tmpDir(.{});
+    defer escape_tmp.cleanup();
+    try escape_tmp.dir.createDir(std.testing.io, "pkg", .default_dir);
+    try escape_tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "pkg/main.roc",
+        .data =
+        \\package [] {}
+        \\
+        \\import ../../Outside
+        ,
+    });
+    const escape_root = try escape_tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(escape_root);
+    const escape_main = try std.fs.path.join(allocator, &.{ escape_root, "pkg", "main.roc" });
+    defer allocator.free(escape_main);
+    const escape_result = try util.runRoc(std.testing.io, allocator, &.{ "check", "--no-cache" }, escape_main);
+    defer allocator.free(escape_result.stdout);
+    defer allocator.free(escape_result.stderr);
+    try util.checkFailure(escape_result);
+    try testing.expect(std.mem.find(u8, escape_result.stderr, "IMPORT ESCAPES PACKAGE ROOT") != null);
+
+    var case_tmp = testing.tmpDir(.{});
+    defer case_tmp.cleanup();
+    try case_tmp.dir.createDir(std.testing.io, "Dir", .default_dir);
+    try case_tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\package [] {}
+        \\
+        \\import dir/Hello
+        ,
+    });
+    try case_tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "Dir/Hello.roc",
+        .data = "Hello := []\n",
+    });
+    const case_root = try case_tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(case_root);
+    const case_main = try std.fs.path.join(allocator, &.{ case_root, "main.roc" });
+    defer allocator.free(case_main);
+    const case_result = try util.runRoc(std.testing.io, allocator, &.{ "check", "--no-cache" }, case_main);
+    defer allocator.free(case_result.stdout);
+    defer allocator.free(case_result.stderr);
+    try util.checkFailure(case_result);
+
+    if (comptime @import("builtin").os.tag == .windows) return;
+
+    var outside_tmp = testing.tmpDir(.{});
+    defer outside_tmp.cleanup();
+    try outside_tmp.dir.createDir(std.testing.io, "pkg", .default_dir);
+    try outside_tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "pkg/main.roc",
+        .data =
+        \\package [] {}
+        \\
+        \\import Escape
+        ,
+    });
+    try outside_tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "Outside.roc",
+        .data = "Outside := []\n",
+    });
+    outside_tmp.dir.symLink(std.testing.io, "../Outside.roc", "pkg/Escape.roc", .{}) catch return error.SkipZigTest;
+    const outside_root = try outside_tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(outside_root);
+    const outside_main = try std.fs.path.join(allocator, &.{ outside_root, "pkg", "main.roc" });
+    defer allocator.free(outside_main);
+    const outside_result = try util.runRoc(std.testing.io, allocator, &.{ "check", "--no-cache" }, outside_main);
+    defer allocator.free(outside_result.stdout);
+    defer allocator.free(outside_result.stderr);
+    try util.checkFailure(outside_result);
+    try testing.expect(std.mem.find(u8, outside_result.stderr, "resolves outside") != null);
+
+    var alias_tmp = testing.tmpDir(.{});
+    defer alias_tmp.cleanup();
+    try alias_tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\package [] {}
+        \\
+        \\import Real
+        \\import Alias
+        ,
+    });
+    try alias_tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "Real.roc",
+        .data = "Real := []\n",
+    });
+    alias_tmp.dir.symLink(std.testing.io, "Real.roc", "Alias.roc", .{}) catch return error.SkipZigTest;
+    const alias_root = try alias_tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(alias_root);
+    const alias_main = try std.fs.path.join(allocator, &.{ alias_root, "main.roc" });
+    defer allocator.free(alias_main);
+    const alias_result = try util.runRoc(std.testing.io, allocator, &.{ "check", "--no-cache" }, alias_main);
+    defer allocator.free(alias_result.stdout);
+    defer allocator.free(alias_result.stderr);
+    try util.checkFailure(alias_result);
+    try testing.expect(std.mem.find(u8, alias_result.stderr, "IMPORT SOURCE ALIAS") != null);
+    try testing.expect(std.mem.find(u8, alias_result.stderr, "same source file") != null);
+
+    var root_alias_tmp = testing.tmpDir(.{});
+    defer root_alias_tmp.cleanup();
+    try root_alias_tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\package [] {}
+        \\
+        \\import MainAlias
+        ,
+    });
+    root_alias_tmp.dir.symLink(std.testing.io, "main.roc", "MainAlias.roc", .{}) catch return error.SkipZigTest;
+    const root_alias_root = try root_alias_tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(root_alias_root);
+    const root_alias_main = try std.fs.path.join(allocator, &.{ root_alias_root, "main.roc" });
+    defer allocator.free(root_alias_main);
+    const root_alias_result = try util.runRoc(std.testing.io, allocator, &.{ "check", "--no-cache" }, root_alias_main);
+    defer allocator.free(root_alias_result.stdout);
+    defer allocator.free(root_alias_result.stderr);
+    try util.checkFailure(root_alias_result);
+    try testing.expect(std.mem.find(u8, root_alias_result.stderr, "IMPORT SOURCE ALIAS") != null);
 }

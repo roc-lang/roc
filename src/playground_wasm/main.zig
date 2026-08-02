@@ -879,7 +879,7 @@ fn replDefinitionIdentity(line: []const u8) std.mem.Allocator.Error!?ReplDefinit
         },
         .import => |import| .{
             .kind = .import,
-            .name = ast.resolveImportModulePath(import.module_name_tok, import.qualifier_tok, import.nested_import),
+            .name = ast.resolveImportTarget(import.target),
         },
         .file_import => |file_import| .{ .kind = .file_import, .name = ast.resolve(file_import.name_tok) },
         else => null,

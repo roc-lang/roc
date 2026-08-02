@@ -630,21 +630,30 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
         .import => |i| {
             node.tag = .import;
             node.region = i.region;
-            node.main_token = i.module_name_tok;
+            node.main_token = i.target.module_name_tok;
             var rhs = AST.ImportRhs{
                 .aliased = 0,
                 .qualified = 0,
-                .nested = @intFromBool(i.nested_import),
+                .has_nested = @intFromBool(i.target.hasNestedTypes()),
+                .origin = @intFromEnum(i.target.origin),
+                .base = @intFromEnum(i.target.base),
                 .reserved = 0,
             };
 
-            // Store all import data in a flat format:
-            // [exposes.span.start, exposes.span.len, qualifier_tok?, alias_tok?]
+            // [exposes.start, exposes.len, target.start, target.path_start,
+            //  parent_count, nested_start?, nested_len, qualifier?, alias?]
             const data_start = @as(u32, @intCast(store.extra_data.items.len));
             try store.extra_data.append(store.gpa, i.exposes.span.start);
             try store.extra_data.append(store.gpa, i.exposes.span.len);
+            try store.extra_data.append(store.gpa, i.target.start_tok);
+            try store.extra_data.append(store.gpa, i.target.path_start_tok);
+            try store.extra_data.append(store.gpa, i.target.parent_count);
+            if (i.target.nested_start_tok) |tok| {
+                try store.extra_data.append(store.gpa, tok);
+            }
+            try store.extra_data.append(store.gpa, i.target.nested_len);
 
-            if (i.qualifier_tok) |tok| {
+            if (i.target.qualifier_tok) |tok| {
                 rhs.qualified = 1;
                 try store.extra_data.append(store.gpa, tok);
             }
@@ -1630,11 +1639,24 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
         .import => {
             const rhs = @as(AST.ImportRhs, @bitCast(node.data.rhs));
 
-            // Read flat data format: [exposes.span.start, exposes.span.len, qualifier_tok?, alias_tok?]
             var extra_data_pos = node.data.lhs;
             const exposes_start = store.extra_data.items[extra_data_pos];
             extra_data_pos += 1;
             const exposes_len = store.extra_data.items[extra_data_pos];
+            extra_data_pos += 1;
+            const target_start_tok = store.extra_data.items[extra_data_pos];
+            extra_data_pos += 1;
+            const path_start_tok = store.extra_data.items[extra_data_pos];
+            extra_data_pos += 1;
+            const parent_count: u16 = @intCast(store.extra_data.items[extra_data_pos]);
+            extra_data_pos += 1;
+
+            var nested_start_tok: ?Token.Idx = null;
+            if (rhs.has_nested == 1) {
+                nested_start_tok = store.extra_data.items[extra_data_pos];
+                extra_data_pos += 1;
+            }
+            const nested_len: u16 = @intCast(store.extra_data.items[extra_data_pos]);
             extra_data_pos += 1;
 
             var qualifier_tok: ?Token.Idx = null;
@@ -1648,14 +1670,22 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
             }
 
             return AST.Statement{ .import = .{
-                .module_name_tok = node.main_token,
-                .qualifier_tok = qualifier_tok,
+                .target = .{
+                    .origin = @enumFromInt(rhs.origin),
+                    .base = @enumFromInt(rhs.base),
+                    .parent_count = parent_count,
+                    .start_tok = target_start_tok,
+                    .path_start_tok = path_start_tok,
+                    .module_name_tok = node.main_token,
+                    .qualifier_tok = qualifier_tok,
+                    .nested_start_tok = nested_start_tok,
+                    .nested_len = nested_len,
+                },
                 .alias_tok = alias_tok,
                 .exposes = .{ .span = .{
                     .start = exposes_start,
                     .len = exposes_len,
                 } },
-                .nested_import = rhs.nested == 1,
                 .region = node.region,
             } };
         },

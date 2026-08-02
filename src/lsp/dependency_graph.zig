@@ -196,9 +196,9 @@ pub const DependencyGraph = struct {
             const node = self.modules.getPtr(module_state.path) orelse continue;
 
             // Add imports (local modules within same package)
-            for (module_state.imports.items) |import_id| {
-                if (import_id < pkg.modules.items.len) {
-                    const imported_module = &pkg.modules.items[import_id];
+            for (module_state.imports.items) |edge| {
+                if (edge.module_id < pkg.modules.items.len) {
+                    const imported_module = &pkg.modules.items[edge.module_id];
                     try node.addImport(self.allocator, imported_module.path);
 
                     // Add reverse dependency
