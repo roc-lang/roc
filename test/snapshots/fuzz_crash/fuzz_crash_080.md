@@ -13,6 +13,7 @@ c : L
 ~~~
 # EXPECTED
 UNDECLARED TYPE - fuzz_crash_080.md:1:5:1:6
+UNBOUND WHERE RECEIVER - fuzz_crash_080.md:3:17:4:23
 DECLARATION HAS NO VALUE - fuzz_crash_080.md:1:1:5:10
 # PROBLEMS
 
@@ -24,6 +25,22 @@ DECLARATION HAS NO VALUE - fuzz_crash_080.md:1:1:5:10
  │      ‾                                                                     │
  └───────────────────────────────────────────────────── fuzz_crash_080.md:1:5 ┘
 
+
+
+┌────────────────────────┐
+│ UNBOUND WHERE RECEIVER ├─ The type variable `o` is not introduced by this ──┐
+└┬───────────────────────┘  annotation's type or a connected method           │
+ │                          constraint, so this where clause cannot add the   │
+ │                          `h` method to it.                                 │
+ │                                                                            │
+ │  o                                                                         │
+ │  .h : a,                                                                   │
+ │                                                                            │
+ └──────────────────────────────────────────────────── fuzz_crash_080.md:3:17 ┘
+
+    A where clause receiver must be introduced by the annotation's type, or by
+    the method type of a receiver that is already connected to the annotation.
+    Connect `o` to the annotation, or remove this constraint.
 
 
 ┌──────────────────────────┐
