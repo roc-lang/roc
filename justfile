@@ -56,3 +56,6 @@ test: clean
 clean:
     git clean -dfx -e justfile -e .sprite -e .claude
     rm -rf ~/.cache/roc
+
+rebase:
+    git fetch origin && git rebase origin/main
