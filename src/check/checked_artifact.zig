@@ -17735,7 +17735,7 @@ pub const HostedProcTable = struct {
 
 /// One platform-header hosted binding. Slice order is the host dispatch index.
 pub const HostedBinding = struct {
-    target_artifact: CheckedModuleArtifactKey,
+    target_checked_module: CheckedModuleArtifactKey,
     target_def: CIR.Def.Idx,
     external_symbol_name: canonical.ExternalSymbolNameId,
 };
@@ -17792,7 +17792,7 @@ pub const HostedBindingTable = struct {
             const imported = imports[import_index];
 
             try bindings.append(allocator, .{
-                .target_artifact = imported.key,
+                .target_checked_module = imported.key,
                 .target_def = target_def,
                 .external_symbol_name = try names.internExternalSymbolName(module.moduleEnvConst().getString(entry.symbol)),
             });

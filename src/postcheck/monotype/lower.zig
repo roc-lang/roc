@@ -1385,12 +1385,12 @@ const HostedCatalogEntry = struct {
     external_symbol_name: names.ExternalSymbolNameId,
     dispatch_index: u32,
     order: []const u8,
-    target_artifact: [32]u8,
+    target_checked_module_digest: [32]u8,
     def_idx: u32,
 };
 
-const HostedTargetKey = struct {
-    artifact: [32]u8,
+const HostedProcedureId = struct {
+    checked_module_digest: [32]u8,
     def_idx: u32,
 };
 
@@ -2071,19 +2071,19 @@ const Builder = struct {
                 );
             }
 
-            var entries_by_target = std.AutoHashMap(HostedTargetKey, usize).init(self.allocator);
+            var entries_by_target = std.AutoHashMap(HostedProcedureId, usize).init(self.allocator);
             defer entries_by_target.deinit();
             try entries_by_target.ensureTotalCapacity(@intCast(entries.items.len));
             for (entries.items, 0..) |entry, index| {
                 entries_by_target.putAssumeCapacityNoClobber(.{
-                    .artifact = entry.target_artifact,
+                    .checked_module_digest = entry.target_checked_module_digest,
                     .def_idx = entry.def_idx,
                 }, index);
             }
 
             for (binding_view.table.bindings, 0..) |binding, dispatch_index| {
                 const entry_index = entries_by_target.get(.{
-                    .artifact = binding.target_artifact.bytes,
+                    .checked_module_digest = binding.target_checked_module.bytes,
                     .def_idx = @intFromEnum(binding.target_def),
                 }) orelse Common.invariant("hosted function is missing from the checked hosted binding table");
                 entries.items[entry_index].dispatch_index = @intCast(dispatch_index);
@@ -2107,7 +2107,7 @@ const Builder = struct {
                         .eq => if (a.def_idx != b.def_idx)
                             a.def_idx < b.def_idx
                         else
-                            std.mem.order(u8, &a.target_artifact, &b.target_artifact) == .lt,
+                            std.mem.order(u8, &a.target_checked_module_digest, &b.target_checked_module_digest) == .lt,
                     };
                 }
             };
@@ -2147,7 +2147,7 @@ const Builder = struct {
                 .external_symbol_name = try self.program.names.internExternalSymbolName(view.names.externalSymbolNameText(proc.external_symbol_name)),
                 .dispatch_index = 0,
                 .order = proc.orderKey(view.hosted_procs),
-                .target_artifact = view.key.bytes,
+                .target_checked_module_digest = view.key.bytes,
                 .def_idx = @intFromEnum(proc.def_idx),
             });
         }

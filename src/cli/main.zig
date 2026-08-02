@@ -1691,7 +1691,7 @@ fn applyHostedBindings(
 
     for (bindings, 0..) |binding, dispatch_index| {
         const entry_index = entries_by_target.get(.{
-            .module_key = binding.target_artifact.bytes,
+            .module_key = binding.target_checked_module.bytes,
             .def_idx = @intFromEnum(binding.target_def),
         }) orelse {
             if (builtin.mode == .Debug) {

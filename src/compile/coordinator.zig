@@ -6045,10 +6045,10 @@ test "hosted distinctness: identical hosted declarations bound to different plat
             for (view.hosted_bindings.bindings) |binding| {
                 const symbol = view.canonical_names.externalSymbolNameText(binding.external_symbol_name);
                 if (first_target) |target| {
-                    try std.testing.expect(!std.mem.eql(u8, &target.bytes, &binding.target_artifact.bytes));
+                    try std.testing.expect(!std.mem.eql(u8, &target.bytes, &binding.target_checked_module.bytes));
                     try std.testing.expect(!std.mem.eql(u8, first_symbol.?, symbol));
                 } else {
-                    first_target = binding.target_artifact;
+                    first_target = binding.target_checked_module;
                     first_symbol = symbol;
                 }
                 binding_count += 1;
