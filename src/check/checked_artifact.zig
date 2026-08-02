@@ -16687,9 +16687,9 @@ pub const ProcTarget = union(enum) {
 };
 
 /// Checker-owned capability for adapting a hosted function whose exact
-/// `Builtin.Try` result is requested with a wider error row. The nominal,
-/// tags, and type argument positions are explicit so postcheck never recognizes
-/// Try by names or backing shape.
+/// `Builtin.Try` result has a closed structural error row and is requested with
+/// a wider error row. The nominal, tags, and type argument positions are
+/// explicit so postcheck never recognizes Try by names or backing shape.
 pub const HostedTryAdapterCapability = struct {
     nominal: canonical.NominalTypeKey,
     ok_tag: canonical.TagLabelId,
@@ -16722,6 +16722,82 @@ pub const CheckedProcedureTemplate = struct {
     /// specialization of this template receives one evidence entry per param.
     evidence_params: artifact_serialize.Span = .{},
 };
+
+fn checkedTypeIsClosedTagRow(
+    checked_types: *const CheckedTypeStore,
+    root: CheckedTypeId,
+) bool {
+    var remaining = checked_types.payloads.items.len;
+    var current = root;
+    while (true) {
+        switch (checked_types.payload(current)) {
+            .alias => |alias| current = alias.backing,
+            .tag_union => |tag_union| current = tag_union.ext,
+            .empty_tag_union => return true,
+            .flex, .rigid => |variable| return variable.row_default == .empty_tag_union,
+            else => return false,
+        }
+        if (remaining == 0) {
+            checkedArtifactInvariant("hosted Try error row chain was cyclic", .{});
+        }
+        remaining -= 1;
+    }
+}
+
+test "hosted Try adapter capability recognizes only closed structural error rows" {
+    const allocator = std.testing.allocator;
+
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+
+    const empty_row = try store.appendSyntheticPayloadRoot(allocator, &names, .empty_tag_union);
+    const non_row = try store.appendSyntheticPayloadRoot(allocator, &names, .empty_record);
+    const open_tail = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(105), true);
+    try store.fillSyntheticTypeRoot(allocator, open_tail, .{ .flex = .{} });
+    const defaulted_tail = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(106), true);
+    try store.fillSyntheticTypeRoot(allocator, defaulted_tail, .{ .flex = .{ .row_default = .empty_tag_union } });
+
+    const error_tag = try names.internTagLabel("HostErr");
+    const closed_tags = try allocator.alloc(CheckedTagBuild, 1);
+    closed_tags[0] = .{ .name = error_tag };
+    const closed_row = try store.appendSyntheticPayloadRoot(allocator, &names, .{ .tag_union = .{
+        .tags = closed_tags,
+        .ext = empty_row,
+    } });
+
+    const open_tags = try allocator.alloc(CheckedTagBuild, 1);
+    open_tags[0] = .{ .name = error_tag };
+    const open_row = try store.appendSyntheticPayloadRoot(allocator, &names, .{ .tag_union = .{
+        .tags = open_tags,
+        .ext = open_tail,
+    } });
+
+    const defaulted_tags = try allocator.alloc(CheckedTagBuild, 1);
+    defaulted_tags[0] = .{ .name = error_tag };
+    const defaulted_row = try store.appendSyntheticPayloadRoot(allocator, &names, .{ .tag_union = .{
+        .tags = defaulted_tags,
+        .ext = defaulted_tail,
+    } });
+
+    const alias_name = try names.internTypeName("HostErrors");
+    const module_identity = try names.internModuleIdentity(&([_]u8{0x69} ** 32));
+    const aliased_row = try store.appendSyntheticPayloadRoot(allocator, &names, .{ .alias = .{
+        .name = alias_name,
+        .origin_module = module_identity,
+        .owner_module = testCheckedModuleKey(105),
+        .backing = closed_row,
+    } });
+
+    try std.testing.expect(checkedTypeIsClosedTagRow(&store, empty_row));
+    try std.testing.expect(checkedTypeIsClosedTagRow(&store, closed_row));
+    try std.testing.expect(checkedTypeIsClosedTagRow(&store, defaulted_row));
+    try std.testing.expect(checkedTypeIsClosedTagRow(&store, aliased_row));
+    try std.testing.expect(!checkedTypeIsClosedTagRow(&store, open_row));
+    try std.testing.expect(!checkedTypeIsClosedTagRow(&store, non_row));
+}
 
 fn hostedTryAdapterCapabilityForRoot(
     module: TypedCIR.Module,
@@ -16759,6 +16835,7 @@ fn hostedTryAdapterCapabilityForRoot(
     if (nominal.args.len != 2) {
         checkedArtifactInvariant("Builtin.Try checked type did not have exactly two type arguments", .{});
     }
+    if (!checkedTypeIsClosedTagRow(checked_types, nominal.args[1])) return null;
     const idents = module.commonIdents();
     return .{
         .nominal = checkedNominalTypeKey(nominal),
