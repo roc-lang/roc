@@ -1074,9 +1074,22 @@ pub const Watcher = struct {
             path_z,
             .{ .ACCMODE = .RDONLY, .CLOEXEC = true },
             0,
-        ) catch |err| {
-            std.log.warn("Failed to open {s} for watching: {}", .{ path, err });
-            return error.WatchOpenFailed;
+        ) catch |err| switch (err) {
+            // One descriptor per watched directory and per watched file is
+            // inherent to kqueue, so a large tree can need more descriptors
+            // than the process is allowed. Say so, because the per-path open
+            // error alone reads like a problem with that one path.
+            error.ProcessFdQuotaExceeded, error.SystemFdQuotaExceeded => {
+                std.log.warn(
+                    "Ran out of file descriptors watching {s}: this watcher needs one per directory and per watched file. Raise the open-files limit to watch a tree this large.",
+                    .{path},
+                );
+                return error.WatchOpenFailed;
+            },
+            else => {
+                std.log.warn("Failed to open {s} for watching: {}", .{ path, err });
+                return error.WatchOpenFailed;
+            },
         };
         errdefer _ = std.c.close(fd);
 
