@@ -7729,9 +7729,9 @@ pub const MonoLlvmCodeGen = struct {
 
         var call_args = try self.rocListArgs1(GuardedList.at(args, 0));
         defer call_args.deinit(self.allocator);
-        // listReplace copies the displaced element into out_element before
-        // overwriting it. list_set discards that value, but the builtin still
-        // needs a real slot to write.
+        // listReplace moves the displaced element into out_element before
+        // overwriting it. list_set does not return that ownership unit, so it
+        // needs both a real slot and a drop after the call.
         const old_elem_ptr = try self.allocEntryBlockSlot(
             .i8,
             abi.elem_size,
@@ -7749,6 +7749,11 @@ pub const MonoLlvmCodeGen = struct {
         try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
         try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.listOp(.list_set)), call_args.types.items, call_args.values.items);
+        if (abi.contains_refcounted) {
+            if (abi.elem_layout_idx) |elem_layout_idx| {
+                try self.emitRcHelperCall(.{ .op = .decref, .layout_idx = elem_layout_idx }, .atomic, old_elem_ptr, null);
+            }
+        }
     }
 
     fn emitListReplaceUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
