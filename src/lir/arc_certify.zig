@@ -89,6 +89,10 @@
 //! exactly once, nothing is used after its value dies, and no borrowed
 //! value is released.
 //!
+//! Certification also checks the structural contract of erased-callable proc
+//! arguments. This keeps the hidden capture/reuse ABI and its ownership marker
+//! synchronized across every transform that clones or rewrites proc specs.
+//!
 //! A certification failure is a compiler bug in ARC insertion. The production
 //! entry point panics in debug builds; release builds never run the certifier.
 
@@ -176,6 +180,8 @@ fn certifyStoreWithWorkStats(
     diag: *Diagnostic,
     work_stats: ?*CertifierWorkStats,
 ) CertifyError!void {
+    try certifyProcAbiMetadata(store, layouts, diag);
+
     var rc_local = try allocator.alloc(bool, store.localCount());
     defer allocator.free(rc_local);
     for (0..store.localCount()) |index| {
@@ -208,6 +214,65 @@ fn certifyStoreWithWorkStats(
         const proc = store.getProcSpec(proc_id);
         const body = proc.body orelse continue;
         try certifier.certifyProc(proc_id, proc, body);
+    }
+}
+
+/// Verifies the structural ownership contract of procedure arguments.
+///
+/// Every erased-callable entry has two hidden trailing arguments: an opaque
+/// borrowed capture pointer followed by the nullable reuse pointer. When the
+/// reuse pointer is an ARC-visible ownership input, its exact final-argument
+/// local is recorded in `erased_return_reuse_arg` and has erased-callable
+/// layout. Otherwise both the marker and ARC-visible layout must be absent.
+/// Internal Roc-ABI destination variants may also carry the marker, so every
+/// non-null marker is required to name a final erased-callable argument.
+fn certifyProcAbiMetadata(
+    store: *const LirStore,
+    layouts: *const layout_mod.Store,
+    diag: *Diagnostic,
+) CertifyError!void {
+    for (0..store.procSpecCount()) |proc_index| {
+        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+        const proc = store.getProcSpec(proc_id);
+        const args = store.getLocalSpan(proc.args);
+
+        if (proc.erased_return_reuse_arg) |marker| {
+            if (GuardedList.borrowLen(args) == 0 or
+                GuardedList.at(args, GuardedList.borrowLen(args) - 1) != marker)
+            {
+                diag.context_proc = proc_id;
+                diag.set("proc={d}: erased return-reuse marker must name the final argument", .{proc_index});
+                return error.Certification;
+            }
+            const marker_layout = store.getLocal(marker).layout_idx;
+            if (layouts.getLayout(marker_layout).tag != .erased_callable) {
+                diag.context_proc = proc_id;
+                diag.set("proc={d}: marked erased return-reuse argument must have erased-callable layout", .{proc_index});
+                return error.Certification;
+            }
+        }
+
+        if (proc.abi != .erased_callable) continue;
+        if (GuardedList.borrowLen(args) < 2) {
+            diag.context_proc = proc_id;
+            diag.set("proc={d}: erased-callable ABI requires trailing capture and reuse arguments", .{proc_index});
+            return error.Certification;
+        }
+
+        const capture_arg = GuardedList.at(args, GuardedList.borrowLen(args) - 2);
+        if (store.getLocal(capture_arg).layout_idx != .opaque_ptr) {
+            diag.context_proc = proc_id;
+            diag.set("proc={d}: erased-callable capture argument must have opaque-pointer layout", .{proc_index});
+            return error.Certification;
+        }
+
+        const reuse_arg = GuardedList.at(args, GuardedList.borrowLen(args) - 1);
+        const reuse_layout = store.getLocal(reuse_arg).layout_idx;
+        if (proc.erased_return_reuse_arg == null and reuse_layout != .opaque_ptr) {
+            diag.context_proc = proc_id;
+            diag.set("proc={d}: unmarked erased-callable reuse argument must have opaque-pointer layout", .{proc_index});
+            return error.Certification;
+        }
     }
 }
 
@@ -3573,7 +3638,155 @@ const CertifyTest = struct {
         }
         return certifyUniqueArgs(self.allocator, &self.store, rc_local, arc_sig.SigTable.all_owned, &self.diag);
     }
+
+    fn certifyProcAbiMetadataOnly(self: *CertifyTest) CertifyError!void {
+        return certifyProcAbiMetadata(&self.store, &self.layouts, &self.diag);
+    }
 };
+
+test "certify accepts consistent erased-callable proc ABI metadata" {
+    {
+        var f = try CertifyTest.init(testing.allocator);
+        defer f.deinit();
+
+        const capture = try f.local(.opaque_ptr);
+        const reuse = try f.local(.opaque_ptr);
+        const result = try f.local(.i64);
+        const body = try f.ret(result);
+        _ = try f.store.addProcSpec(.{
+            .name = f.store.freshSyntheticSymbol(),
+            .args = try f.store.addLocalSpan(&.{ capture, reuse }),
+            .body = body,
+            .ret_layout = .i64,
+            .abi = .erased_callable,
+        });
+
+        try f.certifyProcAbiMetadataOnly();
+    }
+
+    {
+        var f = try CertifyTest.init(testing.allocator);
+        defer f.deinit();
+
+        const erased_callable = try f.layouts.insertErasedCallable();
+        const capture = try f.local(.opaque_ptr);
+        const reuse = try f.local(erased_callable);
+        const body = try f.ret(reuse);
+        _ = try f.store.addProcSpec(.{
+            .name = f.store.freshSyntheticSymbol(),
+            .args = try f.store.addLocalSpan(&.{ capture, reuse }),
+            .erased_return_reuse_arg = reuse,
+            .body = body,
+            .ret_layout = erased_callable,
+            .abi = .erased_callable,
+        });
+
+        try f.certifyProcAbiMetadataOnly();
+    }
+}
+
+test "certify rejects erased-callable proc ABI metadata mismatches" {
+    {
+        var f = try CertifyTest.init(testing.allocator);
+        defer f.deinit();
+
+        const result = try f.local(.i64);
+        const body = try f.ret(result);
+        _ = try f.store.addProcSpec(.{
+            .name = f.store.freshSyntheticSymbol(),
+            .args = LIR.LocalSpan.empty(),
+            .body = body,
+            .ret_layout = .i64,
+            .abi = .erased_callable,
+        });
+
+        try testing.expectError(error.Certification, f.certifyProcAbiMetadataOnly());
+        try testing.expect(std.mem.find(u8, f.diag.message(), "requires trailing capture and reuse arguments") != null);
+    }
+
+    {
+        var f = try CertifyTest.init(testing.allocator);
+        defer f.deinit();
+
+        const capture = try f.local(.i64);
+        const reuse = try f.local(.opaque_ptr);
+        const result = try f.local(.i64);
+        const body = try f.ret(result);
+        _ = try f.store.addProcSpec(.{
+            .name = f.store.freshSyntheticSymbol(),
+            .args = try f.store.addLocalSpan(&.{ capture, reuse }),
+            .body = body,
+            .ret_layout = .i64,
+            .abi = .erased_callable,
+        });
+
+        try testing.expectError(error.Certification, f.certifyProcAbiMetadataOnly());
+        try testing.expect(std.mem.find(u8, f.diag.message(), "capture argument must have opaque-pointer layout") != null);
+    }
+
+    {
+        var f = try CertifyTest.init(testing.allocator);
+        defer f.deinit();
+
+        const erased_callable = try f.layouts.insertErasedCallable();
+        const capture = try f.local(.opaque_ptr);
+        const marked_reuse = try f.local(erased_callable);
+        const final_reuse = try f.local(.opaque_ptr);
+        const body = try f.ret(marked_reuse);
+        _ = try f.store.addProcSpec(.{
+            .name = f.store.freshSyntheticSymbol(),
+            .args = try f.store.addLocalSpan(&.{ capture, marked_reuse, final_reuse }),
+            .erased_return_reuse_arg = marked_reuse,
+            .body = body,
+            .ret_layout = erased_callable,
+            .abi = .erased_callable,
+        });
+
+        try testing.expectError(error.Certification, f.certifyProcAbiMetadataOnly());
+        try testing.expect(std.mem.find(u8, f.diag.message(), "marker must name the final argument") != null);
+    }
+
+    {
+        var f = try CertifyTest.init(testing.allocator);
+        defer f.deinit();
+
+        const capture = try f.local(.opaque_ptr);
+        const reuse = try f.local(.opaque_ptr);
+        const result = try f.local(.i64);
+        const body = try f.ret(result);
+        _ = try f.store.addProcSpec(.{
+            .name = f.store.freshSyntheticSymbol(),
+            .args = try f.store.addLocalSpan(&.{ capture, reuse }),
+            .erased_return_reuse_arg = reuse,
+            .body = body,
+            .ret_layout = .i64,
+            .abi = .erased_callable,
+        });
+
+        try testing.expectError(error.Certification, f.certifyProcAbiMetadataOnly());
+        try testing.expect(std.mem.find(u8, f.diag.message(), "must have erased-callable layout") != null);
+    }
+
+    {
+        var f = try CertifyTest.init(testing.allocator);
+        defer f.deinit();
+
+        const erased_callable = try f.layouts.insertErasedCallable();
+        const capture = try f.local(.opaque_ptr);
+        const reuse = try f.local(erased_callable);
+        const body = try f.ret(reuse);
+        _ = try f.store.addProcSpec(.{
+            .name = f.store.freshSyntheticSymbol(),
+            .args = try f.store.addLocalSpan(&.{ capture, reuse }),
+            .body = body,
+            .ret_layout = erased_callable,
+            .abi = .erased_callable,
+        });
+
+        try testing.expectError(error.Certification, f.certifyProcAbiMetadataOnly());
+        try testing.expect(std.mem.find(u8, f.diag.message(), "unmarked erased-callable reuse argument") != null);
+    }
+}
 
 test "unique-argument certification isolates shared locals between procedures" {
     var f = try CertifyTest.init(testing.allocator);

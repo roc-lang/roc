@@ -6017,7 +6017,9 @@ an erased return-reuse specialization. Later stages must not scan emitted LIR to
 reconstruct whether a local eventually flows to a return. A proc with this
 hidden ownership input records its exact argument local in
 `LirProcSpec.erased_return_reuse_arg`; transforms that clone proc arguments must
-preserve and remap the marker.
+preserve and remap the marker. Debug LIR certification verifies that every
+erased-callable proc's hidden capture and reuse arguments, the reuse argument's
+layout, and the ownership marker remain structurally consistent.
 
 Destination-aware aggregate construction is required for the full benefit of
 box reuse. A record update or tag construction whose result is demanded in a
