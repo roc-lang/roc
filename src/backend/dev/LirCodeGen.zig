@@ -37,7 +37,9 @@ const x86_64 = @import("x86_64/mod.zig");
 const aarch64 = @import("aarch64/mod.zig");
 const CallingConventionMod = @import("CallingConvention.zig");
 const CallingConvention = CallingConventionMod.CallingConvention;
-const RocTarget = @import("roc_target").RocTarget;
+const roc_target_mod = @import("roc_target");
+const RocTarget = roc_target_mod.RocTarget;
+const CpuLevel = roc_target_mod.CpuLevel;
 
 // Num builtin functions for 128-bit integer operations
 
@@ -523,6 +525,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Calling convention for the target platform (derived from comptime target)
         cc: CallingConvention,
 
+        /// How old a CPU the emitted instructions must run on.
+        ///
+        /// This is a runtime field rather than part of the comptime `target`
+        /// so that a `v1` target compiles through its default twin's
+        /// instantiation. The OS, architecture, ABI, and calling convention are
+        /// identical between the two; only instruction selection differs.
+        cpu_level: CpuLevel,
+
         /// Architecture-specific code generator with register allocation
         codegen: CodeGen,
 
@@ -948,10 +958,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             layout_store_opt: *const LayoutStore,
             static_strings: []const StaticStringData.Entry,
             float_nan_mode: builtins.float_bits.NanMode,
+            cpu_level: CpuLevel,
         ) Allocator.Error!Self {
             return .{
                 .allocator = allocator,
                 .cc = CallingConvention.forTarget(target),
+                .cpu_level = cpu_level,
                 .codegen = CodeGen.init(allocator),
                 .store = store,
                 .layout_store = layout_store_opt,
@@ -9903,7 +9915,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// dst = number of set bits in the full 64-bit value `src`.
         fn emitPopcount64(self: *Self, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
-            if (comptime target.toCpuArch() == .aarch64) {
+            // POPCNT is an SSE4.2-era instruction, so an x86 target at the
+            // baseline CPU level counts bits the same way aarch64 does.
+            const use_swar = comptime target.toCpuArch() == .aarch64;
+            if (use_swar or self.cpu_level == .v1) {
                 // aarch64 has no scalar population-count instruction; use the
                 // classic SWAR sequence on general registers.
                 const t = try self.allocTempGeneral();
@@ -9942,9 +9957,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn emitClz64(self: *Self, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
             if (comptime target.toCpuArch() == .aarch64) {
                 try self.codegen.emit.clzRegReg(.w64, dst, src);
-            } else {
-                try self.codegen.emit.lzcntRegReg(.w64, dst, src);
+                return;
             }
+            if (self.cpu_level == .v1) {
+                // BSR reports the index of the highest set bit, so the leading
+                // zero count is `63 - index`. Selecting -1 for a zero operand
+                // carries that arithmetic to the 64 LZCNT reports.
+                const t = try self.allocTempGeneral();
+                try self.codegen.emitLoadImm(t, -1);
+                try self.codegen.emit.bsrRegReg(.w64, dst, src);
+                try self.codegen.emit.cmovcc(.equal, .w64, dst, t);
+                try self.codegen.emitLoadImm(t, 63);
+                // Subtract into the temp: `dst` is the right-hand operand here,
+                // so making it the destination would overwrite it first.
+                try self.codegen.emitSub(.w64, t, t, dst);
+                try self.emitMovRegReg(dst, t);
+                self.codegen.freeGeneral(t);
+                return;
+            }
+            try self.codegen.emit.lzcntRegReg(.w64, dst, src);
         }
 
         /// dst = number of trailing zero bits of the full 64-bit value `src`
@@ -9954,9 +9985,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // No native ctz: reverse the bits, then count leading zeros.
                 try self.codegen.emit.rbitRegReg(.w64, dst, src);
                 try self.codegen.emit.clzRegReg(.w64, dst, dst);
-            } else {
-                try self.codegen.emit.tzcntRegReg(.w64, dst, src);
+                return;
             }
+            if (self.cpu_level == .v1) {
+                // BSF already reports the index of the lowest set bit, which is
+                // the trailing zero count. Only the zero operand differs, and
+                // TZCNT reports 64 there.
+                const t = try self.allocTempGeneral();
+                try self.codegen.emitLoadImm(t, 64);
+                try self.codegen.emit.bsfRegReg(.w64, dst, src);
+                try self.codegen.emit.cmovcc(.equal, .w64, dst, t);
+                self.codegen.freeGeneral(t);
+                return;
+            }
+            try self.codegen.emit.tzcntRegReg(.w64, dst, src);
         }
 
         /// Lower a bit-count op on a scalar integer (width 8..64). The operand is
@@ -20358,7 +20400,7 @@ fn compileRootWithFloatNanMode(
     float_nan_mode: builtins.float_bits.NanMode,
 ) Allocator.Error!CompiledTestRoot {
     const allocator = std.testing.allocator;
-    var codegen = try HostLirCodeGen.init(allocator, store, layout_store, &.{}, float_nan_mode);
+    var codegen = try HostLirCodeGen.init(allocator, store, layout_store, &.{}, float_nan_mode, .default);
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
 
@@ -20509,7 +20551,7 @@ test "code generator initialization" {
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
     defer codegen.deinit();
 }
 
@@ -20524,7 +20566,7 @@ test "vector spill residency is independent of scalar local count" {
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     const vector_local = try addLocal(&store, .u8x16);
@@ -20589,7 +20631,7 @@ test "proc params and mutable list cells use distinct stack slots" {
     } });
     const args = try store.addLocalSpan(&.{ start, end });
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     const HostCodeGen = @TypeOf(codegen.codegen);
@@ -20631,7 +20673,7 @@ test "Windows internal proc ABI reads stack arguments after shadow space" {
     const list = try addLocal(&store, list_layout);
     const args = try store.addLocalSpan(&.{ a, b, c, d, list });
 
-    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve);
+    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     const InnerCodeGen = @TypeOf(codegen.codegen);
@@ -20664,7 +20706,7 @@ test "AArch64 internal proc ABI uses caller stack arg base for stack arguments" 
     const stack_arg = try addLocal(&store, .u64);
     const args = try store.addLocalSpan(&.{ a0, a1, a2, a3, a4, a5, a6, a7, stack_arg });
 
-    var codegen = try ArmCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve);
+    var codegen = try ArmCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     const InnerCodeGen = @TypeOf(codegen.codegen);
@@ -20688,7 +20730,7 @@ test "AArch64 compare immediate accepts large bit masks" {
     defer test_state.deinit();
 
     const ArmCodeGen = LirCodeGen(.arm64mac);
-    var codegen = try ArmCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve);
+    var codegen = try ArmCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     try codegen.emitCmpImm(aarch64.GeneralReg.X0, @bitCast(@as(u64, 1) << 63));
@@ -21517,7 +21559,7 @@ test "entrypoint arg offsets preserve Roc alignment order" {
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     var offsets: [2]u32 = undefined;
@@ -21544,7 +21586,7 @@ test "entrypoint param slots round aggregates to ABI word width" {
         test_state.layout_store.getLayout(.f32),
     });
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     try std.testing.expectEqual(@as(u32, 16), codegen.entrypointParamSlotSize(aggregate_layout));

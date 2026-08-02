@@ -224,6 +224,7 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
             program.layouts,
             static_strings.entries,
             .preserve,
+            .default,
         );
         defer codegen.deinit();
         try codegen.compileAllProcSpecs(program.store.getProcSpecs());

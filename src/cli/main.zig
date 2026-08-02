@@ -5617,6 +5617,7 @@ fn writeDevRunImageToSharedMemory(
             layouts,
             static_strings.entries,
             .preserve,
+            .default,
         );
         defer codegen.deinit();
         codegen.generation_mode = .shim_execution;

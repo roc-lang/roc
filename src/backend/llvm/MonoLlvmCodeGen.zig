@@ -3654,6 +3654,35 @@ pub const MonoLlvmCodeGen = struct {
         try self.storeScalar(self.slot(target).ptr, target_layout, result);
     }
 
+    /// Whether the target machine has an x86 CPU feature.
+    ///
+    /// SIMD lowerings ask this before reaching for an instruction that is not
+    /// in the x86-64 baseline, so a `v1` target takes the architecture-neutral
+    /// path instead of emitting an instruction its CPUs do not have. The
+    /// resolved feature set is the same one LLVM selects instructions from, so
+    /// this cannot disagree with what the target machine will accept.
+    fn hasX86Feature(self: *MonoLlvmCodeGen, feature: std.Target.x86.Feature) bool {
+        return std.Target.x86.featureSetHas(self.target.cpu.features, feature);
+    }
+
+    /// Whether the target machine has an aarch64 CPU feature. See `hasX86Feature`.
+    fn hasAarch64Feature(self: *MonoLlvmCodeGen, feature: std.Target.aarch64.Feature) bool {
+        return std.Target.aarch64.featureSetHas(self.target.cpu.features, feature);
+    }
+
+    /// Whether this target lowers SIMD through x86 vector instructions.
+    fn isX86Simd(self: *MonoLlvmCodeGen) bool {
+        return self.target.cpu.arch == .x86_64;
+    }
+
+    /// Whether this target lowers SIMD through NEON.
+    ///
+    /// NEON is mandatory in Armv8.0-A, so every aarch64 target has it,
+    /// including `v1`.
+    fn isAarch64Simd(self: *MonoLlvmCodeGen) bool {
+        return self.target.cpu.arch == .aarch64 or self.target.cpu.arch == .aarch64_be;
+    }
+
     fn simdVectorForLayout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) ?layout.Vector {
         const value_layout = self.layoutValue(layout_idx);
         if (value_layout.tag != .scalar or value_layout.getScalar().tag != .vector) return null;
@@ -3892,7 +3921,8 @@ pub const MonoLlvmCodeGen = struct {
                 try self.storeSimdLocal(target, wip.select(.normal, lhs_ge, forward, reverse, "") catch return error.OutOfMemory);
             },
             .simd_avg_rounded => {
-                if (self.target.cpu.arch == .x86_64) {
+                // PAVGB/PAVGW are SSE2, available at every x86 CPU level.
+                if (self.isX86Simd()) {
                     const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
                     const rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
                     const name = if (vector.laneBits() == 8) "llvm.x86.sse2.pavg.b" else "llvm.x86.sse2.pavg.w";
@@ -3972,7 +4002,7 @@ pub const MonoLlvmCodeGen = struct {
                 try self.storeSimdLocal(target, wip.cast(.trunc, shifted, vector_ty, "") catch return error.OutOfMemory);
             },
             .simd_mul_q15_sat => {
-                if (self.target.cpu.arch == .x86_64) {
+                if (self.isX86Simd() and self.hasX86Feature(.ssse3)) {
                     const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
                     const rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
                     const multiplied = try self.callBuiltin("llvm.x86.ssse3.pmul.hr.sw.128", vector_ty, &.{ vector_ty, vector_ty }, &.{ lhs, rhs });
@@ -3984,7 +4014,7 @@ pub const MonoLlvmCodeGen = struct {
                     try self.storeSimdLocal(target, wip.select(.normal, both_min, maximum, multiplied, "") catch return error.OutOfMemory);
                     return;
                 }
-                if (self.target.cpu.arch == .aarch64 or self.target.cpu.arch == .aarch64_be) {
+                if (self.isAarch64Simd()) {
                     const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
                     const rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
                     try self.storeSimdLocal(target, try self.callBuiltin("llvm.aarch64.neon.sqrdmulh.v8i16", vector_ty, &.{ vector_ty, vector_ty }, &.{ lhs, rhs }));
@@ -4013,7 +4043,8 @@ pub const MonoLlvmCodeGen = struct {
                 try self.storeSimdLocal(target, wip.bin(.mul, lhs, rhs, "") catch return error.OutOfMemory);
             },
             .simd_dot_pairs => {
-                if (self.target.cpu.arch == .x86_64) {
+                // PMADDWD is SSE2, so it is available at every x86 CPU level.
+                if (self.isX86Simd()) {
                     const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
                     const rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
                     try self.storeSimdLocal(target, try self.callBuiltin("llvm.x86.sse2.pmadd.wd", try self.simdRawType(32, 4), &.{ vector_ty, vector_ty }, &.{ lhs, rhs }));
@@ -4027,7 +4058,7 @@ pub const MonoLlvmCodeGen = struct {
                 try self.storeSimdLocal(target, wip.bin(.add, even, odd, "") catch return error.OutOfMemory);
             },
             .simd_dot_pairs_sat => {
-                if (self.target.cpu.arch == .x86_64) {
+                if (self.isX86Simd() and self.hasX86Feature(.ssse3)) {
                     const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
                     const rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
                     try self.storeSimdLocal(target, try self.callBuiltin("llvm.x86.ssse3.pmadd.ub.sw.128", try self.simdRawType(16, 8), &.{ vector_ty, vector_ty }, &.{ lhs, rhs }));
@@ -4046,7 +4077,8 @@ pub const MonoLlvmCodeGen = struct {
                 try self.storeSimdLocal(target, wip.cast(.trunc, clamped, try self.simdRawType(16, 8), "") catch return error.OutOfMemory);
             },
             .simd_sad => {
-                if (self.target.cpu.arch == .x86_64) {
+                // PSADBW is SSE2, so it is available at every x86 CPU level.
+                if (self.isX86Simd()) {
                     const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
                     const rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
                     try self.storeSimdLocal(target, try self.callBuiltin("llvm.x86.sse2.psad.bw", try self.simdRawType(64, 2), &.{ vector_ty, vector_ty }, &.{ lhs, rhs }));
@@ -4199,7 +4231,7 @@ pub const MonoLlvmCodeGen = struct {
         const table = try self.loadSimdLocal(GuardedList.at(args, 0));
         const indices = try self.loadSimdLocal(GuardedList.at(args, 1));
         const vector_ty = try self.simdRawType(8, 16);
-        if (self.target.cpu.arch == .x86_64) {
+        if (self.isX86Simd() and self.hasX86Feature(.ssse3)) {
             // pshufb zeroes a lane when bit 7 of its index is set, but wraps
             // indices 16-127 through `& 0x0F` instead of zeroing them, which is
             // not the semantics this op promises. Saturating-add 0x70 first:
@@ -4211,7 +4243,8 @@ pub const MonoLlvmCodeGen = struct {
             try self.storeSimdLocal(target, try self.callBuiltin("llvm.x86.ssse3.pshuf.b.128", vector_ty, &.{ vector_ty, vector_ty }, &.{ table, biased }));
             return;
         }
-        if (self.target.cpu.arch == .aarch64 or self.target.cpu.arch == .aarch64_be) {
+        // TBL is part of NEON, which Armv8.0-A makes mandatory.
+        if (self.isAarch64Simd()) {
             try self.storeSimdLocal(target, try self.callBuiltin("llvm.aarch64.neon.tbl1.v16i8", vector_ty, &.{ vector_ty, vector_ty }, &.{ table, indices }));
             return;
         }
@@ -4296,7 +4329,7 @@ pub const MonoLlvmCodeGen = struct {
         const index = builder.intValue(.i32, @intFromBool(high)) catch return error.OutOfMemory;
         const lhs64 = wip.extractElement(lhs_vector, index, "") catch return error.OutOfMemory;
         const rhs64 = wip.extractElement(rhs_vector, index, "") catch return error.OutOfMemory;
-        if (self.target.cpu.arch == .x86_64) {
+        if (self.isX86Simd() and self.hasX86Feature(.pclmul)) {
             const vector_ty = try self.simdRawType(64, 2);
             const immediate: u8 = if (high) 0x11 else 0x00;
             try self.storeSimdLocal(target, try self.callBuiltin(
@@ -4307,7 +4340,9 @@ pub const MonoLlvmCodeGen = struct {
             ));
             return;
         }
-        if (self.target.cpu.arch == .aarch64 or self.target.cpu.arch == .aarch64_be) {
+        // PMULL64 comes from the AES extension, not from base NEON, so an
+        // Armv8.0-A target without it takes the bitwise path below.
+        if (self.isAarch64Simd() and self.hasAarch64Feature(.aes)) {
             const byte_vector_ty = try self.simdRawType(8, 16);
             const product = try self.callBuiltin("llvm.aarch64.neon.pmull64", byte_vector_ty, &.{ .i64, .i64 }, &.{ lhs64, rhs64 });
             try self.storeSimdLocal(target, product);

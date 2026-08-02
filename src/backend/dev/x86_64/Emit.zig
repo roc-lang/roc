@@ -239,6 +239,31 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
         }
 
+        /// BSR dst, src (index of highest set bit) — `0F BD /r`. dst is ModRM.reg.
+        ///
+        /// Sets ZF when src is zero and leaves dst architecturally undefined,
+        /// so callers must select the zero result themselves. This is the
+        /// x86-64 baseline's bit scan; LZCNT is the same opcode behind an `F3`
+        /// prefix, which older CPUs ignore, decoding LZCNT as BSR and silently
+        /// answering `63 - n` where LZCNT would answer `n`.
+        pub fn bsrRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
+            try self.emitRex(width, dst, src);
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0xBD);
+            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+        }
+
+        /// BSF dst, src (index of lowest set bit) — `0F BC /r`. dst is ModRM.reg.
+        ///
+        /// Sets ZF when src is zero and leaves dst architecturally undefined.
+        /// See `bsrRegReg` for how this relates to TZCNT.
+        pub fn bsfRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
+            try self.emitRex(width, dst, src);
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0xBC);
+            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+        }
+
         /// LZCNT dst, src (count leading zeros) — `F3 0F BD /r`. dst is ModRM.reg.
         pub fn lzcntRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
             try self.buf.append(self.allocator, 0xF3); // mandatory prefix
