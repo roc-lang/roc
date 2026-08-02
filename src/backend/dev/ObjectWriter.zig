@@ -59,7 +59,7 @@ pub fn generateObjectFileWithDebug(
                 .aarch64 => .aarch64,
                 else => return error.UnsupportedTarget,
             };
-            var elf = try object.ElfWriter.init(allocator, elf_arch);
+            var elf = try object.ElfWriter.init(allocator, elf_arch, elfOsabi(os_tag));
             defer elf.deinit();
 
             try elf.setCode(code);
@@ -261,6 +261,16 @@ fn elfSection(section: Section) object.elf.Section {
         .text => .text,
         .rodata => .rodata,
         .undef => .undef,
+    };
+}
+
+/// The OSABI a dev-backend object declares for a target OS, matching what LLVM
+/// writes for the same triple so both backends' objects agree in one link.
+fn elfOsabi(os_tag: std.Target.Os.Tag) object.elf.Osabi {
+    return switch (os_tag) {
+        .freebsd => .freebsd,
+        .openbsd => .openbsd,
+        else => .none,
     };
 }
 
@@ -519,6 +529,34 @@ test "generate aarch64 windows object with unwind sections" {
 
     const num_sections = std.mem.readInt(u16, output.items[2..4], .little);
     try std.testing.expectEqual(@as(u16, 3), num_sections);
+}
+
+test "ELF objects declare the OSABI their target's linker looks for" {
+    const cases = [_]struct { target: RocTarget, osabi: u8 }{
+        .{ .target = .x64openbsd, .osabi = 12 },
+        .{ .target = .x64freebsd, .osabi = 9 },
+        .{ .target = .x64netbsd, .osabi = 0 },
+        .{ .target = .x64musl, .osabi = 0 },
+    };
+
+    for (cases) |case| {
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+
+        try generateObjectFile(
+            std.testing.allocator,
+            case.target,
+            &[_]u8{0xC3}, // ret
+            &.{},
+            &.{},
+            &.{},
+            &.{},
+            &output,
+        );
+
+        // e_ident[EI_OSABI]
+        try std.testing.expectEqual(case.osabi, output.items[7]);
+    }
 }
 
 test "static strings are emitted into readonly object sections for native targets" {
