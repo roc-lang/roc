@@ -1167,6 +1167,11 @@ const Formatter = struct {
         no_additional_indent_on_access,
     };
 
+    const ExprFormatContext = struct {
+        behavior: ExprFormatBehavior = .normal,
+        question_suffix_follows: bool = false,
+    };
+
     fn formatStringInterpolation(fmt: *Formatter, idx: AST.Expr.Idx) FormatAstError!void {
         try fmt.pushAll("${");
         const part_region = fmt.nodeRegion(@intFromEnum(idx));
@@ -1219,7 +1224,7 @@ const Formatter = struct {
     };
 
     fn formatExprWithInfo(fmt: *Formatter, ei: AST.Expr.Idx) FormatAstError!FormattedExpr {
-        return formatExprInner(fmt, ei, .normal);
+        return formatExprInner(fmt, ei, .{});
     }
 
     fn adjustMultilineAccessIndent(fmt: *Formatter, format_behavior: ExprFormatBehavior) void {
@@ -1250,7 +1255,7 @@ const Formatter = struct {
     }
 
     fn formatExprInnerDiscard(fmt: *Formatter, ei: AST.Expr.Idx, format_behavior: ExprFormatBehavior) FormatAstError!void {
-        const formatted = try fmt.formatExprInner(ei, format_behavior);
+        const formatted = try fmt.formatExprInner(ei, .{ .behavior = format_behavior });
         Formatter.discardRegion(formatted.region);
     }
 
@@ -1319,11 +1324,12 @@ const Formatter = struct {
         return formatted;
     }
 
-    fn formatExprInner(fmt: *Formatter, ei: AST.Expr.Idx, format_behavior: ExprFormatBehavior) FormatAstError!FormattedExpr {
+    fn formatExprInner(fmt: *Formatter, ei: AST.Expr.Idx, format_context: ExprFormatContext) FormatAstError!FormattedExpr {
         const expr = fmt.ast.store.getExpr(ei);
         const region = fmt.nodeRegion(@intFromEnum(ei));
         var formatted = FormattedExpr{ .region = region };
         const multiline = fmt.nodeWillBeMultiline(AST.Expr.Idx, ei);
+        const format_behavior = format_context.behavior;
         const indent_modifier: u32 = @intFromBool(format_behavior != .normal and fmt.curr_indent > 0);
         const curr_indent: u32 = fmt.curr_indent - indent_modifier;
         defer {
@@ -1523,11 +1529,12 @@ const Formatter = struct {
                         const args = fmt.ast.store.exprSlice(apply.args);
 
                         // A direct empty argument list contributes no arguments
-                        // beyond the piped value, so remove it whenever doing so
-                        // does not expose another application as the pipe RHS.
+                        // beyond the piped value. Remove it unless a following
+                        // `?` needs the call syntax to own the completed pipe, or
+                        // doing so would expose another application as the RHS.
                         // (`value |> make()()` must remain distinct from
                         // `value |> make()`.)
-                        if (args.len == 0 and apply_fn != .apply) {
+                        if (args.len == 0 and apply_fn != .apply and !format_context.question_suffix_follows) {
                             const right_region = fmt.nodeRegion(@intFromEnum(ld.right));
                             const closing_token = right_region.end - 1;
                             if (fmt.hasCommentBefore(closing_token) and try fmt.flushCommentsBefore(closing_token)) {
@@ -1761,10 +1768,19 @@ const Formatter = struct {
                 }
             },
             .suffix_single_question => |s| {
-                const body = switch (format_behavior) {
-                    .normal => try fmt.formatExprWithInfo(s.expr),
-                    .no_indent_on_access, .no_additional_indent_on_access => try fmt.formatExprInner(s.expr, .no_additional_indent_on_access),
+                const child_behavior: ExprFormatBehavior = switch (format_behavior) {
+                    .normal => .normal,
+                    .no_indent_on_access, .no_additional_indent_on_access => .no_additional_indent_on_access,
                 };
+                const child_expr = fmt.ast.store.getExpr(s.expr);
+                const pipe_needs_parens = child_expr == .arrow_call and fmt.ast.store.getExpr(child_expr.arrow_call.right) != .apply;
+                const body = if (pipe_needs_parens)
+                    try fmt.formatParenthesizedExpr(null, s.expr, fmt.nodeWillBeMultiline(AST.Expr.Idx, s.expr))
+                else
+                    try fmt.formatExprInner(s.expr, .{
+                        .behavior = child_behavior,
+                        .question_suffix_follows = child_expr == .arrow_call,
+                    });
                 _ = try fmt.continueAfterMultilineStringLine(body);
                 try fmt.push('?');
             },
@@ -4264,6 +4280,31 @@ test "pipe targets ending in question marks stay unparenthesized" {
     defer std.testing.allocator.free(result);
 
     try std.testing.expectEqualStrings(input, result);
+}
+
+test "issue 10510: empty call controls pipe question suffix precedence" {
+    // Repro for https://github.com/roc-lang/roc/issues/10510
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\from_arrow = a->f()?
+        \\with_call = a |> f()?
+        \\without_call = a |> f?
+        \\parenthesized_result = (a |> f)?
+        \\chain = a->f()?->g()?->h()?
+    , false);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(
+        "from_arrow = a |> f()?\n" ++
+            "\n" ++
+            "with_call = a |> f()?\n" ++
+            "\n" ++
+            "without_call = a |> f?\n" ++
+            "\n" ++
+            "parenthesized_result = (a |> f)?\n" ++
+            "\n" ++
+            "chain = a |> f()? |> g()? |> h()?\n",
+        result,
+    );
 }
 
 test "parenthesized pipe receivers drop direct empty target arguments" {
