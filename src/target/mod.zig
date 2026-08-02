@@ -72,6 +72,22 @@ pub const ld_so = struct {
     pub const musl_x86 = "ld-musl-i386.so.1";
 };
 
+/// The absolute path a BSD kernel uses as an executable's program interpreter.
+///
+/// Each BSD ships exactly one loader at a fixed absolute path, so unlike Linux
+/// (where the path depends on which libc the target links against) this is
+/// determined by the OS alone. Keyed on `std.Target.Os.Tag` because the linker
+/// carries a resolved OS tag rather than a `RocTarget`; returns null for any OS
+/// whose loader is not addressed this way.
+pub fn bsdProgramInterpreter(os_tag: std.Target.Os.Tag) ?[]const u8 {
+    return switch (os_tag) {
+        .freebsd => "/libexec/ld-elf.so.1",
+        .openbsd => "/usr/libexec/ld.so",
+        .netbsd => "/usr/libexec/ld.elf_so",
+        else => null,
+    };
+}
+
 /// Roc's simplified target representation.
 /// Maps to specific OS/arch/ABI combinations for cross-compilation.
 pub const RocTarget = enum {
@@ -376,9 +392,8 @@ pub const RocTarget = enum {
             .x64win, .arm64win => return error.WindowsTarget,
 
             // BSD variants
-            .x64freebsd => "/libexec/ld-elf.so.1",
-            .x64openbsd => "/usr/libexec/ld.so",
-            .x64netbsd => "/usr/libexec/ld.elf_so",
+            .x64freebsd, .x64openbsd, .x64netbsd => bsdProgramInterpreter(self.toOsTag()) orelse
+                return error.NoKnownLinkerPath,
 
             // Generic ELF doesn't have a specific linker
             .x64elf => return error.NoKnownLinkerPath,
