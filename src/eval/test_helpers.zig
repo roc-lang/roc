@@ -1006,6 +1006,10 @@ fn compileInspectedProgramForTargetImpl(
     );
     errdefer cleanupParseAndCanonical(allocator, resources);
 
+    if (try parsedResourcesHaveErrorDiagnostics(allocator, &resources)) {
+        return error.TypeCheckError;
+    }
+
     const lowered = try lowerParsedProgramToLir(allocator, io, &resources, target_usize);
     errdefer {
         var owned = lowered;
