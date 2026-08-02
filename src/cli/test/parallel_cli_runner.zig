@@ -955,6 +955,9 @@ const subcommand_cases = [_]CliCase{
     // Repro for https://github.com/roc-lang/roc/issues/10098: the reference to
     // `b` is delayed inside a function body, so this checks without a root cycle.
     .{ .id = 0, .suite = .subcommands, .name = "issue 10098: recursive function-value cycle checks cleanly", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10098_compile_time_root_cycle.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }} } } },
+    // Repro for https://github.com/roc-lang/roc/issues/10502: recursive,
+    // parameterized nominals with annotated polymorphic methods check cleanly.
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10502: recursive generic nominal method checks cleanly", .timeout_ms = 10_000, .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10502_recursive_generic_nominal_map/Bar.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }}, .not_contains = &.{ .{ .stream = .stderr, .text = "overflowed its stack" }, .{ .stream = .stderr, .text = "panic" } } } } },
     // Repro for https://github.com/roc-lang/roc/issues/10303: mutually
     // recursive function-containing values must finish Monotype lowering.
     .{ .id = 0, .suite = .subcommands, .name = "issue 10303: mutually recursive function values check cleanly", .timeout_ms = 10_000, .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10303_recursive_function_values.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }} } } },
