@@ -19241,29 +19241,9 @@ fn collectResolvedDispatchTargetSubstitutions(
                     conflicts,
                 );
             }
-            if (!target_nominal.is_opaque) {
-                const target_backing = (try store.ensureInstantiatedNominalBackingRootForPayload(
-                    allocator,
-                    names,
-                    target_nominal_copy,
-                )) orelse return;
-                const plan_backing = (try store.ensureInstantiatedNominalBackingRootForPayload(
-                    allocator,
-                    names,
-                    plan_nominal_copy,
-                )) orelse return;
-                try collectResolvedDispatchTargetSubstitutions(
-                    allocator,
-                    names,
-                    store,
-                    target_backing,
-                    plan_backing,
-                    formals,
-                    actuals,
-                    active,
-                    conflicts,
-                );
-            }
+            // Matching nominal applications are completely related by their
+            // arguments. Their shared declaration backing is representation
+            // data and is opened only for nominal-versus-structural relations.
         },
         .tuple => |target_items| {
             const plan_items = switch (plan_payload) {
@@ -19561,28 +19541,9 @@ fn collectDispatchPlanIdentitySubstitutions(
                     active,
                 );
             }
-            if (!target_nominal.is_opaque) {
-                const target_backing = (try store.ensureInstantiatedNominalBackingRootForPayload(
-                    allocator,
-                    names,
-                    target_nominal_copy,
-                )) orelse return;
-                const plan_backing = (try store.ensureInstantiatedNominalBackingRootForPayload(
-                    allocator,
-                    names,
-                    plan_nominal_copy,
-                )) orelse return;
-                try collectDispatchPlanIdentitySubstitutions(
-                    allocator,
-                    names,
-                    store,
-                    target_backing,
-                    plan_backing,
-                    formals,
-                    actuals,
-                    active,
-                );
-            }
+            // Matching nominal applications are completely related by their
+            // arguments. Their shared declaration backing is representation
+            // data and is opened only for nominal-versus-structural relations.
         },
         .tuple => |target_items| {
             const plan_items = switch (plan_payload) {
