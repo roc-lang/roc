@@ -6052,6 +6052,23 @@ test "issue 10181 explicit Str interpolation suffix checks cleanly" {
     try std.testing.expectEqual(@as(usize, 0), resources.checker.problems.problems.items.len);
 }
 
+test "issue 10401 self-referential associated type definition does not panic public api dependencies" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : {}
+        \\main = {}
+        \\T := [].{
+        \\    A :: T.A
+        \\}
+    ;
+
+    const resources = helpers.parseAndCanonicalizeProgram(allocator, .module, source, &.{}) catch |err| switch (err) {
+        error.TypeCheckError, error.ParseError => return,
+        else => return err,
+    };
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+}
+
 const dispatch_boundary_source =
     \\Thing := [Val(Str)].{
     \\    to_str : Thing -> Str

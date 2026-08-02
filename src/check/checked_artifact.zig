@@ -23648,9 +23648,7 @@ fn collectPublicApiDependencies(
     defer active_types.deinit();
 
     for (exported_defs) |def_idx| {
-        const root = checked_type_publication.rootForSourceVar(module, module.defType(def_idx)) orelse {
-            checkedArtifactInvariant("exported def type root was not published", .{});
-        };
+        const root = checked_type_publication.rootForSourceVar(module, module.defType(def_idx)) orelse continue;
         try appendPublicApiTypeDependencies(
             allocator,
             names,
@@ -23785,9 +23783,7 @@ fn appendExposedTypeDeclarationPublicApiDependencies(
             else => continue,
         }
 
-        const root = checked_type_publication.rootForSourceVar(module, ModuleEnv.varFrom(statement_idx)) orelse {
-            checkedArtifactInvariant("exposed type declaration root was not published", .{});
-        };
+        const root = checked_type_publication.rootForSourceVar(module, ModuleEnv.varFrom(statement_idx)) orelse continue;
         try appendPublicApiTypeDependencies(
             allocator,
             names,
