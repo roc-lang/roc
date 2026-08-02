@@ -503,18 +503,42 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
             // threshold once a caller grows: nudge every linked builtin with
             // inlinehint so a large decode loop keeps its append and copy
             // helpers inline, matching how the emitted procs are declared.
+            //
+            // The hint is only a cost-model bonus, and the inliner still
+            // declines these helpers once a caller crosses its size budget --
+            // at which point a hot loop's straight-line appends degrade into
+            // out-of-line calls exactly where staying inline matters most.
+            // The unchecked leaf helpers behind that failure are pinned with
+            // alwaysinline instead: they are tiny and non-recursive, so
+            // inlining them is right at any caller size.
             const inlinehint_kind = externs.LLVMGetEnumAttributeKindForName("inlinehint", "inlinehint".len);
             const inlinehint_attr = externs.LLVMCreateEnumAttribute(externs.LLVMGetModuleContext(builtins_module), inlinehint_kind, 0);
+            const alwaysinline_kind = externs.LLVMGetEnumAttributeKindForName("alwaysinline", "alwaysinline".len);
+            const alwaysinline_attr = externs.LLVMCreateEnumAttribute(externs.LLVMGetModuleContext(builtins_module), alwaysinline_kind, 0);
+            const pinned_inline_suffixes = [_][]const u8{
+                "roc_builtins_list_append_unsafe",
+                "roc_builtins_list_append_range_within_unsafe",
+                "roc_builtins_list_slack_unique",
+            };
             var builtin_func = externs.LLVMGetFirstFunction(builtins_module);
             while (builtin_func) |fv| : (builtin_func = externs.LLVMGetNextFunction(fv)) {
                 if (externs.LLVMIsDeclaration(fv) != 0) continue;
                 externs.LLVMRemoveStringAttributeAtIndex(fv, LLVMAttributeFunctionIndex, "target-features", "target-features".len);
                 externs.LLVMRemoveStringAttributeAtIndex(fv, LLVMAttributeFunctionIndex, "target-cpu", "target-cpu".len);
-                externs.LLVMAddAttributeAtIndex(fv, LLVMAttributeFunctionIndex, inlinehint_attr);
 
                 var name_len: usize = 0;
                 const name_ptr = externs.LLVMGetValueName2(fv, &name_len);
-                if (!app_decls.contains(name_ptr[0..name_len])) {
+                const name = name_ptr[0..name_len];
+                var pinned = false;
+                for (pinned_inline_suffixes) |suffix| {
+                    if (std.mem.endsWith(u8, name, suffix)) {
+                        pinned = true;
+                        break;
+                    }
+                }
+                externs.LLVMAddAttributeAtIndex(fv, LLVMAttributeFunctionIndex, if (pinned) alwaysinline_attr else inlinehint_attr);
+
+                if (!app_decls.contains(name)) {
                     externs.LLVMSetLinkage(fv, LLVMInternalLinkage);
                 }
             }
