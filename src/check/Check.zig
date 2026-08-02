@@ -8059,50 +8059,44 @@ fn checkPlatformHostedSection(self: *Self) std.mem.Allocator.Error!void {
 
     const section = self.cir.hosted_entries.items.items;
 
-    // Qualified names of every hosted function declared by imported modules,
-    // built the same way the hosted dispatch catalog builds its keys:
-    // "Module.func" with a trailing `!` stripped.
-    var declared = std.StringHashMap(void).init(self.gpa);
+    const HostedTarget = struct {
+        module: *const ModuleEnv,
+        def: CIR.Def.Idx,
+    };
+
+    // Exact definitions of every hosted function declared by imported modules.
+    // Display names are retained only for missing-entry diagnostics.
+    var declared = std.AutoHashMap(HostedTarget, []const u8).init(self.gpa);
     defer {
-        var key_it = declared.keyIterator();
-        while (key_it.next()) |key| self.gpa.free(key.*);
+        var value_it = declared.valueIterator();
+        while (value_it.next()) |name| self.gpa.free(name.*);
         declared.deinit();
     }
     // Walk owner modules (direct imports plus their transitive public
     // dependencies), since hosted functions can live in modules the platform
-    // root never imports directly. Within each module, walk global value defs,
-    // not all_defs: hosted functions declared as associated items of (possibly
-    // nested) type modules are hoisted into global_value_defs only, and the
-    // hosted dispatch catalog scans the same list.
+    // root never imports directly. The hosted transform publishes the exact
+    // rewritten defs, including associated items of nested type modules.
     for (self.owner_modules) |imported_env| {
-        const all_defs = imported_env.store.sliceDefs(imported_env.global_value_defs);
-        for (all_defs) |def_idx| {
+        for (imported_env.store.sliceDefs(imported_env.hosted_defs)) |def_idx| {
             const def = imported_env.store.getDef(def_idx);
             const expr = imported_env.store.getExpr(def.expr);
-            if (expr != .e_hosted_lambda) continue;
+            std.debug.assert(expr == .e_hosted_lambda);
 
-            var module_name = imported_env.module_name;
-            if (Ident.textEndsWith(module_name, ".roc")) {
-                module_name = module_name[0 .. module_name.len - 4];
+            const target = HostedTarget{ .module = imported_env, .def = def_idx };
+            const name = try hostedDefinitionDisplayName(self.gpa, imported_env, expr.e_hosted_lambda.symbol_name);
+            const gop = try declared.getOrPut(target);
+            if (gop.found_existing) {
+                self.gpa.free(name);
+            } else {
+                gop.value_ptr.* = name;
             }
-            var func_name = imported_env.getIdent(expr.e_hosted_lambda.symbol_name);
-            if (Ident.textEndsWith(func_name, "!")) {
-                func_name = func_name[0 .. func_name.len - 1];
-            }
-            const key = try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ module_name, func_name });
-            const gop = try declared.getOrPut(key);
-            if (gop.found_existing) self.gpa.free(key);
         }
     }
 
-    // Walk the section: resolve each entry, detect duplicate functions and
+    // Walk the section's resolved targets, detect duplicate functions and
     // duplicate/reserved symbols (provides symbols share the namespace).
-    var mapped = std.StringHashMap(void).init(self.gpa);
-    defer {
-        var key_it = mapped.keyIterator();
-        while (key_it.next()) |key| self.gpa.free(key.*);
-        mapped.deinit();
-    }
+    var mapped = std.AutoHashMap(HostedTarget, void).init(self.gpa);
+    defer mapped.deinit();
     var symbols = std.StringHashMap(void).init(self.gpa);
     defer symbols.deinit();
     for (self.cir.provides_entries.items.items) |provides_entry| {
@@ -8112,31 +8106,46 @@ fn checkPlatformHostedSection(self: *Self) std.mem.Allocator.Error!void {
     }
 
     for (section) |entry| {
-        var func_name = self.cir.getIdent(entry.func_ident);
-        if (Ident.textEndsWith(func_name, "!")) {
-            func_name = func_name[0 .. func_name.len - 1];
-        }
-        const key = if (entry.module_ident) |module_ident|
-            try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ self.cir.getIdent(module_ident), func_name })
+        const imported_env = if (entry.target_import) |import_idx|
+            self.hoistedImportedModule(self.cir, import_idx)
         else
-            try self.gpa.dupe(u8, func_name);
+            null;
+        const target = if (imported_env) |env|
+            if (entry.target_def) |def_idx| HostedTarget{ .module = env, .def = def_idx } else null
+        else
+            null;
 
-        if (!declared.contains(key)) {
-            const name_idx = try self.problems.putExtraString(key);
+        if (target) |resolved| {
+            const def = resolved.module.store.getDef(resolved.def);
+            const expr = resolved.module.store.getExpr(def.expr);
+            if (expr != .e_hosted_lambda) {
+                const display_name = try hostedEntryDisplayName(self.gpa, self.cir, entry);
+                defer self.gpa.free(display_name);
+                const name_idx = try self.problems.putExtraString(display_name);
+                _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
+                    .name = name_idx,
+                    .reason = .function_has_implementation,
+                } });
+            } else {
+                const gop = try mapped.getOrPut(resolved);
+                if (gop.found_existing) {
+                    const display_name = try hostedEntryDisplayName(self.gpa, self.cir, entry);
+                    defer self.gpa.free(display_name);
+                    const name_idx = try self.problems.putExtraString(display_name);
+                    _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
+                        .name = name_idx,
+                        .reason = .duplicate_function,
+                    } });
+                }
+            }
+        } else {
+            const display_name = try hostedEntryDisplayName(self.gpa, self.cir, entry);
+            defer self.gpa.free(display_name);
+            const name_idx = try self.problems.putExtraString(display_name);
             _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
                 .name = name_idx,
                 .reason = .unknown_function,
             } });
-        }
-
-        const gop = try mapped.getOrPut(key);
-        if (gop.found_existing) {
-            const name_idx = try self.problems.putExtraString(key);
-            _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
-                .name = name_idx,
-                .reason = .duplicate_function,
-            } });
-            self.gpa.free(key);
         }
 
         const symbol_text = self.cir.getString(entry.symbol);
@@ -8144,15 +8153,46 @@ fn checkPlatformHostedSection(self: *Self) std.mem.Allocator.Error!void {
     }
 
     // Every declared hosted function needs exactly one section entry.
-    var declared_it = declared.keyIterator();
-    while (declared_it.next()) |key| {
-        if (mapped.contains(key.*)) continue;
-        const name_idx = try self.problems.putExtraString(key.*);
+    var declared_it = declared.iterator();
+    while (declared_it.next()) |decl| {
+        if (mapped.contains(decl.key_ptr.*)) continue;
+        const name_idx = try self.problems.putExtraString(decl.value_ptr.*);
         _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
             .name = name_idx,
             .reason = .function_not_in_section,
         } });
     }
+}
+
+fn hostedDefinitionDisplayName(
+    allocator: Allocator,
+    module: *const ModuleEnv,
+    symbol_name: Ident.Idx,
+) Allocator.Error![]const u8 {
+    var module_name = module.module_name;
+    if (Ident.textEndsWith(module_name, ".roc")) {
+        module_name = module_name[0 .. module_name.len - 4];
+    }
+    var func_name = module.getIdent(symbol_name);
+    if (Ident.textEndsWith(func_name, "!")) {
+        func_name = func_name[0 .. func_name.len - 1];
+    }
+    return std.fmt.allocPrint(allocator, "{s}.{s}", .{ module_name, func_name });
+}
+
+fn hostedEntryDisplayName(
+    allocator: Allocator,
+    platform: *const ModuleEnv,
+    entry: ModuleEnv.HostedEntry,
+) Allocator.Error![]const u8 {
+    var func_name = platform.getIdent(entry.func_ident);
+    if (Ident.textEndsWith(func_name, "!")) {
+        func_name = func_name[0 .. func_name.len - 1];
+    }
+    return if (entry.module_ident) |module_ident|
+        std.fmt.allocPrint(allocator, "{s}.{s}", .{ platform.getIdent(module_ident), func_name })
+    else
+        allocator.dupe(u8, func_name);
 }
 
 fn checkProvidesEntryHostBoundaryRows(

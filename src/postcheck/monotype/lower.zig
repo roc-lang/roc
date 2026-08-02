@@ -422,6 +422,7 @@ const ModuleView = struct {
     entry_wrappers: *const checked.EntryWrapperTable,
     intrinsic_wrappers: *const checked.IntrinsicWrapperTable,
     hosted_procs: *const checked.HostedProcTable,
+    hosted_bindings: *const checked.HostedBindingTable,
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     method_registry: *const static_dispatch.MethodRegistry,
     method_lookup_scope: []const checked.ModuleId,
@@ -1384,22 +1385,18 @@ const HostedCatalogEntry = struct {
     external_symbol_name: names.ExternalSymbolNameId,
     dispatch_index: u32,
     order: []const u8,
+    target_artifact: [32]u8,
     def_idx: u32,
 };
 
-/// The platform header's hosted section, resolved to the same qualified keys
-/// the checked modules' hosted tables sort by ("Module.func" with a trailing `!`
-/// stripped). Section order defines hosted dispatch order, and each entry's
-/// string is the hosted function's linker symbol.
-const HostedSectionMap = struct {
-    keys: []const []const u8,
-    symbols: []const []const u8,
+const HostedTargetKey = struct {
+    artifact: [32]u8,
+    def_idx: u32,
+};
 
-    fn deinit(self: HostedSectionMap, allocator: Allocator) void {
-        for (self.keys) |key| allocator.free(key);
-        allocator.free(self.keys);
-        allocator.free(self.symbols);
-    }
+const HostedBindingView = struct {
+    table: *const checked.HostedBindingTable,
+    names: *const names.NameStore,
 };
 
 /// Pattern binders are dense IDs allocated by `CheckedBodyStore`, so their
@@ -2066,39 +2063,33 @@ const Builder = struct {
             try self.appendHostedCatalogFromView(&entries, moduleView(relation));
         }
 
-        const SortContext = struct {
-            pub fn lessThan(_: void, a: HostedCatalogEntry, b: HostedCatalogEntry) bool {
-                return switch (std.mem.order(u8, a.order, b.order)) {
-                    .lt => true,
-                    .gt => false,
-                    .eq => a.def_idx < b.def_idx,
-                };
+        if (self.hostedBindingView()) |binding_view| {
+            if (entries.items.len != binding_view.table.bindings.len) {
+                Common.invariantFmt(
+                    "platform hosted binding count {d} disagrees with hosted catalog size {d}",
+                    .{ binding_view.table.bindings.len, entries.items.len },
+                );
             }
-        };
-        std.mem.sort(HostedCatalogEntry, entries.items, {}, SortContext.lessThan);
 
-        for (entries.items, 0..) |*entry, index| {
-            entry.dispatch_index = @intCast(index);
-        }
-
-        if (try self.buildHostedSectionMap()) |map| {
-            defer map.deinit(self.allocator);
-
-            // Platform checking already verified the section is total over the
-            // platform's hosted functions and duplicate-free, so every catalog
-            // entry has exactly one section position.
-            if (entries.items.len != map.keys.len) {
-                Common.invariant("platform hosted section disagrees with the hosted catalog size");
+            var entries_by_target = std.AutoHashMap(HostedTargetKey, usize).init(self.allocator);
+            defer entries_by_target.deinit();
+            try entries_by_target.ensureTotalCapacity(@intCast(entries.items.len));
+            for (entries.items, 0..) |entry, index| {
+                entries_by_target.putAssumeCapacityNoClobber(.{
+                    .artifact = entry.target_artifact,
+                    .def_idx = entry.def_idx,
+                }, index);
             }
-            for (entries.items) |*entry| {
-                const pos = blk: {
-                    for (map.keys, 0..) |key, key_index| {
-                        if (std.mem.eql(u8, key, entry.order)) break :blk key_index;
-                    }
-                    Common.invariant("hosted function is missing from the platform hosted section");
-                };
-                entry.dispatch_index = @intCast(pos);
-                entry.external_symbol_name = try self.program.names.internExternalSymbolName(map.symbols[pos]);
+
+            for (binding_view.table.bindings, 0..) |binding, dispatch_index| {
+                const entry_index = entries_by_target.get(.{
+                    .artifact = binding.target_artifact.bytes,
+                    .def_idx = @intFromEnum(binding.target_def),
+                }) orelse Common.invariant("hosted function is missing from the checked hosted binding table");
+                entries.items[entry_index].dispatch_index = @intCast(dispatch_index);
+                entries.items[entry_index].external_symbol_name = try self.program.names.internExternalSymbolName(
+                    binding_view.names.externalSymbolNameText(binding.external_symbol_name),
+                );
             }
 
             const DispatchSort = struct {
@@ -2107,50 +2098,46 @@ const Builder = struct {
                 }
             };
             std.mem.sort(HostedCatalogEntry, entries.items, {}, DispatchSort.lessThan);
+        } else {
+            const SortContext = struct {
+                pub fn lessThan(_: void, a: HostedCatalogEntry, b: HostedCatalogEntry) bool {
+                    return switch (std.mem.order(u8, a.order, b.order)) {
+                        .lt => true,
+                        .gt => false,
+                        .eq => if (a.def_idx != b.def_idx)
+                            a.def_idx < b.def_idx
+                        else
+                            std.mem.order(u8, &a.target_artifact, &b.target_artifact) == .lt,
+                    };
+                }
+            };
+            std.mem.sort(HostedCatalogEntry, entries.items, {}, SortContext.lessThan);
+            for (entries.items, 0..) |*entry, index| {
+                entry.dispatch_index = @intCast(index);
+            }
         }
 
         self.hosted_catalog = try entries.toOwnedSlice(self.allocator);
     }
 
-    /// Find the platform module's hosted section and resolve it to qualified
-    /// keys plus linker symbols. Imported modules can carry platform metadata
-    /// during app checking, but they do not define the hosted dispatch order
-    /// for this lowering pass.
-    fn buildHostedSectionMap(self: *Builder) Allocator.Error!?HostedSectionMap {
-        const platform_env = blk: {
-            const root_env = moduleView(self.root_view).module_env;
-            if (root_env.hosted_entries.items.items.len != 0) break :blk root_env;
-            for (self.modules.root.relation_modules) |relation| {
-                const env = moduleView(relation).module_env;
-                if (env.hosted_entries.items.items.len != 0) break :blk env;
-            }
-            return null;
-        };
-
-        const section = platform_env.hosted_entries.items.items;
-        var keys = try self.allocator.alloc([]const u8, section.len);
-        var key_count: usize = 0;
-        errdefer {
-            for (keys[0..key_count]) |key| self.allocator.free(key);
-            self.allocator.free(keys);
+    fn hostedBindingView(self: *Builder) ?HostedBindingView {
+        const root = moduleView(self.root_view);
+        if (root.module_identity.kind == .platform) {
+            return .{ .table = root.hosted_bindings, .names = root.names };
         }
-        const symbols = try self.allocator.alloc([]const u8, section.len);
-        errdefer self.allocator.free(symbols);
-
-        for (section, 0..) |entry, index| {
-            var func_text = platform_env.getIdentText(entry.func_ident);
-            if (func_text.len > 0 and func_text[func_text.len - 1] == '!') {
-                func_text = func_text[0 .. func_text.len - 1];
+        for (self.modules.imports) |imported| {
+            const view = moduleView(imported);
+            if (view.module_identity.kind == .platform) {
+                return .{ .table = view.hosted_bindings, .names = view.names };
             }
-            keys[index] = if (entry.module_ident) |module_ident|
-                try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ platform_env.getIdentText(module_ident), func_text })
-            else
-                try self.allocator.dupe(u8, func_text);
-            key_count = index + 1;
-            symbols[index] = platform_env.getString(entry.symbol);
         }
-
-        return .{ .keys = keys, .symbols = symbols };
+        for (self.modules.root.relation_modules) |relation| {
+            const view = moduleView(relation);
+            if (view.module_identity.kind == .platform) {
+                return .{ .table = view.hosted_bindings, .names = view.names };
+            }
+        }
+        return null;
     }
 
     fn appendHostedCatalogFromView(self: *Builder, entries: *std.ArrayList(HostedCatalogEntry), view: ModuleView) Allocator.Error!void {
@@ -2160,6 +2147,7 @@ const Builder = struct {
                 .external_symbol_name = try self.program.names.internExternalSymbolName(view.names.externalSymbolNameText(proc.external_symbol_name)),
                 .dispatch_index = 0,
                 .order = proc.orderKey(view.hosted_procs),
+                .target_artifact = view.key.bytes,
                 .def_idx = @intFromEnum(proc.def_idx),
             });
         }
@@ -45254,6 +45242,7 @@ fn moduleView(view: checked.ImportedModuleView) ModuleView {
         .entry_wrappers = view.entry_wrappers,
         .intrinsic_wrappers = view.intrinsic_wrappers,
         .hosted_procs = view.hosted_procs,
+        .hosted_bindings = view.hosted_bindings,
         .static_dispatch_plans = view.static_dispatch_plans,
         .method_registry = view.method_registry,
         .method_lookup_scope = view.method_lookup_scope,

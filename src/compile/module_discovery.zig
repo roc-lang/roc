@@ -16,7 +16,8 @@ const AST = parse.AST;
 /// 3. Are not compiler-owned package-header Builtin auto-imports
 ///
 /// In addition to explicit `import` statements, the upper-cased entries in a
-/// `package [Mod1, Mod2, ...] {}` header are treated as auto-imports.
+/// `package [Mod1, Mod2, ...] {}` header and module targets in a platform
+/// `hosted` section are treated as auto-imports.
 ///
 /// This is used to identify which sibling modules need to be compiled
 /// before canonicalizing the current module.
@@ -45,6 +46,19 @@ pub fn extractImportsFromDeclIndex(
     for (parse_ast.decl_index.imports.items) |import| {
         if (import.qualifier != null) continue;
         try appendModuleName(gpa, &result, stripLeadingDot(parse_ast.env.getIdent(import.module_name)), true);
+    }
+
+    const file = parse_ast.store.getFile();
+    switch (parse_ast.store.getHeader(file.header)) {
+        .platform => |platform| {
+            for (parse_ast.store.symbolMapEntrySlice(platform.hosted)) |entry_idx| {
+                const entry = parse_ast.store.getSymbolMapEntry(entry_idx);
+                const module_token = entry.module orelse continue;
+                const module_ident = parse_ast.tokens.resolveIdentifier(module_token) orelse continue;
+                try appendModuleName(gpa, &result, parse_ast.env.getIdent(module_ident), false);
+            }
+        },
+        else => {},
     }
 
     return result.toOwnedSlice(gpa);
@@ -180,4 +194,36 @@ test "explicit directory import supplies a package-header module alias" {
     try std.testing.expectEqual(@as(usize, 2), local_imports.len);
     try std.testing.expectEqualStrings("Auto", local_imports[0]);
     try std.testing.expectEqualStrings("Src.Widget", local_imports[1]);
+}
+
+test "platform hosted targets are module dependencies" {
+    const gpa = std.testing.allocator;
+    var env = try @import("base").CommonEnv.init(gpa,
+        \\platform ""
+        \\    requires {}
+        \\    exposes [Effect]
+        \\    packages {}
+        \\    provides {}
+        \\    hosted {
+        \\        "roc_bar_get": Bar.Idx.get!,
+        \\        "roc_effect_run": Effect.run!,
+        \\    }
+        \\    targets: {}
+        \\
+        \\import Effect
+    );
+    defer env.deinit(gpa);
+
+    const ast = try parse.file(gpa, &env);
+    defer ast.deinit();
+
+    const local_imports = try extractImportsFromDeclIndex(ast, gpa);
+    defer {
+        for (local_imports) |item| gpa.free(item);
+        gpa.free(local_imports);
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), local_imports.len);
+    try std.testing.expectEqualStrings("Effect", local_imports[0]);
+    try std.testing.expectEqualStrings("Bar", local_imports[1]);
 }

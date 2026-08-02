@@ -773,6 +773,8 @@ all_defs: CIR.Def.Span,
 /// Module-global value definitions: top-level values, associated items, and
 /// compiler-created hosted globals. Local block definitions are not included.
 global_value_defs: CIR.Def.Span,
+/// Exact definitions rewritten from annotation-only declarations to hosted lambdas.
+hosted_defs: CIR.Def.Span,
 /// All the top-level statements in the module (populated by canonicalization)
 all_statements: CIR.Statement.Span,
 /// All canonical type-declaration statements in the module.
@@ -918,12 +920,23 @@ pub const ProvidesEntry = struct {
 /// entry with module_ident="Stdout", func_ident="line!", and symbol pointing to
 /// the interned string "roc_stdout_line".
 pub const HostedEntry = struct {
+    pub const TargetStatus = enum(u8) {
+        unresolved,
+        resolved,
+        missing_module,
+        missing_value,
+    };
+
     /// The type module name (e.g., "Stdout"); null for unqualified functions
     module_ident: ?Ident.Idx,
     /// The hosted function name (e.g., "line!")
     func_ident: Ident.Idx,
     /// The literal linker symbol (e.g., "roc_stdout_line")
     symbol: StringLiteral.Idx,
+    /// Exact imported definition selected by this entry after canonicalization.
+    target_import: ?CIR.Import.Idx,
+    target_def: ?CIR.Def.Idx,
+    target_status: TargetStatus,
 
     pub const SafeList = collections.SafeList(@This());
 };
@@ -1004,6 +1017,7 @@ pub fn initCIRFields(self: *Self, module_name: []const u8) Allocator.Error!void 
     self.module_role = .user;
     self.all_defs = .{ .span = .{ .start = 0, .len = 0 } };
     self.global_value_defs = .{ .span = .{ .start = 0, .len = 0 } };
+    self.hosted_defs = .{ .span = .{ .start = 0, .len = 0 } };
     self.all_statements = .{ .span = .{ .start = 0, .len = 0 } };
     self.type_decls = .{ .span = .{ .start = 0, .len = 0 } };
     self.forward_type_decls = .{ .span = .{ .start = 0, .len = 0 } };
@@ -1046,6 +1060,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .module_role = .user,
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .global_value_defs = .{ .span = .{ .start = 0, .len = 0 } },
+        .hosted_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .type_decls = .{ .span = .{ .start = 0, .len = 0 } },
         .forward_type_decls = .{ .span = .{ .start = 0, .len = 0 } },
@@ -3412,6 +3427,7 @@ pub const Serialized = extern struct {
     module_role: ModuleRole,
     all_defs: CIR.Def.Span,
     global_value_defs: CIR.Def.Span,
+    hosted_defs: CIR.Def.Span,
     all_statements: CIR.Statement.Span,
     type_decls: CIR.Statement.Span,
     forward_type_decls: CIR.Statement.Span,
@@ -3499,6 +3515,7 @@ pub const Serialized = extern struct {
         self.module_role = env.module_role;
         self.all_defs = env.all_defs;
         self.global_value_defs = env.global_value_defs;
+        self.hosted_defs = env.hosted_defs;
         self.all_statements = env.all_statements;
         self.type_decls = env.type_decls;
         self.forward_type_decls = env.forward_type_decls;
@@ -3586,6 +3603,7 @@ pub const Serialized = extern struct {
             .module_role = self.module_role,
             .all_defs = self.all_defs,
             .global_value_defs = self.global_value_defs,
+            .hosted_defs = self.hosted_defs,
             .all_statements = self.all_statements,
             .type_decls = self.type_decls,
             .forward_type_decls = self.forward_type_decls,
@@ -3649,6 +3667,7 @@ pub const Serialized = extern struct {
             .module_role = self.module_role,
             .all_defs = self.all_defs,
             .global_value_defs = self.global_value_defs,
+            .hosted_defs = self.hosted_defs,
             .all_statements = self.all_statements,
             .type_decls = self.type_decls,
             .forward_type_decls = self.forward_type_decls,
@@ -3712,6 +3731,7 @@ pub const Serialized = extern struct {
             .module_role = self.module_role,
             .all_defs = self.all_defs,
             .global_value_defs = self.global_value_defs,
+            .hosted_defs = self.hosted_defs,
             .all_statements = self.all_statements,
             .type_decls = self.type_decls,
             .forward_type_decls = self.forward_type_decls,
