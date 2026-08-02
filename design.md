@@ -3482,6 +3482,23 @@ complete):
   so the host's view of a `?:` field agrees byte-for-byte with the
   compiler's — layout stays a function of the annotation alone, which is
   what keeps `?:` legal across the Host Symbol ABI.
+- Inspect rendering back-decodes the slot SHAPE (documented deviation):
+  Monotype `Type.Field` deliberately carries no kind axis — the kind is
+  consumed once, into the slot encoding, by `lowerFieldSlotType`. Record
+  `Str.inspect` expansion runs over the memoized Monotype alone (no
+  checked row in hand), so `Builder.optionalFieldSlot` recognizes an
+  optional slot by its exact encoding: a closed two-variant
+  `[Missing, Present(τ)]` union renders as the payload or `<missing>`.
+  This is the one consumer below checking that infers the kind from the
+  monotype shape instead of reading explicit kind data. Accepted
+  consequence: a required field ANNOTATED as exactly
+  `[Missing, Present(τ)]` is byte- and digest-identical to an optional
+  field, so inspect renders it identically (`Present(5)` → `5`,
+  `Missing` → `<missing>`). Every other consumer (`.?` chains,
+  construction, update, destructure, glue) reads the explicit checked
+  kind and is NOT subject to this collapse. Threading a kind axis through
+  `Type.Field` solely for inspect fidelity of that one adversarial
+  annotation was judged not worth widening every Monotype record.
 
 Kind defaulting as a checker pass (IMPLEMENTED): a literal-minted kind var
 still undetermined at module finalize (a literal field never used at either

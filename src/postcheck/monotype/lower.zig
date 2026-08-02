@@ -4654,17 +4654,17 @@ const Builder = struct {
     /// inline (required/defaulted) slot. Monotype `Type.Field` carries no
     /// kind axis: `lowerFieldSlotType` consumed the checked row's kind, once,
     /// into exactly the raw closed two-variant structural union
-    /// `[Missing, Present(payload)]` (design.md "Field Kinds (All-Dynamic
-    /// Optional Fields)" — the discriminant contract every consumer below
-    /// checking shares). At the Monotype level that shape IS the kind, so
-    /// this reads the encoding back rather than testing separate kind data.
-    /// Consumers that still have the checked row in hand (`.?` chains,
-    /// record construction) learn the kind from checked data instead and go
-    /// straight to `optionalSlotInfo`; record INSPECT rendering has only the
-    /// memoized monotype, so it consumes the slot encoding through this.
-    /// Deliberate consequence, pinned by the same design: a required field
-    /// annotated with that exact structural union is byte- and digest-
-    /// identical to an optional field here and renders identically.
+    /// `[Missing, Present(payload)]`. This reads the encoding back from the
+    /// SHAPE rather than testing explicit kind data — the one such consumer
+    /// below checking, documented as a deviation in design.md "Field Kinds
+    /// (All-Dynamic Optional Fields)" ("Inspect rendering back-decodes the
+    /// slot SHAPE"): inspect expansion runs over the memoized monotype with
+    /// no checked row in hand. Consumers that still have the checked row
+    /// (`.?` chains, record construction) learn the kind from checked data
+    /// and go straight to `optionalSlotInfo`. Accepted consequence, per the
+    /// same design.md bullet: a required field annotated with that exact
+    /// structural union is byte- and digest-identical to an optional field
+    /// here and renders identically.
     fn optionalFieldSlot(self: *Builder, slot_ty: Type.TypeId) ?OptionalSlotInfo {
         const tags = switch (self.program.types.get(slot_ty)) {
             .tag_union => |span_| self.program.types.tagSpan(span_),
@@ -17905,7 +17905,7 @@ const BodyContext = struct {
                     const mono_field_name = try self.builder.recordFieldName(self.view, field.label);
                     const slot_node = try self.graph.recordConstructionFieldNode(expr_node, mono_field_name);
                     const field_kind: checked.CheckedFieldKind.Tag =
-                        if (try self.checkedFieldKind(expr.ty, mono_field_name)) |kind| kind.tag else .required;
+                        try self.constructedFieldKindTag(expr.ty, mono_field_name);
                     child_nodes[child_index] = if (field_kind == .optional) opt: {
                         // A SUPPLIED OPTIONAL field's child is checked at the
                         // slot's Present payload type, never the slot union
@@ -30373,7 +30373,7 @@ const BodyContext = struct {
             const mono_field_name = try self.builder.recordFieldName(self.view, field.label);
             const field_node = try self.graph.recordConstructionFieldNode(record_node, mono_field_name);
             const field_kind: checked.CheckedFieldKind.Tag =
-                if (try self.checkedFieldKind(checked_ty, mono_field_name)) |kind| kind.tag else .required;
+                try self.constructedFieldKindTag(checked_ty, mono_field_name);
             if (field_kind == .optional) {
                 // A SUPPLIED OPTIONAL field's child is checked at the slot's
                 // Present payload type; the slot itself is the tagged union
@@ -31599,7 +31599,9 @@ const BodyContext = struct {
     }
 
     /// Find `field_name`'s declared kind on the checked row behind
-    /// `checked_ty`, walking aliases and the extension chain.
+    /// `checked_ty`, walking aliases, nominal backing, and the extension
+    /// chain. The kind is view-portable: its tag is POD and a defaulted
+    /// kind's identity carries its declaring module.
     fn checkedFieldKind(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
@@ -32307,7 +32309,7 @@ const BodyContext = struct {
         for (0..target_field_count) |i| {
             const field = target_field_list[i];
             const field_kind: checked.CheckedFieldKind.Tag =
-                if (try self.checkedFieldKind(checked_ty, field.name)) |kind| kind.tag else .required;
+                try self.constructedFieldKindTag(checked_ty, field.name);
             const value = if (try self.recordUpdateFieldValue(record.fields, field.name)) |field_value| supplied: {
                 // A SUPPLIED OPTIONAL field wraps its value in the slot's
                 // Present tag (design.md "Field Kinds"); the checked field
@@ -32460,7 +32462,7 @@ const BodyContext = struct {
         for (0..target_fields.len) |index| {
             const field = target_fields[index];
             const field_kind: checked.CheckedFieldKind.Tag =
-                if (try self.checkedFieldKind(checked_ty, field.name)) |kind| kind.tag else .required;
+                try self.constructedFieldKindTag(checked_ty, field.name);
             const value = if (try self.recordUpdateFieldValue(record.fields, field.name)) |field_value| blk: {
                 const pre = self.preLoweredChildAt(pre_lowered, field_value) orelse
                     Common.invariant("record graph constructor lost its pre-lowered field child");
@@ -32677,7 +32679,7 @@ const BodyContext = struct {
             const mono_field_name = try self.builder.recordFieldName(self.view, field.label);
             const slot_node = try self.graph.recordConstructionFieldNode(record_node, mono_field_name);
             const field_kind: checked.CheckedFieldKind.Tag =
-                if (try self.checkedFieldKind(checked_ty, mono_field_name)) |kind| kind.tag else .required;
+                try self.constructedFieldKindTag(checked_ty, mono_field_name);
             child_nodes[child_index] = if (field_kind == .optional) opt: {
                 // A SUPPLIED OPTIONAL field's child is checked at the slot's
                 // Present payload type, never the slot union (design.md
