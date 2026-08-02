@@ -1128,12 +1128,14 @@ pub const Watcher = struct {
 
     fn removeKqueueWatch(self: *Watcher, fd: i32) void {
         const index = self.findKqueueWatch(fd) orelse return;
-        const watch = self.impl.watches.swapRemove(index);
-        _ = std.c.close(watch.fd);
-        self.allocator.free(watch.path);
+        self.removeKqueueWatchAt(index);
     }
 
     /// Drop a directory's watch along with every watch beneath it.
+    ///
+    /// Descendants go first because `dir_path` is owned by the directory's own
+    /// watch: removing that entry frees the very bytes the remaining
+    /// comparisons read.
     fn removeKqueueWatchTree(self: *Watcher, dir_path: []const u8) void {
         var i: usize = 0;
         while (i < self.impl.watches.items.len) {
@@ -1142,14 +1144,22 @@ pub const Watcher = struct {
                 std.mem.startsWith(u8, path, dir_path) and
                 path[dir_path.len] == std.fs.path.sep;
 
-            if (std.mem.eql(u8, path, dir_path) or under_dir) {
-                const watch = self.impl.watches.swapRemove(i);
-                _ = std.c.close(watch.fd);
-                self.allocator.free(watch.path);
+            if (under_dir) {
+                self.removeKqueueWatchAt(i);
                 continue;
             }
             i += 1;
         }
+
+        if (self.findKqueueWatchByPath(dir_path)) |index| {
+            self.removeKqueueWatchAt(index);
+        }
+    }
+
+    fn removeKqueueWatchAt(self: *Watcher, index: usize) void {
+        const watch = self.impl.watches.swapRemove(index);
+        _ = std.c.close(watch.fd);
+        self.allocator.free(watch.path);
     }
 
     fn watchLoopWindows(self: *Watcher) void {
