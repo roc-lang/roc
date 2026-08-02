@@ -176,7 +176,8 @@ pub fn getSystemPageSize() error{ SysctlFailed, UnsupportedPlatform }!usize {
             break :blk page_size_c;
         },
         .freebsd, .netbsd, .openbsd, .dragonfly => blk: {
-            const result = std.c.getpagesize();
+            const result = std.c.sysconf(@intFromEnum(std.c._SC.PAGESIZE));
+            if (result <= 0) return error.SysctlFailed;
             break :blk @intCast(result);
         },
         else => return error.UnsupportedPlatform,
