@@ -1,0 +1,58 @@
+# local-only build helpers
+#   see .git/info/exclude
+
+# list all available just recipes
+list:
+   @ just --list --unsorted
+
+alias install := install-release
+
+# clean build and install
+[linux]
+install-dev: clean && install-rust-glue
+    zig build roc
+    cp ./zig-out/bin/roc ~/.local/bin/
+
+# clean build and install release-fast
+[linux]
+install-release: clean && install-rust-glue
+    zig build build-release
+    cp ./zig-out/bin/roc ~/.local/bin/
+
+# install src/glue/src/RustGlue.roc as the `rust_glue` shorthand for the roc on PATH
+# (roc install only accepts URLs, so this serves the bundle over loopback HTTP)
+[linux]
+install-rust-glue:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tmp=$(mktemp -d)
+    server_pid=""
+    trap 'kill "$server_pid" 2>/dev/null || true; rm -rf "$tmp"' EXIT
+    mkdir "$tmp/serve"
+    cp src/glue/src/RustGlue.roc "$tmp/main.roc"
+    (cd "$tmp" && roc bundle --output-dir "$tmp/serve" main.roc)
+    bundle=$(basename "$tmp"/serve/*.tar.zst)
+    # no `roc uninstall` exists, and reinstalling the same shorthand from a
+    # different URL is a hard error, so drop this compiler version's entry
+    version=$(roc version | awk '{print $NF}')
+    rm -rf "${ROC_INSTALL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/roc}/$version/rust_glue"
+    python3 -u -m http.server 0 --bind 127.0.0.1 --directory "$tmp/serve" >"$tmp/server.log" 2>&1 &
+    server_pid=$!
+    port=""
+    for _ in $(seq 1 50); do
+        port=$(sed -n 's/.*port \([0-9]*\).*/\1/p' "$tmp/server.log" | head -n1)
+        [ -n "$port" ] && break
+        sleep 0.1
+    done
+    [ -n "$port" ] || { echo "http.server did not start"; cat "$tmp/server.log"; exit 1; }
+    roc install rust_glue "http://127.0.0.1:$port/$bundle"
+
+# clean build and test
+[linux]
+test: clean
+    zig build test
+
+[linux]
+clean:
+    git clean -dfx -e justfile -e .sprite -e .claude
+    rm -rf ~/.cache/roc
