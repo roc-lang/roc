@@ -236,22 +236,30 @@ import json.Parser as JP
 
 ### Modules in subdirectories
 
-An uppercase dotted module path maps to source subdirectories when the import has
-an explicit `as` or `exposing` clause. For example:
+Use `/` for source-directory traversal and `.` for types nested inside a
+module. Binding clauses do not change which source file is selected. For
+example:
 
 ```roc
-import Src.Widget as Widget
-import Internal.Http.Client exposing [send]
+import Src/Widget as Widget
+import Internal/Http/Client exposing [send]
 ```
 
-These imports load `Src/Widget.roc` and `Internal/Http/Client.roc`,
-respectively, relative to the directory containing the importing `.roc` file.
-The source-visible module name is the final path segment, so `Src/Widget.roc`
-defines the nominal type `Widget`.
+These imports load `Src/Widget.roc` and `Internal/Http/Client.roc`, respectively,
+relative to the importing file. A bare target and a target beginning with `./`
+use that base; `../` moves toward the package root, and a leading `/` starts at
+the package root:
 
-The explicit clause disambiguates a directory path from a nested type import.
-Without one, `import Url.ParseErr` imports the nested `ParseErr` type from
-`Url.roc`; it does not load `Url/ParseErr.roc`.
+```roc
+import Helper
+import ./Internal/Parser
+import ../Shared/Codec
+import /Public/Api
+```
+
+In every form, a dot begins nested-type selection. `import Url.ParseErr` loads
+`Url.roc` and imports `ParseErr`; `import Url/ParseErr` loads
+`Url/ParseErr.roc`. Adding `as` or `exposing` never changes that distinction.
 
 A package can expose a module stored in a subdirectory by naming its import
 alias in the package header:
@@ -259,8 +267,19 @@ alias in the package header:
 ```roc
 package [Widget] {}
 
-import Src.Widget as Widget
+import Src/Widget as Widget
 ```
+
+Package-qualified imports use one dot after the lowercase package alias, then
+the public module name. Further dots select nested types:
+
+```roc
+import json.Parser
+import json.Parser.ParseErr as PE
+```
+
+Directory traversal is private to the package that declares the public module;
+consumers use its public name rather than its internal source path.
 
 ### Importing types from packages
 
@@ -512,6 +531,34 @@ app [main!] {
     json: "../json/main.roc"
 }
 ```
+
+### Pinning a Roc version
+
+Any app, package or platform header may pin the version of the Roc compiler it
+is written for, using the reserved `roc` entry in its packages record:
+
+```roc
+app [main!] {
+    pf: platform "../basic-cli/main.roc",
+    roc: "nightly-2026-July-31-123c5d7"
+}
+```
+
+This is optional. When present, the value must be a version string of the kind
+`roc version` prints: either a nightly tag such as
+`nightly-2026-July-31-123c5d7` or a release version such as `0.1.0`. Because
+`roc` names the compiler version, it cannot also be used as the shorthand for a
+platform or package.
+
+Compiling a file whose pin names a different compiler than the one you are
+running reports a warning; it does not stop the build.
+
+`roc fmt` keeps a pinned nightly up to date: when the compiler running it is a
+nightly at least as new as the pin, it rewrites the pin to name that compiler.
+A pinned release version is left alone, since pinning a release is a deliberate
+choice rather than a snapshot of whatever nightly was current. Because this is
+part of formatting, `roc fmt --check` reports a file whose nightly pin is out
+of date as needing formatting.
 
 ### Nominal type identity across packages
 

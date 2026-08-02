@@ -309,7 +309,7 @@ Numbers cannot have leading zeros.
     Imports must name a mod, optionally with a qualifier and exposing list.
 
     For example:
-        import Json.Decode exposing [decode]
+        import Json/Decode exposing [decode]
 
     I found `import` here.
     That word is reserved by Roc, so it cannot be used as a name in this

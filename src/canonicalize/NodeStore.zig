@@ -492,7 +492,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 86;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 87;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 56;
 /// Count of the statement nodes in the ModuleEnv
@@ -4669,6 +4669,11 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             node.tag = .diag_module_header_deprecated;
             region = r.region;
         },
+        .roc_version_mismatch => |r| {
+            node.tag = .diag_roc_version_mismatch;
+            region = r.region;
+            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.pinned), .ident2 = @bitCast(r.running) } });
+        },
         .redundant_expose_main_type => |r| {
             node.tag = .diag_redundant_expose_main_type;
             region = r.region;
@@ -5230,6 +5235,14 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_module_header_deprecated => return CIR.Diagnostic{ .module_header_deprecated = .{
             .region = store.getRegionAt(node_idx),
         } },
+        .diag_roc_version_mismatch => {
+            const p = payload.diag_two_idents;
+            return CIR.Diagnostic{ .roc_version_mismatch = .{
+                .pinned = @bitCast(p.ident1),
+                .running = @bitCast(p.ident2),
+                .region = store.getRegionAt(node_idx),
+            } };
+        },
         .diag_redundant_expose_main_type => {
             const p = payload.diag_two_idents;
             return CIR.Diagnostic{ .redundant_expose_main_type = .{

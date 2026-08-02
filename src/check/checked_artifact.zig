@@ -2457,18 +2457,7 @@ fn isHostedProcedureExpr(expr: CIR.Expr) bool {
 }
 
 fn intrinsicForProcedureDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?IntrinsicId {
-    const def = module.def(def_idx);
-    const expr_ident = switch (def.expr.data) {
-        .e_anno_only => |anno| anno.ident,
-        else => return null,
-    };
-    const env = module.moduleEnvConst();
-    if (!can.BuiltinLowLevel.isBuiltinModule(env) or
-        !can.BuiltinLowLevel.isIntrinsicAnnotation(env, expr_ident))
-    {
-        return null;
-    }
-    return can.BuiltinLowLevel.intrinsicAnnotation(env, expr_ident);
+    return static_dispatch.intrinsicForProcedureDef(module, def_idx);
 }
 
 fn iteratorProcedureForDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?IteratorProcedureId {
@@ -7947,6 +7936,7 @@ test "checked artifact builtin nominal categorization requires explicit builtin 
     const empty_nested_proc_sites = NestedProcSiteTable{};
     const empty_static_dispatch_plans = static_dispatch.StaticDispatchPlanTable{};
     const empty_hosted_procs = HostedProcTable{};
+    const empty_hosted_bindings = HostedBindingTable{};
     const empty_exported_procedure_templates = ExportedProcedureTemplateTable{};
     const empty_exported_procedure_bindings = ExportedProcedureBindingTable{};
     const empty_exported_const_templates = ExportedConstTemplateTable{};
@@ -7980,6 +7970,7 @@ test "checked artifact builtin nominal categorization requires explicit builtin 
         .nested_proc_sites = &empty_nested_proc_sites,
         .static_dispatch_plans = &empty_static_dispatch_plans,
         .hosted_procs = &empty_hosted_procs,
+        .hosted_bindings = &empty_hosted_bindings,
         .exported_procedure_templates = empty_exported_procedure_templates.view(),
         .exported_procedure_bindings = empty_exported_procedure_bindings.view(),
         .exported_const_templates = empty_exported_const_templates.view(),
@@ -16698,9 +16689,9 @@ pub const ProcTarget = union(enum) {
 };
 
 /// Checker-owned capability for adapting a hosted function whose exact
-/// `Builtin.Try` result is requested with a wider error row. The nominal,
-/// tags, and type argument positions are explicit so postcheck never recognizes
-/// Try by names or backing shape.
+/// `Builtin.Try` result has a closed structural error row and is requested with
+/// a wider error row. The nominal, tags, and type argument positions are
+/// explicit so postcheck never recognizes Try by names or backing shape.
 pub const HostedTryAdapterCapability = struct {
     nominal: canonical.NominalTypeKey,
     ok_tag: canonical.TagLabelId,
@@ -16733,6 +16724,82 @@ pub const CheckedProcedureTemplate = struct {
     /// specialization of this template receives one evidence entry per param.
     evidence_params: artifact_serialize.Span = .{},
 };
+
+fn checkedTypeIsClosedTagRow(
+    checked_types: *const CheckedTypeStore,
+    root: CheckedTypeId,
+) bool {
+    var remaining = checked_types.payloads.items.len;
+    var current = root;
+    while (true) {
+        switch (checked_types.payload(current)) {
+            .alias => |alias| current = alias.backing,
+            .tag_union => |tag_union| current = tag_union.ext,
+            .empty_tag_union => return true,
+            .flex, .rigid => |variable| return variable.row_default == .empty_tag_union,
+            else => return false,
+        }
+        if (remaining == 0) {
+            checkedArtifactInvariant("hosted Try error row chain was cyclic", .{});
+        }
+        remaining -= 1;
+    }
+}
+
+test "hosted Try adapter capability recognizes only closed structural error rows" {
+    const allocator = std.testing.allocator;
+
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+
+    const empty_row = try store.appendSyntheticPayloadRoot(allocator, &names, .empty_tag_union);
+    const non_row = try store.appendSyntheticPayloadRoot(allocator, &names, .empty_record);
+    const open_tail = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(105), true);
+    try store.fillSyntheticTypeRoot(allocator, open_tail, .{ .flex = .{} });
+    const defaulted_tail = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(106), true);
+    try store.fillSyntheticTypeRoot(allocator, defaulted_tail, .{ .flex = .{ .row_default = .empty_tag_union } });
+
+    const error_tag = try names.internTagLabel("HostErr");
+    const closed_tags = try allocator.alloc(CheckedTagBuild, 1);
+    closed_tags[0] = .{ .name = error_tag };
+    const closed_row = try store.appendSyntheticPayloadRoot(allocator, &names, .{ .tag_union = .{
+        .tags = closed_tags,
+        .ext = empty_row,
+    } });
+
+    const open_tags = try allocator.alloc(CheckedTagBuild, 1);
+    open_tags[0] = .{ .name = error_tag };
+    const open_row = try store.appendSyntheticPayloadRoot(allocator, &names, .{ .tag_union = .{
+        .tags = open_tags,
+        .ext = open_tail,
+    } });
+
+    const defaulted_tags = try allocator.alloc(CheckedTagBuild, 1);
+    defaulted_tags[0] = .{ .name = error_tag };
+    const defaulted_row = try store.appendSyntheticPayloadRoot(allocator, &names, .{ .tag_union = .{
+        .tags = defaulted_tags,
+        .ext = defaulted_tail,
+    } });
+
+    const alias_name = try names.internTypeName("HostErrors");
+    const module_identity = try names.internModuleIdentity(&([_]u8{0x69} ** 32));
+    const aliased_row = try store.appendSyntheticPayloadRoot(allocator, &names, .{ .alias = .{
+        .name = alias_name,
+        .origin_module = module_identity,
+        .owner_module = testCheckedModuleKey(105),
+        .backing = closed_row,
+    } });
+
+    try std.testing.expect(checkedTypeIsClosedTagRow(&store, empty_row));
+    try std.testing.expect(checkedTypeIsClosedTagRow(&store, closed_row));
+    try std.testing.expect(checkedTypeIsClosedTagRow(&store, defaulted_row));
+    try std.testing.expect(checkedTypeIsClosedTagRow(&store, aliased_row));
+    try std.testing.expect(!checkedTypeIsClosedTagRow(&store, open_row));
+    try std.testing.expect(!checkedTypeIsClosedTagRow(&store, non_row));
+}
 
 fn hostedTryAdapterCapabilityForRoot(
     module: TypedCIR.Module,
@@ -16770,6 +16837,7 @@ fn hostedTryAdapterCapabilityForRoot(
     if (nominal.args.len != 2) {
         checkedArtifactInvariant("Builtin.Try checked type did not have exactly two type arguments", .{});
     }
+    if (!checkedTypeIsClosedTagRow(checked_types, nominal.args[1])) return null;
     const idents = module.commonIdents();
     return .{
         .nominal = checkedNominalTypeKey(nominal),
@@ -17560,7 +17628,7 @@ pub const HostedProcTable = struct {
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
-        global_value_defs: []const CIR.Def.Idx,
+        hosted_defs: []const CIR.Def.Idx,
         names: *canonical.CanonicalNameStore,
         templates: *const CheckedProcedureTemplateTable,
     ) Allocator.Error!HostedProcTable {
@@ -17575,7 +17643,7 @@ pub const HostedProcTable = struct {
         var order_key_bytes = std.ArrayList(u8).empty;
         errdefer order_key_bytes.deinit(allocator);
 
-        for (global_value_defs) |def_idx| {
+        for (hosted_defs) |def_idx| {
             const def = module.def(def_idx);
             switch (def.expr.data) {
                 .e_hosted_lambda => |hosted| {
@@ -17661,6 +17729,80 @@ pub const HostedProcTable = struct {
     pub fn deinit(self: *HostedProcTable, allocator: Allocator) void {
         allocator.free(self.procs);
         allocator.free(@constCast(self.order_key_bytes));
+        self.* = .{};
+    }
+};
+
+/// One platform-header hosted binding. Slice order is the host dispatch index.
+pub const HostedBinding = struct {
+    target_checked_module: CheckedModuleArtifactKey,
+    target_def: CIR.Def.Idx,
+    external_symbol_name: canonical.ExternalSymbolNameId,
+};
+
+/// Exact platform-header bindings from external symbols to checked hosted defs.
+pub const HostedBindingTable = struct {
+    bindings: []HostedBinding = &.{},
+
+    pub const Serialized = extern struct {
+        bindings: SerializedSlice(HostedBinding) = .{},
+        const Serde = artifact_serialize.SliceStoreSerde(HostedBindingTable, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
+    };
+
+    pub fn fromModule(
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        names: *canonical.CanonicalNameStore,
+        imports: []const PublishImportArtifact,
+    ) Allocator.Error!HostedBindingTable {
+        if (module.moduleEnvConst().module_kind != .platform) return .{};
+
+        var bindings = std.ArrayList(HostedBinding).empty;
+        errdefer bindings.deinit(allocator);
+
+        const Target = struct {
+            module_idx: u32,
+            def: CIR.Def.Idx,
+        };
+        var hosted_targets = std.AutoHashMap(Target, usize).init(allocator);
+        defer hosted_targets.deinit();
+        var hosted_target_count: usize = 0;
+        for (imports) |imported| hosted_target_count += imported.view.hosted_procs.procs.len;
+        try hosted_targets.ensureTotalCapacity(@intCast(hosted_target_count));
+        for (imports, 0..) |imported, import_index| {
+            for (imported.view.hosted_procs.procs) |proc| {
+                hosted_targets.putAssumeCapacityNoClobber(.{
+                    .module_idx = imported.module_idx,
+                    .def = proc.def_idx,
+                }, import_index);
+            }
+        }
+
+        for (module.moduleEnvConst().hosted_entries.items.items) |entry| {
+            if (entry.target_status != .resolved) continue;
+            const import_idx = entry.target_import orelse continue;
+            const target_def = entry.target_def orelse continue;
+            const resolved_module_idx = module.resolvedImportModule(import_idx) orelse continue;
+            const import_index = hosted_targets.get(.{
+                .module_idx = resolved_module_idx,
+                .def = target_def,
+            }) orelse continue;
+            const imported = imports[import_index];
+
+            try bindings.append(allocator, .{
+                .target_checked_module = imported.key,
+                .target_def = target_def,
+                .external_symbol_name = try names.internExternalSymbolName(module.moduleEnvConst().getString(entry.symbol)),
+            });
+        }
+
+        return .{ .bindings = try bindings.toOwnedSlice(allocator) };
+    }
+
+    pub fn deinit(self: *HostedBindingTable, allocator: Allocator) void {
+        allocator.free(self.bindings);
         self.* = .{};
     }
 };
@@ -18862,7 +19004,7 @@ fn checkedDispatchPlanNeedsRelation(
     return switch (plan.resolution) {
         .direct_closed, .direct_parametric => |direct| switch (plans.evidenceNode(direct.evidence).target.kind) {
             .procedure => |procedure| switch (procedure.runtime_target) {
-                .graph_participating => true,
+                .graph_participating, .intrinsic => true,
                 .procedure, .low_level => false,
             },
             .local_proc => false,
@@ -19241,29 +19383,9 @@ fn collectResolvedDispatchTargetSubstitutions(
                     conflicts,
                 );
             }
-            if (!target_nominal.is_opaque) {
-                const target_backing = (try store.ensureInstantiatedNominalBackingRootForPayload(
-                    allocator,
-                    names,
-                    target_nominal_copy,
-                )) orelse return;
-                const plan_backing = (try store.ensureInstantiatedNominalBackingRootForPayload(
-                    allocator,
-                    names,
-                    plan_nominal_copy,
-                )) orelse return;
-                try collectResolvedDispatchTargetSubstitutions(
-                    allocator,
-                    names,
-                    store,
-                    target_backing,
-                    plan_backing,
-                    formals,
-                    actuals,
-                    active,
-                    conflicts,
-                );
-            }
+            // Matching nominal applications are completely related by their
+            // arguments. Their shared declaration backing is representation
+            // data and is opened only for nominal-versus-structural relations.
         },
         .tuple => |target_items| {
             const plan_items = switch (plan_payload) {
@@ -19561,28 +19683,9 @@ fn collectDispatchPlanIdentitySubstitutions(
                     active,
                 );
             }
-            if (!target_nominal.is_opaque) {
-                const target_backing = (try store.ensureInstantiatedNominalBackingRootForPayload(
-                    allocator,
-                    names,
-                    target_nominal_copy,
-                )) orelse return;
-                const plan_backing = (try store.ensureInstantiatedNominalBackingRootForPayload(
-                    allocator,
-                    names,
-                    plan_nominal_copy,
-                )) orelse return;
-                try collectDispatchPlanIdentitySubstitutions(
-                    allocator,
-                    names,
-                    store,
-                    target_backing,
-                    plan_backing,
-                    formals,
-                    actuals,
-                    active,
-                );
-            }
+            // Matching nominal applications are completely related by their
+            // arguments. Their shared declaration backing is representation
+            // data and is opened only for nominal-versus-structural relations.
         },
         .tuple => |target_items| {
             const plan_items = switch (plan_payload) {
@@ -25822,6 +25925,7 @@ pub const CheckedModuleArtifact = struct {
     callable_eval_templates: CallableEvalTemplateTable = .{},
     root_requests: RootRequestTable,
     hosted_procs: HostedProcTable,
+    hosted_bindings: HostedBindingTable = .{},
     platform_required_declarations: PlatformRequiredDeclarationTable,
     platform_requirement_relations: PlatformRequirementRelationTable = .{},
     platform_requirement_solutions: PlatformRequirementSolutionTable = .{},
@@ -25985,6 +26089,7 @@ pub const CheckedModuleArtifact = struct {
         callable_eval_templates: CallableEvalTemplateTable.Serialized,
         root_requests: RootRequestTable.Serialized,
         hosted_procs: HostedProcTable.Serialized,
+        hosted_bindings: HostedBindingTable.Serialized,
         platform_required_declarations: PlatformRequiredDeclarationTable.Serialized,
         platform_requirement_relations: PlatformRequirementRelationTable.Serialized,
         platform_requirement_solutions: PlatformRequirementSolutionTable.Serialized,
@@ -26016,7 +26121,7 @@ pub const CheckedModuleArtifact = struct {
             // `proc_bases`; `checked_types` includes its `var_names` interner = 3).
             // POD inline `key`/`module_identity` contribute 0. Fixed at compile time,
             // independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 203);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 204);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -26057,6 +26162,7 @@ pub const CheckedModuleArtifact = struct {
             try self.callable_eval_templates.serialize(&artifact.callable_eval_templates, gpa, writer);
             try self.root_requests.serialize(&artifact.root_requests, gpa, writer);
             try self.hosted_procs.serialize(&artifact.hosted_procs, gpa, writer);
+            try self.hosted_bindings.serialize(&artifact.hosted_bindings, gpa, writer);
             try self.platform_required_declarations.serialize(&artifact.platform_required_declarations, gpa, writer);
             try self.platform_requirement_relations.serialize(&artifact.platform_requirement_relations, gpa, writer);
             try self.platform_requirement_solutions.serialize(&artifact.platform_requirement_solutions, gpa, writer);
@@ -26147,6 +26253,7 @@ pub const CheckedModuleArtifact = struct {
                 .callable_eval_templates = self.callable_eval_templates.deserialize(base_addr),
                 .root_requests = self.root_requests.deserialize(base_addr),
                 .hosted_procs = self.hosted_procs.deserialize(base_addr),
+                .hosted_bindings = self.hosted_bindings.deserialize(base_addr),
                 .platform_required_declarations = self.platform_required_declarations.deserialize(base_addr),
                 .platform_requirement_relations = self.platform_requirement_relations.deserialize(base_addr),
                 .platform_requirement_solutions = self.platform_requirement_solutions.deserialize(base_addr),
@@ -26164,7 +26271,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 50;
+    const serialized_layout_version: u32 = 51;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -26262,6 +26369,7 @@ pub const CheckedModuleArtifact = struct {
         self.platform_requirement_solutions.deinit(allocator);
         self.platform_requirement_relations.deinit(allocator);
         self.platform_required_declarations.deinit(allocator);
+        self.hosted_bindings.deinit(allocator);
         self.hosted_procs.deinit(allocator);
         self.root_requests.deinit(allocator);
         self.callable_eval_templates.deinit(allocator);
@@ -26767,11 +26875,83 @@ pub const CheckedModuleArtifact = struct {
         return null;
     }
 
+    /// Verify the producer-authored runtime category for every method whose
+    /// checked template is an annotation-only intrinsic wrapper. This runs only
+    /// from the debug artifact verifier; release consumers trust the serialized
+    /// category without repeating the classification work.
+    fn verifyMethodIntrinsicRuntimeTargets(self: *const CheckedModuleArtifact) void {
+        for (self.method_registry.entries, 0..) |entry, entry_index| {
+            const procedure = switch (entry.target.kind) {
+                .procedure => |procedure| procedure,
+                .local_proc, .structural => continue,
+            };
+            if (!std.meta.eql(procedure.template.artifact.bytes, self.key.bytes)) {
+                std.debug.panic(
+                    "checked artifact invariant violated: method registry procedure {d} referenced a foreign checked template",
+                    .{entry_index},
+                );
+            }
+            const template_index = @intFromEnum(procedure.template.template);
+            if (template_index >= self.checked_procedure_templates.templates.len) {
+                std.debug.panic(
+                    "checked artifact invariant violated: method registry procedure {d} referenced a missing checked template",
+                    .{entry_index},
+                );
+            }
+            const template = self.checked_procedure_templates.templates[template_index];
+            const template_intrinsic: ?IntrinsicId = switch (template.body) {
+                .intrinsic_wrapper => |wrapper_id| blk: {
+                    const wrapper_index = @intFromEnum(wrapper_id);
+                    if (wrapper_index >= self.intrinsic_wrappers.wrappers.len) {
+                        std.debug.panic(
+                            "checked artifact invariant violated: method registry procedure {d} referenced a missing intrinsic wrapper",
+                            .{entry_index},
+                        );
+                    }
+                    const wrapper = self.intrinsic_wrappers.wrappers[wrapper_index];
+                    if (wrapper.template.template != procedure.template.template) {
+                        std.debug.panic(
+                            "checked artifact invariant violated: method registry procedure {d} referenced the wrong intrinsic wrapper template",
+                            .{entry_index},
+                        );
+                    }
+                    break :blk wrapper.intrinsic;
+                },
+                .checked_body, .entry_wrapper => null,
+            };
+
+            switch (procedure.runtime_target) {
+                .intrinsic => |runtime_intrinsic| {
+                    if (runtime_intrinsic.callsiteArity() == null or
+                        template_intrinsic == null or
+                        template_intrinsic.? != runtime_intrinsic)
+                    {
+                        std.debug.panic(
+                            "checked artifact invariant violated: method registry procedure {d} had inconsistent call-site intrinsic metadata",
+                            .{entry_index},
+                        );
+                    }
+                },
+                .procedure, .low_level, .graph_participating => {
+                    if (template_intrinsic) |intrinsic| {
+                        if (intrinsic.callsiteArity() != null) {
+                            std.debug.panic(
+                                "checked artifact invariant violated: method registry procedure {d} lost its call-site intrinsic runtime target",
+                                .{entry_index},
+                            );
+                        }
+                    }
+                },
+            }
+        }
+    }
+
     pub fn verifyComplete(self: *const CheckedModuleArtifact) Allocator.Error!void {
         if (builtin.mode != .Debug) return;
 
         std.debug.assert(self.module_identity.module_idx != std.math.maxInt(u32));
         verifyRootRequestSubsets(self.root_requests);
+        self.verifyMethodIntrinsicRuntimeTargets();
 
         if (self.validateDispatchEvidence()) |failure| {
             const expr_idx: ?u32 = if (failure.expr) |expr| @intFromEnum(expr) else null;
@@ -27331,6 +27511,7 @@ pub const ImportedModuleView = struct {
     nested_proc_sites: *const NestedProcSiteTable,
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     hosted_procs: *const HostedProcTable,
+    hosted_bindings: *const HostedBindingTable,
     exported_procedure_templates: ExportedProcedureTemplateView,
     exported_procedure_bindings: ExportedProcedureBindingView,
     exported_const_templates: ExportedConstTemplateView,
@@ -27377,6 +27558,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .nested_proc_sites = &artifact.nested_proc_sites,
         .static_dispatch_plans = &artifact.static_dispatch_plans,
         .hosted_procs = &artifact.hosted_procs,
+        .hosted_bindings = &artifact.hosted_bindings,
         .exported_procedure_templates = artifact.exported_procedure_templates.view(),
         .exported_procedure_bindings = artifact.exported_procedure_bindings.view(),
         .exported_const_templates = artifact.exported_const_templates.view(),
@@ -28917,8 +29099,17 @@ pub fn publishFromTypedModule(
     checked_bodies.attachQuotePlans(&static_dispatch_plans);
     checked_bodies.attachIteratorForPlans(&static_dispatch_plans);
 
-    var hosted_procs = try HostedProcTable.fromModule(allocator, module, global_value_defs, &canonical_names, &checked_procedure_templates);
+    var hosted_procs = try HostedProcTable.fromModule(
+        allocator,
+        module,
+        module_env.store.sliceDefs(module_env.hosted_defs),
+        &canonical_names,
+        &checked_procedure_templates,
+    );
     errdefer hosted_procs.deinit(allocator);
+
+    var hosted_bindings = try HostedBindingTable.fromModule(allocator, module, &canonical_names, inputs.imports);
+    errdefer hosted_bindings.deinit(allocator);
 
     var platform_required_bindings = try PlatformRequiredBindingTable.fromRelation(
         allocator,
@@ -29334,6 +29525,7 @@ pub fn publishFromTypedModule(
         .callable_eval_templates = callable_eval_templates,
         .root_requests = root_requests,
         .hosted_procs = hosted_procs,
+        .hosted_bindings = hosted_bindings,
         .platform_required_declarations = platform_required_declarations,
         .platform_requirement_relations = platform_requirement_relations,
         .platform_requirement_solutions = platform_requirement_solutions,
@@ -29422,6 +29614,7 @@ fn expectProvidedExportKind(
     const empty_nested_proc_sites = NestedProcSiteTable{};
     const empty_static_dispatch_plans = static_dispatch.StaticDispatchPlanTable{};
     const empty_hosted_procs = HostedProcTable{};
+    const empty_hosted_bindings = HostedBindingTable{};
     const empty_exported_procedure_templates = ExportedProcedureTemplateTable{};
     const empty_exported_procedure_bindings = ExportedProcedureBindingTable{};
     const empty_exported_const_templates = ExportedConstTemplateTable{};
@@ -29491,6 +29684,7 @@ fn expectProvidedExportKind(
         .nested_proc_sites = &empty_nested_proc_sites,
         .static_dispatch_plans = &empty_static_dispatch_plans,
         .hosted_procs = &empty_hosted_procs,
+        .hosted_bindings = &empty_hosted_bindings,
         .exported_procedure_templates = empty_exported_procedure_templates.view(),
         .exported_procedure_bindings = empty_exported_procedure_bindings.view(),
         .exported_const_templates = empty_exported_const_templates.view(),
@@ -29594,7 +29788,13 @@ fn expectProvidedExportKind(
     checked_bodies.attachQuotePlans(&static_dispatch_plans);
     checked_bodies.attachIteratorForPlans(&static_dispatch_plans);
 
-    var hosted_procs = try HostedProcTable.fromModule(allocator, module, global_value_defs, &canonical_names, &checked_procedure_templates);
+    var hosted_procs = try HostedProcTable.fromModule(
+        allocator,
+        module,
+        module_env.store.sliceDefs(module_env.hosted_defs),
+        &canonical_names,
+        &checked_procedure_templates,
+    );
     defer hosted_procs.deinit(allocator);
 
     var platform_requirement_relations = try PlatformRequirementRelationTable.fromRelation(
@@ -29868,6 +30068,7 @@ test "checked module owns post-check inputs at the checked boundary" {
     try std.testing.expect(@hasField(CheckedModuleArtifact, "callable_eval_templates"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "root_requests"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "hosted_procs"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "hosted_bindings"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "platform_required_declarations"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "platform_required_bindings"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "compile_time_roots"));
@@ -30534,6 +30735,7 @@ test "transform-A stores: serialize/deserialize round-trip preserves every slice
     try expectAllSliceStoreRoundTrips(NestedProcSiteTable); // transform-B: now POD after side-list conversion
     try expectAllSliceStoreRoundTrips(ModuleInterfaceCapabilities); // transform-B: args moved to shared pool
     try expectAllSliceStoreRoundTrips(HostedProcTable); // transform-B: order_key moved to byte pool
+    try expectAllSliceStoreRoundTrips(HostedBindingTable);
 }
 
 fn testCheckedArtifactKey(byte: u8) CheckedModuleArtifactKey {
@@ -30597,6 +30799,7 @@ fn testVisibilityImportedView(
         .nested_proc_sites = undefined,
         .static_dispatch_plans = undefined,
         .hosted_procs = undefined,
+        .hosted_bindings = undefined,
         .exported_procedure_templates = undefined,
         .exported_procedure_bindings = undefined,
         .exported_const_templates = undefined,
@@ -31405,8 +31608,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x1B, 0x11, 0xD9, 0x21, 0xB5, 0xDB, 0x30, 0xCD, 0x8C, 0x5D, 0x84, 0x29, 0xC2, 0x54, 0xA7, 0x63,
-        0x71, 0x09, 0x85, 0x3F, 0x4B, 0xF1, 0x58, 0x2C, 0xF1, 0x29, 0x0F, 0x21, 0xA9, 0x6D, 0x15, 0x86,
+        0xB5, 0xCC, 0xBB, 0x44, 0x7C, 0xAB, 0xBD, 0xD4, 0xCD, 0xCC, 0x90, 0x8C, 0xA9, 0x7E, 0x0B, 0x63,
+        0x5C, 0xCE, 0x5C, 0xD1, 0xA0, 0xBB, 0xFD, 0x14, 0x5B, 0x4C, 0xB0, 0xB2, 0x39, 0xFA, 0xDB, 0xC3,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

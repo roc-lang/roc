@@ -25,7 +25,9 @@ pub const ModuleId = u32;
 
 /// Information about a discovered local import during canonicalization
 pub const DiscoveredLocalImport = struct {
-    /// The module name (e.g., "Foo")
+    /// Exact source target used by canonicalization (e.g. "../Shared/Foo").
+    import_name: []const u8,
+    /// Package-root-relative logical module path (e.g. "Shared/Foo").
     module_name: []const u8,
     /// The resolved filesystem path
     path: []const u8,
@@ -69,6 +71,8 @@ pub const ParseTask = struct {
     /// the module is staged elsewhere (e.g. a default app written to a temp dir),
     /// so sibling imports resolve against the user's original directory.
     source_dir: []const u8,
+    /// Package source root used for leading `/` and parent-bound checks.
+    package_root: []const u8,
     /// Compiler role for this source module
     module_role: ModuleEnv.ModuleRole,
     /// Dependency depth from root
@@ -202,6 +206,8 @@ pub const ParsedResult = struct {
     discovered_local_imports: std.ArrayList(DiscoveredLocalImport),
     /// Discovered external imports (cross-package qualified imports)
     discovered_external_imports: std.ArrayList(DiscoveredExternalImport),
+    /// True when lexical import resolution rejected a target before any file access.
+    import_resolution_failed: bool,
     /// Any reports generated during parsing
     reports: std.ArrayList(Report),
     /// Timing: nanoseconds spent parsing
@@ -417,6 +423,7 @@ pub const WorkerResult = union(enum) {
         switch (self.*) {
             .parsed => |*r| {
                 for (r.discovered_local_imports.items) |imp| {
+                    gpa.free(imp.import_name);
                     gpa.free(imp.module_name);
                     gpa.free(imp.path);
                 }
@@ -430,6 +437,7 @@ pub const WorkerResult = union(enum) {
             },
             .canonicalized => |*r| {
                 for (r.discovered_local_imports.items) |imp| {
+                    gpa.free(imp.import_name);
                     gpa.free(imp.module_name);
                     gpa.free(imp.path);
                 }
@@ -487,6 +495,7 @@ test "WorkerTask accessors" {
             .module_name = "Main",
             .path = "/path/to/Main.roc",
             .source_dir = "/path/to",
+            .package_root = "/path/to",
             .depth = 0,
             .module_role = .user,
         },
@@ -511,6 +520,7 @@ test "WorkerResult accessors" {
             .cached_ast = undefined,
             .discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty,
             .discovered_external_imports = std.ArrayList(DiscoveredExternalImport).empty,
+            .import_resolution_failed = false,
             .reports = reports,
             .parse_ns = 1000,
         },

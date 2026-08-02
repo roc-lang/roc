@@ -113,6 +113,9 @@ pub const Options = struct {
     loaded_specialization_shards: []const LoadedSpecializationShard = &.{},
     /// Optional deterministic counters for specialization-shape tests.
     specialization_counters: ?*SpecializationCounters = null,
+    /// Optional deterministic workload diagnostics. The checked pipeline
+    /// supplies this only for detailed `--timings` reporting.
+    diagnostics: ?*Diagnostics = null,
     /// Whether inline expects should be lowered at all. Optimized runtime builds
     /// omit them before their conditions can affect control-flow decisions.
     inline_expects: InlineExpectMode = .run,
@@ -339,6 +342,44 @@ const BodyWorkTimingScope = struct {
 /// Deterministic counters used by specialization-shape tests.
 pub const SpecializationCounters = specialize.Counters;
 
+/// Deterministic counts for body-context, type-instantiation, and call work.
+pub const BodyDiagnostics = struct {
+    graphs_created: u64 = 0,
+    body_contexts_created: u64 = 0,
+    checked_node_requests: u64 = 0,
+    checked_node_cache_hits: u64 = 0,
+    checked_node_cache_misses: u64 = 0,
+    fresh_checked_node_requests: u64 = 0,
+    call_expressions: u64 = 0,
+    dispatch_expressions: u64 = 0,
+    expr_relation_requests: u64 = 0,
+    argument_spans_prepared: u64 = 0,
+    arguments_prepared: u64 = 0,
+    nested_callable_checks: u64 = 0,
+    nested_lambdas_prepared: u64 = 0,
+    nested_closures_prepared: u64 = 0,
+};
+
+/// Deterministic Monotype workload counts. These diagnose how much exact
+/// instantiation and call preparation occurred; they never affect lowering.
+pub const Diagnostics = struct {
+    specialization: SpecializationCounters = .{},
+    graph: solve.GraphDiagnostics = .{},
+    body: BodyDiagnostics = .{},
+
+    pub fn add(self: *Diagnostics, other: Diagnostics) void {
+        addFlatCounters(SpecializationCounters, &self.specialization, other.specialization);
+        addFlatCounters(solve.GraphDiagnostics, &self.graph, other.graph);
+        addFlatCounters(BodyDiagnostics, &self.body, other.body);
+    }
+};
+
+fn addFlatCounters(comptime T: type, destination: *T, source: T) void {
+    inline for (std.meta.fields(T)) |field| {
+        @field(destination, field.name) = @field(destination, field.name) +| @field(source, field.name);
+    }
+}
+
 /// Lower checked modules and explicit roots into Monotype IR.
 pub fn run(
     allocator: Allocator,
@@ -422,6 +463,7 @@ const ModuleView = struct {
     entry_wrappers: *const checked.EntryWrapperTable,
     intrinsic_wrappers: *const checked.IntrinsicWrapperTable,
     hosted_procs: *const checked.HostedProcTable,
+    hosted_bindings: *const checked.HostedBindingTable,
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     method_registry: *const static_dispatch.MethodRegistry,
     method_lookup_scope: []const checked.ModuleId,
@@ -897,6 +939,13 @@ const GraphHostedTryInfo = struct {
     err: NodeId,
 };
 
+const GraphHostedTryWidening = struct {
+    public_try: GraphHostedTryInfo,
+    request_try: GraphHostedTryInfo,
+    public_err: []const InstTag,
+    request_err: []const InstTag,
+};
+
 fn graphTagByName(
     tags: []const InstTag,
     name: names.TagNameId,
@@ -928,6 +977,35 @@ fn graphHostedTryInfoOrNull(
     };
 }
 
+fn graphHostedTryWideningOrNull(
+    graph: *InstGraph,
+    capability: HostedTryAdapterCapability,
+    public_ret: NodeId,
+    request_ret: NodeId,
+) Allocator.Error!?GraphHostedTryWidening {
+    const public_try = graphHostedTryInfoOrNull(graph, capability, public_ret) orelse return null;
+    const request_try = graphHostedTryInfoOrNull(graph, capability, request_ret) orelse return null;
+    const public_err = (try graph.tagRowNodesOrNull(public_try.err)) orelse return null;
+    const request_err = (try graph.tagRowNodesOrNull(request_try.err)) orelse return null;
+
+    if (request_err.tags.len < public_err.tags.len) {
+        Common.invariant("hosted Try request removed a declared error label");
+    }
+    for (public_err.tags) |public_tag| {
+        const request_tag = graphTagByName(request_err.tags, public_tag.name) orelse
+            Common.invariant("hosted Try request removed a declared error label");
+        if (public_tag.payloads.len != request_tag.payloads.len) {
+            Common.invariant("hosted Try request changed a declared error payload arity");
+        }
+    }
+    return .{
+        .public_try = public_try,
+        .request_try = request_try,
+        .public_err = public_err.tags,
+        .request_err = request_err.tags,
+    };
+}
+
 /// Relate a hosted request whose `Try` result has additional error labels.
 /// Declared labels and every non-row component remain exact graph relations;
 /// only the request's extra error labels stay outside the checked public row.
@@ -942,29 +1020,15 @@ fn relateHostedTryWidening(
     if (public.args.len != request.args.len) {
         Common.invariant("hosted function request changed arity from its checked interface");
     }
-    const public_try = graphHostedTryInfoOrNull(graph, capability, public.ret) orelse return false;
-    const request_try = graphHostedTryInfoOrNull(graph, capability, request.ret) orelse return false;
-
-    const public_err = (try graph.tagRowNodes(public_try.err)).tags;
-    const request_err = (try graph.tagRowNodes(request_try.err)).tags;
-    if (request_err.len < public_err.len) {
-        Common.invariant("hosted Try request removed a declared error label");
-    }
-    for (public_err) |public_tag| {
-        const request_tag = graphTagByName(request_err, public_tag.name) orelse
-            Common.invariant("hosted Try request removed a declared error label");
-        if (public_tag.payloads.len != request_tag.payloads.len) {
-            Common.invariant("hosted Try request changed a declared error payload arity");
-        }
-    }
-    if (request_err.len == public_err.len) return false;
+    const widening = try graphHostedTryWideningOrNull(graph, capability, public.ret, request.ret) orelse return false;
+    if (widening.request_err.len == widening.public_err.len) return false;
 
     for (public.args, request.args) |public_arg, request_arg| {
         try relateRequestComponent(graph, public_arg, request_arg);
     }
-    try relateRequestComponent(graph, public_try.ok, request_try.ok);
-    for (public_err) |public_tag| {
-        const request_tag = graphTagByName(request_err, public_tag.name) orelse unreachable;
+    try relateRequestComponent(graph, widening.public_try.ok, widening.request_try.ok);
+    for (widening.public_err) |public_tag| {
+        const request_tag = graphTagByName(widening.request_err, public_tag.name) orelse unreachable;
         for (public_tag.payloads, request_tag.payloads) |public_payload, request_payload| {
             try relateRequestComponent(graph, public_payload, request_payload);
         }
@@ -979,22 +1043,8 @@ fn hostedTryWideningRequestHasAdditionalErrors(
     request_ret: NodeId,
 ) Allocator.Error!bool {
     const public = try graph.functionNodes(public_fn);
-    const public_try = graphHostedTryInfoOrNull(graph, capability, public.ret) orelse return false;
-    const request_try = graphHostedTryInfoOrNull(graph, capability, request_ret) orelse return false;
-
-    const public_err = (try graph.tagRowNodes(public_try.err)).tags;
-    const request_err = (try graph.tagRowNodes(request_try.err)).tags;
-    if (request_err.len < public_err.len) {
-        Common.invariant("hosted Try request removed a declared error label");
-    }
-    for (public_err) |public_tag| {
-        const request_tag = graphTagByName(request_err, public_tag.name) orelse
-            Common.invariant("hosted Try request removed a declared error label");
-        if (public_tag.payloads.len != request_tag.payloads.len) {
-            Common.invariant("hosted Try request changed a declared error payload arity");
-        }
-    }
-    return request_err.len > public_err.len;
+    const widening = try graphHostedTryWideningOrNull(graph, capability, public.ret, request_ret) orelse return false;
+    return widening.request_err.len > widening.public_err.len;
 }
 
 fn relateHostedFunctionRequestInterface(
@@ -1384,22 +1434,18 @@ const HostedCatalogEntry = struct {
     external_symbol_name: names.ExternalSymbolNameId,
     dispatch_index: u32,
     order: []const u8,
+    target_checked_module_digest: [32]u8,
     def_idx: u32,
 };
 
-/// The platform header's hosted section, resolved to the same qualified keys
-/// the checked modules' hosted tables sort by ("Module.func" with a trailing `!`
-/// stripped). Section order defines hosted dispatch order, and each entry's
-/// string is the hosted function's linker symbol.
-const HostedSectionMap = struct {
-    keys: []const []const u8,
-    symbols: []const []const u8,
+const HostedProcedureId = struct {
+    checked_module_digest: [32]u8,
+    def_idx: u32,
+};
 
-    fn deinit(self: HostedSectionMap, allocator: Allocator) void {
-        for (self.keys) |key| allocator.free(key);
-        allocator.free(self.keys);
-        allocator.free(self.symbols);
-    }
+const HostedBindingView = struct {
+    table: *const checked.HostedBindingTable,
+    names: *const names.NameStore,
 };
 
 /// Pattern binders are dense IDs allocated by `CheckedBodyStore`, so their
@@ -1826,6 +1872,7 @@ const Builder = struct {
     specialization_cache: SpecializationCacheControl,
     loaded_specialization_shards: []const LoadedSpecializationShard,
     counters: ?*SpecializationCounters,
+    diagnostics: ?*Diagnostics,
     inline_expects: InlineExpectMode,
     static_data_literals: bool,
     target_usize: base.target.TargetUsize,
@@ -1892,8 +1939,10 @@ const Builder = struct {
     evidence_arena: std.heap.ArenaAllocator,
 
     fn init(allocator: Allocator, modules: Common.CheckedModules, program: *Ast.Program, options: Options) Builder {
+        const counters = options.specialization_counters orelse
+            if (options.diagnostics) |diagnostics| &diagnostics.specialization else null;
         var spec_store = specialize.SpecBuilder.init(allocator, &program.names, &program.types, &program.specs);
-        spec_store.counters = options.specialization_counters;
+        spec_store.counters = counters;
         return .{
             .allocator = allocator,
             .modules = modules,
@@ -1902,7 +1951,8 @@ const Builder = struct {
             .proc_debug_names = options.proc_debug_names,
             .specialization_cache = options.specialization_cache,
             .loaded_specialization_shards = options.loaded_specialization_shards,
-            .counters = options.specialization_counters,
+            .counters = counters,
+            .diagnostics = options.diagnostics,
             .inline_expects = options.inline_expects,
             .static_data_literals = options.static_data_literals,
             .target_usize = options.target_usize,
@@ -2023,6 +2073,27 @@ const Builder = struct {
         }
     }
 
+    fn countBodyDiagnostic(self: *Builder, comptime field: []const u8) void {
+        if (self.diagnostics) |diagnostics| {
+            @field(diagnostics.body, field) += 1;
+        }
+    }
+
+    fn countBodyDiagnosticBy(self: *Builder, comptime field: []const u8, amount: usize) void {
+        if (self.diagnostics) |diagnostics| {
+            @field(diagnostics.body, field) += @intCast(amount);
+        }
+    }
+
+    fn createGraph(self: *Builder) Allocator.Error!*InstGraph {
+        const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
+        if (self.diagnostics) |diagnostics| {
+            diagnostics.body.graphs_created += 1;
+            graph.setDiagnostics(&diagnostics.graph);
+        }
+        return graph;
+    }
+
     fn specializationTypeDigest(self: *Builder, ty: Type.TypeId) names.TypeDigest {
         if (self.counters != null) {
             self.count("specialization_type_digest_requests");
@@ -2066,39 +2137,33 @@ const Builder = struct {
             try self.appendHostedCatalogFromView(&entries, moduleView(relation));
         }
 
-        const SortContext = struct {
-            pub fn lessThan(_: void, a: HostedCatalogEntry, b: HostedCatalogEntry) bool {
-                return switch (std.mem.order(u8, a.order, b.order)) {
-                    .lt => true,
-                    .gt => false,
-                    .eq => a.def_idx < b.def_idx,
-                };
+        if (self.hostedBindingView()) |binding_view| {
+            if (entries.items.len != binding_view.table.bindings.len) {
+                Common.invariantFmt(
+                    "platform hosted binding count {d} disagrees with hosted catalog size {d}",
+                    .{ binding_view.table.bindings.len, entries.items.len },
+                );
             }
-        };
-        std.mem.sort(HostedCatalogEntry, entries.items, {}, SortContext.lessThan);
 
-        for (entries.items, 0..) |*entry, index| {
-            entry.dispatch_index = @intCast(index);
-        }
-
-        if (try self.buildHostedSectionMap()) |map| {
-            defer map.deinit(self.allocator);
-
-            // Platform checking already verified the section is total over the
-            // platform's hosted functions and duplicate-free, so every catalog
-            // entry has exactly one section position.
-            if (entries.items.len != map.keys.len) {
-                Common.invariant("platform hosted section disagrees with the hosted catalog size");
+            var entries_by_target = std.AutoHashMap(HostedProcedureId, usize).init(self.allocator);
+            defer entries_by_target.deinit();
+            try entries_by_target.ensureTotalCapacity(@intCast(entries.items.len));
+            for (entries.items, 0..) |entry, index| {
+                entries_by_target.putAssumeCapacityNoClobber(.{
+                    .checked_module_digest = entry.target_checked_module_digest,
+                    .def_idx = entry.def_idx,
+                }, index);
             }
-            for (entries.items) |*entry| {
-                const pos = blk: {
-                    for (map.keys, 0..) |key, key_index| {
-                        if (std.mem.eql(u8, key, entry.order)) break :blk key_index;
-                    }
-                    Common.invariant("hosted function is missing from the platform hosted section");
-                };
-                entry.dispatch_index = @intCast(pos);
-                entry.external_symbol_name = try self.program.names.internExternalSymbolName(map.symbols[pos]);
+
+            for (binding_view.table.bindings, 0..) |binding, dispatch_index| {
+                const entry_index = entries_by_target.get(.{
+                    .checked_module_digest = binding.target_checked_module.bytes,
+                    .def_idx = @intFromEnum(binding.target_def),
+                }) orelse Common.invariant("hosted function is missing from the checked hosted binding table");
+                entries.items[entry_index].dispatch_index = @intCast(dispatch_index);
+                entries.items[entry_index].external_symbol_name = try self.program.names.internExternalSymbolName(
+                    binding_view.names.externalSymbolNameText(binding.external_symbol_name),
+                );
             }
 
             const DispatchSort = struct {
@@ -2107,50 +2172,46 @@ const Builder = struct {
                 }
             };
             std.mem.sort(HostedCatalogEntry, entries.items, {}, DispatchSort.lessThan);
+        } else {
+            const SortContext = struct {
+                pub fn lessThan(_: void, a: HostedCatalogEntry, b: HostedCatalogEntry) bool {
+                    return switch (std.mem.order(u8, a.order, b.order)) {
+                        .lt => true,
+                        .gt => false,
+                        .eq => if (a.def_idx != b.def_idx)
+                            a.def_idx < b.def_idx
+                        else
+                            std.mem.order(u8, &a.target_checked_module_digest, &b.target_checked_module_digest) == .lt,
+                    };
+                }
+            };
+            std.mem.sort(HostedCatalogEntry, entries.items, {}, SortContext.lessThan);
+            for (entries.items, 0..) |*entry, index| {
+                entry.dispatch_index = @intCast(index);
+            }
         }
 
         self.hosted_catalog = try entries.toOwnedSlice(self.allocator);
     }
 
-    /// Find the platform module's hosted section and resolve it to qualified
-    /// keys plus linker symbols. Imported modules can carry platform metadata
-    /// during app checking, but they do not define the hosted dispatch order
-    /// for this lowering pass.
-    fn buildHostedSectionMap(self: *Builder) Allocator.Error!?HostedSectionMap {
-        const platform_env = blk: {
-            const root_env = moduleView(self.root_view).module_env;
-            if (root_env.hosted_entries.items.items.len != 0) break :blk root_env;
-            for (self.modules.root.relation_modules) |relation| {
-                const env = moduleView(relation).module_env;
-                if (env.hosted_entries.items.items.len != 0) break :blk env;
-            }
-            return null;
-        };
-
-        const section = platform_env.hosted_entries.items.items;
-        var keys = try self.allocator.alloc([]const u8, section.len);
-        var key_count: usize = 0;
-        errdefer {
-            for (keys[0..key_count]) |key| self.allocator.free(key);
-            self.allocator.free(keys);
+    fn hostedBindingView(self: *Builder) ?HostedBindingView {
+        const root = moduleView(self.root_view);
+        if (root.module_identity.kind == .platform) {
+            return .{ .table = root.hosted_bindings, .names = root.names };
         }
-        const symbols = try self.allocator.alloc([]const u8, section.len);
-        errdefer self.allocator.free(symbols);
-
-        for (section, 0..) |entry, index| {
-            var func_text = platform_env.getIdentText(entry.func_ident);
-            if (func_text.len > 0 and func_text[func_text.len - 1] == '!') {
-                func_text = func_text[0 .. func_text.len - 1];
+        for (self.modules.imports) |imported| {
+            const view = moduleView(imported);
+            if (view.module_identity.kind == .platform) {
+                return .{ .table = view.hosted_bindings, .names = view.names };
             }
-            keys[index] = if (entry.module_ident) |module_ident|
-                try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ platform_env.getIdentText(module_ident), func_text })
-            else
-                try self.allocator.dupe(u8, func_text);
-            key_count = index + 1;
-            symbols[index] = platform_env.getString(entry.symbol);
         }
-
-        return .{ .keys = keys, .symbols = symbols };
+        for (self.modules.root.relation_modules) |relation| {
+            const view = moduleView(relation);
+            if (view.module_identity.kind == .platform) {
+                return .{ .table = view.hosted_bindings, .names = view.names };
+            }
+        }
+        return null;
     }
 
     fn appendHostedCatalogFromView(self: *Builder, entries: *std.ArrayList(HostedCatalogEntry), view: ModuleView) Allocator.Error!void {
@@ -2160,6 +2221,7 @@ const Builder = struct {
                 .external_symbol_name = try self.program.names.internExternalSymbolName(view.names.externalSymbolNameText(proc.external_symbol_name)),
                 .dispatch_index = 0,
                 .order = proc.orderKey(view.hosted_procs),
+                .target_checked_module_digest = view.key.bytes,
                 .def_idx = @intFromEnum(proc.def_idx),
             });
         }
@@ -2399,7 +2461,7 @@ const Builder = struct {
         } else self.templateRefForProcedureUse(procedure);
         var graph_setup_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
         defer graph_setup_timing_scope.end();
-        const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
+        const graph = try self.createGraph();
         defer graph.destroy();
         const saved_graph = self.active_graph;
         const saved_body_draft = self.active_body_draft;
@@ -2660,7 +2722,7 @@ const Builder = struct {
 
         var graph_setup_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
         defer graph_setup_timing_scope.end();
-        const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
+        const graph = try self.createGraph();
         defer graph.destroy();
         const saved_graph = self.active_graph;
         const saved_body_draft = self.active_body_draft;
@@ -2825,7 +2887,7 @@ const Builder = struct {
         var timing_scope = ProcedureTimingScope.begin(self.timing, .dispatch_evidence);
         defer timing_scope.end();
 
-        const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
+        const graph = try self.createGraph();
         defer graph.destroy();
         var draft = BodyDraftStore.init(self.allocator);
         defer draft.deinit();
@@ -3047,7 +3109,7 @@ const Builder = struct {
 
         var graph_setup_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
         defer graph_setup_timing_scope.end();
-        const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
+        const graph = try self.createGraph();
         defer graph.destroy();
         const saved_graph = self.active_graph;
         const saved_body_draft = self.active_body_draft;
@@ -3228,6 +3290,12 @@ const Builder = struct {
             try source_ctx.codecLexicalContextKey()
         else
             null;
+        const local_evidence_owner = specEvidenceLocalOwner(source_ctx.draft, evidence);
+        const local_context_dependent = local_evidence_owner != null or structural_lexical_dependent;
+        const lexical_owner = local_evidence_owner orelse if (structural_lexical_dependent)
+            source_ctx.draft.current_owner
+        else
+            null;
 
         // Draft specialization identity stays graph-native for the entire
         // relation-production phase. Even a currently resolved request can
@@ -3236,6 +3304,19 @@ const Builder = struct {
         var selection = DraftOpenCandidateSelection{};
         const resolved_request_ty: ?Type.TypeId = if (try source_ctx.graph.typeIsResolved(request_fn_node))
             try source_ctx.activeTypeFromNode(request_fn_node)
+        else
+            null;
+        // An unresolved procedure interface is not yet a durable
+        // specialization key. Its callee body must contribute all of its
+        // checked constraints before this graph applies row defaults, so the
+        // entire connected open dependency group lowers in this graph and
+        // seals together. The initial open shape is still an explicit
+        // graph-local identity for reusing a completed member of that group.
+        const open_group_member = resolved_request_ty == null and
+            !local_context_dependent and
+            template.target != .hosted;
+        const open_request_shape: ?solve.OpenFunctionInterfaceShape = if (open_group_member)
+            try source_ctx.graph.openFunctionInterfaceShape(request_fn_node)
         else
             null;
         // Resolved requests key directly on their structural type digest, so a
@@ -3247,6 +3328,12 @@ const Builder = struct {
             .request_kind = 0,
             .request_fn_key = self.specializationTypeDigest(request_fn_ty).bytes,
         } else null;
+        const open_shape_lookup_address: ?DraftTemplateLookupAddress = if (open_request_shape) |shape| .{
+            .family = family,
+            .evidence_digest = evidence_digest.bytes,
+            .request_kind = 2,
+            .request_fn_key = shape.digest.bytes,
+        } else null;
         if (resolved_lookup_address) |address| {
             if (source_ctx.draft.template_spec_lookup.get(address)) |candidates| {
                 for (candidates.items) |raw_spec| {
@@ -3257,6 +3344,22 @@ const Builder = struct {
                     const spec_fn_ty = try source_ctx.activeTypeFromNode(spec.request_fn_node);
                     if (!try self.program.types.typeEql(&self.program.names, spec_fn_ty, resolved_request_ty.?)) continue;
                     if (!selection.add(raw_spec, true)) unreachable;
+                }
+            }
+        }
+        if (selection.selected() == null) {
+            if (open_shape_lookup_address) |address| {
+                if (source_ctx.draft.template_spec_lookup.get(address)) |candidates| {
+                    for (candidates.items) |raw_spec| {
+                        const spec = &source_ctx.draft.template_specs.items[raw_spec];
+                        if (spec.state != .lowered) continue;
+                        if (!spec.open_group_member) continue;
+                        if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
+                        if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
+                        const spec_shape = spec.open_request_shape orelse continue;
+                        if (!std.mem.eql(u8, spec_shape, open_request_shape.?.bytes)) continue;
+                        if (!selection.add(raw_spec, true)) unreachable;
+                    }
                 }
             }
         }
@@ -3315,7 +3418,9 @@ const Builder = struct {
             // graph cells with the specialization currently being lowered. Once
             // both requests are fully resolved, exact structural type equality is
             // the durable proof that they are the same specialization request.
-            // Unresolved requests continue to use graph-interface identity only.
+            // Completed unresolved requests already had their alpha-normalized
+            // open shapes checked above; this scan retains graph-interface
+            // identity for active recursive and partially overlapping requests.
             if (resolved_request_ty) |request_fn_ty| {
                 for (source_ctx.draft.template_specs.items, 0..) |*spec, raw_spec_usize| {
                     const raw_spec: u32 = @intCast(raw_spec_usize);
@@ -3339,8 +3444,9 @@ const Builder = struct {
             // interface class is a recursive edge. Fresh checked variables in
             // its new body instance are not joined until that edge is related,
             // so join the complete request before returning the in-progress
-            // definition. Completed specializations only reach here through
-            // exact interface identity and cannot merge on a partial overlap.
+            // definition. Completed specializations reach here through exact
+            // resolved identity or a complete alpha-normalized open shape, never
+            // through a partial interface overlap.
             const spec = &source_ctx.draft.template_specs.items[raw_spec];
             self.count("template_hits");
             const active_recursive_edge = spec.state == .lowering and
@@ -3372,6 +3478,9 @@ const Builder = struct {
             if (resolved_lookup_address) |address| {
                 try registerTemplateSpecLookup(source_ctx.draft, self.allocator, address, raw_spec);
             }
+            if (open_shape_lookup_address) |address| {
+                try registerTemplateSpecLookup(source_ctx.draft, self.allocator, address, raw_spec);
+            }
             return .{ .local = .{ .draft = spec.fn_id } };
         }
         const is_local = moduleBytesEqual(view.key.bytes, names.procTemplateModuleDigest(template_ref).bytes);
@@ -3399,25 +3508,11 @@ const Builder = struct {
             },
             .signature_relation = signature_relation,
         });
-        const local_evidence_owner = specEvidenceLocalOwner(source_ctx.draft, evidence);
-        const local_context_dependent = local_evidence_owner != null or structural_lexical_dependent;
-        // An unresolved procedure interface is not yet a valid durable
-        // specialization key. Its callee body must contribute all of its
-        // checked constraints before this graph applies row defaults, so the
-        // entire connected open dependency group lowers in this graph and
-        // seals together. A resolved interface remains eligible for the
-        // independent specialization-graph path below.
-        const open_group_member = resolved_request_ty == null and
-            !local_context_dependent and
-            template.target != .hosted;
         self.count("template_misses");
-        const lexical_owner = local_evidence_owner orelse if (structural_lexical_dependent)
-            source_ctx.draft.current_owner
-        else
-            null;
         if (local_context_dependent and template.target == .hosted) {
             Common.invariant("hosted template specialization depended on a local procedure context");
         }
+        const spec_index = source_ctx.draft.template_specs.items.len;
         const lexical = if (local_context_dependent)
             try source_ctx.captureCodecLexicalContext()
         else
@@ -3429,7 +3524,6 @@ const Builder = struct {
                 self.allocator.free(captured.local_procs);
             }
         };
-        const spec_index = source_ctx.draft.template_specs.items.len;
         const demand_boundary: u32 = @intCast(source_ctx.draft.runtime_value_demands.items.len);
         try source_ctx.draft.template_specs.append(self.allocator, .{
             .state = if (local_context_dependent or open_group_member) .lowering else .deferred,
@@ -3451,6 +3545,7 @@ const Builder = struct {
             .lexical_context_key = lexical_context_key,
             .fn_id = fn_id,
             .open_group_member = open_group_member,
+            .open_request_shape = if (open_request_shape) |shape| shape.bytes else null,
         });
         try source_ctx.draft.template_spec_by_fn.put(fn_id, @intCast(spec_index));
         lexical_needs_cleanup = false;
@@ -3471,6 +3566,9 @@ const Builder = struct {
             try lookup_entry.value_ptr.append(self.allocator, @intCast(spec_index));
         }
         if (resolved_lookup_address) |address| {
+            try registerTemplateSpecLookup(source_ctx.draft, self.allocator, address, @intCast(spec_index));
+        }
+        if (open_shape_lookup_address) |address| {
             try registerTemplateSpecLookup(source_ctx.draft, self.allocator, address, @intCast(spec_index));
         }
 
@@ -4051,7 +4149,7 @@ const Builder = struct {
         nominal: checked.CheckedNominalType,
         mono_args: []const Type.TypeId,
     ) Allocator.Error!Type.TypeId {
-        const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
+        const graph = try self.createGraph();
         defer graph.destroy();
         const saved_graph = self.active_graph;
         const saved_body_draft = self.active_body_draft;
@@ -4712,7 +4810,7 @@ const Builder = struct {
             Common.invariant("root procedure evidence range was outside its checked module");
         }
 
-        const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
+        const graph = try self.createGraph();
         defer graph.destroy();
         var draft = BodyDraftStore.init(self.allocator);
         defer draft.deinit();
@@ -4774,7 +4872,7 @@ const Builder = struct {
         switch (fn_template.fn_def) {
             .nested => {
                 const fn_view = self.moduleForConstFnDef(fn_template.fn_def);
-                const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
+                const graph = try self.createGraph();
                 defer graph.destroy();
                 const saved_graph = self.active_graph;
                 const saved_body_draft = self.active_body_draft;
@@ -4820,7 +4918,7 @@ const Builder = struct {
             },
             else => {
                 const fn_view = self.moduleForConstFnDef(fn_template.fn_def);
-                const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
+                const graph = try self.createGraph();
                 defer graph.destroy();
                 var body_draft = BodyDraftStore.init(self.allocator);
                 defer body_draft.deinit();
@@ -4922,6 +5020,16 @@ const Builder = struct {
             .request_kind = 0,
             .request_fn_key = self.specializationTypeDigest(request_fn_ty).bytes,
         } else null;
+        const open_request_shape: ?solve.OpenFunctionInterfaceShape = if (resolved_request_ty == null)
+            try source_ctx.graph.openFunctionInterfaceShape(request_fn_node)
+        else
+            null;
+        const open_shape_lookup_address: ?DraftNestedLookupAddress = if (open_request_shape) |shape| .{
+            .family = family,
+            .evidence_digest = evidence_digest.bytes,
+            .request_kind = 2,
+            .request_fn_key = shape.digest.bytes,
+        } else null;
         // Nested draft requests use the same graph-native identity discipline
         // as template requests; no resolved node becomes a durable cache key
         // before the graph freezes.
@@ -4943,6 +5051,28 @@ const Builder = struct {
                     const spec_fn_ty = spec.request_fn_ty orelse continue;
                     if (!try self.program.types.typeEql(&self.program.names, spec_fn_ty, resolved_request_ty.?)) continue;
                     if (!selection.add(raw_spec, true)) unreachable;
+                }
+            }
+        }
+        if (selection.selected() == null) {
+            if (open_shape_lookup_address) |address| {
+                if (source_ctx.draft.nested_spec_lookup.get(address)) |candidates| {
+                    for (candidates.items) |raw_spec| {
+                        const spec = &source_ctx.draft.nested_specs.items[raw_spec];
+                        if (spec.state != .lowered) continue;
+                        if (spec.request_fn_ty != null) continue;
+                        if (!evidenceChainEql(spec.evidence, requested_evidence)) continue;
+                        if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
+                        if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
+                        if (signature_relation == .exact_graph and
+                            source_ctx.draft.fns.items[@intFromEnum(spec.fn_id)].signature_relation != .exact_graph)
+                        {
+                            continue;
+                        }
+                        const spec_shape = spec.open_request_shape orelse continue;
+                        if (!std.mem.eql(u8, spec_shape, open_request_shape.?.bytes)) continue;
+                        if (!selection.add(raw_spec, true)) unreachable;
+                    }
                 }
             }
         }
@@ -5138,6 +5268,7 @@ const Builder = struct {
             .local_context_dependent = evidenceChainRequiresLocalContext(requested_evidence),
             .symbol = symbol,
             .fn_id = fn_id,
+            .open_request_shape = if (open_request_shape) |shape| shape.bytes else null,
         });
         var indexed_nodes = std.AutoHashMap(NodeId, void).init(self.allocator);
         defer indexed_nodes.deinit();
@@ -5154,6 +5285,9 @@ const Builder = struct {
             const lookup_entry = try source_ctx.draft.nested_spec_lookup.getOrPut(lookup_address);
             if (!lookup_entry.found_existing) lookup_entry.value_ptr.* = .empty;
             try lookup_entry.value_ptr.append(self.allocator, @intCast(spec_index));
+        }
+        if (open_shape_lookup_address) |address| {
+            try registerNestedSpecLookup(source_ctx.draft, self.allocator, address, @intCast(spec_index));
         }
 
         const owner_scope = try source_ctx.draft.enterOwner(.{ .draft_fn = fn_id });
@@ -5388,11 +5522,11 @@ const Builder = struct {
 
             var added_intrinsic_call = false;
             var intrinsic_index: usize = 0;
-            while (intrinsic_index < body_draft.deferred_parse_intrinsics.items.len) : (intrinsic_index += 1) {
-                if (try self.prepareDraftParseIntrinsic(
+            while (intrinsic_index < body_draft.deferred_callsite_intrinsics.items.len) : (intrinsic_index += 1) {
+                if (try self.prepareDraftCallsiteIntrinsic(
                     body_draft,
                     graph,
-                    body_draft.deferred_parse_intrinsics.items[intrinsic_index],
+                    body_draft.deferred_callsite_intrinsics.items[intrinsic_index],
                 )) added_intrinsic_call = true;
             }
 
@@ -5416,9 +5550,9 @@ const Builder = struct {
                 Common.invariant("deferred structural serialization reservation was filled before final graph sealing");
             }
         }
-        for (body_draft.deferred_parse_intrinsics.items) |boundary| {
+        for (body_draft.deferred_callsite_intrinsics.items) |boundary| {
             if (body_draft.exprs.items[@intFromEnum(boundary.expr)].data != .pending_deferred) {
-                Common.invariant("deferred parse intrinsic reservation was filled before final graph sealing");
+                Common.invariant("deferred call-site intrinsic reservation was filled before final graph sealing");
             }
         }
     }
@@ -5696,7 +5830,7 @@ const Builder = struct {
         );
     }
 
-    /// Relation production for a deferred parse intrinsic. Only
+    /// Relation production for a deferred call-site intrinsic. Only
     /// `parse_tag_union` generates parser bodies whose format method calls
     /// and error-row tags must exist as graph relations before the freeze;
     /// the FieldNames/Field intrinsics only reshape already-related values.
@@ -5704,11 +5838,11 @@ const Builder = struct {
     /// a synthetic `(encoding) -> (state) -> Try` constructor node over the
     /// options' own component cells lets the structural-parser preparation
     /// helpers run unchanged.
-    fn prepareDraftParseIntrinsic(
+    fn prepareDraftCallsiteIntrinsic(
         self: *Builder,
         body_draft: *BodyDraftStore,
         graph: *InstGraph,
-        boundary: DraftDeferredParseIntrinsic,
+        boundary: DraftDeferredCallsiteIntrinsic,
     ) Allocator.Error!bool {
         if (boundary.intrinsic != .parse_tag_union) return false;
         const owner_scope = try body_draft.enterOwner(boundary.owner);
@@ -5845,13 +5979,13 @@ const Builder = struct {
     /// final graph sealing: their callable request nodes carried live row
     /// defaults during body lowering, and only the sealer may decide the
     /// final rows those intrinsic bodies are generated over.
-    fn emitDraftDeferredParseIntrinsics(
+    fn emitDraftDeferredCallsiteIntrinsics(
         self: *Builder,
         body_draft: *BodyDraftStore,
         graph: *InstGraph,
         sealer: *GraphTypeFinals,
     ) Allocator.Error!void {
-        for (body_draft.deferred_parse_intrinsics.items) |boundary| {
+        for (body_draft.deferred_callsite_intrinsics.items) |boundary| {
             const owner_scope = try body_draft.enterOwner(boundary.owner);
             defer owner_scope.leave();
 
@@ -5893,28 +6027,36 @@ const Builder = struct {
             ctx.frozen_codec_calls = frozen_codec_calls.items;
 
             const callable = try graph.functionNodes(boundary.callable_node);
-            const lowered = try ctx.lowerParseIntrinsicBodyAtCallable(
+            var checked_arg_storage: [checked.IntrinsicId.max_callsite_arity]checked.CheckedExprId = undefined;
+            const checked_args = ctx.checkedCallsiteIntrinsicArgs(
+                boundary.intrinsic,
+                boundary.operands,
+                &checked_arg_storage,
+            );
+            const lowered = try ctx.lowerCallsiteIntrinsicBodyAtCallable(
                 boundary.intrinsic,
                 boundary.checked_expr_id,
                 boundary.source_fn_ty,
-                boundary.args,
+                checked_args,
                 callable,
                 null,
                 if (boundary.pre_lowered_args) |span| ctx.exprSpan(span) else null,
             );
-            const lowered_expr = body_draft.exprs.items[@intFromEnum(lowered)];
-            const reserved_ty = try body_draft.exprs.items[@intFromEnum(boundary.expr)].ty.seal(graph, sealer);
+            var lowered_expr = body_draft.exprs.items[@intFromEnum(lowered)];
+            const reserved_cell = body_draft.exprs.items[@intFromEnum(boundary.expr)].ty;
+            const reserved_ty = try reserved_cell.seal(graph, sealer);
             const lowered_ty = try lowered_expr.ty.seal(graph, sealer);
             if (!try self.program.types.typeEql(&self.program.names, reserved_ty, lowered_ty)) {
-                Common.invariant("deferred parse intrinsic changed its sealed result type");
+                Common.invariant("deferred call-site intrinsic changed its sealed result type");
             }
+            lowered_expr.ty = reserved_cell;
             body_draft.exprs.items[@intFromEnum(boundary.expr)] = lowered_expr;
             body_draft.expr_impossibility_proofs.items[@intFromEnum(boundary.expr)] =
                 body_draft.expr_impossibility_proofs.items[@intFromEnum(lowered)];
         }
-        for (body_draft.deferred_parse_intrinsics.items) |boundary| {
+        for (body_draft.deferred_callsite_intrinsics.items) |boundary| {
             if (body_draft.exprs.items[@intFromEnum(boundary.expr)].data == .pending_deferred) {
-                Common.invariant("deferred parse intrinsic did not fill its reservation");
+                Common.invariant("deferred call-site intrinsic did not fill its reservation");
             }
         }
     }
@@ -6354,7 +6496,7 @@ const Builder = struct {
         var sealer = GraphTypeFinals.init(graph);
         defer sealer.deinit();
         try self.emitDraftDeferredStructuralSerializations(body_draft, graph, &sealer);
-        try self.emitDraftDeferredParseIntrinsics(body_draft, graph, &sealer);
+        try self.emitDraftDeferredCallsiteIntrinsics(body_draft, graph, &sealer);
         try self.emitDraftDeferredStructuralEqs(body_draft, graph, &sealer);
         try self.emitDraftDeferredInspects(body_draft, graph, &sealer);
         const sealed_root = if (root_node) |node| try sealer.sealNode(node) else null;
@@ -7194,7 +7336,7 @@ const Builder = struct {
         }
 
         const fn_view = self.moduleForConstFnDef(fn_value.fn_def);
-        const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
+        const graph = try self.createGraph();
         defer graph.destroy();
         const saved_graph = self.active_graph;
         const saved_body_draft = self.active_body_draft;
@@ -7346,7 +7488,7 @@ const Builder = struct {
             else => Common.invariant("non-parser function reached parser runtime restore"),
         };
         const fn_view = self.moduleForDigest(names.procTemplateModuleDigest(runtime.owner));
-        const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
+        const graph = try self.createGraph();
         defer graph.destroy();
         const saved_graph = self.active_graph;
         const saved_body_draft = self.active_body_draft;
@@ -7472,7 +7614,7 @@ const Builder = struct {
             else => Common.invariant("non-encoder_for function reached encoder_for runtime restore"),
         };
         const fn_view = self.moduleForDigest(names.procTemplateModuleDigest(runtime.owner));
-        const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
+        const graph = try self.createGraph();
         defer graph.destroy();
         const saved_graph = self.active_graph;
         const saved_body_draft = self.active_body_draft;
@@ -7915,7 +8057,7 @@ const Builder = struct {
         };
         const template = procedure.template;
 
-        const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
+        const graph = try self.createGraph();
         defer graph.destroy();
         const saved_graph = self.active_graph;
         const saved_body_draft = self.active_body_draft;
@@ -9556,6 +9698,10 @@ const DraftTemplateSpec = struct {
     /// This context-free specialization joined its requester's live solve
     /// group because its interface was not closed enough to be a durable key.
     open_group_member: bool,
+    /// Exact alpha-normalized shape of the unresolved request before this
+    /// specialization body contributed its relations. This graph-local snapshot
+    /// is the collision authority and never becomes durable specialization identity.
+    open_request_shape: ?[]const u8 = null,
     root_def: ?DraftDefId = null,
     resolved_slot: ?Ast.FnSlot = null,
 };
@@ -9650,12 +9796,17 @@ const DraftDeferredStructuralSerialization = struct {
     lexical: DraftCodecLexicalContext,
 };
 
-/// One parse intrinsic whose callable request still carried unresolved
+/// One call-site intrinsic whose callable request still carried unresolved
 /// component cells at body-lowering time (e.g. a `FieldName(shape)` whose
 /// shape row stays widenable until final sealing). The reservation keeps the
 /// callable's result node live; emission lowers the intrinsic body under the
 /// frozen final-type sealer.
-const DraftDeferredParseIntrinsic = struct {
+const CheckedIntrinsicOperands = union(enum) {
+    direct_call: []const checked.CheckedExprId,
+    dispatch: []const static_dispatch.StaticDispatchOperand,
+};
+
+const DraftDeferredCallsiteIntrinsic = struct {
     view: ModuleView,
     method_scope: ModuleView,
     owner_template: names.ProcTemplate,
@@ -9664,7 +9815,7 @@ const DraftDeferredParseIntrinsic = struct {
     intrinsic: checked.IntrinsicId,
     checked_expr_id: checked.CheckedExprId,
     source_fn_ty: checked.CheckedTypeId,
-    args: []const checked.CheckedExprId,
+    operands: CheckedIntrinsicOperands,
     pre_lowered_args: ?DraftSpan(DraftExprId),
     callable_node: NodeId,
     evidence: EvidenceChain,
@@ -9935,6 +10086,10 @@ const DraftNestedSpec = struct {
     local_context_dependent: bool,
     symbol: Common.Symbol,
     fn_id: DraftFnId,
+    /// Exact alpha-normalized shape of the unresolved request before this nested
+    /// body contributed its relations. This graph-local snapshot is the collision
+    /// authority and never becomes durable specialization identity.
+    open_request_shape: ?[]const u8 = null,
 };
 
 /// One reuse of a completed (or actively lowering) draft specialization from a
@@ -10045,7 +10200,7 @@ const BodyDraftStore = struct {
     deferred_const_uses: std.ArrayList(DraftDeferredConstUse),
     deferred_structural_eqs: std.ArrayList(DraftDeferredStructuralEq),
     deferred_structural_serializations: std.ArrayList(DraftDeferredStructuralSerialization),
-    deferred_parse_intrinsics: std.ArrayList(DraftDeferredParseIntrinsic),
+    deferred_callsite_intrinsics: std.ArrayList(DraftDeferredCallsiteIntrinsic),
     prepared_codec_calls: std.ArrayList(DraftPreparedCodecCall),
     local_proc_contexts: std.ArrayList(LocalProcContext),
     deferred_inspects: std.ArrayList(DraftDeferredInspect),
@@ -10116,7 +10271,7 @@ const BodyDraftStore = struct {
             .deferred_const_uses = .empty,
             .deferred_structural_eqs = .empty,
             .deferred_structural_serializations = .empty,
-            .deferred_parse_intrinsics = .empty,
+            .deferred_callsite_intrinsics = .empty,
             .prepared_codec_calls = .empty,
             .local_proc_contexts = .empty,
             .deferred_inspects = .empty,
@@ -10190,7 +10345,7 @@ const BodyDraftStore = struct {
             self.allocator.free(boundary.lexical.binders);
             self.allocator.free(boundary.lexical.local_procs);
         }
-        for (self.deferred_parse_intrinsics.items) |boundary| {
+        for (self.deferred_callsite_intrinsics.items) |boundary| {
             self.allocator.free(boundary.lexical.binders);
             self.allocator.free(boundary.lexical.local_procs);
         }
@@ -10237,7 +10392,7 @@ const BodyDraftStore = struct {
         self.prepared_inspect_methods.deinit(self.allocator);
         self.deferred_inspects.deinit(self.allocator);
         self.deferred_structural_serializations.deinit(self.allocator);
-        self.deferred_parse_intrinsics.deinit(self.allocator);
+        self.deferred_callsite_intrinsics.deinit(self.allocator);
         self.prepared_codec_calls.deinit(self.allocator);
         self.deferred_structural_eqs.deinit(self.allocator);
         self.deferred_const_uses.deinit(self.allocator);
@@ -12331,6 +12486,7 @@ const BodyContext = struct {
         graph: *InstGraph,
         draft: *BodyDraftStore,
     ) Allocator.Error!BodyContext {
+        builder.countBodyDiagnostic("body_contexts_created");
         return .{
             .allocator = allocator,
             .builder = builder,
@@ -14636,8 +14792,13 @@ const BodyContext = struct {
     fn instNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!NodeId {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
         defer timing_scope.end();
+        self.builder.countBodyDiagnostic("checked_node_requests");
         const address = self.typeAddress(checked_ty);
-        if (self.scopedNode(address)) |existing| return existing;
+        if (self.scopedNode(address)) |existing| {
+            self.builder.countBodyDiagnostic("checked_node_cache_hits");
+            return existing;
+        }
+        self.builder.countBodyDiagnostic("checked_node_cache_misses");
         const placeholder = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
         try self.putScopedNode(address, placeholder);
         const built = try self.instNodeContent(checked_ty);
@@ -14648,6 +14809,7 @@ const BodyContext = struct {
     fn freshInstNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!NodeId {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
         defer timing_scope.end();
+        self.builder.countBodyDiagnostic("fresh_checked_node_requests");
         var fresh = try BodyContext.initWithMethodScope(
             self.allocator,
             self.builder,
@@ -17039,7 +17201,7 @@ const BodyContext = struct {
         checked_ret_ty: checked.CheckedTypeId,
         call: anytype,
     ) Allocator.Error!DraftExprId {
-        if (try self.lowerParseIntrinsicCallExpr(checked_expr_id, checked_ret_ty, call, null)) |expr| {
+        if (try self.lowerCallsiteIntrinsicCallExpr(checked_expr_id, checked_ret_ty, call, null)) |expr| {
             return expr;
         }
         const lowered = try self.lowerCall(checked_ret_ty, call);
@@ -17092,14 +17254,14 @@ const BodyContext = struct {
         return self.builder.functionShape(fn_ty, "checked call function type was not a function").ret;
     }
 
-    fn lowerParseIntrinsicCallExpr(
+    fn lowerCallsiteIntrinsicCallExpr(
         self: *BodyContext,
         checked_expr_id: checked.CheckedExprId,
         checked_ret_ty: checked.CheckedTypeId,
         call: anytype,
         expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!?DraftExprId {
-        return try self.lowerParseIntrinsicCallExprAtExpectedNode(
+        return try self.lowerCallsiteIntrinsicCallExprAtExpectedNode(
             checked_expr_id,
             checked_ret_ty,
             call,
@@ -17108,14 +17270,14 @@ const BodyContext = struct {
         );
     }
 
-    fn lowerParseIntrinsicCallExprAtNode(
+    fn lowerCallsiteIntrinsicCallExprAtNode(
         self: *BodyContext,
         checked_expr_id: checked.CheckedExprId,
         checked_ret_ty: checked.CheckedTypeId,
         call: anytype,
         expected_ret_node: NodeId,
     ) Allocator.Error!?DraftExprId {
-        return try self.lowerParseIntrinsicCallExprAtExpectedNode(
+        return try self.lowerCallsiteIntrinsicCallExprAtExpectedNode(
             checked_expr_id,
             checked_ret_ty,
             call,
@@ -17124,7 +17286,7 @@ const BodyContext = struct {
         );
     }
 
-    fn lowerParseIntrinsicCallExprAtExpectedNode(
+    fn lowerCallsiteIntrinsicCallExprAtExpectedNode(
         self: *BodyContext,
         checked_expr_id: checked.CheckedExprId,
         checked_ret_ty: checked.CheckedTypeId,
@@ -17133,17 +17295,75 @@ const BodyContext = struct {
         expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!?DraftExprId {
         const target = call.direct_target orelse return null;
-        const intrinsic = self.parseIntrinsicForResolvedTarget(target) orelse return null;
+        const intrinsic = self.callsiteIntrinsicForResolvedTarget(target) orelse return null;
         const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
 
-        // The checked call instantiation owns the exact specialization cells for
-        // every argument. Consume those cells directly; expression syntax is
-        // not a type authority, and composite operands expose only these
-        // producer-owned cells.
-        var callable_node = try self.directCallTypeNode(checked_ret_ty, call, source_fn_ty, expected_ret_node);
+        const callable_node = try self.directCallTypeNode(checked_ret_ty, call, source_fn_ty, expected_ret_node);
+        return try self.lowerCallsiteIntrinsicAtCallableNode(
+            intrinsic,
+            checked_expr_id,
+            source_fn_ty,
+            .{ .direct_call = call.args },
+            callable_node,
+            expected_ret_ty,
+        );
+    }
+
+    /// Return checked expression operands for a call-site intrinsic without
+    /// allocating. Method dispatch is valid here only when every operand is a
+    /// source expression; compiler-generated dispatch operands have their own
+    /// explicit lowering protocols.
+    fn checkedCallsiteIntrinsicArgs(
+        _: *BodyContext,
+        intrinsic: checked.IntrinsicId,
+        operands: CheckedIntrinsicOperands,
+        storage: *[checked.IntrinsicId.max_callsite_arity]checked.CheckedExprId,
+    ) []const checked.CheckedExprId {
+        const expected_arity: usize = intrinsic.callsiteArity() orelse
+            Common.invariant("non-call-site intrinsic reached call-site lowering");
+        const actual_arity = switch (operands) {
+            .direct_call => |args| args.len,
+            .dispatch => |args| args.len,
+        };
+        if (actual_arity != expected_arity) {
+            Common.invariant("checked call-site intrinsic had an unexpected arity");
+        }
+        return switch (operands) {
+            .direct_call => |args| args,
+            .dispatch => |args| blk: {
+                for (args, storage.*[0..expected_arity]) |operand, *checked_arg| {
+                    checked_arg.* = switch (operand) {
+                        .checked_expr => |expr| expr,
+                        .generated_interpolation_iter,
+                        .generated_numeral,
+                        .generated_quote,
+                        => Common.invariant("call-site intrinsic had a compiler-generated dispatch operand"),
+                    };
+                }
+                break :blk storage.*[0..expected_arity];
+            },
+        };
+    }
+
+    /// Lower every syntax form for a call-site intrinsic through one exact
+    /// monomorphic body generator. The checked callable request owns the
+    /// specialization cells; neither source syntax nor the intrinsic wrapper
+    /// is a later type authority.
+    fn lowerCallsiteIntrinsicAtCallableNode(
+        self: *BodyContext,
+        intrinsic: checked.IntrinsicId,
+        checked_expr_id: checked.CheckedExprId,
+        source_fn_ty: checked.CheckedTypeId,
+        operands: CheckedIntrinsicOperands,
+        initial_callable_node: NodeId,
+        expected_ret_ty: ?Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        var checked_arg_storage: [checked.IntrinsicId.max_callsite_arity]checked.CheckedExprId = undefined;
+        const args = self.checkedCallsiteIntrinsicArgs(intrinsic, operands, &checked_arg_storage);
+        var callable_node = initial_callable_node;
         var callable = try self.graph.functionNodes(callable_node);
-        if (callable.args.len != call.args.len) {
-            Common.invariant("checked parse intrinsic call request had an unexpected arity");
+        if (callable.args.len != args.len) {
+            Common.invariant("checked call-site intrinsic request had an unexpected arity");
         }
         switch (intrinsic.requestResultSource()) {
             .declared_return => {},
@@ -17170,8 +17390,8 @@ const BodyContext = struct {
                 // Other intrinsics defer only while their request still owns
                 // live row defaults such as an open `FieldName(shape)` row.
                 const pre_lowered_args: ?DraftSpan(DraftExprId) = if (intrinsic == .parse_tag_union) blk: {
-                    try self.prepareExprSpanAtNodes(call.args, callable.args);
-                    break :blk try self.lowerPreparedExprSpanAtNodes(call.args, callable.args);
+                    try self.prepareExprSpanAtNodes(args, callable.args);
+                    break :blk try self.lowerPreparedExprSpanAtNodes(args, callable.args);
                 } else null;
                 const expr = try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(callable.ret), .pending_deferred);
                 const lexical = try self.captureCodecLexicalContext();
@@ -17180,7 +17400,7 @@ const BodyContext = struct {
                     self.allocator.free(lexical.binders);
                     self.allocator.free(lexical.local_procs);
                 };
-                try self.draft.deferred_parse_intrinsics.append(self.allocator, .{
+                try self.draft.deferred_callsite_intrinsics.append(self.allocator, .{
                     .view = self.view,
                     .method_scope = self.method_scope,
                     .owner_template = self.owner_template,
@@ -17189,7 +17409,7 @@ const BodyContext = struct {
                     .intrinsic = intrinsic,
                     .checked_expr_id = checked_expr_id,
                     .source_fn_ty = source_fn_ty,
-                    .args = call.args,
+                    .operands = operands,
                     .pre_lowered_args = pre_lowered_args,
                     .callable_node = callable_node,
                     .evidence = self.evidence,
@@ -17201,15 +17421,19 @@ const BodyContext = struct {
             }
         }
 
-        return try self.lowerParseIntrinsicBodyAtCallable(
+        const lowered = try self.lowerCallsiteIntrinsicBodyAtCallable(
             intrinsic,
             checked_expr_id,
             source_fn_ty,
-            call.args,
+            args,
             callable,
             expected_ret_ty,
             null,
         );
+        if (try self.graph.containsGeneratedPrivate(callable.ret)) {
+            self.draft.exprs.items[@intFromEnum(lowered)].ty = DraftTypeCell.fromGraphNode(callable.ret);
+        }
+        return lowered;
     }
 
     /// Synthetic `(encoding) -> (state) -> Try` constructor node over a
@@ -17229,7 +17453,7 @@ const BodyContext = struct {
     /// checked callable request nodes and lower the intrinsic body. Under
     /// frozen emission the current-phase view seals each node to its final
     /// type; during ordinary body lowering every node is already resolved.
-    fn lowerParseIntrinsicBodyAtCallable(
+    fn lowerCallsiteIntrinsicBodyAtCallable(
         self: *BodyContext,
         intrinsic: checked.IntrinsicId,
         checked_expr_id: checked.CheckedExprId,
@@ -17239,14 +17463,17 @@ const BodyContext = struct {
         expected_ret_ty: ?Type.TypeId,
         pre_lowered_args: ?[]const DraftExprId,
     ) Allocator.Error!DraftExprId {
-        const arg_tys = try self.allocator.alloc(Type.TypeId, args.len);
-        defer self.allocator.free(arg_tys);
-        for (callable.args, 0..) |arg_node, index| {
-            arg_tys[index] = try self.currentPhaseTypeForNode(arg_node);
+        if (args.len > checked.IntrinsicId.max_callsite_arity or callable.args.len != args.len) {
+            Common.invariant("call-site intrinsic body had an unexpected arity");
+        }
+        var arg_ty_storage: [checked.IntrinsicId.max_callsite_arity]Type.TypeId = undefined;
+        const arg_tys = arg_ty_storage[0..args.len];
+        for (callable.args, arg_tys) |arg_node, *arg_ty| {
+            arg_ty.* = try self.currentPhaseTypeForNode(arg_node);
         }
         const ret_ty = try self.currentPhaseTypeForNode(callable.ret);
         if (expected_ret_ty) |expected| {
-            if (!self.sameType(expected, ret_ty)) Common.invariant("checked parse intrinsic lowered at a type different from its context type");
+            if (!self.sameType(expected, ret_ty)) Common.invariant("checked call-site intrinsic lowered at a type different from its context type");
         }
 
         return switch (intrinsic) {
@@ -17261,7 +17488,7 @@ const BodyContext = struct {
         };
     }
 
-    fn lowerParseIntrinsicArgAtType(
+    fn lowerCallsiteIntrinsicArgAtType(
         self: *BodyContext,
         checked_arg: checked.CheckedExprId,
         ty: Type.TypeId,
@@ -17277,7 +17504,7 @@ const BodyContext = struct {
             if (try self.currentLocalForResolvedValue(ref_id)) |local_id| {
                 const local_ty = try self.localType(local_id);
                 if (!self.sameType(ty, local_ty)) {
-                    Common.invariant("checked parse intrinsic local argument type differed from its concrete local type");
+                    Common.invariant("checked call-site intrinsic local argument type differed from its concrete local type");
                 }
                 return try self.addExpr(.{ .ty = local_ty, .data = .{ .local = local_id } });
             }
@@ -17602,7 +17829,23 @@ const BodyContext = struct {
         };
     }
 
-    fn parseIntrinsicForResolvedTarget(self: *BodyContext, target: checked.ResolvedValueId) ?checked.IntrinsicId {
+    fn callsiteIntrinsicForMethodTarget(
+        _: *BodyContext,
+        target: static_dispatch.MethodTarget,
+    ) ?checked.IntrinsicId {
+        return switch (target.kind) {
+            .procedure => |procedure| switch (procedure.runtime_target) {
+                .intrinsic => |intrinsic| if (intrinsic.callsiteArity() != null)
+                    intrinsic
+                else
+                    Common.invariant("non-call-site intrinsic had a call-site method runtime target"),
+                .procedure, .low_level, .graph_participating => null,
+            },
+            .local_proc, .structural => null,
+        };
+    }
+
+    fn callsiteIntrinsicForResolvedTarget(self: *BodyContext, target: checked.ResolvedValueId) ?checked.IntrinsicId {
         const raw = @intFromEnum(target);
         if (raw >= self.view.resolved_refs.records.len) {
             Common.invariant("checked direct call target is outside resolved value table");
@@ -17616,17 +17859,7 @@ const BodyContext = struct {
             .platform_required_proc => |proc| proc.procedure.intrinsic,
             else => null,
         } orelse return null;
-        return switch (intrinsic) {
-            .parse_tag_union,
-            .field_names_rename_fields,
-            .field_names_shortest_name,
-            .field_names_longest_name,
-            .field_names_iter,
-            .field_names_for_size,
-            .field_name,
-            => intrinsic,
-            .str_inspect, .structural_eq => null,
-        };
+        return if (intrinsic.callsiteArity() != null) intrinsic else null;
     }
 
     fn lowerFieldNamesRenameFieldNames(
@@ -17638,8 +17871,8 @@ const BodyContext = struct {
         if (args.len != 2 or arg_tys.len != 2) Common.invariant("FieldNames.rename_fields reached Monotype with an unexpected arity");
         if (!self.sameType(arg_tys[0], ret_ty)) Common.invariant("FieldNames.rename_fields result type differed from its field set argument");
 
-        const fields_value = try self.lowerParseIntrinsicArgAtType(args[0], arg_tys[0]);
-        const rename_value = try self.lowerParseIntrinsicArgAtType(args[1], arg_tys[1]);
+        const fields_value = try self.lowerCallsiteIntrinsicArgAtType(args[0], arg_tys[0]);
+        const rename_value = try self.lowerCallsiteIntrinsicArgAtType(args[1], arg_tys[1]);
         if (self.generatedFieldNamesBackingValueFieldNames(arg_tys[0])) |backing_fields| {
             const stable_backing_fields = try GuardedList.dupe(self.allocator, Type.Field, backing_fields);
             defer self.allocator.free(stable_backing_fields);
@@ -17830,7 +18063,7 @@ const BodyContext = struct {
         const shape_ty = self.fieldsShapeType(arg_tys[0]);
         const fields = try GuardedList.dupe(self.allocator, Type.Field, self.recordFieldsForShape(shape_ty));
         defer self.allocator.free(fields);
-        const fields_value = try self.lowerParseIntrinsicArgAtType(args[0], arg_tys[0]);
+        const fields_value = try self.lowerCallsiteIntrinsicArgAtType(args[0], arg_tys[0]);
         if (self.generatedFieldNamesBackingInfo(arg_tys[0])) |info| {
             const fields_local = try self.addLocal(self.builder.symbols.fresh(), arg_tys[0]);
             const body = try self.lowerGeneratedFieldNamesNameBound(
@@ -17908,7 +18141,7 @@ const BodyContext = struct {
         const name_field = self.recordFieldByText(backing_ty, "name");
         if (!self.sameType(name_field.ty, ret_ty)) Common.invariant("Field.name backing name field differed from Str");
 
-        const field_value = try self.lowerParseIntrinsicArgAtType(args[0], field_ty);
+        const field_value = try self.lowerCallsiteIntrinsicArgAtType(args[0], field_ty);
         const field_local = try self.addLocal(self.builder.symbols.fresh(), field_ty);
         const backing_local = try self.addLocal(self.builder.symbols.fresh(), backing_ty);
         const name_expr = try self.addExpr(.{
@@ -18180,7 +18413,7 @@ const BodyContext = struct {
         }
         const field_handle_ty = self.iterItemType(ret_ty);
 
-        const fields_value = try self.lowerParseIntrinsicArgAtType(args[0], arg_tys[0]);
+        const fields_value = try self.lowerCallsiteIntrinsicArgAtType(args[0], arg_tys[0]);
         const fields_local = try self.addLocal(self.builder.symbols.fresh(), arg_tys[0]);
         const size_local: ?DraftLocalId = if (mode == .for_size) blk: {
             if (!self.typeHasBuiltinOwner(arg_tys[1], .u64)) Common.invariant("FieldNames.for_size size argument was not U64");
@@ -18232,7 +18465,7 @@ const BodyContext = struct {
             );
         };
         if (mode == .for_size) {
-            const size_value = try self.lowerParseIntrinsicArgAtType(args[1], arg_tys[1]);
+            const size_value = try self.lowerCallsiteIntrinsicArgAtType(args[1], arg_tys[1]);
             iter_expr = try self.wrapLet(size_local.?, arg_tys[1], size_value, iter_expr, ret_ty);
         }
         return try self.wrapLet(fields_local, arg_tys[0], fields_value, iter_expr, ret_ty);
@@ -23432,8 +23665,8 @@ const BodyContext = struct {
             else => Common.invariant("ParseTagUnionSpec.parse value type was not a tag union"),
         };
         const spec_ty = arg_tys[0];
-        const spec_value = if (pre_lowered_args) |lowered| lowered[0] else try self.lowerParseIntrinsicArgAtType(args[0], arg_tys[0]);
-        const options_value = if (pre_lowered_args) |lowered| lowered[1] else try self.lowerParseIntrinsicArgAtType(args[1], arg_tys[1]);
+        const spec_value = if (pre_lowered_args) |lowered| lowered[0] else try self.lowerCallsiteIntrinsicArgAtType(args[0], arg_tys[0]);
+        const options_value = if (pre_lowered_args) |lowered| lowered[1] else try self.lowerCallsiteIntrinsicArgAtType(args[1], arg_tys[1]);
         const options_ty = arg_tys[1];
         const key_ty = self.builder.recordFieldType(options_ty, try self.builder.program.names.internRecordFieldLabel("tag"));
         const encoding_ty = self.builder.recordFieldType(options_ty, try self.builder.program.names.internRecordFieldLabel("encoding"));
@@ -24059,6 +24292,7 @@ const BodyContext = struct {
     ) Allocator.Error!LoweredCall {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .call_dispatch);
         defer timing_scope.end();
+        self.builder.countBodyDiagnostic("call_expressions");
         if (try self.lowerCallThatCannotReachCallee(checked_ret_ty, call, expected_ret_node)) |lowered| return lowered;
 
         if (call.direct_target) |target| {
@@ -24926,7 +25160,7 @@ const BodyContext = struct {
             .platform_required_const => |required| return try self.constUseTypeNode(checked_ty, required.const_use),
             else => {},
         }
-        return try self.activeNodeFromType(try self.lookupExprMonoType(checked_ty, ref_id));
+        return try self.lowerTypeNode(checked_ty);
     }
 
     fn lookupExprMonoType(
@@ -28432,6 +28666,7 @@ const BodyContext = struct {
     ) Allocator.Error!void {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
         defer timing_scope.end();
+        self.builder.countBodyDiagnostic("expr_relation_requests");
         // Divergent expressions never return a value to relate to the request.
         // In particular, checking may replace a failed callee with
         // `runtime_error`, which emits a crash, while its unused call type
@@ -28624,6 +28859,8 @@ const BodyContext = struct {
         nodes: []const NodeId,
     ) Allocator.Error!void {
         if (checked_exprs.len != nodes.len) Common.invariant("checked call argument count differed from graph function arity");
+        self.builder.countBodyDiagnostic("argument_spans_prepared");
+        self.builder.countBodyDiagnosticBy("arguments_prepared", checked_exprs.len);
         for (checked_exprs, nodes) |checked_expr, node| {
             try self.relateExprAtNode(checked_expr, node);
         }
@@ -29302,9 +29539,9 @@ const BodyContext = struct {
         else if (try self.restoredHoistedExprAtNode(checked_expr, expected_node)) |restored|
             restored
         else if (if (producer_request) |request|
-            try self.lowerParseIntrinsicCallExprAtNode(checked_expr, expr.ty, call, request)
+            try self.lowerCallsiteIntrinsicCallExprAtNode(checked_expr, expr.ty, call, request)
         else
-            try self.lowerParseIntrinsicCallExpr(checked_expr, expr.ty, call, null)) |intrinsic|
+            try self.lowerCallsiteIntrinsicCallExpr(checked_expr, expr.ty, call, null)) |intrinsic|
             intrinsic
         else lowered: {
             // Preserve the expected result as an active graph relation. It may
@@ -29386,7 +29623,7 @@ const BodyContext = struct {
         switch (expr.data) {
             .runtime_error => return try self.lowerExprWithType(checked_expr, ty),
             .call => |call| {
-                if (try self.lowerParseIntrinsicCallExpr(checked_expr, expr.ty, call, ty)) |lowered| {
+                if (try self.lowerCallsiteIntrinsicCallExpr(checked_expr, expr.ty, call, ty)) |lowered| {
                     return lowered;
                 }
                 try self.constrainKnownType(expr.ty, ty);
@@ -30128,9 +30365,14 @@ const BodyContext = struct {
         expr_id: checked.CheckedExprId,
         request_fn_node: NodeId,
     ) Allocator.Error!void {
+        self.builder.countBodyDiagnostic("nested_callable_checks");
         switch (self.view.bodies.expr(expr_id).data) {
-            .lambda => _ = try self.ensureLambdaAtNode(expr_id, request_fn_node),
+            .lambda => {
+                self.builder.countBodyDiagnostic("nested_lambdas_prepared");
+                _ = try self.ensureLambdaAtNode(expr_id, request_fn_node);
+            },
             .closure => |closure| {
+                self.builder.countBodyDiagnostic("nested_closures_prepared");
                 var capture_nodes = std.ArrayList(NodeId).empty;
                 defer capture_nodes.deinit(self.allocator);
                 for (closure.captures) |capture| {
@@ -30273,6 +30515,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .call_dispatch);
         defer timing_scope.end();
+        self.builder.countBodyDiagnostic("dispatch_expressions");
         const plan_id = maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
         var direct_parametric_low_level: ?can.CIR.Expr.LowLevel = null;
@@ -30295,7 +30538,7 @@ const BodyContext = struct {
                             procedure,
                             expected_ret_cell,
                         ),
-                        .graph_participating => {},
+                        .intrinsic, .graph_participating => {},
                     },
                     .local_proc => direct_graph_call = true,
                     .structural => {},
@@ -30307,7 +30550,7 @@ const BodyContext = struct {
                     .procedure => |procedure| switch (procedure.runtime_target) {
                         .low_level => |op| direct_parametric_low_level = op,
                         .procedure => direct_graph_call = true,
-                        .graph_participating => {},
+                        .intrinsic, .graph_participating => {},
                     },
                     .local_proc => direct_graph_call = true,
                     .structural => {},
@@ -30363,6 +30606,23 @@ const BodyContext = struct {
                 }
             },
             .structural => {},
+        }
+        const callsite_intrinsic = switch (resolution) {
+            .target => |lookup| self.callsiteIntrinsicForMethodTarget(lookup.target),
+            .structural => null,
+        };
+        if (callsite_intrinsic) |intrinsic| {
+            if (plan.result_mode != .value) {
+                Common.invariant("call-site intrinsic dispatch had a non-value result mode");
+            }
+            return try self.lowerCallsiteIntrinsicAtCallableNode(
+                intrinsic,
+                plan.expr,
+                plan.callable_ty,
+                .{ .dispatch = plan_args },
+                callable_node,
+                expected_ret_ty,
+            );
         }
         const callable_graph = switch (self.graph.content(callable_node)) {
             .func => |function| function,
@@ -31534,7 +31794,7 @@ const BodyContext = struct {
             .local_proc, .structural => return null,
         };
         switch (procedure.runtime_target) {
-            .graph_participating => return null,
+            .intrinsic, .graph_participating => return null,
             .procedure, .low_level => {},
         }
 
@@ -32192,7 +32452,7 @@ const BodyContext = struct {
         arg_index: usize,
         arg_ty: Type.TypeId,
     ) Allocator.Error!Type.TypeId {
-        var graph = try InstGraph.create(self.allocator, &self.builder.program.types, &self.builder.program.names);
+        const graph = try self.builder.createGraph();
         defer graph.destroy();
 
         const owner_template = switch (lookup.target.kind) {
@@ -45350,6 +45610,7 @@ fn moduleView(view: checked.ImportedModuleView) ModuleView {
         .entry_wrappers = view.entry_wrappers,
         .intrinsic_wrappers = view.intrinsic_wrappers,
         .hosted_procs = view.hosted_procs,
+        .hosted_bindings = view.hosted_bindings,
         .static_dispatch_plans = view.static_dispatch_plans,
         .method_registry = view.method_registry,
         .method_lookup_scope = view.method_lookup_scope,

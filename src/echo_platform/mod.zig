@@ -7,6 +7,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const builtins = @import("builtins");
+const roc_args = @import("roc_args");
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
 
@@ -46,15 +47,15 @@ pub const run_shim_platform_main_source =
     \\
 ;
 
-/// Build-only Linux default platform. Unlike the default `roc` command, linked Linux output
-/// owns its process entrypoint and lowers echo directly in the backend.
+/// Build-only Linux default platform. The default-platform runtime owns the
+/// process entrypoint and passes the process arguments to this Roc entrypoint.
 pub const build_platform_main_source =
     \\platform ""
     \\    requires {} { main! : List(Str) => Try(_, [Exit(I8), ..]) }
     \\    exposes [Echo]
     \\    packages {}
-    \\    provides { "_start": main_for_host! }
-++ "\n    hosted { \"" ++ builtins.shim_symbols.roc_default_echo_line ++ "\": Echo.line! }\n" ++
+++ "\n    provides { \"" ++ builtins.shim_symbols.roc_default_start_main ++ "\": main_for_host! }" ++
+    "\n    hosted { \"" ++ builtins.shim_symbols.roc_default_echo_line ++ "\": Echo.line! }\n" ++
     \\    targets: {
     \\        inputs_dir: "targets/",
     \\        x64musl: { inputs: [app] },
@@ -65,11 +66,11 @@ pub const build_platform_main_source =
     \\
     \\import Echo
     \\
-    \\main_for_host! : {} => I8
-    \\main_for_host! = |_args|
-    \\    match main!([]) {
+    \\main_for_host! : List(Str) => I32
+    \\main_for_host! = |args|
+    \\    match main!(args) {
     \\        Ok(_) => 0
-    \\        Err(Exit(code)) => code
+    \\        Err(Exit(code)) => I8.to_i32(code)
     \\        Err(_) => 1
     \\    }
     \\
@@ -95,9 +96,9 @@ pub const build_c_platform_main_source =
     \\
     \\import Echo
     \\
-    \\main_for_host! : {} => I32
-    \\main_for_host! = |_args|
-    \\    match main!([]) {
+    \\main_for_host! : List(Str) => I32
+    \\main_for_host! = |args|
+    \\    match main!(args) {
     \\        Ok(_) => 0
     \\        Err(Exit(code)) => I8.to_i32(code)
     \\        Err(_) => 1
@@ -354,47 +355,7 @@ pub fn buildCliArgs(app_args: []const []const u8, roc_ops: *host_abi.RocOps) std
 /// Sanitize a byte slice to valid UTF-8, replacing invalid bytes with U+FFFD.
 /// Returns the input slice unchanged if it's already valid UTF-8.
 fn sanitizeUtf8(input: []const u8, allocator: std.mem.Allocator) std.mem.Allocator.Error![]const u8 {
-    if (std.unicode.utf8ValidateSlice(input)) return input;
-
-    // Worst case: each invalid byte becomes 3-byte replacement char
-    const buf = try allocator.alloc(u8, input.len * 3);
-    var out_i: usize = 0;
-    var in_i: usize = 0;
-    while (in_i < input.len) {
-        const seq_len = std.unicode.utf8ByteSequenceLength(input[in_i]) catch {
-            // Invalid lead byte — replacement char
-            buf[out_i] = 0xEF;
-            buf[out_i + 1] = 0xBF;
-            buf[out_i + 2] = 0xBD;
-            out_i += 3;
-            in_i += 1;
-            continue;
-        };
-        if (in_i + seq_len > input.len) {
-            // Truncated sequence
-            buf[out_i] = 0xEF;
-            buf[out_i + 1] = 0xBF;
-            buf[out_i + 2] = 0xBD;
-            out_i += 3;
-            in_i += 1;
-            continue;
-        }
-        if (std.unicode.utf8Decode(input[in_i..][0..seq_len])) |_| {
-            @memcpy(buf[out_i..][0..seq_len], input[in_i..][0..seq_len]);
-            out_i += seq_len;
-            in_i += seq_len;
-        } else |_| {
-            buf[out_i] = 0xEF;
-            buf[out_i + 1] = 0xBF;
-            buf[out_i + 2] = 0xBD;
-            out_i += 3;
-            in_i += 1;
-        }
-    }
-    // realloc to the exact length so the returned slice is the whole allocation
-    // and callers can free it (a plain resize can decline a shrink, e.g. across
-    // smp size classes, which would leave the returned sub-slice unfreeable).
-    return allocator.realloc(buf, out_i) catch buf[0..out_i];
+    return roc_args.sanitizeUtf8(input, allocator);
 }
 
 const testing = std.testing;

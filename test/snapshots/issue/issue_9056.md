@@ -32,9 +32,10 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-import (mod "a.B.C")
+	(s-import (mod "a.B")
 		(exposes
-			(exposed (name "E") (wildcard false)))))
+			(exposed (name "C") (alias "D") (wildcard false))
+			(exposed (name "C.E") (alias "E") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure

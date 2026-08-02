@@ -7,7 +7,7 @@ type=file
 ~~~roc
 import Basics.Try
 import Color
-import ModA.ModB exposing [TypeC]
+import ModA/ModB exposing [TypeC]
 import ExternalMod as ExtMod
 
 # Simple qualified type
@@ -105,10 +105,10 @@ UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
 
 
 ┌──────────────────┐
-│ MOD NOT FOUND ├─ The mod `ModA.ModB` was not found in this Roc ───────┐
+│ MOD NOT FOUND ├─ The mod `ModA/ModB` was not found in this Roc ───────┐
 └┬─────────────────┘  project.                                                │
  │                                                                            │
- │  import ModA.ModB exposing [TypeC]                                         │
+ │  import ModA/ModB exposing [TypeC]                                         │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
  └──────────────────────────────────── qualified_type_canonicalization.md:3:1 ┘
 
@@ -311,7 +311,7 @@ UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
 ~~~zig
 KwImport,UpperIdent,NoSpaceDotUpperIdent,
 KwImport,UpperIdent,
-KwImport,UpperIdent,NoSpaceDotUpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,
+KwImport,UpperIdent,OpSlash,UpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,
 KwImport,UpperIdent,KwAs,UpperIdent,
 LowerIdent,OpColon,UpperIdent,NoSpaceDotUpperIdent,
 LowerIdent,OpAssign,UpperIdent,NoSpaceDotUpperIdent,NoSpaceOpenRound,OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,CloseRound,
@@ -339,11 +339,9 @@ EndOfFile,
 (file
 	(type-mod)
 	(statements
-		(s-import (raw "Basics")
-			(exposing
-				(exposed-upper-ident (text "Try"))))
+		(s-import (raw "Basics.Try"))
 		(s-import (raw "Color"))
-		(s-import (raw "ModA.ModB")
+		(s-import (raw "ModA/ModB")
 			(exposing
 				(exposed-upper-ident (text "TypeC"))))
 		(s-import (raw "ExternalMod") (alias "ExtMod"))
@@ -439,7 +437,7 @@ EndOfFile,
 ~~~roc
 import Basics.Try
 import Color
-import ModA.ModB exposing [TypeC]
+import ModA/ModB exposing [TypeC]
 import ExternalMod as ExtMod
 
 # Simple qualified type
@@ -535,10 +533,10 @@ transform = |result|
 				(ty-malformed))))
 	(s-import (mod "Basics")
 		(exposes
-			(exposed (name "Try") (wildcard false))))
+			(exposed (name "Try") (alias "Try") (wildcard false))))
 	(s-import (mod "Color")
 		(exposes))
-	(s-import (mod "ModA.ModB")
+	(s-import (mod "ModA/ModB")
 		(exposes
 			(exposed (name "TypeC") (wildcard false))))
 	(s-import (mod "ExternalMod")

@@ -275,6 +275,12 @@ pub const Diagnostic = union(enum) {
     module_header_deprecated: struct {
         region: Region,
     },
+    /// The header pins a compiler version that is not the one running.
+    roc_version_mismatch: struct {
+        pinned: Ident.Idx,
+        running: Ident.Idx,
+        region: Region,
+    },
     redundant_expose_main_type: struct {
         type_name: Ident.Idx,
         module_name: Ident.Idx,
@@ -450,6 +456,7 @@ pub const Diagnostic = union(enum) {
             .execution_requires_app_or_default_app => |d| d.region,
             .type_name_case_mismatch => |d| d.region,
             .module_header_deprecated => |d| d.region,
+            .roc_version_mismatch => |d| d.region,
             .redundant_expose_main_type => |d| d.region,
             .invalid_main_type_rename_in_exposing => |d| d.region,
             .type_alias_redeclared => |d| d.redeclared_region,

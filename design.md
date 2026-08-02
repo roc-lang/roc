@@ -686,6 +686,32 @@ use recursive grammar functions, and it does not keep source substrings as an
 implicit parsing cursor. Source text may be consulted only through token
 metadata, for diagnostics, literal decoding, and identifier interning.
 
+### Import Targets
+
+The parser records every source import as a structured target. That structure
+contains its origin (local or package), local base (importer, parent traversal,
+or package root), ordered source-path segments, package qualifier when present,
+and ordered nested-type segments. Binding clauses are separate fields and must
+never participate in source-file selection.
+
+`/` separates source-path segments. `.` selects a type nested inside the source
+module. A bare local target and `./` are relative to the importing file, `../`
+traverses toward the package root, and a leading `/` begins at the package root.
+A package target consists of a lowercase package alias, one `.`, and its public
+module name; any later dotted segments are nested types. Package consumers
+cannot name the package's internal source path. A package header may bind a
+public module name to one exact internal target with an explicit local import.
+
+Resolution normalizes local targets to one package-root-relative logical path
+before graph insertion. That logical path is the module identity, so distinct
+source spellings of the same target share one graph node. Resolution derives
+exactly one `.roc` path from the parsed target. It does not probe alternate
+files, reinterpret dots as directories, inspect `as` or `exposing`, or recover
+an import meaning from solved types. Parent traversal beyond the package root,
+incorrect directory spelling, and multiple logical targets for one underlying
+file are errors. Cache keys and watch inputs consume the normalized identity
+and exact resolved path produced here.
+
 The parser is a direct token-dispatch machine. Hot parser code is organized as
 grammar kernels that walk the token buffer with local token dispatch and ordinary
 lexical control flow. The hot path must not route grammar progress through a
@@ -2124,6 +2150,7 @@ const DirectCall = struct {
 const RuntimeTarget = union(enum) {
     procedure,
     low_level: LowLevel,
+    intrinsic: IntrinsicId,
     graph_participating: struct {
         iterator_protocol: ?GraphProtocol,
     },
@@ -2221,8 +2248,9 @@ only calls whose target itself comes from an enclosing specialization.
 
 The runtime target category is producer-authored. Canonicalization records the
 exact low-level operation when it replaces a provided definition; CheckedModule
-records ordinary procedure targets and operations whose runtime
-representation must participate in a Monotype graph. Graph participation
+records ordinary procedure targets, annotation-only compiler intrinsics whose
+monomorphic implementation is emitted at the checked call site, and operations
+whose runtime representation must participate in a Monotype graph. Graph participation
 covers both producers and representation-sensitive consumers: for example, an
 `Iter` method that consumes a generated-private iterator must preserve that
 representation even when it returns an ordinary value. An optional exact graph
@@ -2230,6 +2258,10 @@ protocol identifies operations that construct or directly interpret a compiler
 representation; other graph-sensitive procedures carry no protocol. No
 consumer may inspect a procedure body, builtin name, owner type, or result shape
 to reconstruct this category.
+
+Ordinary calls and method dispatches to the same intrinsic consume this exact
+identity through one Monotype lowering path. A call-site intrinsic never becomes
+an ordinary procedure specialization merely because static dispatch selected it.
 
 Each checked procedure template stores separate spans of direct calls and
 dispatch relations. Evidence instantiation iterates only the relation span; it
@@ -3065,6 +3097,28 @@ error row injects into its containing record row); rejected —
 test/cli/ParserMissingRequiredFieldError.roc (a required-record parser cannot
 use a closed format error row that omits `MissingRequiredField(Str)`).
 
+### Builtin Str Interpolation Part Compatibility
+
+Builtin `Str` interpolation accepts a part only when ordinary unification can
+make the part `Str` and every static-dispatch constraint already carried by the
+part is satisfiable by builtin `Str`. The checker decides both conditions in one
+commit-probe: success commits the unification and any method evidence; failure
+rolls the whole attempt back and reports the interpolation-part type mismatch.
+
+Builtin quote and interpolation literal constraints are discharged directly by
+`Str`. A numeral literal constraint is rejected because builtin `Str` does not
+materialize numerals, and every non-literal constraint uses the ordinary static
+dispatch method-acceptance rule. Rejecting a constrained part retires its copied
+static-dispatch constraints together with the erroneous interpolation so no
+unresolved static-dispatch constraint can cross the checked boundary.
+
+Both sides are pinned by tests: accepted —
+test/cli/issue_10204_imported_interpolation_metadata/Main.roc (an imported
+interpolation instantiated with `Str` checks successfully); rejected —
+test/cli/issue_10474_record_field_interpolation.roc (a generalized numeral
+record field cannot be instantiated as `Str` by interpolation and reports a
+type mismatch without `CheckedModule` construction panicking).
+
 ### Rewrite Inventory
 
 Every solver-mutating rewrite in checking, classified. A change that adds a
@@ -3113,6 +3167,9 @@ Other solved-graph mutations:
   Required-Field Error Composition (above). A custom parser method's
   instantiated error extension is closed, then its concrete tags gate ordinary
   unification constraints requiring the parent parser row to include them.
+- `constrainInterpolationPartToStr` — policy: Builtin Str Interpolation Part
+  Compatibility (above). One commit-probe unifies the part with `Str` and
+  validates every attached dispatch constraint; only full success is committed.
 - Literal defaulting (`commitLiteralDefault`, `commitLiteralGroupDefault`)
   — policy: literal defaulting as declared in Static Dispatch At The
   Checked Boundary (the `LITERAL DEFAULTED` warning) and the numeric
@@ -6635,6 +6692,16 @@ generated translation shim defines the exported entrypoints, marshals their
 natural C ABI arguments into interpreter calls, and fills the interpreter's
 internal dispatch table with the extern host symbols' addresses. Hosted
 dispatch order for that table is the `hosted` section's declaration order.
+
+Canonicalization resolves every `hosted` mapping once to an exact imported
+definition. Checking validates that definition is a hosted declaration, and a
+successfully checked platform module stores the header-ordered binding table in
+its `CheckedModule`, indexed by `(target CheckedModule digest, target CIR
+definition)`. `HostedCompiler.replaceAnnoOnlyWithHosted` records the exact
+rewritten definition span in `ModuleEnv`; `CheckedModule` construction consumes
+it directly. CLI and post-check consumers join hosted procedures to the binding
+table by those identities in linear time; they must not reconstruct or match
+qualified source names.
 
 ## Watch Mode For Check And Test
 

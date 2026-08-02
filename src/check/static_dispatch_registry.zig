@@ -253,6 +253,9 @@ pub const ProcedureRuntimeTarget = union(enum(u8)) {
     /// One exact producer-authored low-level operation. Monotype emits this
     /// operation directly and must not request a procedure specialization.
     low_level: base.LowLevel,
+    /// An annotation-only compiler intrinsic whose monomorphic implementation
+    /// is emitted directly at the checked call site.
+    intrinsic: can.BuiltinLowLevel.IntrinsicId,
     /// A compiler-authored operation whose runtime representation must
     /// participate in Monotype's graph protocol. The optional procedure
     /// identity selects an exact iterator construction/lowering protocol;
@@ -265,7 +268,7 @@ pub const ProcedureRuntimeTarget = union(enum(u8)) {
     pub fn iteratorProcedure(self: ProcedureRuntimeTarget) ?IteratorProcedureId {
         return switch (self) {
             .graph_participating => |target| target.iterator_procedure,
-            .procedure, .low_level => null,
+            .procedure, .low_level, .intrinsic => null,
         };
     }
 };
@@ -287,6 +290,9 @@ fn procedureRuntimeTargetForDef(
     def_idx: CIR.Def.Idx,
     method_owner: MethodOwner,
 ) ProcedureRuntimeTarget {
+    if (intrinsicForProcedureDef(module, def_idx)) |intrinsic| {
+        if (intrinsic.callsiteArity() != null) return .{ .intrinsic = intrinsic };
+    }
     if (iteratorProcedureForDef(module, def_idx)) |iterator| return .{ .graph_participating = .{
         .iterator_procedure = iterator,
     } };
@@ -299,6 +305,17 @@ fn procedureRuntimeTargetForDef(
     }
     if (module.moduleEnvConst().providedLowLevelForDef(def_idx)) |op| return .{ .low_level = op };
     return .procedure;
+}
+
+/// Exact compiler-intrinsic identity for an annotation-only builtin procedure.
+pub fn intrinsicForProcedureDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?can.BuiltinLowLevel.IntrinsicId {
+    const expr_ident = switch (module.def(def_idx).expr.data) {
+        .e_anno_only => |anno| anno.ident,
+        else => return null,
+    };
+    const env = module.moduleEnvConst();
+    if (!can.BuiltinLowLevel.isBuiltinModule(env)) return null;
+    return can.BuiltinLowLevel.intrinsicAnnotation(env, expr_ident);
 }
 
 /// Public `LocalProcedureMethodTarget` declaration.
