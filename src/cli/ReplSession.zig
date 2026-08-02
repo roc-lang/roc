@@ -53,12 +53,13 @@ module_root: []const u8 = ".",
 pub const StepResult = union(enum) {
     output: []u8,
     diagnostic: []u8,
+    runtime_crash: []u8,
     none,
     exit,
 
     pub fn deinit(self: StepResult, allocator: Allocator) void {
         switch (self) {
-            .output, .diagnostic => |bytes| allocator.free(bytes),
+            .output, .diagnostic, .runtime_crash => |bytes| allocator.free(bytes),
             .none, .exit => {},
         }
     }
@@ -120,6 +121,14 @@ pub fn step(self: *ReplSession, input: []const u8) ReplStepError![]u8 {
     return switch (result) {
         .output => |bytes| bytes,
         .diagnostic => |bytes| bytes,
+        .runtime_crash => |message| {
+            defer self.allocator.free(message);
+            return std.fmt.allocPrint(
+                self.allocator,
+                "This Roc code crashed with: \"{f}\"",
+                .{std.zig.fmtString(message)},
+            );
+        },
         .none => self.allocator.dupe(u8, ""),
         .exit => self.allocator.dupe(u8, "Goodbye!"),
     };
@@ -733,11 +742,21 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
         return .{ .diagnostic = try self.renderModuleProblems(source, import_sources, report_config) };
     }
 
-    return switch (self.backend_kind) {
-        .interpreter => .{ .output = try eval.test_helpers.lirInterpreterInspectedStr(self.allocator, &compiled.lowered) },
-        .dev => .{ .output = try eval.test_helpers.devEvaluatorInspectedStr(self.allocator, &compiled.lowered) },
-        .llvm => .{ .output = try eval.test_helpers.llvmEvaluatorInspectedStr(self.allocator, &compiled.lowered) },
-        .wasm => .{ .output = try eval.test_helpers.wasmEvaluatorInspectedStr(self.allocator, &compiled.lowered) },
+    const lowered = &compiled.lowered;
+    const program: eval.InspectedRun.Program = .{
+        .store = &lowered.view.store,
+        .layouts = &lowered.view.layouts,
+        .main_proc = lowered.mainProc(),
+    };
+    const result = switch (self.backend_kind) {
+        .interpreter => try eval.InspectedRun.run(self.allocator, .interpreter, program),
+        .dev => try eval.InspectedRun.run(self.allocator, .dev, program),
+        .wasm => try eval.InspectedRun.run(self.allocator, .wasm, program),
+        .llvm => try eval.InspectedRun.run(self.allocator, .llvm, program),
+    };
+    return switch (result.outcome) {
+        .returned => |output| .{ .output = output },
+        .crashed => |message| .{ .runtime_crash = message },
     };
 }
 
@@ -1735,6 +1754,22 @@ test "Repl - invalid syntax preserves definitions" {
     const result = try repl.step("x");
     defer testing.allocator.free(result);
     try testing.expectEqualStrings("42.0", result);
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/10491: a runtime crash is
+// reported without terminating the REPL session.
+test "Repl - issue 10491 integer overflow reports crash and continues" {
+    const steps = &[_][2][]const u8{
+        .{
+            "U64.highest + U64.highest",
+            "This Roc code crashed with: \"Integer addition overflowed\"",
+        },
+        .{ "1 + 1", "2.0" },
+    };
+
+    try expectStateful(.interpreter, steps);
+    try expectStateful(.dev, steps);
+    try expectStateful(.wasm, steps);
 }
 
 // Repro for https://github.com/roc-lang/roc/issues/10063: the annotated

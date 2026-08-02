@@ -4460,6 +4460,7 @@ pub fn canonicalizeFile(
     }
 
     try self.resolvePlatformProvides();
+    try self.resolvePlatformHosted();
 
     // Check for exposed but not implemented items
     try self.checkExposedButNotImplemented();
@@ -5403,7 +5404,60 @@ fn addPlatformHostedItems(
             .module_ident = module_ident,
             .func_ident = func_ident,
             .symbol = symbol_idx,
+            .target_import = null,
+            .target_def = null,
+            .target_status = .unresolved,
         });
+    }
+}
+
+/// Resolve hosted mappings once imports and exposed definitions are known.
+/// The resulting target is the same explicit external-definition identity
+/// used by ordinary qualified value lookups.
+fn resolvePlatformHosted(self: *Self) std.mem.Allocator.Error!void {
+    if (self.env.module_kind != .platform) return;
+
+    for (self.env.hosted_entries.items.items) |*entry| {
+        const module_alias = entry.module_ident orelse {
+            entry.target_status = .missing_module;
+            continue;
+        };
+        const imported = self.lookupAvailableModuleEnv(module_alias) orelse blk: {
+            const module_info = (try self.scopeLookupOrPrepareModule(module_alias)) orelse {
+                entry.target_status = .missing_module;
+                continue;
+            };
+            break :blk self.lookupAvailableModuleEnv(module_info.module_name) orelse {
+                entry.target_status = .missing_module;
+                continue;
+            };
+        };
+
+        const func_text = self.env.getIdent(entry.func_ident);
+        const lookup_scratch_top = self.scratchBytesTop();
+        defer self.clearScratchBytesFrom(lookup_scratch_top);
+        const lookup_name = if (imported.statement_idx != null)
+            try self.scratchQualifiedText(self.env.getIdent(imported.qualified_type_ident), func_text)
+        else if (std.mem.findScalar(u8, func_text, '.') != null)
+            try self.scratchQualifiedText(imported.env.module_name, func_text)
+        else
+            func_text;
+
+        const target_ident = imported.env.common.findIdent(lookup_name) orelse {
+            entry.target_status = .missing_value;
+            continue;
+        };
+        const target_node_idx = imported.env.getExposedValueNodeIndexById(target_ident) orelse {
+            entry.target_status = .missing_value;
+            continue;
+        };
+
+        // A source alias can reach a type module re-exposed by another module.
+        // Store the selected definition owner's import, not the alias module's
+        // import, so the def index and import index always share one owner.
+        entry.target_import = try self.getOrCreateAutoImportedTypeImport(imported);
+        entry.target_def = @enumFromInt(target_node_idx);
+        entry.target_status = .resolved;
     }
 }
 

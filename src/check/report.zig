@@ -3731,6 +3731,14 @@ pub const ReportBuilder = struct {
                 D.bytes(",").withNoPrecedingSpace(),
                 D.bytes("but no exposed module declares a hosted function with that name."),
             }, self, &report, &report.headline),
+            .function_has_implementation => try D.renderSliceInto(&.{
+                D.bytes("The platform header's"),
+                D.bytes("hosted").withAnnotation(.inline_code),
+                D.bytes("section has an entry for"),
+                D.bytes(name).withAnnotation(.inline_code),
+                D.bytes(",").withNoPrecedingSpace(),
+                D.bytes("but that function has an implementation. Hosted functions must have a type annotation without a Roc implementation."),
+            }, self, &report, &report.headline),
             .duplicate_function => try D.renderSliceInto(&.{
                 D.bytes("The platform header's"),
                 D.bytes("hosted").withAnnotation(.inline_code),

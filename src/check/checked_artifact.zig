@@ -7936,6 +7936,7 @@ test "checked artifact builtin nominal categorization requires explicit builtin 
     const empty_nested_proc_sites = NestedProcSiteTable{};
     const empty_static_dispatch_plans = static_dispatch.StaticDispatchPlanTable{};
     const empty_hosted_procs = HostedProcTable{};
+    const empty_hosted_bindings = HostedBindingTable{};
     const empty_exported_procedure_templates = ExportedProcedureTemplateTable{};
     const empty_exported_procedure_bindings = ExportedProcedureBindingTable{};
     const empty_exported_const_templates = ExportedConstTemplateTable{};
@@ -7969,6 +7970,7 @@ test "checked artifact builtin nominal categorization requires explicit builtin 
         .nested_proc_sites = &empty_nested_proc_sites,
         .static_dispatch_plans = &empty_static_dispatch_plans,
         .hosted_procs = &empty_hosted_procs,
+        .hosted_bindings = &empty_hosted_bindings,
         .exported_procedure_templates = empty_exported_procedure_templates.view(),
         .exported_procedure_bindings = empty_exported_procedure_bindings.view(),
         .exported_const_templates = empty_exported_const_templates.view(),
@@ -17626,7 +17628,7 @@ pub const HostedProcTable = struct {
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
-        global_value_defs: []const CIR.Def.Idx,
+        hosted_defs: []const CIR.Def.Idx,
         names: *canonical.CanonicalNameStore,
         templates: *const CheckedProcedureTemplateTable,
     ) Allocator.Error!HostedProcTable {
@@ -17641,7 +17643,7 @@ pub const HostedProcTable = struct {
         var order_key_bytes = std.ArrayList(u8).empty;
         errdefer order_key_bytes.deinit(allocator);
 
-        for (global_value_defs) |def_idx| {
+        for (hosted_defs) |def_idx| {
             const def = module.def(def_idx);
             switch (def.expr.data) {
                 .e_hosted_lambda => |hosted| {
@@ -17727,6 +17729,80 @@ pub const HostedProcTable = struct {
     pub fn deinit(self: *HostedProcTable, allocator: Allocator) void {
         allocator.free(self.procs);
         allocator.free(@constCast(self.order_key_bytes));
+        self.* = .{};
+    }
+};
+
+/// One platform-header hosted binding. Slice order is the host dispatch index.
+pub const HostedBinding = struct {
+    target_checked_module: CheckedModuleArtifactKey,
+    target_def: CIR.Def.Idx,
+    external_symbol_name: canonical.ExternalSymbolNameId,
+};
+
+/// Exact platform-header bindings from external symbols to checked hosted defs.
+pub const HostedBindingTable = struct {
+    bindings: []HostedBinding = &.{},
+
+    pub const Serialized = extern struct {
+        bindings: SerializedSlice(HostedBinding) = .{},
+        const Serde = artifact_serialize.SliceStoreSerde(HostedBindingTable, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
+    };
+
+    pub fn fromModule(
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        names: *canonical.CanonicalNameStore,
+        imports: []const PublishImportArtifact,
+    ) Allocator.Error!HostedBindingTable {
+        if (module.moduleEnvConst().module_kind != .platform) return .{};
+
+        var bindings = std.ArrayList(HostedBinding).empty;
+        errdefer bindings.deinit(allocator);
+
+        const Target = struct {
+            module_idx: u32,
+            def: CIR.Def.Idx,
+        };
+        var hosted_targets = std.AutoHashMap(Target, usize).init(allocator);
+        defer hosted_targets.deinit();
+        var hosted_target_count: usize = 0;
+        for (imports) |imported| hosted_target_count += imported.view.hosted_procs.procs.len;
+        try hosted_targets.ensureTotalCapacity(@intCast(hosted_target_count));
+        for (imports, 0..) |imported, import_index| {
+            for (imported.view.hosted_procs.procs) |proc| {
+                hosted_targets.putAssumeCapacityNoClobber(.{
+                    .module_idx = imported.module_idx,
+                    .def = proc.def_idx,
+                }, import_index);
+            }
+        }
+
+        for (module.moduleEnvConst().hosted_entries.items.items) |entry| {
+            if (entry.target_status != .resolved) continue;
+            const import_idx = entry.target_import orelse continue;
+            const target_def = entry.target_def orelse continue;
+            const resolved_module_idx = module.resolvedImportModule(import_idx) orelse continue;
+            const import_index = hosted_targets.get(.{
+                .module_idx = resolved_module_idx,
+                .def = target_def,
+            }) orelse continue;
+            const imported = imports[import_index];
+
+            try bindings.append(allocator, .{
+                .target_checked_module = imported.key,
+                .target_def = target_def,
+                .external_symbol_name = try names.internExternalSymbolName(module.moduleEnvConst().getString(entry.symbol)),
+            });
+        }
+
+        return .{ .bindings = try bindings.toOwnedSlice(allocator) };
+    }
+
+    pub fn deinit(self: *HostedBindingTable, allocator: Allocator) void {
+        allocator.free(self.bindings);
         self.* = .{};
     }
 };
@@ -25849,6 +25925,7 @@ pub const CheckedModuleArtifact = struct {
     callable_eval_templates: CallableEvalTemplateTable = .{},
     root_requests: RootRequestTable,
     hosted_procs: HostedProcTable,
+    hosted_bindings: HostedBindingTable = .{},
     platform_required_declarations: PlatformRequiredDeclarationTable,
     platform_requirement_relations: PlatformRequirementRelationTable = .{},
     platform_requirement_solutions: PlatformRequirementSolutionTable = .{},
@@ -26012,6 +26089,7 @@ pub const CheckedModuleArtifact = struct {
         callable_eval_templates: CallableEvalTemplateTable.Serialized,
         root_requests: RootRequestTable.Serialized,
         hosted_procs: HostedProcTable.Serialized,
+        hosted_bindings: HostedBindingTable.Serialized,
         platform_required_declarations: PlatformRequiredDeclarationTable.Serialized,
         platform_requirement_relations: PlatformRequirementRelationTable.Serialized,
         platform_requirement_solutions: PlatformRequirementSolutionTable.Serialized,
@@ -26043,7 +26121,7 @@ pub const CheckedModuleArtifact = struct {
             // `proc_bases`; `checked_types` includes its `var_names` interner = 3).
             // POD inline `key`/`module_identity` contribute 0. Fixed at compile time,
             // independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 203);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 204);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -26084,6 +26162,7 @@ pub const CheckedModuleArtifact = struct {
             try self.callable_eval_templates.serialize(&artifact.callable_eval_templates, gpa, writer);
             try self.root_requests.serialize(&artifact.root_requests, gpa, writer);
             try self.hosted_procs.serialize(&artifact.hosted_procs, gpa, writer);
+            try self.hosted_bindings.serialize(&artifact.hosted_bindings, gpa, writer);
             try self.platform_required_declarations.serialize(&artifact.platform_required_declarations, gpa, writer);
             try self.platform_requirement_relations.serialize(&artifact.platform_requirement_relations, gpa, writer);
             try self.platform_requirement_solutions.serialize(&artifact.platform_requirement_solutions, gpa, writer);
@@ -26174,6 +26253,7 @@ pub const CheckedModuleArtifact = struct {
                 .callable_eval_templates = self.callable_eval_templates.deserialize(base_addr),
                 .root_requests = self.root_requests.deserialize(base_addr),
                 .hosted_procs = self.hosted_procs.deserialize(base_addr),
+                .hosted_bindings = self.hosted_bindings.deserialize(base_addr),
                 .platform_required_declarations = self.platform_required_declarations.deserialize(base_addr),
                 .platform_requirement_relations = self.platform_requirement_relations.deserialize(base_addr),
                 .platform_requirement_solutions = self.platform_requirement_solutions.deserialize(base_addr),
@@ -26289,6 +26369,7 @@ pub const CheckedModuleArtifact = struct {
         self.platform_requirement_solutions.deinit(allocator);
         self.platform_requirement_relations.deinit(allocator);
         self.platform_required_declarations.deinit(allocator);
+        self.hosted_bindings.deinit(allocator);
         self.hosted_procs.deinit(allocator);
         self.root_requests.deinit(allocator);
         self.callable_eval_templates.deinit(allocator);
@@ -27430,6 +27511,7 @@ pub const ImportedModuleView = struct {
     nested_proc_sites: *const NestedProcSiteTable,
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     hosted_procs: *const HostedProcTable,
+    hosted_bindings: *const HostedBindingTable,
     exported_procedure_templates: ExportedProcedureTemplateView,
     exported_procedure_bindings: ExportedProcedureBindingView,
     exported_const_templates: ExportedConstTemplateView,
@@ -27476,6 +27558,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .nested_proc_sites = &artifact.nested_proc_sites,
         .static_dispatch_plans = &artifact.static_dispatch_plans,
         .hosted_procs = &artifact.hosted_procs,
+        .hosted_bindings = &artifact.hosted_bindings,
         .exported_procedure_templates = artifact.exported_procedure_templates.view(),
         .exported_procedure_bindings = artifact.exported_procedure_bindings.view(),
         .exported_const_templates = artifact.exported_const_templates.view(),
@@ -29016,8 +29099,17 @@ pub fn publishFromTypedModule(
     checked_bodies.attachQuotePlans(&static_dispatch_plans);
     checked_bodies.attachIteratorForPlans(&static_dispatch_plans);
 
-    var hosted_procs = try HostedProcTable.fromModule(allocator, module, global_value_defs, &canonical_names, &checked_procedure_templates);
+    var hosted_procs = try HostedProcTable.fromModule(
+        allocator,
+        module,
+        module_env.store.sliceDefs(module_env.hosted_defs),
+        &canonical_names,
+        &checked_procedure_templates,
+    );
     errdefer hosted_procs.deinit(allocator);
+
+    var hosted_bindings = try HostedBindingTable.fromModule(allocator, module, &canonical_names, inputs.imports);
+    errdefer hosted_bindings.deinit(allocator);
 
     var platform_required_bindings = try PlatformRequiredBindingTable.fromRelation(
         allocator,
@@ -29433,6 +29525,7 @@ pub fn publishFromTypedModule(
         .callable_eval_templates = callable_eval_templates,
         .root_requests = root_requests,
         .hosted_procs = hosted_procs,
+        .hosted_bindings = hosted_bindings,
         .platform_required_declarations = platform_required_declarations,
         .platform_requirement_relations = platform_requirement_relations,
         .platform_requirement_solutions = platform_requirement_solutions,
@@ -29521,6 +29614,7 @@ fn expectProvidedExportKind(
     const empty_nested_proc_sites = NestedProcSiteTable{};
     const empty_static_dispatch_plans = static_dispatch.StaticDispatchPlanTable{};
     const empty_hosted_procs = HostedProcTable{};
+    const empty_hosted_bindings = HostedBindingTable{};
     const empty_exported_procedure_templates = ExportedProcedureTemplateTable{};
     const empty_exported_procedure_bindings = ExportedProcedureBindingTable{};
     const empty_exported_const_templates = ExportedConstTemplateTable{};
@@ -29590,6 +29684,7 @@ fn expectProvidedExportKind(
         .nested_proc_sites = &empty_nested_proc_sites,
         .static_dispatch_plans = &empty_static_dispatch_plans,
         .hosted_procs = &empty_hosted_procs,
+        .hosted_bindings = &empty_hosted_bindings,
         .exported_procedure_templates = empty_exported_procedure_templates.view(),
         .exported_procedure_bindings = empty_exported_procedure_bindings.view(),
         .exported_const_templates = empty_exported_const_templates.view(),
@@ -29693,7 +29788,13 @@ fn expectProvidedExportKind(
     checked_bodies.attachQuotePlans(&static_dispatch_plans);
     checked_bodies.attachIteratorForPlans(&static_dispatch_plans);
 
-    var hosted_procs = try HostedProcTable.fromModule(allocator, module, global_value_defs, &canonical_names, &checked_procedure_templates);
+    var hosted_procs = try HostedProcTable.fromModule(
+        allocator,
+        module,
+        module_env.store.sliceDefs(module_env.hosted_defs),
+        &canonical_names,
+        &checked_procedure_templates,
+    );
     defer hosted_procs.deinit(allocator);
 
     var platform_requirement_relations = try PlatformRequirementRelationTable.fromRelation(
@@ -29967,6 +30068,7 @@ test "checked module owns post-check inputs at the checked boundary" {
     try std.testing.expect(@hasField(CheckedModuleArtifact, "callable_eval_templates"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "root_requests"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "hosted_procs"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "hosted_bindings"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "platform_required_declarations"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "platform_required_bindings"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "compile_time_roots"));
@@ -30652,6 +30754,7 @@ test "transform-A stores: serialize/deserialize round-trip preserves every slice
     try expectAllSliceStoreRoundTrips(NestedProcSiteTable); // transform-B: now POD after side-list conversion
     try expectAllSliceStoreRoundTrips(ModuleInterfaceCapabilities); // transform-B: args moved to shared pool
     try expectAllSliceStoreRoundTrips(HostedProcTable); // transform-B: order_key moved to byte pool
+    try expectAllSliceStoreRoundTrips(HostedBindingTable);
 }
 
 fn testCheckedArtifactKey(byte: u8) CheckedModuleArtifactKey {
@@ -30715,6 +30818,7 @@ fn testVisibilityImportedView(
         .nested_proc_sites = undefined,
         .static_dispatch_plans = undefined,
         .hosted_procs = undefined,
+        .hosted_bindings = undefined,
         .exported_procedure_templates = undefined,
         .exported_procedure_bindings = undefined,
         .exported_const_templates = undefined,
@@ -31523,8 +31627,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xC1, 0x26, 0x48, 0xC6, 0x91, 0x09, 0xD0, 0xFD, 0x34, 0x05, 0x3E, 0x2E, 0x14, 0x4C, 0x61, 0x2A,
-        0x11, 0x14, 0xF4, 0x6B, 0xCB, 0x05, 0xF1, 0x4C, 0x83, 0x43, 0x62, 0x2B, 0x87, 0x4A, 0x62, 0x3A,
+        0xB5, 0xCC, 0xBB, 0x44, 0x7C, 0xAB, 0xBD, 0xD4, 0xCD, 0xCC, 0x90, 0x8C, 0xA9, 0x7E, 0x0B, 0x63,
+        0x5C, 0xCE, 0x5C, 0xD1, 0xA0, 0xBB, 0xFD, 0x14, 0x5B, 0x4C, 0xB0, 0xB2, 0x39, 0xFA, 0xDB, 0xC3,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
