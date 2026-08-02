@@ -4008,6 +4008,12 @@ test "issue 10431: wrapped declaration has no trailing whitespace" {
     try std.testing.expectEqualStrings("x =\n\t1\n", result);
 }
 
+test "issue 10191: leading newline before function parameter formatting is stable" {
+    // Repro for https://github.com/roc-lang/roc/issues/10191
+    const result = try moduleFmtsStable(std.testing.allocator, "\nm : (S) -> r\n", false);
+    defer std.testing.allocator.free(result);
+}
+
 test "string token text preserves significant trailing spaces" {
     const regular = try moduleFmtsStable(std.testing.allocator, "regular=\"value \"", false);
     defer std.testing.allocator.free(regular);
