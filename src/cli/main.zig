@@ -48,6 +48,7 @@ const ctx_mod = @import("ctx");
 const compile = @import("compile");
 const can = @import("can");
 const check = @import("check");
+const canonical = check.CanonicalNames;
 const bundle = @import("bundle");
 const unbundle = @import("unbundle");
 
@@ -1607,6 +1608,16 @@ const CheckedHostedTable = struct {
     symbols: []const []const u8,
 };
 
+const HostedTargetKey = struct {
+    module_key: [32]u8,
+    def_idx: u32,
+};
+
+const HostedBindingView = struct {
+    table: *const check.CheckedArtifact.HostedBindingTable,
+    names: *const canonical.CanonicalNameStore,
+};
+
 fn checkedModuleKeySeen(seen_keys: []const [32]u8, key: [32]u8) bool {
     for (seen_keys) |seen_key| {
         if (std.mem.eql(u8, &seen_key, &key)) return true;
@@ -1634,78 +1645,62 @@ fn appendHostedCacheEntriesFromView(
     }
 }
 
-const HostedSectionMap = struct {
-    keys: []const []const u8,
-    symbols: []const []const u8,
-};
-
-fn hostedSectionMapFromEnv(allocator: Allocator, env: *const ModuleEnv) Allocator.Error!HostedSectionMap {
-    const section = env.hosted_entries.items.items;
-    const keys = try allocator.alloc([]const u8, section.len);
-    errdefer {
-        for (keys) |key| allocator.free(key);
-        allocator.free(keys);
-    }
-    const symbols = try allocator.alloc([]const u8, section.len);
-    errdefer allocator.free(symbols);
-
-    for (section, 0..) |entry, index| {
-        var func_text = env.getIdentText(entry.func_ident);
-        if (func_text.len > 0 and func_text[func_text.len - 1] == '!') {
-            func_text = func_text[0 .. func_text.len - 1];
-        }
-        keys[index] = if (entry.module_ident) |module_ident|
-            try std.fmt.allocPrint(allocator, "{s}.{s}", .{ env.getIdentText(module_ident), func_text })
-        else
-            try allocator.dupe(u8, func_text);
-        symbols[index] = env.getString(entry.symbol);
-    }
-
-    return .{ .keys = keys, .symbols = symbols };
-}
-
-fn deinitHostedSectionMap(allocator: Allocator, map: HostedSectionMap) void {
-    for (map.keys) |key| allocator.free(key);
-    allocator.free(map.keys);
-    allocator.free(map.symbols);
-}
-
-fn findHostedSectionEnv(
+fn findHostedBindingView(
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     imported_artifacts: []const check.CheckedArtifact.ImportedModuleView,
     relation_artifacts: []const check.CheckedArtifact.ImportedModuleView,
-) ?*const ModuleEnv {
-    const root_env = root_artifact.moduleEnvConst();
-    if (root_env.hosted_entries.items.items.len != 0) return root_env;
+) ?HostedBindingView {
+    if (root_artifact.module_identity.kind == .platform) {
+        return .{ .table = &root_artifact.hosted_bindings, .names = &root_artifact.canonical_names };
+    }
     for (imported_artifacts) |view| {
-        if (view.module_env.hosted_entries.items.items.len != 0) return view.module_env;
+        if (view.module_identity.kind == .platform) {
+            return .{ .table = view.hosted_bindings, .names = view.canonical_names };
+        }
     }
     for (relation_artifacts) |view| {
-        if (view.module_env.hosted_entries.items.items.len != 0) return view.module_env;
+        if (view.module_identity.kind == .platform) {
+            return .{ .table = view.hosted_bindings, .names = view.canonical_names };
+        }
     }
     return null;
 }
 
-fn applyHostedSectionMap(entries: []HostedCacheEntry, map: HostedSectionMap) void {
-    if (entries.len != map.keys.len) {
+fn applyHostedBindings(
+    allocator: Allocator,
+    entries: []HostedCacheEntry,
+    binding_view: HostedBindingView,
+) Allocator.Error!void {
+    const bindings = binding_view.table.bindings;
+    if (entries.len != bindings.len) {
         if (builtin.mode == .Debug) {
-            std.debug.panic("default roc command invariant violated: hosted section size {d} differs from checked hosted catalog size {d}", .{ map.keys.len, entries.len });
+            std.debug.panic("default roc command invariant violated: hosted binding count {d} differs from checked hosted catalog size {d}", .{ bindings.len, entries.len });
         }
         unreachable;
     }
 
-    for (entries) |*entry| {
-        const dispatch_index = blk: {
-            for (map.keys, 0..) |key, index| {
-                if (std.mem.eql(u8, key, entry.order_key)) break :blk index;
-            }
+    var entries_by_target = std.AutoHashMap(HostedTargetKey, usize).init(allocator);
+    defer entries_by_target.deinit();
+    try entries_by_target.ensureTotalCapacity(@intCast(entries.len));
+    for (entries, 0..) |entry, index| {
+        entries_by_target.putAssumeCapacityNoClobber(.{
+            .module_key = entry.module_key,
+            .def_idx = entry.def_idx,
+        }, index);
+    }
+
+    for (bindings, 0..) |binding, dispatch_index| {
+        const entry_index = entries_by_target.get(.{
+            .module_key = binding.target_checked_module.bytes,
+            .def_idx = @intFromEnum(binding.target_def),
+        }) orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("default roc command invariant violated: hosted function '{s}' is missing from the platform hosted section", .{entry.order_key});
+                std.debug.panic("default roc command invariant violated: a checked hosted binding has no matching hosted procedure", .{});
             }
             unreachable;
         };
-        entry.dispatch_index = @intCast(dispatch_index);
-        entry.external_symbol_name = map.symbols[dispatch_index];
+        entries[entry_index].dispatch_index = @intCast(dispatch_index);
+        entries[entry_index].external_symbol_name = binding_view.names.externalSymbolNameText(binding.external_symbol_name);
     }
 
     const DispatchSort = struct {
@@ -1740,28 +1735,25 @@ fn checkedHostedTable(
         try appendHostedCacheEntriesFromView(allocator, &hosted_entries, &seen_keys, view);
     }
 
-    const SortContext = struct {
-        pub fn lessThan(_: void, a: HostedCacheEntry, b: HostedCacheEntry) bool {
-            return switch (std.mem.order(u8, a.order_key, b.order_key)) {
-                .lt => true,
-                .gt => false,
-                .eq => if (a.def_idx != b.def_idx)
-                    a.def_idx < b.def_idx
-                else
-                    std.mem.order(u8, &a.module_key, &b.module_key) == .lt,
-            };
+    if (findHostedBindingView(root_artifact, imported_artifacts, relation_artifacts)) |binding_view| {
+        try applyHostedBindings(allocator, hosted_entries.items, binding_view);
+    } else {
+        const SortContext = struct {
+            pub fn lessThan(_: void, a: HostedCacheEntry, b: HostedCacheEntry) bool {
+                return switch (std.mem.order(u8, a.order_key, b.order_key)) {
+                    .lt => true,
+                    .gt => false,
+                    .eq => if (a.def_idx != b.def_idx)
+                        a.def_idx < b.def_idx
+                    else
+                        std.mem.order(u8, &a.module_key, &b.module_key) == .lt,
+                };
+            }
+        };
+        std.mem.sort(HostedCacheEntry, hosted_entries.items, {}, SortContext.lessThan);
+        for (hosted_entries.items, 0..) |*entry, index| {
+            entry.dispatch_index = @intCast(index);
         }
-    };
-    std.mem.sort(HostedCacheEntry, hosted_entries.items, {}, SortContext.lessThan);
-
-    for (hosted_entries.items, 0..) |*entry, index| {
-        entry.dispatch_index = @intCast(index);
-    }
-
-    if (findHostedSectionEnv(root_artifact, imported_artifacts, relation_artifacts)) |env| {
-        const map = try hostedSectionMapFromEnv(allocator, env);
-        defer deinitHostedSectionMap(allocator, map);
-        applyHostedSectionMap(hosted_entries.items, map);
     }
 
     const entries = try hosted_entries.toOwnedSlice(allocator);

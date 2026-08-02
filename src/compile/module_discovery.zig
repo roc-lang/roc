@@ -130,6 +130,7 @@ pub fn resolveLocalImportLogicalPath(
 /// against the importing module's logical path without inspecting source text.
 /// Uppercase entries in a package header are also importer-relative
 /// auto-imports unless an explicit import supplies that public binding.
+/// Platform hosted targets are importer-relative auto-imports as well.
 ///
 /// This is used to identify which sibling modules need to be compiled
 /// before canonicalizing the current module.
@@ -158,6 +159,19 @@ pub fn extractImportsFromDeclIndex(
     for (parse_ast.decl_index.imports.items) |import| {
         if (import.origin != .local) continue;
         try appendModuleName(gpa, &result, parse_ast.env.getIdent(import.module_name), import.base, import.parent_count, true);
+    }
+
+    const file = parse_ast.store.getFile();
+    switch (parse_ast.store.getHeader(file.header)) {
+        .platform => |platform| {
+            for (parse_ast.store.symbolMapEntrySlice(platform.hosted)) |entry_idx| {
+                const entry = parse_ast.store.getSymbolMapEntry(entry_idx);
+                const module_token = entry.module orelse continue;
+                const module_ident = parse_ast.tokens.resolveIdentifier(module_token) orelse continue;
+                try appendModuleName(gpa, &result, parse_ast.env.getIdent(module_ident), .importer, 0, false);
+            }
+        },
+        else => {},
     }
 
     return result.toOwnedSlice(gpa);
@@ -489,4 +503,38 @@ test "local import normalization is package-root relative and rejects escape" {
             try std.testing.expect(actual == null);
         }
     }
+}
+
+test "platform hosted targets are module dependencies" {
+    const gpa = std.testing.allocator;
+    var env = try @import("base").CommonEnv.init(gpa,
+        \\platform ""
+        \\    requires {}
+        \\    exposes [Effect]
+        \\    packages {}
+        \\    provides {}
+        \\    hosted {
+        \\        "roc_bar_get": Bar.Idx.get!,
+        \\        "roc_effect_run": Effect.run!,
+        \\    }
+        \\    targets: {}
+        \\
+        \\import Effect
+    );
+    defer env.deinit(gpa);
+
+    const ast = try parse.file(gpa, &env);
+    defer ast.deinit();
+
+    const local_imports = try extractImportsFromDeclIndex(ast, gpa);
+    defer {
+        for (local_imports) |item| gpa.free(item.import_name);
+        gpa.free(local_imports);
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), local_imports.len);
+    try std.testing.expectEqualStrings("Effect", local_imports[0].import_name);
+    try std.testing.expectEqualStrings("Bar", local_imports[1].import_name);
+    try std.testing.expectEqual(.importer, local_imports[1].base);
+    try std.testing.expectEqual(@as(u16, 0), local_imports[1].parent_count);
 }

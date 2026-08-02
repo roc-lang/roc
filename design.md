@@ -6693,6 +6693,16 @@ natural C ABI arguments into interpreter calls, and fills the interpreter's
 internal dispatch table with the extern host symbols' addresses. Hosted
 dispatch order for that table is the `hosted` section's declaration order.
 
+Canonicalization resolves every `hosted` mapping once to an exact imported
+definition. Checking validates that definition is a hosted declaration, and a
+successfully checked platform module stores the header-ordered binding table in
+its `CheckedModule`, indexed by `(target CheckedModule digest, target CIR
+definition)`. `HostedCompiler.replaceAnnoOnlyWithHosted` records the exact
+rewritten definition span in `ModuleEnv`; `CheckedModule` construction consumes
+it directly. CLI and post-check consumers join hosted procedures to the binding
+table by those identities in linear time; they must not reconstruct or match
+qualified source names.
+
 ## Watch Mode For Check And Test
 
 `roc check --watch` and `roc test --watch` are long-running compiler commands.

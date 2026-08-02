@@ -1501,8 +1501,7 @@ pub fn parseCheckModule(
         .checked_artifact => try czer.validateForExplicitRoots(),
     }
     if (hosted_transform) {
-        var modified_defs = try can.HostedCompiler.replaceAnnoOnlyWithHosted(module_env);
-        defer modified_defs.deinit(module_env.gpa);
+        try can.HostedCompiler.replaceAnnoOnlyWithHosted(module_env);
     }
     const can_elapsed = can_timer.read();
 

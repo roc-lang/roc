@@ -3731,10 +3731,7 @@ pub const Coordinator = struct {
                 const is_platform_pkg = self.platform_root_package_name != null and
                     std.mem.eql(u8, result.package_name, self.platform_root_package_name.?);
                 if (is_platform_pkg) {
-                    if (can.HostedCompiler.replaceAnnoOnlyWithHosted(env)) |modified_defs| {
-                        var defs = modified_defs;
-                        defs.deinit(env.gpa);
-                    } else |_| {}
+                    try can.HostedCompiler.replaceAnnoOnlyWithHosted(env);
                 }
             }
         }
@@ -6037,19 +6034,28 @@ test "hosted distinctness: identical hosted declarations bound to different plat
     try std.testing.expectEqual(@as(usize, 2), symbols.items.len);
     try std.testing.expect(!canonical.procedureValueRefEql(proc_refs.items[0], proc_refs.items[1]));
 
-    // And the platform header binds them to two distinct linker symbols.
-    var linker_symbols = std.ArrayList([]const u8).empty;
-    defer linker_symbols.deinit(allocator);
+    // And the checked platform table binds two distinct target artifacts to
+    // two distinct linker symbols in header order.
+    var binding_count: usize = 0;
+    var first_target: ?check.CheckedArtifact.CheckedModuleArtifactKey = null;
+    var first_symbol: ?[]const u8 = null;
     for (view_groups) |views| {
         for (views) |view| {
-            const env = view.module_env;
-            for (env.hosted_entries.items.items) |entry| {
-                try linker_symbols.append(allocator, env.getString(entry.symbol));
+            if (view.module_identity.kind != .platform) continue;
+            for (view.hosted_bindings.bindings) |binding| {
+                const symbol = view.canonical_names.externalSymbolNameText(binding.external_symbol_name);
+                if (first_target) |target| {
+                    try std.testing.expect(!std.mem.eql(u8, &target.bytes, &binding.target_checked_module.bytes));
+                    try std.testing.expect(!std.mem.eql(u8, first_symbol.?, symbol));
+                } else {
+                    first_target = binding.target_checked_module;
+                    first_symbol = symbol;
+                }
+                binding_count += 1;
             }
         }
     }
-    try std.testing.expectEqual(@as(usize, 2), linker_symbols.items.len);
-    try std.testing.expect(!std.mem.eql(u8, linker_symbols.items[0], linker_symbols.items[1]));
+    try std.testing.expectEqual(@as(usize, 2), binding_count);
 }
 
 fn collectPatternExtractionRegionStats(
