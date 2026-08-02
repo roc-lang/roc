@@ -7199,6 +7199,18 @@ generated C, Zig, and Rust output and call every direct and aggregate shape in
 both directions, so a host compiler and Roc must independently choose the same
 ABI.
 
+An owning tag-union payload is never projected through a borrowed accessor
+that returns an owning value. Generated host glue exposes an unsafe raw
+consuming projection which takes mutable access to one owned union shell,
+moves the active payload out, and leaves the shell logically uninitialized.
+The caller must first validate the explicit discriminant and must neither read
+nor destroy the shell after the move. A host language with affine or RAII
+ownership puts this primitive behind a non-copying owner whose failed
+tag-specific projection returns the still-owned shell. Borrowed inspection, if
+needed, returns only a pointer or reference and never fabricates another owning
+payload descriptor. The 32-bit aligned-byte representation and native union
+representation provide the same move contract.
+
 ABI class assignment, LLVM carrier selection, and concrete argument/result
 placement are separate explicit steps. Every register placement records both
 its byte pieces and their atomic carrier. Piecewise carriers become independent
