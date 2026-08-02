@@ -174,6 +174,15 @@ pub const FunctionNodes = struct {
     ret: NodeId,
 };
 
+/// Immutable alpha-normalized bytes for one open function interface, scoped to
+/// the producing instantiation graph. The digest selects lookup candidates;
+/// exact bytes remain the collision authority after body relations mutate the
+/// live request nodes.
+pub const OpenFunctionInterfaceShape = struct {
+    digest: names.TypeDigest,
+    bytes: []const u8,
+};
+
 /// Deterministic operation counts for diagnosing Monotype graph workloads.
 /// `InstGraph.diagnostics` remains null unless detailed diagnostics were
 /// requested, so ordinary lowering does not count hot-path operations.
@@ -1410,11 +1419,27 @@ pub const InstGraph = struct {
     /// depending on fresh node ids. Producer-owned source-interface and
     /// recursive-representation evidence participate because they can change
     /// how an otherwise identical open shape finalizes.
-    pub fn openFunctionInterfaceShapeDigest(self: *InstGraph, node: NodeId) Allocator.Error!names.TypeDigest {
-        var writer = OpenFunctionInterfaceShapeDigest.init(self);
+    /// Capture the exact open-interface shape before a callee body can refine
+    /// its live graph nodes. The bytes are graph-arena owned and must not escape
+    /// draft specialization lookup.
+    pub fn openFunctionInterfaceShape(self: *InstGraph, node: NodeId) Allocator.Error!OpenFunctionInterfaceShape {
+        var sizing = OpenFunctionInterfaceShapeWriter.init(self);
+        defer sizing.deinit();
+        try sizing.writeFunctionInterface(node);
+        const digest: names.TypeDigest = .{ .bytes = sizing.hasher.finalResult() };
+
+        const bytes = try self.arena().alloc(u8, sizing.output_len);
+        var writer = OpenFunctionInterfaceShapeWriter.initWithOutput(self, bytes);
         defer writer.deinit();
         try writer.writeFunctionInterface(node);
-        return .{ .bytes = writer.hasher.finalResult() };
+        if (writer.output_len != bytes.len) {
+            Common.invariant("open function-interface shape changed while being captured");
+        }
+        const written_digest: names.TypeDigest = .{ .bytes = writer.hasher.finalResult() };
+        if (!std.mem.eql(u8, &digest.bytes, &written_digest.bytes)) {
+            Common.invariant("open function-interface shape digest differed from its exact bytes");
+        }
+        return .{ .digest = digest, .bytes = bytes };
     }
 
     /// Whether a live graph type is already closed and can be snapshotted
@@ -4045,14 +4070,16 @@ fn optionalInstDigestEql(left: ?names.TypeDigest, right: ?names.TypeDigest) bool
     return right == null;
 }
 
-const OpenFunctionInterfaceShapeDigest = struct {
+const OpenFunctionInterfaceShapeWriter = struct {
     graph: *InstGraph,
     hasher: std.crypto.hash.sha2.Sha256,
     unresolved_ids: std.AutoHashMap(NodeId, u32),
     visiting: std.ArrayList(NodeId),
     next_unresolved: u32 = 0,
+    output: ?[]u8 = null,
+    output_len: usize = 0,
 
-    fn init(graph: *InstGraph) OpenFunctionInterfaceShapeDigest {
+    fn init(graph: *InstGraph) OpenFunctionInterfaceShapeWriter {
         return .{
             .graph = graph,
             .hasher = std.crypto.hash.sha2.Sha256.init(.{}),
@@ -4061,12 +4088,18 @@ const OpenFunctionInterfaceShapeDigest = struct {
         };
     }
 
-    fn deinit(self: *OpenFunctionInterfaceShapeDigest) void {
+    fn initWithOutput(graph: *InstGraph, output: []u8) OpenFunctionInterfaceShapeWriter {
+        var writer = init(graph);
+        writer.output = output;
+        return writer;
+    }
+
+    fn deinit(self: *OpenFunctionInterfaceShapeWriter) void {
         self.visiting.deinit(self.graph.allocator);
         self.unresolved_ids.deinit();
     }
 
-    fn writeFunctionInterface(self: *OpenFunctionInterfaceShapeDigest, node: NodeId) Allocator.Error!void {
+    fn writeFunctionInterface(self: *OpenFunctionInterfaceShapeWriter, node: NodeId) Allocator.Error!void {
         self.writeBytes("roc.monotype.open_function_interface_shape.v2");
         try self.writeFunctionNodes(try self.graph.functionNodes(node));
         if (self.graph.requestSourceInterface(node)) |source| {
@@ -4077,13 +4110,13 @@ const OpenFunctionInterfaceShapeDigest = struct {
         }
     }
 
-    fn writeFunctionNodes(self: *OpenFunctionInterfaceShapeDigest, function: FunctionNodes) Allocator.Error!void {
+    fn writeFunctionNodes(self: *OpenFunctionInterfaceShapeWriter, function: FunctionNodes) Allocator.Error!void {
         self.writeU32(@intCast(function.args.len));
         for (function.args) |arg| try self.writeNode(arg);
         try self.writeNode(function.ret);
     }
 
-    fn writeNode(self: *OpenFunctionInterfaceShapeDigest, raw_node: NodeId) Allocator.Error!void {
+    fn writeNode(self: *OpenFunctionInterfaceShapeWriter, raw_node: NodeId) Allocator.Error!void {
         const node = self.graph.find(raw_node);
         const content = self.graph.nodes.items[@intFromEnum(node)];
         self.writeU8(if (self.hasRecursiveValueSlot(node)) 1 else 0);
@@ -4189,32 +4222,32 @@ const OpenFunctionInterfaceShapeDigest = struct {
         }
     }
 
-    fn hasRecursiveValueSlot(self: *OpenFunctionInterfaceShapeDigest, node: NodeId) bool {
+    fn hasRecursiveValueSlot(self: *OpenFunctionInterfaceShapeWriter, node: NodeId) bool {
         for (self.graph.recursive_argument_slots.items) |slot| {
             if (self.graph.find(slot) == node) return true;
         }
         return false;
     }
 
-    fn hasForcedDynamicIteratorRoot(self: *OpenFunctionInterfaceShapeDigest, node: NodeId) bool {
+    fn hasForcedDynamicIteratorRoot(self: *OpenFunctionInterfaceShapeWriter, node: NodeId) bool {
         for (self.graph.forced_dynamic_iterator_roots.items) |root| {
             if (self.graph.find(root) == node) return true;
         }
         return false;
     }
 
-    fn writeNodeSpan(self: *OpenFunctionInterfaceShapeDigest, nodes: []const NodeId) Allocator.Error!void {
+    fn writeNodeSpan(self: *OpenFunctionInterfaceShapeWriter, nodes: []const NodeId) Allocator.Error!void {
         self.writeU32(@intCast(nodes.len));
         for (nodes) |node| try self.writeNode(node);
     }
 
-    fn writeVariable(self: *OpenFunctionInterfaceShapeDigest, variable: InstVariable) void {
+    fn writeVariable(self: *OpenFunctionInterfaceShapeWriter, variable: InstVariable) void {
         self.writeBytes(@tagName(variable.origin));
         self.writeOptionalNumericDefaultPhase(variable.numeric_default_phase);
         self.writeOptionalRowDefault(variable.row_default);
     }
 
-    fn writeTypeDef(self: *OpenFunctionInterfaceShapeDigest, def: Type.TypeDef) void {
+    fn writeTypeDef(self: *OpenFunctionInterfaceShapeWriter, def: Type.TypeDef) void {
         self.writeBytes(self.graph.name_store.moduleIdentityBytes(def.module));
         self.writeOptionalU32(def.source_decl);
         if (def.source_decl == null) {
@@ -4227,7 +4260,7 @@ const OpenFunctionInterfaceShapeDigest = struct {
         self.writeOptionalIteratorTopology(def.iterator_topology);
     }
 
-    fn writeOptionalBacking(self: *OpenFunctionInterfaceShapeDigest, backing: ?InstBacking) Allocator.Error!void {
+    fn writeOptionalBacking(self: *OpenFunctionInterfaceShapeWriter, backing: ?InstBacking) Allocator.Error!void {
         if (backing) |actual| {
             self.writeU8(1);
             try self.writeBacking(actual);
@@ -4236,14 +4269,14 @@ const OpenFunctionInterfaceShapeDigest = struct {
         }
     }
 
-    fn writeBacking(self: *OpenFunctionInterfaceShapeDigest, backing: InstBacking) Allocator.Error!void {
+    fn writeBacking(self: *OpenFunctionInterfaceShapeWriter, backing: InstBacking) Allocator.Error!void {
         self.writeBytes(@tagName(backing.use));
         self.writeBytes(@tagName(backing.authority));
         try self.writeNode(backing.node);
     }
 
     fn writeDeclaredFieldSpan(
-        self: *OpenFunctionInterfaceShapeDigest,
+        self: *OpenFunctionInterfaceShapeWriter,
         declared_order: []const InstDeclaredField,
     ) Allocator.Error!void {
         self.writeU32(@intCast(declared_order.len));
@@ -4262,7 +4295,7 @@ const OpenFunctionInterfaceShapeDigest = struct {
     }
 
     fn writeOptionalGeneratedIterator(
-        self: *OpenFunctionInterfaceShapeDigest,
+        self: *OpenFunctionInterfaceShapeWriter,
         generated_iterator: ?InstGeneratedIterator,
     ) Allocator.Error!void {
         const generated = generated_iterator orelse {
@@ -4280,7 +4313,7 @@ const OpenFunctionInterfaceShapeDigest = struct {
     }
 
     fn writeOptionalIteratorTopology(
-        self: *OpenFunctionInterfaceShapeDigest,
+        self: *OpenFunctionInterfaceShapeWriter,
         topology: ?Type.IteratorTopology,
     ) void {
         const value = topology orelse {
@@ -4300,7 +4333,7 @@ const OpenFunctionInterfaceShapeDigest = struct {
     }
 
     fn writeOptionalBuiltinOwner(
-        self: *OpenFunctionInterfaceShapeDigest,
+        self: *OpenFunctionInterfaceShapeWriter,
         owner: ?static_dispatch.BuiltinOwner,
     ) void {
         if (owner) |actual| {
@@ -4312,7 +4345,7 @@ const OpenFunctionInterfaceShapeDigest = struct {
     }
 
     fn writeOptionalNumericDefaultPhase(
-        self: *OpenFunctionInterfaceShapeDigest,
+        self: *OpenFunctionInterfaceShapeWriter,
         phase: ?checked.NumericDefaultPhase,
     ) void {
         if (phase) |actual| {
@@ -4324,7 +4357,7 @@ const OpenFunctionInterfaceShapeDigest = struct {
     }
 
     fn writeOptionalRowDefault(
-        self: *OpenFunctionInterfaceShapeDigest,
+        self: *OpenFunctionInterfaceShapeWriter,
         row_default: ?checked.RowDefault,
     ) void {
         if (row_default) |actual| {
@@ -4335,7 +4368,7 @@ const OpenFunctionInterfaceShapeDigest = struct {
         }
     }
 
-    fn writeOptionalDigest(self: *OpenFunctionInterfaceShapeDigest, digest: ?names.TypeDigest) void {
+    fn writeOptionalDigest(self: *OpenFunctionInterfaceShapeWriter, digest: ?names.TypeDigest) void {
         if (digest) |actual| {
             self.writeU8(1);
             self.writeBytes(&actual.bytes);
@@ -4344,7 +4377,7 @@ const OpenFunctionInterfaceShapeDigest = struct {
         }
     }
 
-    fn writeOptionalU32(self: *OpenFunctionInterfaceShapeDigest, value: ?u32) void {
+    fn writeOptionalU32(self: *OpenFunctionInterfaceShapeWriter, value: ?u32) void {
         if (value) |actual| {
             self.writeU8(1);
             self.writeU32(actual);
@@ -4353,18 +4386,29 @@ const OpenFunctionInterfaceShapeDigest = struct {
         }
     }
 
-    fn writeBytes(self: *OpenFunctionInterfaceShapeDigest, bytes: []const u8) void {
+    fn writeBytes(self: *OpenFunctionInterfaceShapeWriter, bytes: []const u8) void {
         self.writeU32(@intCast(bytes.len));
-        self.hasher.update(bytes);
+        self.writeRawBytes(bytes);
     }
 
-    fn writeU8(self: *OpenFunctionInterfaceShapeDigest, value: u8) void {
-        self.hasher.update(&.{value});
+    fn writeU8(self: *OpenFunctionInterfaceShapeWriter, value: u8) void {
+        self.writeRawBytes(&.{value});
     }
 
-    fn writeU32(self: *OpenFunctionInterfaceShapeDigest, value: u32) void {
+    fn writeU32(self: *OpenFunctionInterfaceShapeWriter, value: u32) void {
         var little = std.mem.nativeToLittle(u32, value);
-        self.hasher.update(std.mem.asBytes(&little));
+        self.writeRawBytes(std.mem.asBytes(&little));
+    }
+
+    fn writeRawBytes(self: *OpenFunctionInterfaceShapeWriter, bytes: []const u8) void {
+        self.hasher.update(bytes);
+        if (self.output) |output| {
+            if (self.output_len > output.len or bytes.len > output.len - self.output_len) {
+                Common.invariant("open function-interface shape exceeded its measured byte count");
+            }
+            @memcpy(output[self.output_len..][0..bytes.len], bytes);
+        }
+        self.output_len += bytes.len;
     }
 };
 
@@ -4676,7 +4720,7 @@ test "open draft function interfaces use related graph classes directly" {
     try std.testing.expect(!graph.sameFunctionInterface(left, other));
 }
 
-test "open function interface shape digest alpha-normalizes variables and preserves aliasing" {
+test "open function interface shape snapshot alpha-normalizes variables and survives refinement" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -4697,9 +4741,13 @@ test "open function interface shape digest alpha-normalizes variables and preser
         .ret = equivalent_var,
     } });
 
-    const left_digest = try graph.openFunctionInterfaceShapeDigest(left);
-    const equivalent_digest = try graph.openFunctionInterfaceShapeDigest(equivalent);
-    try std.testing.expectEqualSlices(u8, &left_digest.bytes, &equivalent_digest.bytes);
+    const left_shape = try graph.openFunctionInterfaceShape(left);
+    const equivalent_shape = try graph.openFunctionInterfaceShape(equivalent);
+    try std.testing.expectEqualSlices(u8, &left_shape.digest.bytes, &equivalent_shape.digest.bytes);
+    try std.testing.expectEqualSlices(u8, left_shape.bytes, equivalent_shape.bytes);
+    var exact_bytes_digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(left_shape.bytes, &exact_bytes_digest, .{});
+    try std.testing.expectEqualSlices(u8, &left_shape.digest.bytes, &exact_bytes_digest);
 
     const distinct_first = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
     const distinct_second = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
@@ -4707,11 +4755,19 @@ test "open function interface shape digest alpha-normalizes variables and preser
         .args = try graph.arena().dupe(NodeId, &.{ distinct_first, distinct_second }),
         .ret = distinct_first,
     } });
-    const distinct_digest = try graph.openFunctionInterfaceShapeDigest(distinct);
-    try std.testing.expect(!std.mem.eql(u8, &left_digest.bytes, &distinct_digest.bytes));
+    const distinct_shape = try graph.openFunctionInterfaceShape(distinct);
+    try std.testing.expect(!std.mem.eql(u8, &left_shape.digest.bytes, &distinct_shape.digest.bytes));
+    try std.testing.expect(!std.mem.eql(u8, left_shape.bytes, distinct_shape.bytes));
+
+    const stored_equivalent_bytes = equivalent_shape.bytes;
+    const str = try graph.newNode(.{ .primitive = .str });
+    try graph.unify(equivalent_var, str);
+    const refined_shape = try graph.openFunctionInterfaceShape(equivalent);
+    try std.testing.expect(!std.mem.eql(u8, stored_equivalent_bytes, refined_shape.bytes));
+    try std.testing.expectEqualSlices(u8, left_shape.bytes, stored_equivalent_bytes);
 }
 
-test "open function interface shape digest preserves defaults and recursive structure" {
+test "open function interface shape preserves defaults and recursive structure" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -4732,9 +4788,9 @@ test "open function interface shape digest preserves defaults and recursive stru
         .args = try graph.arena().dupe(NodeId, &.{tag_default}),
         .ret = ret,
     } });
-    const record_digest = try graph.openFunctionInterfaceShapeDigest(record_fn);
-    const tag_digest = try graph.openFunctionInterfaceShapeDigest(tag_fn);
-    try std.testing.expect(!std.mem.eql(u8, &record_digest.bytes, &tag_digest.bytes));
+    const record_shape = try graph.openFunctionInterfaceShape(record_fn);
+    const tag_shape = try graph.openFunctionInterfaceShape(tag_fn);
+    try std.testing.expect(!std.mem.eql(u8, record_shape.bytes, tag_shape.bytes));
 
     const left_cycle = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
     try graph.setContent(left_cycle, .{ .tuple = try graph.arena().dupe(NodeId, &.{left_cycle}) });
@@ -4748,12 +4804,12 @@ test "open function interface shape digest preserves defaults and recursive stru
         .args = try graph.arena().dupe(NodeId, &.{right_cycle}),
         .ret = ret,
     } });
-    const left_recursive_digest = try graph.openFunctionInterfaceShapeDigest(left_recursive);
-    const right_recursive_digest = try graph.openFunctionInterfaceShapeDigest(right_recursive);
-    try std.testing.expectEqualSlices(u8, &left_recursive_digest.bytes, &right_recursive_digest.bytes);
+    const left_recursive_shape = try graph.openFunctionInterfaceShape(left_recursive);
+    const right_recursive_shape = try graph.openFunctionInterfaceShape(right_recursive);
+    try std.testing.expectEqualSlices(u8, left_recursive_shape.bytes, right_recursive_shape.bytes);
 }
 
-test "open function interface shape digest includes producer-owned graph evidence" {
+test "open function interface shape includes producer-owned graph evidence" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -4774,14 +4830,14 @@ test "open function interface shape digest includes producer-owned graph evidenc
         .args = try graph.arena().dupe(NodeId, &.{right_arg}),
         .ret = ret,
     } });
-    const initial_left_digest = try graph.openFunctionInterfaceShapeDigest(left);
-    const initial_right_digest = try graph.openFunctionInterfaceShapeDigest(right);
-    try std.testing.expectEqualSlices(u8, &initial_left_digest.bytes, &initial_right_digest.bytes);
+    const initial_left_shape = try graph.openFunctionInterfaceShape(left);
+    const initial_right_shape = try graph.openFunctionInterfaceShape(right);
+    try std.testing.expectEqualSlices(u8, initial_left_shape.bytes, initial_right_shape.bytes);
 
     try graph.markRecursiveValueSlot(left_arg);
-    const recursive_left_digest = try graph.openFunctionInterfaceShapeDigest(left);
-    const unmarked_right_digest = try graph.openFunctionInterfaceShapeDigest(right);
-    try std.testing.expect(!std.mem.eql(u8, &recursive_left_digest.bytes, &unmarked_right_digest.bytes));
+    const recursive_left_shape = try graph.openFunctionInterfaceShape(left);
+    const unmarked_right_shape = try graph.openFunctionInterfaceShape(right);
+    try std.testing.expect(!std.mem.eql(u8, recursive_left_shape.bytes, unmarked_right_shape.bytes));
 
     const module_identity = try name_store.internModuleIdentity(&([_]u8{0xA7} ** 32));
     const type_name = try name_store.internTypeName("PrivateShape");
@@ -4831,9 +4887,9 @@ test "open function interface shape digest includes producer-owned graph evidenc
     try graph.registerRequestSourceInterface(private_left_request, source_bool);
     try graph.registerRequestSourceInterface(private_right_request, source_str);
 
-    const private_left_digest = try graph.openFunctionInterfaceShapeDigest(private_left_request);
-    const private_right_digest = try graph.openFunctionInterfaceShapeDigest(private_right_request);
-    try std.testing.expect(!std.mem.eql(u8, &private_left_digest.bytes, &private_right_digest.bytes));
+    const private_left_shape = try graph.openFunctionInterfaceShape(private_left_request);
+    const private_right_shape = try graph.openFunctionInterfaceShape(private_right_request);
+    try std.testing.expect(!std.mem.eql(u8, private_left_shape.bytes, private_right_shape.bytes));
 }
 
 test "cyclic row extension is not a resolved graph type" {

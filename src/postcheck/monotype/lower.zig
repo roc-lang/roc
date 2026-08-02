@@ -3327,8 +3327,8 @@ const Builder = struct {
         const open_group_member = resolved_request_ty == null and
             !local_context_dependent and
             template.target != .hosted;
-        const open_request_shape_key: ?names.TypeDigest = if (open_group_member)
-            try source_ctx.graph.openFunctionInterfaceShapeDigest(request_fn_node)
+        const open_request_shape: ?solve.OpenFunctionInterfaceShape = if (open_group_member)
+            try source_ctx.graph.openFunctionInterfaceShape(request_fn_node)
         else
             null;
         // Resolved requests key directly on their structural type digest, so a
@@ -3340,11 +3340,11 @@ const Builder = struct {
             .request_kind = 0,
             .request_fn_key = self.specializationTypeDigest(request_fn_ty).bytes,
         } else null;
-        const open_shape_lookup_address: ?DraftTemplateLookupAddress = if (open_request_shape_key) |shape_key| .{
+        const open_shape_lookup_address: ?DraftTemplateLookupAddress = if (open_request_shape) |shape| .{
             .family = family,
             .evidence_digest = evidence_digest.bytes,
             .request_kind = 2,
-            .request_fn_key = shape_key.bytes,
+            .request_fn_key = shape.digest.bytes,
         } else null;
         if (resolved_lookup_address) |address| {
             if (source_ctx.draft.template_spec_lookup.get(address)) |candidates| {
@@ -3368,8 +3368,8 @@ const Builder = struct {
                         if (!spec.open_group_member) continue;
                         if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
                         if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
-                        const spec_shape_key = spec.open_request_shape_key orelse continue;
-                        if (!std.mem.eql(u8, spec_shape_key[0..], open_request_shape_key.?.bytes[0..])) continue;
+                        const spec_shape = spec.open_request_shape orelse continue;
+                        if (!std.mem.eql(u8, spec_shape, open_request_shape.?.bytes)) continue;
                         if (!selection.add(raw_spec, true)) unreachable;
                     }
                 }
@@ -3557,7 +3557,7 @@ const Builder = struct {
             .lexical_context_key = lexical_context_key,
             .fn_id = fn_id,
             .open_group_member = open_group_member,
-            .open_request_shape_key = if (open_request_shape_key) |shape_key| shape_key.bytes else null,
+            .open_request_shape = if (open_request_shape) |shape| shape.bytes else null,
         });
         try source_ctx.draft.template_spec_by_fn.put(fn_id, @intCast(spec_index));
         lexical_needs_cleanup = false;
@@ -5032,15 +5032,15 @@ const Builder = struct {
             .request_kind = 0,
             .request_fn_key = self.specializationTypeDigest(request_fn_ty).bytes,
         } else null;
-        const open_request_shape_key: ?names.TypeDigest = if (resolved_request_ty == null)
-            try source_ctx.graph.openFunctionInterfaceShapeDigest(request_fn_node)
+        const open_request_shape: ?solve.OpenFunctionInterfaceShape = if (resolved_request_ty == null)
+            try source_ctx.graph.openFunctionInterfaceShape(request_fn_node)
         else
             null;
-        const open_shape_lookup_address: ?DraftNestedLookupAddress = if (open_request_shape_key) |shape_key| .{
+        const open_shape_lookup_address: ?DraftNestedLookupAddress = if (open_request_shape) |shape| .{
             .family = family,
             .evidence_digest = evidence_digest.bytes,
             .request_kind = 2,
-            .request_fn_key = shape_key.bytes,
+            .request_fn_key = shape.digest.bytes,
         } else null;
         // Nested draft requests use the same graph-native identity discipline
         // as template requests; no resolved node becomes a durable cache key
@@ -5081,8 +5081,8 @@ const Builder = struct {
                         {
                             continue;
                         }
-                        const spec_shape_key = spec.open_request_shape_key orelse continue;
-                        if (!std.mem.eql(u8, spec_shape_key[0..], open_request_shape_key.?.bytes[0..])) continue;
+                        const spec_shape = spec.open_request_shape orelse continue;
+                        if (!std.mem.eql(u8, spec_shape, open_request_shape.?.bytes)) continue;
                         if (!selection.add(raw_spec, true)) unreachable;
                     }
                 }
@@ -5280,7 +5280,7 @@ const Builder = struct {
             .local_context_dependent = evidenceChainRequiresLocalContext(requested_evidence),
             .symbol = symbol,
             .fn_id = fn_id,
-            .open_request_shape_key = if (open_request_shape_key) |shape_key| shape_key.bytes else null,
+            .open_request_shape = if (open_request_shape) |shape| shape.bytes else null,
         });
         var indexed_nodes = std.AutoHashMap(NodeId, void).init(self.allocator);
         defer indexed_nodes.deinit();
@@ -9702,10 +9702,10 @@ const DraftTemplateSpec = struct {
     /// This context-free specialization joined its requester's live solve
     /// group because its interface was not closed enough to be a durable key.
     open_group_member: bool,
-    /// Alpha-normalized shape of the unresolved request before this
-    /// specialization body contributed its relations. This is graph-local and
-    /// never participates in durable specialization identity.
-    open_request_shape_key: ?[32]u8 = null,
+    /// Exact alpha-normalized shape of the unresolved request before this
+    /// specialization body contributed its relations. This graph-local snapshot
+    /// is the collision authority and never becomes durable specialization identity.
+    open_request_shape: ?[]const u8 = null,
     root_def: ?DraftDefId = null,
     resolved_slot: ?Ast.FnSlot = null,
 };
@@ -10085,10 +10085,10 @@ const DraftNestedSpec = struct {
     local_context_dependent: bool,
     symbol: Common.Symbol,
     fn_id: DraftFnId,
-    /// Alpha-normalized shape of the unresolved request before this nested body
-    /// contributed its relations. This is graph-local and never participates
-    /// in durable specialization identity.
-    open_request_shape_key: ?[32]u8 = null,
+    /// Exact alpha-normalized shape of the unresolved request before this nested
+    /// body contributed its relations. This graph-local snapshot is the collision
+    /// authority and never becomes durable specialization identity.
+    open_request_shape: ?[]const u8 = null,
 };
 
 /// One reuse of a completed (or actively lowering) draft specialization from a
