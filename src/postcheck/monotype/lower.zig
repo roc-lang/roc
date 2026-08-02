@@ -9756,7 +9756,7 @@ const ActiveConstNodeRepresentation = union(enum) {
 const ActiveConstNodeAddress = struct {
     module: [32]u8,
     node: checked.ConstNodeId,
-    sealed_digest: ?names.TypeDigest,
+    sealed_representation: bool,
 };
 
 const MaterializedConstNodeAddress = struct {
@@ -9766,7 +9766,6 @@ const MaterializedConstNodeAddress = struct {
 };
 
 fn activeConstNodeAddress(
-    builder: *Builder,
     store_view: ModuleView,
     node: checked.ConstNodeId,
     representation: ActiveConstNodeRepresentation,
@@ -9774,9 +9773,9 @@ fn activeConstNodeAddress(
     return .{
         .module = store_view.key.bytes,
         .node = node,
-        .sealed_digest = switch (representation) {
-            .sealed => |ty| builder.program.types.typeDigestCached(&builder.program.names, ty, null),
-            .graph => null,
+        .sealed_representation = switch (representation) {
+            .sealed => true,
+            .graph => false,
         },
     };
 }
@@ -17813,7 +17812,7 @@ const BodyContext = struct {
         representation: ActiveConstNodeRepresentation,
         request_cell: DraftTypeCell,
     ) Allocator.Error!?DraftExprId {
-        const address = activeConstNodeAddress(self.builder, store_view, node, representation);
+        const address = activeConstNodeAddress(store_view, node, representation);
         var cursor = self.draft.active_const_node_binding_indices.get(address);
         while (cursor) |index| {
             if (index >= self.draft.active_const_node_bindings.items.len) {
@@ -17857,7 +17856,7 @@ const BodyContext = struct {
         static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!?DraftExprId {
         const address = MaterializedConstNodeAddress{
-            .active = activeConstNodeAddress(self.builder, store_view, node, representation),
+            .active = activeConstNodeAddress(store_view, node, representation),
             .owner = self.draft.current_owner,
             .static_data_const_locator = static_data_const_locator,
         };
@@ -17911,7 +17910,7 @@ const BodyContext = struct {
         cell: DraftTypeCell,
     ) Allocator.Error!void {
         const index = self.draft.active_const_node_bindings.items.len;
-        const address = activeConstNodeAddress(self.builder, store_view, node, representation);
+        const address = activeConstNodeAddress(store_view, node, representation);
         const previous_same_address = self.draft.active_const_node_binding_indices.get(address);
         try self.draft.active_const_node_bindings.append(self.allocator, .{
             .module = store_view.key,
@@ -17940,7 +17939,7 @@ const BodyContext = struct {
         {
             Common.invariant("ConstStore node reservation changed before materialization completed");
         }
-        const address = activeConstNodeAddress(self.builder, store_view, node, representation);
+        const address = activeConstNodeAddress(store_view, node, representation);
         const current = self.draft.active_const_node_binding_indices.getPtr(address) orelse
             Common.invariant("completed ConstStore node had no active reservation index");
         if (current.* != index) {
@@ -17971,7 +17970,7 @@ const BodyContext = struct {
         static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!void {
         const address = MaterializedConstNodeAddress{
-            .active = activeConstNodeAddress(self.builder, store_view, node, representation),
+            .active = activeConstNodeAddress(store_view, node, representation),
             .owner = self.draft.current_owner,
             .static_data_const_locator = static_data_const_locator,
         };

@@ -21,6 +21,7 @@ const RuntimeValueAddress = struct {
     len: usize,
     plan: u32,
     layout: u32,
+    storage: LirProgram.CaptureSlotStorage,
 };
 
 /// Runtime erased-callable identity decoded into the LIR proc and capture data.
@@ -126,16 +127,46 @@ pub const Writer = struct {
         layout_idx: layout.Idx,
         value: Value,
     ) Allocator.Error!checked.ConstNodeId {
-        if (self.memoAddress(plan_id, layout_idx, value)) |address| {
+        return try self.storeValueAtStorage(plan_id, layout_idx, value, .value);
+    }
+
+    fn storeValueAtStorage(
+        self: *Writer,
+        plan_id: LirProgram.ConstPlanId,
+        layout_idx: layout.Idx,
+        value: Value,
+        storage: LirProgram.CaptureSlotStorage,
+    ) Allocator.Error!checked.ConstNodeId {
+        if (self.memoAddress(plan_id, layout_idx, value, storage)) |address| {
             if (self.stored_values.get(address)) |existing| return existing;
             const node = try self.module.const_store.reserve();
             try self.stored_values.put(address, node);
-            try self.storeValueFresh(node, plan_id, layout_idx, value);
+            try self.storeValueFreshAtStorage(node, plan_id, layout_idx, value, storage);
             return node;
         }
         const node = try self.module.const_store.reserve();
-        try self.storeValueFresh(node, plan_id, layout_idx, value);
+        try self.storeValueFreshAtStorage(node, plan_id, layout_idx, value, storage);
         return node;
+    }
+
+    fn storeValueFreshAtStorage(
+        self: *Writer,
+        node: checked.ConstNodeId,
+        plan_id: LirProgram.ConstPlanId,
+        layout_idx: layout.Idx,
+        value: Value,
+        storage: LirProgram.CaptureSlotStorage,
+    ) Allocator.Error!void {
+        switch (storage) {
+            .value => try self.storeValueFresh(node, plan_id, layout_idx, value),
+            .recursive_box => {
+                const boxed = self.program.layouts.getLayout(layout_idx);
+                if (boxed.tag != .box) writerInvariant("recursive capture slot did not use box storage");
+                const payload = self.readBoxDataPointer(value) orelse
+                    writerInvariant("recursive capture slot had null payload pointer");
+                try self.storeValueFresh(node, plan_id, boxed.getIdx(), .{ .ptr = payload });
+            },
+        }
     }
 
     fn storeValueFresh(
@@ -145,7 +176,8 @@ pub const Writer = struct {
         layout_idx: layout.Idx,
         value: Value,
     ) Allocator.Error!void {
-        switch (self.constPlan(plan_id)) {
+        const plan = self.constPlan(plan_id);
+        switch (plan) {
             .pending => writerInvariant("pending const plan reached ConstStore writer"),
             .layout_only => writerInvariant("layout-only const plan reached ConstStore writer"),
             .zst => self.module.const_store.fill(node, .zst),
@@ -477,7 +509,7 @@ pub const Writer = struct {
                 captures[index] = .{
                     .id = slot.id,
                     .ty = try self.cloneCaptureType(slot.ty),
-                    .value = try self.storeValue(slot.plan, .zst, Value.zst),
+                    .value = try self.storeValueAtStorage(slot.plan, .zst, Value.zst, slot.storage),
                 };
             }
         } else if (layout_value.tag == .struct_) {
@@ -487,14 +519,14 @@ pub const Writer = struct {
                 captures[index] = .{
                     .id = slot.id,
                     .ty = try self.cloneCaptureType(slot.ty),
-                    .value = try self.storeValue(slot.plan, field_layout, payload_value.offset(offset)),
+                    .value = try self.storeValueAtStorage(slot.plan, field_layout, payload_value.offset(offset), slot.storage),
                 };
             }
         } else if (slots.len == 1) {
             captures[0] = .{
                 .id = slots[0].id,
                 .ty = try self.cloneCaptureType(slots[0].ty),
-                .value = try self.storeValue(slots[0].plan, payload_layout, payload_value),
+                .value = try self.storeValueAtStorage(slots[0].plan, payload_layout, payload_value, slots[0].storage),
             };
         } else {
             writerInvariant("multi-capture function did not use a struct capture layout");
@@ -517,11 +549,29 @@ pub const Writer = struct {
         layout_idx: layout.Idx,
         value: Value,
     ) Allocator.Error!void {
-        if (self.memoAddress(plan_id, layout_idx, value)) |address| {
+        try self.collectStrBackingsAtStorage(plan_id, layout_idx, value, .value);
+    }
+
+    fn collectStrBackingsAtStorage(
+        self: *Writer,
+        plan_id: LirProgram.ConstPlanId,
+        layout_idx: layout.Idx,
+        value: Value,
+        storage: LirProgram.CaptureSlotStorage,
+    ) Allocator.Error!void {
+        if (self.memoAddress(plan_id, layout_idx, value, storage)) |address| {
             const entry = try self.visited_str_values.getOrPut(address);
             if (entry.found_existing) return;
             entry.value_ptr.* = {};
         }
+        if (storage == .recursive_box) {
+            const boxed = self.program.layouts.getLayout(layout_idx);
+            if (boxed.tag != .box) writerInvariant("recursive capture slot did not use box storage");
+            const payload = self.readBoxDataPointer(value) orelse
+                writerInvariant("recursive capture slot had null payload pointer");
+            return try self.collectStrBackings(plan_id, boxed.getIdx(), .{ .ptr = payload });
+        }
+
         switch (self.constPlan(plan_id)) {
             .pending => writerInvariant("pending const plan reached string backing collection"),
             .layout_only => writerInvariant("layout-only const plan reached string backing collection"),
@@ -710,15 +760,15 @@ pub const Writer = struct {
         if (slots.len == 0) return;
         const layout_value = self.program.layouts.getLayout(payload_layout);
         if (layout_value.tag == .zst) {
-            for (slots) |slot| try self.collectStrBackings(slot.plan, .zst, Value.zst);
+            for (slots) |slot| try self.collectStrBackingsAtStorage(slot.plan, .zst, Value.zst, slot.storage);
         } else if (layout_value.tag == .struct_) {
             for (slots) |slot| {
                 const field_layout = self.program.layouts.getStructFieldLayoutByOriginalIndex(layout_value.getStruct().idx, slot.slot);
                 const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(layout_value.getStruct().idx, slot.slot);
-                try self.collectStrBackings(slot.plan, field_layout, payload_value.offset(offset));
+                try self.collectStrBackingsAtStorage(slot.plan, field_layout, payload_value.offset(offset), slot.storage);
             }
         } else if (slots.len == 1) {
-            try self.collectStrBackings(slots[0].plan, payload_layout, payload_value);
+            try self.collectStrBackingsAtStorage(slots[0].plan, payload_layout, payload_value, slots[0].storage);
         } else {
             writerInvariant("multi-capture function did not use a struct capture layout");
         }
@@ -807,7 +857,13 @@ pub const Writer = struct {
             @as(usize, value.read(u32));
     }
 
-    fn memoAddress(self: *Writer, plan_id: LirProgram.ConstPlanId, layout_idx: layout.Idx, value: Value) ?RuntimeValueAddress {
+    fn memoAddress(
+        self: *Writer,
+        plan_id: LirProgram.ConstPlanId,
+        layout_idx: layout.Idx,
+        value: Value,
+        storage: LirProgram.CaptureSlotStorage,
+    ) ?RuntimeValueAddress {
         const layout_value = self.program.layouts.getLayout(layout_idx);
         const ptr: ?usize = switch (layout_value.tag) {
             .box => if (self.readBoxDataPointer(value)) |payload| @intFromPtr(payload) else null,
@@ -836,6 +892,7 @@ pub const Writer = struct {
             },
             .plan = @intFromEnum(plan_id),
             .layout = @intFromEnum(layout_idx),
+            .storage = storage,
         } else null;
     }
 

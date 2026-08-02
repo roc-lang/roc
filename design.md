@@ -6428,14 +6428,18 @@ generated procedure template that the checked module owns or references
 explicitly.
 `captures` bind the exact capture identities required by that function to
 stored const nodes. `ty` is the exact target-independent runtime representation
-of that captured slot, including recursive box storage when present. Source
-lambdas use checked pattern binders. Compiler-generated functions whose
-captures have no source pattern, such as structural parser runtime functions,
-use explicit generated capture ids assigned by the generator. Capture identity
-selects the checked template binder; it is not a substitute for value identity
-and is never used to infer a graph back-edge. A stored function does not store a
-lambda set, callable-set descriptor, call specialization id, erased ABI,
-capture layout, runtime tag, or LIR proc id.
+of the captured value. The temporary LIR function-result metadata separately
+provides each capture's explicit payload layout and storage mode; when a
+recursive slot uses box storage, the writer memoizes that box address before
+following it and stores the pointed-to value under the capture's ordinary value
+type. Source lambdas use
+checked pattern binders. Compiler-generated functions whose captures have no
+source pattern, such as structural parser runtime functions, use explicit
+generated capture ids assigned by the generator. Capture identity selects the
+checked template binder; it is not a substitute for value identity and is never
+used to infer a graph back-edge. A stored function does not store a lambda set,
+callable-set descriptor, call specialization id, erased ABI, capture layout,
+runtime tag, or LIR proc id.
 
 During compile-time evaluation, the direct LIR builder also produces temporary
 function result-store data. Storing a function result is scoped by `FnSet`
@@ -6484,6 +6488,7 @@ const CaptureSlot = struct {
     slot: u32,
     ty: ConstTypeId,
     plan: ConstPlanId,
+    storage: enum { value, recursive_box },
 };
 ```
 

@@ -58,6 +58,12 @@ pub const CaptureSlot = struct {
     slot: u32,
     ty: const_store.ConstTypeId,
     plan: ConstPlanId,
+    storage: CaptureSlotStorage,
+};
+
+pub const CaptureSlotStorage = enum(u8) {
+    value,
+    recursive_box,
 };
 
 /// One runtime tag variant for a finite callable value.
