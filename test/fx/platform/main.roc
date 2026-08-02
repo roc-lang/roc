@@ -2,7 +2,7 @@ platform ""
     requires {
         main! : () => {}
     }
-    exposes [Stdout, Stderr, Stdin, Builder, Host, NodeA, NodeB, Element, Padded]
+    exposes [Stdout, Stderr, Stdin, Builder, Host, NodeA, NodeB, Element, Padded, Rb]
     packages {}
     provides { "roc_main": main_for_host! }
     hosted {
@@ -43,6 +43,7 @@ import NodeA
 import NodeB
 import Element
 import Padded
+import Rb
 
 main_for_host! : () => {}
 main_for_host! = main!

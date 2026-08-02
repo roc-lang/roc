@@ -551,34 +551,39 @@ const BuiltinsObjects = struct {
     }
 };
 
-const DefaultPlatformRuntimeObjects = struct {
-    const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/roc_default_platform.o");
-    const arm64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64musl/roc_default_platform.o");
-    const x64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64glibc/roc_default_platform.o");
-    const arm64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64glibc/roc_default_platform.o");
-    const x64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/roc_default_platform.o");
-    const arm64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/roc_default_platform.o");
-    const x64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/roc_default_platform.obj");
-    const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/roc_default_platform.obj");
+fn DefaultPlatformObjects(comptime base_name: []const u8) type {
+    return struct {
+        const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/" ++ base_name ++ ".o");
+        const arm64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64musl/" ++ base_name ++ ".o");
+        const x64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64glibc/" ++ base_name ++ ".o");
+        const arm64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64glibc/" ++ base_name ++ ".o");
+        const x64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/" ++ base_name ++ ".o");
+        const arm64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/" ++ base_name ++ ".o");
+        const x64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/" ++ base_name ++ ".obj");
+        const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/" ++ base_name ++ ".obj");
 
-    pub fn forTarget(target: RocTarget) ?[]const u8 {
-        return switch (target) {
-            .x64musl => x64musl,
-            .arm64musl => arm64musl,
-            .x64glibc, .x64linux => x64glibc,
-            .arm64glibc, .arm64linux => arm64glibc,
-            .x64mac => x64mac,
-            .arm64mac => arm64mac,
-            .x64win => x64win,
-            .arm64win => arm64win,
-            else => null,
-        };
-    }
+        pub fn forTarget(target: RocTarget) ?[]const u8 {
+            return switch (target) {
+                .x64musl => x64musl,
+                .arm64musl => arm64musl,
+                .x64glibc, .x64linux => x64glibc,
+                .arm64glibc, .arm64linux => arm64glibc,
+                .x64mac => x64mac,
+                .arm64mac => arm64mac,
+                .x64win => x64win,
+                .arm64win => arm64win,
+                else => null,
+            };
+        }
 
-    pub fn filename(target: RocTarget) []const u8 {
-        return if (target.isWindows()) "roc_default_platform.obj" else "roc_default_platform.o";
-    }
-};
+        pub fn filename(target: RocTarget) []const u8 {
+            return if (target.isWindows()) base_name ++ ".obj" else base_name ++ ".o";
+        }
+    };
+}
+
+const DefaultPlatformRuntimeObjects = DefaultPlatformObjects("roc_default_runtime");
+const DefaultPlatformExecutableObjects = DefaultPlatformObjects("roc_default_platform");
 
 // Workaround for Zig standard library compilation issue on macOS ARM64.
 //
@@ -7309,7 +7314,16 @@ fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, original_source: [
     const temp_dir = createUniqueTempDir(ctx) catch |err| {
         return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
     };
-    defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, temp_dir) catch {};
+
+    if (args.keep_temp) {
+        const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+        const config = reporting.ReportingConfig.initColorTerminal();
+        const headline = try std.fmt.allocPrint(ctx.arena, "Kept temporary directory: {s}.", .{temp_dir});
+        var report = try reporting.Report.init(ctx.arena, "Kept Temporary Directory", headline, .warning);
+        defer report.deinit();
+        reporting.renderReportToTerminal(&report, ctx.io.stderr(), palette, config) catch {};
+    }
+    defer if (!args.keep_temp) std.Io.Dir.cwd().deleteTree(ctx.io.std_io, temp_dir) catch {};
 
     const platform_dir = try std.fs.path.join(ctx.arena, &.{ temp_dir, ".roc_echo_platform" });
     try std.Io.Dir.cwd().createDirPath(ctx.io.std_io, platform_dir);
@@ -7603,6 +7617,16 @@ fn writeDefaultPlatformRuntimeObject(ctx: *CliCtx, artifact_dir: []const u8, tar
     const runtime_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, DefaultPlatformRuntimeObjects.filename(target) });
     backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, bytes) catch |err| {
         std.log.err("Failed to write default platform runtime object {s}: {}", .{ runtime_path, err });
+        return err;
+    };
+    return runtime_path;
+}
+
+fn writeDefaultPlatformExecutableObject(ctx: *CliCtx, artifact_dir: []const u8, target: RocTarget) CliMainError!?[]const u8 {
+    const bytes = DefaultPlatformExecutableObjects.forTarget(target) orelse return null;
+    const runtime_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, DefaultPlatformExecutableObjects.filename(target) });
+    backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, bytes) catch |err| {
+        std.log.err("Failed to write default platform executable object {s}: {}", .{ runtime_path, err });
         return err;
     };
     return runtime_path;
@@ -8934,7 +8958,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     } else {
         reporter.begin("LLVM IR Generation");
         const hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
-        const enable_default_platform_runtime = args.synthetic_default_platform and DefaultPlatformRuntimeObjects.forTarget(target) != null;
+        const enable_default_platform_runtime = args.synthetic_default_platform and DefaultPlatformExecutableObjects.forTarget(target) != null;
 
         const app_object = try compileLlvmAppObject(
             ctx,
@@ -8948,7 +8972,16 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
             args.synthetic_default_platform,
             &reporter,
         );
-        defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, app_object.artifact_dir) catch {};
+
+        if (args.keep_temp) {
+            const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+            const config = reporting.ReportingConfig.initColorTerminal();
+            const headline = try std.fmt.allocPrint(ctx.arena, "Kept temporary directory: {s}.", .{app_object.artifact_dir});
+            var report = try reporting.Report.init(ctx.arena, "Kept Temporary Directory", headline, .warning);
+            defer report.deinit();
+            reporting.renderReportToTerminal(&report, ctx.io.stderr(), palette, config) catch {};
+        }
+        defer if (!args.keep_temp) std.Io.Dir.cwd().deleteTree(ctx.io.std_io, app_object.artifact_dir) catch {};
 
         var static_data_obj_path: ?[]const u8 = null;
         if (static_data_exports.len > 0) {
@@ -8972,7 +9005,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
             try object_files.append(path);
         }
         if (enable_default_platform_runtime) {
-            if (try writeDefaultPlatformRuntimeObject(ctx, app_object.artifact_dir, target)) |runtime_path| {
+            if (try writeDefaultPlatformExecutableObject(ctx, app_object.artifact_dir, target)) |runtime_path| {
                 try object_files.append(runtime_path);
             } else {
                 return error.UnsupportedTarget;
@@ -9264,7 +9297,6 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     }
 
     var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
-    object_compiler.enable_default_platform_runtime = args.synthetic_default_platform;
     var backend_timing = backend.ObjectFileCompiler.Timing.init(ctx.io.std_io);
     object_compiler.timing = &backend_timing;
 
@@ -9306,7 +9338,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     try object_files.append(obj_path);
     try object_files.append(builtins_path);
     if (args.synthetic_default_platform) {
-        if (try writeDefaultPlatformRuntimeObject(ctx, build_scratch_dir, target)) |runtime_path| {
+        if (try writeDefaultPlatformExecutableObject(ctx, build_scratch_dir, target)) |runtime_path| {
             try object_files.append(runtime_path);
         } else {
             return error.UnsupportedTarget;
@@ -13785,8 +13817,11 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
 
     const stdout = ctx.io.stdout();
     const stderr = ctx.io.stderr();
+    // Formatting a file brings its `roc` version pin up to date when this
+    // compiler is a newer nightly than the one it names.
+    const format_options: fmt.Options = .{ .compiler_version = build_options.compiler_version };
     if (args.stdin) {
-        fmt.formatStdin(ctx.gpa, ctx.io.std_io, std.Io.File.stdin(), std.Io.File.stdout(), stderr) catch |err| return err;
+        fmt.formatStdin(ctx.gpa, format_options, ctx.io.std_io, std.Io.File.stdin(), std.Io.File.stdout(), stderr) catch |err| return err;
         return;
     }
 
@@ -13800,7 +13835,7 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
         defer unformatted_files.deinit(ctx.gpa);
 
         for (args.paths) |path| {
-            var result = try fmt.formatPath(ctx.gpa, ctx.arena, std.Io.Dir.cwd(), path, true, ctx.io.std_io, stderr);
+            var result = try fmt.formatPath(ctx.gpa, ctx.arena, std.Io.Dir.cwd(), path, true, format_options, ctx.io.std_io, stderr);
             defer result.deinit();
             if (result.unformatted_files) |files| {
                 try unformatted_files.appendSlice(ctx.gpa, files.items);
@@ -13826,7 +13861,7 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
     } else {
         var success_count: usize = 0;
         for (args.paths) |path| {
-            const result = try fmt.formatPath(ctx.gpa, ctx.arena, std.Io.Dir.cwd(), path, false, ctx.io.std_io, stderr);
+            const result = try fmt.formatPath(ctx.gpa, ctx.arena, std.Io.Dir.cwd(), path, false, format_options, ctx.io.std_io, stderr);
             success_count += result.success;
             failure_count += result.failure;
         }

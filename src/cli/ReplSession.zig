@@ -351,16 +351,29 @@ fn resolveImports(self: *ReplSession) Allocator.Error!ImportResolution {
     const import_source = try self.importDefinitionsSource();
     defer self.allocator.free(import_source);
 
-    const seed_names = try self.importNamesOf(import_source);
+    const seed_imports = try self.importsOf(import_source);
     defer {
-        for (seed_names) |name| self.allocator.free(name);
-        self.allocator.free(seed_names);
+        for (seed_imports) |seed_import| self.allocator.free(seed_import.import_name);
+        self.allocator.free(seed_imports);
     }
 
     var failure: ?[]u8 = null;
     errdefer if (failure) |msg| self.allocator.free(msg);
 
-    for (seed_names) |name| {
+    for (seed_imports) |seed_import| {
+        const name = (try compile.module_discovery.resolveLocalImportLogicalPath(
+            self.allocator,
+            "Repl",
+            seed_import,
+        )) orelse {
+            failure = try std.fmt.allocPrint(
+                self.allocator,
+                "The import `{s}` traverses above the REPL module root.",
+                .{seed_import.import_name},
+            );
+            break;
+        };
+        defer self.allocator.free(name);
         try self.addModuleRecursive(name, &sources, &visited, &failure);
         if (failure != null) break;
     }
@@ -443,12 +456,26 @@ fn addModuleRecursive(
 
     // Resolve this module's own imports first so dependencies are appended
     // before it.
-    const child_names = try self.importNamesOf(source);
+    const child_imports = try self.importsOf(source);
     defer {
-        for (child_names) |name| self.allocator.free(name);
-        self.allocator.free(child_names);
+        for (child_imports) |child_import| self.allocator.free(child_import.import_name);
+        self.allocator.free(child_imports);
     }
-    for (child_names) |child| {
+    for (child_imports) |child_import| {
+        const child = (try compile.module_discovery.resolveLocalImportLogicalPath(
+            self.allocator,
+            module_name,
+            child_import,
+        )) orelse {
+            failure.* = try std.fmt.allocPrint(
+                self.allocator,
+                "The import `{s}` traverses above the REPL module root.",
+                .{child_import.import_name},
+            );
+            self.allocator.free(source);
+            return;
+        };
+        defer self.allocator.free(child);
         try self.addModuleRecursive(child, sources, visited, failure);
         if (failure.* != null) {
             self.allocator.free(source);
@@ -467,7 +494,7 @@ fn addModuleRecursive(
 
 /// Parse `source` as a module and return the unqualified sibling module names it
 /// imports (caller owns the slice and each name).
-fn importNamesOf(self: *ReplSession, source: []const u8) Allocator.Error![][]const u8 {
+fn importsOf(self: *ReplSession, source: []const u8) Allocator.Error![]compile.module_discovery.LocalImport {
     var env = try ModuleEnv.init(self.allocator, source);
     defer env.deinit();
     env.common.source = source;
@@ -480,12 +507,12 @@ fn importNamesOf(self: *ReplSession, source: []const u8) Allocator.Error![][]con
 }
 
 /// Map a module name to its source path: `Util` -> `Util.roc`,
-/// `Foo.Bar` -> `Foo/Bar.roc`.
+/// `Foo/Bar` -> `Foo/Bar.roc`.
 fn modulePathFromName(allocator: Allocator, module_name: []const u8) Allocator.Error![]u8 {
     var buffer = std.ArrayList(u8).empty;
     errdefer buffer.deinit(allocator);
 
-    var it = std.mem.splitScalar(u8, module_name, '.');
+    var it = std.mem.splitScalar(u8, module_name, '/');
     var first = true;
     while (it.next()) |part| {
         if (!first) try buffer.appendSlice(allocator, std.fs.path.sep_str) else first = false;
@@ -908,7 +935,12 @@ pub fn inputStatusWithAllocator(allocator: Allocator, line: []const u8) Allocato
         .import => |import| .{
             .kind = .definition,
             .definition_kind = .import,
-            .name = if (import.alias_tok) |tok| ast.resolve(tok) else ast.resolve(import.module_name_tok),
+            .name = if (import.alias_tok) |tok|
+                ast.resolve(tok)
+            else if (import.target.nested_start_tok) |nested_start|
+                ast.resolve(nested_start + import.target.nested_len - 1)
+            else
+                ast.resolve(import.target.module_name_tok),
         },
         .file_import => |file_import| .{
             .kind = .definition,

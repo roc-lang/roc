@@ -156,8 +156,18 @@ fn statWasm(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) CoreCtx.StatError
     return error.FileNotFound;
 }
 
-fn listDirWasm(_: ?*anyopaque, _: std.Io, _: []const u8, _: Allocator) CoreCtx.ListError![]CoreCtx.FileEntry {
-    return error.FileNotFound;
+fn listDirWasm(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8, allocator: Allocator) CoreCtx.ListError![]CoreCtx.FileEntry {
+    const self = getCtx(ctx_ptr);
+    if (self.source == null) return error.FileNotFound;
+
+    const source_path = if (std.fs.path.isAbsolute(self.filename))
+        try allocator.dupe(u8, self.filename)
+    else
+        try std.fs.path.join(allocator, &.{ path, self.filename });
+    errdefer allocator.free(source_path);
+    const entries = try allocator.alloc(CoreCtx.FileEntry, 1);
+    entries[0] = .{ .path = source_path, .kind = .file };
+    return entries;
 }
 
 fn dirNameWasm(_: ?*anyopaque, _: std.Io, absolute_path: []const u8) ?[]const u8 {

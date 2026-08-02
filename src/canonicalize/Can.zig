@@ -63,6 +63,14 @@ pub const ModuleInitContext = struct {
     builtin_types: BuiltinTypeContext,
     imported_modules: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType) = null,
     explicit_root_names: []const []const u8 = &.{},
+    /// Version string of the compiler that is running, used to check a
+    /// header's `roc` version pin against it. Null skips that check.
+    ///
+    /// Real builds pass `build_options.compiler_version`. It is a parameter
+    /// rather than something canonicalization reads for itself so that tools
+    /// which canonicalize for inspection — the snapshot tool above all —
+    /// produce output that does not change with whichever compiler built them.
+    compiler_version: ?[]const u8 = null,
 };
 
 /// A definition requested by an explicit-roots caller.
@@ -262,6 +270,9 @@ placeholder_idents: std.AutoHashMapUnmanaged(Ident.Idx, PlaceholderInfo) = .{},
 /// Definitions requested by the caller as explicit post-check roots.
 explicit_root_names: []const []const u8 = &.{},
 explicit_root_defs: std.ArrayListUnmanaged(ExplicitRootDef) = .empty,
+/// Version of the compiler that is running, or null to skip checking the
+/// header's `roc` version pin. See `ModuleInitContext.compiler_version`.
+compiler_version: ?[]const u8 = null,
 /// Platform provides declarations awaiting local-definition resolution after
 /// all top-level declarations have been canonicalized.
 pending_provides_entries: std.ArrayListUnmanaged(PendingProvidesEntry) = .empty,
@@ -707,6 +718,7 @@ fn initInternal(
         .globally_resolvable_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .explicit_module_envs = if (maybe_context) |context| context.imported_modules else null,
         .explicit_root_names = if (maybe_context) |context| context.explicit_root_names else &.{},
+        .compiler_version = if (maybe_context) |context| context.compiler_version else null,
         .import_indices = std.AutoHashMapUnmanaged(Ident.Idx, Import.Idx){},
         .alias_cycle_references = std.AutoHashMapUnmanaged(AST.Statement.Idx, AST.Statement.Idx){},
         .alias_cycle_scopes = std.AutoHashMapUnmanaged(AST.DeclIndex.ScopeIdx, void){},
@@ -4101,10 +4113,12 @@ pub fn canonicalizeFile(
         },
         .package => |h| {
             self.env.module_kind = .package;
+            try self.checkRocVersionPin(h.roc_version);
             try self.createExposedScope(h.exposes);
         },
         .platform => |h| {
             self.env.module_kind = .platform;
+            try self.checkRocVersionPin(h.roc_version);
             try self.createExposedScope(h.exposes);
             // Also add the 'provides' items (what platform provides to the host, e.g., main_for_host!)
             // These need to be in the exposed scope so they become exports
@@ -4122,6 +4136,7 @@ pub fn canonicalizeFile(
         },
         .app => |h| {
             self.env.module_kind = .app;
+            try self.checkRocVersionPin(h.roc_version);
             // App modules may have platform requirements that should constrain numeric literals
             // before defaulting to Dec, so defer numeric defaults until after platform checking
             // App headers have 'provides' instead of 'exposes'
@@ -5212,6 +5227,25 @@ fn introduceExistingPatternBindingsIntoScope(
     }
 }
 
+/// Warn when the header pins a compiler version other than the one running.
+///
+/// Does nothing when the caller did not say which compiler is running, when
+/// the header pins no version, or when the pin is one the parser already
+/// rejected as unreadable.
+fn checkRocVersionPin(self: *Self, roc_version: ?AST.RecordField.Idx) std.mem.Allocator.Error!void {
+    const running = self.compiler_version orelse return;
+    const field_idx = roc_version orelse return;
+    const field = self.parse_ir.store.getRecordField(field_idx);
+    const pinned = self.parse_ir.rocVersionText(field_idx) orelse return;
+    if (!base.roc_version.isMismatch(pinned, running)) return;
+
+    try self.env.pushDiagnostic(Diagnostic{ .roc_version_mismatch = .{
+        .pinned = try self.env.insertIdent(base.Ident.for_text(pinned)),
+        .running = try self.env.insertIdent(base.Ident.for_text(running)),
+        .region = self.parse_ir.tokenizedRegionToRegion(field.region),
+    } });
+}
+
 fn createExposedScope(
     self: *Self,
     exposes: AST.Collection.Idx,
@@ -6300,28 +6334,33 @@ fn normalizedImportModuleIdent(
 ) std.mem.Allocator.Error!Ident.Idx {
     const scratch_top = self.scratchBytesTop();
     defer self.clearScratchBytesFrom(scratch_top);
+    const target = import_stmt.target;
 
-    if (import_stmt.qualifier_tok) |qualifier_tok| {
-        try self.scratchAppendSlice(self.parse_ir.resolve(qualifier_tok));
+    if (target.origin == .package) {
+        try self.scratchAppendSlice(self.parse_ir.resolve(target.qualifier_tok.?));
         try self.scratchAppendByte('.');
-    }
+        const raw = self.parse_ir.resolve(target.module_name_tok);
+        try self.scratchAppendSlice(if (raw.len > 0 and raw[0] == '.') raw[1..] else raw);
+    } else {
+        switch (target.base) {
+            .importer => if (target.start_tok != target.path_start_tok) try self.scratchAppendSlice("./"),
+            .package_root => try self.scratchAppendByte('/'),
+            .parent => for (0..target.parent_count) |_| try self.scratchAppendSlice("../"),
+        }
 
-    const first_raw = self.parse_ir.resolve(import_stmt.module_name_tok);
-    const first = if (first_raw.len > 0 and first_raw[0] == '.') first_raw[1..] else first_raw;
-    try self.scratchAppendSlice(first);
-
-    if (!import_stmt.nested_import) {
         const tags = self.parse_ir.tokens.tokens.items(.tag);
-        var tok = import_stmt.module_name_tok + 1;
-        while (tok < tags.len) : (tok += 1) {
+        var tok = target.path_start_tok;
+        var need_separator = false;
+        while (tok <= target.module_name_tok) : (tok += 1) {
             switch (tags[tok]) {
-                .NoSpaceDotUpperIdent, .DotUpperIdent => {
+                .UpperIdent, .LowerIdent => {
+                    if (need_separator) try self.scratchAppendByte('/');
                     const raw = self.parse_ir.resolve(tok);
-                    const segment = if (raw.len > 0 and raw[0] == '.') raw[1..] else raw;
-                    try self.scratchAppendByte('.');
-                    try self.scratchAppendSlice(segment);
+                    try self.scratchAppendSlice(raw);
+                    need_separator = true;
                 },
-                else => break,
+                .OpSlash => {},
+                else => {},
             }
         }
     }
@@ -6338,26 +6377,102 @@ fn canonicalizeImportStatement(
     defer trace.end();
 
     // 1. Build the complete module name selected by the parser.
-    if (self.parse_ir.tokens.resolveIdentifier(import_stmt.module_name_tok) == null) return null;
-    if (import_stmt.qualifier_tok) |qualifier_tok| {
+    if (self.parse_ir.tokens.resolveIdentifier(import_stmt.target.module_name_tok) == null) return null;
+    if (import_stmt.target.qualifier_tok) |qualifier_tok| {
         if (self.parse_ir.tokens.resolveIdentifier(qualifier_tok) == null) return null;
     }
     const module_name = try self.normalizedImportModuleIdent(import_stmt);
 
     // 2. Convert exposed items to CIR
     const scratch_start = self.env.store.scratchExposedItemTop();
-    try self.convertASTExposesToCIR(import_stmt.exposes);
+    if (import_stmt.target.hasNestedTypes()) {
+        try self.convertNestedImportExposesToCIR(import_stmt);
+    } else {
+        try self.convertASTExposesToCIR(import_stmt.exposes);
+    }
     const cir_exposes = try self.env.store.exposedItemSpanFrom(scratch_start);
     const import_region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
 
     // 3. Check if this is a package-qualified import (has a qualifier like "pf" in "pf.Stdout")
-    const is_package_qualified = import_stmt.qualifier_tok != null;
+    const is_package_qualified = import_stmt.target.origin == .package;
 
     // 4. Dispatch to the appropriate handler based on whether this is a nested import
-    return if (import_stmt.nested_import)
+    return if (import_stmt.target.hasNestedTypes())
         try self.importUnaliased(module_name, cir_exposes, import_region, is_package_qualified)
     else
         try self.importAliased(module_name, import_stmt.alias_tok, cir_exposes, import_region, is_package_qualified);
+}
+
+fn nestedImportPathIdent(
+    self: *Self,
+    target: AST.ImportTarget,
+) std.mem.Allocator.Error!Ident.Idx {
+    const start = target.nested_start_tok.?;
+    const scratch_top = self.scratchBytesTop();
+    defer self.clearScratchBytesFrom(scratch_top);
+    for (0..target.nested_len) |offset| {
+        if (offset != 0) try self.scratchAppendByte('.');
+        const raw = self.parse_ir.resolve(start + @as(Token.Idx, @intCast(offset)));
+        try self.scratchAppendSlice(if (raw.len > 0 and raw[0] == '.') raw[1..] else raw);
+    }
+    return try self.env.insertIdent(base.Ident.for_text(self.scratchBytesFrom(scratch_top)));
+}
+
+fn appendNestedImportExposedItem(
+    self: *Self,
+    name: Ident.Idx,
+    alias: ?Ident.Idx,
+    is_wildcard: bool,
+    region: Region,
+) std.mem.Allocator.Error!void {
+    const item_idx = try self.env.addExposedItem(.{
+        .name = name,
+        .alias = alias,
+        .is_wildcard = is_wildcard,
+    }, region);
+    try self.env.store.addScratchExposedItem(item_idx);
+}
+
+fn convertNestedImportExposesToCIR(
+    self: *Self,
+    import_stmt: @TypeOf(@as(AST.Statement, undefined).import),
+) std.mem.Allocator.Error!void {
+    const nested_path = try self.nestedImportPathIdent(import_stmt.target);
+    const selected_alias = if (import_stmt.alias_tok) |alias_tok|
+        self.parse_ir.tokens.resolveIdentifier(alias_tok) orelse return
+    else
+        self.parse_ir.tokens.resolveIdentifier(
+            import_stmt.target.nested_start_tok.? + import_stmt.target.nested_len - 1,
+        ) orelse return;
+    const import_region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
+    try self.appendNestedImportExposedItem(nested_path, selected_alias, false, import_region);
+
+    for (self.parse_ir.store.exposedItemSlice(import_stmt.exposes)) |ast_exposed_idx| {
+        const ast_exposed = self.parse_ir.store.getExposedItem(ast_exposed_idx);
+        const ident_token, const alias_token, const is_wildcard, const tokenized_region = switch (ast_exposed) {
+            .lower_ident => |item| .{ item.ident, item.as, false, item.region },
+            .upper_ident => |item| .{ item.ident, item.as, false, item.region },
+            .upper_ident_star => |item| .{ item.ident, null, true, item.region },
+            .malformed => continue,
+        };
+        const item_ident = self.parse_ir.tokens.resolveIdentifier(ident_token) orelse continue;
+        const scratch_top = self.scratchBytesTop();
+        try self.scratchAppendSlice(self.env.getIdent(nested_path));
+        try self.scratchAppendByte('.');
+        try self.scratchAppendSlice(self.env.getIdent(item_ident));
+        const qualified_item = try self.env.insertIdent(base.Ident.for_text(self.scratchBytesFrom(scratch_top)));
+        self.clearScratchBytesFrom(scratch_top);
+        const local_alias = if (alias_token) |tok|
+            self.parse_ir.tokens.resolveIdentifier(tok)
+        else
+            item_ident;
+        try self.appendNestedImportExposedItem(
+            qualified_item,
+            local_alias,
+            is_wildcard,
+            self.parse_ir.tokenizedRegionToRegion(tokenized_region),
+        );
+    }
 }
 
 /// Canonicalize a file import statement: `import "path" as name : Type`
@@ -19890,10 +20005,10 @@ fn ensureParserImportAlias(self: *Self, alias_name: Ident.Idx) std.mem.Allocator
         .import => |import_stmt| import_stmt,
         else => return,
     };
-    if (import_stmt.nested_import) return;
+    if (import_stmt.target.hasNestedTypes()) return;
 
-    if (self.parse_ir.tokens.resolveIdentifier(import_stmt.module_name_tok) == null) return;
-    if (import_stmt.qualifier_tok) |qualifier_tok| {
+    if (self.parse_ir.tokens.resolveIdentifier(import_stmt.target.module_name_tok) == null) return;
+    if (import_stmt.target.qualifier_tok) |qualifier_tok| {
         if (self.parse_ir.tokens.resolveIdentifier(qualifier_tok) == null) return;
     }
     const module_name = try self.normalizedImportModuleIdent(import_stmt);
@@ -19910,7 +20025,7 @@ fn ensureParserImportAlias(self: *Self, alias_name: Ident.Idx) std.mem.Allocator
         module_name,
         import_region,
         empty_exposes,
-        import_stmt.qualifier_tok != null,
+        import_stmt.target.origin == .package,
         false,
     );
 

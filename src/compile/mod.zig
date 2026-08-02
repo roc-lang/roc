@@ -123,9 +123,11 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_10218_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10271_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10395_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_10508_test.zig"));
     std.testing.refAllDecls(@import("test/tce_capture_test.zig"));
     std.testing.refAllDecls(@import("test/list_map_target_independent_lir_test.zig"));
     std.testing.refAllDecls(@import("test/platform_box_update_lir_test.zig"));
+    std.testing.refAllDecls(@import("test/provided_callable_boundary_test.zig"));
     std.testing.refAllDecls(@import("test/match_lowering_test.zig"));
     std.testing.refAllDecls(@import("test/match_corpus_test.zig"));
     std.testing.refAllDecls(@import("test/url_package_test.zig"));

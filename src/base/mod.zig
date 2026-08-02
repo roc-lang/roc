@@ -37,6 +37,7 @@ pub const CommonEnv = @import("CommonEnv.zig");
 pub const source_utils = @import("source_utils.zig");
 pub const module_path = @import("module_path.zig");
 pub const url = @import("url.zig");
+pub const roc_version = @import("roc_version.zig");
 pub const doc_comment = @import("doc_comment.zig");
 
 /// The default general-purpose allocator for the current target (fast, not leak-checking).
@@ -55,6 +56,7 @@ test {
     const module_path_mod = @import("module_path.zig");
     std.testing.refAllDecls(ident);
     std.testing.refAllDecls(module_path_mod);
+    std.testing.refAllDecls(@import("roc_version.zig"));
 }
 
 /// Whether a function calls itself.

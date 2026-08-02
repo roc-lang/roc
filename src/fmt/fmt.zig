@@ -3,6 +3,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
+const base = @import("base");
 const parse = @import("parse");
 const collections = @import("collections");
 const can = @import("can");
@@ -34,6 +35,20 @@ const FormatFlags = enum {
     no_debug,
 };
 
+/// Knobs for formatting that depend on the compiler doing it rather than on
+/// the source being formatted.
+pub const Options = struct {
+    /// Version string of the compiler that is running. When it is a nightly
+    /// newer than the one a header pins with `roc: "..."`, formatting rewrites
+    /// that pin to name it — see `base.roc_version.shouldUpgrade`.
+    ///
+    /// Null leaves every pin exactly as written, which is what tools that
+    /// format for inspection want: the snapshot tool, the playground and the
+    /// formatter's own round-trip tests must not produce output that changes
+    /// with whichever compiler built them.
+    compiler_version: ?[]const u8 = null,
+};
+
 /// Report of the result of formatting Roc files including the count of successes, failures, and any files that need to be reformatted
 pub const FormattingResult = struct {
     success: usize,
@@ -51,7 +66,7 @@ pub const FormattingResult = struct {
 /// Formats all roc files in the specified path.
 /// Handles both single files and directories
 /// Returns the number of files successfully formatted and that failed to format.
-pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: std.Io.Dir, path: []const u8, check: bool, io: std.Io, stderr: *std.Io.Writer) FormatPathError!FormattingResult {
+pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: std.Io.Dir, path: []const u8, check: bool, options: Options, io: std.Io, stderr: *std.Io.Writer) FormatPathError!FormattingResult {
     // TODO: update this to use the filesystem abstraction
     // When doing so, add a mock filesystem and some tests.
 
@@ -69,7 +84,7 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
         defer walker.deinit();
         while (try walker.next(io)) |entry| {
             if (entry.kind == .file) {
-                if (formatFilePath(gpa, entry.dir, entry.basename, if (unformatted_files) |*to_reformat| to_reformat else null, io, stderr)) |_| {
+                if (formatFilePath(gpa, entry.dir, entry.basename, if (unformatted_files) |*to_reformat| to_reformat else null, options, io, stderr)) |_| {
                     success_count += 1;
                 } else |err| switch (err) {
                     error.NotRocFile => {},
@@ -81,7 +96,7 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
             }
         }
     } else |_| {
-        if (formatFilePath(gpa, base_dir, path, if (unformatted_files) |*to_reformat| to_reformat else null, io, stderr)) |_| {
+        if (formatFilePath(gpa, base_dir, path, if (unformatted_files) |*to_reformat| to_reformat else null, options, io, stderr)) |_| {
             success_count += 1;
         } else |err| switch (err) {
             error.NotRocFile => {},
@@ -132,7 +147,7 @@ fn binarySearch(
 
 /// Formats a single roc file at the specified path.
 /// Returns errors on failure and files that don't end in `.roc`
-pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []const u8, unformatted_files: ?*std.array_list.Managed([]const u8), io: std.Io, stderr: *std.Io.Writer) FormatFileError!void {
+pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []const u8, unformatted_files: ?*std.array_list.Managed([]const u8), options: Options, io: std.Io, stderr: *std.Io.Writer) FormatFileError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -199,7 +214,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []cons
     if (unformatted_files != null) {
         var formatted: std.Io.Writer.Allocating = .init(gpa);
         defer formatted.deinit();
-        try formatAst(parse_ast.*, &formatted.writer);
+        try formatAstWithOptions(parse_ast.*, &formatted.writer, options);
         if (!std.mem.eql(u8, formatted.written(), module_env.common.source)) {
             try unformatted_files.?.append(path);
         }
@@ -208,12 +223,12 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []cons
         defer output_file.close(io);
         var output_buffer: [4096]u8 = undefined;
         var output_writer = output_file.writer(io, &output_buffer);
-        try formatAst(parse_ast.*, &output_writer.interface);
+        try formatAstWithOptions(parse_ast.*, &output_writer.interface, options);
     }
 }
 
 /// Format the contents of stdin and output the result to stdout
-pub fn formatStdin(gpa: std.mem.Allocator, io: std.Io, stdin: std.Io.File, stdout: std.Io.File, stderr: *std.Io.Writer) FormatStdinError!void {
+pub fn formatStdin(gpa: std.mem.Allocator, options: Options, io: std.Io, stdin: std.Io.File, stdout: std.Io.File, stderr: *std.Io.Writer) FormatStdinError!void {
     const contents = blk: {
         var read_buf: [4096]u8 = undefined;
         var stdin_reader = stdin.readerStreaming(io, &read_buf);
@@ -246,7 +261,7 @@ pub fn formatStdin(gpa: std.mem.Allocator, io: std.Io, stdin: std.Io.File, stdou
 
     var stdout_buffer: [4096]u8 = undefined;
     var stdout_writer = stdout.writer(io, &stdout_buffer);
-    try formatAst(parse_ast.*, &stdout_writer.interface);
+    try formatAstWithOptions(parse_ast.*, &stdout_writer.interface, options);
 }
 
 fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST, stderr: *std.Io.Writer) (Allocator.Error || error{WriteFailed})!void {
@@ -285,11 +300,11 @@ fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST, 
     }
 }
 
-fn formatIRNode(ast: AST, writer: *std.Io.Writer, formatter: *const fn (*Formatter) FormatAstError!void) FormatAstError!void {
+fn formatIRNode(ast: AST, writer: *std.Io.Writer, options: Options, formatter: *const fn (*Formatter) FormatAstError!void) FormatAstError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    var fmt = try Formatter.init(ast, writer);
+    var fmt = try Formatter.init(ast, writer, options);
     defer fmt.deinit();
 
     try formatter(&fmt);
@@ -299,13 +314,19 @@ fn formatIRNode(ast: AST, writer: *std.Io.Writer, formatter: *const fn (*Formatt
 /// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is a file.
 /// Only returns an error if the underlying writer returns an error.
 pub fn formatAst(ast: AST, writer: *std.Io.Writer) FormatAstError!void {
-    return formatIRNode(ast, writer, Formatter.formatFile);
+    return formatAstWithOptions(ast, writer, .{});
+}
+
+/// `formatAst`, but for callers that know which compiler is running and so can
+/// have a header's `roc` version pin brought up to date. See `Options`.
+pub fn formatAstWithOptions(ast: AST, writer: *std.Io.Writer, options: Options) FormatAstError!void {
+    return formatIRNode(ast, writer, options, Formatter.formatFile);
 }
 
 /// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is a header.
 /// Only returns an error if the underlying writer returns an error.
 pub fn formatHeader(ast: AST, writer: *std.Io.Writer) FormatAstError!void {
-    return formatIRNode(ast, writer, formatHeaderInner);
+    return formatIRNode(ast, writer, .{}, formatHeaderInner);
 }
 
 fn formatHeaderInner(fmt: *Formatter) FormatAstError!void {
@@ -315,7 +336,7 @@ fn formatHeaderInner(fmt: *Formatter) FormatAstError!void {
 /// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is a statement.
 /// Only returns an error if the underlying writer returns an error.
 pub fn formatStatement(ast: AST, writer: *std.Io.Writer) FormatAstError!void {
-    return formatIRNode(ast, writer, formatStatementInner);
+    return formatIRNode(ast, writer, .{}, formatStatementInner);
 }
 
 fn formatStatementInner(fmt: *Formatter) FormatAstError!void {
@@ -325,7 +346,7 @@ fn formatStatementInner(fmt: *Formatter) FormatAstError!void {
 /// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is an expression.
 /// Only returns an error if the underlying writer returns an error.
 pub fn formatExpr(ast: AST, writer: *std.Io.Writer) FormatAstError!void {
-    return formatIRNode(ast, writer, formatExprNode);
+    return formatIRNode(ast, writer, .{}, formatExprNode);
 }
 
 fn formatExprNode(fmt: *Formatter) FormatAstError!void {
@@ -340,10 +361,20 @@ const Formatter = struct {
         expanded,
     };
 
+    /// A header's `roc` version pin that this run of the formatter is
+    /// rewriting, rather than echoing back what the source says.
+    const RocVersionUpgrade = struct {
+        field: AST.RecordField.Idx,
+        version: []const u8,
+    };
+
     ast: AST,
     writer: *std.Io.Writer,
     /// Cached output layout for type annotations and their record fields.
     type_layouts: []TypeLayout,
+    options: Options,
+    /// Set while formatting a header whose version pin is out of date.
+    roc_version_upgrade: ?RocVersionUpgrade = null,
     curr_indent: u32 = 0,
     flags: FormatFlags = .no_debug,
     // This starts true since beginning of file is considered a newline.
@@ -352,7 +383,7 @@ const Formatter = struct {
     pending_spaces: usize = 0,
 
     /// Creates a new Formatter for the given parse IR.
-    fn init(ast: AST, writer: *std.Io.Writer) Allocator.Error!Formatter {
+    fn init(ast: AST, writer: *std.Io.Writer, options: Options) Allocator.Error!Formatter {
         const type_layouts = try ast.gpa.alloc(TypeLayout, ast.store.nodeCount());
         @memset(type_layouts, .unknown);
 
@@ -360,6 +391,7 @@ const Formatter = struct {
             .ast = ast,
             .writer = writer,
             .type_layouts = type_layouts,
+            .options = options,
         };
     }
 
@@ -506,7 +538,7 @@ const Formatter = struct {
                 var flushed = false;
                 try fmt.pushAll("import");
                 if (multiline) {
-                    flushed = try fmt.flushCommentsBefore(if (i.qualifier_tok) |q| q else i.module_name_tok);
+                    flushed = try fmt.flushCommentsBefore(i.target.start_tok);
                 }
                 if (!flushed) {
                     try fmt.push(' ');
@@ -514,7 +546,7 @@ const Formatter = struct {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
                 }
-                const path_result = try fmt.formatModulePath(i.module_name_tok, i.qualifier_tok);
+                const path_result = try fmt.formatImportTarget(i.target);
                 const last_module_tok = path_result.last_tok;
                 if (multiline and (i.alias_tok != null or i.exposes.span.len > 0)) {
                     flushed = try fmt.flushCommentsAfter(last_module_tok);
@@ -554,10 +586,7 @@ const Formatter = struct {
                         flushed = try fmt.flushCommentsAfter(a);
                     }
                 }
-                // Nested imports store their final segment in `exposes`, but it is
-                // still part of the dotted source path rather than a source
-                // `exposing` clause.
-                const needs_exposing = !i.nested_import and i.exposes.span.len > 0;
+                const needs_exposing = i.exposes.span.len > 0;
                 if (needs_exposing) {
                     if (flushed) {
                         fmt.curr_indent += 1;
@@ -871,42 +900,32 @@ const Formatter = struct {
         try fmt.pushTokenText(ident);
     }
 
-    /// Formats the complete dotted path written in an import statement.
-    ///
-    /// Whether that path selects a directory-qualified module or a nested type
-    /// is explicit on the import node and does not affect path formatting.
+    /// Formats an explicit import target without whitespace around separators.
     const ModulePathResult = struct {
         last_tok: Token.Idx,
     };
 
-    fn formatModulePath(fmt: *Formatter, module_name_tok: Token.Idx, qualifier: ?Token.Idx) (Allocator.Error || error{WriteFailed})!ModulePathResult {
+    fn formatImportTarget(fmt: *Formatter, target: AST.ImportTarget) (Allocator.Error || error{WriteFailed})!ModulePathResult {
         const curr_indent = fmt.curr_indent;
         defer {
             fmt.curr_indent = curr_indent;
         }
 
-        // Output qualifier if present
-        if (qualifier) |q| {
-            try fmt.pushTokenText(q);
-            try fmt.push('.');
-        }
-
-        // Output the first uppercase token
-        try fmt.pushTokenText(module_name_tok);
-        var last_tok = module_name_tok;
-
-        // Normalize every dotted path segment to no whitespace before the dot.
-        var tok = module_name_tok + 1;
         const tags = fmt.ast.tokens.tokens.items(.tag);
-        while (tok < tags.len) {
-            const tag = tags[tok];
-            if (tag != .NoSpaceDotUpperIdent and tag != .DotUpperIdent) {
-                break;
+        const last_tok = target.lastToken();
+        var tok = target.start_tok;
+        while (tok <= last_tok) : (tok += 1) {
+            switch (tags[tok]) {
+                .NoSpaceDotUpperIdent, .DotUpperIdent => {
+                    try fmt.push('.');
+                    try fmt.pushTokenText(tok);
+                },
+                .OpSlash => try fmt.push('/'),
+                .Dot => try fmt.push('.'),
+                .DoubleDot => try fmt.pushAll(".."),
+                .UpperIdent, .LowerIdent => try fmt.pushTokenText(tok),
+                else => {},
             }
-            try fmt.push('.');
-            try fmt.pushTokenText(tok);
-            last_tok = tok;
-            tok += 1;
         }
 
         return .{ .last_tok = last_tok };
@@ -1114,6 +1133,18 @@ const Formatter = struct {
         const field = fmt.ast.store.getRecordField(idx);
         var ends_with_multiline_string_line = false;
         try fmt.pushTokenText(field.name);
+        if (fmt.roc_version_upgrade) |upgrade| {
+            if (idx == upgrade.field) {
+                // Write the running compiler's version rather than the stale
+                // one in the source. Planning the upgrade already parsed that
+                // version as a nightly tag, so it is alphanumerics and `-`
+                // only and needs no escaping inside the quotes.
+                try fmt.pushAll(": \"");
+                try fmt.pushAll(upgrade.version);
+                try fmt.push('"');
+                return .{ .region = field.region, .ends_with_multiline_string_line = false };
+            }
+        }
         if (field.value) |v| {
             try fmt.pushAll(": ");
             const formatted_value = try fmt.formatExprWithInfo(v);
@@ -1134,6 +1165,11 @@ const Formatter = struct {
         normal,
         no_indent_on_access,
         no_additional_indent_on_access,
+    };
+
+    const ExprFormatContext = struct {
+        behavior: ExprFormatBehavior = .normal,
+        question_suffix_follows: bool = false,
     };
 
     fn formatStringInterpolation(fmt: *Formatter, idx: AST.Expr.Idx) FormatAstError!void {
@@ -1188,7 +1224,7 @@ const Formatter = struct {
     };
 
     fn formatExprWithInfo(fmt: *Formatter, ei: AST.Expr.Idx) FormatAstError!FormattedExpr {
-        return formatExprInner(fmt, ei, .normal);
+        return formatExprInner(fmt, ei, .{});
     }
 
     fn adjustMultilineAccessIndent(fmt: *Formatter, format_behavior: ExprFormatBehavior) void {
@@ -1219,7 +1255,7 @@ const Formatter = struct {
     }
 
     fn formatExprInnerDiscard(fmt: *Formatter, ei: AST.Expr.Idx, format_behavior: ExprFormatBehavior) FormatAstError!void {
-        const formatted = try fmt.formatExprInner(ei, format_behavior);
+        const formatted = try fmt.formatExprInner(ei, .{ .behavior = format_behavior });
         Formatter.discardRegion(formatted.region);
     }
 
@@ -1288,11 +1324,12 @@ const Formatter = struct {
         return formatted;
     }
 
-    fn formatExprInner(fmt: *Formatter, ei: AST.Expr.Idx, format_behavior: ExprFormatBehavior) FormatAstError!FormattedExpr {
+    fn formatExprInner(fmt: *Formatter, ei: AST.Expr.Idx, format_context: ExprFormatContext) FormatAstError!FormattedExpr {
         const expr = fmt.ast.store.getExpr(ei);
         const region = fmt.nodeRegion(@intFromEnum(ei));
         var formatted = FormattedExpr{ .region = region };
         const multiline = fmt.nodeWillBeMultiline(AST.Expr.Idx, ei);
+        const format_behavior = format_context.behavior;
         const indent_modifier: u32 = @intFromBool(format_behavior != .normal and fmt.curr_indent > 0);
         const curr_indent: u32 = fmt.curr_indent - indent_modifier;
         defer {
@@ -1492,11 +1529,12 @@ const Formatter = struct {
                         const args = fmt.ast.store.exprSlice(apply.args);
 
                         // A direct empty argument list contributes no arguments
-                        // beyond the piped value, so remove it whenever doing so
-                        // does not expose another application as the pipe RHS.
+                        // beyond the piped value. Remove it unless a following
+                        // `?` needs the call syntax to own the completed pipe, or
+                        // doing so would expose another application as the RHS.
                         // (`value |> make()()` must remain distinct from
                         // `value |> make()`.)
-                        if (args.len == 0 and apply_fn != .apply) {
+                        if (args.len == 0 and apply_fn != .apply and !format_context.question_suffix_follows) {
                             const right_region = fmt.nodeRegion(@intFromEnum(ld.right));
                             const closing_token = right_region.end - 1;
                             if (fmt.hasCommentBefore(closing_token) and try fmt.flushCommentsBefore(closing_token)) {
@@ -1730,10 +1768,19 @@ const Formatter = struct {
                 }
             },
             .suffix_single_question => |s| {
-                const body = switch (format_behavior) {
-                    .normal => try fmt.formatExprWithInfo(s.expr),
-                    .no_indent_on_access, .no_additional_indent_on_access => try fmt.formatExprInner(s.expr, .no_additional_indent_on_access),
+                const child_behavior: ExprFormatBehavior = switch (format_behavior) {
+                    .normal => .normal,
+                    .no_indent_on_access, .no_additional_indent_on_access => .no_additional_indent_on_access,
                 };
+                const child_expr = fmt.ast.store.getExpr(s.expr);
+                const pipe_needs_parens = child_expr == .arrow_call and fmt.ast.store.getExpr(child_expr.arrow_call.right) != .apply;
+                const body = if (pipe_needs_parens)
+                    try fmt.formatParenthesizedExpr(null, s.expr, fmt.nodeWillBeMultiline(AST.Expr.Idx, s.expr))
+                else
+                    try fmt.formatExprInner(s.expr, .{
+                        .behavior = child_behavior,
+                        .question_suffix_follows = child_expr == .arrow_call,
+                    });
                 _ = try fmt.continueAfterMultilineStringLine(body);
                 try fmt.push('?');
             },
@@ -2473,11 +2520,28 @@ const Formatter = struct {
         }
     }
 
+    /// Which of the header's dependency-record entries pins a compiler version
+    /// that this compiler should replace with its own, if any.
+    fn plannedRocVersionUpgrade(fmt: *Formatter, header: AST.Header) ?RocVersionUpgrade {
+        const current = fmt.options.compiler_version orelse return null;
+        const field_idx = switch (header) {
+            .app => |h| h.roc_version,
+            .package => |h| h.roc_version,
+            .platform => |h| h.roc_version,
+            else => null,
+        } orelse return null;
+        const pinned = fmt.ast.rocVersionText(field_idx) orelse return null;
+        if (!base.roc_version.shouldUpgrade(pinned, current)) return null;
+        return .{ .field = field_idx, .version = current };
+    }
+
     fn formatHeader(fmt: *Formatter, hi: AST.Header.Idx) FormatAstError!void {
         const header = fmt.ast.store.getHeader(hi);
         const start_indent = fmt.curr_indent;
+        fmt.roc_version_upgrade = fmt.plannedRocVersionUpgrade(header);
         defer {
             fmt.curr_indent = start_indent;
+            fmt.roc_version_upgrade = null;
         }
 
         const multiline = fmt.nodeWillBeMultiline(AST.Header.Idx, hi);
@@ -3185,13 +3249,13 @@ const Formatter = struct {
     fn flushCommentsBeforeMin(fmt: *Formatter, tokenIdx: Token.Idx, min_leading_newlines: u8) error{WriteFailed}!bool {
         const start = if (tokenIdx == 0) 0 else fmt.ast.tokens.resolve(tokenIdx - 1).end.offset;
         const end = fmt.ast.tokens.resolve(tokenIdx).start.offset;
-        return fmt.flushComments(fmt.ast.env.source[start..end], min_leading_newlines);
+        return fmt.flushComments(start, fmt.ast.env.source[start..end], min_leading_newlines);
     }
 
     fn flushCommentsAfter(fmt: *Formatter, tokenIdx: Token.Idx) error{WriteFailed}!bool {
         const start = fmt.ast.tokens.resolve(tokenIdx).end.offset;
         const end = fmt.ast.tokens.resolve(tokenIdx + 1).start.offset;
-        return fmt.flushComments(fmt.ast.env.source[start..end], 0);
+        return fmt.flushComments(start, fmt.ast.env.source[start..end], 0);
     }
 
     fn flushCommentsEOF(fmt: *Formatter) error{WriteFailed}!void {
@@ -3221,7 +3285,7 @@ const Formatter = struct {
                 try fmt.push('#');
                 const comment_text = between_text[comment_start..comment_end];
                 // Add space after # unless next char is space or # (preserves ## doc comments and ### separators)
-                if (comment_text.len > 0 and comment_text[0] != ' ' and comment_text[0] != '#') {
+                if (!isShebang(start + i, comment_text) and comment_text.len > 0 and comment_text[0] != ' ' and comment_text[0] != '#') {
                     try fmt.push(' ');
                 }
                 try fmt.pushAll(comment_text);
@@ -3238,7 +3302,17 @@ const Formatter = struct {
         try fmt.ensureNewline();
     }
 
-    fn flushComments(fmt: *Formatter, between_text: []const u8, min_leading_newlines: u8) error{WriteFailed}!bool {
+    /// A `#!` at the very start of a file is a shebang, so the formatter must leave
+    /// it alone. Inserting the usual space after the `#` would stop the shell from
+    /// recognizing it, breaking executable Roc scripts.
+    /// `offset` is the absolute source offset of the comment's `#`, and
+    /// `comment_text` is everything after that `#` up to the end of the line.
+    fn isShebang(offset: usize, comment_text: []const u8) bool {
+        return offset == 0 and comment_text.len > 0 and comment_text[0] == '!';
+    }
+
+    /// `start_offset` is the absolute source offset that `between_text` begins at.
+    fn flushComments(fmt: *Formatter, start_offset: usize, between_text: []const u8, min_leading_newlines: u8) error{WriteFailed}!bool {
         var newline_count: usize = 0;
         var prev_was_comment: bool = false;
         // True once we've either upgraded a source newline into a blank line
@@ -3287,7 +3361,7 @@ const Formatter = struct {
                 try fmt.push('#');
                 const comment_text = between_text[comment_start..comment_end];
                 // Add space after # unless next char is space or # (preserves ## doc comments and ### separators)
-                if (comment_text.len > 0 and comment_text[0] != ' ' and comment_text[0] != '#') {
+                if (!isShebang(start_offset + i, comment_text) and comment_text.len > 0 and comment_text[0] != ' ' and comment_text[0] != '#') {
                     try fmt.push(' ');
                 }
                 try fmt.pushAll(comment_text);
@@ -4208,6 +4282,31 @@ test "pipe targets ending in question marks stay unparenthesized" {
     try std.testing.expectEqualStrings(input, result);
 }
 
+test "issue 10510: empty call controls pipe question suffix precedence" {
+    // Repro for https://github.com/roc-lang/roc/issues/10510
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\from_arrow = a->f()?
+        \\with_call = a |> f()?
+        \\without_call = a |> f?
+        \\parenthesized_result = (a |> f)?
+        \\chain = a->f()?->g()?->h()?
+    , false);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(
+        "from_arrow = a |> f()?\n" ++
+            "\n" ++
+            "with_call = a |> f()?\n" ++
+            "\n" ++
+            "without_call = a |> f?\n" ++
+            "\n" ++
+            "parenthesized_result = (a |> f)?\n" ++
+            "\n" ++
+            "chain = a |> f()? |> g()? |> h()?\n",
+        result,
+    );
+}
+
 test "parenthesized pipe receivers drop direct empty target arguments" {
     const input = "x = (foo |> bar()).baz()";
     const result = try moduleFmtsStable(std.testing.allocator, input, false);
@@ -4274,15 +4373,15 @@ test "parenthesized type application with leading newline is idempotent" {
 }
 
 test "import alias after comment stays separated" {
-    const result = try moduleFmtsStable(std.testing.allocator, "import A .B as#\nX", false);
+    const result = try moduleFmtsStable(std.testing.allocator, "import A / B as#\nX", false);
     defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("import A.B as #\nX\n", result);
+    try std.testing.expectEqualStrings("import A/B as #\nX\n", result);
 }
 
 test "import path spacing is normalized" {
-    const result = try moduleFmtsStable(std.testing.allocator, "import Layout .Path as LayoutPath", false);
+    const result = try moduleFmtsStable(std.testing.allocator, "import Layout / Path as LayoutPath", false);
     defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("import Layout.Path as LayoutPath\n", result);
+    try std.testing.expectEqualStrings("import Layout/Path as LayoutPath\n", result);
 }
 
 test "nested import path remains nested after formatting" {
@@ -4757,4 +4856,167 @@ test "blank line inserted before doc comments following code" {
         \\
     ;
     try std.testing.expectEqualStrings(expected, result);
+}
+
+/// Format `input` as a compiler reporting itself as `compiler_version` would,
+/// so that tests of the `roc` version pin do not depend on how this binary was
+/// built. Asserts that formatting the result again is a no-op, since a pin
+/// that has just been brought up to date must have nothing left to upgrade.
+fn fmtAsCompiler(gpa: std.mem.Allocator, input: []const u8, compiler_version: []const u8) FormatTestError![]const u8 {
+    const options: Options = .{ .compiler_version = compiler_version };
+
+    var module_env = try ModuleEnv.init(gpa, input);
+    defer module_env.deinit();
+    const parse_ast = try parse.file(gpa, &module_env.common);
+    defer parse_ast.deinit();
+    std.testing.expectEqualSlices(AST.Diagnostic, &[_]AST.Diagnostic{}, parse_ast.parse_diagnostics.items) catch {
+        return error.ParseFailed;
+    };
+
+    var result: std.Io.Writer.Allocating = .init(gpa);
+    defer result.deinit();
+    try formatAstWithOptions(parse_ast.*, &result.writer, options);
+
+    var stable_env = try ModuleEnv.init(gpa, result.written());
+    defer stable_env.deinit();
+    const stable_ast = try parse.file(gpa, &stable_env.common);
+    defer stable_ast.deinit();
+    var stable: std.Io.Writer.Allocating = .init(gpa);
+    defer stable.deinit();
+    try formatAstWithOptions(stable_ast.*, &stable.writer, options);
+    std.testing.expectEqualStrings(result.written(), stable.written()) catch {
+        return error.FormattingNotStable;
+    };
+
+    return try result.toOwnedSlice();
+}
+
+test "fmt upgrades an app's roc version pin to a newer nightly" {
+    const result = try fmtAsCompiler(
+        std.testing.allocator,
+        \\app [main!] { pf: platform "../platform/main.roc", roc: "nightly-2026-July-30-aaaaaaa" }
+        \\
+        \\main! = |_| {}
+    ,
+        "nightly-2026-August-1-bbbbbbb",
+    );
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(
+        \\app [main!] { pf: platform "../platform/main.roc", roc: "nightly-2026-August-1-bbbbbbb" }
+        \\
+        \\main! = |_| {}
+        \\
+    , result);
+}
+
+test "fmt upgrades a package's roc version pin" {
+    const result = try fmtAsCompiler(
+        std.testing.allocator,
+        \\package [Foo] { roc: "nightly-2026-July-30-aaaaaaa" }
+    ,
+        "nightly-2026-August-1-bbbbbbb",
+    );
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(
+        \\package [Foo] { roc: "nightly-2026-August-1-bbbbbbb" }
+        \\
+    , result);
+}
+
+test "fmt upgrades a roc version pin written across several lines" {
+    const result = try fmtAsCompiler(
+        std.testing.allocator,
+        "app [main!] {\n" ++
+            "\tpf: platform \"../platform/main.roc\",\n" ++
+            "\troc: \"nightly-2026-July-30-aaaaaaa\",\n" ++
+            "}\n\nmain! = |_| {}",
+        "nightly-2026-August-1-bbbbbbb",
+    );
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(
+        "app [main!] {\n" ++
+            "\tpf: platform \"../platform/main.roc\",\n" ++
+            "\troc: \"nightly-2026-August-1-bbbbbbb\",\n" ++
+            "}\n\nmain! = |_| {}\n",
+        result,
+    );
+}
+
+test "fmt leaves a roc version pin alone when it must not be upgraded" {
+    const gpa = std.testing.allocator;
+    const cases = [_]struct { pinned: []const u8, running: []const u8 }{
+        // Running an older nightly than the pin.
+        .{ .pinned = "nightly-2026-August-1-aaaaaaa", .running = "nightly-2026-July-30-bbbbbbb" },
+        // A release pin is deliberate, so a nightly must not overwrite it.
+        .{ .pinned = "0.1.0", .running = "nightly-2026-July-30-bbbbbbb" },
+        // A local development build is not a version a header may pin.
+        .{ .pinned = "nightly-2026-July-30-aaaaaaa", .running = "debug-c6dfe61b" },
+    };
+
+    for (cases) |case| {
+        const input = try std.fmt.allocPrint(gpa, "package [Foo] {{ roc: \"{s}\" }}\n", .{case.pinned});
+        defer gpa.free(input);
+
+        const result = try fmtAsCompiler(gpa, input, case.running);
+        defer gpa.free(result);
+
+        try std.testing.expectEqualStrings(input, result);
+    }
+}
+
+test "fmt leaves a roc version pin alone when the compiler is unknown" {
+    const input =
+        \\package [Foo] { roc: "nightly-2026-July-30-aaaaaaa" }
+        \\
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(input, result);
+}
+
+test "fmt upgrades a roc version pin that has a comment written inside it" {
+    // The formatter drops a comment written between a header field's `:` and
+    // its value whether or not the field is a version pin, so upgrading such a
+    // pin loses nothing that would otherwise have survived.
+    const input = "package [Foo] {\n" ++
+        "\troc: # pinned deliberately\n" ++
+        "\t\t\"nightly-2026-July-30-aaaaaaa\",\n" ++
+        "}\n";
+    const result = try fmtAsCompiler(std.testing.allocator, input, "nightly-2026-August-1-bbbbbbb");
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expect(std.mem.find(u8, result, "nightly-2026-August-1-bbbbbbb") != null);
+}
+
+test "fmt preserves a shebang on the first line" {
+    const input = "#!/usr/bin/env roc\n" ++
+        "app [main!] { pf: platform \"./platform/main.roc\" }\n";
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(input, result);
+}
+
+test "fmt preserves a shebang in a file with no header" {
+    const input = "#!/usr/bin/env roc\n" ++
+        "x = 1\n";
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(input, result);
+}
+
+test "fmt spaces out a #! that is not on the first line" {
+    // Only the very first line of a file can be a shebang, so `#!` anywhere else
+    // is an ordinary comment and gets the usual space after the `#`.
+    const input = "x = 1\n" ++
+        "#!/usr/bin/env roc\n";
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings("x = 1\n# !/usr/bin/env roc\n", result);
 }

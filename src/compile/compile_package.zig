@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const base = @import("base");
 const parse = @import("parse");
 const can = @import("can");
@@ -382,11 +383,12 @@ pub fn canonicalizeModuleWithSiblings(
     // Canonicalization consumes concrete exposed-node data from dependencies.
     const sibling_imports = try module_discovery.extractImportsFromDeclIndex(parse_ast, gpa);
     defer {
-        for (sibling_imports) |imp| gpa.free(imp);
+        for (sibling_imports) |imp| gpa.free(imp.import_name);
         gpa.free(sibling_imports);
     }
 
-    for (sibling_imports) |sibling_name| {
+    for (sibling_imports) |sibling_import| {
+        const sibling_name = sibling_import.import_name;
         // Skip self
         if (std.mem.eql(u8, sibling_name, env.module_name)) continue;
 
@@ -457,6 +459,7 @@ pub fn canonicalizeModuleWithSiblings(
             .builtin_indices = builtin_indices,
         },
         .imported_modules = &module_envs_map,
+        .compiler_version = build_options.compiler_version,
     });
     czer.source_dir = root_dir;
     try czer.canonicalizeFile();
