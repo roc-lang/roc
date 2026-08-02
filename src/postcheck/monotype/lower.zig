@@ -30655,18 +30655,17 @@ const BodyContext = struct {
         _ = try checkedMonoRequestNode(self.graph, checked_result_node, plan_ret_node);
         const call_data = try self.lowerResolvedDispatchAtNode(plan, resolved, callable_node, self, pre_lowered.items);
         const call_ret_cell = if (try self.graph.containsGeneratedPrivate(plan_ret_node)) blk: {
-            // Stays on the graph node until the section 8 identity cutover:
-            // sealing the consumer-declared emission here severs the occurrence
-            // identity downstream evidence still keys on - 36 iterator eval
-            // tests crashed when tried - even though the emitted content is
-            // certified equal up to that identity (reunify.md 13.2e). The
-            // authority transfer for generated returns FOLLOWS the interner,
-            // it cannot precede it.
-            if (try self.graph.typeIsResolved(plan_ret_node)) {
-                self.measureDispatchReturnParity(checked_ret_ty, plan, try self.activeTypeFromNode(plan_ret_node));
-            } else {
-                census.bump("dispatch_return_parity_unresolved_at_cell");
+            // A generated return is the producer's own representation, and
+            // directed emission states it from the consumer's declared input
+            // (reunify.md 13.2e). Sealing it here needed the section 8
+            // identity cutover first: before dedup, one occurrence's sealed id
+            // did not name the same type another occurrence sealed, so
+            // downstream evidence keyed on the graph node lost its subject.
+            if (self.generatedDispatchReturnFinal(checked_ret_ty, plan)) |final| {
+                census.bump("dispatch_return_directed_cell");
+                break :blk DraftTypeCell.fromSealed(final);
             }
+            census.bump("dispatch_return_directed_declined_at_cell");
             break :blk DraftTypeCell.fromGraphNode(plan_ret_node);
         } else expected_ret_cell orelse DraftTypeCell.fromGraphNode(plan_ret_node);
         const call_expr = try self.addExprWithTypeCell(
