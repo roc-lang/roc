@@ -41,6 +41,8 @@ pub const Counters = struct {
     nested_misses: u64 = 0,
     template_lookup_candidates: u64 = 0,
     nested_lookup_candidates: u64 = 0,
+    /// Top-level digest requests. The hit/miss counters below count recursive
+    /// type nodes visited by those requests, so they do not sum to this value.
     specialization_type_digest_requests: u64 = 0,
     specialization_type_digest_cache_hits: u64 = 0,
     specialization_type_digest_cache_misses: u64 = 0,

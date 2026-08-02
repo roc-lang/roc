@@ -85,6 +85,8 @@ pub const TargetConfig = struct {
 pub const Timing = struct {
     std_io: std.Io,
     detailed_monotype_body: bool = false,
+    monotype_diagnostics_mutex: std.Io.Mutex = .init,
+    monotype_diagnostics: postcheck.Monotype.Lower.Diagnostics = .{},
     monotype_ns: TimingCounter = .{},
     monotype_setup_ns: TimingCounter = .{},
     monotype_procedure_specialization_ns: TimingCounter = .{},
@@ -123,6 +125,7 @@ pub const Timing = struct {
     }
 
     pub fn snapshot(self: *const Timing) TimingSnapshot {
+        const diagnostics = self.monotypeDiagnosticsSnapshot();
         return .{
             .monotype_ns = self.monotype_ns.load(),
             .monotype_setup_ns = self.monotype_setup_ns.load(),
@@ -150,6 +153,7 @@ pub const Timing = struct {
             .lir_gen_ns = self.lir_gen_ns.load(),
             .lir_passes_ns = self.lir_passes_ns.load(),
             .arc_ns = self.arc_ns.load(),
+            .monotype_diagnostics = diagnostics,
         };
     }
 
@@ -180,6 +184,7 @@ pub const Timing = struct {
         self.lir_gen_ns.add(snapshot_value.lir_gen_ns);
         self.lir_passes_ns.add(snapshot_value.lir_passes_ns);
         self.arc_ns.add(snapshot_value.arc_ns);
+        self.addMonotypeDiagnostics(snapshot_value.monotype_diagnostics);
     }
 
     fn start(self: *const Timing) i64 {
@@ -221,6 +226,19 @@ pub const Timing = struct {
         self.monotype_static_data_requests_ns.add(snapshot_value.static_data_requests_ns);
         self.monotype_finalization_ns.add(snapshot_value.finalization_ns);
     }
+
+    fn addMonotypeDiagnostics(self: *Timing, diagnostics: postcheck.Monotype.Lower.Diagnostics) void {
+        self.monotype_diagnostics_mutex.lockUncancelable(self.std_io);
+        defer self.monotype_diagnostics_mutex.unlock(self.std_io);
+        self.monotype_diagnostics.add(diagnostics);
+    }
+
+    fn monotypeDiagnosticsSnapshot(self: *const Timing) postcheck.Monotype.Lower.Diagnostics {
+        const mutable = @constCast(self);
+        mutable.monotype_diagnostics_mutex.lockUncancelable(self.std_io);
+        defer mutable.monotype_diagnostics_mutex.unlock(self.std_io);
+        return self.monotype_diagnostics;
+    }
 };
 
 const TimingCounter = base.ConcurrentU64;
@@ -253,6 +271,7 @@ pub const TimingSnapshot = struct {
     lir_gen_ns: u64 = 0,
     lir_passes_ns: u64 = 0,
     arc_ns: u64 = 0,
+    monotype_diagnostics: postcheck.Monotype.Lower.Diagnostics = .{},
 };
 
 const TimingPhase = enum {
@@ -268,6 +287,26 @@ const TimingPhase = enum {
 
 fn timingNowNs(std_io: std.Io) i64 {
     return @intCast(@max(0, std.Io.Timestamp.now(std_io, .awake).nanoseconds));
+}
+
+test "pipeline timing aggregates Monotype diagnostics" {
+    var timing = Timing.init(std.Io.Threaded.global_single_threaded.io());
+    var first: postcheck.Monotype.Lower.Diagnostics = .{};
+    first.specialization.template_requests = 3;
+    first.graph.nodes_created = 5;
+    first.body.call_expressions = 7;
+    timing.addMonotypeDiagnostics(first);
+
+    var second: postcheck.Monotype.Lower.Diagnostics = .{};
+    second.specialization.template_requests = 11;
+    second.graph.nodes_created = 13;
+    second.body.call_expressions = 17;
+    timing.addMonotypeDiagnostics(second);
+
+    const diagnostics = timing.snapshot().monotype_diagnostics;
+    try std.testing.expectEqual(@as(u64, 14), diagnostics.specialization.template_requests);
+    try std.testing.expectEqual(@as(u64, 18), diagnostics.graph.nodes_created);
+    try std.testing.expectEqual(@as(u64, 24), diagnostics.body.call_expressions);
 }
 
 /// Whether the root checked module is complete or inside checking finalization.
@@ -428,6 +467,10 @@ pub fn lowerCheckedModulesToLir(
         postcheck.Monotype.Lower.Timing.init(timing.std_io)
     else
         null;
+    var monotype_diagnostics: ?postcheck.Monotype.Lower.Diagnostics = if (target.timing) |timing|
+        if (timing.detailed_monotype_body) .{} else null
+    else
+        null;
     if (monotype_timing) |*detail| {
         detail.body_work_timing_enabled = target.timing.?.detailed_monotype_body;
     }
@@ -445,11 +488,13 @@ pub fn lowerCheckedModulesToLir(
                 .omit => .omit,
             },
             .timing = if (monotype_timing) |*timing| timing else null,
+            .diagnostics = if (monotype_diagnostics) |*diagnostics| diagnostics else null,
         },
     );
     if (target.timing) |timing| {
         timing.finish(monotype_started_ns, .monotype);
         if (monotype_timing) |*detail| timing.addMonotypeSnapshot(detail.snapshot());
+        if (monotype_diagnostics) |diagnostics| timing.addMonotypeDiagnostics(diagnostics);
     }
     var mono_owned = true;
     errdefer if (mono_owned) mono.deinit();

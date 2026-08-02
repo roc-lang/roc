@@ -113,6 +113,9 @@ pub const Options = struct {
     loaded_specialization_shards: []const LoadedSpecializationShard = &.{},
     /// Optional deterministic counters for specialization-shape tests.
     specialization_counters: ?*SpecializationCounters = null,
+    /// Optional deterministic workload diagnostics. The checked pipeline
+    /// supplies this only for detailed `--timings` reporting.
+    diagnostics: ?*Diagnostics = null,
     /// Whether inline expects should be lowered at all. Optimized runtime builds
     /// omit them before their conditions can affect control-flow decisions.
     inline_expects: InlineExpectMode = .run,
@@ -338,6 +341,44 @@ const BodyWorkTimingScope = struct {
 
 /// Deterministic counters used by specialization-shape tests.
 pub const SpecializationCounters = specialize.Counters;
+
+/// Deterministic counts for body-context, type-instantiation, and call work.
+pub const BodyDiagnostics = struct {
+    graphs_created: u64 = 0,
+    body_contexts_created: u64 = 0,
+    checked_node_requests: u64 = 0,
+    checked_node_cache_hits: u64 = 0,
+    checked_node_cache_misses: u64 = 0,
+    fresh_checked_node_requests: u64 = 0,
+    call_expressions: u64 = 0,
+    dispatch_expressions: u64 = 0,
+    expr_relation_requests: u64 = 0,
+    argument_spans_prepared: u64 = 0,
+    arguments_prepared: u64 = 0,
+    nested_callable_checks: u64 = 0,
+    nested_lambdas_prepared: u64 = 0,
+    nested_closures_prepared: u64 = 0,
+};
+
+/// Deterministic Monotype workload counts. These diagnose how much exact
+/// instantiation and call preparation occurred; they never affect lowering.
+pub const Diagnostics = struct {
+    specialization: SpecializationCounters = .{},
+    graph: solve.GraphDiagnostics = .{},
+    body: BodyDiagnostics = .{},
+
+    pub fn add(self: *Diagnostics, other: Diagnostics) void {
+        addFlatCounters(SpecializationCounters, &self.specialization, other.specialization);
+        addFlatCounters(solve.GraphDiagnostics, &self.graph, other.graph);
+        addFlatCounters(BodyDiagnostics, &self.body, other.body);
+    }
+};
+
+fn addFlatCounters(comptime T: type, destination: *T, source: T) void {
+    inline for (std.meta.fields(T)) |field| {
+        @field(destination, field.name) = @field(destination, field.name) +| @field(source, field.name);
+    }
+}
 
 /// Lower checked modules and explicit roots into Monotype IR.
 pub fn run(
@@ -897,6 +938,13 @@ const GraphHostedTryInfo = struct {
     err: NodeId,
 };
 
+const GraphHostedTryWidening = struct {
+    public_try: GraphHostedTryInfo,
+    request_try: GraphHostedTryInfo,
+    public_err: []const InstTag,
+    request_err: []const InstTag,
+};
+
 fn graphTagByName(
     tags: []const InstTag,
     name: names.TagNameId,
@@ -928,6 +976,35 @@ fn graphHostedTryInfoOrNull(
     };
 }
 
+fn graphHostedTryWideningOrNull(
+    graph: *InstGraph,
+    capability: HostedTryAdapterCapability,
+    public_ret: NodeId,
+    request_ret: NodeId,
+) Allocator.Error!?GraphHostedTryWidening {
+    const public_try = graphHostedTryInfoOrNull(graph, capability, public_ret) orelse return null;
+    const request_try = graphHostedTryInfoOrNull(graph, capability, request_ret) orelse return null;
+    const public_err = (try graph.tagRowNodesOrNull(public_try.err)) orelse return null;
+    const request_err = (try graph.tagRowNodesOrNull(request_try.err)) orelse return null;
+
+    if (request_err.tags.len < public_err.tags.len) {
+        Common.invariant("hosted Try request removed a declared error label");
+    }
+    for (public_err.tags) |public_tag| {
+        const request_tag = graphTagByName(request_err.tags, public_tag.name) orelse
+            Common.invariant("hosted Try request removed a declared error label");
+        if (public_tag.payloads.len != request_tag.payloads.len) {
+            Common.invariant("hosted Try request changed a declared error payload arity");
+        }
+    }
+    return .{
+        .public_try = public_try,
+        .request_try = request_try,
+        .public_err = public_err.tags,
+        .request_err = request_err.tags,
+    };
+}
+
 /// Relate a hosted request whose `Try` result has additional error labels.
 /// Declared labels and every non-row component remain exact graph relations;
 /// only the request's extra error labels stay outside the checked public row.
@@ -942,29 +1019,15 @@ fn relateHostedTryWidening(
     if (public.args.len != request.args.len) {
         Common.invariant("hosted function request changed arity from its checked interface");
     }
-    const public_try = graphHostedTryInfoOrNull(graph, capability, public.ret) orelse return false;
-    const request_try = graphHostedTryInfoOrNull(graph, capability, request.ret) orelse return false;
-
-    const public_err = (try graph.tagRowNodes(public_try.err)).tags;
-    const request_err = (try graph.tagRowNodes(request_try.err)).tags;
-    if (request_err.len < public_err.len) {
-        Common.invariant("hosted Try request removed a declared error label");
-    }
-    for (public_err) |public_tag| {
-        const request_tag = graphTagByName(request_err, public_tag.name) orelse
-            Common.invariant("hosted Try request removed a declared error label");
-        if (public_tag.payloads.len != request_tag.payloads.len) {
-            Common.invariant("hosted Try request changed a declared error payload arity");
-        }
-    }
-    if (request_err.len == public_err.len) return false;
+    const widening = try graphHostedTryWideningOrNull(graph, capability, public.ret, request.ret) orelse return false;
+    if (widening.request_err.len == widening.public_err.len) return false;
 
     for (public.args, request.args) |public_arg, request_arg| {
         try relateRequestComponent(graph, public_arg, request_arg);
     }
-    try relateRequestComponent(graph, public_try.ok, request_try.ok);
-    for (public_err) |public_tag| {
-        const request_tag = graphTagByName(request_err, public_tag.name) orelse unreachable;
+    try relateRequestComponent(graph, widening.public_try.ok, widening.request_try.ok);
+    for (widening.public_err) |public_tag| {
+        const request_tag = graphTagByName(widening.request_err, public_tag.name) orelse unreachable;
         for (public_tag.payloads, request_tag.payloads) |public_payload, request_payload| {
             try relateRequestComponent(graph, public_payload, request_payload);
         }
@@ -979,22 +1042,8 @@ fn hostedTryWideningRequestHasAdditionalErrors(
     request_ret: NodeId,
 ) Allocator.Error!bool {
     const public = try graph.functionNodes(public_fn);
-    const public_try = graphHostedTryInfoOrNull(graph, capability, public.ret) orelse return false;
-    const request_try = graphHostedTryInfoOrNull(graph, capability, request_ret) orelse return false;
-
-    const public_err = (try graph.tagRowNodes(public_try.err)).tags;
-    const request_err = (try graph.tagRowNodes(request_try.err)).tags;
-    if (request_err.len < public_err.len) {
-        Common.invariant("hosted Try request removed a declared error label");
-    }
-    for (public_err) |public_tag| {
-        const request_tag = graphTagByName(request_err, public_tag.name) orelse
-            Common.invariant("hosted Try request removed a declared error label");
-        if (public_tag.payloads.len != request_tag.payloads.len) {
-            Common.invariant("hosted Try request changed a declared error payload arity");
-        }
-    }
-    return request_err.len > public_err.len;
+    const widening = try graphHostedTryWideningOrNull(graph, capability, public.ret, request_ret) orelse return false;
+    return widening.request_err.len > widening.public_err.len;
 }
 
 fn relateHostedFunctionRequestInterface(
@@ -1826,6 +1875,7 @@ const Builder = struct {
     specialization_cache: SpecializationCacheControl,
     loaded_specialization_shards: []const LoadedSpecializationShard,
     counters: ?*SpecializationCounters,
+    diagnostics: ?*Diagnostics,
     inline_expects: InlineExpectMode,
     static_data_literals: bool,
     target_usize: base.target.TargetUsize,
@@ -1892,8 +1942,10 @@ const Builder = struct {
     evidence_arena: std.heap.ArenaAllocator,
 
     fn init(allocator: Allocator, modules: Common.CheckedModules, program: *Ast.Program, options: Options) Builder {
+        const counters = options.specialization_counters orelse
+            if (options.diagnostics) |diagnostics| &diagnostics.specialization else null;
         var spec_store = specialize.SpecBuilder.init(allocator, &program.names, &program.types, &program.specs);
-        spec_store.counters = options.specialization_counters;
+        spec_store.counters = counters;
         return .{
             .allocator = allocator,
             .modules = modules,
@@ -1902,7 +1954,8 @@ const Builder = struct {
             .proc_debug_names = options.proc_debug_names,
             .specialization_cache = options.specialization_cache,
             .loaded_specialization_shards = options.loaded_specialization_shards,
-            .counters = options.specialization_counters,
+            .counters = counters,
+            .diagnostics = options.diagnostics,
             .inline_expects = options.inline_expects,
             .static_data_literals = options.static_data_literals,
             .target_usize = options.target_usize,
@@ -2021,6 +2074,27 @@ const Builder = struct {
         if (self.counters) |counters| {
             @field(counters, field) += @intCast(amount);
         }
+    }
+
+    fn countBodyDiagnostic(self: *Builder, comptime field: []const u8) void {
+        if (self.diagnostics) |diagnostics| {
+            @field(diagnostics.body, field) += 1;
+        }
+    }
+
+    fn countBodyDiagnosticBy(self: *Builder, comptime field: []const u8, amount: usize) void {
+        if (self.diagnostics) |diagnostics| {
+            @field(diagnostics.body, field) += @intCast(amount);
+        }
+    }
+
+    fn createGraph(self: *Builder) Allocator.Error!*InstGraph {
+        const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
+        if (self.diagnostics) |diagnostics| {
+            diagnostics.body.graphs_created += 1;
+            graph.setDiagnostics(&diagnostics.graph);
+        }
+        return graph;
     }
 
     fn specializationTypeDigest(self: *Builder, ty: Type.TypeId) names.TypeDigest {
@@ -2399,7 +2473,7 @@ const Builder = struct {
         } else self.templateRefForProcedureUse(procedure);
         var graph_setup_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
         defer graph_setup_timing_scope.end();
-        const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
+        const graph = try self.createGraph();
         defer graph.destroy();
         const saved_graph = self.active_graph;
         const saved_body_draft = self.active_body_draft;
@@ -2660,7 +2734,7 @@ const Builder = struct {
 
         var graph_setup_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
         defer graph_setup_timing_scope.end();
-        const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
+        const graph = try self.createGraph();
         defer graph.destroy();
         const saved_graph = self.active_graph;
         const saved_body_draft = self.active_body_draft;
@@ -2825,7 +2899,7 @@ const Builder = struct {
         var timing_scope = ProcedureTimingScope.begin(self.timing, .dispatch_evidence);
         defer timing_scope.end();
 
-        const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
+        const graph = try self.createGraph();
         defer graph.destroy();
         var draft = BodyDraftStore.init(self.allocator);
         defer draft.deinit();
@@ -3047,7 +3121,7 @@ const Builder = struct {
 
         var graph_setup_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
         defer graph_setup_timing_scope.end();
-        const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
+        const graph = try self.createGraph();
         defer graph.destroy();
         const saved_graph = self.active_graph;
         const saved_body_draft = self.active_body_draft;
@@ -4087,7 +4161,7 @@ const Builder = struct {
         nominal: checked.CheckedNominalType,
         mono_args: []const Type.TypeId,
     ) Allocator.Error!Type.TypeId {
-        const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
+        const graph = try self.createGraph();
         defer graph.destroy();
         const saved_graph = self.active_graph;
         const saved_body_draft = self.active_body_draft;
@@ -4748,7 +4822,7 @@ const Builder = struct {
             Common.invariant("root procedure evidence range was outside its checked module");
         }
 
-        const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
+        const graph = try self.createGraph();
         defer graph.destroy();
         var draft = BodyDraftStore.init(self.allocator);
         defer draft.deinit();
@@ -4810,7 +4884,7 @@ const Builder = struct {
         switch (fn_template.fn_def) {
             .nested => {
                 const fn_view = self.moduleForConstFnDef(fn_template.fn_def);
-                const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
+                const graph = try self.createGraph();
                 defer graph.destroy();
                 const saved_graph = self.active_graph;
                 const saved_body_draft = self.active_body_draft;
@@ -4856,7 +4930,7 @@ const Builder = struct {
             },
             else => {
                 const fn_view = self.moduleForConstFnDef(fn_template.fn_def);
-                const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
+                const graph = try self.createGraph();
                 defer graph.destroy();
                 var body_draft = BodyDraftStore.init(self.allocator);
                 defer body_draft.deinit();
@@ -7266,7 +7340,7 @@ const Builder = struct {
         }
 
         const fn_view = self.moduleForConstFnDef(fn_value.fn_def);
-        const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
+        const graph = try self.createGraph();
         defer graph.destroy();
         const saved_graph = self.active_graph;
         const saved_body_draft = self.active_body_draft;
@@ -7418,7 +7492,7 @@ const Builder = struct {
             else => Common.invariant("non-parser function reached parser runtime restore"),
         };
         const fn_view = self.moduleForDigest(names.procTemplateModuleDigest(runtime.owner));
-        const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
+        const graph = try self.createGraph();
         defer graph.destroy();
         const saved_graph = self.active_graph;
         const saved_body_draft = self.active_body_draft;
@@ -7544,7 +7618,7 @@ const Builder = struct {
             else => Common.invariant("non-encoder_for function reached encoder_for runtime restore"),
         };
         const fn_view = self.moduleForDigest(names.procTemplateModuleDigest(runtime.owner));
-        const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
+        const graph = try self.createGraph();
         defer graph.destroy();
         const saved_graph = self.active_graph;
         const saved_body_draft = self.active_body_draft;
@@ -7987,7 +8061,7 @@ const Builder = struct {
         };
         const template = procedure.template;
 
-        const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
+        const graph = try self.createGraph();
         defer graph.destroy();
         const saved_graph = self.active_graph;
         const saved_body_draft = self.active_body_draft;
@@ -12411,6 +12485,7 @@ const BodyContext = struct {
         graph: *InstGraph,
         draft: *BodyDraftStore,
     ) Allocator.Error!BodyContext {
+        builder.countBodyDiagnostic("body_contexts_created");
         return .{
             .allocator = allocator,
             .builder = builder,
@@ -14716,8 +14791,13 @@ const BodyContext = struct {
     fn instNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!NodeId {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
         defer timing_scope.end();
+        self.builder.countBodyDiagnostic("checked_node_requests");
         const address = self.typeAddress(checked_ty);
-        if (self.scopedNode(address)) |existing| return existing;
+        if (self.scopedNode(address)) |existing| {
+            self.builder.countBodyDiagnostic("checked_node_cache_hits");
+            return existing;
+        }
+        self.builder.countBodyDiagnostic("checked_node_cache_misses");
         const placeholder = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
         try self.putScopedNode(address, placeholder);
         const built = try self.instNodeContent(checked_ty);
@@ -14728,6 +14808,7 @@ const BodyContext = struct {
     fn freshInstNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!NodeId {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
         defer timing_scope.end();
+        self.builder.countBodyDiagnostic("fresh_checked_node_requests");
         var fresh = try BodyContext.initWithMethodScope(
             self.allocator,
             self.builder,
@@ -24139,6 +24220,7 @@ const BodyContext = struct {
     ) Allocator.Error!LoweredCall {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .call_dispatch);
         defer timing_scope.end();
+        self.builder.countBodyDiagnostic("call_expressions");
         if (try self.lowerCallThatCannotReachCallee(checked_ret_ty, call, expected_ret_node)) |lowered| return lowered;
 
         if (call.direct_target) |target| {
@@ -28512,6 +28594,7 @@ const BodyContext = struct {
     ) Allocator.Error!void {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
         defer timing_scope.end();
+        self.builder.countBodyDiagnostic("expr_relation_requests");
         // Divergent expressions never return a value to relate to the request.
         // In particular, checking may replace a failed callee with
         // `runtime_error`, which emits a crash, while its unused call type
@@ -28704,6 +28787,8 @@ const BodyContext = struct {
         nodes: []const NodeId,
     ) Allocator.Error!void {
         if (checked_exprs.len != nodes.len) Common.invariant("checked call argument count differed from graph function arity");
+        self.builder.countBodyDiagnostic("argument_spans_prepared");
+        self.builder.countBodyDiagnosticBy("arguments_prepared", checked_exprs.len);
         for (checked_exprs, nodes) |checked_expr, node| {
             try self.relateExprAtNode(checked_expr, node);
         }
@@ -30208,9 +30293,14 @@ const BodyContext = struct {
         expr_id: checked.CheckedExprId,
         request_fn_node: NodeId,
     ) Allocator.Error!void {
+        self.builder.countBodyDiagnostic("nested_callable_checks");
         switch (self.view.bodies.expr(expr_id).data) {
-            .lambda => _ = try self.ensureLambdaAtNode(expr_id, request_fn_node),
+            .lambda => {
+                self.builder.countBodyDiagnostic("nested_lambdas_prepared");
+                _ = try self.ensureLambdaAtNode(expr_id, request_fn_node);
+            },
             .closure => |closure| {
+                self.builder.countBodyDiagnostic("nested_closures_prepared");
                 var capture_nodes = std.ArrayList(NodeId).empty;
                 defer capture_nodes.deinit(self.allocator);
                 for (closure.captures) |capture| {
@@ -30353,6 +30443,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .call_dispatch);
         defer timing_scope.end();
+        self.builder.countBodyDiagnostic("dispatch_expressions");
         const plan_id = maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
         var direct_parametric_low_level: ?can.CIR.Expr.LowLevel = null;
@@ -32272,7 +32363,7 @@ const BodyContext = struct {
         arg_index: usize,
         arg_ty: Type.TypeId,
     ) Allocator.Error!Type.TypeId {
-        var graph = try InstGraph.create(self.allocator, &self.builder.program.types, &self.builder.program.names);
+        const graph = try self.builder.createGraph();
         defer graph.destroy();
 
         const owner_template = switch (lookup.target.kind) {

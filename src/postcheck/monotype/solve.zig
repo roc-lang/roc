@@ -174,6 +174,29 @@ pub const FunctionNodes = struct {
     ret: NodeId,
 };
 
+/// Deterministic operation counts for diagnosing Monotype graph workloads.
+/// `InstGraph.diagnostics` remains null unless detailed diagnostics were
+/// requested, so ordinary lowering does not count hot-path operations.
+pub const GraphDiagnostics = struct {
+    nodes_created: u64 = 0,
+    unify_requests: u64 = 0,
+    class_unions: u64 = 0,
+    active_type_requests: u64 = 0,
+    active_type_imported_hits: u64 = 0,
+    active_snapshot_cache_hits: u64 = 0,
+    active_snapshot_cache_misses: u64 = 0,
+    active_snapshot_nodes_materialized: u64 = 0,
+    active_snapshot_invalidations: u64 = 0,
+    active_snapshot_entries_invalidated: u64 = 0,
+    mono_import_requests: u64 = 0,
+    mono_import_hits: u64 = 0,
+    mono_import_misses: u64 = 0,
+    generated_private_scans: u64 = 0,
+    generated_private_nodes_visited: u64 = 0,
+    finished_mono_scans: u64 = 0,
+    finished_mono_nodes_visited: u64 = 0,
+};
+
 /// Graph-native named-type cells.
 pub const NamedNodes = struct {
     args: []const NodeId,
@@ -265,6 +288,7 @@ pub const InstGraph = struct {
     relation_state: RelationState,
     types: *Type.Store,
     name_store: *const names.NameStore,
+    diagnostics: ?*GraphDiagnostics,
     arena_impl: std.heap.ArenaAllocator,
     nodes: std.ArrayList(InstNode),
     versions: std.ArrayList(u32),
@@ -330,6 +354,7 @@ pub const InstGraph = struct {
             .relation_state = .producing,
             .types = types,
             .name_store = name_store,
+            .diagnostics = null,
             .arena_impl = std.heap.ArenaAllocator.init(allocator),
             .nodes = .empty,
             .versions = .empty,
@@ -349,6 +374,22 @@ pub const InstGraph = struct {
             .recursive_argument_slots = .empty,
         };
         return graph;
+    }
+
+    pub fn setDiagnostics(self: *InstGraph, diagnostics: *GraphDiagnostics) void {
+        self.diagnostics = diagnostics;
+    }
+
+    fn countDiagnostic(self: *InstGraph, comptime field: []const u8) void {
+        if (self.diagnostics) |diagnostics| {
+            @field(diagnostics, field) += 1;
+        }
+    }
+
+    fn countDiagnosticBy(self: *InstGraph, comptime field: []const u8, amount: usize) void {
+        if (self.diagnostics) |diagnostics| {
+            @field(diagnostics, field) += @intCast(amount);
+        }
     }
 
     pub fn destroy(self: *InstGraph) void {
@@ -1176,6 +1217,7 @@ pub const InstGraph = struct {
         try self.class_member_head.append(self.allocator, id);
         try self.class_member_tail.append(self.allocator, id);
         try self.registerRowParent(id, node_content);
+        self.countDiagnostic("nodes_created");
         return id;
     }
 
@@ -1525,6 +1567,7 @@ pub const InstGraph = struct {
     /// Whether this exact graph type contains compiler-generated private
     /// opaque evidence at any structural depth.
     pub fn containsGeneratedPrivate(self: *InstGraph, root: NodeId) Allocator.Error!bool {
+        self.countDiagnostic("generated_private_scans");
         var pending = std.ArrayList(NodeId).empty;
         defer pending.deinit(self.allocator);
         var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
@@ -1534,6 +1577,7 @@ pub const InstGraph = struct {
             const node = self.find(raw_node);
             const entry = try seen.getOrPut(node);
             if (entry.found_existing) continue;
+            self.countDiagnostic("generated_private_nodes_visited");
             switch (self.nodes.items[@intFromEnum(node)]) {
                 .redirect => unreachable,
                 .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
@@ -1572,6 +1616,7 @@ pub const InstGraph = struct {
     /// producer evidence, but no enclosing representation-selection operation
     /// may mutate one of their descendant classes.
     pub fn containsFinishedMono(self: *InstGraph, root: NodeId) Allocator.Error!bool {
+        self.countDiagnostic("finished_mono_scans");
         var pending = std.ArrayList(NodeId).empty;
         defer pending.deinit(self.allocator);
         var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
@@ -1581,6 +1626,7 @@ pub const InstGraph = struct {
             const node = self.find(raw_node);
             const entry = try seen.getOrPut(node);
             if (entry.found_existing) continue;
+            self.countDiagnostic("finished_mono_nodes_visited");
             var members = self.classMemberIterator(node);
             while (members.next()) |member| {
                 if (self.imported_monos.contains(member)) return true;
@@ -2255,15 +2301,22 @@ pub const InstGraph = struct {
         return self.tagPayloadNodeWithAccess(node, name, payload_index, .runtime_layout);
     }
 
-    /// Read every explicit tag and payload cell from a tag-union-shaped node
-    /// without materializing a Monotype or exposing its row extension.
-    pub fn tagRowNodes(self: *InstGraph, raw_row: NodeId) Allocator.Error!TagRowNodes {
+    /// Read every explicit tag and payload cell when the node is tag-row
+    /// shaped, without materializing a Monotype or exposing its row extension.
+    pub fn tagRowNodesOrNull(self: *InstGraph, raw_row: NodeId) Allocator.Error!?TagRowNodes {
         const structural = try self.shapeRoot(raw_row, "tag row", .inspectable);
         return switch (self.content(structural)) {
             .tag_union => .{ .tags = (try self.flattenTagRow(structural)).tags },
             .empty_tag_union => .{ .tags = &.{} },
-            else => Common.invariant("instantiation tag-row read had a non-tag-union node"),
+            else => null,
         };
+    }
+
+    /// Read every explicit tag and payload cell from a tag-union-shaped node
+    /// without materializing a Monotype or exposing its row extension.
+    pub fn tagRowNodes(self: *InstGraph, raw_row: NodeId) Allocator.Error!TagRowNodes {
+        return try self.tagRowNodesOrNull(raw_row) orelse
+            Common.invariant("instantiation tag-row read had a non-tag-union node");
     }
 
     /// Return whether a tag row's explicit extension is proven closed. This
@@ -2392,6 +2445,8 @@ pub const InstGraph = struct {
     /// global invalidation is the exact dependency rule. Observed snapshots
     /// remain immutable; the next inspection materializes new ids.
     fn invalidateActiveSnapshots(self: *InstGraph, _: NodeId) void {
+        self.countDiagnostic("active_snapshot_invalidations");
+        self.countDiagnosticBy("active_snapshot_entries_invalidated", self.current_snapshots.count());
         self.current_snapshots.clearRetainingCapacity();
     }
 
@@ -2418,6 +2473,7 @@ pub const InstGraph = struct {
             }
             moved_list.deinit(self.allocator);
         }
+        self.countDiagnostic("class_unions");
         self.invalidateActiveSnapshots(winner);
     }
 
@@ -2523,6 +2579,7 @@ pub const InstGraph = struct {
         allow_private_selection: bool,
     ) Allocator.Error!void {
         self.requireRelationProduction();
+        self.countDiagnostic("unify_requests");
         var pending = std.ArrayList(NodePair).empty;
         defer pending.deinit(self.allocator);
         var related = std.AutoHashMap(NodePair, void).init(self.allocator);
@@ -3440,7 +3497,12 @@ pub const InstGraph = struct {
     /// mutation of another specialization's final type.
     pub fn importMono(self: *InstGraph, ty: Type.TypeId) Allocator.Error!NodeId {
         self.requireRelationProduction();
-        if (self.linked_type_nodes.get(ty)) |existing| return self.find(existing);
+        self.countDiagnostic("mono_import_requests");
+        if (self.linked_type_nodes.get(ty)) |existing| {
+            self.countDiagnostic("mono_import_hits");
+            return self.find(existing);
+        }
+        self.countDiagnostic("mono_import_misses");
         const node = try self.newNode(.{ .unresolved = InstVariable.placeholder() });
         // One-way memo: every import is a finished Monotype from outside this
         // graph (ids materialized here hit the memo above), so it enters as a
@@ -3559,7 +3621,11 @@ pub const InstGraph = struct {
     /// not be written to completed Monotype output.
     pub fn activeTypeViewForNode(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
         self.requireRelationProduction();
-        if (self.imported_monos.get(node)) |imported| return imported;
+        self.countDiagnostic("active_type_requests");
+        if (self.imported_monos.get(node)) |imported| {
+            self.countDiagnostic("active_type_imported_hits");
+            return imported;
+        }
         if (!try self.typeIsResolved(node)) {
             Common.invariant("active Monotype TypeId requested for an unresolved instantiation graph node");
         }
@@ -3571,11 +3637,16 @@ pub const InstGraph = struct {
         if (!try self.typeIsResolved(root)) {
             Common.invariant("immutable Monotype snapshot requested for an unresolved instantiation graph node");
         }
-        if (self.current_snapshots.get(root)) |current| return current;
+        if (self.current_snapshots.get(root)) |current| {
+            self.countDiagnostic("active_snapshot_cache_hits");
+            return current;
+        }
+        self.countDiagnostic("active_snapshot_cache_misses");
 
         var snapshot = GraphTypeFinals.initActiveSnapshot(self);
         defer snapshot.deinit();
         const ty = try snapshot.sealNode(root);
+        self.countDiagnosticBy("active_snapshot_nodes_materialized", snapshot.sealed.count());
 
         var materialized = snapshot.sealed.iterator();
         while (materialized.next()) |item| {
@@ -4492,6 +4563,44 @@ fn testCheckedTypeId(comptime value: u32) checked.CheckedTypeId {
 
 test "monotype solve declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+test "graph diagnostics count authoritative operations" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+    var diagnostics: GraphDiagnostics = .{};
+    graph.setDiagnostics(&diagnostics);
+
+    const boolean = try graph.newNode(.{ .primitive = .bool });
+    _ = try graph.activeTypeViewForNode(boolean);
+    _ = try graph.activeTypeViewForNode(boolean);
+
+    const unresolved = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const str = try graph.newNode(.{ .primitive = .str });
+    try graph.unify(unresolved, str);
+    try std.testing.expect(!try graph.containsGeneratedPrivate(boolean));
+    try std.testing.expect(!try graph.containsFinishedMono(boolean));
+
+    try std.testing.expectEqual(@as(u64, 3), diagnostics.nodes_created);
+    try std.testing.expectEqual(@as(u64, 1), diagnostics.unify_requests);
+    try std.testing.expectEqual(@as(u64, 1), diagnostics.class_unions);
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.active_type_requests);
+    try std.testing.expectEqual(@as(u64, 1), diagnostics.active_snapshot_cache_hits);
+    try std.testing.expectEqual(@as(u64, 1), diagnostics.active_snapshot_cache_misses);
+    try std.testing.expectEqual(@as(u64, 1), diagnostics.active_snapshot_nodes_materialized);
+    try std.testing.expect(diagnostics.active_snapshot_invalidations >= 1);
+    try std.testing.expectEqual(@as(u64, 1), diagnostics.active_snapshot_entries_invalidated);
+    try std.testing.expectEqual(@as(u64, 1), diagnostics.generated_private_scans);
+    try std.testing.expectEqual(@as(u64, 1), diagnostics.generated_private_nodes_visited);
+    try std.testing.expectEqual(@as(u64, 1), diagnostics.finished_mono_scans);
+    try std.testing.expectEqual(@as(u64, 1), diagnostics.finished_mono_nodes_visited);
 }
 
 test "completed monotype program view does not expose instantiation graph nodes" {
