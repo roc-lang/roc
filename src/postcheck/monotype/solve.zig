@@ -1365,7 +1365,9 @@ pub const InstGraph = struct {
     /// graph-local lookup key for unresolved draft requests: concrete
     /// structure is written directly, while unresolved union-find classes are
     /// numbered by first occurrence so interface aliasing is preserved without
-    /// depending on fresh node ids.
+    /// depending on fresh node ids. Producer-owned source-interface and
+    /// recursive-representation evidence participate because they can change
+    /// how an otherwise identical open shape finalizes.
     pub fn openFunctionInterfaceShapeDigest(self: *InstGraph, node: NodeId) Allocator.Error!names.TypeDigest {
         var writer = OpenFunctionInterfaceShapeDigest.init(self);
         defer writer.deinit();
@@ -3994,8 +3996,17 @@ const OpenFunctionInterfaceShapeDigest = struct {
     }
 
     fn writeFunctionInterface(self: *OpenFunctionInterfaceShapeDigest, node: NodeId) Allocator.Error!void {
-        const function = try self.graph.functionNodes(node);
-        self.writeBytes("roc.monotype.open_function_interface_shape.v1");
+        self.writeBytes("roc.monotype.open_function_interface_shape.v2");
+        try self.writeFunctionNodes(try self.graph.functionNodes(node));
+        if (self.graph.requestSourceInterface(node)) |source| {
+            self.writeBytes("source-interface");
+            try self.writeFunctionNodes(try self.graph.functionNodes(source));
+        } else {
+            self.writeBytes("no-source-interface");
+        }
+    }
+
+    fn writeFunctionNodes(self: *OpenFunctionInterfaceShapeDigest, function: FunctionNodes) Allocator.Error!void {
         self.writeU32(@intCast(function.args.len));
         for (function.args) |arg| try self.writeNode(arg);
         try self.writeNode(function.ret);
@@ -4004,6 +4015,8 @@ const OpenFunctionInterfaceShapeDigest = struct {
     fn writeNode(self: *OpenFunctionInterfaceShapeDigest, raw_node: NodeId) Allocator.Error!void {
         const node = self.graph.find(raw_node);
         const content = self.graph.nodes.items[@intFromEnum(node)];
+        self.writeU8(if (self.hasRecursiveValueSlot(node)) 1 else 0);
+        self.writeU8(if (self.hasForcedDynamicIteratorRoot(node)) 1 else 0);
         switch (content) {
             .redirect => unreachable,
             .unresolved => |variable| {
@@ -4103,6 +4116,20 @@ const OpenFunctionInterfaceShapeDigest = struct {
             },
             .zst => self.writeBytes("zst"),
         }
+    }
+
+    fn hasRecursiveValueSlot(self: *OpenFunctionInterfaceShapeDigest, node: NodeId) bool {
+        for (self.graph.recursive_argument_slots.items) |slot| {
+            if (self.graph.find(slot) == node) return true;
+        }
+        return false;
+    }
+
+    fn hasForcedDynamicIteratorRoot(self: *OpenFunctionInterfaceShapeDigest, node: NodeId) bool {
+        for (self.graph.forced_dynamic_iterator_roots.items) |root| {
+            if (self.graph.find(root) == node) return true;
+        }
+        return false;
     }
 
     fn writeNodeSpan(self: *OpenFunctionInterfaceShapeDigest, nodes: []const NodeId) Allocator.Error!void {
@@ -4538,6 +4565,166 @@ test "open draft function interfaces use related graph classes directly" {
     const other_arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
     const other = try graph.newNode(.{ .func = .{ .args = try graph.arena().dupe(NodeId, &.{other_arg}), .ret = ret } });
     try std.testing.expect(!graph.sameFunctionInterface(left, other));
+}
+
+test "open function interface shape digest alpha-normalizes variables and preserves aliasing" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const left_var = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const left = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{ left_var, left_var }),
+        .ret = left_var,
+    } });
+    const equivalent_var = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const equivalent = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{ equivalent_var, equivalent_var }),
+        .ret = equivalent_var,
+    } });
+
+    const left_digest = try graph.openFunctionInterfaceShapeDigest(left);
+    const equivalent_digest = try graph.openFunctionInterfaceShapeDigest(equivalent);
+    try std.testing.expectEqualSlices(u8, &left_digest.bytes, &equivalent_digest.bytes);
+
+    const distinct_first = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const distinct_second = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const distinct = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{ distinct_first, distinct_second }),
+        .ret = distinct_first,
+    } });
+    const distinct_digest = try graph.openFunctionInterfaceShapeDigest(distinct);
+    try std.testing.expect(!std.mem.eql(u8, &left_digest.bytes, &distinct_digest.bytes));
+}
+
+test "open function interface shape digest preserves defaults and recursive structure" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const ret = try graph.newNode(.{ .primitive = .bool });
+    const record_default = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_record) });
+    const record_fn = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{record_default}),
+        .ret = ret,
+    } });
+    const tag_default = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
+    const tag_fn = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{tag_default}),
+        .ret = ret,
+    } });
+    const record_digest = try graph.openFunctionInterfaceShapeDigest(record_fn);
+    const tag_digest = try graph.openFunctionInterfaceShapeDigest(tag_fn);
+    try std.testing.expect(!std.mem.eql(u8, &record_digest.bytes, &tag_digest.bytes));
+
+    const left_cycle = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    try graph.setContent(left_cycle, .{ .tuple = try graph.arena().dupe(NodeId, &.{left_cycle}) });
+    const left_recursive = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{left_cycle}),
+        .ret = ret,
+    } });
+    const right_cycle = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    try graph.setContent(right_cycle, .{ .tuple = try graph.arena().dupe(NodeId, &.{right_cycle}) });
+    const right_recursive = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{right_cycle}),
+        .ret = ret,
+    } });
+    const left_recursive_digest = try graph.openFunctionInterfaceShapeDigest(left_recursive);
+    const right_recursive_digest = try graph.openFunctionInterfaceShapeDigest(right_recursive);
+    try std.testing.expectEqualSlices(u8, &left_recursive_digest.bytes, &right_recursive_digest.bytes);
+}
+
+test "open function interface shape digest includes producer-owned graph evidence" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const ret = try graph.newNode(.{ .primitive = .bool });
+    const left_arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const left = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{left_arg}),
+        .ret = ret,
+    } });
+    const right_arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const right = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{right_arg}),
+        .ret = ret,
+    } });
+    const initial_left_digest = try graph.openFunctionInterfaceShapeDigest(left);
+    const initial_right_digest = try graph.openFunctionInterfaceShapeDigest(right);
+    try std.testing.expectEqualSlices(u8, &initial_left_digest.bytes, &initial_right_digest.bytes);
+
+    try graph.markRecursiveValueSlot(left_arg);
+    const recursive_left_digest = try graph.openFunctionInterfaceShapeDigest(left);
+    const unmarked_right_digest = try graph.openFunctionInterfaceShapeDigest(right);
+    try std.testing.expect(!std.mem.eql(u8, &recursive_left_digest.bytes, &unmarked_right_digest.bytes));
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xA7} ** 32));
+    const type_name = try name_store.internTypeName("PrivateShape");
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(1) };
+    const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
+    const private_left = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .@"opaque",
+        .builtin_owner = null,
+        .args = try graph.arena().alloc(NodeId, 0),
+        .backing = .{
+            .node = try graph.newNode(.empty_record),
+            .use = .inspectable,
+            .authority = .generated_private,
+        },
+    } });
+    const private_right = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .@"opaque",
+        .builtin_owner = null,
+        .args = try graph.arena().alloc(NodeId, 0),
+        .backing = .{
+            .node = try graph.newNode(.empty_record),
+            .use = .inspectable,
+            .authority = .generated_private,
+        },
+    } });
+    const private_left_request = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{private_left}),
+        .ret = ret,
+    } });
+    const private_right_request = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{private_right}),
+        .ret = ret,
+    } });
+    const source_bool = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{ret}),
+        .ret = ret,
+    } });
+    const source_str_arg = try graph.newNode(.{ .primitive = .str });
+    const source_str = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{source_str_arg}),
+        .ret = ret,
+    } });
+    try graph.registerRequestSourceInterface(private_left_request, source_bool);
+    try graph.registerRequestSourceInterface(private_right_request, source_str);
+
+    const private_left_digest = try graph.openFunctionInterfaceShapeDigest(private_left_request);
+    const private_right_digest = try graph.openFunctionInterfaceShapeDigest(private_right_request);
+    try std.testing.expect(!std.mem.eql(u8, &private_left_digest.bytes, &private_right_digest.bytes));
 }
 
 test "cyclic row extension is not a resolved graph type" {

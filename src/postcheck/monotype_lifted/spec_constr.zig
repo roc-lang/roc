@@ -420,6 +420,7 @@ const CallableValue = struct {
     ty: Type.TypeId,
     fn_id: Ast.FnId,
     captures: []const CaptureValue,
+    iterator_step: bool = false,
 };
 
 const CallPattern = struct {
@@ -670,6 +671,32 @@ const SpecAdmission = enum {
     admitted,
     denied_body_size,
     denied_spec_count,
+};
+
+const InlineCallMode = enum {
+    all,
+    iterator_fusion,
+    none,
+
+    fn admitsDirect(
+        self: InlineCallMode,
+        procedure: ?check.StaticDispatchRegistry.IteratorProcedureId,
+        inside_iterator: bool,
+    ) bool {
+        return switch (self) {
+            .all => true,
+            .iterator_fusion => inside_iterator or isIteratorProducer(procedure),
+            .none => false,
+        };
+    }
+
+    fn admitsCallable(self: InlineCallMode, callable: CallableValue, inside_iterator: bool) bool {
+        return switch (self) {
+            .all => true,
+            .iterator_fusion => inside_iterator or callable.iterator_step,
+            .none => false,
+        };
+    }
 };
 
 /// GHC-style body-size admission for SpecConstr work. A large source body is
@@ -941,7 +968,7 @@ const Pass = struct {
 
         var cloner = Cloner.initForRewrite(self);
         defer cloner.deinit();
-        cloner.inline_direct_calls = false;
+        cloner.inline_calls = .none;
         cloner.rewrite_call_patterns = false;
         cloner.emit_callable_workers = false;
 
@@ -1201,7 +1228,17 @@ const Pass = struct {
                 .body = .{ .roc = specialized },
                 .ret = fn_.ret,
             });
+            self.refreshPreCloneBodySize(index);
         }
+    }
+
+    fn refreshPreCloneBodySize(self: *Pass, index: usize) void {
+        if (index >= self.plans.len) Common.invariant("SpecConstr body-size refresh received a generated function");
+        self.plans[index].body_size = fnBodySizeWithin(
+            self.program,
+            self.program.getFnAt(index).body,
+            spec_constr_body_expr_threshold,
+        );
     }
 
     fn copyProcDebugName(self: *Pass, source_symbol: Common.Symbol, target_symbol: Common.Symbol) Allocator.Error!void {
@@ -1257,11 +1294,12 @@ const Pass = struct {
             var cloner = Cloner.initForRewrite(self);
             cloner.rewrite_call_patterns = false;
             cloner.emit_callable_workers = false;
-            // Generic analysis follows only existing constructor evidence from
-            // source syntax and local substitution. It must not synthesize new
-            // evidence by inlining callees; result-shape demand does that in
-            // production clones where emitted-code admission is enforced.
-            cloner.inline_direct_calls = false;
+            // Checker-stamped iterator producers enter an explicit fusion
+            // context. Their helper calls and generated-private step callables
+            // remain visible transitively so the complete iterator pipeline can
+            // seed fusion workers. Generic calls outside that context remain
+            // opaque until a production clone enforces emitted-code admission.
+            cloner.inline_calls = .iterator_fusion;
             cloner.inline_direct_requires_known_arg = true;
             defer cloner.deinit();
             try cloner.collectCallPatternsInExpr(fn_id, body);
@@ -3407,7 +3445,7 @@ const Pass = struct {
 
             var cloner = Cloner.initForRewrite(self);
             defer cloner.deinit();
-            cloner.inline_direct_calls = false;
+            cloner.inline_calls = .none;
             cloner.rewrite_call_patterns = false;
             cloner.emit_callable_workers = false;
             const cloned = try cloner.cloneExpr(body);
@@ -4215,7 +4253,8 @@ const Cloner = struct {
     /// a cyclic value is rebound through a plain source clone before it can
     /// reach here — so reaching `value_wrapper_strip_cap` is a compiler bug.
     materialize_strip_depth: usize,
-    inline_direct_calls: bool,
+    inline_calls: InlineCallMode,
+    iterator_inline_depth: usize,
     inline_direct_requires_known_arg: bool,
     rewrite_call_patterns: bool,
     /// Pattern discovery and detect-only walks do not own output functions.
@@ -4251,7 +4290,8 @@ const Cloner = struct {
             .inline_scope_origins = std.AutoHashMap(Ast.InlineScopeId, Ast.InlineScopeId).init(pass.allocator),
             .wrapper_strip_depth = 0,
             .materialize_strip_depth = 0,
-            .inline_direct_calls = true,
+            .inline_calls = .all,
+            .iterator_inline_depth = 0,
             .inline_direct_requires_known_arg = true,
             .rewrite_call_patterns = true,
             .emit_callable_workers = true,
@@ -4281,7 +4321,8 @@ const Cloner = struct {
             .inline_scope_origins = std.AutoHashMap(Ast.InlineScopeId, Ast.InlineScopeId).init(pass.allocator),
             .wrapper_strip_depth = 0,
             .materialize_strip_depth = 0,
-            .inline_direct_calls = true,
+            .inline_calls = .all,
+            .iterator_inline_depth = 0,
             .inline_direct_requires_known_arg = false,
             .rewrite_call_patterns = true,
             .emit_callable_workers = true,
@@ -4804,7 +4845,12 @@ const Cloner = struct {
             },
             .call_value => |call| {
                 const callee = try self.cloneExprValueDemandingShapeInto(call.callee, bindings);
-                if (callee == .callable) {
+                if (callee == .callable and self.inline_calls.admitsCallable(callee.callable, self.iterator_inline_depth != 0)) {
+                    const enters_iterator = self.inline_calls == .iterator_fusion;
+                    if (enters_iterator) self.iterator_inline_depth += 1;
+                    defer {
+                        if (enters_iterator) self.iterator_inline_depth -= 1;
+                    }
                     return try self.inlineCallableCallValue(expr.ty, callee.callable, call.args, expr_id, false, bindings);
                 }
                 return .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .call_value = .{
@@ -4814,7 +4860,9 @@ const Cloner = struct {
             },
             .call_proc => |call| {
                 if (call.is_cold) return .{ .expr = try self.cloneExprPlain(expr_id) };
-                if (!self.inline_direct_calls) return .{ .expr = try self.cloneExprPlain(expr_id) };
+                if (!self.inline_calls.admitsDirect(call.iterator_procedure, self.iterator_inline_depth != 0)) {
+                    return .{ .expr = try self.cloneExprPlain(expr_id) };
+                }
                 const callee = Ast.localDirectCallee(call) orelse return .{ .expr = try self.cloneExprPlain(expr_id) };
                 const has_known_shape_arg = try self.directCallHasKnownShapeArg(call.args);
                 // A direct call carries its callee's captures by the callee's
@@ -4830,6 +4878,11 @@ const Cloner = struct {
                     !captures_foreign)
                 {
                     return .{ .expr = try self.cloneExprPlain(expr_id) };
+                }
+                const enters_iterator = self.inline_calls == .iterator_fusion;
+                if (enters_iterator) self.iterator_inline_depth += 1;
+                defer {
+                    if (enters_iterator) self.iterator_inline_depth -= 1;
                 }
                 return try self.inlineDirectCallValue(
                     callee,
@@ -4854,14 +4907,25 @@ const Cloner = struct {
         const expr = self.pass.program.getExpr(expr_id);
         return switch (expr.data) {
             .call_proc => |call| blk: {
-                if (call.is_cold or !self.inline_direct_calls) break :blk try self.cloneExprValueInto(expr_id, bindings);
+                if (call.is_cold or !self.inline_calls.admitsDirect(call.iterator_procedure, self.iterator_inline_depth != 0)) {
+                    break :blk try self.cloneExprValueInto(expr_id, bindings);
+                }
                 const callee = Ast.localDirectCallee(call) orelse break :blk try self.cloneExprValueInto(expr_id, bindings);
+                const enters_iterator = self.inline_calls == .iterator_fusion;
+                if (enters_iterator) self.iterator_inline_depth += 1;
+                defer {
+                    if (enters_iterator) self.iterator_inline_depth -= 1;
+                }
                 break :blk try self.inlineDirectCallValue(callee, call.args, call.captures, expr_id, true, bindings);
             },
             .call_value => |call| blk: {
-                if (!self.inline_direct_calls) break :blk try self.cloneExprValueInto(expr_id, bindings);
                 const callee = try self.cloneExprValueDemandingShapeInto(call.callee, bindings);
-                if (callee == .callable) {
+                if (callee == .callable and self.inline_calls.admitsCallable(callee.callable, self.iterator_inline_depth != 0)) {
+                    const enters_iterator = self.inline_calls == .iterator_fusion;
+                    if (enters_iterator) self.iterator_inline_depth += 1;
+                    defer {
+                        if (enters_iterator) self.iterator_inline_depth -= 1;
+                    }
                     break :blk try self.inlineCallableCallValue(expr.ty, callee.callable, call.args, expr_id, true, bindings);
                 }
                 break :blk .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .call_value = .{
@@ -5049,6 +5113,16 @@ const Cloner = struct {
         fn_ref: @import("../monotype/ast.zig").LiftedFunctionValue,
         bindings: *BindingChain,
     ) Common.LowerError!Value {
+        const source_fn = self.pass.program.getFn(fn_ref.fn_id);
+        if (source_fn.body == .roc and
+            self.pass.inlineBodyAdmission(fn_ref.fn_id, source_fn.body.roc) != .admitted)
+        {
+            return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .fn_ref = .{
+                .fn_id = fn_ref.fn_id,
+                .captures = try self.cloneCaptureOperandSpan(fn_ref.captures),
+            } } }) };
+        }
+
         const capture_count: usize = @intCast(fn_ref.captures.len);
         const captures = try self.arena.allocator().alloc(CaptureValue, capture_count);
         for (0..capture_count) |index| {
@@ -6307,6 +6381,7 @@ const Cloner = struct {
                     return .{ .nominal = .{ .ty = first.ty, .backing = backing } };
                 },
                 .callable => |first| {
+                    var iterator_step = first.iterator_step;
                     for (values[1..]) |other| {
                         const other_callable = switch (other) {
                             .callable => |callable| callable,
@@ -6315,6 +6390,7 @@ const Cloner = struct {
                         if (other_callable.ty != first.ty) break :structured;
                         if (other_callable.fn_id != first.fn_id) break :structured;
                         if (other_callable.captures.len != first.captures.len) break :structured;
+                        iterator_step = iterator_step and other_callable.iterator_step;
                         for (other_callable.captures, first.captures) |other_capture, first_capture| {
                             if (other_capture.id != first_capture.id) break :structured;
                         }
@@ -6329,7 +6405,12 @@ const Cloner = struct {
                             .value = try self.rebuildLetCaseJoinValue(children, arena, params, site_args, budget),
                         };
                     }
-                    return .{ .callable = .{ .ty = first.ty, .fn_id = first.fn_id, .captures = captures } };
+                    return .{ .callable = .{
+                        .ty = first.ty,
+                        .fn_id = first.fn_id,
+                        .captures = captures,
+                        .iterator_step = iterator_step,
+                    } };
                 },
             }
         }
@@ -7672,6 +7753,7 @@ const Cloner = struct {
                     .ty = callable.ty,
                     .fn_id = callable.fn_id,
                     .captures = captures,
+                    .iterator_step = callable.iterator_step,
                 } };
             },
         };
@@ -10812,7 +10894,31 @@ fn callableTargetMatches(program: *const Ast.Program, expected: Ast.FnId, actual
 // so each reader counts the edges it follows and treats reaching
 // `value_wrapper_strip_cap` as a compiler bug.
 fn fieldFromValue(program: *const Ast.Program, value: Value, name: names.RecordFieldNameId) ?Value {
-    return fieldFromValueStripping(program, value, name, 0);
+    const field = fieldFromValueStripping(program, value, name, 0) orelse return null;
+    if (!isGeneratedIteratorStepField(program, valueType(program, value), name)) return field;
+    return switch (field) {
+        .callable => |callable| blk: {
+            var step = callable;
+            step.iterator_step = true;
+            break :blk .{ .callable = step };
+        },
+        else => field,
+    };
+}
+
+fn isGeneratedIteratorStepField(
+    program: *const Ast.Program,
+    receiver_ty: Type.TypeId,
+    field: names.RecordFieldNameId,
+) bool {
+    const named = switch (program.types.get(receiver_ty)) {
+        .named => |named| named,
+        else => return false,
+    };
+    const topology = named.def.iterator_topology orelse return false;
+    const backing = named.backing orelse return false;
+    return backing.authority == .generated_private and
+        field == topology.step_field;
 }
 
 fn fieldFromValueStripping(program: *const Ast.Program, value: Value, name: names.RecordFieldNameId, strip_depth: usize) ?Value {
@@ -11060,7 +11166,7 @@ test "SpecConstr admission uses body size and worker count before cloning" {
         .body = .{ .roc = unit_expr },
         .ret = unit_ty,
     });
-    _ = try program.addFn(.{
+    const large_fn_id = try program.addFn(.{
         .symbol = @enumFromInt(2),
         .args = Ast.Span(Ast.TypedLocal).empty(),
         .captures = Ast.Span(Ast.TypedLocal).empty(),
@@ -11078,9 +11184,39 @@ test "SpecConstr admission uses body size and worker count before cloning" {
     try std.testing.expectEqual(SpecAdmission.denied_spec_count, pass.newSpecAdmission(0));
     try std.testing.expectEqual(SpecAdmission.denied_body_size, pass.newSpecAdmission(1));
     try std.testing.expectEqual(SpecAdmission.denied_body_size, pass.inlineBodyAdmission(@enumFromInt(1), large_body));
+
+    const fn_ty = try program.types.add(.{ .func = .{
+        .args = Type.Span.empty(),
+        .ret = unit_ty,
+    } });
+    const large_fn_ref = try program.addExpr(.{ .ty = fn_ty, .data = .{ .fn_ref = .{
+        .fn_id = large_fn_id,
+        .captures = Ast.Span(Ast.CaptureOperand).empty(),
+    } } });
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+    const cloned_large_fn_ref = try cloner.cloneExprValue(large_fn_ref);
+    const residual_large_fn_ref = switch (cloned_large_fn_ref.value) {
+        .expr => |expr| expr,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expect(program.getExpr(residual_large_fn_ref).data == .fn_ref);
+
+    const large_fn = program.getFnAt(1);
+    program.setFnAt(1, .{
+        .symbol = large_fn.symbol,
+        .source = large_fn.source,
+        .signature = large_fn.signature,
+        .args = large_fn.args,
+        .captures = large_fn.captures,
+        .body = .{ .roc = unit_expr },
+        .ret = large_fn.ret,
+    });
+    pass.refreshPreCloneBodySize(1);
+    try std.testing.expectEqual(SpecAdmission.admitted, pass.newSpecAdmission(1));
 }
 
-test "value-aware call-pattern collection only follows existing constructor evidence" {
+test "value-aware call-pattern collection keeps generic producer calls opaque" {
     const allocator = std.testing.allocator;
     var program = emptyLiftedProgramForTest(allocator);
     defer program.deinit();
