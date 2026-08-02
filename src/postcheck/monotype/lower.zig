@@ -2646,6 +2646,7 @@ const Builder = struct {
         lowered_template.evidence = body_ctx.evidence.vector;
         defer body_ctx.deinit();
         const root_node = try body_ctx.relateCheckedFunctionToMono(template.checked_fn_root, lower_fn_ty);
+        body_ctx.measureSpecRootParity(template.checked_fn_root, lower_fn_ty);
         // reunify.md section 11.1, Slice 7 Stage B: reserve argument/result
         // representation slots before body discovery so the shadow can measure
         // which reserved positions gain representation information as the body
@@ -14590,6 +14591,45 @@ const BodyContext = struct {
             self.callee_context,
             rehearsal.innermostRequestEdge(),
         );
+    }
+
+    /// Debug/probe-only: whether directed emission of a specialization's own
+    /// checked function root, read under the frame that specialization holds,
+    /// states the very request function type the graph built for it. This is
+    /// the certification the request seam needs before its construction moves
+    /// off the graph: the request IS the callee's instantiated interface, so
+    /// agreement here says the whole per-argument relation the graph runs to
+    /// build one is redundant (reunify.md sections 7.2, 11).
+    fn measureSpecRootParity(self: *BodyContext, checked_fn_root: checked.CheckedTypeId, request_fn_ty: Type.TypeId) void {
+        if (comptime !census.enabled) return;
+        const rehearsal = self.builder.rehearsal orelse return;
+        const address = self.typeAddress(checked_fn_root);
+        var binding: spec_rehearsal.Rehearsal.PositionBinding = .none;
+        const emitted = rehearsal.typeForCheckedPositionWithEdge(
+            .{ .module_bytes = address.module_bytes, .type_id = address.type_id },
+            self.callee_context,
+            &binding,
+            rehearsal.innermostRequestEdge(),
+        ) catch {
+            census.bump("spec_root_parity_error");
+            return;
+        };
+        const directed = emitted orelse {
+            census.bump("spec_root_parity_declined");
+            return;
+        };
+        const types = &self.builder.program.types;
+        const name_store = &self.builder.program.names;
+        const left = types.typeDigest(name_store, directed);
+        const right = types.typeDigest(name_store, request_fn_ty);
+        if (std.mem.eql(u8, &left.bytes, &right.bytes)) {
+            census.bump("spec_root_parity_agree");
+            return;
+        }
+        census.bump("spec_root_parity_diverge");
+        if (types.typeEql(name_store, directed, request_fn_ty) catch false) {
+            census.bump("spec_root_parity_eql_not_digest");
+        }
     }
 
     /// Debug/probe-only: measure one read at a graph exit against directed
