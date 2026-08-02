@@ -1869,6 +1869,21 @@ const Walk = struct {
         };
     }
 
+    /// The backing a sealed position emits: the producer-placed one when the
+    /// relation kept it, else the declaration's own instantiation. A position
+    /// sealed at a producer-owned tier owns its runtime encoding, and the
+    /// graph marks exactly that ownership on such a backing, so the emitted
+    /// backing carries the same authority (reunify.md sections 10.1, 10.3).
+    fn sealedBacking(sealed: SealedPosition, declaration: ?MonoType.NamedBacking) ?MonoType.NamedBacking {
+        if (sealed.backing) |placed| return placed;
+        var backing = declaration orelse return null;
+        switch (sealed.def.iterator_representation) {
+            .minted, .forced_dynamic => backing.authority = .generated_private,
+            .none => {},
+        }
+        return backing;
+    }
+
     /// A nominal or opaque. Builtin nominals whose runtime encoding is a
     /// primitive, list, or box lower to that structural shape, matching
     /// production; the rest keep declaration identity as a stored named node with
@@ -1909,7 +1924,7 @@ const Walk = struct {
             .kind = if (n.is_opaque) .@"opaque" else .nominal,
             .builtin_owner = self.owner.resolver.builtinOwner(self.cursor, n),
             .args = args.items,
-            .backing = sealed.backing orelse backing,
+            .backing = sealedBacking(sealed, backing),
             .declared_order = declared_order,
         });
     }
@@ -2027,7 +2042,7 @@ const Walk = struct {
             .kind = if (n.is_opaque) .@"opaque" else .nominal,
             .builtin_owner = self.owner.resolver.builtinOwner(self.cursor, n),
             .args = try self.build_store.addSpan(emitted_args.items),
-            .backing = sealed.backing orelse backing,
+            .backing = sealedBacking(sealed, backing),
             .declared_order = try self.build_store.addDeclaredFields(declared_order),
         } };
     }
