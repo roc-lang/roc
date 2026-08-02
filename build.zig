@@ -157,30 +157,63 @@ fn withRocMacosDeploymentTarget(b: *std.Build, target: ResolvedTarget) ResolvedT
     return b.resolveTargetQuery(roc_target.macos_deployment.query(target.result.cpu.arch));
 }
 
-/// Returns the optimal target query for release builds on the current host.
+/// Returns the target query for release builds on the current host.
+///
+/// `-Dtarget` and `-Dcpu` select the release target, so a packager can trade
+/// portability for speed. With neither flag, the defaults are:
 /// - Linux: Uses musl for fully static binaries
-/// - x86_64: Uses x86_64_v3 for modern CPU features (AVX2, BMI2, etc.)
-/// - aarch64: Uses the baseline CPU so the binary runs on every aarch64 device
-fn getReleaseTargetQuery() std.Target.Query {
-    var query: std.Target.Query = .{};
+/// - x86_64 and aarch64: Uses the baseline CPU, so a single released binary
+///   runs on every CPU of that architecture
+///
+/// What that floor costs the parts of this binary which aren't declared as
+/// dependencies in build.zig.zon:
+///
+/// - Zig's standard library has no runtime CPU dispatch anywhere. Its vector
+///   width is picked at comptime by `std.simd.suggestVectorLength` from
+///   `builtin.cpu`: SSE gives 128 bits, AVX2 gives 256, AVX-512 gives 512. So a
+///   baseline build halves the width used by `std.mem`, `std.unicode`,
+///   `std.crypto.blake3` (which is what `roc bundle` hashes with),
+///   `std.compress.flate`, and `std.http.HeadParser`. It does not make them
+///   scalar.
+/// - musl has no ifunc and no x86_64 string assembly, so it is unaffected.
+/// - compiler_rt has no dispatch and nothing above baseline to give up.
+/// - Roc's own code under src/ contains no `@Vector` and no `std.simd`, so the
+///   only thing a higher floor buys it is wider autovectorization.
+///
+/// build.zig.zon carries the same accounting for each declared dependency.
+fn getReleaseTargetQuery(b: *std.Build, target: ResolvedTarget) std.Target.Query {
+    // A `-Dtarget` triple names the entire target, ABI included, so it replaces
+    // every default below.
+    if (b.user_input_options.contains("target")) return target.query;
+
+    // `-Dcpu` names only the CPU, so it carries over onto the release ABI
+    // defaults rather than replacing them.
+    const explicit_cpu = b.user_input_options.contains("cpu");
+    var query: std.Target.Query = if (explicit_cpu) target.query else .{};
 
     // Use musl on Linux for static linking
     if (builtin.target.os.tag == .linux) {
         query.abi = .musl;
     }
 
-    // An otherwise-empty query means "native CPU", which bakes the build
-    // machine's CPU features into the released binary. Pin the CPU model
-    // explicitly so releases stay portable.
-    switch (builtin.target.cpu.arch) {
-        // Use x86_64_v3 CPU model for x86_64 (enables AVX2, BMI2, etc.)
-        .x86_64 => query.cpu_model = .{ .explicit = &std.Target.x86.cpu.x86_64_v3 },
-        // Baseline aarch64 is armv8.0-a, which every aarch64 device supports.
-        // Building natively on an armv9 CI runner emitted SVE (plus LSE and
-        // RCPC) instructions, which crashed with SIGILL on older phones and
-        // Raspberry Pis. On macOS, baseline is apple_m1, i.e. all Apple Silicon.
-        .aarch64 => query.cpu_model = .baseline,
-        else => {},
+    if (!explicit_cpu) {
+        // An otherwise-empty query means "native CPU", which bakes the build
+        // machine's CPU features into the released binary. Pin the CPU model
+        // explicitly so releases stay portable.
+        switch (builtin.target.cpu.arch) {
+            // Baseline x86-64 is the 2003 instruction set, which every x86-64
+            // CPU supports. A higher floor makes the binary die of SIGILL
+            // before it can print anything on any CPU below that floor: pinning
+            // x86_64_v3 requires AVX2 and BMI2, which excludes Intel's Celeron
+            // and Pentium Silver lines along with everything pre-Haswell.
+            .x86_64 => query.cpu_model = .baseline,
+            // Baseline aarch64 is armv8.0-a, which every aarch64 device supports.
+            // Building natively on an armv9 CI runner emitted SVE (plus LSE and
+            // RCPC) instructions, which crashed with SIGILL on older phones and
+            // Raspberry Pis. On macOS, baseline is apple_m1, i.e. all Apple Silicon.
+            .aarch64 => query.cpu_model = .baseline,
+            else => {},
+        }
     }
 
     return query;
@@ -2634,11 +2667,13 @@ pub fn build(b: *std.Build) void {
             .abi = if (builtin.target.os.tag == .linux) .musl else null,
         };
 
-        // Use x86_64_v3 (AVX2, no AVX-512) for Valgrind compatibility.
-        // Valgrind 3.22 can't emulate AVX-512 EVEX instructions in musl startup code.
-        // This matches the release target (getReleaseTargetQuery) which also uses x86_64_v3.
+        // Pin baseline x86-64 instead of inheriting the build machine's CPU.
+        // This matches the release target (getReleaseTargetQuery), so a build
+        // from source runs everywhere a released binary does, and it keeps
+        // Valgrind working: Valgrind 3.22 can't emulate the AVX-512 EVEX
+        // instructions a native build emits into musl startup code.
         if (builtin.target.cpu.arch == .x86_64) {
-            default_target_query.cpu_model = .{ .explicit = &std.Target.x86.cpu.x86_64_v3 };
+            default_target_query.cpu_model = .baseline;
         }
 
         break :blk b.standardTargetOptions(.{ .default_target = default_target_query });
@@ -3278,7 +3313,7 @@ pub fn build(b: *std.Build) void {
 
     // Release build with platform-optimal settings
     {
-        const release_target = b.resolveTargetQuery(getReleaseTargetQuery());
+        const release_target = b.resolveTargetQuery(getReleaseTargetQuery(b, target));
         // Create a release-specific zstd dependency with release settings
         const release_zstd = b.dependency("zstd", .{
             .target = release_target,
