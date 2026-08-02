@@ -13712,6 +13712,13 @@ fn processReplInput(
                     try stderr.print("{s}\n", .{diagnostic});
                 }
             },
+            .runtime_crash => |message| {
+                had_diagnostics.* = true;
+                try stderr.print(
+                    "This Roc code crashed with: \"{f}\"\n",
+                    .{std.zig.fmtString(message)},
+                );
+            },
             .none => {},
             .exit => return true,
         }
