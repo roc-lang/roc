@@ -457,15 +457,18 @@ pub const CFStmt = union(enum) {
         target: LocalId,
         closure: LocalId,
         args: LocalSpan,
-        /// Consume `closure` as the destination for an erased-callable result.
+        /// Consume the allocation denoted by `closure` as the destination for
+        /// an erased-callable result.
         /// The erased callee may repack it when the returned capture payload has
         /// the same committed size and alignment; otherwise it releases the
         /// consumed allocation and returns a fresh one. At the machine ABI this
         /// passes the callable data pointer as the nullable fifth argument.
         reuse_closure: bool = false,
         /// Ownership source consumed by `reuse_closure`. This may be an outer
-        /// transparent nominal/tag wrapper of `closure`; both denote the same
-        /// erased-callable allocation, while this local carries its owned unit.
+        /// transparent nominal/tag wrapper of `closure`; both must denote the
+        /// same erased-callable allocation, while this local carries its owned
+        /// unit. Debug certification proves that allocation identity through
+        /// the exact representation-transparent producer chain.
         reuse_source: ?LocalId = null,
         next: CFStmtId,
     },
@@ -697,11 +700,13 @@ pub fn erasedCallReuseFieldsMatch(assign: anytype) bool {
 pub const LirProcSpec = struct {
     name: Symbol,
     args: LocalSpan,
-    /// Optional hidden ownership input for an erased-callable return
-    /// destination. Its local has erased-callable layout so ARC can track the
-    /// transferred ownership unit, but its runtime pointer may be null when
-    /// the caller declines reuse.
-    erased_return_reuse_arg: ?LocalId = null,
+    /// Hidden erased-callable ownership input. Every erased-callable ABI proc
+    /// records its final argument here, regardless of whether its result can
+    /// reuse the allocation. Its local has erased-callable layout so ARC always
+    /// consumes a non-null transfer; its runtime pointer may be null when the
+    /// caller declines reuse. Internal Roc-ABI destination variants preserve
+    /// this marker when they forward the same input.
+    erased_reuse_arg: ?LocalId = null,
     frame_locals: LocalSpan = LocalSpan.empty(),
     join_points: JoinPointSpan = JoinPointSpan.empty(),
     body: ?CFStmtId = null,

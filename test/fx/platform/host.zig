@@ -979,6 +979,27 @@ fn callBoxedI64ToI64(ops: *builtins.host_abi.RocOps, boxed: ?[*]u8, arg0: i64) i
     return result;
 }
 
+/// Invoke a boxed callable whose scalar result cannot reuse the allocation,
+/// transferring the caller's owned reference through the fifth ABI argument.
+/// The callee must therefore release the allocation before returning.
+fn consumeBoxedI64ToI64(ops: *builtins.host_abi.RocOps, boxed: ?[*]u8, arg0: i64) i64 {
+    const payload_ptr = boxed orelse {
+        ops.crash("host attempted to call a null boxed erased callable");
+        unreachable;
+    };
+    const payload = builtins.erased_callable.payloadPtr(payload_ptr);
+    var call_args = I64ToI64Args{ .arg0 = arg0 };
+    var result: i64 = undefined;
+    payload.callable_fn_ptr(
+        ops,
+        @ptrCast(&result),
+        @ptrCast(&call_args),
+        builtins.erased_callable.capturePtr(payload_ptr),
+        payload_ptr,
+    );
+    return result;
+}
+
 fn callBoxedTransitionWithoutReuse(ops: *builtins.host_abi.RocOps, boxed: ?[*]u8) i64 {
     const outer_ptr = boxed orelse {
         ops.crash("host attempted to call a null boxed transition");
@@ -1207,9 +1228,7 @@ fn hostedHostBoxedWithBoxedCapture(inner: ?[*]u8, bonus: i64) callconv(.c) ?[*]u
 }
 
 fn hostedHostCallBoxed(boxed: ?[*]u8, value: i64) callconv(.c) i64 {
-    const ops = g_roc_ops.?;
-    defer builtins.erased_callable.decref(boxed, ops);
-    return callBoxedI64ToI64(ops, boxed, value);
+    return consumeBoxedI64ToI64(g_roc_ops.?, boxed, value);
 }
 
 fn hostedHostCallBoxedTransition(boxed: ?[*]u8) callconv(.c) i64 {

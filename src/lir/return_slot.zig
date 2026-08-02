@@ -223,7 +223,7 @@ const ReturnSlotPass = struct {
         }
 
         const body = try cloner.cloneStmt(source_body);
-        const erased_return_reuse_arg = if (source_spec.erased_return_reuse_arg) |source_arg|
+        const erased_reuse_arg = if (source_spec.erased_reuse_arg) |source_arg|
             try cloner.mapLocal(source_arg)
         else
             null;
@@ -237,7 +237,7 @@ const ReturnSlotPass = struct {
         const variant = try self.store.addProcSpec(.{
             .name = self.store.freshSyntheticSymbol(),
             .args = try self.store.addLocalSpan(variant_args.items),
-            .erased_return_reuse_arg = erased_return_reuse_arg,
+            .erased_reuse_arg = erased_reuse_arg,
             .frame_locals = try self.store.addLocalSpan(frame_locals.items[0..unique_len]),
             .body = body,
             .ret_layout = .zst,

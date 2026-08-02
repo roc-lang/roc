@@ -1088,10 +1088,11 @@ generate_host_abi_types_rust =
 	\\
 	\\/// Uniform ABI function pointer stored in `RocErasedCallablePayload`.
 	\\///
-	\\/// The final `reuse` pointer is nullable. Non-null transfers one owned callable
-	\\/// reference to the callee; the caller must not use or decref that ownership unit
-	\\/// after the call. The callee must return it as the selected callable result or
-	\\/// decref it exactly once.
+	\\/// The final `reuse` pointer is nullable. Non-null must be the callable data
+	\\/// pointer whose inline capture begins at `capture`; it transfers one owned
+	\\/// reference to the callee. The caller must not use or decref that ownership
+	\\/// unit after the call. The callee consumes it exactly once, whether or not the
+	\\/// result can reuse the allocation.
 	\\pub type RocErasedCallableFn = extern "C" fn(*mut RocHost, *mut u8, *const u8, *mut u8, *mut u8);
 	\\
 	\\/// Final-drop callback for inline erased-callable captures.

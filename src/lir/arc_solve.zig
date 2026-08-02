@@ -690,7 +690,7 @@ pub fn solve(
         if (dense_uniqueness.destroyed.isSet(arc_index)) unique_destroyed.set(local);
     }
     if (builtin.mode == .Debug) {
-        var independently_unique = try computeUniquenessDetailed(allocator, store, rc_local, .{ .sigs = solver.sigs }, null, solver.proc_stmts, null);
+        var independently_unique = try computeUniquenessDetailed(allocator, store, rc_local, .{ .sigs = solver.sigs }, null, solver.proc_stmts, null, null, null);
         defer independently_unique.deinit(allocator);
         if (!unique.eql(independently_unique.unique) or !unique_destroyed.eql(independently_unique.destroyed)) {
             solveInvariant("typed uniqueness facts disagreed with independent LIR analysis");
@@ -1381,6 +1381,30 @@ fn reachableStatementSet(
         try appendStructuralSuccessors(allocator, store, &stack, store.getCFStmt(current));
     }
     return reachable;
+}
+
+/// Collect one procedure's exact reachable statement inventory without a
+/// store-wide statement bitset. Final-LIR certifiers reuse this inventory for
+/// proc-local analyses whose sibling variants share source LocalIds.
+pub fn collectProcStatements(
+    allocator: Allocator,
+    store: *const LirStore,
+    body: LIR.CFStmtId,
+    stmts: *std.ArrayList(LIR.CFStmtId),
+) SolveError!void {
+    stmts.clearRetainingCapacity();
+    var visited = std.AutoHashMap(LIR.CFStmtId, void).init(allocator);
+    defer visited.deinit();
+    var stack = std.ArrayList(LIR.CFStmtId).empty;
+    defer stack.deinit(allocator);
+    try stack.append(allocator, body);
+
+    while (stack.pop()) |current| {
+        const entry = try visited.getOrPut(current);
+        if (entry.found_existing) continue;
+        try stmts.append(allocator, current);
+        try appendStructuralSuccessors(allocator, store, &stack, store.getCFStmt(current));
+    }
 }
 
 fn collectAll(solver: *Solver) SolveError!void {
@@ -2932,21 +2956,46 @@ pub fn computeUniqueness(
     rc_local: []const bool,
     sigs: arc_sig.SigTable,
 ) SolveError!Uniqueness {
-    return computeUniquenessDetailed(allocator, store, rc_local, sigs, null, null, null);
+    return computeUniquenessDetailed(allocator, store, rc_local, sigs, null, null, null, null, null);
 }
 
-/// Re-derives uniqueness from exactly one emitted procedure body. ARC
-/// variants deliberately share the source procedure's LocalIds, so a final
-/// store must not let definitions or uses in a sibling body affect this
-/// procedure's proof.
+const ProcUniquenessDomain = struct {
+    local_to_dense: []const u32,
+    count: usize,
+
+    fn indexOf(self: ProcUniquenessDomain, local: LIR.LocalId) ?u32 {
+        const raw = @intFromEnum(local);
+        if (raw >= self.local_to_dense.len) return null;
+        const dense = self.local_to_dense[raw];
+        return if (dense == no_local) null else dense;
+    }
+};
+
+/// Re-derives uniqueness from exactly one emitted procedure's explicit
+/// statement and reference-counted-local inventories. ARC variants deliberately
+/// share source LocalIds, so sibling definitions cannot affect this proof; the
+/// dense proc domain also avoids store-wide allocation or clearing per proc.
 pub fn computeProcUniqueness(
     allocator: Allocator,
     store: *const LirStore,
     rc_local: []const bool,
     sigs: arc_sig.SigTable,
     proc: LIR.LirProcSpecId,
+    stmts: []const LIR.CFStmtId,
+    local_to_dense: []const u32,
+    dense_local_count: usize,
 ) SolveError!Uniqueness {
-    return computeUniquenessDetailed(allocator, store, rc_local, sigs, null, null, proc);
+    return computeUniquenessDetailed(
+        allocator,
+        store,
+        rc_local,
+        sigs,
+        null,
+        null,
+        proc,
+        stmts,
+        .{ .local_to_dense = local_to_dense, .count = dense_local_count },
+    );
 }
 
 fn computeUniquenessDetailed(
@@ -2957,20 +3006,25 @@ fn computeUniquenessDetailed(
     origin_facts: ?*UniqueOriginFacts,
     proc_stmts: ?[]const std.ArrayList(LIR.CFStmtId),
     only_proc: ?LIR.LirProcSpecId,
+    exact_stmts: ?[]const LIR.CFStmtId,
+    proc_domain: ?ProcUniquenessDomain,
 ) SolveError!Uniqueness {
-    const local_count = store.localCount();
+    const local_count = if (proc_domain) |domain| domain.count else store.localCount();
 
-    var reachable = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, store.cfStmtCount());
+    var reachable: std.bit_set.DynamicBitSetUnmanaged = .{};
     defer reachable.deinit(allocator);
-    if (proc_stmts) |by_proc| {
-        if (only_proc) |proc_id| {
-            for (by_proc[@intFromEnum(proc_id)].items) |stmt| reachable.set(@intFromEnum(stmt));
+    if (exact_stmts == null) {
+        reachable = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, store.cfStmtCount());
+        if (proc_stmts) |by_proc| {
+            if (only_proc) |proc_id| {
+                for (by_proc[@intFromEnum(proc_id)].items) |stmt| reachable.set(@intFromEnum(stmt));
+            } else {
+                for (by_proc) |stmts| for (stmts.items) |stmt| reachable.set(@intFromEnum(stmt));
+            }
         } else {
-            for (by_proc) |stmts| for (stmts.items) |stmt| reachable.set(@intFromEnum(stmt));
+            reachable.deinit(allocator);
+            reachable = try reachableStatementSet(allocator, store, only_proc);
         }
-    } else {
-        reachable.deinit(allocator);
-        reachable = try reachableStatementSet(allocator, store, only_proc);
     }
 
     var born = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
@@ -3006,22 +3060,27 @@ fn computeUniquenessDetailed(
 
     const Marks = struct {
         rc: []const bool,
+        domain: ?ProcUniquenessDomain,
+
+        fn indexOf(self: @This(), local: LIR.LocalId) ?u32 {
+            if (self.domain) |domain| return domain.indexOf(local);
+            const index = @intFromEnum(local);
+            if (index >= self.rc.len or !self.rc[index]) return null;
+            return @intCast(index);
+        }
 
         fn noteBirth(self: @This(), set: *std.bit_set.DynamicBitSetUnmanaged, local: LIR.LocalId) void {
-            const index = @intFromEnum(local);
-            if (index >= self.rc.len or !self.rc[index]) return;
+            const index = self.indexOf(local) orelse return;
             set.set(index);
         }
 
         fn destroy(self: @This(), set: *std.bit_set.DynamicBitSetUnmanaged, local: LIR.LocalId) void {
-            const index = @intFromEnum(local);
-            if (index >= self.rc.len or !self.rc[index]) return;
+            const index = self.indexOf(local) orelse return;
             set.set(index);
         }
 
         fn noteUse(self: @This(), set: *std.bit_set.DynamicBitSetUnmanaged, local: LIR.LocalId) void {
-            const index = @intFromEnum(local);
-            if (index >= self.rc.len or !self.rc[index]) return;
+            const index = self.indexOf(local) orelse return;
             set.set(index);
         }
 
@@ -3031,8 +3090,7 @@ fn computeUniquenessDetailed(
             multi: *std.bit_set.DynamicBitSetUnmanaged,
             local: LIR.LocalId,
         ) void {
-            const index = @intFromEnum(local);
-            if (index >= self.rc.len or !self.rc[index]) return;
+            const index = self.indexOf(local) orelse return;
             if (seen.isSet(index)) {
                 multi.set(index);
             } else {
@@ -3046,8 +3104,7 @@ fn computeUniquenessDetailed(
             dead: *std.bit_set.DynamicBitSetUnmanaged,
             local: LIR.LocalId,
         ) void {
-            const index = @intFromEnum(local);
-            if (index >= self.rc.len or !self.rc[index]) return;
+            const index = self.indexOf(local) orelse return;
             if (once.isSet(index)) {
                 dead.set(index);
             } else {
@@ -3055,7 +3112,7 @@ fn computeUniquenessDetailed(
             }
         }
     };
-    const marks = Marks{ .rc = rc_local };
+    const marks = Marks{ .rc = rc_local, .domain = proc_domain };
 
     const Alias = struct {
         /// Records a pure same-value alias definition. The definition is the
@@ -3073,10 +3130,12 @@ fn computeUniquenessDetailed(
             target: LIR.LocalId,
             source: LIR.LocalId,
         ) SolveError!void {
-            const target_index = @intFromEnum(target);
-            if (target_index >= m.rc.len or !m.rc[target_index]) return;
-            const source_index = @intFromEnum(source);
-            if (source_index >= m.rc.len or !m.rc[source_index] or source_index == target_index) {
+            const target_index = m.indexOf(target) orelse return;
+            const source_index = m.indexOf(source) orelse {
+                foreign.set(target_index);
+                return;
+            };
+            if (source_index == target_index) {
                 foreign.set(target_index);
                 return;
             }
@@ -3105,7 +3164,13 @@ fn computeUniquenessDetailed(
     }
 
     var reachable_iter = reachable.iterator(.{});
-    while (reachable_iter.next()) |stmt_index| {
+    var exact_stmt_index: usize = 0;
+    stmt_loop: while (true) {
+        const stmt_index = if (exact_stmts) |stmts| blk: {
+            if (exact_stmt_index == stmts.len) break :stmt_loop;
+            defer exact_stmt_index += 1;
+            break :blk @intFromEnum(stmts[exact_stmt_index]);
+        } else reachable_iter.next() orelse break;
         const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
         if (origin_facts) |facts| try collectUniqueOriginStmt(facts, store, stmt);
         switch (stmt) {

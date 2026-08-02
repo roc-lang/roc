@@ -1701,7 +1701,7 @@ pub const Interpreter = struct {
             const arg = args[i];
             const arg_layout = arg_layouts[i];
             const param_layout = self.store.getLocal(param).layout_idx;
-            const is_erased_return_reuse_arg = proc_spec.erased_return_reuse_arg == param;
+            const is_erased_reuse_arg = proc_spec.erased_reuse_arg == param;
             if (proc_spec.abi == .erased_callable and i + 2 == params.len) {
                 if (param_layout != .opaque_ptr or arg_layout != .opaque_ptr) {
                     return self.invariantFailedError(
@@ -1747,12 +1747,12 @@ pub const Interpreter = struct {
                 param_layout,
             );
             const materialized = try self.materializeLocalValue(coerced, param_layout);
-            if (is_erased_return_reuse_arg and self.readBoxedDataPointer(materialized) == null) {
+            if (is_erased_reuse_arg and self.readBoxedDataPointer(materialized) == null) {
                 // Null is valid only for this explicitly marked ABI ownership
                 // input: it means the caller declined destination reuse.
                 if (self.layout_store.getLayout(param_layout).tag != .erased_callable) {
                     return self.invariantFailedError(
-                        "LIR/interpreter invariant violated: erased return reuse parameter in proc {d} did not have erased_callable layout",
+                        "LIR/interpreter invariant violated: erased reuse parameter in proc {d} did not have erased_callable layout",
                         .{@intFromEnum(proc_id)},
                     );
                 }

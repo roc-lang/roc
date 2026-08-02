@@ -19,14 +19,17 @@ pub const RocOps = utils.RocOps;
 /// returned by `capturePtr(payload_data_ptr)`.
 ///
 /// `reuse` is an optional ownership transfer from caller to callee. Null means
-/// that no ownership is transferred. Non-null transfers exactly one owned
-/// reference to that erased-callable allocation; the caller must not decref or
-/// otherwise use that ownership unit after the call. The callee must consume it
-/// on every normal return path, either by returning the allocation as the one
-/// statically selected erased-callable result slot or by decrefing it exactly
-/// once. A callee may return a fresh allocation when the transferred allocation
-/// is shared at runtime. The `capture` argument remains borrowed independently
-/// of whether `reuse` aliases its containing callable allocation.
+/// that no ownership is transferred. Non-null must be the data pointer of the
+/// erased-callable allocation that contains `capture`, so
+/// `capture == capturePtr(reuse)`; the uniform function pointer does not carry
+/// enough layout metadata to safely reuse an unrelated allocation. Non-null
+/// transfers exactly one owned reference to that allocation; the caller must
+/// not decref or otherwise use that ownership unit after the call. The callee
+/// must consume it on every normal return path, either by returning the
+/// allocation as the one statically selected erased-callable result slot or by
+/// decrefing it exactly once. A callee may return a fresh allocation when the
+/// transferred allocation is shared at runtime. `capture` remains borrowed for
+/// the duration of the call.
 pub const ErasedCallableFn = *const fn (
     ops: *RocOps,
     ret: ?[*]u8,

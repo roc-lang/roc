@@ -1106,11 +1106,7 @@ const Lowerer = struct {
         }
         if (spec.abi == .erased) {
             if (spec.return_reuse.enabled()) Common.invariant("erased proc carried a second return-reuse specialization");
-            const reuse_layout = if (self.erasedResultDemand(entry.ret) == .single_slot)
-                try self.result.layouts.insertErasedCallable()
-            else
-                try self.layoutOfType(try self.erasedCapturePtrType());
-            arg_locals[lifted_args.len + 1] = try self.addLocalForLayout(reuse_layout);
+            arg_locals[lifted_args.len + 1] = try self.addLocalForLayout(try self.result.layouts.insertErasedCallable());
         }
 
         const saved_loc = self.result.store.current_loc;
@@ -1127,11 +1123,8 @@ const Lowerer = struct {
         };
         const args_span = try self.result.store.addLocalSpan(arg_locals);
         const ret_layout = try self.layoutOfType(entry.ret);
-        const erased_return_reuse_arg = switch (spec.abi) {
-            .erased => if (self.erasedResultDemand(entry.ret) == .single_slot)
-                arg_locals[lifted_args.len + 1]
-            else
-                null,
+        const erased_reuse_arg = switch (spec.abi) {
+            .erased => arg_locals[lifted_args.len + 1],
             .finite => if (spec.return_reuse.enabled())
                 arg_locals[lifted_args.len + @as(usize, @intFromBool(entry.capture_arg_ty != null))]
             else
@@ -1140,7 +1133,7 @@ const Lowerer = struct {
         const proc = try self.result.store.addProcSpec(.{
             .name = lirSymbol(entry.symbol),
             .args = args_span,
-            .erased_return_reuse_arg = erased_return_reuse_arg,
+            .erased_reuse_arg = erased_reuse_arg,
             .body = null,
             .ret_layout = ret_layout,
             .abi = if (spec.abi == .erased) .erased_callable else .roc,
