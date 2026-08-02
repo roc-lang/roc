@@ -3826,6 +3826,17 @@ Builtin :: [].{
 			$joined
 		}
 
+		## Map each item to a list and concatenate the results, preserving order.
+		##
+		## You may know a similar function named `flat_map` or `concat_map` in other languages.
+		## ```roc
+		## expect [1.I64, 2, 3].join_map(|n| [n, n * 10]) == [1, 10, 2, 20, 3, 30]
+		##
+		## expect ["a", "b"].join_map(|s| [s, s]) == ["a", "a", "b", "b"]
+		## ```
+		join_map : List(a), (a -> List(b)) -> List(b)
+		join_map = |list, transform| List.join(List.map(list, transform))
+
 		## Insert a separator between every pair of items in a list.
 		## ```roc
 		## expect [1.I64, 2, 3].intersperse(0) == [1, 0, 2, 0, 3]

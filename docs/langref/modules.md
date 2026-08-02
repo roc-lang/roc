@@ -236,22 +236,30 @@ import json.Parser as JP
 
 ### Modules in subdirectories
 
-An uppercase dotted module path maps to source subdirectories when the import has
-an explicit `as` or `exposing` clause. For example:
+Use `/` for source-directory traversal and `.` for types nested inside a
+module. Binding clauses do not change which source file is selected. For
+example:
 
 ```roc
-import Src.Widget as Widget
-import Internal.Http.Client exposing [send]
+import Src/Widget as Widget
+import Internal/Http/Client exposing [send]
 ```
 
-These imports load `Src/Widget.roc` and `Internal/Http/Client.roc`,
-respectively, relative to the directory containing the importing `.roc` file.
-The source-visible module name is the final path segment, so `Src/Widget.roc`
-defines the nominal type `Widget`.
+These imports load `Src/Widget.roc` and `Internal/Http/Client.roc`, respectively,
+relative to the importing file. A bare target and a target beginning with `./`
+use that base; `../` moves toward the package root, and a leading `/` starts at
+the package root:
 
-The explicit clause disambiguates a directory path from a nested type import.
-Without one, `import Url.ParseErr` imports the nested `ParseErr` type from
-`Url.roc`; it does not load `Url/ParseErr.roc`.
+```roc
+import Helper
+import ./Internal/Parser
+import ../Shared/Codec
+import /Public/Api
+```
+
+In every form, a dot begins nested-type selection. `import Url.ParseErr` loads
+`Url.roc` and imports `ParseErr`; `import Url/ParseErr` loads
+`Url/ParseErr.roc`. Adding `as` or `exposing` never changes that distinction.
 
 A package can expose a module stored in a subdirectory by naming its import
 alias in the package header:
@@ -259,8 +267,19 @@ alias in the package header:
 ```roc
 package [Widget] {}
 
-import Src.Widget as Widget
+import Src/Widget as Widget
 ```
+
+Package-qualified imports use one dot after the lowercase package alias, then
+the public module name. Further dots select nested types:
+
+```roc
+import json.Parser
+import json.Parser.ParseErr as PE
+```
+
+Directory traversal is private to the package that declares the public module;
+consumers use its public name rather than its internal source path.
 
 ### Importing types from packages
 

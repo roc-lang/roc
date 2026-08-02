@@ -1,4 +1,4 @@
-app [main!] { pf: platform "./platform/main.roc" }
+app [main!] { pf: platform "./platform/fallible_reject_main.roc" }
 
 # Rejected side of the hosted-try-question-widening rule (design.md "Hosted
 # Try Question Widening"), paired with issue_9963_hosted_try_question_mark.roc

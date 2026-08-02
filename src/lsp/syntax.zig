@@ -680,7 +680,7 @@ pub const SyntaxChecker = struct {
 
         // First, find the module and its coordinator package.
         var target_pkg: ?*compile.coordinator.PackageState = null;
-        var target_module_imports: ?[]const u32 = null;
+        var target_module_imports: ?[]const compile.coordinator.LocalImportEdge = null;
 
         const coord = env.coordinator orelse return null;
         var pkg_it = coord.packages.iterator();
@@ -703,9 +703,9 @@ pub const SyntaxChecker = struct {
         errdefer imported_envs.deinit(self.allocator);
 
         // Local imports (within same package)
-        for (imports) |import_id| {
-            if (import_id < pkg.modules.items.len) {
-                const imported_module = &pkg.modules.items[import_id];
+        for (imports) |edge| {
+            if (edge.module_id < pkg.modules.items.len) {
+                const imported_module = &pkg.modules.items[edge.module_id];
                 if (imported_module.moduleEnv()) |imp_env| {
                     try imported_envs.append(self.allocator, imp_env);
                 }

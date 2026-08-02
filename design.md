@@ -686,6 +686,32 @@ use recursive grammar functions, and it does not keep source substrings as an
 implicit parsing cursor. Source text may be consulted only through token
 metadata, for diagnostics, literal decoding, and identifier interning.
 
+### Import Targets
+
+The parser records every source import as a structured target. That structure
+contains its origin (local or package), local base (importer, parent traversal,
+or package root), ordered source-path segments, package qualifier when present,
+and ordered nested-type segments. Binding clauses are separate fields and must
+never participate in source-file selection.
+
+`/` separates source-path segments. `.` selects a type nested inside the source
+module. A bare local target and `./` are relative to the importing file, `../`
+traverses toward the package root, and a leading `/` begins at the package root.
+A package target consists of a lowercase package alias, one `.`, and its public
+module name; any later dotted segments are nested types. Package consumers
+cannot name the package's internal source path. A package header may bind a
+public module name to one exact internal target with an explicit local import.
+
+Resolution normalizes local targets to one package-root-relative logical path
+before graph insertion. That logical path is the module identity, so distinct
+source spellings of the same target share one graph node. Resolution derives
+exactly one `.roc` path from the parsed target. It does not probe alternate
+files, reinterpret dots as directories, inspect `as` or `exposing`, or recover
+an import meaning from solved types. Parent traversal beyond the package root,
+incorrect directory spelling, and multiple logical targets for one underlying
+file are errors. Cache keys and watch inputs consume the normalized identity
+and exact resolved path produced here.
+
 The parser is a direct token-dispatch machine. Hot parser code is organized as
 grammar kernels that walk the token buffer with local token dispatch and ordinary
 lexical control flow. The hot path must not route grammar progress through a
