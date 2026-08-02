@@ -727,6 +727,13 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             // Stamp a build id so stripped copies of the binary can be
             // matched back to their debug info.
             try args.append("--build-id");
+            // Match what each BSD's own toolchain produces: relocations
+            // resolved eagerly at load and their section mapped read-only
+            // afterwards.
+            try args.append("-z");
+            try args.append("relro");
+            try args.append("-z");
+            try args.append("now");
             // Suppress linker warnings
             if (suppress_linker_warnings) {
                 try args.append("-w");
@@ -1145,6 +1152,16 @@ fn findArg(args: []const []const u8, needle: []const u8) ?usize {
     return null;
 }
 
+/// Whether `args` contains `flag` immediately followed by `value`, for the
+/// linker options that are spelled as two separate arguments.
+fn hasArgPair(args: []const []const u8, flag: []const u8, value: []const u8) bool {
+    if (args.len == 0) return false;
+    for (args[0 .. args.len - 1], 0..) |arg, i| {
+        if (std.mem.eql(u8, arg, flag) and std.mem.eql(u8, args[i + 1], value)) return true;
+    }
+    return false;
+}
+
 /// Convenience function to link two object files into an executable
 pub fn linkTwoObjects(ctx: *CliCtx, obj1: []const u8, obj2: []const u8, output: []const u8) LinkError!void {
     if (comptime !llvm_available) {
@@ -1353,6 +1370,9 @@ test "BSD executables name their OS program interpreter" {
         const linker_idx = findArg(args.items, "-dynamic-linker") orelse return error.MissingDynamicLinker;
         try std.testing.expect(linker_idx + 1 < args.items.len);
         try std.testing.expectEqualStrings(case.interpreter, args.items[linker_idx + 1]);
+
+        try std.testing.expect(hasArgPair(args.items, "-z", "relro"));
+        try std.testing.expect(hasArgPair(args.items, "-z", "now"));
     }
 }
 
