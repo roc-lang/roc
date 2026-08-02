@@ -44,6 +44,8 @@ const name_width: usize = 28;
 /// Maximum number of top-level phases a single operation reports.
 const max_phases: usize = 16;
 const max_subphases: usize = 24;
+const max_counter_groups: usize = 4;
+const max_counters_per_group: usize = 24;
 
 const spinner_frames = [_][]const u8{
     "\u{280B}", "\u{2819}", "\u{2839}", "\u{2838}", "\u{283C}",
@@ -55,6 +57,18 @@ const spinner_frames = [_][]const u8{
 pub const SubTiming = struct {
     name: []const u8,
     ns: u64,
+};
+
+/// A deterministic operation count shown only for explicit diagnostic output.
+pub const Counter = struct {
+    name: []const u8,
+    count: u64,
+};
+
+const CounterGroup = struct {
+    name: []const u8,
+    counters: [max_counters_per_group]Counter = undefined,
+    len: u8 = 0,
 };
 
 const Phase = struct {
@@ -112,6 +126,8 @@ pub const Reporter = struct {
     peak_bytes: u64 = 0,
     phases: [max_phases]Phase = undefined,
     phase_count: usize = 0,
+    counter_groups: [max_counter_groups]CounterGroup = undefined,
+    counter_group_count: usize = 0,
     active: ?usize = null,
     displaying: bool = false,
     pending_partial: bool = false,
@@ -239,6 +255,23 @@ pub const Reporter = struct {
         if (self.displaying) self.writeCommittedPhase(idx);
     }
 
+    /// Record deterministic counters to print after the timing phases. Counter
+    /// diagnostics are explicit `--timings` output and never appear merely
+    /// because an interactive operation crossed the slow-operation threshold.
+    pub fn recordCounters(self: *Reporter, name: []const u8, counters: []const Counter) void {
+        if (!self.always) return;
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
+        if (self.finished or self.counter_group_count >= self.counter_groups.len) return;
+
+        const group = &self.counter_groups[self.counter_group_count];
+        group.* = .{ .name = name };
+        const len = @min(counters.len, group.counters.len);
+        @memcpy(group.counters[0..len], counters[0..len]);
+        group.len = @intCast(len);
+        self.counter_group_count += 1;
+    }
+
     fn endActiveLocked(self: *Reporter, subs: []const SubTiming) void {
         const idx = self.active orelse return;
         self.sampleMemoryLocked();
@@ -268,6 +301,7 @@ pub const Reporter = struct {
             var totals_buf: [64]u8 = undefined;
             self.writer.print("{f}{s}\n", .{ padName(self.op_label), self.formatTotals(&totals_buf) }) catch {};
         }
+        if (self.always) self.writeCounterGroups();
         self.writer.flush() catch {};
     }
 
@@ -396,6 +430,15 @@ pub const Reporter = struct {
         self.writer.print("{f}{s}\n", .{ padName(self.op_label), self.formatTotals(&totals_buf) }) catch {};
         var i: usize = 0;
         while (i < self.phase_count) : (i += 1) self.writeCommittedPhase(i);
+    }
+
+    fn writeCounterGroups(self: *Reporter) void {
+        for (self.counter_groups[0..self.counter_group_count]) |group| {
+            self.writer.print("  {s}\n", .{group.name}) catch {};
+            for (group.counters[0..group.len]) |counter| {
+                self.writer.print("      {f} {d}\n", .{ padChildName(counter.name), counter.count }) catch {};
+            }
+        }
     }
 
     /// Redraw the active phase's line in place with the spinner and live counter.
@@ -668,6 +711,10 @@ fn collectStatic(buf: *std.Io.Writer.Allocating, timings_flag: bool) void {
     reporter.end();
     reporter.begin("Linking");
     reporter.end();
+    reporter.recordCounters("Monotype workload", &.{
+        .{ .name = "Graph nodes created", .count = 1234 },
+        .{ .name = "Unification requests", .count = 5678 },
+    });
     reporter.finish();
 }
 
@@ -693,6 +740,9 @@ test "static breakdown lists every phase with the timings flag" {
     // The post-codegen backend phases each get their own aligned row.
     try testing.expect(std.mem.find(u8, out, "LLVM Optimize + Emit") != null);
     try testing.expect(std.mem.find(u8, out, "Linking") != null);
+    try testing.expect(std.mem.find(u8, out, "Monotype workload") != null);
+    try testing.expect(std.mem.find(u8, out, "Graph nodes created") != null);
+    try testing.expect(std.mem.find(u8, out, "1234") != null);
     // With a sampled memory range the parent row shows above its breakdown
     // (the range is only truthful on the parent's contiguous window); without
     // sampling the breakdown replaces it entirely.
