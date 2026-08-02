@@ -7034,3 +7034,16 @@ test "issue 10354 undefined identifier in expression does not panic monotype low
         else => return err,
     };
 }
+
+test "issue 10409 duplicate top-level value defs do not panic constant root lookup" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : {}
+        \\main = {}
+        \\x = ()
+        \\x = 0
+    ;
+
+    var lowered = try lowerModule(allocator, source, .wrappers);
+    defer lowered.deinit(allocator);
+}
