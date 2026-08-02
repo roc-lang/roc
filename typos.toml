@@ -29,6 +29,7 @@ ANF = "ANF" # A-normal form
 ba = "ba" # Binop apply
 caf = "caf" # Part of the word "café"
 clos = "clos" # Closure
+flate = "flate" # Zig std module name for DEFLATE, as in std.compress.flate
 ful = "ful" # Suffix, as in "effectful"
 Paeth = "Paeth" # PNG filter named for Alan W. Paeth
 rela = "rela" # Relative
