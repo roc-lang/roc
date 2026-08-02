@@ -34,6 +34,23 @@ pub const IntrinsicId = enum(u8) {
         argument: u8,
     };
 
+    /// Arity for intrinsics whose implementation is emitted at each checked
+    /// call site. Null identifies wrappers lowered through another explicit
+    /// checked protocol.
+    pub fn callsiteArity(self: IntrinsicId) ?u8 {
+        return switch (self) {
+            .str_inspect, .structural_eq => null,
+            .parse_tag_union, .field_names_rename_fields, .field_names_for_size => 2,
+            .field_names_shortest_name,
+            .field_names_longest_name,
+            .field_names_iter,
+            .field_name,
+            => 1,
+        };
+    }
+
+    pub const max_callsite_arity = 2;
+
     /// Explicit request-topology contract for compiler-owned intrinsic calls.
     pub fn requestResultSource(self: IntrinsicId) RequestResultSource {
         return switch (self) {
@@ -1616,4 +1633,16 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     }
 
     return new_def_indices;
+}
+
+test "intrinsic call-site protocol classifies every intrinsic" {
+    try std.testing.expectEqual(@as(?u8, null), IntrinsicId.str_inspect.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, null), IntrinsicId.structural_eq.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, 2), IntrinsicId.parse_tag_union.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, 2), IntrinsicId.field_names_rename_fields.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, 1), IntrinsicId.field_names_shortest_name.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, 1), IntrinsicId.field_names_longest_name.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, 1), IntrinsicId.field_names_iter.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, 2), IntrinsicId.field_names_for_size.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, 1), IntrinsicId.field_name.callsiteArity());
 }
