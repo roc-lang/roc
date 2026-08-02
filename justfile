@@ -5,7 +5,11 @@
 list:
    @ just --list --unsorted
 
-alias install := install-release
+alias install := install-latest-release
+
+# fetch and install the latest roc with rust_glue
+[linux]
+install-latest-release: rebase install-release
 
 # clean build and install
 [linux]
