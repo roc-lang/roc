@@ -390,11 +390,11 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
         compile_options.options,
     );
     defer {
-        std.Io.Dir.deleteFileAbsolute(std.Options.debug_io, std.mem.sliceTo(dylib_path, 0)) catch {};
+        std.Io.Dir.deleteFileAbsolute(std.Options.debug_io, dylib_path) catch {};
         allocator.free(dylib_path);
     }
 
-    var lib = try EvalDynLib.open(allocator, std.mem.sliceTo(dylib_path, 0));
+    var lib = try EvalDynLib.open(allocator, dylib_path);
     defer lib.close();
 
     const EntryFn = *const fn (*builtins.host_abi.RocOps, *TestInvocationContext, [*]u8, ?*anyopaque) callconv(.c) void;
