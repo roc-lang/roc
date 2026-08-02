@@ -175,8 +175,7 @@ const WrapperAnalyzer = struct {
     }
 
     fn solvedCaptureCount(self: *const WrapperAnalyzer, fn_id: Lifted.FnId) usize {
-        const captures = self.solvedCapturesForFn(fn_id);
-        return self.solved.types.captureSpan(captures).len;
+        return self.solvedCapturesForFn(fn_id).count();
     }
 
     fn solvedCapturesForFn(self: *const WrapperAnalyzer, fn_id: Lifted.FnId) SolvedType.Span {
@@ -190,7 +189,8 @@ const WrapperAnalyzer = struct {
             .erased => |erased| erased.members,
             else => Common.invariant("callable value did not have a resolved callable slot"),
         };
-        for (self.solved.types.memberSpan(callable)) |member| {
+        for (0..callable.count()) |member_index| {
+            const member = self.solved.types.memberItem(callable, member_index);
             if (member.lambda == fn_symbol) return member.captures;
         }
         return .empty();

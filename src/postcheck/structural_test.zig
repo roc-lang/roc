@@ -176,6 +176,41 @@ test "Lambda Solved keeps lifted syntax and stores callable sets in types" {
     try std.testing.expect(!@hasField(LambdaSolvedType.Content, "erased_fn"));
 }
 
+test "Lambda Solved mutable type store exposes no whole-slice span accessors" {
+    // Solving appends to the store's backing lists while walks are in
+    // flight, so a slice taken from the mutable store can dangle after a
+    // realloc (issue 10520). Whole-slice reads live only on the frozen
+    // View; the mutable store offers per-item accessors.
+    const Store = LambdaSolvedType.Store;
+    try std.testing.expect(!@hasDecl(Store, "span"));
+    try std.testing.expect(!@hasDecl(Store, "fieldSpan"));
+    try std.testing.expect(!@hasDecl(Store, "tagSpan"));
+    try std.testing.expect(!@hasDecl(Store, "captureSpan"));
+    try std.testing.expect(!@hasDecl(Store, "memberSpan"));
+    try std.testing.expect(!@hasDecl(Store, "declaredFieldSpan"));
+
+    try std.testing.expect(@hasDecl(Store, "spanItem"));
+    try std.testing.expect(@hasDecl(Store, "fieldItem"));
+    try std.testing.expect(@hasDecl(Store, "tagItem"));
+    try std.testing.expect(@hasDecl(Store, "captureItem"));
+    try std.testing.expect(@hasDecl(Store, "memberItem"));
+    try std.testing.expect(@hasDecl(Store, "declaredFieldItem"));
+
+    try std.testing.expect(@hasDecl(Store.View, "span"));
+    try std.testing.expect(@hasDecl(Store.View, "fieldSpan"));
+    try std.testing.expect(@hasDecl(Store.View, "tagSpan"));
+    try std.testing.expect(@hasDecl(Store.View, "captureSpan"));
+    try std.testing.expect(@hasDecl(Store.View, "memberSpan"));
+    try std.testing.expect(@hasDecl(Store.View, "declaredFieldSpan"));
+
+    // The backing lists are guarded like the sibling stores, so a borrow
+    // held across a realloc fails loudly in Debug builds rather than only
+    // when a repro app happens to hit the realloc.
+    inline for (.{ "vars", "spans", "fields", "tags", "captures", "fn_members", "declared_fields" }) |list_field| {
+        try std.testing.expect(@hasField(@FieldType(Store, list_field), "__guarded_backing"));
+    }
+}
+
 test "SpecConstr owns strict binding chains and retains opaque discarded work" {
     const source = @embedFile("monotype_lifted/spec_constr.zig");
     try expectContains(source, "const ClonedValue = struct");

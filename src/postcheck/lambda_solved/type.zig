@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const check = @import("check");
+const collections = @import("collections");
 
 const Common = @import("../common.zig");
 const MonoType = @import("../monotype/type.zig");
@@ -9,6 +10,11 @@ const MonoType = @import("../monotype/type.zig");
 /// Checked boundary name module used by Lambda Solved types.
 pub const names = check.CheckedNames;
 const static_dispatch = check.StaticDispatchRegistry;
+const GuardedList = collections.GuardedList;
+
+fn StoreList(comptime T: type, comptime field_name: []const u8) type {
+    return GuardedList.List(T, "lambda_solved.Type.Store." ++ field_name);
+}
 
 /// Identifier for a type variable in the Lambda Solved store.
 pub const TypeVarId = enum(u32) {
@@ -144,15 +150,26 @@ test "lambda solved named backing preserves generated-private authority" {
 }
 
 /// Store for Lambda Solved type variables and their shared spans.
+///
+/// While solving runs, every span list can grow: expanding a lazy mono leaf
+/// or adding a fresh var reallocates the backing storage, so a slice taken
+/// before such an append dangles. The mutable store therefore exposes only
+/// per-element accessors (`spanItem`, `fieldItem`, ...) that re-read through
+/// the backing list on every call. Code that has finished mutating takes a
+/// `View`, which freezes the store and gets whole-slice accessors back.
+///
+/// The backing lists are `GuardedList`s like the sibling stores, so any
+/// future borrow held across a realloc fails deterministically in Debug
+/// builds instead of reading freed memory.
 pub const Store = struct {
     allocator: std.mem.Allocator,
-    vars: std.ArrayList(Content),
-    spans: std.ArrayList(TypeVarId),
-    fields: std.ArrayList(Field),
-    tags: std.ArrayList(Tag),
-    captures: std.ArrayList(Capture),
-    fn_members: std.ArrayList(FnMember),
-    declared_fields: std.ArrayList(DeclaredField),
+    vars: StoreList(Content, "vars"),
+    spans: StoreList(TypeVarId, "spans"),
+    fields: StoreList(Field, "fields"),
+    tags: StoreList(Tag, "tags"),
+    captures: StoreList(Capture, "captures"),
+    fn_members: StoreList(FnMember, "fn_members"),
+    declared_fields: StoreList(DeclaredField, "declared_fields"),
 
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{
@@ -178,17 +195,21 @@ pub const Store = struct {
     }
 
     pub fn add(self: *Store, content: Content) std.mem.Allocator.Error!TypeVarId {
-        const id: TypeVarId = @enumFromInt(@as(u32, @intCast(self.vars.items.len)));
+        const id: TypeVarId = @enumFromInt(@as(u32, @intCast(self.vars.len())));
         try self.vars.append(self.allocator, content);
         return id;
     }
 
     pub fn set(self: *Store, id: TypeVarId, content: Content) void {
-        self.vars.items[@intFromEnum(id)] = content;
+        self.vars.set(@intFromEnum(id), content);
     }
 
     pub fn get(self: *const Store, id: TypeVarId) Content {
-        return self.vars.items[@intFromEnum(id)];
+        return self.vars.get(@intFromEnum(id));
+    }
+
+    pub fn varCount(self: *const Store) usize {
+        return self.vars.len();
     }
 
     pub fn root(self: *const Store, id: TypeVarId) TypeVarId {
@@ -234,100 +255,81 @@ pub const Store = struct {
     }
 
     pub fn compressAllRoots(self: *Store) void {
-        for (0..self.vars.items.len) |index| {
+        for (0..self.vars.len()) |index| {
             _ = self.rootCompressed(@enumFromInt(@as(u32, @intCast(index))));
         }
     }
 
     pub fn addSpan(self: *Store, values: []const TypeVarId) std.mem.Allocator.Error!Span {
         if (values.len == 0) return .empty();
-        const start: u32 = @intCast(self.spans.items.len);
+        const start: u32 = @intCast(self.spans.len());
         try self.spans.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addFields(self: *Store, values: []const Field) std.mem.Allocator.Error!Span {
         if (values.len == 0) return .empty();
-        const start: u32 = @intCast(self.fields.items.len);
+        const start: u32 = @intCast(self.fields.len());
         try self.fields.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addTags(self: *Store, values: []const Tag) std.mem.Allocator.Error!Span {
         if (values.len == 0) return .empty();
-        const start: u32 = @intCast(self.tags.items.len);
+        const start: u32 = @intCast(self.tags.len());
         try self.tags.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addCaptures(self: *Store, values: []const Capture) std.mem.Allocator.Error!Span {
         if (values.len == 0) return .empty();
-        const start: u32 = @intCast(self.captures.items.len);
+        const start: u32 = @intCast(self.captures.len());
         try self.captures.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addMembers(self: *Store, values: []const FnMember) std.mem.Allocator.Error!Span {
         if (values.len == 0) return .empty();
-        const start: u32 = @intCast(self.fn_members.items.len);
+        const start: u32 = @intCast(self.fn_members.len());
         try self.fn_members.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
-    pub fn span(self: *const Store, span_: Span) []const TypeVarId {
-        return self.spans.items[span_.start..][0..span_.len];
-    }
-
     pub fn spanItem(self: *const Store, span_: Span, index: usize) TypeVarId {
         if (index >= span_.count()) Common.invariant("Lambda Solved type span index out of bounds");
-        return self.spans.items[@as(usize, span_.start) + index];
-    }
-
-    pub fn fieldSpan(self: *const Store, span_: Span) []const Field {
-        return self.fields.items[span_.start..][0..span_.len];
+        return self.spans.get(@as(usize, span_.start) + index);
     }
 
     pub fn addDeclaredFields(self: *Store, values: []const DeclaredField) std.mem.Allocator.Error!Span {
         if (values.len == 0) return .empty();
-        const start: u32 = @intCast(self.declared_fields.items.len);
+        const start: u32 = @intCast(self.declared_fields.len());
         try self.declared_fields.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
-    pub fn declaredFieldSpan(self: *const Store, span_: Span) []const DeclaredField {
-        return self.declared_fields.items[span_.start..][0..span_.len];
+    pub fn declaredFieldItem(self: *const Store, span_: Span, index: usize) DeclaredField {
+        if (index >= span_.count()) Common.invariant("Lambda Solved declared field span index out of bounds");
+        return self.declared_fields.get(@as(usize, span_.start) + index);
     }
 
     pub fn fieldItem(self: *const Store, span_: Span, index: usize) Field {
         if (index >= span_.count()) Common.invariant("Lambda Solved field span index out of bounds");
-        return self.fields.items[@as(usize, span_.start) + index];
-    }
-
-    pub fn tagSpan(self: *const Store, span_: Span) []const Tag {
-        return self.tags.items[span_.start..][0..span_.len];
+        return self.fields.get(@as(usize, span_.start) + index);
     }
 
     pub fn tagItem(self: *const Store, span_: Span, index: usize) Tag {
         if (index >= span_.count()) Common.invariant("Lambda Solved tag span index out of bounds");
-        return self.tags.items[@as(usize, span_.start) + index];
-    }
-
-    pub fn captureSpan(self: *const Store, span_: Span) []const Capture {
-        return self.captures.items[span_.start..][0..span_.len];
+        return self.tags.get(@as(usize, span_.start) + index);
     }
 
     pub fn captureItem(self: *const Store, span_: Span, index: usize) Capture {
         if (index >= span_.count()) Common.invariant("Lambda Solved capture span index out of bounds");
-        return self.captures.items[@as(usize, span_.start) + index];
-    }
-
-    pub fn memberSpan(self: *const Store, span_: Span) []const FnMember {
-        return self.fn_members.items[span_.start..][0..span_.len];
+        return self.captures.get(@as(usize, span_.start) + index);
     }
 
     pub fn memberItem(self: *const Store, span_: Span, index: usize) FnMember {
         if (index >= span_.count()) Common.invariant("Lambda Solved member span index out of bounds");
-        return self.fn_members.items[@as(usize, span_.start) + index];
+        return self.fn_members.get(@as(usize, span_.start) + index);
     }
 
     pub const View = struct {
@@ -384,13 +386,13 @@ pub const Store = struct {
 
     pub fn view(self: *const Store) View {
         return .{
-            .vars = self.vars.items,
-            .spans = self.spans.items,
-            .fields = self.fields.items,
-            .tags = self.tags.items,
-            .captures = self.captures.items,
-            .fn_members = self.fn_members.items,
-            .declared_fields = self.declared_fields.items,
+            .vars = self.vars.unsafeRawItemsForView(),
+            .spans = self.spans.unsafeRawItemsForView(),
+            .fields = self.fields.unsafeRawItemsForView(),
+            .tags = self.tags.unsafeRawItemsForView(),
+            .captures = self.captures.unsafeRawItemsForView(),
+            .fn_members = self.fn_members.unsafeRawItemsForView(),
+            .declared_fields = self.declared_fields.unsafeRawItemsForView(),
         };
     }
 };
@@ -416,7 +418,7 @@ test "lambda solved function types carry callable variables" {
     const function = store.get(fn_ty).func;
     try std.testing.expectEqual(callable, function.callable);
     try std.testing.expectEqual(ret, function.ret);
-    try std.testing.expectEqual(arg, store.span(function.args)[0]);
+    try std.testing.expectEqual(arg, store.spanItem(function.args, 0));
 }
 
 test "lambda solved type variable order uses the typed id helper" {
