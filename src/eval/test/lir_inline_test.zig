@@ -3619,6 +3619,18 @@ fn expectEscapingIterChainAllocatesNothing(source: []const u8) TestError!void {
     try expectLoweredIterChainAllocatesNothing(allocator, &optimized.lowered);
 }
 
+test "issue 10348 nominal declaration with unbound annotation does not panic" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : {}
+        \\main = {}
+        \\M := { f : I }
+    ;
+
+    var lowered = try lowerModule(allocator, source, .wrappers);
+    defer lowered.deinit(allocator);
+}
+
 test "iter alloc static: iterator returned from a function is zero-alloc" {
     try expectEscapingIterChainAllocatesNothing(
         \\consume : Iter(U64) -> U64

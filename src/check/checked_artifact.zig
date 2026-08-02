@@ -5145,8 +5145,8 @@ fn appendCheckedTypeRootFromDeclarationAnno(
             },
             .builtin,
             .external,
+            .pending,
             => try appendCheckedTypeRoot(allocator, module, names, imports, store, active, ModuleEnv.varFrom(anno_idx)),
-            .pending => checkedArtifactInvariant("checked declaration template still contained pending lookup", .{}),
         },
         .apply => |apply| blk: {
             const actual_args = try checkedTypeIdsFromDeclarationAnnoSpan(
@@ -5203,6 +5203,7 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                 },
                 .builtin,
                 .external,
+                .pending,
                 => {
                     const generic_root = try appendCheckedTypeRoot(
                         allocator,
@@ -5229,7 +5230,6 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                     }
                     break :blk result;
                 },
-                .pending => checkedArtifactInvariant("checked declaration template still contained pending apply", .{}),
             }
             if (actual_args_owned) {
                 allocator.free(actual_args);
@@ -5253,7 +5253,7 @@ fn appendCheckedTypeRootFromDeclarationAnno(
         },
         .tag,
         .malformed,
-        => checkedArtifactInvariant("nominal declaration annotation was not a valid checked template", .{}),
+        => try appendCheckedTypeRoot(allocator, module, names, imports, store, active, ModuleEnv.varFrom(anno_idx)),
     };
 }
 
