@@ -929,6 +929,83 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.appendSlice(self.allocator, &.{ 0xC4, byte2, byte3 });
         }
 
+        /// Emit the legacy (non-VEX) prefixes for a two-operand SSE instruction.
+        fn emitSseLegacyPrefix(
+            self: *Self,
+            map: VexMap,
+            prefix: VexPrefix,
+            dst: FloatReg,
+            rm_high: u1,
+        ) Allocator.Error!void {
+            switch (prefix) {
+                .none => {},
+                .p66 => try self.buf.append(self.allocator, 0x66),
+                .pf3 => try self.buf.append(self.allocator, 0xF3),
+                .pf2 => try self.buf.append(self.allocator, 0xF2),
+            }
+            if (dst.rexB() == 1 or rm_high == 1) {
+                try self.buf.append(self.allocator, rex(0, dst.rexB(), 0, rm_high));
+            }
+            try self.buf.append(self.allocator, 0x0F);
+            switch (map) {
+                .map_0f => {},
+                .map_0f38 => try self.buf.append(self.allocator, 0x38),
+                .map_0f3a => try self.buf.append(self.allocator, 0x3A),
+            }
+        }
+
+        /// Two-register 128-bit SSE instruction in the legacy encoding.
+        ///
+        /// The x86-64 baseline predates VEX, so baseline targets encode the
+        /// same opcodes this way. Legacy SSE is destructive: `dst` is also the
+        /// first source, which is why callers move the left operand into `dst`
+        /// before emitting.
+        pub fn sseRegReg(
+            self: *Self,
+            map: VexMap,
+            prefix: VexPrefix,
+            opcode: u8,
+            dst: FloatReg,
+            src: FloatReg,
+        ) Allocator.Error!void {
+            try self.emitSseLegacyPrefix(map, prefix, dst, src.rexB());
+            try self.buf.append(self.allocator, opcode);
+            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+        }
+
+        /// Two-register 128-bit SSE instruction with an immediate, legacy encoding.
+        pub fn sseRegRegImm8(
+            self: *Self,
+            map: VexMap,
+            prefix: VexPrefix,
+            opcode: u8,
+            dst: FloatReg,
+            src: FloatReg,
+            imm: u8,
+        ) Allocator.Error!void {
+            try self.sseRegReg(map, prefix, opcode, dst, src);
+            try self.buf.append(self.allocator, imm);
+        }
+
+        /// Packed shift by immediate in the legacy encoding. The destination is
+        /// ModR/M.r/m and ModR/M.reg carries the opcode extension.
+        pub fn ssePackedShiftImm8(
+            self: *Self,
+            opcode: u8,
+            extension: u3,
+            dst: FloatReg,
+            imm: u8,
+        ) Allocator.Error!void {
+            try self.buf.append(self.allocator, 0x66);
+            if (dst.rexB() == 1) {
+                try self.buf.append(self.allocator, rex(0, 0, 0, 1));
+            }
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, opcode);
+            try self.buf.append(self.allocator, modRM(0b11, extension, dst.enc()));
+            try self.buf.append(self.allocator, imm);
+        }
+
         /// Generic three-register 128-bit VEX instruction.
         pub fn vexRegRegReg(
             self: *Self,

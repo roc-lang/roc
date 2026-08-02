@@ -5915,7 +5915,37 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             lhs: FloatReg,
             rhs: FloatReg,
         ) Allocator.Error!void {
+            if (self.cpu_level == .v1) {
+                // VEX is an AVX encoding, so the baseline reaches these same
+                // opcodes through legacy SSE. Legacy SSE reads and writes one
+                // register for the left operand, so materialize `lhs` in `dst`
+                // first. Ops whose opcode lives outside the `0F` map are above
+                // the baseline entirely and are routed to the SIMD builtin
+                // before reaching here.
+                std.debug.assert(map == .map_0f);
+                if (dst == rhs and dst != lhs) {
+                    // Writing `lhs` into `dst` would destroy the right operand,
+                    // so stage the right operand somewhere else first.
+                    const protect = vectorRegMask(&.{ dst, lhs, rhs });
+                    const staged = try self.allocTempVector(protect);
+                    defer self.codegen.freeFloat(staged);
+                    try self.codegen.emit.movdqaRegReg(staged, rhs);
+                    try self.codegen.emit.movdqaRegReg(dst, lhs);
+                    try self.codegen.emit.sseRegReg(map, .p66, opcode, dst, staged);
+                    return;
+                }
+                if (dst != lhs) try self.codegen.emit.movdqaRegReg(dst, lhs);
+                try self.codegen.emit.sseRegReg(map, .p66, opcode, dst, rhs);
+                return;
+            }
             try self.codegen.emit.vexRegRegReg(map, .p66, false, opcode, dst, lhs, rhs);
+        }
+
+        /// Bit mask of the given vector registers, for spill protection.
+        fn vectorRegMask(regs: []const FloatReg) u32 {
+            var mask: u32 = 0;
+            for (regs) |reg| mask |= @as(u32, 1) << @intFromEnum(reg);
+            return mask;
         }
 
         fn emitBasicSimdVector(
