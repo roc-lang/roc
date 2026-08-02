@@ -716,11 +716,17 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
     }
 
     const lowered = &compiled.lowered;
-    const result = try eval.InspectedRun.run(self.allocator, self.backend_kind, .{
+    const program: eval.InspectedRun.Program = .{
         .store = &lowered.view.store,
         .layouts = &lowered.view.layouts,
         .main_proc = lowered.mainProc(),
-    });
+    };
+    const result = switch (self.backend_kind) {
+        .interpreter => try eval.InspectedRun.run(self.allocator, .interpreter, program),
+        .dev => try eval.InspectedRun.run(self.allocator, .dev, program),
+        .wasm => try eval.InspectedRun.run(self.allocator, .wasm, program),
+        .llvm => try eval.InspectedRun.run(self.allocator, .llvm, program),
+    };
     return switch (result.outcome) {
         .returned => |output| .{ .output = output },
         .crashed => |message| .{ .runtime_crash = message },

@@ -81,9 +81,60 @@ pub const Result = struct {
     }
 };
 
+const InterpreterError = Allocator.Error || error{
+    ComptimeExhaustiveness,
+    Crash,
+    DivisionByZero,
+    ExpectErr,
+    Internal,
+    RuntimeError,
+};
+
+const DevError = Allocator.Error || error{
+    DevBackendUnavailable,
+    EmptyCode,
+    Internal,
+    MmapFailed,
+    MprotectFailed,
+    UnsupportedPlatform,
+    UnwindRegistrationFailed,
+    VirtualAllocFailed,
+    VirtualProtectFailed,
+};
+
+const WasmError = Allocator.Error || error{
+    Internal,
+    WasmExecFailed,
+};
+
+const LlvmOptionsError = Allocator.Error || error{UnsupportedTarget};
+
+const LlvmError = Allocator.Error || std.DynLib.Error || error{
+    BitcodeParseError,
+    CompilationFailed,
+    Internal,
+    InvalidUtf8,
+    LinkFailed,
+    LlvmBackendUnavailable,
+    ModuleLinkFailed,
+    TempFileError,
+    UnsupportedLowLevel,
+    UnsupportedTarget,
+    WindowsSDKNotFound,
+};
+
+fn BackendError(comptime backend_kind: Backend) type {
+    return switch (backend_kind) {
+        .interpreter => InterpreterError,
+        .dev => DevError,
+        .wasm => WasmError,
+        .llvm => LlvmError,
+    };
+}
+
 /// Execute an inspect-wrapped root. Roc crashes are returned as `.crashed`;
 /// the error channel is reserved for compiler, allocator, and engine failures.
-pub fn run(allocator: Allocator, backend_kind: Backend, program: Program) !Result {
+pub fn run(allocator: Allocator, comptime backend_kind: Backend, program: Program) BackendError(backend_kind)!Result {
     return switch (backend_kind) {
         .interpreter => runInterpreter(allocator, program),
         .dev => runDev(allocator, program),
@@ -118,7 +169,7 @@ fn mainProcArgLayouts(allocator: Allocator, program: Program) Allocator.Error![]
     return arg_layouts;
 }
 
-fn runInterpreter(allocator: Allocator, program: Program) !Result {
+fn runInterpreter(allocator: Allocator, program: Program) InterpreterError!Result {
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
@@ -156,7 +207,7 @@ fn runInterpreter(allocator: Allocator, program: Program) !Result {
     };
 }
 
-fn runDev(allocator: Allocator, program: Program) !Result {
+fn runDev(allocator: Allocator, program: Program) DevError!Result {
     if (comptime !backend.host_lir_codegen_available) {
         return error.DevBackendUnavailable;
     } else {
@@ -233,7 +284,7 @@ fn runDev(allocator: Allocator, program: Program) !Result {
     }
 }
 
-fn runWasm(allocator: Allocator, program: Program) !Result {
+fn runWasm(allocator: Allocator, program: Program) WasmError!Result {
     if (comptime builtin.target.os.tag == .freestanding) return error.WasmExecFailed;
 
     var codegen = backend.wasm.WasmCodeGen.init(
@@ -282,7 +333,7 @@ const OwnedLlvmCompileOptions = struct {
     }
 };
 
-fn llvmCompileOptions(allocator: Allocator, target_usize: base.target.TargetUsize) !OwnedLlvmCompileOptions {
+fn llvmCompileOptions(allocator: Allocator, target_usize: base.target.TargetUsize) LlvmOptionsError!OwnedLlvmCompileOptions {
     const llvm_compile = @import("llvm_compile");
     const native_roc_target = roc_target.RocTarget.detectNative();
     const resolved_target = std.zig.system.resolveTargetQuery(std.Options.debug_io, native_roc_target.llvmTargetQuery()) catch
@@ -306,7 +357,7 @@ fn llvmCompileOptions(allocator: Allocator, target_usize: base.target.TargetUsiz
     };
 }
 
-fn runLlvm(allocator: Allocator, program: Program) !Result {
+fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
     if (comptime builtin.target.os.tag == .freestanding) return error.LlvmBackendUnavailable;
 
     const llvm_compile = @import("llvm_compile");

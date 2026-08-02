@@ -2739,7 +2739,7 @@ pub fn llvmEvalBoolRootModulesWithMaxWorkersAndCallbacks(
     return runLlvmBoolRootCalls(allocator, calls, longjmp_on_crash, max_workers, completion_callback, event_callback);
 }
 
-fn legacyInspectedRun(allocator: Allocator, backend_kind: InspectedRun.Backend, lowered: *const LoweredProgram) TestHelperError!EvalRunResult {
+fn legacyInspectedRun(allocator: Allocator, comptime backend_kind: InspectedRun.Backend, lowered: *const LoweredProgram) TestHelperError!EvalRunResult {
     const result = try InspectedRun.run(allocator, backend_kind, .{
         .store = &lowered.view.store,
         .layouts = &lowered.view.layouts,
