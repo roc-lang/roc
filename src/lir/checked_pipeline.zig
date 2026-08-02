@@ -290,7 +290,7 @@ fn timingNowNs(std_io: std.Io) i64 {
 }
 
 test "pipeline timing aggregates Monotype diagnostics" {
-    var timing = Timing.init(std.Io.Threaded.global_single_threaded.io());
+    var timing = Timing.init(std.testing.io);
     var first: postcheck.Monotype.Lower.Diagnostics = .{};
     first.specialization.template_requests = 3;
     first.graph.nodes_created = 5;
