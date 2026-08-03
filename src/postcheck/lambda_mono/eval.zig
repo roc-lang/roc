@@ -333,6 +333,7 @@ pub const Evaluator = struct {
             .list => |span| return .{ .list = try self.evalExprSpan(frame, span) },
             .tuple => |span| return .{ .tuple = try self.evalExprSpan(frame, span) },
             .record => |span| return try self.evalRecord(frame, expr.ty, span),
+            .record_update => |update| return try self.evalRecordUpdate(frame, expr.ty, update),
             .capture_record => |span| return .{ .capture_record = try self.evalExprSpan(frame, span) },
             .tag => |tag| return try self.evalTag(frame, expr.ty, tag.name, tag.payloads),
             .callable => |callable| {
@@ -453,6 +454,31 @@ pub const Evaluator = struct {
                     break field_expr.value;
                 }
             } else return self.unsupported_("record field not found in record expression");
+            out[i] = try self.evalExpr(frame, value_expr);
+        }
+        return .{ .record = out };
+    }
+
+    fn evalRecordUpdate(self: *Evaluator, frame: *Frame, ty: Type.TypeId, update: Ast.RecordUpdate) EvalError!Value {
+        const field_types = switch (self.structural(ty)) {
+            .record => |fields| fields,
+            else => return self.unsupported_("record update without record type"),
+        };
+        const base_value = try self.evalExpr(frame, update.base);
+        const base_fields = switch (base_value) {
+            .record => |fields| fields,
+            else => return self.unsupported_("record update base without record value"),
+        };
+        const type_fields = self.program.types.fieldSpan(field_types);
+        if (base_fields.len != type_fields.len) return self.unsupported_("record update base arity differs from record type");
+        const out = self.alloc().dupe(Value, base_fields) catch return error.OutOfMemory;
+        const update_fields = self.program.fieldExprSpan(update.fields);
+        for (0..type_fields.len) |i| {
+            const type_field = GuardedList.at(type_fields, i);
+            const value_expr = for (0..update_fields.len) |update_index| {
+                const field = GuardedList.at(update_fields, update_index);
+                if (self.program.names.recordFieldLabelTextEql(type_field.name, field.name)) break field.value;
+            } else continue;
             out[i] = try self.evalExpr(frame, value_expr);
         }
         return .{ .record = out };

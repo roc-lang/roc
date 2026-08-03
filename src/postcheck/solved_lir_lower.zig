@@ -2459,6 +2459,7 @@ const Lowerer = struct {
             .list => |items| try self.lowerListIntoAtType(target, expr_ty, items, next),
             .tuple => |items| try self.lowerTupleIntoAtType(target, expr_ty, items, next),
             .record => |fields| try self.lowerRecordInto(target, expr_ty, fields, next),
+            .record_update => |update| try self.lowerRecordUpdateInto(target, expr_ty, update, next),
             .tag => |tag| try self.lowerTagInto(target, expr_ty, tag.name, tag.payloads, next),
             .lambda,
             .def_ref,
@@ -2552,6 +2553,7 @@ const Lowerer = struct {
             .list => |items| try self.lowerListIntoAtType(target, ty, items, next),
             .tuple => |items| try self.lowerTupleIntoAtType(target, ty, items, next),
             .record => |fields| try self.lowerRecordInto(target, ty, fields, next),
+            .record_update => |update| try self.lowerRecordUpdateInto(target, ty, update, next),
             .tag => |tag| try self.lowerTagInto(target, ty, tag.name, tag.payloads, next),
             .call_proc => |call| switch (Lifted.directCallee(call)) {
                 .local => |callee| try self.lowerDirectProcCallInto(
@@ -2770,6 +2772,87 @@ const Lowerer = struct {
         return try self.lowerStructExprsIntoAtTypes(target, ordered, field_tys, next);
     }
 
+    fn lowerRecordUpdateInto(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        ty: Type.TypeId,
+        update: Lifted.RecordUpdate,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        if (self.boxBackingLayoutForDirectConstruction(target)) |backing_layout| {
+            const backing_local = try self.addLocalForLayout(backing_layout);
+            const boundary = try self.assignBoxBoundary(target, backing_local, backing_layout, next);
+            return try self.lowerRecordUpdateInto(backing_local, ty, update, boundary);
+        }
+
+        const type_fields = try GuardedList.dupe(self.allocator, Type.Field, self.recordFields(ty));
+        defer self.allocator.free(type_fields);
+        const update_fields = try GuardedList.dupe(self.allocator, Lifted.FieldExpr, self.solved.lifted.fieldExprSpan(update.fields));
+        defer self.allocator.free(update_fields);
+        const updates_by_field = try self.allocator.alloc(?Lifted.ExprId, type_fields.len);
+        defer self.allocator.free(updates_by_field);
+        @memset(updates_by_field, null);
+        for (update_fields) |field| {
+            const field_index = Lowerer.recordFieldIndexInFields(type_fields, field.name);
+            if (updates_by_field[field_index] != null) Common.invariant("record update contained the same field more than once");
+            updates_by_field[field_index] = field.value;
+        }
+
+        const base_ty = try self.lowerExprContextTy(update.base);
+        const base_local = try self.addTemp(base_ty);
+        const field_locals = try self.allocator.alloc(LIR.LocalId, type_fields.len);
+        defer self.allocator.free(field_locals);
+        const target_is_zst = self.isZstLocal(target);
+        for (type_fields, 0..) |field, index| {
+            const field_layout = if (target_is_zst)
+                layout.Idx.zst
+            else
+                self.localFieldLayout(target, @intCast(index));
+            field_locals[index] = try self.addLocalForLayout(field_layout);
+            try self.local_types.put(field_locals[index], field.ty);
+        }
+
+        var current = if (target_is_zst)
+            try self.assignZst(target, next)
+        else
+            try self.result.store.addCFStmt(.{ .assign_struct = .{
+                .target = target,
+                .fields = try self.result.store.addLocalSpan(field_locals),
+                .next = next,
+            } });
+
+        var index = type_fields.len;
+        while (index > 0) {
+            index -= 1;
+            if (updates_by_field[index]) |value| {
+                current = try self.lowerExprIntoAtType(field_locals[index], value, type_fields[index].ty, current);
+            }
+        }
+
+        const source_ty = self.storageTypeOfLocalOr(base_local, base_ty);
+        index = type_fields.len;
+        while (index > 0) {
+            index -= 1;
+            if (updates_by_field[index] != null) continue;
+            if (target_is_zst) {
+                current = try self.assignZst(field_locals[index], current);
+                continue;
+            }
+            const source_index = self.recordFieldIndex(source_ty, type_fields[index].name);
+            const source_field_ty = self.recordFieldType(source_ty, type_fields[index].name);
+            current = try self.assignTypedRefRead(
+                field_locals[index],
+                type_fields[index].ty,
+                source_field_ty,
+                self.localFieldLayout(base_local, source_index),
+                .{ .field = .{ .source = base_local, .field_idx = source_index } },
+                current,
+            );
+        }
+
+        return try self.lowerExprIntoAtType(base_local, update.base, base_ty, current);
+    }
+
     fn lowerTagInto(
         self: *Lowerer,
         target: LIR.LocalId,
@@ -2858,7 +2941,7 @@ const Lowerer = struct {
             // Box edges come from that producer-owned layout graph instead of
             // constructing an independently rooted backing layout and then
             // recursively converting the completed value.
-            .list, .tuple, .record, .tag => return try self.lowerExprIntoAtType(target, backing, backing_ty, next),
+            .list, .tuple, .record, .record_update, .tag => return try self.lowerExprIntoAtType(target, backing, backing_ty, next),
             else => {},
         }
 

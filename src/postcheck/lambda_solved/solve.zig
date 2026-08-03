@@ -542,6 +542,12 @@ const Solver = struct {
                     _ = try self.expectExpr(field.value, try self.recordField(expected, field.name));
                 }
             },
+            .record_update => |update| {
+                _ = try self.expectExpr(update.base, expected);
+                for (self.lifted.fieldExprSpan(update.fields)) |field| {
+                    _ = try self.expectExpr(field.value, try self.recordField(expected, field.name));
+                }
+            },
             .tag => |tag| {
                 const payload_tys = try self.tagPayloadsSpan(expected, tag.name);
                 const payloads = self.lifted.exprSpan(tag.payloads);
@@ -808,6 +814,14 @@ const Solver = struct {
                 _ = try self.exprSlot(expr_id);
                 self.expr_done[index] = true;
                 for (self.lifted.fieldExprSpan(fields)) |field| {
+                    _ = try self.inferExpr(field.value);
+                }
+            },
+            .record_update => |update| {
+                _ = try self.exprSlot(expr_id);
+                self.expr_done[index] = true;
+                _ = try self.inferExpr(update.base);
+                for (self.lifted.fieldExprSpan(update.fields)) |field| {
                     _ = try self.inferExpr(field.value);
                 }
             },

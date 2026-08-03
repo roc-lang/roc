@@ -8956,6 +8956,11 @@ const DraftFieldExpr = struct {
     value: DraftExprId,
 };
 
+const DraftRecordUpdate = struct {
+    base: DraftExprId,
+    fields: DraftSpan(DraftFieldExpr),
+};
+
 const DraftTagExpr = struct {
     name: names.TagNameId,
     payloads: DraftSpan(DraftExprId),
@@ -9143,6 +9148,7 @@ const DraftExprData = union(enum(u8)) {
     list: DraftSpan(DraftExprId),
     tuple: DraftSpan(DraftExprId),
     record: DraftSpan(DraftFieldExpr),
+    record_update: DraftRecordUpdate,
     tag: DraftTagExpr,
     nominal: DraftExprId,
     let_: struct {
@@ -11373,6 +11379,10 @@ const BodyDraftStore = struct {
             .list => |span| .{ .list = ids.exprSpan(span) },
             .tuple => |span| .{ .tuple = ids.exprSpan(span) },
             .record => |span| .{ .record = ids.fieldExprSpan(span) },
+            .record_update => |update| .{ .record_update = .{
+                .base = ids.expr(update.base),
+                .fields = ids.fieldExprSpan(update.fields),
+            } },
             .tag => |tag| .{ .tag = .{
                 .name = tag.name,
                 .payloads = ids.exprSpan(tag.payloads),
@@ -12787,6 +12797,14 @@ const BodyContext = struct {
                 var proofs = std.ArrayList(?RuntimeImpossibilityProofId).empty;
                 defer proofs.deinit(self.allocator);
                 for (self.fieldExprSpan(span)) |field|
+                    try proofs.append(self.allocator, self.exprImpossibilityProof(field.value));
+                break :blk try self.anyImpossibilityProof(proofs.items);
+            },
+            .record_update => |update| blk: {
+                var proofs = std.ArrayList(?RuntimeImpossibilityProofId).empty;
+                defer proofs.deinit(self.allocator);
+                try proofs.append(self.allocator, self.exprImpossibilityProof(update.base));
+                for (self.fieldExprSpan(update.fields)) |field|
                     try proofs.append(self.allocator, self.exprImpossibilityProof(field.value));
                 break :blk try self.anyImpossibilityProof(proofs.items);
             },
@@ -14254,6 +14272,13 @@ const BodyContext = struct {
             },
             .record => |fields| {
                 for (self.fieldExprSpan(fields)) |field| {
+                    if (try self.exprDependsOnFreeLocalInner(field.value, target, bound)) return true;
+                }
+                return false;
+            },
+            .record_update => |update| {
+                if (try self.exprDependsOnFreeLocalInner(update.base, target, bound)) return true;
+                for (self.fieldExprSpan(update.fields)) |field| {
                     if (try self.exprDependsOnFreeLocalInner(field.value, target, bound)) return true;
                 }
                 return false;
@@ -29904,6 +29929,24 @@ const BodyContext = struct {
         ty: Type.TypeId,
         pre_lowered: []const PreLoweredChild,
     ) Allocator.Error!DraftExprId {
+        if (record.ext) |ext| {
+            const base_expr = self.preLoweredChildAt(pre_lowered, ext) orelse try self.lowerExpr(ext);
+            const fields = try self.allocator.alloc(DraftFieldExpr, record.fields.len);
+            defer self.allocator.free(fields);
+            for (record.fields, 0..) |field, index| {
+                const name = try self.builder.recordFieldName(self.view, field.label);
+                const value = if (self.preLoweredChildAt(pre_lowered, field.value)) |pre|
+                    pre
+                else
+                    try self.lowerExprAtType(field.value, self.builder.recordFieldType(ty, name));
+                fields[index] = .{ .name = name, .value = value };
+            }
+            return try self.addExpr(.{ .ty = ty, .data = .{ .record_update = .{
+                .base = base_expr,
+                .fields = try self.addFieldExprSpan(fields),
+            } } });
+        }
+
         const target_fields = switch (self.builder.shapeContent(ty)) {
             .record => |fields| fields,
             else => Common.invariant("record expression had a non-record monotype"),
@@ -29985,6 +30028,24 @@ const BodyContext = struct {
         record_node: NodeId,
         pre_lowered: []const PreLoweredChild,
     ) Allocator.Error!DraftExprId {
+        if (record.ext) |ext| {
+            const base_expr = self.preLoweredChildAt(pre_lowered, ext) orelse
+                Common.invariant("record graph update lost its pre-lowered base child");
+            const fields = try self.allocator.alloc(DraftFieldExpr, record.fields.len);
+            defer self.allocator.free(fields);
+            for (record.fields, 0..) |field, index| {
+                fields[index] = .{
+                    .name = try self.builder.recordFieldName(self.view, field.label),
+                    .value = self.preLoweredChildAt(pre_lowered, field.value) orelse
+                        Common.invariant("record graph update lost its pre-lowered field child"),
+                };
+            }
+            return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(record_node), .{ .record_update = .{
+                .base = base_expr,
+                .fields = try self.addFieldExprSpan(fields),
+            } });
+        }
+
         const target_fields = (try self.graph.recordConstructionNodes(record_node)).fields;
         const lowered = try self.allocator.alloc(DraftFieldExpr, target_fields.len);
         defer self.allocator.free(lowered);
