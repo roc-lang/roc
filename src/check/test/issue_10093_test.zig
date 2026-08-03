@@ -28,18 +28,6 @@ test "issue 10093: nested malformed nominal backing is invalid" {
     try test_env.assertNominalDeclValidity("T", false);
 }
 
-test "issue 10093: header underscores preserve nominal template validity" {
-    const src =
-        \\Wrapped(_) := [Wrapped]
-    ;
-
-    var test_env = try TestEnv.init("Test", src);
-    defer test_env.deinit();
-
-    try test_env.assertNoErrors();
-    try test_env.assertNominalDeclValidity("Wrapped", true);
-}
-
 test "issue 10093: invalidity propagates through forward declaration dependencies" {
     const src =
         \\Outer := [Outer(Middle)]

@@ -23556,26 +23556,27 @@ fn appendExposedTypeDeclarationPublicApiDependencies(
 
         const statement_idx: CIR.Statement.Idx = @enumFromInt(raw_node_idx);
         switch (module.getStatement(statement_idx)) {
-            .s_alias_decl, .s_nominal_decl => {
-                const root = checked_type_publication.rootForSourceVar(module, ModuleEnv.varFrom(statement_idx)) orelse {
-                    checkedArtifactInvariant("exposed type declaration root was not published", .{});
-                };
-                try appendPublicApiTypeDependencies(
-                    allocator,
-                    names,
-                    module_identity,
-                    artifact_key,
-                    checked_types,
-                    root,
-                    active_types,
-                    imports,
-                    available_artifacts,
-                    keys,
-                    type_owner_keys,
-                );
-            },
-            else => {},
+            .s_alias_decl => {},
+            .s_nominal_decl => if (!localNominalDeclarationIsValid(module, statement_idx)) continue,
+            else => continue,
         }
+
+        const root = checked_type_publication.rootForSourceVar(module, ModuleEnv.varFrom(statement_idx)) orelse {
+            checkedArtifactInvariant("exposed type declaration root was not published", .{});
+        };
+        try appendPublicApiTypeDependencies(
+            allocator,
+            names,
+            module_identity,
+            artifact_key,
+            checked_types,
+            root,
+            active_types,
+            imports,
+            available_artifacts,
+            keys,
+            type_owner_keys,
+        );
     }
 }
 

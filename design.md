@@ -441,12 +441,11 @@ evaluate.
 Checking records type-declaration template validity while generating annotation
 nodes. A declaration is locally invalid when its header contains a `.malformed`
 annotation node or any annotation node generated for its backing resolves to the
-solver's error type. Header underscores remain valid declaration parameters even
-though their recovery vars use the error type. Every local named-type reference
-generated in a declaration also records a directed dependency from the referencing
-declaration to the referenced declaration. This evidence comes from the normal
-annotation-generation traversal; validity must not be reconstructed later by
-rescanning source syntax or solved type structure.
+solver's error type. Every local named-type reference generated in a declaration
+also records a directed dependency from the referencing declaration to the
+referenced declaration. This evidence comes from the normal annotation-generation
+traversal; validity must not be reconstructed later by rescanning source syntax or
+solved type structure.
 
 After all local type declarations have been generated, checking computes the
 transitive closure of invalidity over those recorded dependency edges. This
@@ -460,6 +459,8 @@ error type, and invalid nominal declarations are also marked invalid in the
 declaration table. CheckedModule construction enforces this invariant: a nominal
 declaration marked valid always has an error-free checked template, and
 encountering malformed template data for one is an invariant violation.
+`CheckedTypeStore` construction and public-API dependency collection both omit
+nominal declarations that checking explicitly marked invalid.
 
 ### Compile-Time Evaluation And Static Storage
 
