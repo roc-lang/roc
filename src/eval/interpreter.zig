@@ -5430,8 +5430,8 @@ pub const Interpreter = struct {
                     .interp = self,
                     .elem_layout = self.listElemLayout(arg_layout),
                 };
-                // listReplace requires a scratch slot for the old element; we discard it here
-                // because list_set returns only the new list (replace semantics return a pair).
+                // listReplace moves the old element into a scratch slot. list_set does not
+                // return that ownership unit, so release it after the replacement.
                 const old_elem = try self.allocAlignedBytes(info.width, layout_mod.RocAlignment.fromByteUnits(@intCast(info.alignment)));
                 const result = if (updateModeForArg0(ll.unique_args) == .InPlace)
                     builtins.list.listReplaceInPlace(
@@ -5458,6 +5458,9 @@ pub const Interpreter = struct {
                         &builtins.list.copy_fallback,
                         &self.roc_ops,
                     );
+                if (elems_rc) {
+                    listElementDecref(@ptrCast(&elem_rc_ctx), @ptrCast(old_elem.ptr));
+                }
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
             .list_with_capacity => blk: {

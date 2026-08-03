@@ -7244,3 +7244,15 @@ test "SpecConstr rewrites nested match breaks with the selected loop exit ABI" {
     var lowered = try lowerModule(allocator, source, .wrappers);
     defer lowered.deinit(allocator);
 }
+
+test "issue 10354 undefined identifier in expression does not panic monotype lowering" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\undefined
+    ;
+
+    _ = lowerModule(allocator, source, .wrappers) catch |err| switch (err) {
+        error.TypeCheckError, error.ParseError => {},
+        else => return err,
+    };
+}

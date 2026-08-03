@@ -71,6 +71,7 @@ const Decision = union(enum) {
 const WrapperAnalyzer = struct {
     allocator: std.mem.Allocator,
     solved: *const Solved.Program,
+    solved_types: SolvedType.Store.View,
     decisions: []Decision,
     stack: std.ArrayList(Lifted.FnId),
 
@@ -85,6 +86,7 @@ const WrapperAnalyzer = struct {
         var analyzer = WrapperAnalyzer{
             .allocator = allocator,
             .solved = solved,
+            .solved_types = solved.types.view(),
             .decisions = decisions,
             .stack = .empty,
         };
@@ -176,7 +178,7 @@ const WrapperAnalyzer = struct {
 
     fn solvedCaptureCount(self: *const WrapperAnalyzer, fn_id: Lifted.FnId) usize {
         const captures = self.solvedCapturesForFn(fn_id);
-        return self.solved.types.captureSpan(captures).len;
+        return self.solved_types.captureSpan(captures).len;
     }
 
     fn solvedCapturesForFn(self: *const WrapperAnalyzer, fn_id: Lifted.FnId) SolvedType.Span {
@@ -190,7 +192,7 @@ const WrapperAnalyzer = struct {
             .erased => |erased| erased.members,
             else => Common.invariant("callable value did not have a resolved callable slot"),
         };
-        for (self.solved.types.memberSpan(callable)) |member| {
+        for (self.solved_types.memberSpan(callable)) |member| {
             if (member.lambda == fn_symbol) return member.captures;
         }
         return .empty();

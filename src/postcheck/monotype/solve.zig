@@ -2567,8 +2567,16 @@ pub const InstGraph = struct {
                     if (public_row.fields.len != request_row.fields.len) {
                         Common.invariant("request container join received records with different field counts");
                     }
-                    for (public_row.fields, request_row.fields) |public_field, request_field| {
-                        if (!Ident.textEql(self.fieldLabelText(public_field.name), self.fieldLabelText(request_field.name))) {
+                    for (public_row.fields) |public_field| {
+                        const wanted = self.fieldLabelText(public_field.name);
+                        var found = false;
+                        for (request_row.fields) |request_field| {
+                            if (Ident.textEql(wanted, self.fieldLabelText(request_field.name))) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
                             Common.invariant("request container join received records with different fields");
                         }
                     }
@@ -2582,10 +2590,18 @@ pub const InstGraph = struct {
                     if (public_row.tags.len != request_row.tags.len) {
                         Common.invariant("request container join received tag unions with different tag counts");
                     }
-                    for (public_row.tags, request_row.tags) |public_tag, request_tag| {
-                        if (!Ident.textEql(self.tagLabelText(public_tag.name), self.tagLabelText(request_tag.name)) or
-                            public_tag.payloads.len != request_tag.payloads.len)
-                        {
+                    for (public_row.tags) |public_tag| {
+                        const wanted = self.tagLabelText(public_tag.name);
+                        var found = false;
+                        for (request_row.tags) |request_tag| {
+                            if (Ident.textEql(wanted, self.tagLabelText(request_tag.name)) and
+                                public_tag.payloads.len == request_tag.payloads.len)
+                            {
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
                             Common.invariant("request container join received tag unions with different tags");
                         }
                     }

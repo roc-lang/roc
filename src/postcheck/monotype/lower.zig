@@ -6700,13 +6700,10 @@ const Builder = struct {
         var out_index: usize = 0;
         for (fn_value.captures) |capture| {
             if (!capture.id.isCanonical()) continue;
-            out.items[out_index].value = switch (capture.value) {
-                .node => |node| if (static_data_const_locator) |const_locator|
-                    try fn_ctx.restoredStaticDataCandidateNode(store_view, fn_view, node, out.items[out_index].ty, const_locator, checkedBinderType(fn_view, capture.id.binder()), .allow)
-                else
-                    try fn_ctx.restoreConstNodeAtType(store_view, fn_view, node, out.items[out_index].ty),
-                .recursive_const => try fn_ctx.restoreRecursiveConstCaptureAtType(capture.id, out.items[out_index].ty),
-            };
+            out.items[out_index].value = if (static_data_const_locator) |const_locator|
+                try fn_ctx.restoredStaticDataCandidateNode(store_view, fn_view, capture.value, out.items[out_index].ty, const_locator, checkedBinderType(fn_view, capture.id.binder()), .allow)
+            else
+                try fn_ctx.restoreConstNodeAtType(store_view, fn_view, capture.value, out.items[out_index].ty);
             out_index += 1;
         }
 
@@ -7311,13 +7308,10 @@ const Builder = struct {
             initialized += 1;
         }
         for (fn_value.captures, 0..) |capture, index| {
-            captures[index].value = switch (capture.value) {
-                .node => |node| if (static_data_const_locator) |const_locator|
-                    try fn_ctx.restoredStaticDataCandidateNode(store_view, fn_view, node, captures[index].ty, const_locator, checkedBinderType(fn_view, constCaptureBinder(capture.id)), .allow)
-                else
-                    try fn_ctx.restoreConstNodeAtType(store_view, fn_view, node, captures[index].ty),
-                .recursive_const => try fn_ctx.restoreRecursiveConstCaptureAtType(capture.id, captures[index].ty),
-            };
+            captures[index].value = if (static_data_const_locator) |const_locator|
+                try fn_ctx.restoredStaticDataCandidateNode(store_view, fn_view, capture.value, captures[index].ty, const_locator, checkedBinderType(fn_view, constCaptureBinder(capture.id)), .allow)
+            else
+                try fn_ctx.restoreConstNodeAtType(store_view, fn_view, capture.value, captures[index].ty);
         }
         const template = try self.constFnTemplateToMono(fn_value, ty);
         const nested = switch (template.fn_def) {
@@ -9652,6 +9646,58 @@ const ActiveCallableEvalBinding = struct {
     used: bool = false,
 };
 
+const ActiveConstNodeRepresentation = union(enum) {
+    sealed: Type.TypeId,
+    graph: NodeId,
+};
+
+const ActiveConstNodeAddress = struct {
+    module: [32]u8,
+    node: checked.ConstNodeId,
+    sealed_representation: bool,
+};
+
+const MaterializedConstNodeAddress = struct {
+    active: ActiveConstNodeAddress,
+    owner: DraftOwner,
+    static_data_const_locator: ?checked.ConstLocator,
+};
+
+fn activeConstNodeAddress(
+    store_view: ModuleView,
+    node: checked.ConstNodeId,
+    representation: ActiveConstNodeRepresentation,
+) ActiveConstNodeAddress {
+    return .{
+        .module = store_view.key.bytes,
+        .node = node,
+        .sealed_representation = switch (representation) {
+            .sealed => true,
+            .graph => false,
+        },
+    };
+}
+
+/// A ConstStore node currently being materialized. ConstStore graphs may
+/// contain exact back-edges through function captures, so descendants reuse
+/// this reserved local instead of recursively expanding the node again.
+const ActiveConstNodeBinding = struct {
+    module: checked.ModuleId,
+    node: checked.ConstNodeId,
+    representation: ActiveConstNodeRepresentation,
+    previous_same_address: ?u32,
+    owner: DraftOwner,
+    cell: DraftTypeCell,
+    local: ?DraftLocalId = null,
+    used: bool = false,
+};
+
+const MaterializedConstNode = struct {
+    representation: ActiveConstNodeRepresentation,
+    expr: DraftExprId,
+    previous_same_address: ?u32,
+};
+
 /// One deferred structural derivation over an operand whose graph node may
 /// still carry live row defaults; the eq and hash flavors share this record
 /// and the prepare/emit pipeline. For equality, `lhs`/`rhs` are the two
@@ -10094,6 +10140,10 @@ const BodyDraftStore = struct {
     /// the first closed direct call in this draft.
     closed_direct_specializations: std.AutoHashMap(ClosedDirectCallIdentity, ClosedDirectDraftSpecialization),
     active_callable_eval_bindings: std.ArrayList(ActiveCallableEvalBinding),
+    active_const_node_bindings: std.ArrayList(ActiveConstNodeBinding),
+    active_const_node_binding_indices: std.AutoHashMap(ActiveConstNodeAddress, u32),
+    materialized_const_nodes: std.ArrayList(MaterializedConstNode),
+    materialized_const_node_indices: std.AutoHashMap(MaterializedConstNodeAddress, u32),
     active_const_bindings: std.ArrayList(ActiveConstBinding),
     deferred_const_uses: std.ArrayList(DraftDeferredConstUse),
     deferred_structural_eqs: std.ArrayList(DraftDeferredStructuralEq),
@@ -10165,6 +10215,10 @@ const BodyDraftStore = struct {
             .template_spec_lookup = std.AutoHashMap(DraftTemplateLookupAddress, std.ArrayList(u32)).init(allocator),
             .closed_direct_specializations = std.AutoHashMap(ClosedDirectCallIdentity, ClosedDirectDraftSpecialization).init(allocator),
             .active_callable_eval_bindings = .empty,
+            .active_const_node_bindings = .empty,
+            .active_const_node_binding_indices = std.AutoHashMap(ActiveConstNodeAddress, u32).init(allocator),
+            .materialized_const_nodes = .empty,
+            .materialized_const_node_indices = std.AutoHashMap(MaterializedConstNodeAddress, u32).init(allocator),
             .active_const_bindings = .empty,
             .deferred_const_uses = .empty,
             .deferred_structural_eqs = .empty,
@@ -10295,6 +10349,10 @@ const BodyDraftStore = struct {
         self.deferred_structural_eqs.deinit(self.allocator);
         self.deferred_const_uses.deinit(self.allocator);
         self.active_callable_eval_bindings.deinit(self.allocator);
+        self.active_const_node_bindings.deinit(self.allocator);
+        self.active_const_node_binding_indices.deinit();
+        self.materialized_const_nodes.deinit(self.allocator);
+        self.materialized_const_node_indices.deinit();
         self.active_const_bindings.deinit(self.allocator);
         self.string_bytes.deinit(self.allocator);
         self.string_literals.deinit(self.allocator);
@@ -17983,6 +18041,184 @@ const BodyContext = struct {
         }
         if (!active.used) return lowered;
         return try self.wrapRecursiveConstLocalAtTypeCell(local, request_cell, lowered);
+    }
+
+    fn activeConstNodeBindingExpr(
+        self: *BodyContext,
+        store_view: ModuleView,
+        node: checked.ConstNodeId,
+        representation: ActiveConstNodeRepresentation,
+        request_cell: DraftTypeCell,
+    ) Allocator.Error!?DraftExprId {
+        const address = activeConstNodeAddress(store_view, node, representation);
+        var cursor = self.draft.active_const_node_binding_indices.get(address);
+        while (cursor) |index| {
+            if (index >= self.draft.active_const_node_bindings.items.len) {
+                Common.invariant("active ConstStore node index was outside its binding stack");
+            }
+            const active = self.draft.active_const_node_bindings.items[index];
+            if (!try self.constNodeRepresentationsEql(active.representation, representation)) {
+                cursor = active.previous_same_address;
+                continue;
+            }
+
+            try relateRequestComponent(
+                self.graph,
+                try active.cell.toGraphNode(self.graph),
+                try request_cell.toGraphNode(self.graph),
+            );
+            const local = active.local orelse blk: {
+                const owner_scope = try self.draft.enterOwner(active.owner);
+                defer owner_scope.leave();
+                const reserved = try self.addLocalWithBinderCell(
+                    self.builder.symbols.fresh(),
+                    active.cell,
+                    null,
+                );
+                self.draft.active_const_node_bindings.items[index].local = reserved;
+                break :blk reserved;
+            };
+            self.draft.active_const_node_bindings.items[index].used = true;
+            return try self.addExprWithTypeCell(request_cell, .{ .local = local });
+        }
+
+        return null;
+    }
+
+    fn materializedConstNodeExpr(
+        self: *BodyContext,
+        store_view: ModuleView,
+        node: checked.ConstNodeId,
+        representation: ActiveConstNodeRepresentation,
+        request_cell: DraftTypeCell,
+        static_data_const_locator: ?checked.ConstLocator,
+    ) Allocator.Error!?DraftExprId {
+        const address = MaterializedConstNodeAddress{
+            .active = activeConstNodeAddress(store_view, node, representation),
+            .owner = self.draft.current_owner,
+            .static_data_const_locator = static_data_const_locator,
+        };
+        var cursor = self.draft.materialized_const_node_indices.get(address);
+        while (cursor) |index| {
+            if (index >= self.draft.materialized_const_nodes.items.len) {
+                Common.invariant("materialized ConstStore node index was outside its entry list");
+            }
+            const existing = self.draft.materialized_const_nodes.items[index];
+            if (!try self.constNodeRepresentationsEql(existing.representation, representation)) {
+                cursor = existing.previous_same_address;
+                continue;
+            }
+            try relateRequestComponent(
+                self.graph,
+                try self.exprTypeCell(existing.expr).toGraphNode(self.graph),
+                try request_cell.toGraphNode(self.graph),
+            );
+            return existing.expr;
+        }
+        return null;
+    }
+
+    fn constNodeRepresentationsEql(
+        self: *BodyContext,
+        left: ActiveConstNodeRepresentation,
+        right: ActiveConstNodeRepresentation,
+    ) Allocator.Error!bool {
+        return switch (left) {
+            .sealed => |left_ty| switch (right) {
+                .sealed => |right_ty| left_ty == right_ty or
+                    try self.builder.program.types.typeEql(
+                        &self.builder.program.names,
+                        left_ty,
+                        right_ty,
+                    ),
+                .graph => false,
+            },
+            .graph => switch (right) {
+                .sealed => false,
+                .graph => true,
+            },
+        };
+    }
+
+    fn reserveConstNodeBinding(
+        self: *BodyContext,
+        store_view: ModuleView,
+        node: checked.ConstNodeId,
+        representation: ActiveConstNodeRepresentation,
+        cell: DraftTypeCell,
+    ) Allocator.Error!void {
+        const index = self.draft.active_const_node_bindings.items.len;
+        const address = activeConstNodeAddress(store_view, node, representation);
+        const previous_same_address = self.draft.active_const_node_binding_indices.get(address);
+        try self.draft.active_const_node_bindings.append(self.allocator, .{
+            .module = store_view.key,
+            .node = node,
+            .representation = representation,
+            .previous_same_address = previous_same_address,
+            .owner = self.draft.current_owner,
+            .cell = cell,
+        });
+        try self.draft.active_const_node_binding_indices.put(address, @intCast(index));
+    }
+
+    fn finishConstNodeBinding(
+        self: *BodyContext,
+        store_view: ModuleView,
+        node: checked.ConstNodeId,
+        representation: ActiveConstNodeRepresentation,
+        cell: DraftTypeCell,
+        lowered: DraftExprId,
+    ) Allocator.Error!DraftExprId {
+        const index = self.draft.active_const_node_bindings.items.len - 1;
+        const active = self.draft.active_const_node_bindings.pop().?;
+        if (!moduleBytesEqual(active.module.bytes, store_view.key.bytes) or
+            active.node != node or
+            !std.meta.eql(active.representation, representation))
+        {
+            Common.invariant("ConstStore node reservation changed before materialization completed");
+        }
+        const address = activeConstNodeAddress(store_view, node, representation);
+        const current = self.draft.active_const_node_binding_indices.getPtr(address) orelse
+            Common.invariant("completed ConstStore node had no active reservation index");
+        if (current.* != index) {
+            Common.invariant("completed ConstStore node was not its address bucket head");
+        }
+        if (active.previous_same_address) |previous| {
+            current.* = previous;
+        } else if (!self.draft.active_const_node_binding_indices.remove(address)) {
+            Common.invariant("completed ConstStore node address could not be removed");
+        }
+        if (!active.used) return lowered;
+
+        const owner_scope = try self.draft.enterOwner(active.owner);
+        defer owner_scope.leave();
+        return try self.wrapRecursiveConstLocalAtTypeCell(
+            active.local orelse Common.invariant("used ConstStore node reservation had no local"),
+            cell,
+            lowered,
+        );
+    }
+
+    fn cacheMaterializedConstNode(
+        self: *BodyContext,
+        store_view: ModuleView,
+        node: checked.ConstNodeId,
+        representation: ActiveConstNodeRepresentation,
+        expr: DraftExprId,
+        static_data_const_locator: ?checked.ConstLocator,
+    ) Allocator.Error!void {
+        const address = MaterializedConstNodeAddress{
+            .active = activeConstNodeAddress(store_view, node, representation),
+            .owner = self.draft.current_owner,
+            .static_data_const_locator = static_data_const_locator,
+        };
+        const index = self.draft.materialized_const_nodes.items.len;
+        try self.draft.materialized_const_nodes.append(self.allocator, .{
+            .representation = representation,
+            .expr = expr,
+            .previous_same_address = self.draft.materialized_const_node_indices.get(address),
+        });
+        try self.draft.materialized_const_node_indices.put(address, @intCast(index));
     }
 
     fn lowerInspectOnlyCall(
@@ -25953,49 +26189,6 @@ const BodyContext = struct {
         }
     }
 
-    fn activeConstLocalForCaptureId(self: *BodyContext, capture_id: checked.CaptureId) Allocator.Error!?DraftLocalId {
-        var active_id = self.active_const_binding;
-        while (active_id) |id| {
-            const index = @intFromEnum(id);
-            const active = self.draft.active_const_bindings.items[index];
-            const active_capture_id = self.draft.locals.items[@intFromEnum(active.local)].capture_id;
-            if (active_capture_id != null and std.meta.eql(active_capture_id.?, capture_id)) {
-                self.draft.active_const_bindings.items[index].used = true;
-                try self.materializeActiveConstBinding(id);
-                return active.local;
-            }
-            active_id = active.parent;
-        }
-        return null;
-    }
-
-    fn restoreRecursiveConstCaptureAtType(
-        self: *BodyContext,
-        capture_id: checked.CaptureId,
-        ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        const local = (try self.activeConstLocalForCaptureId(capture_id)) orelse
-            Common.invariant("stored recursive const capture had no active const binding");
-        const local_ty = try self.localType(local);
-        if (!self.sameType(local_ty, ty)) {
-            Common.invariant("stored recursive const capture type differed from its active const binding");
-        }
-        return try self.addExpr(.{ .ty = local_ty, .data = .{ .local = local } });
-    }
-
-    fn restoreRecursiveConstCaptureAtNode(
-        self: *BodyContext,
-        capture_id: checked.CaptureId,
-        request_node: NodeId,
-    ) Allocator.Error!DraftExprId {
-        const local = (try self.activeConstLocalForCaptureId(capture_id)) orelse
-            Common.invariant("stored recursive const capture had no active const binding");
-        const cell = self.localTypeCell(local);
-        const local_node = try cell.toGraphNode(self.graph);
-        try relateRequestComponent(self.graph, local_node, request_node);
-        return try self.addExprWithTypeCell(cell, .{ .local = local });
-    }
-
     fn topLevelConstBinderForUse(store_view: ModuleView, const_use: checked.ConstLocator) ?checked.PatternBinderId {
         const owner = switch (const_use.owner) {
             .top_level_binding => |owner| owner,
@@ -26982,22 +27175,40 @@ const BodyContext = struct {
         static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!DraftExprId {
         const value = store_view.const_store.get(node);
+        const representation: ActiveConstNodeRepresentation = .{ .sealed = ty };
+        const cell = DraftTypeCell.fromSealed(ty);
+        if (try self.materializedConstNodeExpr(store_view, node, representation, cell, static_data_const_locator)) |existing| return existing;
+
         switch (value) {
-            .fn_value => |fn_id| {
-                return try self.restoreConstFn(store_view, fn_id, ty, static_data_const_locator);
-            },
+            .fn_value => {},
             .tag, .record, .tuple => if (self.builder.nominalConstructionLayer(ty)) |layer| {
                 const backing_expr = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, node, layer.backing, static_data_const_locator);
-                return try self.addExpr(.{ .ty = layer.named, .data = .{ .nominal = backing_expr } });
+                const materialized = try self.addExpr(.{ .ty = layer.named, .data = .{ .nominal = backing_expr } });
+                try self.cacheMaterializedConstNode(store_view, node, representation, materialized, static_data_const_locator);
+                return materialized;
             },
             .nominal => |nominal| if (self.builder.nominalConstructionLayer(ty)) |layer| {
                 const backing_expr = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, nominal.backing, layer.backing, static_data_const_locator);
-                return try self.addExpr(.{ .ty = layer.named, .data = .{ .nominal = backing_expr } });
+                const materialized = try self.addExpr(.{ .ty = layer.named, .data = .{ .nominal = backing_expr } });
+                try self.cacheMaterializedConstNode(store_view, node, representation, materialized, static_data_const_locator);
+                return materialized;
             },
             else => {},
         }
-        const data = try self.restoreConstData(store_view, type_view, value, ty, static_data_const_locator);
-        return try self.addExpr(.{ .ty = ty, .data = data });
+
+        if (try self.activeConstNodeBindingExpr(store_view, node, representation, cell)) |active| return active;
+
+        try self.reserveConstNodeBinding(store_view, node, representation, cell);
+        const lowered = switch (value) {
+            .fn_value => |fn_id| try self.restoreConstFn(store_view, fn_id, ty, static_data_const_locator),
+            else => try self.addExpr(.{
+                .ty = ty,
+                .data = try self.restoreConstData(store_view, type_view, value, ty, static_data_const_locator),
+            }),
+        };
+        const materialized = try self.finishConstNodeBinding(store_view, node, representation, cell, lowered);
+        try self.cacheMaterializedConstNode(store_view, node, representation, materialized, static_data_const_locator);
+        return materialized;
     }
 
     fn restoredStaticDataCandidateNode(
@@ -27094,7 +27305,13 @@ const BodyContext = struct {
         static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!DraftExprId {
         const value = store_view.const_store.get(node);
-        return switch (value) {
+        const representation: ActiveConstNodeRepresentation = .{ .graph = request_node };
+        const cell = DraftTypeCell.fromGraphNode(request_node);
+        if (try self.materializedConstNodeExpr(store_view, node, representation, cell, static_data_const_locator)) |existing| return existing;
+        if (try self.activeConstNodeBindingExpr(store_view, node, representation, cell)) |active| return active;
+
+        try self.reserveConstNodeBinding(store_view, node, representation, cell);
+        const lowered = switch (value) {
             .fn_value => |fn_id| try self.restoreConstFnAtNodeWithStaticRoot(
                 store_view,
                 fn_id,
@@ -27138,6 +27355,9 @@ const BodyContext = struct {
                 ),
             ),
         };
+        const materialized = try self.finishConstNodeBinding(store_view, node, representation, cell, lowered);
+        try self.cacheMaterializedConstNode(store_view, node, representation, materialized, static_data_const_locator);
+        return materialized;
     }
 
     fn restoreConstDataAtNode(
@@ -27867,26 +28087,23 @@ const BodyContext = struct {
             initialized += 1;
         }
         for (fn_value.captures, 0..) |capture, index| {
-            captures[index].value = switch (capture.value) {
-                .node => |node| if (static_data_const_locator) |const_locator|
-                    try fn_ctx.restoredStaticDataCandidateNodeAtNode(
-                        store_view,
-                        fn_view,
-                        node,
-                        captures[index].node,
-                        const_locator,
-                        checkedBinderType(fn_view, constCaptureBinder(capture.id)),
-                        .allow,
-                    )
-                else
-                    try fn_ctx.restoreConstNodeAtNode(
-                        store_view,
-                        fn_view,
-                        node,
-                        captures[index].node,
-                    ),
-                .recursive_const => try fn_ctx.restoreRecursiveConstCaptureAtNode(capture.id, captures[index].node),
-            };
+            captures[index].value = if (static_data_const_locator) |const_locator|
+                try fn_ctx.restoredStaticDataCandidateNodeAtNode(
+                    store_view,
+                    fn_view,
+                    capture.value,
+                    captures[index].node,
+                    const_locator,
+                    checkedBinderType(fn_view, constCaptureBinder(capture.id)),
+                    .allow,
+                )
+            else
+                try fn_ctx.restoreConstNodeAtNode(
+                    store_view,
+                    fn_view,
+                    capture.value,
+                    captures[index].node,
+                );
         }
 
         const capture_nested = switch (fn_def) {
@@ -28096,13 +28313,10 @@ const BodyContext = struct {
             initialized += 1;
         }
         for (fn_value.captures, 0..) |capture, index| {
-            captures[index].value = switch (capture.value) {
-                .node => |node| if (static_data_const_locator) |const_locator|
-                    try fn_ctx.restoredStaticDataCandidateNode(store_view, fn_view, node, captures[index].ty, const_locator, checkedBinderType(fn_view, constCaptureBinder(capture.id)), .allow)
-                else
-                    try fn_ctx.restoreConstNodeAtType(store_view, fn_view, node, captures[index].ty),
-                .recursive_const => try fn_ctx.restoreRecursiveConstCaptureAtType(capture.id, captures[index].ty),
-            };
+            captures[index].value = if (static_data_const_locator) |const_locator|
+                try fn_ctx.restoredStaticDataCandidateNode(store_view, fn_view, capture.value, captures[index].ty, const_locator, checkedBinderType(fn_view, constCaptureBinder(capture.id)), .allow)
+            else
+                try fn_ctx.restoreConstNodeAtType(store_view, fn_view, capture.value, captures[index].ty);
         }
 
         const capture_nested = switch (template.fn_def) {
@@ -46169,10 +46383,7 @@ fn constCaptureBinder(id: check.ConstStore.CaptureId) checked.PatternBinderId {
 fn constGeneratedCaptureNode(fn_value: check.ConstStore.ConstFn, capture_id: u32) ?checked.ConstNodeId {
     const needle = checked.CaptureId.generatedCheck(capture_id);
     for (fn_value.captures) |capture| {
-        if (capture.id == needle) return switch (capture.value) {
-            .node => |node| node,
-            .recursive_const => Common.invariant("generated ConstStore capture was marked as a recursive source constant"),
-        };
+        if (capture.id == needle) return capture.value;
     }
     return null;
 }

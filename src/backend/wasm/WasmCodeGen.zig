@@ -18714,10 +18714,22 @@ fn generateLLListSet(self: *Self, args: anytype, ret_layout: layout.Idx, unique_
     const elem_layout_idx = list_abi.elem_layout_idx orelse unreachable;
     const index_local = try self.materializeListIndex(GuardedList.at(args, 1));
     const elem_ptr = try self.materializeElementPtr(GuardedList.at(args, 2), elem_layout_idx, elem_size, elem_align);
-    // list_set discards the displaced element; the builtin still needs a slot.
+    // listReplace moves the displaced element here; list_set releases that
+    // unreturned ownership unit after the call.
     const out_element_offset = try self.allocStackMemory(elem_size, elem_align);
 
     try self.emitListReplaceCall(list_abi, list_ptr, index_local, elem_ptr, out_element_offset, result_offset, unique_args);
+    if (list_abi.elements_refcounted) {
+        const old_elem_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitFpOffset(out_element_offset);
+        try self.emitLocalSet(old_elem_ptr);
+        try self.emitExplicitRcHelperCallForValuePtr(
+            .{ .op = .decref, .layout_idx = elem_layout_idx },
+            .atomic,
+            old_elem_ptr,
+            1,
+        );
+    }
     try self.emitFpOffset(result_offset);
 }
 
