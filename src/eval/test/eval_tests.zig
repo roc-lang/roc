@@ -700,6 +700,60 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "{ b: { c: <missing> } }" },
     },
+    // The next three tests pin CURRENT width-absorption semantics, which are
+    // under active language-design debate: a closed annotated parameter row
+    // absorbs a caller's extra optional fields by widening its instantiation.
+    // If a polarity restriction lands (absorption only into a literal's
+    // still-unbound row), these calls become type errors and these tests must
+    // be renegotiated — they document behavior, not a language guarantee.
+    .{
+        .name = "optional record field: closed param absorbs a wider value's missing optional slot",
+        .source_kind = .module,
+        .source =
+        \\f : { b : Str } -> Str
+        \\f = |r| r.b
+        \\
+        \\v : { a ?: U64, b : Str }
+        \\v = { b: "hello" }
+        \\
+        \\main = f(v)
+        ,
+        .expected = .{ .inspect_str = "\"hello\"" },
+    },
+    .{
+        // The extra optional field sorts BEFORE the accessed field: if the
+        // call dropped `a ?:` from the type while the value kept the wide
+        // layout, reading `b` at the narrow offset would read the `a` slot.
+        .name = "optional record field: closed param absorbs a wider value's present optional slot",
+        .source_kind = .module,
+        .source =
+        \\f : { b : Str } -> Str
+        \\f = |r| r.b
+        \\
+        \\w : { a ?: U64, b : Str }
+        \\w = { a: 7, b: "world" }
+        \\
+        \\main = f(w)
+        ,
+        .expected = .{ .inspect_str = "\"world\"" },
+    },
+    .{
+        .name = "optional record field: one function takes narrow and wide rows via separate instantiations",
+        .source_kind = .module,
+        .source =
+        \\f : { b : Str } -> Str
+        \\f = |r| r.b
+        \\
+        \\narrow : { b : Str }
+        \\narrow = { b: "n" }
+        \\
+        \\wide : { a ?: U64, b : Str }
+        \\wide = { a: 1, b: "w" }
+        \\
+        \\main = Str.concat(f(narrow), f(wide))
+        ,
+        .expected = .{ .inspect_str = "\"nw\"" },
+    },
     .{
         .name = "defaulted record field: heap Str default materializes from the empty literal",
         .source_kind = .module,
