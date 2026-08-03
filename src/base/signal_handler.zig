@@ -413,11 +413,13 @@ fn getFaultAddress(info: *const posix.siginfo_t) usize {
         builtin.os.tag == .watchos or
         builtin.os.tag == .visionos or
         builtin.os.tag == .freebsd or
-        builtin.os.tag == .dragonfly or
-        builtin.os.tag == .netbsd or
-        builtin.os.tag == .openbsd)
+        builtin.os.tag == .dragonfly)
     {
         return @intFromPtr(info.addr);
+    } else if (comptime builtin.os.tag == .openbsd) {
+        return @intFromPtr(info.data.fault.addr);
+    } else if (comptime builtin.os.tag == .netbsd) {
+        return @intFromPtr(info.info.reason.fault.addr);
     } else {
         return 0;
     }

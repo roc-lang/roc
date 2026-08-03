@@ -71,7 +71,7 @@ page_size: usize,
 const Handle = platform.Handle;
 
 /// Get the system's page size at runtime
-pub fn getSystemPageSize() error{ SysctlFailed, UnsupportedPlatform }!usize {
+pub fn getSystemPageSize() error{ PageSizeQueryFailed, UnsupportedPlatform }!usize {
     return platform.getSystemPageSize();
 }
 

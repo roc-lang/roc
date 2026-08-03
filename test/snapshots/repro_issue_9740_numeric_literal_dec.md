@@ -211,18 +211,18 @@ main! = |_| {
 														(args
 															(e-num (value "0"))))
 													(e-block
-														(e-call (constraint-fn-var 387)
+														(e-call (constraint-fn-var 343)
 															(e-lookup-local
 																(p-assign (ident "slice")))
 															(e-lookup-local
 																(p-assign (ident "rest")))
-															(e-dispatch-call (method "minus") (constraint-fn-var 340)
+															(e-dispatch-call (method "minus") (constraint-fn-var 326)
 																(receiver
 																	(e-lookup-local
 																		(p-assign (ident "start"))))
 																(args
 																	(e-num (value "1"))))
-															(e-dispatch-call (method "minus") (constraint-fn-var 367)
+															(e-dispatch-call (method "minus") (constraint-fn-var 339)
 																(receiver
 																	(e-lookup-local
 																		(p-assign (ident "end"))))
@@ -242,16 +242,16 @@ main! = |_| {
 																	(p-assign (ident "x"))))))))
 											(if-else
 												(e-block
-													(e-call (constraint-fn-var 480)
+													(e-call (constraint-fn-var 392)
 														(e-lookup-external
 															(builtin))
-														(e-call (constraint-fn-var 465)
+														(e-call (constraint-fn-var 391)
 															(e-lookup-local
 																(p-assign (ident "slice")))
 															(e-lookup-local
 																(p-assign (ident "rest")))
 															(e-num (value "0"))
-															(e-dispatch-call (method "minus") (constraint-fn-var 445)
+															(e-dispatch-call (method "minus") (constraint-fn-var 387)
 																(receiver
 																	(e-lookup-local
 																		(p-assign (ident "end"))))

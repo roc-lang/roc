@@ -77,7 +77,7 @@ my @categories = (
             # representation-mirror unit test fixture builds a real graph to
             # exercise the shadow; it deletes with the shadow at the flip.
             { label => 'InstGraph.create(', re => qr/InstGraph\.create\(/,
-              counts => { $SOLVE => 33, $LOWER => 28, $RMIRR => 1 } },
+              counts => { $SOLVE => 38, $LOWER => 17, $RMIRR => 1 } },
             { label => 'InstVariable.row(', re => qr/InstVariable\.row\(/,
               counts => { $SOLVE => 16, $LOWER => 3 } },
         ],
@@ -111,7 +111,7 @@ my @categories = (
             # `unifyRowWithEmpty`), reached only while executing a relation a
             # $LOWER site already named. They delete with the unifier.
             { label => '.unify(', re => qr/\.unify\(/,
-              counts => { $SOLVE => 19, $LOWER => 41, $RMIRR => 2 } },
+              counts => { $SOLVE => 21, $LOWER => 39, $RMIRR => 2 } },
             { label => 'unifyRoots', re => qr/\bunifyRoots\b/,
               counts => { $SOLVE => 2 } },
             { label => 'unifyConcrete', re => qr/\bunifyConcrete\b/,
@@ -151,7 +151,7 @@ my @categories = (
             { label => 'measureUnifySite', re => qr/\bmeasureUnifySite\b/,
               counts => { $LOWER => 43, $SREH => 1 } },
             { label => 'noteUnifySite', re => qr/\bnoteUnifySite\b/,
-              counts => { $LOWER => 14 } },
+              counts => { $LOWER => 13 } },
             { label => 'noteUnifyConstruction', re => qr/\bnoteUnifyConstruction\b/,
               counts => { $LOWER => 4, $SREH => 1 } },
         ],
@@ -167,7 +167,7 @@ my @categories = (
         exempt  => [],
         patterns => [
             { label => 'importMono', re => qr/\bimportMono\b/,
-              counts => { $SOLVE => 15, $LOWER => 20 } },
+              counts => { $SOLVE => 15, $LOWER => 21 } },
         ],
     },
     {
@@ -235,15 +235,15 @@ my @categories = (
             { label => 'unifyPublicGeneratedIterator', re => qr/\bunifyPublicGeneratedIterator\b/,
               counts => { $LS => 2 } },
             { label => 'transparentAliasBacking', re => qr/\btransparentAliasBacking\b/,
-              counts => { $LS => 4 } },
+              counts => { $LS => 4, $LOWER => 5 } },
             { label => 'mergeLambdaSets', re => qr/\bmergeLambdaSets\b/,
               counts => { $LS => 8 } },
             { label => 'unifyCaptures', re => qr/\bunifyCaptures\b/,
               counts => { $LS => 5 } },
             { label => 'markErasedCallablesReachedByType', re => qr/\bmarkErasedCallablesReachedByType\b/,
-              counts => { $LS => 8 } },
+              counts => { $LS => 10 } },
             { label => 'markErasedCallablesReachedByTypeInner', re => qr/\bmarkErasedCallablesReachedByTypeInner\b/,
-              counts => { $LS => 13 } },
+              counts => { $LS => 12 } },
             { label => 'closeCallableSlot', re => qr/\bcloseCallableSlot\b/,
               counts => { $LS => 3 } },
             { label => 'structuralBackingForNamed', re => qr/\bstructuralBackingForNamed\b/,
@@ -251,7 +251,7 @@ my @categories = (
             { label => 'active_unifications', re => qr/\bactive_unifications\b/,
               counts => { $LS => 7 } },
             { label => 'forall', re => qr/\bforall\b/,
-              counts => { $LS => 10, $LSTY => 1, $SLL => 2, $LMLOW => 1 } },
+              counts => { $LS => 11, $LSTY => 1, $SLL => 2, $LMLOW => 1 } },
         ],
     },
     {

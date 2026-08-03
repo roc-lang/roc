@@ -103,6 +103,7 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
     const lower_expr_type = sourceSliceBetween(lower_source, "fn lowerExprType", "fn lowerExpr(self:");
     const lower_expr_at_type = sourceSliceBetween(lower_source, "fn lowerExprAtType", "fn sameType");
     const lower_lookup_at_type = sourceSliceBetween(lower_source, "fn lowerLookupExprAtType", "fn lowerProcedureUseValue");
+    const lookup_type_node = sourceSliceBetween(lower_source, "fn lookupExprTypeNode", "fn lookupExprMonoType");
 
     try expectContains(lower_call, "if (try self.indirectCalleeMonoType(call.func, call.args, expected_ret_ty)) |fn_ty| {");
     try expectContains(lower_call, "var fn_node = try call_ctx.instantiateCallNodeFromCallerAtNode(");
@@ -111,9 +112,11 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
 
     try expectContains(lower_expr_type, ".lookup_required => |resolved| try self.lookupExprTypeNode(expr.ty, resolved)");
     try expectContains(lower_expr_at_type, ".lookup_required => |resolved| return try self.lowerLookupExprAtType(expr.ty, resolved, ty)");
+    try expectContains(lookup_type_node, "return try self.lowerTypeNode(checked_ty);");
+    try std.testing.expect(std.mem.find(u8, lookup_type_node, "lookupExprMonoType") == null);
     try expectContains(lower_lookup_at_type, ".platform_required_const => |required| return try self.restoreConstUseAtType(");
     try expectContains(lower_lookup_at_type, "required.const_use,\n                ty,\n                try self.evidenceForUseSite(record.expr),");
-    try expectContains(lower_lookup_at_type, ".platform_required_proc => |proc| try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr))");
+    try expectContains(lower_lookup_at_type, ".platform_required_proc => |proc| try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), proc.root_evidence)");
     try expectContains(lower_source, "fn lowerCallableEvalBindingValueAtNode(");
     try expectContains(lower_source, "try self.restoreConstFnAtNode(view, fn_id, request_fn_node)");
     try expectContains(lower_source, "try body_ctx.graphFunctionNode(&.{}, request_fn_node)");
@@ -495,10 +498,29 @@ test "Monotype gates divergent relations and crash dispatches before type instan
         "fn lowerDispatchExprAtType(",
         "const expected_ret_ty:",
     );
+    try expectContains(crash_dispatch, "expected_ret_cell: DraftTypeCell");
     try expectContains(crash_dispatch, ".crash => |reason|");
-    try expectContains(crash_dispatch, "expected_ret_cell orelse DraftTypeCell{ .sealed = try self.unitType() }");
-    try expectContains(crash_dispatch, "addExprWithTypeCell(crash_cell");
+    try expectContains(crash_dispatch, "addExprWithTypeCell(expected_ret_cell");
+    try expectNotContains(crash_dispatch, "unitType()");
     try expectNotContains(crash_dispatch, "plan.callable_ty");
+
+    const contextual_gate = sourceSliceBetween(
+        lower_source,
+        "fn lowerExprAtTypeCellWithDemand(",
+        "fn lowerExprAtTypeCellInner(",
+    );
+    try expectContains(contextual_gate, "self.checkedExprDivergesInLoweredRuntime(checked_expr)");
+    try expectContains(contextual_gate, "fn lowerExprAtTypeCellWithKnownDivergence(");
+    try expectContains(contextual_gate, "if (expr_diverges)");
+    try expectContains(contextual_gate, "lowerDivergentExprAtTypeCell(checked_expr, cell)");
+
+    const result_lookup = sourceSliceBetween(
+        lower_source,
+        "fn dispatchResultTypeNodeInPhase(",
+        "fn callableDispatchResultTypeNodeInPhase(",
+    );
+    try expectContains(result_lookup, "rejected dispatch reached result type lookup without a contextual result cell");
+    try expectNotContains(result_lookup, "unitType()");
 
     const relation_gate = sourceSliceBetween(
         lower_source,
@@ -669,7 +691,7 @@ test "Monotype match lowering relates patterns before specialization and project
     const lower_source = @embedFile("monotype/lower.zig");
     const match_source = sourceSliceBetween(
         lower_source,
-        "fn lowerMatch(self:",
+        "fn lowerMatch(",
         "fn savePatternBinders(",
     );
     try expectContains(match_source, "const scrutinee_cell = DraftTypeCell.fromGraphNode(scrutinee_node)");
@@ -682,11 +704,19 @@ test "Monotype match lowering relates patterns before specialization and project
     try expectNotContains(match_source, "lowerPatternAtType(entry.pattern.pattern");
 
     const relate = std.mem.find(u8, match_source, "try relateRequestComponent(").?;
+    const prepare_rebind = std.mem.find(u8, match_source, "try entry.ctx.rebindPreRegisteredPatternBindersAtNode").?;
+    const prepare_result = std.mem.find(u8, match_source, "try entry.ctx.prepareControlFlowResultSelection").?;
     const guards = std.mem.find(u8, match_source, "entry.ctx.runtime_demand_guard_frames =").?;
-    const rebind_pattern = std.mem.find(u8, match_source, "try entry.ctx.rebindPreRegisteredPatternBindersAtNode").?;
+    const rebind_pattern = guards + std.mem.find(
+        u8,
+        match_source[guards..],
+        "try entry.ctx.rebindPreRegisteredPatternBindersAtNode",
+    ).?;
     const lower_pattern = std.mem.find(u8, match_source, "try entry.ctx.lowerPatternAtNode").?;
     const lower_body = std.mem.find(u8, match_source, "try entry.ctx.lowerMatchBranchBody").?;
-    try std.testing.expect(relate < guards);
+    try std.testing.expect(relate < prepare_rebind);
+    try std.testing.expect(prepare_rebind < prepare_result);
+    try std.testing.expect(prepare_result < guards);
     try std.testing.expect(guards < rebind_pattern);
     try std.testing.expect(rebind_pattern < lower_body);
     try std.testing.expect(lower_body < lower_pattern);
@@ -723,6 +753,10 @@ test "Monotype runtime demands snapshot pass-local compositional impossibility p
     try expectContains(proof_data, "forward: RuntimeImpossibilityProofId");
     try expectContains(proof_data, "impossibility_proof: ?RuntimeImpossibilityProofId");
     try expectContains(proof_data, "statement_success");
+    try expectContains(proof_data, "const RuntimeDemandGuardFrameStack = struct");
+    try expectContains(proof_data, "parent: ?RuntimeDemandGuardFrameId");
+    try expectContains(proof_data, "try draft.runtime_demand_guard_frames.append");
+    try expectNotContains(proof_data, "alloc(RuntimeDemandGuardFrame, existing.len + 1)");
     try expectContains(proof_data, "runtime impossibility proof graph contained a cycle");
 
     const composition = sourceSliceBetween(
@@ -743,8 +777,10 @@ test "Monotype runtime demands snapshot pass-local compositional impossibility p
         "fn cellImpossibilityProof(",
         "fn patDataImpossibilityProof(",
     );
-    try expectContains(cell_proof, ".graph_node => |node| try self.nodeImpossibilityProof(node)");
+    try expectContains(cell_proof, ".graph_node => |node| try self.maybeNodeImpossibilityProof(node)");
     try expectContains(cell_proof, ".sealed => |ty| if (try self.typeIsProvenUninhabited(ty))");
+    try expectContains(cell_proof, "else\n                null");
+    try expectNotContains(cell_proof, ".never");
     try expectNotContains(cell_proof, "toGraphNode");
 
     const cell_boundary = sourceSliceBetween(
@@ -756,8 +792,12 @@ test "Monotype runtime demands snapshot pass-local compositional impossibility p
     try expectContains(cell_boundary, "const region = self.sourceRegionForExpr(expr)");
     try expectContains(cell_boundary, "self.builder.program.current_loc = try self.sourceLocFor(region)");
     try expectContains(cell_boundary, "self.builder.program.current_region = region");
-    try expectContains(cell_boundary, "const expected_node = try cell.toGraphNode(self.graph)");
+    try expectContains(cell_boundary, "return switch (cell)");
+    try expectContains(cell_boundary, ".sealed => |ty|");
+    try expectContains(cell_boundary, "self.requireLoweredExprAtCell(expr, cell, demand, lowered)");
+    try expectContains(cell_boundary, ".graph_node => |expected_node|");
     try expectContains(cell_boundary, "self.requireLoweredExpr(expr, expected_node, demand, lowered)");
+    try expectNotContains(cell_boundary, "const expected_node = try cell.toGraphNode(self.graph)");
 
     const producers = sourceSliceBetween(
         lower_source,
@@ -774,13 +814,16 @@ test "Monotype runtime demands snapshot pass-local compositional impossibility p
         "fn runtimeDemandGuardFrameAddresses(",
     );
     try expectContains(statement_frames, "runtimeDemandGuardFrameAddressRaw(@intFromEnum(statement_id), .statement_success)");
+    try expectContains(statement_frames, "try pushRuntimeDemandGuardFrame(");
     try expectContains(lower_source, "body_ctx.runtime_demand_guard_frames = source_ctx.runtime_demand_guard_frames");
-    try expectContains(lower_source, "if (std.meta.eql(frame.address, address)) return self.runtime_demand_guard_frames");
+    try expectContains(lower_source, "runtimeDemandGuardFrameStackContains(self.draft, self.runtime_demand_guard_frames, address)");
     try expectContains(lower_source, "const proof_reservation = try self.addImpossibilityProof(.pending)");
     try expectContains(lower_source, ".{ .forward = proof }");
-    try expectContains(lower_source, "resolveDraftConstUseReservations(body_draft)");
-    try expectContains(lower_source, "body_draft.expr_locs.items[reservation_index] = body_draft.expr_locs.items[@intFromEnum(restored)]");
-    try expectContains(lower_source, "body_draft.expr_regions.items[reservation_index] = body_draft.expr_regions.items[@intFromEnum(restored)]");
+    try expectContains(lower_source, "try self.resolveDraftConstUseReservations(body_draft)");
+    try expectContains(lower_source, "sources[reservation_index] = restored");
+    try expectContains(lower_source, "deferred const reservation dependencies formed a cycle");
+    try expectContains(lower_source, "body_draft.expr_locs.items[reservation_index] = body_draft.expr_locs.items[restored_index]");
+    try expectContains(lower_source, "body_draft.expr_regions.items[reservation_index] = body_draft.expr_regions.items[restored_index]");
     try expectContains(lower_source, "const DraftConstUseProvenance = union(enum)");
     try expectContains(lower_source, "hoisted: checked.HoistedConstEntry");
     try expectContains(lower_source, "hoisted const use reached a declared deferred boundary");
@@ -791,6 +834,73 @@ test "Monotype runtime demands snapshot pass-local compositional impossibility p
     try expectNotContains(lower_source, "body_draft.exprs.items[reservation_index].ty = DraftTypeCell.fromGraphNode(boundary.request_node)");
     try expectNotContains(lower_source, "runtimeResultProducerForDraftCallee");
     try expectNotContains(lower_source, "runtimeDemandHasUninhabitedProducerGuard");
+}
+
+test "Monotype closed direct low-level lowering stays sealed and allocation disciplined" {
+    const lower_source = @embedFile("monotype/lower.zig");
+
+    const low_level = sourceSliceBetween(
+        lower_source,
+        "fn lowerClosedDirectLowLevelDispatch(",
+        "fn lowerClosedDispatchOperandsAtTypes(",
+    );
+    try expectContains(low_level, "lowerClosedDispatchOperandsAtTypes(");
+    try expectNotContains(low_level, "activeNodeFromType(callable_ty)");
+    try expectNotContains(low_level, "constrainTypeToMono");
+
+    const sealed_operands = sourceSliceBetween(
+        lower_source,
+        "fn lowerClosedDispatchOperandsAtTypes(",
+        "fn lowerClosedDirectProcedureDispatch(",
+    );
+    try expectContains(sealed_operands, "self.typeIsProvenUninhabited(arg_ty)");
+    try expectContains(sealed_operands, "self.reserveExprSpan(operands.len)");
+    try expectContains(sealed_operands, "self.lowerDispatchOperandAtType(operand, ty)");
+    try expectNotContains(sealed_operands, "InstGraph");
+    try expectNotContains(sealed_operands, "activeNodeFromType");
+
+    const graph_operands = sourceSliceBetween(
+        lower_source,
+        "fn lowerClosedDispatchOperandsAtNode(",
+        "fn lowerDispatchWithUninhabitedArgument(",
+    );
+    try expectContains(graph_operands, "prepareDispatchOperandsAtNodes(operands, function.args, &.{})");
+    try expectContains(graph_operands, "lowerPreparedDispatchOperandsAtNodes(");
+    try expectNotContains(graph_operands, "relateExprAtNode");
+    try expectNotContains(graph_operands, "ensureNestedCallableAtNode");
+
+    const pattern_statement = sourceSliceBetween(
+        lower_source,
+        "fn lowerPatternStatement(",
+        "fn patternIsShapeFree(",
+    );
+    try expectContains(pattern_statement, "self.graphFreeResultTypeForExpr(expr)");
+    try expectContains(pattern_statement, ".{ .sealed = ty }");
+    try expectContains(pattern_statement, "lowerExprAtTypeCellWithKnownDivergence(");
+
+    const binder_map = sourceSliceBetween(
+        lower_source,
+        "const BinderMap = struct",
+        "const TypedBinder = struct",
+    );
+    try expectContains(binder_map, "locals: []?DraftLocalId");
+    try expectNotContains(binder_map, "AutoHashMap");
+
+    const source_mapping = sourceSliceBetween(
+        lower_source,
+        "fn sourceLocFor(",
+        "fn sourceRegionForExpr(",
+    );
+    try expectContains(source_mapping, ".file = self.source_file_id");
+    try expectNotContains(source_mapping, "sourceFileIdFor");
+
+    const proof_fold = sourceSliceBetween(
+        lower_source,
+        "fn anyRuntimeImpossibilityProof(",
+        "const BinderRestore = struct",
+    );
+    try expectContains(proof_fold, "addManyAsSlice(allocator, active_count)");
+    try expectNotContains(proof_fold, "std.ArrayList");
 }
 
 test "Monotype inspect-only unresolved values defer until final graph sealing" {
@@ -854,8 +964,9 @@ test "Monotype inspect-only unresolved values defer until final graph sealing" {
         "fn exprImpossibilityProof(",
     );
     try expectContains(current_proof, "self.function_entry_demand_guards.len");
-    try expectContains(current_proof, "try proofs.append(self.allocator, frame.proof)");
-    try expectContains(current_proof, "return try self.anyImpossibilityProof(proofs.items)");
+    try expectContains(current_proof, "combined = try self.anyImpossibilityProof(&.{ combined, frame.proof })");
+    try expectContains(current_proof, "return try self.anyImpossibilityProof(&.{ combined, expression_proof })");
+    try expectNotContains(current_proof, "std.ArrayList");
 
     const frame_addresses = sourceSliceBetween(
         lower_source,
@@ -1095,20 +1206,22 @@ test "Monotype encoding intrinsics consume producer-owned identity and result to
     const lower_source = @embedFile("monotype/lower.zig");
     const selector = sourceSliceBetween(
         lower_source,
-        "fn parseIntrinsicForResolvedTarget(",
+        "fn callsiteIntrinsicForMethodTarget(",
         "fn lowerFieldNamesRenameFieldNames(",
     );
     try expectContains(selector, "proc.intrinsic");
+    try expectContains(selector, ".intrinsic => |intrinsic|");
+    try expectContains(selector, "intrinsic.callsiteArity()");
     try expectNotContains(selector, "exportNameText");
     try expectNotContains(selector, "getIdentText");
     try expectNotContains(selector, "moduleForId");
-    try expectNotContains(lower_source, "parseIntrinsicForBuiltinText");
-    try expectNotContains(lower_source, "parseIntrinsicReturnType");
+    try expectNotContains(lower_source, "callsiteIntrinsicForBuiltinText");
+    try expectNotContains(lower_source, "callsiteIntrinsicReturnType");
 
     const intrinsic_call = sourceSliceBetween(
         lower_source,
-        "fn lowerParseIntrinsicCallExpr(",
-        "fn lowerParseIntrinsicArgAtType(",
+        "fn lowerCallsiteIntrinsicCallExpr(",
+        "fn lowerCallsiteIntrinsicArgAtType(",
     );
     try expectContains(intrinsic_call, "intrinsic.requestResultSource()");
     try expectContains(intrinsic_call, "checkedMonoRequestNode(self.graph, callable.ret, callable.args[index])");

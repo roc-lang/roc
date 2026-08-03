@@ -35,7 +35,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+test1 = 10 |> (|x| x + 1)
 ~~~
 # CANONICALIZE
 ~~~clojure

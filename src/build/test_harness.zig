@@ -19,6 +19,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const collections = @import("collections");
+pub const windows_job = @import("windows_job.zig");
 const posix = std.posix;
 const Allocator = std.mem.Allocator;
 
@@ -98,106 +99,6 @@ fn printPoolProgress(is_tty: bool, completed: usize, total: usize, elapsed_ns: u
 
 /// Whether the platform supports `fork` for child process spawning.
 pub const has_fork = (builtin.os.tag != .windows);
-
-// Windows JobObject bindings (used by runChildPool to ensure that killing the
-// parent test runner tears down every still-running worker). The standard
-// library doesn't expose these.
-const job_object = if (builtin.os.tag == .windows) struct {
-    const windows = std.os.windows;
-    const HANDLE = windows.HANDLE;
-    const BOOL = windows.BOOL;
-    const DWORD = windows.DWORD;
-
-    const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: DWORD = 0x00002000;
-
-    const JOBOBJECT_BASIC_LIMIT_INFORMATION = extern struct {
-        PerProcessUserTimeLimit: windows.LARGE_INTEGER,
-        PerJobUserTimeLimit: windows.LARGE_INTEGER,
-        LimitFlags: DWORD,
-        MinimumWorkingSetSize: usize,
-        MaximumWorkingSetSize: usize,
-        ActiveProcessLimit: DWORD,
-        Affinity: usize,
-        PriorityClass: DWORD,
-        SchedulingClass: DWORD,
-    };
-
-    const IO_COUNTERS = extern struct {
-        ReadOperationCount: u64,
-        WriteOperationCount: u64,
-        OtherOperationCount: u64,
-        ReadTransferCount: u64,
-        WriteTransferCount: u64,
-        OtherTransferCount: u64,
-    };
-
-    const JOBOBJECT_EXTENDED_LIMIT_INFORMATION = extern struct {
-        BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION,
-        IoInfo: IO_COUNTERS,
-        ProcessMemoryLimit: usize,
-        JobMemoryLimit: usize,
-        PeakProcessMemoryUsed: usize,
-        PeakJobMemoryUsed: usize,
-    };
-
-    // JobObjectInfoClass values; we only need ExtendedLimitInformation = 9.
-    const JobObjectExtendedLimitInformation: c_int = 9;
-
-    extern "kernel32" fn CreateJobObjectW(
-        lpJobAttributes: ?*anyopaque,
-        lpName: ?[*:0]const u16,
-    ) callconv(.winapi) ?HANDLE;
-    extern "kernel32" fn SetInformationJobObject(
-        hJob: HANDLE,
-        JobObjectInfoClass: c_int,
-        lpJobObjectInfo: *anyopaque,
-        cbJobObjectInfoLength: DWORD,
-    ) callconv(.winapi) BOOL;
-    extern "kernel32" fn AssignProcessToJobObject(
-        hJob: HANDLE,
-        hProcess: HANDLE,
-    ) callconv(.winapi) BOOL;
-
-    fn create() ?HANDLE {
-        const job = CreateJobObjectW(null, null) orelse return null;
-        var info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std.mem.zeroes(JOBOBJECT_EXTENDED_LIMIT_INFORMATION);
-        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        if (SetInformationJobObject(
-            job,
-            JobObjectExtendedLimitInformation,
-            &info,
-            @sizeOf(JOBOBJECT_EXTENDED_LIMIT_INFORMATION),
-        ) == .FALSE) {
-            windows.CloseHandle(job);
-            return null;
-        }
-        return job;
-    }
-
-    fn assign(job: HANDLE, child_handle: HANDLE) void {
-        _ = AssignProcessToJobObject(job, child_handle);
-    }
-
-    fn close(job: HANDLE) void {
-        windows.CloseHandle(job);
-    }
-} else struct {};
-
-fn terminateProcess(child_id: std.process.Child.Id) void {
-    if (builtin.os.tag == .windows) {
-        const k32 = struct {
-            extern "kernel32" fn TerminateProcess(
-                hProcess: std.os.windows.HANDLE,
-                uExitCode: c_uint,
-            ) callconv(.winapi) std.os.windows.BOOL;
-        };
-        _ = k32.TerminateProcess(child_id, 1);
-        return;
-    }
-
-    const pid: std.posix.pid_t = child_id;
-    posixKill(pid, posix.SIG.KILL) catch {};
-}
 
 // POSIX compatibility helpers (removed from std.posix in Zig 0.16)
 //
@@ -1411,7 +1312,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
         };
 
         const ActiveChild = struct {
-            child: *std.process.Child,
+            job: windows_job.Handle,
             test_index: usize,
             worker_index: usize,
             start_ns: u64,
@@ -1427,7 +1328,6 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             slots_mutex: std.Io.Mutex,
             watchdog_done: std.atomic.Value(bool),
             template: []const []const u8,
-            job: ?if (builtin.os.tag == .windows) std.os.windows.HANDLE else void,
             timeout_ms: u64,
             gpa: Allocator,
             specs: []const Spec,
@@ -1456,9 +1356,6 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 return;
             }
 
-            const job = job_object.create();
-            defer if (job) |h| job_object.close(h);
-
             const slots = gpa.alloc(?ActiveChild, max_children) catch {
                 std.debug.print("fatal: failed to allocate child-pool slots\n", .{});
                 return;
@@ -1473,7 +1370,6 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 .slots_mutex = .init,
                 .watchdog_done = std.atomic.Value(bool).init(false),
                 .template = template,
-                .job = job,
                 .timeout_ms = timeout_ms,
                 .gpa = gpa,
                 .specs = specs,
@@ -1580,6 +1476,9 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             const gpa = state.gpa;
             const io = state.io;
 
+            const job = windows_job.create() catch return;
+            defer windows_job.close(job);
+
             var argv: std.ArrayListUnmanaged([]const u8) = .empty;
             defer argv.deinit(gpa);
             argv.appendSlice(gpa, state.template) catch return;
@@ -1590,13 +1489,17 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 .stdin = .pipe,
                 .stdout = .pipe,
                 .stderr = .inherit,
+                .start_suspended = true,
             }) catch return;
 
-            if (comptime builtin.os.tag == .windows) {
-                if (state.job) |h| {
-                    if (child.id) |cid| job_object.assign(h, cid);
-                }
-            }
+            windows_job.assign(job, child.id.?) catch {
+                child.kill(io);
+                return;
+            };
+            windows_job.resumeChild(&child) catch {
+                child.kill(io);
+                return;
+            };
 
             defer {
                 if (child.stdin) |stdin| stdin.close(io);
@@ -1614,7 +1517,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
 
                 state.slots_mutex.lockUncancelable(io);
                 state.slots[slot_idx] = ActiveChild{
-                    .child = &child,
+                    .job = job,
                     .test_index = idx,
                     .worker_index = slot_idx,
                     .start_ns = start_ns,
@@ -1718,7 +1621,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                         const kill_after_ms = slot.timeout_ms +| cfg.timeout_report_grace_ms;
                         if (elapsed > kill_after_ms and !slot.timed_out) {
                             slot.timed_out = true;
-                            if (slot.child.id) |id| terminateProcess(id);
+                            windows_job.terminate(slot.job, 1);
                         }
                     }
                 }
@@ -1751,17 +1654,31 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             argv.append(gpa, idx_str) catch return .crashed;
             argv.appendSlice(gpa, extra_args) catch return .crashed;
 
+            const job = windows_job.create() catch return .crashed;
+            defer windows_job.close(job);
+
             var child = std.process.spawn(io, .{
                 .argv = argv.items,
                 .stdout = .pipe,
                 .stderr = .inherit,
+                .start_suspended = true,
             }) catch return .crashed;
 
-            // Foreground watchdog: a thread that kills the child if it runs
-            // over budget. Pairs with the synchronous read-then-wait below.
+            windows_job.assign(job, child.id.?) catch {
+                child.kill(io);
+                return .crashed;
+            };
+            windows_job.resumeChild(&child) catch {
+                child.kill(io);
+                return .crashed;
+            };
+
+            // Foreground watchdog: a thread that kills the worker's complete
+            // Job Object tree if it runs over budget. Pairs with the
+            // synchronous read-then-wait below.
             const Watch = struct {
                 io: std.Io,
-                child_ptr: *std.process.Child,
+                job: windows_job.Handle,
                 deadline_ms: i64,
                 timed_out: std.atomic.Value(bool),
                 done: std.atomic.Value(bool),
@@ -1773,7 +1690,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                         if (self.done.load(.acquire)) return;
                         if (milliTimestamp() >= self.deadline_ms) {
                             self.timed_out.store(true, .release);
-                            if (self.child_ptr.id) |id| terminateProcess(id);
+                            windows_job.terminate(self.job, 1);
                             return;
                         }
                     }
@@ -1783,7 +1700,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             const kill_after_ms = timeout_ms +| cfg.timeout_report_grace_ms;
             var watch = Watch{
                 .io = io,
-                .child_ptr = &child,
+                .job = job,
                 .deadline_ms = milliTimestamp() + @as(i64, @intCast(kill_after_ms)),
                 .timed_out = std.atomic.Value(bool).init(false),
                 .done = std.atomic.Value(bool).init(false),

@@ -89,7 +89,10 @@ pub const Constants = struct {
     ///     instead of reserving a fresh root the artifact names nowhere.
     /// 54: the encoding protocol names containers by Roc shape: list, tuple,
     ///     record, dict.
-    pub const CACHE_VERSION = 54;
+    /// 55: checked modules store explicitly rejected static-dispatch obligations.
+    /// 56: checked type stores persist representatives and structural union ranks.
+    /// 57: where-clause owners persist rooted annotation ownership semantics.
+    pub const CACHE_VERSION = 57;
 };
 
 /// Configuration for the Roc cache system.

@@ -175,6 +175,11 @@ pub const SkipReason = enum {
     binder_not_found,
     missing_backing,
     engine_input_needed,
+    /// A variable no disposition, default, or binding answers. Emitting a type
+    /// here would state knowledge the checked module does not hold — the empty
+    /// tag union it once produced is indistinguishable from a genuinely
+    /// uninhabited position — so the walk declines instead (reunify.md 7.4).
+    undisposed_residual,
 };
 
 /// A walk left the translatable subset (with `reason` recorded on the walker),
@@ -1575,7 +1580,7 @@ const Walk = struct {
                 .empty_tag_union => try self.build_store.internTagUnion(self.owner.target_names, &.{}),
             };
         }
-        return try self.build_store.internTagUnion(self.owner.target_names, &.{});
+        return self.skip(.undisposed_residual);
     }
 
     fn function(self: *Walk, fn_ty: checked.CheckedFunctionType) WalkError!TypeId {
@@ -2487,7 +2492,7 @@ test "a self-referential record is built through the recursive-group builder" {
     }
 }
 
-test "unconstrained residual variables reach the stored empty tag union" {
+test "a residual without a disposition declines rather than emitting a type" {
     var fixture = TestFixture.init(testing.allocator);
     defer fixture.deinit();
 
@@ -2504,14 +2509,14 @@ test "unconstrained residual variables reach the stored empty tag union" {
     var translator = Translator.init(testing.allocator, &store, &target_names, no_backing.resolver());
     defer translator.deinit();
 
+    // An undisposed residual names no type: emitting one would be
+    // indistinguishable from a genuinely uninhabited position. The explicit
+    // empty tag union still translates.
     var reason: SkipReason = undefined;
-    const from_flex = try translator.translateGroundRoot(fixture.cursor(), flex, &reason);
+    try testing.expectError(error.Skip, translator.translateGroundRoot(fixture.cursor(), flex, &reason));
+    try testing.expectEqual(SkipReason.undisposed_residual, reason);
     const from_empty = try translator.translateGroundRoot(fixture.cursor(), empty, &reason);
-    // The residual and the explicit empty union agree on content. Tag-union
-    // ids are occurrence-held on production stores, so each construction
-    // keeps its own id until the holds lift (reunify.md section 8.5).
-    try testing.expect(try store.typeEql(&target_names, from_empty, from_flex));
-    try testing.expect(store.get(from_flex) == .tag_union);
+    try testing.expect(store.get(from_empty) == .tag_union);
 }
 
 test "a numeric-defaulted residual materializes as the stored default primitive" {

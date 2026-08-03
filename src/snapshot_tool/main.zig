@@ -1138,7 +1138,7 @@ fn processSnapshotContent(
             module_envs_for_file = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
 
             const roc_ctx_for_check = CoreCtx.default(allocator, allocator, app_io);
-            const checker = try compile.PackageEnv.canonicalizeAndTypeCheckModule(
+            const checker = try compile.package.canonicalizeAndTypeCheckModule(
                 roc_ctx_for_check,
                 allocator,
                 can_ir,
@@ -4473,7 +4473,7 @@ fn snapshotReplDefinitionIdentity(allocator: Allocator, line: []const u8) Alloca
         },
         .import => |import| .{
             .kind = .import,
-            .name = ast.resolveImportModulePath(import.module_name_tok, import.qualifier_tok, import.exposes),
+            .name = ast.resolveImportTarget(import.target),
         },
         .file_import => |file_import| .{ .kind = .file_import, .name = ast.resolve(file_import.name_tok) },
         else => null,

@@ -177,7 +177,8 @@ pub const ConstType = union(enum) {
     zst,
 };
 
-/// Captured checked value inside a compile-time function value.
+/// Checked capture identity, type, and stored value for a compile-time
+/// function value.
 pub const ConstCapture = struct {
     id: CaptureId,
     ty: ConstTypeId,
@@ -897,12 +898,34 @@ pub const ConstStore = struct {
         defer self.allocator.free(fn_state);
         @memset(fn_state, .unseen);
 
+        const value_delayed_depth = try self.allocator.alloc(usize, self.values.items.len);
+        defer self.allocator.free(value_delayed_depth);
+        @memset(value_delayed_depth, 0);
+
+        const fn_delayed_depth = try self.allocator.alloc(usize, self.fns.items.len);
+        defer self.allocator.free(fn_delayed_depth);
+        @memset(fn_delayed_depth, 0);
+
         for (self.values.items, 0..) |_, index| {
-            self.verifyAcyclic(@enumFromInt(@as(u32, @intCast(index))), value_state, fn_state);
+            self.verifyGraph(
+                @enumFromInt(@as(u32, @intCast(index))),
+                value_state,
+                fn_state,
+                value_delayed_depth,
+                fn_delayed_depth,
+                0,
+            );
         }
         for (self.fns.items, 0..) |_, index| {
             validateEvidenceFrames(self.getFn(@enumFromInt(@as(u32, @intCast(index)))));
-            self.verifyFnAcyclic(@enumFromInt(@as(u32, @intCast(index))), value_state, fn_state);
+            self.verifyFnGraph(
+                @enumFromInt(@as(u32, @intCast(index))),
+                value_state,
+                fn_state,
+                value_delayed_depth,
+                fn_delayed_depth,
+                0,
+            );
         }
     }
 
@@ -922,63 +945,77 @@ pub const ConstStore = struct {
         self.* = ConstStore.init(self.allocator);
     }
 
-    fn verifyAcyclic(
+    fn verifyGraph(
         self: *const ConstStore,
         id: ConstNodeId,
         value_state: []VisitState,
         fn_state: []VisitState,
+        value_delayed_depth: []usize,
+        fn_delayed_depth: []usize,
+        delayed_depth: usize,
     ) void {
         const index = @intFromEnum(id);
         if (index >= self.values.items.len) constStoreInvariant("completed store contains an out-of-range value id");
         switch (value_state[index]) {
             .done => return,
-            .active => constStoreInvariant("completed store contains a cycle in const node edges"),
+            .active => {
+                if (delayed_depth > value_delayed_depth[index]) return;
+                constStoreInvariant("completed store contains a cycle without a delayed function capture");
+            },
             .unseen => {},
         }
 
         value_state[index] = .active;
+        value_delayed_depth[index] = delayed_depth;
         switch (self.get(id)) {
             .pending => constStoreInvariant("completed store contains a pending node"),
             .zst, .scalar => {},
             .str, .crash => |str| {
                 _ = self.strBytes(str);
             },
-            .fn_value => |fn_id| self.verifyFnAcyclic(fn_id, value_state, fn_state),
-            .box => |child| self.verifyAcyclic(child, value_state, fn_state),
-            .nominal => |nominal| self.verifyAcyclic(nominal.backing, value_state, fn_state),
+            .fn_value => |fn_id| self.verifyFnGraph(fn_id, value_state, fn_state, value_delayed_depth, fn_delayed_depth, delayed_depth),
+            .box => |child| self.verifyGraph(child, value_state, fn_state, value_delayed_depth, fn_delayed_depth, delayed_depth),
+            .nominal => |nominal| self.verifyGraph(nominal.backing, value_state, fn_state, value_delayed_depth, fn_delayed_depth, delayed_depth),
             .list,
             .tuple,
             .record,
             => |children| {
-                for (children) |child| self.verifyAcyclic(child, value_state, fn_state);
+                for (children) |child| self.verifyGraph(child, value_state, fn_state, value_delayed_depth, fn_delayed_depth, delayed_depth);
             },
             .tag => |tag| {
-                for (tag.payloads) |payload| self.verifyAcyclic(payload, value_state, fn_state);
+                for (tag.payloads) |payload| self.verifyGraph(payload, value_state, fn_state, value_delayed_depth, fn_delayed_depth, delayed_depth);
             },
         }
         value_state[index] = .done;
     }
 
-    fn verifyFnAcyclic(
+    fn verifyFnGraph(
         self: *const ConstStore,
         id: ConstFnId,
         value_state: []VisitState,
         fn_state: []VisitState,
+        value_delayed_depth: []usize,
+        fn_delayed_depth: []usize,
+        delayed_depth: usize,
     ) void {
         const index = @intFromEnum(id);
         if (index >= self.fns.items.len) constStoreInvariant("completed store contains an out-of-range function id");
         switch (fn_state[index]) {
             .done => return,
-            .active => constStoreInvariant("completed store contains a recursive function value"),
+            .active => {
+                if (delayed_depth > fn_delayed_depth[index]) return;
+                constStoreInvariant("completed store contains a function cycle without a delayed capture");
+            },
             .unseen => {},
         }
 
         fn_state[index] = .active;
+        fn_delayed_depth[index] = delayed_depth;
         for (self.getFn(id).captures) |capture| {
             if (@intFromEnum(capture.ty) >= self.type_store.types.items.len) {
                 constStoreInvariant("completed store contains an out-of-range capture type id");
             }
-            self.verifyAcyclic(capture.value, value_state, fn_state);
+            self.verifyGraph(capture.value, value_state, fn_state, value_delayed_depth, fn_delayed_depth, delayed_depth + 1);
         }
         fn_state[index] = .done;
     }
@@ -1032,7 +1069,10 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
             .authority = .generated_private,
         },
     } });
-    const caps = try gpa.dupe(ConstCapture, &.{.{ .id = CaptureId.fromBinder(@enumFromInt(1)), .ty = capture_ty, .value = a }});
+    const caps = try gpa.dupe(ConstCapture, &.{
+        .{ .id = CaptureId.fromBinder(@enumFromInt(1)), .ty = capture_ty, .value = a },
+        .{ .id = CaptureId.fromBinder(@enumFromInt(2)), .ty = capture_ty, .value = a },
+    });
     defer gpa.free(caps);
     var target_view: names.CheckedModuleDigest = .{};
     target_view.bytes[0] = 0xA1;
@@ -1102,11 +1142,13 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     try std.testing.expectEqualStrings("hello", loaded.strBytes(loaded.get(str).str));
     // Function captures
     const loaded_fn = loaded.getFn(fn_id);
-    try std.testing.expectEqual(@as(usize, 1), loaded_fn.captures.len);
+    try std.testing.expectEqual(@as(usize, 2), loaded_fn.captures.len);
     try std.testing.expectEqual(capture_ty, loaded_fn.captures[0].ty);
     try std.testing.expectEqual(ConstType{ .primitive = .u64 }, loaded.type_store.get(loaded_fn.captures[0].ty));
     try std.testing.expectEqual(TypeBackingAuthority.generated_private, loaded.type_store.get(private_named_ty).named.backing.?.authority);
     try std.testing.expectEqual(a, loaded_fn.captures[0].value);
+    try std.testing.expectEqual(a, loaded_fn.captures[1].value);
+    try loaded.verifyComplete();
     try std.testing.expectEqual(evidence.len, loaded_fn.evidence.len);
     const loaded_target = loaded_fn.evidence[0].target;
     try std.testing.expectEqualSlices(u8, &target_view.bytes, &loaded_target.view.bytes);
@@ -1164,6 +1206,55 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     var corrupt_range = loaded_fn;
     corrupt_range.evidence_frames = &corrupt_range_frames;
     try std.testing.expect(!ConstStore.evidenceFramesValid(corrupt_range));
+}
+
+test "ConstStore: exact function capture back-edge survives serialization" {
+    const gpa = std.testing.allocator;
+    const CompactWriter = @import("collections").CompactWriter;
+
+    var store = ConstStore.init(gpa);
+    defer store.deinit();
+
+    const unit_ty = try store.type_store.append(.zst);
+    const fn_ty = try store.type_store.append(.{ .func = .{ .args = .{}, .ret = unit_ty } });
+    const fn_node = try store.reserve();
+    const captures = [_]ConstCapture{.{
+        .id = CaptureId.fromBinder(@enumFromInt(1)),
+        .ty = fn_ty,
+        .value = fn_node,
+    }};
+    const evidence_frames = [_]ConstFnEvidenceFrame{
+        ConstFnEvidenceFrame.init(.root, null, 0, 0),
+    };
+    const fn_id = try store.appendFn(.{
+        .fn_def = .{ .local_template = .{ .proc_base = @enumFromInt(1), .template = @enumFromInt(2) } },
+        .source_fn_ty = @enumFromInt(3),
+        .source_fn_key = .{},
+        .captures = &captures,
+        .evidence_frames = &evidence_frames,
+        .evidence_frame_head = 0,
+    });
+    store.fill(fn_node, .{ .fn_value = fn_id });
+    try store.verifyComplete();
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    var writer = CompactWriter.init();
+    const header = try writer.appendAlloc(arena.allocator(), ConstStore.Serialized);
+    try header.serialize(&store, arena.allocator(), &writer);
+
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", writer.total_bytes);
+    defer gpa.free(buffer);
+    _ = try writer.writeToBuffer(buffer);
+
+    const serialized: *const ConstStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    var loaded = serialized.deserialize(@intFromPtr(buffer.ptr), gpa);
+    defer loaded.deinit();
+
+    const loaded_fn_id = loaded.get(fn_node).fn_value;
+    try std.testing.expectEqual(fn_id, loaded_fn_id);
+    try std.testing.expectEqual(fn_node, loaded.getFn(loaded_fn_id).captures[0].value);
+    try loaded.verifyComplete();
 }
 
 test "ConstStore.appendFn: no leak or double-free under allocation failure" {

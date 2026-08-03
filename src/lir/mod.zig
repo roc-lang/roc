@@ -46,6 +46,9 @@ pub const ArcSig = @import("arc_sig.zig");
 pub const ArcSolve = @import("arc_solve.zig");
 /// Debug borrow certifier for ARC-complete LIR.
 pub const ArcCertify = @import("arc_certify.zig");
+/// Field takes from dying aggregates, solved between ARC borrow inference
+/// and RC statement emission.
+pub const ArcDismantle = @import("arc_dismantle.zig");
 /// Shared-memory ARC-inserted LIR image for interpreter-shim execution.
 pub const LirImage = @import("lir_image.zig");
 
@@ -164,5 +167,6 @@ test "lir tests" {
     std.testing.refAllDecls(ArcSig);
     std.testing.refAllDecls(ArcSolve);
     std.testing.refAllDecls(ArcCertify);
+    std.testing.refAllDecls(ArcDismantle);
     std.testing.refAllDecls(LirImage);
 }

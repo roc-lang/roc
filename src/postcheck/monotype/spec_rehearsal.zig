@@ -5477,6 +5477,62 @@ pub const Rehearsal = struct {
                 .binder_not_found => Common.invariant("directed instantiation read a binder no environment names"),
                 .missing_backing => Common.invariant("directed instantiation read a nominal with no backing source"),
                 .engine_input_needed => Common.invariant("directed instantiation left a representation position unemitted"),
+                .undisposed_residual => Common.invariant("directed instantiation read a residual no disposition, default, or binding answers"),
+            },
+            else => |other| other,
+        };
+    }
+
+    /// The Monotype at one checked position as production authority, or null
+    /// exactly when the position holds a residual no disposition, default, or
+    /// binding answers — the one condition under which no final type can be
+    /// stated, so the caller keeps that position on its graph node where the
+    /// relations that bind it still apply (reunify.md 7.4, 13.2d). Every other
+    /// reason a translation cannot answer stays fatal, exactly as
+    /// `typeForCheckedAuthoritative` states it.
+    pub fn typeForCheckedAuthoritativeOrUnstated(
+        self: *Rehearsal,
+        address: CheckedAddress,
+        under_callee: bool,
+        edge: ?RequestEdgeName,
+    ) Allocator.Error!?Type.TypeId {
+        if (self.disabled) {
+            Common.invariant("directed instantiation state was disabled while holding production authority");
+        }
+        const cursor = self.lookup.cursor(address.module_bytes) orelse
+            Common.invariant("directed instantiation read a checked position of an unloaded module");
+        var env: ?*const direct_translate.BindingEnvironment = null;
+        var owner_node = checked.checked_residual_disposition_module_body_owner;
+        const callee = if (under_callee) self.innermostCallee(address.module_bytes) else null;
+        if (callee) |level| {
+            env = level.chain.innermost();
+            owner_node = level.owner_node;
+        } else if (self.frameForModule(address.module_bytes)) |frame| {
+            env = frame.environment();
+            owner_node = frame.owner_node;
+        }
+        if (self.typeUnderEdgeLevel(address, env, owner_node, edge)) |leveled| return leveled;
+        var reason: direct_translate.SkipReason = undefined;
+        return self.translator.translateUnderEnvironment(
+            cursor,
+            env,
+            owner_node,
+            @enumFromInt(address.type_id),
+            &reason,
+        ) catch |err| switch (err) {
+            error.Skip => switch (reason) {
+                .recursive_cycle => Common.invariant("directed instantiation could not close a recursive cycle"),
+                .pending_or_err => Common.invariant("directed instantiation read a pending or erroneous checked position"),
+                .numeric_default_unresolved => Common.invariant("directed instantiation read an unresolved numeric default"),
+                .open_row => Common.invariant("directed instantiation read an open row"),
+                .malformed_builtin_arity => Common.invariant("directed instantiation read a builtin with malformed arity"),
+                .binder_not_found => Common.invariant("directed instantiation read a binder no environment names"),
+                .missing_backing => Common.invariant("directed instantiation read a nominal with no backing source"),
+                .engine_input_needed => Common.invariant("directed instantiation left a representation position unemitted"),
+                .undisposed_residual => {
+                    census.bump("rehearsal_authoritative_unstated");
+                    return null;
+                },
             },
             else => |other| other,
         };
@@ -5564,6 +5620,7 @@ pub const Rehearsal = struct {
                     .numeric_default_unresolved => .operand_numeric_default,
                     .malformed_builtin_arity => .operand_malformed_arity,
                     .missing_backing => .operand_missing_backing,
+                    .undisposed_residual => .operand_undisposed_residual,
                 };
                 return null;
             },
@@ -5733,6 +5790,7 @@ pub const Rehearsal = struct {
                     .malformed_builtin_arity => census.bump("rehearsal_type_skip_malformed_arity"),
                     .binder_not_found => census.bump("rehearsal_type_skip_binder_not_found"),
                     .missing_backing => census.bump("rehearsal_type_skip_missing_backing"),
+                    .undisposed_residual => census.bump("rehearsal_type_skip_undisposed_residual"),
                 }
                 return;
             },

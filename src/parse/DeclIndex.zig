@@ -162,9 +162,20 @@ pub const PackageHeaderModule = struct {
 
 /// Explicit source import recorded by the parser.
 pub const Import = struct {
+    pub const Origin = enum { local, package };
+    pub const LocalBase = enum { importer, package_root, parent };
+
+    /// Source target for the selected module, excluding nested types. Local
+    /// targets retain their explicit base spelling; package targets include
+    /// their lowercase qualifier.
     module_name: Ident.Idx,
+    /// Binding introduced when this target selects a module directly.
+    module_binding: ?Ident.Idx,
     qualifier: ?Ident.Idx,
-    nested: bool,
+    origin: Origin,
+    base: LocalBase,
+    parent_count: u16,
+    nested_type_path: ?Ident.Idx,
     region: TokenRegion,
 };
 

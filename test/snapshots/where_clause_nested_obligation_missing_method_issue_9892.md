@@ -133,7 +133,11 @@ main = run(Wrap.W(42.U8))
 			(args
 				(p-nominal
 					(p-applied-tag)))
-			(e-runtime-error (tag "erroneous_value_expr")))
+			(e-dispatch-call (method "frobnicate") (constraint-fn-var 275)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "x"))))
+				(args)))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "Wrap") (local)
@@ -165,13 +169,7 @@ main = run(Wrap.W(42.U8))
 					(ty-lookup (name "Str") (builtin))))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 306)
-			(e-lookup-local
-				(p-assign (ident "run")))
-			(e-nominal (nominal "Wrap")
-				(e-tag (name "W")
-					(args
-						(e-typed-int (value "42") (type "U8"))))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "Str") (builtin))))
 	(s-nominal-decl
@@ -186,16 +184,16 @@ main = run(Wrap.W(42.U8))
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Wrap(a) -> Error where [a.frobnicate : a -> Error]"))
-		(patt (type "b -> Error where [b.unwrap : b -> Error]"))
-		(patt (type "Error")))
+		(patt (type "Wrap(a) -> Str where [a.frobnicate : a -> Str]"))
+		(patt (type "b -> Str where [b.unwrap : b -> Str]"))
+		(patt (type "Str")))
 	(type_decls
 		(nominal (type "Wrap(a)")
 			(ty-header (name "Wrap")
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "Wrap(a) -> Error where [a.frobnicate : a -> Error]"))
-		(expr (type "b -> Error where [b.unwrap : b -> Error]"))
-		(expr (type "Error"))))
+		(expr (type "Wrap(a) -> Str where [a.frobnicate : a -> Str]"))
+		(expr (type "b -> Str where [b.unwrap : b -> Str]"))
+		(expr (type "Str"))))
 ~~~

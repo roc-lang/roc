@@ -224,7 +224,7 @@ NO CHANGE
 												(e-literal (string "")))
 											(e-lookup-local
 												(p-assign (ident "process_child")))))
-									(e-interpolation (constraint-fn-var 398) (dispatcher-var 63)
+									(e-interpolation (constraint-fn-var 386) (dispatcher-var 63)
 										(first
 											(e-literal (string "")))
 										(parts
@@ -261,7 +261,7 @@ NO CHANGE
 			(ty-lookup (name "Elem") (local))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 483)
+		(e-call (constraint-fn-var 447)
 			(e-lookup-local
 				(p-assign (ident "process")))
 			(e-lookup-local

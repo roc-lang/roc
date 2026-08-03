@@ -275,6 +275,7 @@ pub const UnifySiteBlocker = enum {
     operand_numeric_default,
     operand_malformed_arity,
     operand_missing_backing,
+    operand_undisposed_residual,
     /// The translation reported an error rather than a skip, which stops the
     /// rehearsal; expected zero.
     operand_untranslatable,
@@ -508,6 +509,10 @@ pub const Census = struct {
     pattern_uninhabited_diverge: Counter = Counter.init(0),
     pattern_uninhabited_uncovered: Counter = Counter.init(0),
     pattern_uninhabited_read_error: Counter = Counter.init(0),
+    direct_stored_skip_undisposed_residual: Counter = Counter.init(0),
+    rehearsal_type_skip_undisposed_residual: Counter = Counter.init(0),
+    rehearsal_authoritative_unstated: Counter = Counter.init(0),
+    type_cell_graph_route: Counter = Counter.init(0),
     intern_hit_occurrence_held: Counter = Counter.init(0),
     generated_dispatch_return_directed: Counter = Counter.init(0),
     generated_dispatch_return_node: Counter = Counter.init(0),

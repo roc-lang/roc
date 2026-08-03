@@ -207,7 +207,7 @@ NO CHANGE
 		(patt (type "Error"))
 		(patt (type "MyType"))
 		(patt (type "MyType"))
-		(patt (type "Error")))
+		(patt (type "MyType")))
 	(type_decls
 		(nominal (type "MyType")
 			(ty-header (name "MyType"))))
@@ -217,5 +217,5 @@ NO CHANGE
 		(expr (type "Error"))
 		(expr (type "MyType"))
 		(expr (type "MyType"))
-		(expr (type "Error"))))
+		(expr (type "MyType"))))
 ~~~

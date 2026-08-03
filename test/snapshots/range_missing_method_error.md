@@ -60,7 +60,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "Iter(Str)")))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "Iter(Str)"))))
 ~~~

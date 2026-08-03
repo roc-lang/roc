@@ -112,6 +112,12 @@ pub fn decToFloat(is_f32: bool) BuiltinFn {
     return if (is_f32) .dec_to_f32 else .dec_to_f64;
 }
 
+/// Checked 128-bit integer-to-Dec conversion. The wrappers report whether the
+/// value fits; `unsafe` in their names is about the raw output pointer.
+pub fn int128ToDec(is_signed: bool) BuiltinFn {
+    return if (is_signed) .i128_to_dec_try_unsafe else .u128_to_dec_try_unsafe;
+}
+
 /// Scalar integer modulo by width and signedness, for backends that call
 /// rather than inline it.
 pub fn scalarModBy(bits: u16, is_signed: bool) BuiltinFn {
