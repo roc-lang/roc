@@ -9,6 +9,12 @@ const platform = @import("platform.zig");
 pub const FdInfo = struct {
     fd_str: []u8,
     size: usize,
+    /// The page size the parent process observed. Both processes run on the
+    /// same kernel, so this is the child's page size too, and taking it from
+    /// the parent keeps the child from needing its own way to ask -- on Linux
+    /// the only way to ask is `getauxval`, which a child that links no libc
+    /// and starts without Zig's startup code cannot answer.
+    page_size: usize,
 
     pub fn deinit(self: *FdInfo, allocator: std.mem.Allocator) void {
         allocator.free(self.fd_str);
@@ -110,7 +116,7 @@ fn readFdInfoFromFile(allocator: std.mem.Allocator, io: std.Io) CoordinationErro
     };
     defer allocator.free(content);
 
-    // Parse the content: first line is fd, second line is size
+    // Parse the content: first line is fd, second line is size, third is page size
     var lines = std.mem.tokenizeScalar(u8, content, '\n');
     const fd_line = lines.next() orelse {
         std.log.err("Invalid fd file format: missing fd line", .{});
@@ -118,6 +124,10 @@ fn readFdInfoFromFile(allocator: std.mem.Allocator, io: std.Io) CoordinationErro
     };
     const size_line = lines.next() orelse {
         std.log.err("Invalid fd file format: missing size line", .{});
+        return error.FdInfoReadFailed;
+    };
+    const page_size_line = lines.next() orelse {
+        std.log.err("Invalid fd file format: missing page size line", .{});
         return error.FdInfoReadFailed;
     };
 
@@ -132,8 +142,15 @@ fn readFdInfoFromFile(allocator: std.mem.Allocator, io: std.Io) CoordinationErro
         return error.FdInfoReadFailed;
     };
 
+    const page_size = std.fmt.parseInt(usize, std.mem.trim(u8, page_size_line, " \r\t"), 10) catch {
+        std.log.err("Failed to parse page size from '{s}'", .{page_size_line});
+        allocator.free(fd_str);
+        return error.FdInfoReadFailed;
+    };
+
     return FdInfo{
         .fd_str = fd_str,
         .size = size,
+        .page_size = page_size,
     };
 }

@@ -124,7 +124,6 @@ comptime {
         std.testing.refAllDecls(@import("ReplSession.zig"));
     }
 }
-const libc_finder = @import("libc_finder.zig");
 const linker = @import("linker.zig");
 const builder = @import("builder.zig");
 const llvm_codegen = @import("llvm_codegen");
@@ -249,7 +248,6 @@ const CliMainError =
     CliError ||
     Allocator.Error ||
     cli_args.ParseError ||
-    libc_finder.FindLibcError ||
     linker.LinkError ||
     bundle.BundleError ||
     unbundle.UnbundleError ||
@@ -933,7 +931,11 @@ pub fn writeFdCoordinationFile(ctx: *CliCtx, temp_exe_path: []const u8, shm_hand
     // integer on both platforms -- on Windows it is a HANDLE (a pointer), and
     // `ipc.coordination.parseHandle` turns the integer back into one.
     const handle_int = if (is_windows) @intFromPtr(shm_handle.fd) else shm_handle.fd;
-    const fd_str = try std.fmt.allocPrint(ctx.arena, "{}\n{}", .{ handle_int, shm_handle.size });
+    const fd_str = try std.fmt.allocPrint(ctx.arena, "{}\n{}\n{}", .{
+        handle_int,
+        shm_handle.size,
+        shm_handle.page_size,
+    });
     try fd_file.writeStreamingAll(ctx.io.std_io, fd_str);
     try fd_file.sync(ctx.io.std_io);
 }
@@ -986,7 +988,11 @@ pub fn createTempDirStructure(ctx: *CliCtx, exe_path: []const u8, exe_display_na
         // Note: We'll close this explicitly later, before spawning the child
 
         // Write shared memory info to file (POSIX only - Windows uses command line args)
-        const fd_str = try std.fmt.allocPrint(ctx.arena, "{}\n{}", .{ shm_handle.fd, shm_handle.size });
+        const fd_str = try std.fmt.allocPrint(ctx.arena, "{}\n{}\n{}", .{
+            shm_handle.fd,
+            shm_handle.size,
+            shm_handle.page_size,
+        });
 
         try fd_file.writeStreamingAll(ctx.io.std_io, fd_str);
 
@@ -2131,31 +2137,13 @@ fn defaultRunCheckedHostIdentity(
     return hasher.finalResult();
 }
 
-fn defaultRunLinkInputsIdentity(
-    ctx: *CliCtx,
-    target: RocTarget,
-    libc_info: ?libc_finder.LibcInfo,
-) CliError!?[32]u8 {
+fn defaultRunLinkInputsIdentity(target: RocTarget) ?[32]u8 {
     const runtime_bytes = DefaultPlatformRuntimeObjects.forTarget(target) orelse return null;
 
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    updateHashBytes(&hasher, "roc-run-default-link-inputs-v2");
+    updateHashBytes(&hasher, "roc-run-default-link-inputs-v3");
     updateHashBytes(&hasher, @tagName(target));
     hasher.update(&bytesDigest(runtime_bytes));
-
-    if (libc_info) |info| {
-        updateHashBytes(&hasher, "libc");
-        updateHashBytes(&hasher, info.arch);
-        updateHashBytes(&hasher, info.dynamic_linker);
-        const dynamic_linker_digest = try fileContentsDigest(ctx, info.dynamic_linker);
-        hasher.update(&dynamic_linker_digest);
-        updateHashBytes(&hasher, info.lib_dir);
-        updateHashBytes(&hasher, info.libc_path);
-        const libc_digest = try fileContentsDigest(ctx, info.libc_path);
-        hasher.update(&libc_digest);
-    } else {
-        updateHashBytes(&hasher, "no-libc");
-    }
 
     return hasher.finalResult();
 }
@@ -3372,13 +3360,6 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
             try rejectRunTargetNotExecutable(ctx, requested);
             unreachable;
         }
-        if (requested.isStatic()) {
-            try ctx.io.stderr().print(
-                "Error: shared-memory dev runs for headerless default apps require a dynamic Linux target; got {s}.\n",
-                .{@tagName(requested)},
-            );
-            return error.UnsupportedTarget;
-        }
         break :blk requested;
     } else default_target;
 
@@ -3459,17 +3440,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
     const lowered = &lowered_result.lowered;
     const enable_debug = builtin.mode == .Debug;
     const exe_checked_host_identity = defaultRunCheckedHostIdentity(selected_target, entrypoint_names, lowered_result.hosted_symbols);
-    const libc_info: ?libc_finder.LibcInfo = if (selected_target.isDynamic())
-        libc_finder.findLibc(ctx) catch |err| {
-            try ctx.io.stderr().print(
-                "Error: could not find system libc for shared-memory default app run: {}\n",
-                .{err},
-            );
-            return err;
-        }
-    else
-        null;
-    const link_inputs_identity = (try defaultRunLinkInputsIdentity(ctx, selected_target, libc_info)) orelse {
+    const link_inputs_identity = defaultRunLinkInputsIdentity(selected_target) orelse {
         return rejectRunTargetNotExecutable(ctx, selected_target);
     };
 
@@ -3535,18 +3506,9 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
             shim_path,
             runtime_path,
         };
-        var extra_args = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 5);
-        if (libc_info) |info| {
-            try extra_args.append("-dynamic-linker");
-            try extra_args.append(info.dynamic_linker);
-            try extra_args.append("-L");
-            try extra_args.append(info.lib_dir);
-            try extra_args.append("-lc");
-        }
-
         const link_config = linker.LinkConfig{
             .target_format = linker.TargetFormat.detectFromOs(selected_target.toOsTag()),
-            .target_abi = if (selected_target.isStatic()) .musl else .gnu,
+            .target_abi = llvmBuildLinkAbi(selected_target, true),
             .target_os = selected_target.toOsTag(),
             .target_arch = selected_target.toCpuArch(),
             .output_path = exe_path,
@@ -3554,7 +3516,6 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
             .can_exit_early = false,
             .disable_output = false,
             .scratch_dir = temp_dir,
-            .extra_args = extra_args.items,
         };
 
         linker.link(ctx, link_config) catch |err| {
@@ -4786,6 +4747,9 @@ pub const SharedMemoryHandle = struct {
     /// This may be much larger than `size` since the bump allocator reserves
     /// a large virtual address region upfront.
     mapped_size: usize,
+    /// The page size this process observed, published to the child so it does
+    /// not have to ask the OS itself. See `ipc.FdInfo.page_size`.
+    page_size: usize,
 };
 
 fn hotReloadHostChildHandle(handle: SharedMemoryHandle) SharedMemoryHandle {
@@ -4804,6 +4768,7 @@ test "hot reload host child maps the full shared-memory reservation" {
         .ptr = @as(*anyopaque, @ptrFromInt(0x5678)),
         .size = 4096,
         .mapped_size = 8192,
+        .page_size = 4096,
     };
 
     const child = hotReloadHostChildHandle(original);
@@ -4875,6 +4840,7 @@ fn testingSharedMemoryHandle(shm: *SharedMemoryAllocator) SharedMemoryHandle {
         .ptr = shm.base_ptr,
         .size = shm.getUsedSize(),
         .mapped_size = shm.total_size,
+        .page_size = shm.page_size,
     };
 }
 
@@ -5288,6 +5254,7 @@ fn sharedMemoryResult(
             .ptr = shm.base_ptr,
             .size = shm.getUsedSize(),
             .mapped_size = shm.total_size,
+            .page_size = shm.page_size,
         },
         .entrypoint_names = entrypoint_names,
         .hosted_symbols = hosted_symbols,
@@ -5330,10 +5297,15 @@ fn useDefaultAppSharedMemoryShim(args: cli_args.RunArgs) bool {
         DefaultPlatformRuntimeObjects.forTarget(default_target) != null;
 }
 
+/// Headerless default apps run on the freestanding default platform: raw
+/// syscalls, its own `_start`, and a machine-code shim that reaches the kernel
+/// directly. Nothing in the executable calls libc, so every Linux host links
+/// the same static musl-style executable no matter which libc it ships --
+/// matching what `llvmBuildLinkAbi` already does for `roc build`.
 fn defaultRunShimTarget(native: RocTarget) RocTarget {
     return switch (native) {
-        .x64musl, .x64glibc, .x64linux => .x64linux,
-        .arm64musl, .arm64glibc, .arm64linux => .arm64linux,
+        .x64musl, .x64glibc, .x64linux => .x64musl,
+        .arm64musl, .arm64glibc, .arm64linux => .arm64musl,
         else => native,
     };
 }
@@ -5814,6 +5786,7 @@ fn publishDevRunImage(
             .ptr = shm.base_ptr,
             .size = shm.getUsedSize(),
             .mapped_size = shm.total_size,
+            .page_size = shm.page_size,
         });
         break :blk .{
             .generation = 1,
@@ -5846,6 +5819,7 @@ fn publishDevRunImage(
         .ptr = shm.base_ptr,
         .size = shm.getUsedSize(),
         .mapped_size = shm.total_size,
+        .page_size = shm.page_size,
     };
 }
 

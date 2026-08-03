@@ -12,6 +12,7 @@ pub const SharedMemoryAllocator = @import("SharedMemoryAllocator.zig");
 pub const Handle = platform.Handle;
 pub const FdInfo = coordination.FdInfo;
 pub const CoordinationError = coordination.CoordinationError;
+pub const PageSizeError = platform.PageSizeError;
 
 test "ipc tests" {
     std.testing.refAllDecls(@This());
