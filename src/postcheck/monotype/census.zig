@@ -504,6 +504,10 @@ pub const Census = struct {
     dispatch_return_directed_cell: Counter = Counter.init(0),
     dispatch_return_directed_declined_at_cell: Counter = Counter.init(0),
     // The generated dispatch return's production route.
+    pattern_uninhabited_agree: Counter = Counter.init(0),
+    pattern_uninhabited_diverge: Counter = Counter.init(0),
+    pattern_uninhabited_uncovered: Counter = Counter.init(0),
+    pattern_uninhabited_read_error: Counter = Counter.init(0),
     intern_hit_occurrence_held: Counter = Counter.init(0),
     generated_dispatch_return_directed: Counter = Counter.init(0),
     generated_dispatch_return_node: Counter = Counter.init(0),

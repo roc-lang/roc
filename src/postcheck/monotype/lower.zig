@@ -17100,6 +17100,37 @@ const BodyContext = struct {
         return self.builder.typeIsProvenUninhabited(ty);
     }
 
+    /// Debug/probe-only: whether the directed type at a pattern position gives
+    /// this predicate the same answer the graph walk gives, restricted to
+    /// positions whose variables the active frame binds. The false direction is
+    /// load-bearing here — a position that reads uninhabited eliminates a live
+    /// branch — so a disagreement is dumped with both sides rendered.
+    fn measurePatternUninhabitedParity(
+        self: *BodyContext,
+        pattern_ty: checked.CheckedTypeId,
+        graph_answer: bool,
+    ) Allocator.Error!void {
+        const rehearsal = self.builder.rehearsal orelse return;
+        const address = self.typeAddress(pattern_ty);
+        if (!rehearsal.activeBindingCovers(.{
+            .module_bytes = address.module_bytes,
+            .type_id = address.type_id,
+        })) {
+            census.bump("pattern_uninhabited_uncovered");
+            return;
+        }
+        const directed = self.typeForChecked(pattern_ty) catch {
+            census.bump("pattern_uninhabited_read_error");
+            return;
+        };
+        const directed_answer = try self.typeIsProvenUninhabited(directed);
+        if (directed_answer == graph_answer) {
+            census.bump("pattern_uninhabited_agree");
+            return;
+        }
+        census.bump("pattern_uninhabited_diverge");
+    }
+
     fn checkedPatternIsProvenUninhabited(self: *BodyContext, pattern_id: checked.CheckedPatternId) Allocator.Error!bool {
         // Stays on the graph walk for now: this predicate can run at a program
         // point that does not hold the binding the pattern's position needs, and
@@ -17110,7 +17141,9 @@ const BodyContext = struct {
         // pattern lowering reads its expected type from the scrutinee's final
         // type, where the binding is necessarily in scope (reunify.md 13.2d).
         const pattern = self.view.bodies.pattern(pattern_id);
-        if (try self.nodeIsProvenUninhabited(try self.instNode(pattern.ty))) return true;
+        const graph_answer = try self.nodeIsProvenUninhabited(try self.instNode(pattern.ty));
+        if (comptime census.enabled) try self.measurePatternUninhabitedParity(pattern.ty, graph_answer);
+        if (graph_answer) return true;
         return switch (pattern.data) {
             .as => |as| self.checkedPatternIsProvenUninhabited(as.pattern),
             .applied_tag => |tag| blk: {
