@@ -637,7 +637,7 @@ pub fn llvmFeatureString(allocator: std.mem.Allocator, target: std.Target) std.m
 test {
     // Nothing in this file references host CPU detection, so name it here to
     // put its tests and its comptime check of the CPU floor in this run.
-    _ = host_cpu;
+    std.testing.refAllDecls(host_cpu);
 }
 
 test "native target matches host OS and architecture" {
