@@ -274,17 +274,9 @@ pub const Store = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
-    pub fn span(self: *const Store, span_: Span) []const TypeVarId {
-        return self.spans.items[span_.start..][0..span_.len];
-    }
-
     pub fn spanItem(self: *const Store, span_: Span, index: usize) TypeVarId {
         if (index >= span_.count()) Common.invariant("Lambda Solved type span index out of bounds");
         return self.spans.items[@as(usize, span_.start) + index];
-    }
-
-    pub fn fieldSpan(self: *const Store, span_: Span) []const Field {
-        return self.fields.items[span_.start..][0..span_.len];
     }
 
     pub fn addDeclaredFields(self: *Store, values: []const DeclaredField) std.mem.Allocator.Error!Span {
@@ -294,17 +286,14 @@ pub const Store = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
-    pub fn declaredFieldSpan(self: *const Store, span_: Span) []const DeclaredField {
-        return self.declared_fields.items[span_.start..][0..span_.len];
-    }
-
     pub fn fieldItem(self: *const Store, span_: Span, index: usize) Field {
         if (index >= span_.count()) Common.invariant("Lambda Solved field span index out of bounds");
         return self.fields.items[@as(usize, span_.start) + index];
     }
 
-    pub fn tagSpan(self: *const Store, span_: Span) []const Tag {
-        return self.tags.items[span_.start..][0..span_.len];
+    pub fn declaredFieldItem(self: *const Store, span_: Span, index: usize) DeclaredField {
+        if (index >= span_.count()) Common.invariant("Lambda Solved declared-field span index out of bounds");
+        return self.declared_fields.items[@as(usize, span_.start) + index];
     }
 
     pub fn tagItem(self: *const Store, span_: Span, index: usize) Tag {
@@ -312,17 +301,9 @@ pub const Store = struct {
         return self.tags.items[@as(usize, span_.start) + index];
     }
 
-    pub fn captureSpan(self: *const Store, span_: Span) []const Capture {
-        return self.captures.items[span_.start..][0..span_.len];
-    }
-
     pub fn captureItem(self: *const Store, span_: Span, index: usize) Capture {
         if (index >= span_.count()) Common.invariant("Lambda Solved capture span index out of bounds");
         return self.captures.items[@as(usize, span_.start) + index];
-    }
-
-    pub fn memberSpan(self: *const Store, span_: Span) []const FnMember {
-        return self.fn_members.items[span_.start..][0..span_.len];
     }
 
     pub fn memberItem(self: *const Store, span_: Span, index: usize) FnMember {
@@ -416,7 +397,7 @@ test "lambda solved function types carry callable variables" {
     const function = store.get(fn_ty).func;
     try std.testing.expectEqual(callable, function.callable);
     try std.testing.expectEqual(ret, function.ret);
-    try std.testing.expectEqual(arg, store.span(function.args)[0]);
+    try std.testing.expectEqual(arg, store.spanItem(function.args, 0));
 }
 
 test "lambda solved type variable order uses the typed id helper" {

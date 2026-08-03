@@ -3226,6 +3226,12 @@ Type-store ownership is explicit at each stage boundary:
   store.
 - LIR owns committed layouts, not post-check type ids.
 
+A mutable post-check type store exposes child spans as stable descriptors plus
+indexed item access, never as borrowed slices. Appending while lazily expanding
+a recursive type may relocate a packed side array, but its descriptors remain
+valid. Raw slice access belongs only to immutable stage views, where relocation
+is impossible and consumers retain packed-array iteration performance.
+
 A later stage must not reinterpret an earlier stage's type ids unless the stage
 contract says the type store is shared. When a stage changes type meaning, it
 consumes the earlier program and produces a new program whose ids are meaningful
