@@ -15223,6 +15223,7 @@ const BodyContext = struct {
                     local_ctx.owner_context_fn_key = self.owner_context_fn_key;
                     local_ctx.current_fn_key = self.current_fn_key;
                     const local_root_node = try local_ctx.checkedTemplateInterfaceScopeRootNode(local_scope);
+                    try relateFunctionRequestInterface(self.graph, local_root_node, request_node);
                     try active_local_scopes.put(local_scope, local_root_node);
                     defer _ = active_local_scopes.remove(local_scope);
 
@@ -15245,7 +15246,6 @@ const BodyContext = struct {
                         active_local_scopes,
                         replay_state,
                     );
-                    try relateFunctionRequestInterface(self.graph, local_root_node, request_node);
                 },
             }
         }

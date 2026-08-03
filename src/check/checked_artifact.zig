@@ -27182,6 +27182,9 @@ pub const CheckedModuleArtifact = struct {
                     if (@intFromEnum(local_scope) >= templates.dispatch_scopes.len) {
                         return .{ .kind = .specialization_relation_local_proc_use_invalid, .index = @intCast(i) };
                     }
+                    if (templates.dispatch_scopes[@intFromEnum(local_scope)].checked_expr != local.expr) {
+                        return .{ .kind = .specialization_relation_local_proc_use_invalid, .index = @intCast(i) };
+                    }
                 },
             }
         }
@@ -27203,6 +27206,20 @@ pub const CheckedModuleArtifact = struct {
                     return .{
                         .kind = .evidence_param_path_diverges_from_checked_type,
                         .index = template.evidence_params.start + @as(u32, @intCast(param_offset)),
+                        .method = param.method,
+                    };
+                }
+            }
+        }
+        for (templates.dispatch_scopes) |scope| {
+            const params = templates.evidence_params_pool[scope.evidence_params.start .. scope.evidence_params.start + scope.evidence_params.len];
+            for (params, 0..) |param, param_offset| {
+                const path = templates.evidenceParamPath(param);
+                if (path.len == 0) continue;
+                if (!self.checkedEvidencePathResolves(scope.scheme_root, path)) {
+                    return .{
+                        .kind = .evidence_param_path_diverges_from_checked_type,
+                        .index = scope.evidence_params.start + @as(u32, @intCast(param_offset)),
                         .method = param.method,
                     };
                 }
@@ -31950,8 +31967,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xB5, 0xCC, 0xBB, 0x44, 0x7C, 0xAB, 0xBD, 0xD4, 0xCD, 0xCC, 0x90, 0x8C, 0xA9, 0x7E, 0x0B, 0x63,
-        0x5C, 0xCE, 0x5C, 0xD1, 0xA0, 0xBB, 0xFD, 0x14, 0x5B, 0x4C, 0xB0, 0xB2, 0x39, 0xFA, 0xDB, 0xC3,
+        0x4C, 0x6D, 0xCC, 0x4C, 0x13, 0xA6, 0x0B, 0x10, 0xAF, 0xAC, 0x31, 0xEF, 0xE0, 0x91, 0xC6, 0x39,
+        0x1A, 0x6C, 0x78, 0xFD, 0xF2, 0x88, 0x52, 0x36, 0x1B, 0xC9, 0x8D, 0xBB, 0x2A, 0x31, 0xF6, 0x14,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

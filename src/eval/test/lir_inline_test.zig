@@ -1887,11 +1887,13 @@ test "specialization interface replay follows returned local functions through w
     _ = try monotypeCountersForModule(allocator, source);
 }
 
-test "specialization interface replay keeps unequal generic requests distinct" {
+test "specialization interface replay keeps unequal generic requests through local dependencies distinct" {
     const allocator = std.testing.allocator;
     const source =
+        \\id = |value| value
+        \\
         \\make = |value| {
-        \\    get = || value
+        \\    get = || id(value)
         \\    get
         \\}
         \\
@@ -6193,6 +6195,33 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
     failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_local_proc_use_invalid, failure.kind);
     templates.specialization_interface_relations[raw_local_use].data.local_proc_use = saved_local_ref;
+
+    const local_record = artifact.resolved_value_refs.records[@intFromEnum(saved_local_ref)].ref.local_proc;
+    const local_scope = local_record.dispatch_scope orelse return error.TestUnexpectedResult;
+    const raw_local_scope = @intFromEnum(local_scope);
+    const saved_scope_expr = templates.dispatch_scopes[raw_local_scope].checked_expr;
+    const next_expr = (@intFromEnum(saved_scope_expr) + 1) % artifact.checked_bodies.exprCount();
+    templates.dispatch_scopes[raw_local_scope].checked_expr = @enumFromInt(next_expr);
+    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_local_proc_use_invalid, failure.kind);
+    templates.dispatch_scopes[raw_local_scope].checked_expr = saved_scope_expr;
+
+    var path_param_span: ?@TypeOf(templates.templates[0].evidence_params) = null;
+    for (templates.templates) |template| {
+        const params = templates.evidenceParams(&template);
+        for (params) |param| {
+            if (param.path.len > 0) {
+                path_param_span = template.evidence_params;
+                break;
+            }
+        }
+        if (path_param_span != null) break;
+    }
+    const saved_scope_params = templates.dispatch_scopes[raw_local_scope].evidence_params;
+    templates.dispatch_scopes[raw_local_scope].evidence_params = path_param_span orelse return error.TestUnexpectedResult;
+    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.evidence_param_path_diverges_from_checked_type, failure.kind);
+    templates.dispatch_scopes[raw_local_scope].evidence_params = saved_scope_params;
 
     try std.testing.expect(artifact.validateDispatchEvidence() == null);
 }

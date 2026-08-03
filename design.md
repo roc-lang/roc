@@ -3437,8 +3437,8 @@ Within the specialization, each body instantiation context caches nodes by `(che
 module id, checked type id)`. The address is the checked identity of the type
 variable/content in that body specialization. It is not a structural digest,
 source name, runtime layout, object symbol, or generated procedure id. Nodes
-begin unresolved. As the group is lowered, explicit evidence from checked data
-unifies those nodes:
+begin unresolved. As relations are produced, explicit evidence from checked
+data unifies those nodes:
 
 - the requested root function/value type constrains the checked root type;
 - lambda and closure expected function types constrain the nested function
@@ -3587,21 +3587,24 @@ During active Monotype specialization, unresolved checked variables and row
 extensions remain instantiation graph nodes. They are not represented by
 durable Monotype `TypeId`s.
 
-Type-shaped inspection during relation production is allowed only for a fully
-resolved graph node. It materializes an immutable active snapshot: later graph
-relations invalidate the snapshot cache and a subsequent inspection allocates
-a fresh snapshot rather than refilling an observed `TypeId`. The draft retains
-the graph node, not the snapshot id, and final sealing allocates fresh durable
-ids. Consequently neither an unresolved variable nor an open row can ever be
-observed as `tag_union []`, and no `TypeId` can change from that shape to a
-different type after a consumer has seen it.
+Type-shaped inspection that can escape relation production or become durable
+specialization identity is allowed only for a fully resolved graph node. It
+materializes an immutable active snapshot: later graph relations invalidate the
+snapshot cache and a subsequent inspection allocates a fresh snapshot rather
+than refilling an observed `TypeId`. The draft retains the graph node, not the
+snapshot id, and final sealing allocates fresh durable ids. Consequently no
+durable `TypeId` can change shape after a consumer has seen it.
+
+Interface-replay memo lookup has one narrower inspection operation. It may
+materialize an unresolved request as an immutable provisional scratch view,
+applying defaults in that view only. The digest is only a bucket index; exact
+structural equality is collision authority, the scratch type is never emitted,
+and subsequent relations still act on the original graph node.
 
 The only time an unresolved checked variable with an empty-tag-union row
 default may become durable `tag_union []` is final graph sealing, after every
 checked interface relation and specialization demand for that body has been
-applied. A provisional relation-replay view may apply defaults into an
-immutable scratch `TypeId` for exact memo lookup; it does not mutate the live
-graph and is never emitted as Monotype output.
+applied.
 After sealing, `tag_union []` is closed and uninhabited. Values such as `[]` can
 still be represented as `List(tag_union [])` because they contain no items,
 and code that would need an actual item value must have constrained the
