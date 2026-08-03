@@ -85,3 +85,76 @@ test "host ABI callable positions commit erased layouts without collapsing outer
         expectHostAbiCallablesUseErasedRepresentation,
     );
 }
+
+fn expectContextOutcomeContainsErasedCallable(
+    store: *const lir.LirStore,
+    layouts: *const layout.Store,
+) harness.LowerToLirHarnessError!void {
+    var found_outcome = false;
+    var found_step = false;
+
+    for (store.getProcSpecs()) |proc| {
+        const args = store.getLocalSpan(proc.args);
+
+        if (proc.abi == .erased_callable and proc.body != null and proc.ret_layout == .u64 and args.len >= 1) {
+            const first_arg = collections.GuardedList.at(args, 0);
+            if (store.getLocal(first_arg).layout_idx == .u64) found_step = true;
+        }
+
+        if (args.len != 1 or layouts.getLayout(proc.ret_layout).tag != .tag_union) continue;
+        const state_arg = collections.GuardedList.at(args, 0);
+        const state_layout = layouts.getLayout(store.getLocal(state_arg).layout_idx);
+        try std.testing.expectEqual(layout.LayoutTag.struct_, state_layout.tag);
+        const state_info = layouts.getStructInfo(state_layout);
+        try std.testing.expectEqual(@as(usize, 2), state_info.fields.len);
+
+        const outcome_layout = layouts.getLayout(proc.ret_layout);
+        try std.testing.expectEqual(layout.LayoutTag.tag_union, outcome_layout.tag);
+        const outcome_info = layouts.getTagUnionInfo(outcome_layout);
+        try std.testing.expectEqual(@as(usize, 2), outcome_info.variants.len);
+        try std.testing.expect(outcome_info.data.discriminant_size != 0);
+
+        var found_response = false;
+        var found_stream = false;
+        for (0..outcome_info.variants.len) |variant_index| {
+            const payload_idx = outcome_info.variants.get(variant_index).payload_layout;
+            if (payload_idx == .u16) {
+                found_response = true;
+                continue;
+            }
+
+            const payload_layout = layouts.getLayout(payload_idx);
+            if (payload_layout.tag != .struct_) continue;
+            const stream_info = layouts.getStructInfo(payload_layout);
+            try std.testing.expectEqual(@as(usize, 2), stream_info.fields.len);
+
+            var u64_fields: usize = 0;
+            var erased_fields: usize = 0;
+            for (0..stream_info.fields.len) |field_index| {
+                const field = stream_info.fields.get(field_index);
+                if (field.is_padding) continue;
+                const field_tag = layouts.getLayout(field.layout).tag;
+                if (field.layout == .u64) u64_fields += 1;
+                if (field_tag == .erased_callable) erased_fields += 1;
+            }
+            try std.testing.expectEqual(@as(usize, 1), u64_fields);
+            try std.testing.expectEqual(@as(usize, 1), erased_fields);
+            found_stream = true;
+        }
+
+        try std.testing.expect(found_response);
+        try std.testing.expect(found_stream);
+        found_outcome = true;
+    }
+
+    try std.testing.expect(found_outcome);
+    try std.testing.expect(found_step);
+}
+
+test "provided context may return an erased callable nested in an outcome" {
+    try harness.runAppPathLirInspection(
+        "test/postcheck/provided_callable_context_union/app.roc",
+        .{ .proc_debug_names = true },
+        expectContextOutcomeContainsErasedCallable,
+    );
+}

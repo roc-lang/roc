@@ -378,7 +378,8 @@ const Solver = struct {
             .func => |func| func,
             else => Common.invariant("Lambda Solved ABI boundary referenced a non-function"),
         };
-        for (self.program.types.span(func.args)) |arg| {
+        for (0..func.args.count()) |arg_index| {
+            const arg = self.program.types.spanItem(func.args, arg_index);
             try self.markErasedCallablesReachedByType(arg);
         }
         try self.markErasedCallablesReachedByType(func.ret);
@@ -1111,8 +1112,10 @@ const Solver = struct {
             .link => Common.invariant("Lambda Solved root returned a link"),
             .unbound, .forall, .primitive, .zst => {},
             .erased => |erased| {
-                for (self.program.types.memberSpan(erased.members)) |member| {
-                    for (self.program.types.captureSpan(member.captures)) |capture| {
+                for (0..erased.members.count()) |member_index| {
+                    const member = self.program.types.memberItem(erased.members, member_index);
+                    for (0..member.captures.count()) |capture_index| {
+                        const capture = self.program.types.captureItem(member.captures, capture_index);
                         try self.markErasedCallablesReachedByTypeInner(capture.ty, active);
                     }
                 }
@@ -1123,7 +1126,8 @@ const Solver = struct {
                     .members = .empty(),
                 } });
                 try self.unify(func.callable, erased);
-                for (self.program.types.span(func.args)) |arg| {
+                for (0..func.args.count()) |arg_index| {
+                    const arg = self.program.types.spanItem(func.args, arg_index);
                     try self.markErasedCallablesReachedByTypeInner(arg, active);
                 }
                 try self.markErasedCallablesReachedByTypeInner(func.ret, active);
@@ -1131,24 +1135,29 @@ const Solver = struct {
             .list => |elem| try self.markErasedCallablesReachedByTypeInner(elem, active),
             .box => |elem| try self.markErasedCallablesReachedByTypeInner(elem, active),
             .tuple => |items| {
-                for (self.program.types.span(items)) |item| {
+                for (0..items.count()) |item_index| {
+                    const item = self.program.types.spanItem(items, item_index);
                     try self.markErasedCallablesReachedByTypeInner(item, active);
                 }
             },
             .record => |fields| {
-                for (self.program.types.fieldSpan(fields)) |field| {
+                for (0..fields.count()) |field_index| {
+                    const field = self.program.types.fieldItem(fields, field_index);
                     try self.markErasedCallablesReachedByTypeInner(field.ty, active);
                 }
             },
             .tag_union => |tags| {
-                for (self.program.types.tagSpan(tags)) |tag| {
-                    for (self.program.types.span(tag.payloads)) |payload| {
+                for (0..tags.count()) |tag_index| {
+                    const tag = self.program.types.tagItem(tags, tag_index);
+                    for (0..tag.payloads.count()) |payload_index| {
+                        const payload = self.program.types.spanItem(tag.payloads, payload_index);
                         try self.markErasedCallablesReachedByTypeInner(payload, active);
                     }
                 }
             },
             .named => |named| {
-                for (self.program.types.span(named.args)) |arg| {
+                for (0..named.args.count()) |arg_index| {
+                    const arg = self.program.types.spanItem(named.args, arg_index);
                     try self.markErasedCallablesReachedByTypeInner(arg, active);
                 }
                 if (named.backing) |backing| {
@@ -1156,8 +1165,10 @@ const Solver = struct {
                 }
             },
             .lambda_set => |members| {
-                for (self.program.types.memberSpan(members)) |member| {
-                    for (self.program.types.captureSpan(member.captures)) |capture| {
+                for (0..members.count()) |member_index| {
+                    const member = self.program.types.memberItem(members, member_index);
+                    for (0..member.captures.count()) |capture_index| {
+                        const capture = self.program.types.captureItem(member.captures, capture_index);
                         try self.markErasedCallablesReachedByTypeInner(capture.ty, active);
                     }
                 }

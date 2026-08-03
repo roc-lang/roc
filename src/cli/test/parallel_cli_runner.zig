@@ -436,6 +436,7 @@ const CustomCase = enum {
     glue_zig_opaque_box,
     glue_zig_box_payload_alignment,
     glue_rust,
+    glue_rust_provided_context_callable_outcome,
     glue_rust_box_payload_alignment,
     glue_zig_bang_record_fields,
     glue_package_nominal_api_alias,
@@ -858,6 +859,7 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue uses RocBox for opaque boxed app types", .body = .{ .custom = .glue_zig_opaque_box } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue decrefs non-refcounted boxed payloads with payload alignment", .body = .{ .custom = .glue_zig_box_payload_alignment } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: RustGlue succeeds on fx platform", .body = .{ .custom = .glue_rust } },
+    .{ .id = 0, .suite = .glue, .name = "glue regression: provided context can return a callable inside an outcome", .body = .{ .custom = .glue_rust_provided_context_callable_outcome } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: RustGlue decrefs non-refcounted boxed payloads with payload alignment", .body = .{ .custom = .glue_rust_box_payload_alignment } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue quotes bang record fields", .body = .{ .custom = .glue_zig_bang_record_fields } },
     .{ .id = 0, .suite = .glue, .name = "issue 9865: RustGlue does not panic for package nominal record API alias", .body = .{ .custom = .glue_package_nominal_api_alias } },
@@ -2512,6 +2514,7 @@ fn runCustomCase(
         .glue_zig_opaque_box => customGlueZigOpaqueBox(io, allocator, &env, &timer, timeout_ms),
         .glue_zig_box_payload_alignment => customGlueZigBoxPayloadAlignment(io, allocator, &env, &timer, timeout_ms),
         .glue_rust => customGlueRust(io, allocator, &env, &timer, timeout_ms),
+        .glue_rust_provided_context_callable_outcome => customGlueRustProvidedContextCallableOutcome(io, allocator, &env, &timer, timeout_ms),
         .glue_rust_box_payload_alignment => customGlueRustBoxPayloadAlignment(io, allocator, &env, &timer, timeout_ms),
         .glue_zig_bang_record_fields => customGlueZigBangRecordFieldNames(io, allocator, &env, &timer, timeout_ms),
         .glue_package_nominal_api_alias => customGluePackageNominalApiAlias(io, allocator, &env, &timer, timeout_ms),
@@ -8243,6 +8246,40 @@ fn customGlueRustBoxPayloadAlignment(io: std.Io, allocator: Allocator, env: *con
         "-o",
         test_rlib_path,
     }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+    return null;
+}
+
+fn customGlueRustProvidedContextCallableOutcome(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // A generic application State is opaque to glue, but it may be consumed by
+    // a provided wrapper whose result contains an erased callable. Lambda
+    // Solved must expand that nested callable without invalidating an active
+    // traversal of its growable type stores.
+    const output_dir = createWorkSubdir(io, allocator, env, "rust-context-outcome-glue-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "glue", "--no-cache", "src/glue/src/RustGlue.roc", output_dir, "test/glue/provided-context-callable-outcome/main.roc" },
+        .not_contains = &.{
+            .{ .stream = .stderr, .text = "PANIC" },
+            .{ .stream = .stderr, .text = "unreachable" },
+            .{ .stream = .stderr, .text = "invariant violated" },
+        },
+    })) |failure| return failure;
+
+    const generated_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.rs" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate generated Rust path: {}", .{err});
+    const generated = std.Io.Dir.cwd().readFileAlloc(io, generated_path, allocator, .limited(1024 * 1024)) catch |err|
+        return customFailure(allocator, timer, "failed to read generated Rust file: {}", .{err});
+    defer allocator.free(generated);
+
+    for ([_][]const u8{
+        "pub struct AbiSourceOutcome",
+        "pub stream: core::mem::ManuallyDrop<RocErasedCallable>",
+        "pub fn roc_make_outcome(arg0: u64, arg1: *mut c_void) -> AbiSourceOutcome;",
+    }) |needle| {
+        if (std.mem.find(u8, generated, needle) == null) {
+            return customFailure(allocator, timer, "generated Rust file missing {s}", .{needle});
+        }
+    }
     return null;
 }
 
