@@ -1360,8 +1360,12 @@ pub fn strConcat(
 ) RocStr {
     // NOTE: we don't special-case the first argument being empty. That is because it is owned and
     // may have sufficient capacity to store the rest of the list.
-    if (arg2.isEmpty()) {
-        // the first argument is owned, so we can return it without cloning
+    if (arg2.isEmpty() and arg1.isExclusive(update_mode)) {
+        // The first argument is owned and nobody else holds its allocation, so
+        // the result can be that value itself. Handing back a *shared* value
+        // here would break the op's `result_unique` claim (`base/LowLevel.zig`)
+        // and let ARC treat a shared allocation as freshly owned; a shared
+        // first argument falls through to the copying path below.
         return arg1;
     } else {
         const combined_length = arg1.len() + arg2.len();

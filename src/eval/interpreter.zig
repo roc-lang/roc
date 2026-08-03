@@ -18,6 +18,7 @@ const LirStore = lir.LirStore;
 const GuardedList = LirStore.GuardedList;
 const CheckedArithmetic = lir.CheckedArithmetic;
 const lir_value = @import("value.zig");
+const rc_conformance = @import("rc_conformance.zig");
 const backend = @import("backend");
 const host_trampoline = @import("host_trampoline.zig");
 const builtins = @import("builtins");
@@ -1916,15 +1917,22 @@ pub const Interpreter = struct {
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
                     const arg_layouts = try self.localLayouts(arg_locals);
+                    const ret_layout = self.store.getLocal(assign.target).layout_idx;
+                    const observation = rc_conformance.beginStatement(assign.op, arg_values.len);
+                    if (observation) |obs| self.conformanceSnapshotArgs(obs, arg_values, arg_layouts);
                     const value = try self.evalLowLevel(.{
                         .op = assign.op,
                         .args = arg_values,
                         .arg_layouts = arg_layouts,
-                        .ret_layout = self.store.getLocal(assign.target).layout_idx,
+                        .ret_layout = ret_layout,
                         .callable_proc = null,
                         .unique_args = assign.unique_args,
                         .interchangeable = assign.interchangeable,
                     });
+                    if (observation) |obs| {
+                        self.conformanceSnapshotResult(obs, value, ret_layout);
+                        rc_conformance.endStatement(obs);
+                    }
                     try self.setLocalChecked(frame, current, assign.target, value, assign.op == .box_alloc_zeroed);
                     current = assign.next;
                 },
@@ -4362,6 +4370,166 @@ pub const Interpreter = struct {
             .atomicity = atomicity,
         };
         rl.decrefElements(list_plan.elem_width, &ctx, decrefListElementCallback, &self.roc_ops);
+    }
+
+    // ── RcEffect conformance observation (debug builds only) ──
+    //
+    // These read the same layout-driven RC plans the retain/release handlers
+    // execute, but only to look: they name the allocations a value owns or
+    // reaches, so `rc_conformance` can compare what a low-level op did to what
+    // its `RcEffect` row says it does. Nothing here adjusts a count.
+
+    /// How deep the reachability walk descends before giving up. Depth only
+    /// limits what the alias rules can see; they fire on allocations found,
+    /// never on ones missed.
+    const rc_conformance_max_depth = 8;
+
+    /// The allocation a value owns directly, if its layout has one.
+    fn conformanceOuterAllocation(
+        self: *LirInterpreter,
+        val: Value,
+        layout_idx: layout_mod.Idx,
+    ) ?rc_conformance.Allocation {
+        return switch (self.conformanceRcPlan(layout_idx)) {
+            .str_decref => blk: {
+                const rs = valueToRocStr(val);
+                if (rs.isSmallStr()) break :blk null;
+                break :blk rc_conformance.allocationAt(rs.getAllocationPtr());
+            },
+            .list_decref => rc_conformance.allocationAt(valueToRocList(val).getAllocationDataPtr(&self.roc_ops)),
+            .box_decref, .erased_callable_decref => rc_conformance.allocationAt(val.read(?[*]u8)),
+            else => null,
+        };
+    }
+
+    fn conformanceRcPlan(self: *LirInterpreter, layout_idx: layout_mod.Idx) layout_mod.RcHelperPlan {
+        return self.cachedRcPlan(.{ .op = .decref, .layout_idx = layout_idx });
+    }
+
+    /// Collect every refcounted allocation reachable from a value.
+    fn conformanceCollectAllocations(
+        self: *LirInterpreter,
+        val: Value,
+        layout_idx: layout_mod.Idx,
+        sink: *rc_conformance.AllocationSet,
+    ) void {
+        self.conformanceCollectPlan(self.conformanceRcPlan(layout_idx), val, sink, 0);
+    }
+
+    fn conformanceCollectPlan(
+        self: *LirInterpreter,
+        plan: layout_mod.RcHelperPlan,
+        val: Value,
+        sink: *rc_conformance.AllocationSet,
+        depth: u32,
+    ) void {
+        if (depth > rc_conformance_max_depth) return;
+        switch (plan) {
+            // The walk always asks for decref plans, so the incref and free
+            // shapes of each plan never reach here.
+            .noop, .str_incref, .list_incref, .box_incref, .erased_callable_incref, .str_free, .list_free, .box_free, .erased_callable_free => {},
+            .str_decref => {
+                const rs = valueToRocStr(val);
+                if (rs.isSmallStr()) return;
+                if (rc_conformance.allocationAt(rs.getAllocationPtr())) |found| sink.add(found.rc_addr);
+            },
+            .list_decref => |list_plan| {
+                const rl = valueToRocList(val);
+                if (rc_conformance.allocationAt(rl.getAllocationDataPtr(&self.roc_ops))) |found| sink.add(found.rc_addr);
+                const child_key = list_plan.child orelse return;
+                const bytes = rl.bytes orelse return;
+                const child_plan = self.cachedRcPlan(child_key);
+                for (0..rl.len()) |index| {
+                    const elem = Value{ .ptr = bytes + index * list_plan.elem_width };
+                    self.conformanceCollectPlan(child_plan, elem, sink, depth + 1);
+                }
+            },
+            .box_decref => |box_plan| {
+                const alloc_ptr = val.read(?[*]u8);
+                if (rc_conformance.allocationAt(alloc_ptr)) |found| sink.add(found.rc_addr);
+                const child_key = box_plan.child orelse return;
+                const data_ptr = self.readBoxedDataPointer(val) orelse return;
+                self.conformanceCollectPlan(self.cachedRcPlan(child_key), .{ .ptr = data_ptr }, sink, depth + 1);
+            },
+            .erased_callable_decref => {
+                if (rc_conformance.allocationAt(val.read(?[*]u8))) |found| sink.add(found.rc_addr);
+            },
+            .struct_ => |struct_plan| {
+                const field_count = self.layout_store.rcHelperStructFieldCount(struct_plan);
+                var index: u32 = 0;
+                while (index < field_count) : (index += 1) {
+                    const field_plan = self.cachedStructFieldPlan(struct_plan, index) orelse continue;
+                    const field_val = Value{ .ptr = val.ptr + field_plan.offset };
+                    self.conformanceCollectPlan(self.cachedRcPlan(field_plan.child), field_val, sink, depth + 1);
+                }
+            },
+            .tag_union => |tag_plan| {
+                const variant_count = self.layout_store.rcHelperTagUnionVariantCount(tag_plan);
+                if (variant_count == 0) return;
+                const tu_data = self.layout_store.getTagUnionData(tag_plan.tag_union_idx);
+                const disc_offset = tu_data.discriminant_offset.get(self.layout_store.targetUsize());
+                const disc: u32 = switch (tu_data.discriminant_size) {
+                    0 => 0,
+                    1 => val.offset(disc_offset).read(u8),
+                    2 => val.offset(disc_offset).read(u16),
+                    else => return,
+                };
+                if (disc >= variant_count) return;
+                const child_key = self.cachedTagVariantPlan(tag_plan, disc) orelse return;
+                self.conformanceCollectPlan(self.cachedRcPlan(child_key), val, sink, depth + 1);
+            },
+            .closure => |child_key| {
+                self.conformanceCollectPlan(self.cachedRcPlan(child_key), val, sink, depth + 1);
+            },
+        }
+    }
+
+    /// Snapshot the arguments a low-level op is about to receive.
+    fn conformanceSnapshotArgs(
+        self: *LirInterpreter,
+        observation: *rc_conformance.Observation,
+        args: []const Value,
+        arg_layouts: []const layout_mod.Idx,
+    ) void {
+        const positions = @min(@min(args.len, arg_layouts.len), rc_conformance.max_observed_args);
+        for (0..positions) |index| {
+            observation.args[index] = .{
+                .outer = self.conformanceOuterAllocation(args[index], arg_layouts[index]),
+            };
+        }
+    }
+
+    /// Snapshot what the op left behind, then judge it against its row.
+    fn conformanceSnapshotResult(
+        self: *LirInterpreter,
+        observation: *rc_conformance.Observation,
+        result: Value,
+        ret_layout: layout_mod.Idx,
+    ) void {
+        const window = rc_conformance.endEventWindow();
+        observation.allocated = window.allocated;
+        observation.adjusted_counts = window.adjusted_counts;
+        observation.events_incomplete = window.incomplete;
+
+        const positions = @min(observation.arg_count, rc_conformance.max_observed_args);
+        for (observation.args[0..positions]) |*arg| {
+            const outer = arg.outer orelse continue;
+            if (window.incomplete) {
+                // Without a complete event log there is no way to know whether
+                // reading this count would touch freed memory.
+                arg.count_after = outer.count;
+                continue;
+            }
+            if (rc_conformance.wasFreedInWindow(outer.rc_addr)) {
+                arg.count_after = null;
+                continue;
+            }
+            const rc_ptr: *const isize = @ptrFromInt(outer.rc_addr);
+            arg.count_after = rc_ptr.*;
+        }
+
+        observation.result_outer = self.conformanceOuterAllocation(result, ret_layout);
+        self.conformanceCollectAllocations(result, ret_layout, &observation.result_reachable);
     }
 
     fn performErasedCallableFinalDropIfUnique(
