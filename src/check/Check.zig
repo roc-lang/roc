@@ -10604,7 +10604,9 @@ fn declareWhereAliasConstraints(
 fn whereAliasReferenceArgs(self: *Self, alias: std.meta.fieldInfo(CIR.WhereClause, .w_alias).type) []const CIR.TypeAnno.Idx {
     return switch (self.cir.store.getTypeAnno(alias.alias)) {
         .apply => |apply| self.cir.store.sliceTypeAnnos(apply.args),
-        .lookup => &.{},
+        // A name canonicalization could not resolve carries no arguments; it is
+        // reported when the reference is resolved.
+        .lookup, .malformed => &.{},
         else => unreachable, // canonicalization only builds a name reference here
     };
 }
