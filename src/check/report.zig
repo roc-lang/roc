@@ -64,6 +64,7 @@ const ComptimeCondition = problem_mod.ComptimeCondition;
 const TypeApplyArityMismatch = problem_mod.TypeApplyArityMismatch;
 const RecursiveAlias = problem_mod.RecursiveAlias;
 const NotAWhereAlias = problem_mod.NotAWhereAlias;
+const WhereAliasInTypePosition = problem_mod.WhereAliasInTypePosition;
 const RecursiveWhereAlias = problem_mod.RecursiveWhereAlias;
 const WhereClauseReceiverNotIntroduced = problem_mod.WhereClauseReceiverNotIntroduced;
 const InvalidNominalDeclRecursion = problem_mod.InvalidNominalDeclRecursion;
@@ -894,6 +895,9 @@ pub const ReportBuilder = struct {
             },
             .not_a_where_alias => |data| {
                 return self.buildNotAWhereAliasReport(data);
+            },
+            .where_alias_in_type_position => |data| {
+                return self.buildWhereAliasInTypePositionReport(data);
             },
             .recursive_where_alias => |data| {
                 return self.buildRecursiveWhereAliasReport(data);
@@ -2057,6 +2061,37 @@ pub const ReportBuilder = struct {
             D.bytes("a.Sortable : where [a.compare : a -> [LT, EQ, GT]]").withAnnotation(.inline_code),
             D.bytes("and written in a where clause as"),
             D.bytes("where [a.Sortable]").withAnnotation(.inline_code),
+        }, self, &report);
+
+        return report;
+    }
+
+    fn buildWhereAliasInTypePositionReport(
+        self: *Self,
+        data: WhereAliasInTypePosition,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Where Alias Used as a Type", "", .runtime_error);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
+            D.ident(data.name).withAnnotation(.type_variable),
+            D.bytes("is a where alias, not a type."),
+        }, self, &report, &report.headline);
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("A where alias names a set of method constraints, so it constrains a type variable in a"),
+            D.bytes("where").withAnnotation(.inline_code),
+            D.bytes("clause rather than standing in for a type of its own."),
         }, self, &report);
 
         return report;

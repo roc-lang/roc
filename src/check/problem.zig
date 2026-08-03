@@ -57,6 +57,7 @@ pub const ComptimeCondition = types.ComptimeCondition;
 pub const TypeApplyArityMismatch = types.TypeApplyArityMismatch;
 pub const RecursiveAlias = types.RecursiveAlias;
 pub const NotAWhereAlias = types.NotAWhereAlias;
+pub const WhereAliasInTypePosition = types.WhereAliasInTypePosition;
 pub const RecursiveWhereAlias = types.RecursiveWhereAlias;
 pub const WhereClauseReceiverNotIntroduced = types.WhereClauseReceiverNotIntroduced;
 

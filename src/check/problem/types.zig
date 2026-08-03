@@ -37,6 +37,7 @@ pub const Problem = union(enum) {
     nominal_type_resolution_failed: NominalTypeResolutionFailed,
     recursive_alias: RecursiveAlias,
     not_a_where_alias: NotAWhereAlias,
+    where_alias_in_type_position: WhereAliasInTypePosition,
     recursive_where_alias: RecursiveWhereAlias,
     where_clause_receiver_not_introduced: WhereClauseReceiverNotIntroduced,
     invalid_nominal_decl_recursion: InvalidNominalDeclRecursion,
@@ -508,6 +509,12 @@ pub const RecursiveAlias = struct {
 /// Error when a where clause names something that is not a where alias, such as
 /// an ordinary type (e.g. `where [a.Str]`).
 pub const NotAWhereAlias = struct {
+    name: base.Ident.Idx,
+    region: base.Region,
+};
+
+/// Error when a where alias is used where a type is expected.
+pub const WhereAliasInTypePosition = struct {
     name: base.Ident.Idx,
     region: base.Region,
 };

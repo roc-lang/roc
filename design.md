@@ -2115,6 +2115,17 @@ defaulted at a generalization boundary that narrows the definition's inferred
 type reports `LITERAL DEFAULTED` as a warning, not an error, worded per
 literal kind.
 
+A where alias (`a.Sortable : where [...]`) is a source-level abbreviation for a
+set of method constraints, not a type. Its declaration solves to its receiver: a
+rigid variable carrying the constraints it names. A signature that references
+one instantiates those constraints onto its own type variable, substituting the
+declaration's receiver and parameters by name, so the resulting constraint set
+is indistinguishable from one written out clause by clause. Nothing downstream
+of checking sees a where alias. Because a rigid variable's constraint set is
+fixed by the annotation that introduces it, a where alias constrains only its
+receiver; canonicalization rejects a constraint written against a parameter
+rather than emitting one that could never reach the applied argument.
+
 The checked module outputs normalized dispatch plans. A dispatch plan is a
 checked record, not lowered code:
 
