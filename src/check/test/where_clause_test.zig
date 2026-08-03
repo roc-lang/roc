@@ -569,4 +569,3 @@ test "where alias - parameterized alias substitutes its argument" {
     defer test_env.deinit();
     try test_env.assertLastDefType("a, Str -> Str where [a.encode : a, Str -> Str]");
 }
-
