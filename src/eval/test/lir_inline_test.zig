@@ -6112,7 +6112,7 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
     templates.templates[raw_template].specialization_interface_relations = saved_template_span;
 
     const saved_parent = templates.dispatch_scopes[0].parent;
-    templates.dispatch_scopes[0].parent = @enumFromInt(0);
+    templates.dispatch_scopes[0].parent = @enumFromInt(templates.dispatch_scopes.len);
     failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_scope_parent_invalid, failure.kind);
     templates.dispatch_scopes[0].parent = saved_parent;
@@ -6132,7 +6132,7 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
     const saved_relation_data = templates.specialization_interface_relations[0].data;
     templates.specialization_interface_relations[0].data = .{ .type_equality = .{
         .left = @enumFromInt(artifact.checked_types.payloadCount()),
-        .right = @enumFromInt(0),
+        .right = templates.dispatch_scopes[0].scheme_root,
     } };
     failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_type_out_of_bounds, failure.kind);
