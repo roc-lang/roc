@@ -439,12 +439,14 @@ evaluate.
 ### Type Declaration Template Validity
 
 Checking records type-declaration template validity while generating annotation
-nodes. A declaration is locally invalid when any annotation node generated for
-its header or backing resolves to the solver's error type. Every local named-type
-reference generated in a declaration also records a directed dependency from the
-referencing declaration to the referenced declaration. This evidence comes from
-the normal annotation-generation traversal; validity must not be reconstructed
-later by rescanning source syntax or solved type structure.
+nodes. A declaration is locally invalid when its header contains a `.malformed`
+annotation node or any annotation node generated for its backing resolves to the
+solver's error type. Header underscores remain valid declaration parameters even
+though their recovery vars use the error type. Every local named-type reference
+generated in a declaration also records a directed dependency from the referencing
+declaration to the referenced declaration. This evidence comes from the normal
+annotation-generation traversal; validity must not be reconstructed later by
+rescanning source syntax or solved type structure.
 
 After all local type declarations have been generated, checking computes the
 transitive closure of invalidity over those recorded dependency edges. This
@@ -453,11 +455,11 @@ handles forward and mutually recursive declarations independent of source order,
 and first runs before nominal-recursion validation. Nominal-recursion errors add
 invalid declarations to the same worklist, which is then propagated incrementally
 before value checking without rebuilding the dependency graph. Every invalid
-nominal declaration is marked invalid in the declaration table and its declaration
-root and backing template are poisoned to the error type. CheckedModule
-construction enforces this invariant: a nominal declaration marked valid always
-has an error-free checked template, and encountering malformed template data for
-one is an invariant violation.
+type declaration has its declaration root and backing template poisoned to the
+error type, and invalid nominal declarations are also marked invalid in the
+declaration table. CheckedModule construction enforces this invariant: a nominal
+declaration marked valid always has an error-free checked template, and
+encountering malformed template data for one is an invariant violation.
 
 ### Compile-Time Evaluation And Static Storage
 

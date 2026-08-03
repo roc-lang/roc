@@ -387,11 +387,11 @@ Complex : { person : Person, result : Try(Bool, Str), tree : Tree(U64) }
 				(ty-args
 					(ty-rigid-var (name "ok"))
 					(ty-rigid-var (name "err")))))
-		(alias (type "Tree(a)")
+		(alias (type "Error")
 			(ty-header (name "Tree")
 				(ty-args
 					(ty-rigid-var (name "a")))))
-		(alias (type "Node(a)")
+		(alias (type "Error")
 			(ty-header (name "Node")
 				(ty-args
 					(ty-rigid-var (name "a")))))
@@ -399,13 +399,13 @@ Complex : { person : Person, result : Try(Bool, Str), tree : Tree(U64) }
 			(ty-header (name "MyTry")))
 		(alias (type "Person")
 			(ty-header (name "Person")))
-		(alias (type "BadType")
+		(alias (type "Error")
 			(ty-header (name "BadType")))
 		(alias (type "MyList")
 			(ty-header (name "MyList")))
 		(alias (type "MyDict")
 			(ty-header (name "MyDict")))
-		(alias (type "Complex")
+		(alias (type "Error")
 			(ty-header (name "Complex"))))
 	(expressions))
 ~~~

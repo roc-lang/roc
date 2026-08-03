@@ -634,6 +634,11 @@ fn registerTypeDecl(self: *Self, decl_idx: CIR.Statement.Idx) std.mem.Allocator.
     const existing = self.type_decl_dense_indices.items[slot];
     if (existing != no_type_decl_dense_index) return existing;
 
+    switch (self.cir.store.getStatement(decl_idx)) {
+        .s_alias_decl, .s_nominal_decl => {},
+        else => unreachable,
+    }
+
     try self.type_decl_statements.ensureUnusedCapacity(self.gpa, 1);
     try self.type_decl_invalid.ensureUnusedCapacity(self.gpa, 1);
 
@@ -3655,28 +3660,33 @@ fn propagateTypeDeclarationInvalidity(
     }
 }
 
-fn poisonInvalidNominalDeclarations(self: *Self) std.mem.Allocator.Error!void {
+fn poisonInvalidTypeDeclarations(self: *Self, poisoned: []bool) std.mem.Allocator.Error!void {
     const self_origin = self.cir.selfModuleIdentity();
-    const nominal_count = self.types.nominalDeclCount();
-    var nominal_int: u32 = 0;
-    while (nominal_int < nominal_count) : (nominal_int += 1) {
-        const nominal_idx: types_mod.NominalDecl.Idx = @enumFromInt(nominal_int);
-        const nominal = self.types.getNominalDecl(nominal_idx);
-        if (nominal.origin_module != self_origin) continue;
+    for (self.type_decl_statements.items, self.type_decl_invalid.items, poisoned) |decl_idx, invalid, *was_poisoned| {
+        if (!invalid or was_poisoned.*) continue;
+        was_poisoned.* = true;
 
-        const decl_idx: CIR.Statement.Idx = @enumFromInt(nominal.statement());
-        const dense_idx = self.type_decl_dense_indices.items[nodeSlot(decl_idx)];
-        std.debug.assert(dense_idx != no_type_decl_dense_index);
-        if (!self.type_decl_invalid.items[dense_idx]) continue;
+        const backing_var: ?Var = switch (self.cir.store.getStatement(decl_idx)) {
+            .s_alias_decl => |alias| if (alias.anno == .placeholder) null else ModuleEnv.varFrom(alias.anno),
+            .s_nominal_decl => blk: {
+                const nominal_idx = self.types.lookupNominalDeclByKey(
+                    self_origin,
+                    @intFromEnum(decl_idx),
+                ) orelse unreachable;
+                const nominal = self.types.getNominalDecl(nominal_idx);
+                self.types.markNominalDeclInvalid(nominal_idx);
+                break :blk nominal.backing;
+            },
+            else => unreachable,
+        };
 
-        self.types.markNominalDeclInvalid(nominal_idx);
         try self.types.setVarContent(ModuleEnv.varFrom(decl_idx), .err);
-        try self.types.setVarContent(nominal.backing, .err);
+        if (backing_var) |var_| try self.types.setVarContent(var_, .err);
     }
 }
 
 /// Close declaration-template invalidity over local declaration references,
-/// validate nominal recursion, and poison every transitively invalid nominal.
+/// validate nominal recursion, and poison every transitively invalid declaration.
 fn finalizeTypeDeclarationValidity(self: *Self) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -3718,13 +3728,17 @@ fn finalizeTypeDeclarationValidity(self: *Self) std.mem.Allocator.Error!void {
     defer self.gpa.free(propagated);
     @memset(propagated, false);
 
+    const poisoned = try self.gpa.alloc(bool, decl_count);
+    defer self.gpa.free(poisoned);
+    @memset(poisoned, false);
+
     self.propagateTypeDeclarationInvalidity(dependent_offsets, dependents, propagated, &worklist);
-    try self.poisonInvalidNominalDeclarations();
+    try self.poisonInvalidTypeDeclarations(poisoned);
 
     try self.validateNominalDeclRecursion();
 
     self.propagateTypeDeclarationInvalidity(dependent_offsets, dependents, propagated, &worklist);
-    try self.poisonInvalidNominalDeclarations();
+    try self.poisonInvalidTypeDeclarations(poisoned);
 }
 
 /// Validate every local nominal type declaration's backing recursion, after
@@ -9967,8 +9981,8 @@ fn generateAliasDecl(
     // Next, generate the provided arg types and build the map of rigid variables in the header
     const predeclared_header_vars = self.predeclaredAliasArgs(decl_var);
     const header_vars = if (predeclared_header_vars) |vars| vars else try self.generateHeaderVars(header_args, env);
-    for (header_vars) |header_var| {
-        if (self.types.resolveVar(header_var).desc.content == .err) {
+    for (header_args) |header_arg_idx| {
+        if (self.cir.store.getTypeAnno(header_arg_idx) == .malformed) {
             self.markTypeDeclInvalid(decl_idx);
         }
     }
@@ -10034,8 +10048,8 @@ fn generateNominalDecl(
     // Next, generate the provided arg types and build the map of rigid variables in the header
     const predeclared_header_vars = self.predeclaredNominalArgs(decl_var);
     const header_vars = if (predeclared_header_vars) |vars| vars else try self.generateHeaderVars(header_args, env);
-    for (header_vars) |header_var| {
-        if (self.types.resolveVar(header_var).desc.content == .err) {
+    for (header_args) |header_arg_idx| {
+        if (self.cir.store.getTypeAnno(header_arg_idx) == .malformed) {
             self.markTypeDeclInvalid(decl_idx);
         }
     }

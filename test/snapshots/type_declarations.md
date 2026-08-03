@@ -225,9 +225,9 @@ NO CHANGE
 				(ty-args
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "b")))))
-		(alias (type "Foo")
+		(alias (type "Error")
 			(ty-header (name "Foo")))
-		(alias (type "Some(a)")
+		(alias (type "Error")
 			(ty-header (name "Some")
 				(ty-args
 					(ty-rigid-var (name "a")))))
@@ -241,7 +241,7 @@ NO CHANGE
 					(ty-rigid-var (name "a")))))
 		(alias (type "MyType")
 			(ty-header (name "MyType")))
-		(alias (type "MyType2")
+		(alias (type "Error")
 			(ty-header (name "MyType2"))))
 	(expressions))
 ~~~

@@ -2819,19 +2819,19 @@ expect {
 		(patt (type "{}"))
 		(patt (type "Error")))
 	(type_decls
-		(alias (type "Some(a)")
+		(alias (type "Error")
 			(ty-header (name "Some")
 				(ty-args
 					(ty-rigid-var (name "a")))))
-		(alias (type "Ml(a)")
+		(alias (type "Error")
 			(ty-header (name "Ml")
 				(ty-args
 					(ty-rigid-var (name "a")))))
-		(alias (type "Soine(a)")
+		(alias (type "Error")
 			(ty-header (name "Soine")
 				(ty-args
 					(ty-rigid-var (name "a")))))
-		(alias (type "Func(a)")
+		(alias (type "Error")
 			(ty-header (name "Func")
 				(ty-args
 					(ty-rigid-var (name "a"))))))

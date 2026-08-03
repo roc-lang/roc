@@ -72,7 +72,7 @@ C : []
 (inferred-types
 	(defs)
 	(type_decls
-		(alias (type "C")
+		(alias (type "Error")
 			(ty-header (name "C"))))
 	(expressions))
 ~~~
