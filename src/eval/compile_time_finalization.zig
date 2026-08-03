@@ -1191,6 +1191,7 @@ fn lowerDevEvalAndFinishRoots(
         &lowered.lir_result.layouts,
         static_strings.entries,
         .normalize,
+        .default,
     );
     defer codegen.deinit();
     codegen.setNativeStaticData(native_static_data);

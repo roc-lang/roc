@@ -19,6 +19,7 @@ const i128h = @import("compiler_rt_128.zig");
 const float_math_f32 = @import("float_math/f32.zig");
 const float_math_f64 = @import("float_math/f64.zig");
 const numeric_conversions = @import("numeric_conversions.zig");
+const simd = @import("simd.zig");
 
 const RocStr = str.RocStr;
 const RocList = list.RocList;
@@ -68,6 +69,35 @@ pub fn roc_builtins_hasher_write_u64(seed: u64, domain: u8, value: u64, width: u
 /// C ABI wrapper for hashing 128-bit scalar values.
 pub fn roc_builtins_hasher_write_u128(seed: u64, domain: u8, low: u64, high: u64) callconv(.c) u64 {
     return hash.hasher_write_u128(seed, domain, low, high);
+}
+
+/// Evaluate one 128-bit integer SIMD operation on packed bit patterns.
+///
+/// `src/builtins/simd.zig` defines the bit-exact meaning of every SIMD op
+/// independently of any architecture, so a backend that has no native
+/// instruction sequence for an op on a given target can call this and get the
+/// same answer the native sequence would produce. The dev backend uses it for
+/// the ops whose x86 instructions sit above the x86-64 baseline when compiling
+/// for a `v1` target.
+///
+/// Operands and the result are passed through memory rather than by value:
+/// three `u128` arguments plus a `u128` result do not fit the integer argument
+/// registers, and the caller already has the vectors in a stack slot.
+pub fn roc_builtins_simd_eval(
+    out: *u128,
+    op: u8,
+    arg_kind: u8,
+    ret_kind: u8,
+    args: *const [3]u128,
+) callconv(.c) void {
+    out.* = simd.eval(
+        @enumFromInt(op),
+        @enumFromInt(arg_kind),
+        @enumFromInt(ret_kind),
+        args[0],
+        args[1],
+        args[2],
+    );
 }
 
 /// Store a bit-exact SIMD value into 16 consecutive list bytes, cloning first

@@ -224,6 +224,7 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
             program.layouts,
             static_strings.entries,
             .preserve,
+            .default,
         );
         defer codegen.deinit();
         try codegen.compileAllProcSpecs(program.store.getProcSpecs());
@@ -291,6 +292,7 @@ fn runWasm(allocator: Allocator, program: Program) WasmError!Result {
         allocator,
         program.store,
         program.layouts,
+        .default,
     );
     defer codegen.deinit();
 

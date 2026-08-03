@@ -38,6 +38,26 @@ const windows_cross_targets = [_]CrossTarget{
 /// All Linux cross-compile targets (musl + glibc)
 const linux_cross_targets = musl_cross_targets ++ glibc_cross_targets;
 
+comptime {
+    // The prebuilt builtins objects these targets produce are what
+    // `roc build --opt=dev --target=X` links, and `BuiltinsObjects.forTarget`
+    // hands the same object to a `v1` target as to its default twin. That is
+    // only sound while these queries name no CPU model, because Zig then
+    // resolves them to the architecture baseline. Naming a model here would
+    // put instructions the baseline lacks into every `v1` binary, so it has to
+    // come with per-CPU-level objects instead.
+    for (musl_cross_targets ++ glibc_cross_targets ++ windows_cross_targets) |cross_target| {
+        if (cross_target.query.cpu_model != .determined_by_arch_os) {
+            @compileError("cross-compile target " ++ cross_target.name ++
+                " names a CPU model; baseline (v1) targets would link non-baseline builtins");
+        }
+        if (!cross_target.query.cpu_features_add.isEmpty()) {
+            @compileError("cross-compile target " ++ cross_target.name ++
+                " adds CPU features; baseline (v1) targets would link non-baseline builtins");
+        }
+    }
+}
+
 /// Test platform directories that need host libraries built
 const all_test_platform_dirs = [_][]const u8{ "str", "int", "fx", "fx-open", "dylib", "archive", "alloc-count" };
 const glibc_test_platform_dirs = [_][]const u8{ "str", "int", "dylib", "archive" };
@@ -2626,6 +2646,7 @@ pub fn build(b: *std.Build) void {
     const run_check_glue_abi_step = b.step("run-check-glue-abi", "Check generated Zig glue against the canonical host ABI");
     const run_check_simd_codegen_step = b.step("run-check-simd-codegen", "Check that optimized x86-64 integer SIMD kernels select native instructions");
     const run_check_match_extension_codegen_step = b.step("run-check-match-extension-codegen", "Check the pinned instruction counts for the match-extension loop");
+    const run_check_baseline_codegen_step = b.step("run-check-baseline-codegen", "Check that v1 targets emit no instruction above the architecture baseline");
     const build_snapshot_tool_step = b.step("build-snapshot-tool", "Build the snapshot tool");
     const run_check_snapshots_step = b.step("run-check-snapshots", "Regenerate snapshots and fail if tracked snapshots changed");
     const build_test_zig_step = b.step("build-test-zig", "Build Zig unit-test binaries");
@@ -3174,6 +3195,11 @@ pub fn build(b: *std.Build) void {
     run_simd_codegen_check.addArtifactArg(roc_exe);
     run_simd_codegen_check.step.dependOn(build_test_hosts_step);
     run_check_simd_codegen_step.dependOn(&run_simd_codegen_check.step);
+
+    const run_baseline_codegen_check = b.addSystemCommand(&.{ "bash", "ci/check_baseline_codegen.sh" });
+    run_baseline_codegen_check.addArtifactArg(roc_exe);
+    run_baseline_codegen_check.step.dependOn(build_test_hosts_step);
+    run_check_baseline_codegen_step.dependOn(&run_baseline_codegen_check.step);
 
     const run_match_extension_codegen_check = b.addSystemCommand(&.{ "bash", "ci/check_match_extension_codegen.sh" });
     run_match_extension_codegen_check.addArtifactArg(roc_exe);

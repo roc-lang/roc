@@ -2330,7 +2330,7 @@ pub fn devEvalBoolRoots(
         );
         defer static_strings.deinit();
 
-        var codegen = try HostLirCodeGen.init(allocator, store, layouts, static_strings.entries, .preserve);
+        var codegen = try HostLirCodeGen.init(allocator, store, layouts, static_strings.entries, .preserve, .default);
         defer codegen.deinit();
         try codegen.compileAllProcSpecs(store.getProcSpecs());
 

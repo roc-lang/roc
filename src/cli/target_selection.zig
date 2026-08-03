@@ -35,7 +35,9 @@ pub const SelectionResult = union(enum) {
 };
 
 fn isBuildDefaultTarget(target: RocTarget) bool {
-    return target == .wasm32 or target.matchesHostOsAndArch();
+    // Compare the architecture rather than the target, so both the default and
+    // the baseline spelling of wasm are covered.
+    return target.toCpuArch() == .wasm32 or target.matchesHostOsAndArch();
 }
 
 fn selectExplicitBuildTarget(config: TargetsConfig, target: RocTarget) SelectionResult {
@@ -279,4 +281,22 @@ test "wasm shared module output extension is wasm" {
 test "archive output extension follows target convention" {
     const expected: []const u8 = if (builtin.target.os.tag == .windows) ".lib" else ".a";
     try std.testing.expectEqualStrings(expected, defaultBuildOutputExtension(.archive, RocTarget.detectNative()));
+}
+
+test "baseline wasm is a build default target like its default twin" {
+    // Both spellings of wasm build from any host, so both are eligible as a
+    // build default. Comparing against `.wasm32` alone silently excluded
+    // `wasm32v1` and sent it down the native path instead.
+    try std.testing.expect(isBuildDefaultTarget(.wasm32));
+    try std.testing.expect(isBuildDefaultTarget(.wasm32v1));
+}
+
+test "a v1 target is a build default exactly when its default twin is" {
+    for (std.enums.values(RocTarget)) |target| {
+        if (target.cpuLevel() != .v1) continue;
+        try std.testing.expectEqual(
+            isBuildDefaultTarget(target.defaultCpuTarget()),
+            isBuildDefaultTarget(target),
+        );
+    }
 }

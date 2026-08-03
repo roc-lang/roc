@@ -32,6 +32,7 @@ const RcListPlan = layout.ListPlan;
 const ProcLocalId = LIR.LocalId;
 const ProcLocalSpan = LIR.LocalSpan;
 const RefOp = LIR.RefOp;
+const CpuLevel = @import("roc_target").CpuLevel;
 const WasmModule = @import("WasmModule.zig");
 const WasmLinking = @import("WasmLinking.zig");
 const WasmLayout = @import("WasmLayout.zig");
@@ -232,6 +233,9 @@ fn builtinInternalListAbi(self: *const Self, comptime _: []const u8, list_layout
 }
 
 allocator: Allocator,
+/// How old a WebAssembly runtime the emitted module must run on. `v1` targets
+/// the 1.0 core instruction set, which has neither SIMD nor sign-extension.
+cpu_level: CpuLevel,
 store: *const LirStore,
 layout_store: *const LayoutStore,
 module: WasmModule,
@@ -509,9 +513,10 @@ relocatable_object: bool = false,
 /// Whether final in-memory codegen should still emit relocation edges for
 /// static-data addresses so final DCE can trace data liveness explicitly.
 track_static_data_addresses: bool = false,
-pub fn init(allocator: Allocator, store: *const LirStore, layout_store: *const LayoutStore) Self {
+pub fn init(allocator: Allocator, store: *const LirStore, layout_store: *const LayoutStore, cpu_level: CpuLevel) Self {
     return .{
         .allocator = allocator,
+        .cpu_level = cpu_level,
         .store = store,
         .layout_store = layout_store,
         .module = WasmModule.init(allocator),
@@ -543,8 +548,8 @@ pub fn init(allocator: Allocator, store: *const LirStore, layout_store: *const L
     };
 }
 
-pub fn initWithModule(allocator: Allocator, store: *const LirStore, layout_store: *const LayoutStore, module: *WasmModule) Self {
-    var self = Self.init(allocator, store, layout_store);
+pub fn initWithModule(allocator: Allocator, store: *const LirStore, layout_store: *const LayoutStore, module: *WasmModule, cpu_level: CpuLevel) Self {
+    var self = Self.init(allocator, store, layout_store, cpu_level);
     self.module.deinit();
     self.module = module.*;
     module.* = WasmModule.init(allocator);
@@ -3952,6 +3957,26 @@ fn procLocalLayoutIdx(self: *Self, value: ProcLocalId) layout.Idx {
 /// Infer the wasm ValType that an explicit local value will push onto the stack.
 fn procLocalValType(self: *Self, value: ProcLocalId) Allocator.Error!ValType {
     return try self.resolveValType(self.procLocalLayoutIdx(value));
+}
+
+/// Sign-extend the low `bits` of the i32 on the stack.
+///
+/// `i32.extend8_s` and `i32.extend16_s` are the sign-extension proposal, not
+/// WebAssembly 1.0, so a `v1` target shifts the bit into the sign position and
+/// back out arithmetically instead. Both forms are two instructions.
+fn emitSignExtendI32(self: *Self, bits: u5) Allocator.Error!void {
+    if (self.cpu_level != .v1) {
+        const op = if (bits == 8) Op.i32_extend8_s else Op.i32_extend16_s;
+        self.currentCode().append(self.allocator, op) catch return error.OutOfMemory;
+        return;
+    }
+    const shift: i32 = 32 - @as(i32, bits);
+    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), shift) catch return error.OutOfMemory;
+    self.currentCode().append(self.allocator, Op.i32_shl) catch return error.OutOfMemory;
+    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), shift) catch return error.OutOfMemory;
+    self.currentCode().append(self.allocator, Op.i32_shr_s) catch return error.OutOfMemory;
 }
 
 fn emitCanonicalizeScalarForLayout(self: *Self, layout_idx: layout.Idx) Allocator.Error!void {
@@ -11083,7 +11108,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             if (try self.procLocalValType(GuardedList.at(args, 0)) == .i64) {
                 self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
             }
-            self.currentCode().append(self.allocator, Op.i32_extend8_s) catch return error.OutOfMemory;
+            try self.emitSignExtendI32(8);
         },
         .u16_to_i32, .u16_to_u32 => {
             try self.emitProcLocal(GuardedList.at(args, 0));
@@ -11096,7 +11121,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             if (try self.procLocalValType(GuardedList.at(args, 0)) == .i64) {
                 self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
             }
-            self.currentCode().append(self.allocator, Op.i32_extend16_s) catch return error.OutOfMemory;
+            try self.emitSignExtendI32(16);
         },
 
         // i32/u32 → i64/u64
@@ -11191,16 +11216,16 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         // Signed sub-i32 to unsigned wider wrapping (needs sign extension)
         .i8_to_u32_wrap => {
             try self.emitProcLocal(GuardedList.at(args, 0));
-            self.currentCode().append(self.allocator, Op.i32_extend8_s) catch return error.OutOfMemory;
+            try self.emitSignExtendI32(8);
         },
         .i16_to_u32_wrap => {
             try self.emitProcLocal(GuardedList.at(args, 0));
-            self.currentCode().append(self.allocator, Op.i32_extend16_s) catch return error.OutOfMemory;
+            try self.emitSignExtendI32(16);
         },
         .i8_to_u16_wrap => {
             try self.emitProcLocal(GuardedList.at(args, 0));
             // Sign-extend from 8 bits then mask to 16 bits
-            self.currentCode().append(self.allocator, Op.i32_extend8_s) catch return error.OutOfMemory;
+            try self.emitSignExtendI32(8);
             self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
             WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0xFFFF) catch return error.OutOfMemory;
             self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
@@ -11210,7 +11235,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             if (try self.procLocalValType(GuardedList.at(args, 0)) == .i64) {
                 self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
             }
-            self.currentCode().append(self.allocator, Op.i32_extend8_s) catch return error.OutOfMemory;
+            try self.emitSignExtendI32(8);
             self.currentCode().append(self.allocator, Op.i64_extend_i32_s) catch return error.OutOfMemory;
         },
         .i16_to_u64_wrap => {
@@ -11218,7 +11243,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             if (try self.procLocalValType(GuardedList.at(args, 0)) == .i64) {
                 self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
             }
-            self.currentCode().append(self.allocator, Op.i32_extend16_s) catch return error.OutOfMemory;
+            try self.emitSignExtendI32(16);
             self.currentCode().append(self.allocator, Op.i64_extend_i32_s) catch return error.OutOfMemory;
         },
         .i32_to_u64_wrap => {
@@ -15765,14 +15790,14 @@ fn emitNormalizedIntParts(
     try self.emitLocalGet(raw);
     switch (int_width_bytes) {
         1 => if (is_signed) {
-            self.currentCode().append(self.allocator, Op.i32_extend8_s) catch return error.OutOfMemory;
+            try self.emitSignExtendI32(8);
         } else {
             self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
             WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0xFF) catch return error.OutOfMemory;
             self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
         },
         2 => if (is_signed) {
-            self.currentCode().append(self.allocator, Op.i32_extend16_s) catch return error.OutOfMemory;
+            try self.emitSignExtendI32(16);
         } else {
             self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
             WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0xFFFF) catch return error.OutOfMemory;
@@ -19260,7 +19285,7 @@ test "final static data address tracking keeps referenced data through DCE" {
     const fake_store: *const LirStore = undefined;
     const fake_layouts: *const LayoutStore = undefined;
 
-    var codegen = Self.init(allocator, fake_store, fake_layouts);
+    var codegen = Self.init(allocator, fake_store, fake_layouts, .default);
     defer codegen.deinit();
     codegen.configureStaticDataAddressTracking();
 
