@@ -3658,7 +3658,7 @@ pub const Rehearsal = struct {
             }
             // The checked pair and the active level must name the SAME checked
             // binder at that index; a disagreement would mean the two binder
-            // orderings drifted and the value read would silently mis-bind.
+            // orderings drifted and the value read would silently bind incorrectly.
             if (level.binders[entry.binder_index] != outer_binders[entry.binder_index]) {
                 census.bump("rehearsal_captured_binder_identity_disagrees");
                 continue;
