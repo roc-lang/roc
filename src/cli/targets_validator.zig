@@ -364,6 +364,23 @@ pub fn createValidationReport(
             // host for the baseline target of its own accord.
             if (info.requested_target.cpuLevel() == .v1) {
                 const default_target = info.requested_target.defaultCpuTarget();
+
+                // Nothing asks for a baseline target more often than this
+                // machine does: when the CPU running the compiler is below the
+                // default level's floor, every command that compiles for the
+                // host asks for the baseline spelling of the host's target.
+                if (info.requested_target == target_mod.host_cpu.nativeTarget()) {
+                    try report.document.addText("This machine's CPU does not run the instructions ");
+                    try report.document.addAnnotated(@tagName(default_target), .emphasized);
+                    try report.document.addText(" uses,");
+                    try report.document.addLineBreak();
+                    try report.document.addText("so compiling for this machine means compiling for ");
+                    try report.document.addAnnotated(@tagName(info.requested_target), .emphasized);
+                    try report.document.addText(".");
+                    try report.document.addLineBreak();
+                    try report.document.addLineBreak();
+                }
+
                 for (info.supported_targets) |spec| {
                     if (spec.target != default_target) continue;
 

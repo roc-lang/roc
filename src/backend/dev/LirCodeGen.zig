@@ -20650,7 +20650,9 @@ fn compileRootWithFloatNanMode(
     float_nan_mode: builtins.float_bits.NanMode,
 ) Allocator.Error!CompiledTestRoot {
     const allocator = std.testing.allocator;
-    var codegen = try HostLirCodeGen.init(allocator, store, layout_store, &.{}, float_nan_mode, .default);
+    // The callers of this run the code they get back, so it is held to what
+    // the machine running the tests executes.
+    var codegen = try HostLirCodeGen.init(allocator, store, layout_store, &.{}, float_nan_mode, roc_target_mod.host_cpu.level());
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
 
@@ -20948,7 +20950,7 @@ test "Windows erased callable ABI reads reuse pointer from caller stack" {
     const reuse_arg = try addLocal(&store, .opaque_ptr);
     const args = try store.addLocalSpan(&.{ explicit_arg, capture_arg, reuse_arg });
 
-    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve);
+    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     const InnerCodeGen = @TypeOf(codegen.codegen);

@@ -24,6 +24,7 @@ const RuntimeHostEnv = eval.RuntimeHostEnv;
 const LoweredProgram = helpers.LoweredProgram;
 const Interpreter = eval.Interpreter;
 const backend = @import("backend");
+const roc_target = @import("roc_target");
 const HostLirCodeGen = backend.HostLirCodeGen;
 const ExecutableMemory = backend.ExecutableMemory;
 const collections = @import("collections");
@@ -365,7 +366,7 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendE
             &lowered.view.layouts,
             static_strings.entries,
             .preserve,
-            .default,
+            roc_target.host_cpu.level(),
         );
         defer codegen.deinit();
         try codegen.compileAllProcSpecs(lowered.view.store.getProcSpecs());

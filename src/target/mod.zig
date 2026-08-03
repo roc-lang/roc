@@ -307,6 +307,53 @@ pub const RocTarget = enum {
         };
     }
 
+    /// The `v1` twin of this target, or null when it has none.
+    ///
+    /// A target has no twin when Roc names no CPU floor for it: `arm32*` and
+    /// `arm64mac` already generate code for every CPU that can run them, so
+    /// there is nothing below them to drop to. A `v1` target is its own twin.
+    ///
+    /// Every target is listed rather than using `else`, so adding a target
+    /// fails to compile until its baseline spelling is declared here.
+    pub fn baselineCpuTarget(self: RocTarget) ?RocTarget {
+        return switch (self) {
+            .x64mac => .x64v1mac,
+            .x64win => .x64v1win,
+            .x64freebsd => .x64v1freebsd,
+            .x64openbsd => .x64v1openbsd,
+            .x64netbsd => .x64v1netbsd,
+            .x64musl => .x64v1musl,
+            .x64glibc => .x64v1glibc,
+            .x64linux => .x64v1linux,
+            .x64elf => .x64v1elf,
+
+            .arm64win => .arm64v1win,
+            .arm64linux => .arm64v1linux,
+            .arm64musl => .arm64v1musl,
+            .arm64glibc => .arm64v1glibc,
+
+            .wasm32 => .wasm32v1,
+
+            .x64v1mac,
+            .x64v1win,
+            .x64v1freebsd,
+            .x64v1openbsd,
+            .x64v1netbsd,
+            .x64v1musl,
+            .x64v1glibc,
+            .x64v1linux,
+            .x64v1elf,
+            .arm64v1win,
+            .arm64v1linux,
+            .arm64v1musl,
+            .arm64v1glibc,
+            .wasm32v1,
+            => self,
+
+            .arm64mac, .arm32linux, .arm32musl => null,
+        };
+    }
+
     /// How old a CPU this target's generated code must run on.
     pub fn cpuLevel(self: RocTarget) CpuLevel {
         return if (self.defaultCpuTarget() == self) .default else .v1;
@@ -555,6 +602,10 @@ pub const RocTarget = enum {
     }
 };
 
+/// What the CPU running this compiler can execute, which `builtin.cpu` cannot
+/// answer because the compiler itself is built for the architecture baseline.
+pub const host_cpu = @import("host_cpu.zig");
+
 /// LLVM spelling of a resolved Zig CPU model.
 pub fn llvmCpuName(target: std.Target) []const u8 {
     return target.cpu.model.llvm_name orelse "";
@@ -581,6 +632,12 @@ pub fn llvmFeatureString(allocator: std.mem.Allocator, target: std.Target) std.m
     }
 
     return features.toOwnedSliceSentinel(allocator, 0);
+}
+
+test {
+    // Nothing in this file references host CPU detection, so name it here to
+    // put its tests and its comptime check of the CPU floor in this run.
+    _ = host_cpu;
 }
 
 test "native target matches host OS and architecture" {
