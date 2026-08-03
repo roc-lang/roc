@@ -12,19 +12,17 @@ decodeThings : List(List(U8)) -> List(a)
 decodeThings = ...
 ~~~
 # EXPECTED
-UNSUPPORTED WHERE CLAUSE - where_clauses_4.md:4:9:4:17
+UNDECLARED TYPE - where_clauses_4.md:4:10:4:17
 # PROBLEMS
 
-┌──────────────────────────┐
-│ UNSUPPORTED WHERE CLAUSE ├─ The where clause syntax Decode is not ──────────┐
-└┬─────────────────────────┘  supported.                                      │
+┌─────────────────┐
+│ UNDECLARED TYPE ├─ The type `Decode` is not declared in this scope. ────────┐
+└┬────────────────┘                                                           │
  │                                                                            │
  │  where [a.Decode]                                                          │
- │         ‾‾‾‾‾‾‾‾                                                           │
- └──────────────────────────────────────────────────── where_clauses_4.md:4:9 ┘
+ │          ‾‾‾‾‾‾‾                                                           │
+ └─────────────────────────────────────────────────── where_clauses_4.md:4:10 ┘
 
-    This syntax was used for abilities, which have been removed from Roc. Use
-    method constraints like `where [a.methodName(args) -> ret]` instead.
 
 # TOKENS
 ~~~zig
@@ -53,7 +51,8 @@ EndOfFile,
 					(ty (name "List"))
 					(ty-var (raw "a"))))
 			(where
-				(alias (mod-of "a") (name "Decode"))))
+				(alias (mod-of "a")
+					(ty (name "Decode")))))
 		(s-decl
 			(p-ident (raw "decodeThings"))
 			(e-ellipsis))))
@@ -76,7 +75,9 @@ NO CHANGE
 				(ty-apply (name "List") (builtin)
 					(ty-rigid-var (name "a"))))
 			(where
-				(alias (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "Decode")))))
+				(alias
+					(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+					(ty-malformed)))))
 	(s-import (mod "Decode")
 		(exposes
 			(exposed (name "Decode") (wildcard false)))))
@@ -85,7 +86,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(List(U8)) -> List(a)")))
+		(patt (type "List(List(U8)) -> List(Error)")))
 	(expressions
-		(expr (type "List(List(U8)) -> List(a)"))))
+		(expr (type "List(List(U8)) -> List(Error)"))))
 ~~~

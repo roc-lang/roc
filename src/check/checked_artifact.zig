@@ -2109,6 +2109,7 @@ fn statementDependsOnUnboundPlatformRequirement(
         .break_,
         .import_,
         .alias_decl,
+        .where_alias_decl,
         .nominal_decl,
         .type_anno,
         .type_var_alias,
@@ -8350,6 +8351,7 @@ pub const CheckedStatementData = union(enum) {
     return_: struct { expr: CheckedExprId, lambda: CheckedExprId },
     import_,
     alias_decl,
+    where_alias_decl,
     nominal_decl,
     type_anno,
     type_var_alias,
@@ -8785,6 +8787,7 @@ pub const StoredCheckedStatementData = union(enum) {
     return_: struct { expr: CheckedExprId, lambda: CheckedExprId },
     import_,
     alias_decl,
+    where_alias_decl,
     nominal_decl,
     type_anno,
     type_var_alias,
@@ -8978,6 +8981,7 @@ fn reconstructCheckedStatementData(pool_owner: anytype, stored: StoredCheckedSta
         .break_ => .break_,
         .import_ => .import_,
         .alias_decl => .alias_decl,
+        .where_alias_decl => .where_alias_decl,
         .nominal_decl => .nominal_decl,
         .type_anno => .type_anno,
         .type_var_alias => .type_var_alias,
@@ -9356,6 +9360,7 @@ const CheckedSourceNodes = struct {
                 .s_import,
                 .s_alias_decl,
                 .s_nominal_decl,
+                .s_where_alias_decl,
                 .s_type_anno,
                 .s_type_var_alias,
                 .s_expect,
@@ -9681,6 +9686,7 @@ const CheckedSourceNodes = struct {
             .s_import,
             .s_alias_decl,
             .s_nominal_decl,
+            .s_where_alias_decl,
             .s_type_anno,
             .s_type_var_alias,
             .s_runtime_error,
@@ -10307,6 +10313,7 @@ pub const CheckedBodyStore = struct {
             .break_ => .break_,
             .import_ => .import_,
             .alias_decl => .alias_decl,
+            .where_alias_decl => .where_alias_decl,
             .nominal_decl => .nominal_decl,
             .type_anno => .type_anno,
             .type_var_alias => .type_var_alias,
@@ -11239,6 +11246,7 @@ const CheckedBodyDiagnosticErrorScan = struct {
             .break_,
             .import_,
             .alias_decl,
+            .where_alias_decl,
             .nominal_decl,
             .type_anno,
             .type_var_alias,
@@ -11636,6 +11644,7 @@ fn checkedStatementDataDiverges(
         .pending,
         .import_,
         .alias_decl,
+        .where_alias_decl,
         .nominal_decl,
         .type_anno,
         .type_var_alias,
@@ -12326,6 +12335,7 @@ const CheckedBodyPayloadCopier = struct {
             } },
             .s_import => .import_,
             .s_alias_decl => .alias_decl,
+            .s_where_alias_decl => .where_alias_decl,
             .s_nominal_decl => .nominal_decl,
             .s_type_anno => .type_anno,
             .s_type_var_alias => .type_var_alias,
@@ -16536,6 +16546,7 @@ const CheckedTemplateRefCollector = struct {
             .break_,
             .import_,
             .alias_decl,
+            .where_alias_decl,
             .nominal_decl,
             .type_anno,
             .type_var_alias,
@@ -17553,6 +17564,7 @@ const NestedProcSiteBuilder = struct {
                 try self.scanExpr(loop.body, owner, false);
             },
             .alias_decl,
+            .where_alias_decl,
             .nominal_decl,
             => try self.scanAttachedLocalProcedures(statement_id, owner),
             .pending,
@@ -22040,6 +22052,7 @@ fn checkedStatementContainsExpr(
         .break_,
         .import_,
         .alias_decl,
+        .where_alias_decl,
         .nominal_decl,
         .type_anno,
         .type_var_alias,
@@ -22194,6 +22207,7 @@ fn checkedStatementContainsPattern(
         .break_,
         .import_,
         .alias_decl,
+        .where_alias_decl,
         .nominal_decl,
         .type_anno,
         .type_var_alias,
@@ -26271,7 +26285,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 51;
+    const serialized_layout_version: u32 = 52;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -28862,7 +28876,9 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
                 const where_clause = store.getWhereClause(@enumFromInt(raw_node_idx));
                 switch (where_clause) {
                     .w_method => |method| try visitor.method(method.method_name),
-                    .w_alias => |alias| try visitor.typeName(alias.alias_name),
+                    // The alias reference is a type-anno node of its own, and
+                    // is visited there.
+                    .w_alias => {},
                     .w_malformed => {},
                 }
             },
@@ -31608,8 +31624,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xB5, 0xCC, 0xBB, 0x44, 0x7C, 0xAB, 0xBD, 0xD4, 0xCD, 0xCC, 0x90, 0x8C, 0xA9, 0x7E, 0x0B, 0x63,
-        0x5C, 0xCE, 0x5C, 0xD1, 0xA0, 0xBB, 0xFD, 0x14, 0x5B, 0x4C, 0xB0, 0xB2, 0x39, 0xFA, 0xDB, 0xC3,
+        0x6A, 0x5C, 0x93, 0xBB, 0x86, 0x99, 0x47, 0xE5, 0x87, 0x52, 0x67, 0x47, 0xCC, 0x20, 0xCB, 0x47,
+        0x07, 0xDC, 0x51, 0xD2, 0xE0, 0x33, 0xB1, 0x0C, 0xAD, 0x61, 0xA2, 0x92, 0x91, 0x55, 0xFC, 0xA9,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

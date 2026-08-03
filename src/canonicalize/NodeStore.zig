@@ -492,11 +492,11 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 87;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 88;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 56;
 /// Count of the statement nodes in the ModuleEnv
-pub const MODULEENV_STATEMENT_NODE_COUNT = 20;
+pub const MODULEENV_STATEMENT_NODE_COUNT = 21;
 /// Count of the type annotation nodes in the ModuleEnv
 pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 12;
 /// Count of the pattern nodes in the ModuleEnv
@@ -1018,6 +1018,16 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
                     .header = @enumFromInt(p.header),
                     .anno = @enumFromInt(p.anno),
                     .is_opaque = p.is_opaque != 0,
+                },
+            };
+        },
+        .statement_where_alias_decl => {
+            const p = payload.statement_where_alias_decl;
+            return CIR.Statement{
+                .s_where_alias_decl = .{
+                    .header = @enumFromInt(p.header),
+                    .receiver = @enumFromInt(p.receiver),
+                    .where = store.loadWhereClauseSpan(p.where_span_idx),
                 },
             };
         },
@@ -1950,12 +1960,10 @@ pub fn getWhereClause(store: *const NodeStore, whereClause: CIR.WhereClause.Idx)
         },
         .where_alias => {
             const p = payload.where_alias;
-            const var_ = @as(CIR.TypeAnno.Idx, @enumFromInt(p.var_idx));
-            const alias_name = @as(Ident.Idx, @bitCast(p.alias_name));
 
             return CIR.WhereClause{ .w_alias = .{
-                .var_ = var_,
-                .alias_name = alias_name,
+                .var_ = @enumFromInt(p.var_idx),
+                .alias = @enumFromInt(p.alias_idx),
             } };
         },
         .where_malformed => {
@@ -2576,6 +2584,14 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
                 .header = @intFromEnum(s.header),
                 .anno = @intFromEnum(s.anno),
                 .is_opaque = if (s.is_opaque) 1 else 0,
+            } });
+        },
+        .s_where_alias_decl => |s| {
+            node.tag = .statement_where_alias_decl;
+            node.setPayload(.{ .statement_where_alias_decl = .{
+                .header = @intFromEnum(s.header),
+                .receiver = @intFromEnum(s.receiver),
+                .where_span_idx = try store.storeWhereClauseSpan(s.where),
             } });
         },
         .s_type_anno => |s| {
@@ -3230,11 +3246,11 @@ pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause, region: b
                 .effectful = @intFromBool(where_method.effectful),
             } });
         },
-        .w_alias => |mod_alias| {
+        .w_alias => |where_alias| {
             node.tag = .where_alias;
             node.setPayload(.{ .where_alias = .{
-                .var_idx = @intFromEnum(mod_alias.var_),
-                .alias_name = @bitCast(mod_alias.alias_name),
+                .var_idx = @intFromEnum(where_alias.var_),
+                .alias_idx = @intFromEnum(where_alias.alias),
             } });
         },
         .w_malformed => |malformed| {
@@ -4062,12 +4078,14 @@ pub fn recordFieldSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Re
 
 /// Returns a span from the scratch where clauses starting at the given index,
 /// together with the canonical rigid declaration that owns each method group.
-pub fn whereClauseSpanFrom(store: *NodeStore, start: u32, root_anno: CIR.TypeAnno.Idx) Allocator.Error!CIR.WhereClause.Span {
+pub fn whereClauseSpanFrom(store: *NodeStore, start: u32, root_annos: []const CIR.TypeAnno.Idx) Allocator.Error!CIR.WhereClause.Span {
     const clauses = try store.spanFrom("where_clauses", CIR.WhereClause.IdxSpan, start);
 
     var introduced = std.AutoHashMapUnmanaged(CIR.TypeAnno.Idx, void){};
     defer introduced.deinit(store.gpa);
-    try store.collectIntroducedRigidVars(root_anno, &introduced);
+    for (root_annos) |root_anno| {
+        try store.collectIntroducedRigidVars(root_anno, &introduced);
+    }
     for (store.sliceWhereClauseIndices(clauses)) |where_idx| {
         switch (store.getWhereClause(where_idx)) {
             .w_method => |method| {
@@ -4077,7 +4095,10 @@ pub fn whereClauseSpanFrom(store: *NodeStore, start: u32, root_anno: CIR.TypeAnn
                 }
                 try store.collectIntroducedRigidVars(method.ret, &introduced);
             },
-            .w_alias => |alias| try store.collectIntroducedRigidVars(alias.var_, &introduced),
+            .w_alias => |alias| {
+                try store.collectIntroducedRigidVars(alias.var_, &introduced);
+                try store.collectIntroducedRigidVars(alias.alias, &introduced);
+            },
             .w_malformed => {},
         }
     }
@@ -4090,12 +4111,13 @@ pub fn whereClauseSpanFrom(store: *NodeStore, start: u32, root_anno: CIR.TypeAnn
     }
 
     for (store.sliceWhereClauseIndices(clauses)) |where_idx| {
-        const method = switch (store.getWhereClause(where_idx)) {
-            .w_method => |method| method,
-            .w_alias, .w_malformed => continue,
+        const constrained_var = switch (store.getWhereClause(where_idx)) {
+            .w_method => |method| method.var_,
+            .w_alias => |alias| alias.var_,
+            .w_malformed => continue,
         };
-        const owner = switch (store.getTypeAnno(method.var_)) {
-            .rigid_var => method.var_,
+        const owner = switch (store.getTypeAnno(constrained_var)) {
+            .rigid_var => constrained_var,
             .rigid_var_lookup => |lookup| lookup.ref,
             else => continue,
         };
@@ -4623,6 +4645,11 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             node.tag = .diag_where_clause_not_allowed_in_type_decl;
             region = r.region;
         },
+        .where_alias_constraint_not_on_receiver => |r| {
+            node.tag = .diag_where_alias_constraint_not_on_receiver;
+            region = r.region;
+            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.receiver_name) } });
+        },
         .open_ext_not_allowed_in_type_decl => |r| {
             node.tag = .diag_open_ext_not_allowed_in_type_decl;
             region = r.region;
@@ -4872,7 +4899,7 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
         .underscore_in_type_declaration => |r| {
             node.tag = .diag_underscore_in_type_declaration;
             region = r.region;
-            node.setPayload(.{ .diag_single_value = .{ .value = @intFromBool(r.is_alias) } });
+            node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.declared) } });
         },
         .break_outside_loop => |r| {
             node.tag = .diag_break_outside_loop;
@@ -5195,6 +5222,10 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_where_clause_not_allowed_in_type_decl => return CIR.Diagnostic{ .where_clause_not_allowed_in_type_decl = .{
             .region = store.getRegionAt(node_idx),
         } },
+        .diag_where_alias_constraint_not_on_receiver => return CIR.Diagnostic{ .where_alias_constraint_not_on_receiver = .{
+            .receiver_name = @bitCast(payload.diag_single_ident.ident),
+            .region = store.getRegionAt(node_idx),
+        } },
         .diag_open_ext_not_allowed_in_type_decl => return CIR.Diagnostic{ .open_ext_not_allowed_in_type_decl = .{
             .region = store.getRegionAt(node_idx),
         } },
@@ -5370,7 +5401,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             } };
         },
         .diag_underscore_in_type_declaration => return CIR.Diagnostic{ .underscore_in_type_declaration = .{
-            .is_alias = payload.diag_single_value.value != 0,
+            .declared = @enumFromInt(payload.diag_single_value.value),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_break_outside_loop => return CIR.Diagnostic{ .break_outside_loop = .{

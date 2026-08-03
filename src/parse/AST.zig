@@ -546,6 +546,8 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .file_import_invalid_type => reportParseProblem(ctx, "Invalid File Import Type", "I was parsing a file import type, and only `Str` or `List(U8)` is allowed.", "Use `Str` for text files and `List(U8)` for raw bytes.", .{ .example = "import \"data.txt\" as data : Str" }),
         .nominal_associated_cannot_have_final_expression => reportParseProblem(ctx, "Unexpected Associated Expression", "I was parsing associated items for a nominal type, and I found a plain final expression.", "Associated item blocks can contain associated types and values. Remove the trailing expression or turn it into a named associated value.", .{ .example = "Id := U64 implements [\n    zero = @Id 0\n]" }),
         .type_alias_cannot_have_associated => reportParseProblem(ctx, "Type Alias With Associated Items", "I was parsing a type alias, but only nominal types can have associated items.", "Use `:=` to define a nominal type with associated items, or remove the associated item block from this alias.", .{ .example = "Id := U64 implements [\n    zero = @Id 0\n]" }),
+        .where_alias_cannot_have_associated => reportParseProblem(ctx, "Where Alias With Associated Items", "I was parsing a where alias, but only nominal types can have associated items.", "A where alias names a set of method constraints, so it has no associated items. Remove the associated item block.", .{ .example = "a.Sortable : where [a.compare : a -> [LT, EQ, GT]]" }),
+        .where_alias_expected_where => reportParseProblem(ctx, "Expected Where Clause", "I was parsing a where alias declaration, and I expected `where` after the `:`.", "A where alias is declared by naming a type variable and giving it a set of method constraints.", .{ .example = "a.Sortable : where [a.compare : a -> [LT, EQ, GT]]" }),
         .deprecated_number_suffix => reportDeprecatedNumberSuffix(ctx),
         .expected_targets_colon => reportParseProblem(ctx, "Expected Targets Colon", "I was parsing a `targets` section, and I expected `:` after `targets`.", "The targets section starts with `targets:` followed by a configuration record.", .{ .example = "targets: { linux: { inputs: [app] } }" }),
         .expected_targets_open_curly => reportParseProblem(ctx, "Expected Targets Record", "I was parsing a `targets` section, and I expected `{`.", "Targets are configured with fields inside a record.", .{ .example = "targets: { linux: { inputs: [app] } }" }),
@@ -683,6 +685,8 @@ pub const Diagnostic = struct {
         file_import_invalid_type,
         nominal_associated_cannot_have_final_expression,
         type_alias_cannot_have_associated,
+        where_alias_cannot_have_associated,
+        where_alias_expected_where,
         deprecated_number_suffix,
 
         // Targets section parse errors
@@ -890,10 +894,13 @@ pub fn toSExprStr(ast: *@This(), gpa: std.mem.Allocator, env: *const CommonEnv, 
 /// 1. An alias of the form `Foo = (Bar, Baz)`
 /// 2. A nominal type of the form `Foo := [Bar, Baz]`
 /// 3. An opaque type of the form `Foo :: [Bar, Baz]`
+/// 4. A where alias of the form `a.Foo : where [a.method : a -> Str]`, which
+///    names a reusable set of method constraints rather than a type.
 pub const TypeDeclKind = enum {
     alias,
     nominal,
     @"opaque",
+    where_alias,
 };
 
 /// Represents a statement.  Not all statements are valid in all positions.
@@ -956,9 +963,14 @@ pub const Statement = union(enum) {
     },
     type_decl: struct {
         header: TypeHeader.Idx,
+        /// The declared type. For `.where_alias` declarations this is the
+        /// receiver type variable the constraints apply to (the `a` in
+        /// `a.Foo : where [...]`).
         anno: TypeAnno.Idx,
         kind: TypeDeclKind,
-        /// Where clause (invalid in type declarations, but preserved for error recovery/formatting)
+        /// The constraint set for `.where_alias` declarations. For every other
+        /// kind a where clause is invalid, and is preserved only for error
+        /// recovery and formatting.
         where: ?Collection.Idx,
         /// Associated items block for .nominal types
         /// (e.g. the curly braces in `Foo := [A, B].{ x = 5 }`)
@@ -1105,6 +1117,16 @@ pub const Statement = union(enum) {
                 }
 
                 try ast.store.getTypeAnno(a.anno).pushToSExprTree(gpa, env, ast, tree);
+
+                if (a.where) |where_coll| {
+                    const where_node = tree.beginNode();
+                    try tree.pushStaticAtom("where");
+                    const where_attrs = tree.beginNode();
+                    for (ast.store.whereClauseSlice(.{ .span = ast.store.getCollection(where_coll).span })) |clause_idx| {
+                        try ast.store.getWhereClause(clause_idx).pushToSExprTree(gpa, env, ast, tree);
+                    }
+                    try tree.endNode(where_node, where_attrs);
+                }
 
                 // Add associated block if present
                 if (a.associated) |assoc| {
@@ -2655,20 +2677,25 @@ pub const WhereClause = union(enum) {
         region: TokenizedRegion,
     },
 
-    /// Module type alias constraint.
+    /// Where alias constraint.
     ///
-    /// Specifies that a type variable must satisfy the constraints for an alias type.
-    /// This is useful to avoid writing out the constraints repeatedly which can be cumbersome and error prone
+    /// Specifies that a type variable must satisfy every constraint named by a
+    /// where alias. This avoids writing the same constraints out repeatedly,
+    /// which is cumbersome and error prone.
+    ///
+    /// `alias` names the where alias being applied, and is a `ty` (or an
+    /// `apply` over one) so that module qualification and arguments resolve
+    /// exactly the way they do for any other type name.
     ///
     /// Example:
     /// ```roc
-    /// Sort(a) : a where [a.order : elem, elem -> [LT, EQ, GT]]
+    /// elem.Sort : where [elem.order : elem -> [LT, EQ, GT]]
     ///
     /// sort : List(elem) -> List(elem) where [elem.Sort]
     /// ```
     mod_alias: struct {
         var_tok: Token.Idx,
-        name_tok: Token.Idx,
+        alias: TypeAnno.Idx,
         region: TokenizedRegion,
     },
 
@@ -2714,11 +2741,8 @@ pub const WhereClause = union(enum) {
 
                 try tree.pushStringPair("module-of", ast.resolve(a.var_tok));
 
-                // remove preceding dot
-                const alias_name = ast.resolve(a.name_tok)[1..];
-                try tree.pushStringPair("name", alias_name);
-
                 const attrs = tree.beginNode();
+                try ast.store.getTypeAnno(a.alias).pushToSExprTree(gpa, env, ast, tree);
                 try tree.endNode(begin, attrs);
             },
             .malformed => |m| {

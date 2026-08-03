@@ -189,6 +189,21 @@ pub const Statement = union(enum) {
         /// True if declared with :: (opaque), false if declared with := (nominal)
         is_opaque: bool,
     },
+    /// A where alias declaration, naming a reusable set of method constraints.
+    ///
+    /// ```roc
+    /// a.Sortable : where [a.compare : a -> [LT, EQ, GT]]
+    /// ```
+    ///
+    /// The declaration's type is `receiver`: a rigid variable carrying every
+    /// constraint in `where`. Referencing the alias applies those constraints to
+    /// the referencing signature's own type variable.
+    s_where_alias_decl: struct {
+        header: CIR.TypeHeader.Idx,
+        /// The receiving type variable the constraints are declared against.
+        receiver: CIR.TypeAnno.Idx,
+        where: CIR.WhereClause.Span,
+    },
     /// A type annotation, declaring that the value referred to by an ident in the same scope should be a given type.
     ///
     /// ```roc
@@ -437,6 +452,27 @@ pub const Statement = union(enum) {
 
                 try env.store.getTypeHeader(s.header).pushToSExprTree(env, tree, s.header);
                 try env.store.getTypeAnno(s.anno).pushToSExprTree(env, tree, s.anno);
+
+                try tree.endNode(begin, attrs);
+            },
+            .s_where_alias_decl => |s| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("s-where-alias-decl");
+                const region = env.store.getStatementRegion(stmt_idx);
+                try env.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                try env.store.getTypeHeader(s.header).pushToSExprTree(env, tree, s.header);
+                try env.store.getTypeAnno(s.receiver).pushToSExprTree(env, tree, s.receiver);
+
+                const where_begin = tree.beginNode();
+                try tree.pushStaticAtom("where");
+                const where_attrs = tree.beginNode();
+                for (env.store.sliceWhereClauses(s.where)) |clause_idx| {
+                    const clause = env.store.getWhereClause(clause_idx);
+                    try clause.pushToSExprTree(env, tree, clause_idx);
+                }
+                try tree.endNode(where_begin, where_attrs);
 
                 try tree.endNode(begin, attrs);
             },

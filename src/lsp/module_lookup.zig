@@ -387,6 +387,11 @@ pub fn getStatementParts(stmt: CIR.Statement) StatementParts {
             .expr = null,
             .expr2 = null,
         },
+        .s_where_alias_decl => .{
+            .pattern = null,
+            .expr = null,
+            .expr2 = null,
+        },
         .s_type_anno => .{
             .pattern = null,
             .expr = null,

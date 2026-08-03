@@ -642,7 +642,7 @@ fn rewriteDocTypeRefs(
             },
             .where_clause => |wc| {
                 stack.append(gpa, wc.type) catch {};
-                for (wc.constraints) |c| stack.append(gpa, c.signature) catch {};
+                for (wc.constraints) |c| stack.append(gpa, c.child()) catch {};
             },
             .type_var, .wildcard, .@"error" => {},
         }
@@ -961,6 +961,7 @@ pub const DocEntryKind = enum {
     alias,
     nominal,
     @"opaque",
+    where_alias,
 
     pub fn toStr(self: DocEntryKind) []const u8 {
         return switch (self) {
@@ -968,6 +969,7 @@ pub const DocEntryKind = enum {
             .alias => "alias",
             .nominal => "nominal",
             .@"opaque" => "opaque",
+            .where_alias => "where alias",
         };
     }
 };
@@ -1069,10 +1071,57 @@ pub const DocType = union(enum) {
         layout: Layout = .compact,
     };
 
-    pub const Constraint = struct {
-        type_var: []const u8,
-        method_name: []const u8,
-        signature: *const DocType, // the method's type signature
+    /// One clause of a where constraint list.
+    pub const Constraint = union(enum) {
+        method: Method,
+        where_alias: WhereAlias,
+
+        /// A method the type variable's type must provide: `a.hash : a -> U64`
+        pub const Method = struct {
+            type_var: []const u8,
+            method_name: []const u8,
+            signature: *const DocType, // the method's type signature
+        };
+
+        /// A where alias the type variable must satisfy: `a.Sortable`. The
+        /// reference is a DocType so it links and renders like any other
+        /// named type, including its arguments.
+        pub const WhereAlias = struct {
+            type_var: []const u8,
+            alias: *const DocType,
+        };
+
+        /// The type variable this clause constrains.
+        pub fn typeVar(self: Constraint) []const u8 {
+            return switch (self) {
+                .method => |m| m.type_var,
+                .where_alias => |a| a.type_var,
+            };
+        }
+
+        /// The nested type this clause owns.
+        pub fn child(self: Constraint) *const DocType {
+            return switch (self) {
+                .method => |m| m.signature,
+                .where_alias => |a| a.alias,
+            };
+        }
+
+        pub fn deinit(self: Constraint, gpa: Allocator) void {
+            switch (self) {
+                .method => |m| {
+                    m.signature.deinit(gpa);
+                    gpa.destroy(m.signature);
+                    gpa.free(m.type_var);
+                    gpa.free(m.method_name);
+                },
+                .where_alias => |a| {
+                    a.alias.deinit(gpa);
+                    gpa.destroy(a.alias);
+                    gpa.free(a.type_var);
+                },
+            }
+        }
     };
 
     pub fn writeToSExpr(self: *const DocType, writer: anytype, depth: usize) (Allocator.Error || error{WriteFailed})!void {
@@ -1166,13 +1215,24 @@ pub const DocType = union(enum) {
                 try writer.writeAll("(where ");
                 try wc.type.writeToSExpr(writer, depth);
                 for (wc.constraints) |constraint| {
-                    try writer.writeAll(" (constraint \"");
-                    try writeEscaped(writer, constraint.type_var);
-                    try writer.writeAll("\" \"");
-                    try writeEscaped(writer, constraint.method_name);
-                    try writer.writeAll("\" ");
-                    try constraint.signature.writeToSExpr(writer, depth);
-                    try writer.writeAll(")");
+                    switch (constraint) {
+                        .method => |method| {
+                            try writer.writeAll(" (constraint \"");
+                            try writeEscaped(writer, method.type_var);
+                            try writer.writeAll("\" \"");
+                            try writeEscaped(writer, method.method_name);
+                            try writer.writeAll("\" ");
+                            try method.signature.writeToSExpr(writer, depth);
+                            try writer.writeAll(")");
+                        },
+                        .where_alias => |alias| {
+                            try writer.writeAll(" (where-alias \"");
+                            try writeEscaped(writer, alias.type_var);
+                            try writer.writeAll("\" ");
+                            try alias.alias.writeToSExpr(writer, depth);
+                            try writer.writeAll(")");
+                        },
+                    }
                 }
                 try writer.writeAll(")");
             },
@@ -1244,7 +1304,7 @@ pub const DocType = union(enum) {
                     .where_clause => |wc| {
                         Stack.append(&stack, gpa, .{ .node = wc.type, .children_done = false });
                         for (wc.constraints) |constraint| {
-                            Stack.append(&stack, gpa, .{ .node = constraint.signature, .children_done = false });
+                            Stack.append(&stack, gpa, .{ .node = constraint.child(), .children_done = false });
                         }
                     },
                     .type_ref, .type_var, .wildcard, .@"error" => {},
@@ -1306,9 +1366,17 @@ pub const DocType = union(enum) {
                 .where_clause => |wc| {
                     gpa.destroy(wc.type);
                     for (wc.constraints) |constraint| {
-                        gpa.free(constraint.type_var);
-                        gpa.free(constraint.method_name);
-                        gpa.destroy(constraint.signature);
+                        switch (constraint) {
+                            .method => |method| {
+                                gpa.free(method.type_var);
+                                gpa.free(method.method_name);
+                                gpa.destroy(method.signature);
+                            },
+                            .where_alias => |alias| {
+                                gpa.free(alias.type_var);
+                                gpa.destroy(alias.alias);
+                            },
+                        }
                     }
                     gpa.free(wc.constraints);
                 },
@@ -1378,7 +1446,7 @@ pub const DocEntry = struct {
                     try sig.writeToSExpr(writer, depth + 1);
                     try writer.writeAll(")\n");
                 },
-                .alias => {
+                .alias, .where_alias => {
                     try writer.writeAll("(type \"");
                     try writeEscaped(writer, self.name);
                     try writer.writeAll(" : \" ");

@@ -36,7 +36,8 @@ pub const Problem = union(enum) {
     cannot_access_opaque_nominal: CannotAccessOpaqueNominal,
     nominal_type_resolution_failed: NominalTypeResolutionFailed,
     recursive_alias: RecursiveAlias,
-    unsupported_alias_where_clause: UnsupportedAliasWhereClause,
+    not_a_where_alias: NotAWhereAlias,
+    recursive_where_alias: RecursiveWhereAlias,
     where_clause_receiver_not_introduced: WhereClauseReceiverNotIntroduced,
     invalid_nominal_decl_recursion: InvalidNominalDeclRecursion,
     infinite_recursion: VarWithSnapshot,
@@ -504,10 +505,17 @@ pub const RecursiveAlias = struct {
     region: base.Region,
 };
 
-/// Error when using alias syntax in where clause (e.g., `where [a.SomeAlias]`)
-/// This syntax was used for abilities which have been removed from the language
-pub const UnsupportedAliasWhereClause = struct {
-    alias_name: base.Ident.Idx,
+/// Error when a where clause names something that is not a where alias, such as
+/// an ordinary type (e.g. `where [a.Str]`).
+pub const NotAWhereAlias = struct {
+    name: base.Ident.Idx,
+    region: base.Region,
+};
+
+/// Error when a where alias's constraints reach the alias itself, directly or
+/// through other where aliases.
+pub const RecursiveWhereAlias = struct {
+    name: base.Ident.Idx,
     region: base.Region,
 };
 

@@ -176,6 +176,17 @@ test "NodeStore round trip - Statements" {
         },
     });
 
+    try statements.append(gpa, CIR.Statement{
+        .s_where_alias_decl = .{
+            .header = rand_idx(CIR.TypeHeader.Idx),
+            .receiver = rand_idx(CIR.TypeAnno.Idx),
+            .where = .{
+                .span = rand_span(),
+                .owners = .{ .span = rand_span() },
+            },
+        },
+    });
+
     try statements.append(gpa, CIR.Statement{ .s_type_anno = .{
         .name = rand_ident_idx(),
         .anno = rand_idx(CIR.TypeAnno.Idx),
@@ -991,8 +1002,15 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
+        .where_alias_constraint_not_on_receiver = .{
+            .receiver_name = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
         .underscore_in_type_declaration = .{
-            .is_alias = rand.random().boolean(),
+            .declared = rand.random().enumValue(CIR.DeclaredTypeKind),
             .region = rand_region(),
         },
     });
@@ -1535,7 +1553,7 @@ test "where clause span records canonical rigid ownership by annotation scope" {
     } }, base.Region.zero());
     try store.addScratchWhereClause(enclosing_method);
 
-    const where = try store.whereClauseSpanFrom(0, outer);
+    const where = try store.whereClauseSpanFrom(0, &.{outer});
     const owners = store.sliceWhereClauseOwners(where);
     try testing.expectEqual(@as(usize, 3), owners.len);
 
