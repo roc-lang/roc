@@ -15,6 +15,7 @@
 //! call.
 
 const tracy = @import("tracy");
+const shim_symbols = @import("shim_symbols.zig");
 
 /// A type-erased pointer to a platform-provided hosted function.
 ///
@@ -53,14 +54,44 @@ else
     .vtable;
 
 /// The fixed runtime symbols every host defines under the symbol ABI.
-const extern_host = struct {
-    extern fn roc_alloc(length: usize, alignment: usize) ?*anyopaque;
-    extern fn roc_dealloc(ptr: *anyopaque, alignment: usize) void;
-    extern fn roc_realloc(ptr: *anyopaque, new_length: usize, alignment: usize) ?*anyopaque;
-    extern fn roc_dbg(bytes: [*]const u8, len: usize) void;
-    extern fn roc_expect_failed(bytes: [*]const u8, len: usize) void;
-    extern fn roc_crashed(bytes: [*]const u8, len: usize) void;
+///
+/// These are the same operations as the `RocOps` vtable methods below, but
+/// without the leading `*RocOps` parameter: compiled output resolves them as
+/// linker symbols instead of calling through the vtable. The shim host
+/// (`src/shim_host_abi.zig`) reuses this declaration rather than restating it,
+/// so the extern symbol ABI is written down in exactly one place. The names are
+/// held in lockstep with `shim_symbols.runtime_set` by the comptime check
+/// below; mirrors that cannot import this module (the glue templates'
+/// generated output) are pinned by the glue ABI lock tests instead.
+pub const extern_host = struct {
+    pub extern fn roc_alloc(length: usize, alignment: usize) ?*anyopaque;
+    pub extern fn roc_dealloc(ptr: *anyopaque, alignment: usize) void;
+    pub extern fn roc_realloc(ptr: *anyopaque, new_length: usize, alignment: usize) ?*anyopaque;
+    pub extern fn roc_dbg(bytes: [*]const u8, len: usize) void;
+    pub extern fn roc_expect_failed(bytes: [*]const u8, len: usize) void;
+    pub extern fn roc_crashed(bytes: [*]const u8, len: usize) void;
 };
+
+comptime {
+    // extern_host and shim_symbols.runtime_set must list the same symbols in
+    // the same order.
+    const decls = @typeInfo(extern_host).@"struct".decls;
+    if (decls.len != shim_symbols.runtime_set.len) {
+        @compileError("host_abi.extern_host is out of sync with shim_symbols.runtime_set");
+    }
+    for (decls, shim_symbols.runtime_set) |decl, name| {
+        if (decl.name.len != name.len) {
+            @compileError("host_abi.extern_host declares " ++ decl.name ++
+                " where shim_symbols.runtime_set has " ++ name);
+        }
+        for (decl.name, name) |decl_byte, name_byte| {
+            if (decl_byte != name_byte) {
+                @compileError("host_abi.extern_host declares " ++ decl.name ++
+                    " where shim_symbols.runtime_set has " ++ name);
+            }
+        }
+    }
+}
 
 /// Type-erased pointer to a hosted platform function stored in the
 /// interpreter-internal vtable. The interpreter's trampoline rebuilds each

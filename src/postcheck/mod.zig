@@ -31,29 +31,50 @@ pub const LambdaMono = struct {
     pub const Type = @import("lambda_mono/type.zig");
     pub const Lower = @import("lambda_mono/lower.zig");
     pub const Specialize = @import("lambda_mono/specialize.zig");
+    pub const Eval = @import("lambda_mono/eval.zig");
 };
-pub const LirLower = @import("lir_lower.zig");
+/// Decision-tree match compiler shared by both LIR lowerers.
+pub const MatchTree = @import("match_tree.zig");
 pub const SolvedInline = @import("solved_inline.zig");
 pub const SolvedLirLower = @import("solved_lir_lower.zig");
 pub const StructuralTest = @import("structural_test.zig");
 
 test "postcheck declarations are referenced" {
     std.testing.refAllDecls(@This());
+    std.testing.refAllDecls(@import("common.zig"));
+    std.testing.refAllDecls(@import("monotype/ast.zig"));
+    std.testing.refAllDecls(@import("monotype/type.zig"));
+    std.testing.refAllDecls(@import("monotype/lower.zig"));
     std.testing.refAllDecls(@import("monotype/serialize.zig"));
     std.testing.refAllDecls(@import("monotype/solve.zig"));
+    std.testing.refAllDecls(@import("monotype/specialize.zig"));
+    std.testing.refAllDecls(@import("monotype_lifted/ast.zig"));
+    std.testing.refAllDecls(@import("monotype_lifted/lift.zig"));
+    std.testing.refAllDecls(@import("monotype_lifted/spec_constr.zig"));
+    std.testing.refAllDecls(@import("lambda_solved/ast.zig"));
+    std.testing.refAllDecls(@import("lambda_solved/type.zig"));
+    std.testing.refAllDecls(@import("lambda_solved/solve.zig"));
+    std.testing.refAllDecls(@import("lambda_mono/ast.zig"));
+    std.testing.refAllDecls(@import("lambda_mono/type.zig"));
+    std.testing.refAllDecls(@import("lambda_mono/lower.zig"));
+    std.testing.refAllDecls(@import("lambda_mono/specialize.zig"));
+    std.testing.refAllDecls(@import("lambda_mono/eval.zig"));
+    std.testing.refAllDecls(@import("match_tree.zig"));
+    std.testing.refAllDecls(@import("solved_inline.zig"));
+    std.testing.refAllDecls(@import("solved_lir_lower.zig"));
+    std.testing.refAllDecls(@import("structural_test.zig"));
 }
 
 test "lambda solved unification loop is iterative" {
     const source = @embedFile("lambda_solved/solve.zig");
-    const unify_start = std.mem.indexOf(u8, source, "    fn unify(self: *Solver") orelse
-        @panic("lambda solved unify function not found");
-    const transparent_alias_start = std.mem.indexOfPos(u8, source, unify_start, "    fn transparentAliasBacking") orelse
-        @panic("lambda solved transparent alias helper not found");
-    const unify_source = source[unify_start..transparent_alias_start];
+    const process_start = std.mem.find(u8, source, "    fn processUnifyPair(") orelse
+        @panic("lambda solved processUnifyPair function not found");
+    const apply_start = std.mem.findPos(u8, source, process_start, "    fn applyUnifyFinish(") orelse
+        @panic("lambda solved applyUnifyFinish helper not found");
+    const process_source = source[process_start..apply_start];
 
-    try std.testing.expect(std.mem.indexOf(u8, unify_source, "try self.unify(") == null);
-    try std.testing.expect(std.mem.indexOf(u8, unify_source, "try self.unifySpans(") == null);
-    try std.testing.expect(std.mem.indexOf(u8, unify_source, "try self.unifyFields(") == null);
-    try std.testing.expect(std.mem.indexOf(u8, unify_source, "try self.unifyTags(") == null);
-    try std.testing.expect(std.mem.indexOf(u8, unify_source, "try self.unifyCaptures(") == null);
+    try std.testing.expect(std.mem.find(u8, process_source, "try self.unify(") == null);
+    try std.testing.expect(std.mem.find(u8, process_source, "try self.unifySpans(") == null);
+    try std.testing.expect(std.mem.find(u8, process_source, "try self.mergeTags(") != null);
+    try std.testing.expect(std.mem.find(u8, process_source, "try self.pushUnifyPair(") != null);
 }

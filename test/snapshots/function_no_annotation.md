@@ -107,7 +107,7 @@ NO CHANGE
 			(args
 				(p-assign (ident "x"))
 				(p-assign (ident "y")))
-			(e-dispatch-call (method "times") (constraint-fn-var 38)
+			(e-dispatch-call (method "times") (constraint-fn-var 222)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -116,34 +116,14 @@ NO CHANGE
 						(p-assign (ident "y")))))))
 	(d-let
 		(p-assign (ident "print_number!"))
-		(e-lambda
-			(args
-				(p-assign (ident "n")))
-			(e-call
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-lookup-local
-					(p-assign (ident "n"))))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "process!"))
-		(e-lambda
-			(args
-				(p-assign (ident "x")))
-			(e-call (constraint-fn-var 81)
-				(e-lookup-local
-					(p-assign (ident "print_number!")))
-				(e-call (constraint-fn-var 80)
-					(e-lookup-local
-						(p-assign (ident "multiply")))
-					(e-lookup-local
-						(p-assign (ident "x")))
-					(e-num (value "2"))))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-call (constraint-fn-var 123)
-			(e-lookup-local
-				(p-assign (ident "process!")))
-			(e-num (value "42"))))
-	(s-import (module "pf.Stdout")
+		(e-runtime-error (tag "erroneous_value_expr")))
+	(s-import (mod "pf.Stdout")
 		(exposes)))
 ~~~
 # TYPES

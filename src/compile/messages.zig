@@ -11,6 +11,7 @@ const can = @import("can");
 const check = @import("check");
 const parse = @import("parse");
 const reporting = @import("reporting");
+const eval = @import("eval");
 const watch_inputs = @import("watch_inputs.zig");
 
 const ModuleEnv = can.ModuleEnv;
@@ -24,7 +25,9 @@ pub const ModuleId = u32;
 
 /// Information about a discovered local import during canonicalization
 pub const DiscoveredLocalImport = struct {
-    /// The module name (e.g., "Foo")
+    /// Exact source target used by canonicalization (e.g. "../Shared/Foo").
+    import_name: []const u8,
+    /// Package-root-relative logical module path (e.g. "Shared/Foo").
     module_name: []const u8,
     /// The resolved filesystem path
     path: []const u8,
@@ -68,6 +71,8 @@ pub const ParseTask = struct {
     /// the module is staged elsewhere (e.g. a default app written to a temp dir),
     /// so sibling imports resolve against the user's original directory.
     source_dir: []const u8,
+    /// Package source root used for leading `/` and parent-bound checks.
+    package_root: []const u8,
     /// Compiler role for this source module
     module_role: ModuleEnv.ModuleRole,
     /// Dependency depth from root
@@ -94,6 +99,9 @@ pub const CanonicalizeTask = struct {
     cached_ast: *AST,
     /// Real imported semantic envs available to canonicalization
     imported_modules: []const CanonicalizeImport,
+    /// Validate this module as an explicitly requested checked-artifact root
+    /// instead of as a standalone `roc check` root.
+    validate_as_explicit_roots: bool,
 };
 
 /// Task to type-check a canonicalized module
@@ -120,6 +128,10 @@ pub const TypeCheckTask = struct {
     platform_requirements: ?PlatformRequirementSurface = null,
     /// Additional checked roots requested by package-level metadata.
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
+    /// True when this module is the platform root of an app build: its
+    /// check-time publication is skipped so finalization publishes the
+    /// relation-bearing platform root exactly once.
+    defer_publication: bool = false,
 };
 
 /// The platform root's requirement surface, borrowed from its completed
@@ -194,6 +206,8 @@ pub const ParsedResult = struct {
     discovered_local_imports: std.ArrayList(DiscoveredLocalImport),
     /// Discovered external imports (cross-package qualified imports)
     discovered_external_imports: std.ArrayList(DiscoveredExternalImport),
+    /// True when lexical import resolution rejected a target before any file access.
+    import_resolution_failed: bool,
     /// Any reports generated during parsing
     reports: std.ArrayList(Report),
     /// Timing: nanoseconds spent parsing
@@ -224,14 +238,26 @@ pub const CanonicalizedResult = struct {
     canonicalize_diagnostics_ns: u64,
 };
 
-/// Result of successfully type-checking a module
+/// Worker-owned checked-module output transferred to the coordinator.
+pub const TypeCheckedPublication = union(enum) {
+    published: CheckedArtifact.CheckedModuleArtifact,
+    deferred: *DeferredPublicationState,
+};
+
+/// Result of successfully type-checking a module.
+/// User diagnostics do not alter this outcome: publication is either complete
+/// or explicitly deferred until platform/app relation finalization.
 pub const OwnedSemanticModuleData = struct {
     module_env: *ModuleEnv,
-    checked_artifact: ?CheckedArtifact.CheckedModuleArtifact = null,
-    user_errors_allow_lowering: bool = false,
+    publication: TypeCheckedPublication,
+    publication_owned: bool = true,
 
     pub fn deinit(self: *OwnedSemanticModuleData) void {
-        if (self.checked_artifact) |*artifact| artifact.deinit(artifact.canonical_names.allocator);
+        if (!self.publication_owned) return;
+        switch (self.publication) {
+            .published => |*artifact| artifact.deinit(artifact.canonical_names.allocator),
+            .deferred => |state| state.deinit(),
+        }
     }
 };
 
@@ -253,6 +279,25 @@ pub const TypeCheckedResult = struct {
     type_check_ns: u64,
     /// Timing: nanoseconds spent on diagnostics
     check_diagnostics_ns: u64,
+};
+
+/// Complete checker-owned continuation for a module whose checked artifact is
+/// intentionally published during executable finalization.
+pub const DeferredPublicationState = struct {
+    allocator: Allocator,
+    checker: check.Check,
+    /// Stable copy of the imported-env pointer slice needed to render any
+    /// diagnostics produced during deferred compile-time finalization.
+    imported_envs: []const *ModuleEnv,
+    ctfe_options: eval.CompileTimeFinalization.Options,
+    requirement_context: check.CheckedArtifact.PlatformRequirementContextKey,
+    reported_problem_count: usize,
+
+    pub fn deinit(self: *DeferredPublicationState) void {
+        self.checker.deinit();
+        self.allocator.free(self.imported_envs);
+        self.allocator.destroy(self);
+    }
 };
 
 /// Result when parsing fails (but we still return partial info)
@@ -378,6 +423,7 @@ pub const WorkerResult = union(enum) {
         switch (self.*) {
             .parsed => |*r| {
                 for (r.discovered_local_imports.items) |imp| {
+                    gpa.free(imp.import_name);
                     gpa.free(imp.module_name);
                     gpa.free(imp.path);
                 }
@@ -391,6 +437,7 @@ pub const WorkerResult = union(enum) {
             },
             .canonicalized => |*r| {
                 for (r.discovered_local_imports.items) |imp| {
+                    gpa.free(imp.import_name);
                     gpa.free(imp.module_name);
                     gpa.free(imp.path);
                 }
@@ -448,6 +495,7 @@ test "WorkerTask accessors" {
             .module_name = "Main",
             .path = "/path/to/Main.roc",
             .source_dir = "/path/to",
+            .package_root = "/path/to",
             .depth = 0,
             .module_role = .user,
         },
@@ -472,6 +520,7 @@ test "WorkerResult accessors" {
             .cached_ast = undefined,
             .discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty,
             .discovered_external_imports = std.ArrayList(DiscoveredExternalImport).empty,
+            .import_resolution_failed = false,
             .reports = reports,
             .parse_ns = 1000,
         },

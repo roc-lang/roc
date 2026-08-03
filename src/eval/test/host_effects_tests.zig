@@ -979,6 +979,47 @@ pub const tests = [_]TestCase{
         0,
     ),
     exprTestWithLiveAllocations(
+        "rc balance: List.set releases the displaced refcounted element",
+        \\{
+        \\    entries = [{ words: [1.U64, 2.U64, 3.U64] }]
+        \\    updated = List.set(entries, 0, { words: [] }) ?? []
+        \\    expect List.len(updated) == 1
+        \\    {}
+        \\}
+    ,
+        &.{},
+        .returned,
+        0,
+    ),
+    exprTestWithLiveAllocations(
+        "rc balance: Dict update and escaped refcounted field are fully released",
+        \\{
+        \\    step = |model| {
+        \\        key = "hello"
+        \\        (entries, used_words) = match model.entries.get(key) {
+        \\            Ok(entry) => {
+        \\                refreshed = { ..entry, generation: model.generation }
+        \\                (model.entries.insert(key, refreshed), refreshed.words)
+        \\            }
+        \\            Err(_) => {
+        \\                entry = { words: [1.U64, 2.U64, 3.U64], generation: model.generation }
+        \\                (model.entries.insert(key, entry), entry.words)
+        \\            }
+        \\        }
+        \\        { entries, generation: model.generation + 1, used_words }
+        \\    }
+        \\    initial = { entries: Dict.empty(), generation: 0.U64, used_words: [] }
+        \\    first = step(initial)
+        \\    second = step(first)
+        \\    expect List.len(second.used_words) == 3
+        \\    {}
+        \\}
+    ,
+        &.{},
+        .returned,
+        0,
+    ),
+    exprTestWithLiveAllocations(
         "rc balance: boxed list of heap strings is released after unbox",
         \\{
         \\    boxed = Box.box([
@@ -1040,6 +1081,26 @@ pub const tests = [_]TestCase{
         \\    })
         \\    f = Box.unbox(outer)
         \\    expect f(40) == 42
+        \\    {}
+        \\}
+    ,
+        &.{},
+        .returned,
+        0,
+    ),
+    // Repro for https://github.com/roc-lang/roc/issues/9953:
+    // successful Json.parse should release a runtime-allocated input string.
+    exprTestWithLiveAllocations(
+        "rc balance: Json.parse releases runtime string input after success",
+        \\{
+        \\    json = Str.concat("{ \"name\": \"", "a value long enough to force a heap allocation for the whole json string\" }")
+        \\    result : Try({ name : Str }, _)
+        \\    result = Json.parse(json)
+        \\    n = match result {
+        \\        Ok(rec) => Str.count_utf8_bytes(rec.name)
+        \\        Err(_) => 0
+        \\    }
+        \\    expect n > 0
         \\    {}
         \\}
     ,

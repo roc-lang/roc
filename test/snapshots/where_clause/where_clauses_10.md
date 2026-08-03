@@ -42,7 +42,7 @@ DECLARATION HAS NO VALUE - where_clauses_10.md:3:1:7:15
  │                                                                            │
  └─────────────────────────────────────────────────── where_clauses_10.md:3:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 # TOKENS
@@ -58,7 +58,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "Decode")
 			(exposing
@@ -74,7 +74,7 @@ EndOfFile,
 					(ty (name "List"))
 					(ty-var (raw "a"))))
 			(where
-				(alias (module-of "a") (name "Decode"))))))
+				(alias (mod-of "a") (name "Decode"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -102,7 +102,7 @@ decode_things # After member name
 					(ty-rigid-var (name "a"))))
 			(where
 				(alias (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "Decode")))))
-	(s-import (module "Decode")
+	(s-import (mod "Decode")
 		(exposes
 			(exposed (name "Decode") (wildcard false)))))
 ~~~

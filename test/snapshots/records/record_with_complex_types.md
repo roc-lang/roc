@@ -129,12 +129,10 @@ EndOfFile,
 	scores: [95, 87, 92, 78],
 	status: Active({ since: "2023-01-15" }),
 	preferences: { theme: Dark, notifications: Email("alice@example.com") },
-	metadata: Ok(
-		{
-			tags: ["developer", "senior", "fullstack"],
-			permissions: [Read, Write, Admin],
-		},
-	),
+	metadata: Ok({
+		tags: ["developer", "senior", "fullstack"],
+		permissions: [Read, Write, Admin],
+	}),
 	callback: |x| x + 1,
 	nested: {
 		items: [Some("first"), None, Some("third")],
@@ -236,5 +234,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ callback: a -> a, metadata: [Ok({ permissions: List([Admin, Read, Write, ..]), tags: List(Str) }), ..], name: Str, nested: { items: List([None, Some(Str), ..]), result: [Success({ data: List(Dec), timestamp: Str }), ..] }, preferences: { notifications: [Email(Str), ..], theme: [Dark, ..] }, scores: List(Dec), status: [Active({ since: Str }), ..] } where [a.plus : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
+(expr (type "{ callback: a -> a, metadata: [Ok({ permissions: List([Admin, Read, Write, ..]), tags: List(Str) }), ..], name: Str, nested: { items: List([None, Some(Str), ..]), result: [Success({ data: List(Dec), timestamp: Str }), ..] }, preferences: { notifications: [Email(Str), ..], theme: [Dark, ..] }, scores: List(Dec), status: [Active({ since: Str }), ..] } where [a.plus : a, Dec -> a]"))
 ~~~

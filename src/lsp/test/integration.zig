@@ -15,7 +15,8 @@ pub const integration_env = @import("integration_env.zig");
 const syntax_tests = @import("syntax_test.zig");
 const parse_error_tests = @import("parse_error_test.zig");
 const handler_integration_tests = @import("handler_integration_tests.zig");
+const issue_10161_tests = @import("issue_10161_test.zig");
 
 pub const Spec = integration_spec.Spec;
 pub const SpecError = integration_spec.SpecError;
-pub const specs = parse_error_tests.specs ++ syntax_tests.specs ++ handler_integration_tests.specs;
+pub const specs = parse_error_tests.specs ++ syntax_tests.specs ++ handler_integration_tests.specs ++ issue_10161_tests.specs;

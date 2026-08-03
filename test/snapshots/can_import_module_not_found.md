@@ -1,25 +1,25 @@
 # META
 ~~~ini
-description=Import of non-existent module
+description=Import of non-existent mod
 type=snippet
 ~~~
 # SOURCE
 ~~~roc
-import nonexistent.Module
+import nonexistent.Mod
 
-main = Module.something
+main = Mod.something
 ~~~
 # EXPECTED
-NAME NOT IN SCOPE - can_import_module_not_found.md:3:8:3:24
+NAME NOT IN SCOPE - can_import_mod_not_found.md:3:8:3:21
 # PROBLEMS
 
 ┌───────────────────┐
 │ NAME NOT IN SCOPE ├─ Nothing is named `something` in this scope. ───────────┐
 └┬──────────────────┘                                                         │
  │                                                                            │
- │  main = Module.something                                                   │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                   │
- └──────────────────────────────────────── can_import_module_not_found.md:3:8 ┘
+ │  main = Mod.something                                                      │
+ │         ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
+ └──────────────────────────────────────── can_import_mod_not_found.md:3:8 ┘
 
     Is it misspelled, or is there an import missing?
 
@@ -32,12 +32,12 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
-		(s-import (raw "nonexistent.Module"))
+		(s-import (raw "nonexistent.Mod"))
 		(s-decl
 			(p-ident (raw "main"))
-			(e-ident (raw "Module.something")))))
+			(e-ident (raw "Mod.something")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -49,7 +49,7 @@ NO CHANGE
 	(d-let
 		(p-assign (ident "main"))
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(s-import (module "nonexistent.Module")
+	(s-import (mod "nonexistent.Mod")
 		(exposes)))
 ~~~
 # TYPES

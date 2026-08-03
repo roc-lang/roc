@@ -122,7 +122,7 @@ EndOfFile,
 			(e-lambda
 				(args
 					(p-assign (ident "x")))
-				(e-dispatch-call (method "plus") (constraint-fn-var 147)
+				(e-dispatch-call (method "plus") (constraint-fn-var 263)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "x"))))
@@ -156,5 +156,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ addOne: a -> a, errTag: [Err(Str), ..], nested: [Some([Ok([Just(Dec), ..]), ..]), ..], noneTag: [None, ..], okTag: [Ok(Str), ..], result: Error, someTag: [Some(Dec), ..], tagList: List([None, Some(Dec), ..]) } where [a.plus : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
+(expr (type "{ addOne: a -> a, errTag: [Err(Str), ..], nested: [Some([Ok([Just(Dec), ..]), ..]), ..], noneTag: [None, ..], okTag: [Ok(Str), ..], result: Error, someTag: [Some(Dec), ..], tagList: List([None, Some(Dec), ..]) } where [a.plus : a, Dec -> a]"))
 ~~~

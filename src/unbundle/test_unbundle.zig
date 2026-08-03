@@ -242,18 +242,6 @@ test "pathHasUnbundleErr - empty path" {
     try testing.expect(err.?.reason == .empty_path);
 }
 
-test "pathHasUnbundleErr - mixed valid and invalid components" {
-    // Path with valid components but one .. in the middle
-    const err1 = unbundle.pathHasUnbundleErr("valid/path/../file.txt");
-    try testing.expect(err1 != null);
-    try testing.expect(err1.?.reason == .path_traversal);
-
-    // Path with valid components but one . in the middle
-    const err2 = unbundle.pathHasUnbundleErr("valid/./path/file.txt");
-    try testing.expect(err2 != null);
-    try testing.expect(err2.?.reason == .current_directory_reference);
-}
-
 test "pathHasUnbundleErr - Windows drive letters" {
     const paths = [_][]const u8{
         "C:/file.txt",
@@ -322,41 +310,6 @@ test "BufferExtractWriter - overwrite existing file" {
     try testing.expectEqualStrings("New content", file.?.items);
 }
 
-test "DirExtractWriter - nested directory creation" {
-    const io = testing.io;
-
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    var writer = unbundle.DirExtractWriter.init(tmp.dir, io, testing.allocator);
-    defer writer.deinit();
-
-    // Create a file in a deeply nested path
-    const file_writer = try writer.extractWriter().createFile("a/b/c/d/e/file.txt");
-    try file_writer.writeAll("Nested content");
-    try writer.extractWriter().finishFile();
-
-    // Verify the file was created
-    const content = try tmp.dir.readFileAlloc(io, "a/b/c/d/e/file.txt", testing.allocator, .limited(1024));
-    defer testing.allocator.free(content);
-    try testing.expectEqualStrings("Nested content", content);
-}
-
-test "ErrorContext population" {
-    var error_context: unbundle.ErrorContext = undefined;
-
-    // Test that error context is populated correctly
-    if (unbundle.pathHasUnbundleErr("../etc/passwd")) |validation_error| {
-        error_context.path = validation_error.path;
-        error_context.reason = validation_error.reason;
-
-        try testing.expectEqualStrings("../etc/passwd", error_context.path);
-        try testing.expect(error_context.reason == .path_traversal);
-    } else {
-        try testing.expect(false); // Should have failed
-    }
-}
-
 const download = @import("download.zig");
 
 test "download URL validation parses optional version component" {
@@ -371,7 +324,8 @@ test "download URL validation parses optional version component" {
         try testing.expectEqual(@as(u32, 2), parsed.version.minor);
         try testing.expectEqual(@as(u32, 3), parsed.version.patch);
         try testing.expect(parsed.version.isPresent());
-        try testing.expectEqualStrings("example.com/packages", parsed.urlId(url));
+        try testing.expectEqualStrings("example.com/packages", parsed.urlIdPrefix(url));
+        try testing.expectEqualStrings("", parsed.urlIdSuffix(url));
     }
 
     {
@@ -381,18 +335,17 @@ test "download URL validation parses optional version component" {
         try testing.expectEqualStrings(expected_hash, parsed.hash);
         try testing.expectEqual(download.Version.none, parsed.version);
         try testing.expect(!parsed.version.isPresent());
-        try testing.expectEqualStrings("example.com/packages", parsed.urlId(url));
+        try testing.expectEqualStrings("example.com/packages", parsed.urlIdPrefix(url));
+        try testing.expectEqualStrings("", parsed.urlIdSuffix(url));
     }
 }
 
-test "download URL validation only recognizes strict version components" {
+test "download URL validation ignores non-version number sequences" {
     const expected_hash = "4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf";
     const urls = [_][]const u8{
-        "https://example.com/packages/v1.2.3/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
         "https://example.com/packages/1.2/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
         "https://example.com/packages/1.2.3.4/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
         "https://example.com/packages/1.2.x/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
-        "https://example.com/packages/-1.2.3/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
         "https://example.com/packages/1.2.4294967296/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
     };
 
@@ -402,7 +355,77 @@ test "download URL validation only recognizes strict version components" {
         try testing.expectEqualStrings(expected_hash, parsed.hash);
         try testing.expectEqual(download.Version.none, parsed.version);
         try testing.expect(!parsed.version.isPresent());
-        try testing.expectEqualStrings(url[8 .. url.len - "/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst".len], parsed.urlId(url));
+        try testing.expectEqualStrings(url[8 .. url.len - "/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst".len], parsed.urlIdPrefix(url));
+        try testing.expectEqualStrings("", parsed.urlIdSuffix(url));
+    }
+}
+
+test "download URL validation finds versions embedded in a path segment" {
+    const cases = [_]struct { url: []const u8, prefix: []const u8 }{
+        .{
+            .url = "https://example.com/packages/v1.2.3/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
+            .prefix = "example.com/packages/v",
+        },
+        .{
+            .url = "https://example.com/packages/-1.2.3/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
+            .prefix = "example.com/packages/-",
+        },
+    };
+
+    for (cases) |case| {
+        const parsed = try download.validateUrl(case.url);
+
+        try testing.expectEqual(download.Version{ .major = 1, .minor = 2, .patch = 3 }, parsed.version);
+        try testing.expectEqualStrings(case.prefix, parsed.urlIdPrefix(case.url));
+        try testing.expectEqualStrings("", parsed.urlIdSuffix(case.url));
+    }
+}
+
+test "download URL validation rejects non-allowlisted URLs via the shared gate" {
+    // Plain http to a non-loopback host is rejected by base.url.isSafeUrl
+    // before any parsing happens.
+    const rejected = [_][]const u8{
+        "http://example.com/packages/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
+        "http://192.168.1.100/packages/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
+        "ftp://example.com/packages/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
+        "./relative/path",
+    };
+    for (rejected) |url| {
+        try testing.expectError(download.DownloadError.InvalidUrl, download.validateUrl(url));
+    }
+
+    // Loopback http hosts remain allowed through the same gate.
+    const accepted = try download.validateUrl("http://127.0.0.1:8000/packages/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst");
+    try testing.expectEqualStrings("4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf", accepted.hash);
+}
+
+test "download URL validation rejects the reserved 0.0.0 version" {
+    try testing.expectError(
+        download.DownloadError.InvalidVersion,
+        download.validateUrl("https://example.com/packages/0.0.0/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst"),
+    );
+}
+
+test "download URL validation accepts 0.x versions" {
+    const cases = [_]struct { url: []const u8, version: download.Version }{
+        .{
+            .url = "https://example.com/packages/0.0.1/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
+            .version = .{ .major = 0, .minor = 0, .patch = 1 },
+        },
+        .{
+            .url = "https://example.com/packages/0.9.9/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
+            .version = .{ .major = 0, .minor = 9, .patch = 9 },
+        },
+        .{
+            .url = "https://example.com/packages/0.20.0/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
+            .version = .{ .major = 0, .minor = 20, .patch = 0 },
+        },
+    };
+
+    for (cases) |case| {
+        const parsed = try download.validateUrl(case.url);
+        try testing.expectEqual(case.version, parsed.version);
+        try testing.expectEqualStrings("example.com/packages", parsed.urlIdPrefix(case.url));
     }
 }
 

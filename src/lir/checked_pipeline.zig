@@ -12,6 +12,9 @@ const core = @import("lir_core");
 
 const Arc = @import("arc.zig");
 const Trmc = @import("trmc.zig");
+const BoxReuse = @import("box_reuse.zig");
+const ReturnSlot = @import("return_slot.zig");
+const StrAppend = @import("str_append.zig");
 const ScalarizeJoins = @import("scalarize_joins.zig");
 const TagReachability = @import("tag_reachability.zig");
 const ReachableProcs = @import("reachable_procs.zig");
@@ -25,6 +28,8 @@ const checked = check.CheckedModule;
 
 /// Resource failure while lowering checked modules to LIR.
 pub const LowerResourceError = Allocator.Error;
+/// An explicit checked constant requested for target static-data materialization.
+pub const StaticDataRequest = postcheck.Common.StaticDataRequest;
 
 /// Root checked module plus the checked imports visible to post-check lowering.
 pub const CheckedModuleSet = struct {
@@ -36,7 +41,13 @@ pub const CheckedModuleSet = struct {
 pub const RootRequestSet = struct {
     requests: []const checked.RootRequest = &.{},
     layout_requests: []const checked.CheckedTypeId = &.{},
-    include_static_data_exports: bool = false,
+    /// Explicit checked constants to restore as readonly target data.
+    static_data_requests: []const postcheck.Common.StaticDataRequest = &.{},
+    /// Request layouts and materialization roots for host-visible provided data.
+    include_provided_data_exports: bool = false,
+    /// Restore eligible stored constants as internal readonly static values.
+    include_internal_static_data: bool = false,
+    test_plan_metadata: []const postcheck.Common.RootTestPlanMetadata = &.{},
 };
 
 /// Target settings and checked module state for the checked-to-LIR pipeline.
@@ -54,11 +65,249 @@ pub const TargetConfig = struct {
     proc_debug_names: bool = false,
     /// Control Monotype specialization cache reads and writes.
     monotype_cache: MonotypeCacheControl = .{},
+    /// Build ConstStore materialization plans for requested layouts.
+    /// Disable this only for consumers that read requested layout metadata and
+    /// never materialize requested-layout values.
+    layout_request_const_plans: bool = true,
     /// Delete LIR switch edges whose tag discriminants are unreachable. This
     /// is enabled for optimized builds and kept off for dev and compile-time
     /// evaluation.
     tag_reachability: bool = false,
+    /// Debug-only: forwarded to `SolvedLirLower.Options.debug_materialized_out`
+    /// so a differential harness can execute the Debug verifier's materialized
+    /// Lambda Mono program. The slot receives a value only in Debug builds.
+    debug_materialized_out: ?*?postcheck.LambdaMono.Ast.Program = null,
+    /// Optional timing accumulator for the checked-to-LIR pipeline.
+    timing: ?*Timing = null,
 };
+
+/// Thread-safe timing totals for the checked-to-LIR pipeline.
+pub const Timing = struct {
+    std_io: std.Io,
+    detailed_monotype_body: bool = false,
+    monotype_diagnostics_mutex: std.Io.Mutex = .init,
+    monotype_diagnostics: postcheck.Monotype.Lower.Diagnostics = .{},
+    monotype_ns: TimingCounter = .{},
+    monotype_setup_ns: TimingCounter = .{},
+    monotype_procedure_specialization_ns: TimingCounter = .{},
+    monotype_procedure_root_wrapper_ns: TimingCounter = .{},
+    monotype_procedure_lookup_reservation_ns: TimingCounter = .{},
+    monotype_procedure_dispatch_evidence_ns: TimingCounter = .{},
+    monotype_procedure_body_graph_setup_ns: TimingCounter = .{},
+    monotype_procedure_body_lowering_ns: TimingCounter = .{},
+    monotype_procedure_body_type_graph_ns: TimingCounter = .{},
+    monotype_procedure_body_call_dispatch_ns: TimingCounter = .{},
+    monotype_procedure_body_draft_ir_ns: TimingCounter = .{},
+    monotype_procedure_body_reachability_ns: TimingCounter = .{},
+    monotype_procedure_body_source_mapping_ns: TimingCounter = .{},
+    monotype_procedure_body_local_proc_context_ns: TimingCounter = .{},
+    monotype_procedure_body_finalization_ns: TimingCounter = .{},
+    monotype_procedure_completion_ns: TimingCounter = .{},
+    monotype_layout_requests_ns: TimingCounter = .{},
+    monotype_static_data_requests_ns: TimingCounter = .{},
+    monotype_finalization_ns: TimingCounter = .{},
+    lift_ns: TimingCounter = .{},
+    spec_constr_ns: TimingCounter = .{},
+    lambda_solve_ns: TimingCounter = .{},
+    inline_plan_ns: TimingCounter = .{},
+    lir_gen_ns: TimingCounter = .{},
+    lir_passes_ns: TimingCounter = .{},
+    arc_ns: TimingCounter = .{},
+
+    pub fn init(std_io: std.Io) Timing {
+        return .{ .std_io = std_io };
+    }
+
+    /// Enable fine-grained, per-node Monotype body timing. This is opt-in
+    /// because timestamping interleaved body work has measurable overhead.
+    pub fn enableDetailedMonotypeBody(self: *Timing) void {
+        self.detailed_monotype_body = true;
+    }
+
+    pub fn snapshot(self: *const Timing) TimingSnapshot {
+        const diagnostics = self.monotypeDiagnosticsSnapshot();
+        return .{
+            .monotype_ns = self.monotype_ns.load(),
+            .monotype_setup_ns = self.monotype_setup_ns.load(),
+            .monotype_procedure_specialization_ns = self.monotype_procedure_specialization_ns.load(),
+            .monotype_procedure_root_wrapper_ns = self.monotype_procedure_root_wrapper_ns.load(),
+            .monotype_procedure_lookup_reservation_ns = self.monotype_procedure_lookup_reservation_ns.load(),
+            .monotype_procedure_dispatch_evidence_ns = self.monotype_procedure_dispatch_evidence_ns.load(),
+            .monotype_procedure_body_graph_setup_ns = self.monotype_procedure_body_graph_setup_ns.load(),
+            .monotype_procedure_body_lowering_ns = self.monotype_procedure_body_lowering_ns.load(),
+            .monotype_procedure_body_type_graph_ns = self.monotype_procedure_body_type_graph_ns.load(),
+            .monotype_procedure_body_call_dispatch_ns = self.monotype_procedure_body_call_dispatch_ns.load(),
+            .monotype_procedure_body_draft_ir_ns = self.monotype_procedure_body_draft_ir_ns.load(),
+            .monotype_procedure_body_reachability_ns = self.monotype_procedure_body_reachability_ns.load(),
+            .monotype_procedure_body_source_mapping_ns = self.monotype_procedure_body_source_mapping_ns.load(),
+            .monotype_procedure_body_local_proc_context_ns = self.monotype_procedure_body_local_proc_context_ns.load(),
+            .monotype_procedure_body_finalization_ns = self.monotype_procedure_body_finalization_ns.load(),
+            .monotype_procedure_completion_ns = self.monotype_procedure_completion_ns.load(),
+            .monotype_layout_requests_ns = self.monotype_layout_requests_ns.load(),
+            .monotype_static_data_requests_ns = self.monotype_static_data_requests_ns.load(),
+            .monotype_finalization_ns = self.monotype_finalization_ns.load(),
+            .lift_ns = self.lift_ns.load(),
+            .spec_constr_ns = self.spec_constr_ns.load(),
+            .lambda_solve_ns = self.lambda_solve_ns.load(),
+            .inline_plan_ns = self.inline_plan_ns.load(),
+            .lir_gen_ns = self.lir_gen_ns.load(),
+            .lir_passes_ns = self.lir_passes_ns.load(),
+            .arc_ns = self.arc_ns.load(),
+            .monotype_diagnostics = diagnostics,
+        };
+    }
+
+    pub fn addSnapshot(self: *Timing, snapshot_value: TimingSnapshot) void {
+        self.monotype_ns.add(snapshot_value.monotype_ns);
+        self.monotype_setup_ns.add(snapshot_value.monotype_setup_ns);
+        self.monotype_procedure_specialization_ns.add(snapshot_value.monotype_procedure_specialization_ns);
+        self.monotype_procedure_root_wrapper_ns.add(snapshot_value.monotype_procedure_root_wrapper_ns);
+        self.monotype_procedure_lookup_reservation_ns.add(snapshot_value.monotype_procedure_lookup_reservation_ns);
+        self.monotype_procedure_dispatch_evidence_ns.add(snapshot_value.monotype_procedure_dispatch_evidence_ns);
+        self.monotype_procedure_body_graph_setup_ns.add(snapshot_value.monotype_procedure_body_graph_setup_ns);
+        self.monotype_procedure_body_lowering_ns.add(snapshot_value.monotype_procedure_body_lowering_ns);
+        self.monotype_procedure_body_type_graph_ns.add(snapshot_value.monotype_procedure_body_type_graph_ns);
+        self.monotype_procedure_body_call_dispatch_ns.add(snapshot_value.monotype_procedure_body_call_dispatch_ns);
+        self.monotype_procedure_body_draft_ir_ns.add(snapshot_value.monotype_procedure_body_draft_ir_ns);
+        self.monotype_procedure_body_reachability_ns.add(snapshot_value.monotype_procedure_body_reachability_ns);
+        self.monotype_procedure_body_source_mapping_ns.add(snapshot_value.monotype_procedure_body_source_mapping_ns);
+        self.monotype_procedure_body_local_proc_context_ns.add(snapshot_value.monotype_procedure_body_local_proc_context_ns);
+        self.monotype_procedure_body_finalization_ns.add(snapshot_value.monotype_procedure_body_finalization_ns);
+        self.monotype_procedure_completion_ns.add(snapshot_value.monotype_procedure_completion_ns);
+        self.monotype_layout_requests_ns.add(snapshot_value.monotype_layout_requests_ns);
+        self.monotype_static_data_requests_ns.add(snapshot_value.monotype_static_data_requests_ns);
+        self.monotype_finalization_ns.add(snapshot_value.monotype_finalization_ns);
+        self.lift_ns.add(snapshot_value.lift_ns);
+        self.spec_constr_ns.add(snapshot_value.spec_constr_ns);
+        self.lambda_solve_ns.add(snapshot_value.lambda_solve_ns);
+        self.inline_plan_ns.add(snapshot_value.inline_plan_ns);
+        self.lir_gen_ns.add(snapshot_value.lir_gen_ns);
+        self.lir_passes_ns.add(snapshot_value.lir_passes_ns);
+        self.arc_ns.add(snapshot_value.arc_ns);
+        self.addMonotypeDiagnostics(snapshot_value.monotype_diagnostics);
+    }
+
+    fn start(self: *const Timing) i64 {
+        return timingNowNs(self.std_io);
+    }
+
+    fn finish(self: *Timing, started_ns: i64, phase: TimingPhase) void {
+        const finished_ns = timingNowNs(self.std_io);
+        const elapsed_ns: u64 = @intCast(@max(0, finished_ns - started_ns));
+        switch (phase) {
+            .monotype => self.monotype_ns.add(elapsed_ns),
+            .lift => self.lift_ns.add(elapsed_ns),
+            .spec_constr => self.spec_constr_ns.add(elapsed_ns),
+            .lambda_solve => self.lambda_solve_ns.add(elapsed_ns),
+            .inline_plan => self.inline_plan_ns.add(elapsed_ns),
+            .lir_gen => self.lir_gen_ns.add(elapsed_ns),
+            .lir_passes => self.lir_passes_ns.add(elapsed_ns),
+            .arc => self.arc_ns.add(elapsed_ns),
+        }
+    }
+
+    fn addMonotypeSnapshot(self: *Timing, snapshot_value: postcheck.Monotype.Lower.TimingSnapshot) void {
+        self.monotype_setup_ns.add(snapshot_value.setup_ns);
+        self.monotype_procedure_specialization_ns.add(snapshot_value.procedure_specialization_ns);
+        self.monotype_procedure_root_wrapper_ns.add(snapshot_value.procedure_root_wrapper_ns);
+        self.monotype_procedure_lookup_reservation_ns.add(snapshot_value.procedure_lookup_reservation_ns);
+        self.monotype_procedure_dispatch_evidence_ns.add(snapshot_value.procedure_dispatch_evidence_ns);
+        self.monotype_procedure_body_graph_setup_ns.add(snapshot_value.procedure_body_graph_setup_ns);
+        self.monotype_procedure_body_lowering_ns.add(snapshot_value.procedure_body_lowering_ns);
+        self.monotype_procedure_body_type_graph_ns.add(snapshot_value.procedure_body_type_graph_ns);
+        self.monotype_procedure_body_call_dispatch_ns.add(snapshot_value.procedure_body_call_dispatch_ns);
+        self.monotype_procedure_body_draft_ir_ns.add(snapshot_value.procedure_body_draft_ir_ns);
+        self.monotype_procedure_body_reachability_ns.add(snapshot_value.procedure_body_reachability_ns);
+        self.monotype_procedure_body_source_mapping_ns.add(snapshot_value.procedure_body_source_mapping_ns);
+        self.monotype_procedure_body_local_proc_context_ns.add(snapshot_value.procedure_body_local_proc_context_ns);
+        self.monotype_procedure_body_finalization_ns.add(snapshot_value.procedure_body_finalization_ns);
+        self.monotype_procedure_completion_ns.add(snapshot_value.procedure_completion_ns);
+        self.monotype_layout_requests_ns.add(snapshot_value.layout_requests_ns);
+        self.monotype_static_data_requests_ns.add(snapshot_value.static_data_requests_ns);
+        self.monotype_finalization_ns.add(snapshot_value.finalization_ns);
+    }
+
+    fn addMonotypeDiagnostics(self: *Timing, diagnostics: postcheck.Monotype.Lower.Diagnostics) void {
+        self.monotype_diagnostics_mutex.lockUncancelable(self.std_io);
+        defer self.monotype_diagnostics_mutex.unlock(self.std_io);
+        self.monotype_diagnostics.add(diagnostics);
+    }
+
+    fn monotypeDiagnosticsSnapshot(self: *const Timing) postcheck.Monotype.Lower.Diagnostics {
+        const mutable = @constCast(self);
+        mutable.monotype_diagnostics_mutex.lockUncancelable(self.std_io);
+        defer mutable.monotype_diagnostics_mutex.unlock(self.std_io);
+        return self.monotype_diagnostics;
+    }
+};
+
+const TimingCounter = base.ConcurrentU64;
+
+/// Immutable checked-to-LIR timings for progress reporting.
+pub const TimingSnapshot = struct {
+    monotype_ns: u64 = 0,
+    monotype_setup_ns: u64 = 0,
+    monotype_procedure_specialization_ns: u64 = 0,
+    monotype_procedure_root_wrapper_ns: u64 = 0,
+    monotype_procedure_lookup_reservation_ns: u64 = 0,
+    monotype_procedure_dispatch_evidence_ns: u64 = 0,
+    monotype_procedure_body_graph_setup_ns: u64 = 0,
+    monotype_procedure_body_lowering_ns: u64 = 0,
+    monotype_procedure_body_type_graph_ns: u64 = 0,
+    monotype_procedure_body_call_dispatch_ns: u64 = 0,
+    monotype_procedure_body_draft_ir_ns: u64 = 0,
+    monotype_procedure_body_reachability_ns: u64 = 0,
+    monotype_procedure_body_source_mapping_ns: u64 = 0,
+    monotype_procedure_body_local_proc_context_ns: u64 = 0,
+    monotype_procedure_body_finalization_ns: u64 = 0,
+    monotype_procedure_completion_ns: u64 = 0,
+    monotype_layout_requests_ns: u64 = 0,
+    monotype_static_data_requests_ns: u64 = 0,
+    monotype_finalization_ns: u64 = 0,
+    lift_ns: u64 = 0,
+    spec_constr_ns: u64 = 0,
+    lambda_solve_ns: u64 = 0,
+    inline_plan_ns: u64 = 0,
+    lir_gen_ns: u64 = 0,
+    lir_passes_ns: u64 = 0,
+    arc_ns: u64 = 0,
+    monotype_diagnostics: postcheck.Monotype.Lower.Diagnostics = .{},
+};
+
+const TimingPhase = enum {
+    monotype,
+    lift,
+    spec_constr,
+    lambda_solve,
+    inline_plan,
+    lir_gen,
+    lir_passes,
+    arc,
+};
+
+fn timingNowNs(std_io: std.Io) i64 {
+    return @intCast(@max(0, std.Io.Timestamp.now(std_io, .awake).nanoseconds));
+}
+
+test "pipeline timing aggregates Monotype diagnostics" {
+    var timing = Timing.init(std.testing.io);
+    var first: postcheck.Monotype.Lower.Diagnostics = .{};
+    first.specialization.template_requests = 3;
+    first.graph.nodes_created = 5;
+    first.body.call_expressions = 7;
+    timing.addMonotypeDiagnostics(first);
+
+    var second: postcheck.Monotype.Lower.Diagnostics = .{};
+    second.specialization.template_requests = 11;
+    second.graph.nodes_created = 13;
+    second.body.call_expressions = 17;
+    timing.addMonotypeDiagnostics(second);
+
+    const diagnostics = timing.snapshot().monotype_diagnostics;
+    try std.testing.expectEqual(@as(u64, 14), diagnostics.specialization.template_requests);
+    try std.testing.expectEqual(@as(u64, 18), diagnostics.graph.nodes_created);
+    try std.testing.expectEqual(@as(u64, 24), diagnostics.body.call_expressions);
+}
 
 /// Whether the root checked module is complete or inside checking finalization.
 pub const CheckedModuleState = enum {
@@ -73,6 +322,10 @@ pub const RuntimeTagUnionSchema = postcheck.SolvedLirLower.RuntimeTagUnionSchema
 pub const InlineMode = postcheck.SolvedInline.Mode;
 pub const InlineExpectMode = postcheck.SolvedLirLower.InlineExpectMode;
 pub const MonotypeCacheControl = postcheck.Monotype.Lower.SpecializationCacheControl;
+
+/// Materialized Lambda Mono program type, re-exported for harnesses that
+/// receive one through `TargetConfig.debug_materialized_out`.
+pub const LambdaMonoProgram = postcheck.LambdaMono.Ast.Program;
 
 /// Runtime record and tag-union schemas needed by dev tooling.
 pub const RuntimeValueSchemaStore = struct {
@@ -196,17 +449,31 @@ pub fn lowerCheckedModulesToLir(
 ) LowerResourceError!LoweredProgram {
     try verifyCheckedBoundary(modules, target);
 
-    const layout_requests = try collectLayoutRequests(allocator, modules.root.module, roots.layout_requests, roots.include_static_data_exports);
+    const layout_requests = try collectLayoutRequests(allocator, modules.root.module, roots.layout_requests, roots.include_provided_data_exports);
     defer allocator.free(layout_requests);
     const static_data_requests = switch (target.checked_module_state) {
-        .complete => if (roots.include_static_data_exports)
-            try collectStaticDataRequests(allocator, modules.root.module)
-        else
-            try allocator.alloc(postcheck.Common.StaticDataRequest, 0),
-        .checking_finalization => try allocator.alloc(postcheck.Common.StaticDataRequest, 0),
+        .complete => try collectStaticDataRequests(
+            allocator,
+            modules.root.module,
+            roots.static_data_requests,
+            roots.include_provided_data_exports,
+        ),
+        .checking_finalization => try allocator.dupe(postcheck.Common.StaticDataRequest, roots.static_data_requests),
     };
     defer allocator.free(static_data_requests);
 
+    const monotype_started_ns = if (target.timing) |timing| timing.start() else 0;
+    var monotype_timing: ?postcheck.Monotype.Lower.Timing = if (target.timing) |timing|
+        postcheck.Monotype.Lower.Timing.init(timing.std_io)
+    else
+        null;
+    var monotype_diagnostics: ?postcheck.Monotype.Lower.Diagnostics = if (target.timing) |timing|
+        if (timing.detailed_monotype_body) .{} else null
+    else
+        null;
+    if (monotype_timing) |*detail| {
+        detail.body_work_timing_enabled = target.timing.?.detailed_monotype_body;
+    }
     var mono = try postcheck.Monotype.Lower.run(
         allocator,
         checkedModules(modules),
@@ -214,59 +481,104 @@ pub fn lowerCheckedModulesToLir(
         .{
             .proc_debug_names = target.proc_debug_names,
             .specialization_cache = target.monotype_cache,
+            .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
+            .target_usize = target.target_usize,
             .inline_expects = switch (target.inline_expects) {
                 .run => .run,
                 .omit => .omit,
             },
+            .timing = if (monotype_timing) |*timing| timing else null,
+            .diagnostics = if (monotype_diagnostics) |*diagnostics| diagnostics else null,
         },
     );
+    if (target.timing) |timing| {
+        timing.finish(monotype_started_ns, .monotype);
+        if (monotype_timing) |*detail| timing.addMonotypeSnapshot(detail.snapshot());
+        if (monotype_diagnostics) |diagnostics| timing.addMonotypeDiagnostics(diagnostics);
+    }
     var mono_owned = true;
     errdefer if (mono_owned) mono.deinit();
 
-    var lifted = try postcheck.MonotypeLifted.Lift.run(allocator, mono);
+    const lift_started_ns = if (target.timing) |timing| timing.start() else 0;
+
+    // Each post-check transform consumes its input even when it returns an
+    // error. Transfer ownership before entering the transform so its cleanup
+    // and this function's cleanup can never both deinitialize the same IR.
+    const mono_input = mono;
     mono_owned = false;
     mono = undefined;
+    var lifted = try postcheck.MonotypeLifted.Lift.run(allocator, mono_input);
     var lifted_owned = true;
     errdefer if (lifted_owned) lifted.deinit();
+    if (target.timing) |timing| timing.finish(lift_started_ns, .lift);
 
     if (target.inline_mode != .none) {
+        const spec_constr_started_ns = if (target.timing) |timing| timing.start() else 0;
         try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted);
+        if (target.timing) |timing| timing.finish(spec_constr_started_ns, .spec_constr);
     }
-    try postcheck.MonotypeLifted.Lift.recomputeCaptures(allocator, &lifted);
 
-    var solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted);
+    const lambda_solve_started_ns = if (target.timing) |timing| timing.start() else 0;
+    const lifted_input = lifted;
     lifted_owned = false;
     lifted = undefined;
+    var solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted_input);
     var solved_owned = true;
     errdefer if (solved_owned) solved.deinit();
+    if (target.timing) |timing| timing.finish(lambda_solve_started_ns, .lambda_solve);
 
+    const inline_plan_started_ns = if (target.inline_mode != .none)
+        if (target.timing) |timing| timing.start() else 0
+    else
+        0;
     var inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, &solved);
     defer inline_plan.deinit();
+    if (target.inline_mode != .none) {
+        if (target.timing) |timing| timing.finish(inline_plan_started_ns, .inline_plan);
+    }
 
-    var lowered = try postcheck.SolvedLirLower.run(allocator, target.target_usize, solved, .{
+    const lir_gen_started_ns = if (target.timing) |timing| timing.start() else 0;
+    const solved_input = solved;
+    solved_owned = false;
+    solved = undefined;
+    var lowered = try postcheck.SolvedLirLower.run(allocator, target.target_usize, solved_input, .{
         .inline_plan = inline_plan.view(),
         .inline_expects = target.inline_expects,
         .list_in_place_map = target.list_in_place_map,
+        .dict_seed_mode = switch (target.checked_module_state) {
+            .complete => .runtime,
+            .checking_finalization => .comptime_zero,
+        },
         .proc_debug_names = target.proc_debug_names,
+        .layout_request_const_plans = target.layout_request_const_plans,
+        .test_plan_metadata = roots.test_plan_metadata,
+        .debug_materialized_out = target.debug_materialized_out,
     });
-    solved_owned = false;
-    solved = undefined;
+    if (target.timing) |timing| timing.finish(lir_gen_started_ns, .lir_gen);
     errdefer lowered.deinit();
+
+    const lir_passes_started_ns = if (target.timing) |timing| timing.start() else 0;
 
     // TRMC/TCE must rewrite recursive procs before ARC insertion: it deletes
     // calls and changes allocation sites, and ARC panics on pre-existing RC
     // statements (see src/lir/trmc.zig).
     try Trmc.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     try ScalarizeJoins.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+    try BoxReuse.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+    try ReturnSlot.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+    try StrAppend.run(&lowered.lir_result.store);
     if (target.tag_reachability) {
         try TagReachability.run(&lowered.lir_result);
     }
     try ReachableProcs.run(&lowered.lir_result);
+    if (target.timing) |timing| timing.finish(lir_passes_started_ns, .lir_passes);
 
+    const arc_started_ns = if (target.timing) |timing| timing.start() else 0;
     try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts, .{
         .roots = lowered.lir_result.root_procs.items,
         .specialize = target.inline_mode != .none,
     });
+    if (target.timing) |timing| timing.finish(arc_started_ns, .arc);
 
     if (roots.requests.len != 0 and lowered.lir_result.root_procs.items.len == 0) {
         checkedPipelineInvariant("explicit root set produced no LIR roots");
@@ -315,32 +627,20 @@ fn rootRequests(
         .requests = roots.requests,
         .layout_requests = layout_requests,
         .static_data_requests = static_data_requests,
+        .test_plan_metadata = roots.test_plan_metadata,
     };
 }
 
 fn collectLayoutRequests(
     allocator: Allocator,
-    root: *const checked.Module,
+    _: *const checked.Module,
     explicit: []const checked.CheckedTypeId,
-    include_static_data_exports: bool,
+    _: bool,
 ) Allocator.Error![]checked.CheckedTypeId {
     var requests = std.ArrayList(checked.CheckedTypeId).empty;
     errdefer requests.deinit(allocator);
 
     try requests.appendSlice(allocator, explicit);
-    if (!include_static_data_exports) return try requests.toOwnedSlice(allocator);
-
-    const types = root.checked_types.view();
-    for (root.provided_exports.exports) |provided| {
-        switch (provided) {
-            .data => |data| {
-                if (!try checkedTypeContainsFunction(allocator, types, data.checked_type)) {
-                    try requests.append(allocator, data.checked_type);
-                }
-            },
-            .procedure => {},
-        }
-    }
     return try requests.toOwnedSlice(allocator);
 }
 
@@ -383,97 +683,29 @@ pub fn selectPlatformEntrypointRoots(
 fn collectStaticDataRequests(
     allocator: Allocator,
     root: *const checked.Module,
+    explicit: []const postcheck.Common.StaticDataRequest,
+    include_provided: bool,
 ) Allocator.Error![]postcheck.Common.StaticDataRequest {
     var requests = std.ArrayList(postcheck.Common.StaticDataRequest).empty;
     errdefer requests.deinit(allocator);
 
+    try requests.appendSlice(allocator, explicit);
+
+    if (!include_provided) return try requests.toOwnedSlice(allocator);
+
     for (root.provided_exports.exports) |provided| {
         switch (provided) {
             .data => |data| {
-                if (try checkedTypeContainsFunction(allocator, root.checked_types.view(), data.checked_type)) {
-                    try requests.append(allocator, .{ .data = data });
-                }
+                try requests.append(allocator, .{
+                    .const_locator = data.const_ref,
+                    .checked_type = data.checked_type,
+                });
             },
             .procedure => {},
         }
     }
 
     return try requests.toOwnedSlice(allocator);
-}
-
-fn checkedTypeContainsFunction(
-    allocator: Allocator,
-    types: checked.CheckedTypeStoreView,
-    root: checked.CheckedTypeId,
-) Allocator.Error!bool {
-    var active = std.AutoHashMap(checked.CheckedTypeId, void).init(allocator);
-    defer active.deinit();
-    return try checkedTypeContainsFunctionInner(types, root, &active);
-}
-
-fn checkedTypeContainsFunctionInner(
-    types: checked.CheckedTypeStoreView,
-    root: checked.CheckedTypeId,
-    active: *std.AutoHashMap(checked.CheckedTypeId, void),
-) Allocator.Error!bool {
-    if (active.contains(root)) return false;
-    try active.put(root, {});
-    defer _ = active.remove(root);
-
-    const index: usize = @intFromEnum(root);
-    if (index >= types.payloadCount()) checkedPipelineInvariant("checked type function scan referenced a missing type");
-    return switch (types.payload(root)) {
-        .pending => checkedPipelineInvariant("checked type function scan reached a pending type"),
-        .function => true,
-        .alias => |alias| (try checkedTypeContainsFunctionInner(types, alias.backing, active)) or
-            try checkedTypeSliceContainsFunction(types, alias.args, active),
-        .nominal => |nominal| (try checkedTypeSliceContainsFunction(types, nominal.args, active)) or
-            try checkedTypeContainsFunctionInner(types, nominal.backing, active),
-        .record => |record| (try checkedFieldsContainFunction(types, record.fields, active)) or
-            try checkedTypeContainsFunctionInner(types, record.ext, active),
-        .record_unbound => |fields| checkedFieldsContainFunction(types, fields, active),
-        .tuple => |items| checkedTypeSliceContainsFunction(types, items, active),
-        .tag_union => |tag_union| (try checkedTagsContainFunction(types, tag_union.tags, active)) or
-            try checkedTypeContainsFunctionInner(types, tag_union.ext, active),
-        .flex,
-        .rigid,
-        .empty_record,
-        .empty_tag_union,
-        => false,
-    };
-}
-
-fn checkedTypeSliceContainsFunction(
-    types: checked.CheckedTypeStoreView,
-    items: []const checked.CheckedTypeId,
-    active: *std.AutoHashMap(checked.CheckedTypeId, void),
-) Allocator.Error!bool {
-    for (items) |item| {
-        if (try checkedTypeContainsFunctionInner(types, item, active)) return true;
-    }
-    return false;
-}
-
-fn checkedFieldsContainFunction(
-    types: checked.CheckedTypeStoreView,
-    fields: []const checked.CheckedRecordField,
-    active: *std.AutoHashMap(checked.CheckedTypeId, void),
-) Allocator.Error!bool {
-    for (fields) |field| {
-        if (try checkedTypeContainsFunctionInner(types, field.ty, active)) return true;
-    }
-    return false;
-}
-
-fn checkedTagsContainFunction(
-    types: checked.CheckedTypeStoreView,
-    tags: []const checked.CheckedTag,
-    active: *std.AutoHashMap(checked.CheckedTypeId, void),
-) Allocator.Error!bool {
-    for (tags) |tag| {
-        if (try checkedTypeSliceContainsFunction(types, tag.argsSlice(types), active)) return true;
-    }
-    return false;
 }
 
 fn convertRuntimeSchemas(

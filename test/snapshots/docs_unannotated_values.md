@@ -35,7 +35,7 @@ main_for_host = main
 ~~~clojure
 (package-docs
   (name "test-app")
-  (module
+  (mod
     (name "app")
     (package "app")
     (kind app)
@@ -53,16 +53,6 @@ main_for_host = main
     )
     (entry
       (name "main")
-      (kind value)
-      (type (type-ref (name "Str")))
-    )
-  )
-  (module
-    (name "platform")
-    (package "pf")
-    (kind platform)
-    (entry
-      (name "main_for_host")
       (kind value)
       (type (type-ref (name "Str")))
     )

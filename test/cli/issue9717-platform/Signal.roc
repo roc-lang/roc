@@ -16,12 +16,9 @@ Signal(a) := { expr : Box(Node.SignalExpr) }.{
 	from_expr = |expr| { expr: Box.box(expr) }
 
 	## A constant signal.
-	const : a -> Signal(a) where [a.encode : a, NodeValue -> Try(NodeValue, [])]
+	const : a -> Signal(a) where [a.encoder_for : NodeValue -> (a, NodeValue -> Try(NodeValue, []))]
 	const = |value| {
-		nv =
-			match value.encode(NodeValue.format) {
-				Ok(encoded) => encoded
-			}
+		nv = NodeValue.encode_value(value)
 		{ expr: Box.box(Node.SignalExpr.ConstValue(nv)) }
 	}
 
@@ -40,7 +37,7 @@ Signal(a) := { expr : Box(Node.SignalExpr) }.{
 		Signal(a), (a -> b) -> Signal(b)
 			where [
 				a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
-				b.encode : b, NodeValue -> Try(NodeValue, []),
+				b.encoder_for : NodeValue -> (b, NodeValue -> Try(NodeValue, [])),
 			]
 	map = |signal, f| {
 		wrapped : NodeValue -> NodeValue
@@ -56,16 +53,16 @@ Signal(a) := { expr : Box(Node.SignalExpr) }.{
 				}
 			typed_output : b
 			typed_output = f(typed_input)
-			match typed_output.encode(NodeValue.format) {
-				Ok(encoded) => encoded
-			}
+			NodeValue.encode_value(typed_output)
 		}
 
 		{
-			expr: Box.box(Node.SignalExpr.Map(
-				Signal.clone_expr(signal.expr),
-				Box.box(wrapped),
-			)),
+			expr: Box.box(
+				Node.SignalExpr.Map(
+					Signal.clone_expr(signal.expr),
+					Box.box(wrapped),
+				),
+			),
 		}
 	}
 
@@ -74,7 +71,7 @@ Signal(a) := { expr : Box(Node.SignalExpr) }.{
 			where [
 				a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
 				b.decode : NodeValue, NodeValue -> (Try(b, [TypeMismatch]), NodeValue),
-				c.encode : c, NodeValue -> Try(NodeValue, []),
+				c.encoder_for : NodeValue -> (c, NodeValue -> Try(NodeValue, [])),
 			]
 	map2 = |left, right, f| {
 		wrapped : NodeValue, NodeValue -> NodeValue
@@ -99,17 +96,17 @@ Signal(a) := { expr : Box(Node.SignalExpr) }.{
 				}
 			output : c
 			output = f(left_v, right_v)
-			match output.encode(NodeValue.format) {
-				Ok(encoded) => encoded
-			}
+			NodeValue.encode_value(output)
 		}
 
 		{
-			expr: Box.box(Node.SignalExpr.Map2(
-				Signal.clone_expr(left.expr),
-				Signal.clone_expr(right.expr),
-				Box.box(wrapped),
-			)),
+			expr: Box.box(
+				Node.SignalExpr.Map2(
+					Signal.clone_expr(left.expr),
+					Signal.clone_expr(right.expr),
+					Box.box(wrapped),
+				),
+			),
 		}
 	}
 

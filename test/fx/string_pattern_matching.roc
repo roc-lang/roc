@@ -5,11 +5,11 @@ import pf.Stdout
 # Tests pattern matching on string literals in match expressions.
 
 main! = || {
-    greet("Alice")
-    greet("Bob")
+    greet!("Alice")
+    greet!("Bob")
 }
 
-greet = |name| {
+greet! = |name| {
     message = match name {
         "Alice" => "Hello Alice!"
         "Bob" => "Hey Bob!"

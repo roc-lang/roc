@@ -13,6 +13,7 @@
 //!   ./zig-out/AFLplusplus/bin/afl-fuzz -i /tmp/roc-typecheck-corpus -o /tmp/roc-typecheck-out zig-out/bin/fuzz-typecheck
 
 const std = @import("std");
+const build_options = @import("build_options");
 const compile = @import("compile");
 const roc_target = @import("roc_target");
 const FuzzHarness = @import("FuzzHarness.zig");
@@ -28,9 +29,9 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
 }
 
 pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
-    var gpa_impl = std.heap.DebugAllocator(.{}){};
+    var gpa_impl = std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
     defer {
-        _ = gpa_impl.deinit();
+        _ = build_options.debugGpaOk(gpa_impl.deinit());
     }
     const gpa = gpa_impl.allocator();
 

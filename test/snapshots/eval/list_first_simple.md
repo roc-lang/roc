@@ -35,7 +35,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "items")
 			(ty-apply
@@ -91,7 +91,7 @@ NO CHANGE
 		(e-match
 			(match
 				(cond
-					(e-call (constraint-fn-var 246)
+					(e-call (constraint-fn-var 263)
 						(e-lookup-external
 							(builtin))
 						(e-lookup-local

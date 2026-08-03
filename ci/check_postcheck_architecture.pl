@@ -91,6 +91,21 @@ my @RULES = (
     { category => 'promoted-wrapper-bridge-retired-carrier', regex => qr/\barg_bridges\b/, allowed => {} },
     { category => 'promoted-wrapper-bridge-retired-carrier', regex => qr/\blowerPublishedPromotedWrapperBridge\b/, allowed => {} },
     { category => 'promoted-wrapper-bridge-retired-carrier', regex => qr/\blowerPromotedWrapperBridge[A-Za-z0-9_]*\b/, allowed => {} },
+    # Content-based nominal identity: module/type name TEXT must never decide
+    # identity downstream of import resolution. These deleted text-matching
+    # APIs must stay gone; identity crosses stores only as 32-byte content
+    # hashes (rebase via lookupModuleIdentity/internModuleIdentity).
+    { category => 'text-identity-module-view-match', regex => qr/\bmoduleViewNameMatches\b/, allowed => {} },
+    { category => 'text-identity-owner-remap', regex => qr/\bmethodOwnerInImportedNames\b/, allowed => {} },
+    { category => 'text-identity-owner-env-dedup', regex => qr/\bmoduleEnvNamesMatch\b/, allowed => {} },
+    { category => 'text-identity-owner-env-match', regex => qr/\bownerModuleEnvNameMatches\b/, allowed => {} },
+    { category => 'text-identity-owner-env-map', regex => qr/\bbuildOwnerModuleEnvMap\b/, allowed => {} },
+    { category => 'text-identity-owner-env-map', regex => qr/\bputOwnerModuleEnvNames\b/, allowed => {} },
+    { category => 'text-identity-imported-view-match', regex => qr/\bimportedViewModuleNameMatches\b/, allowed => {} },
+    { category => 'text-identity-public-api-dep', regex => qr/\bpublicApiDependencyViewByModuleName\b/, allowed => {} },
+    { category => 'text-identity-public-api-dep', regex => qr/\bisSelfPublicApiModuleName\b/, allowed => {} },
+    { category => 'text-identity-glue-def-probe', regex => qr/\bfindTopLevelDefByName\b/, allowed => {} },
+    { category => 'text-identity-artifact-env-match', regex => qr/\bmoduleEnvNameMatches\b/, allowed => {} },
 );
 
 sub iter_zig_files {
@@ -308,6 +323,68 @@ sub check_active_body_draft_seal_access {
 }
 
 check_active_body_draft_seal_access();
+
+sub check_iterator_lowering_uses_explicit_ids {
+    my $rel = 'src/postcheck/monotype/lower.zig';
+    my $path = File::Spec->catfile($ROOT, $rel);
+    open my $fh, '<', $path or die "failed to read $rel: $!\n";
+
+    my %bodies;
+    my $current_fn;
+    my $fn_started = 0;
+    my $fn_depth = 0;
+    my $line_no = 0;
+
+    while (my $line = <$fh>) {
+        ++$line_no;
+        chomp $line;
+
+        if (!defined $current_fn && $line =~ /^\s+(?:pub\s+)?fn\s+([A-Za-z0-9_]+)\b/) {
+            $current_fn = $1;
+            $fn_started = 0;
+            $fn_depth = 0;
+        }
+
+        if (defined $current_fn) {
+            push @{$bodies{$current_fn}}, [$line_no, $line];
+            my $delta = brace_delta($line);
+            if (!$fn_started && $line =~ /\{/) {
+                $fn_started = 1;
+            }
+            $fn_depth += $delta if $fn_started;
+            if ($fn_started && $fn_depth <= 0) {
+                undef $current_fn;
+                $fn_started = 0;
+                $fn_depth = 0;
+            }
+        }
+    }
+
+    close $fh or die "failed to close $rel: $!\n";
+
+    # Match reconstruction of the iterator protocol's semantic roles directly,
+    # regardless of the containing helper's spelling. `Done` is shared by
+    # other compiler protocols, so only a text lookup against a step-result
+    # type is an iterator-shape recovery.
+    my $field_role = qr/(?:len_if_known|step|item|rest)/;
+    my $tag_role = qr/(?:Known|Unknown|One|Skip)/;
+    for my $fn (keys %bodies) {
+        for my $entry (@{$bodies{$fn}}) {
+            my ($source_line, $line) = @$entry;
+            my $recovers_by_text =
+                $line =~ /\brecordFieldByText(?:Optional)?\s*\([^\)]*"$field_role"/ ||
+                $line =~ /\bmonoTagByText(?:Optional)?\s*\([^\)]*"$tag_role"/ ||
+                $line =~ /\bmonoTagByText(?:Optional)?\s*\([^,]*step[^,]*,\s*"Done"/ ||
+                $line =~ /\b(?:recordFieldLabelTextEql|tagLabelTextEql)\s*\([^\)]*"(?:$field_role|$tag_role)"/ ||
+                $line =~ /\bIdent\.textEql\s*\([^\)]*"(?:$field_role|$tag_role)"/;
+            if ($recovers_by_text) {
+                push @violations, "$rel:$source_line: iterator-text-shape-recognition: $line";
+            }
+        }
+    }
+}
+
+check_iterator_lowering_uses_explicit_ids();
 
 if (@violations) {
     print "Post-check architecture violations found:\n";

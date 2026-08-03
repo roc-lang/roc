@@ -43,6 +43,24 @@ pub const SourceCodeDisplayRegion = struct {
     filename: ?[]const u8,
 };
 
+/// A source code display plus the regions to underline within it.
+pub const SourceCodeWithUnderlines = struct {
+    /// Overall region to display (determines which lines to show)
+    display_region: SourceCodeDisplayRegion,
+    /// Regions to underline within the displayed code
+    underline_regions: []UnderlineRegion,
+};
+
+/// Multiple highlighted regions within the same source code.
+pub const SourceCodeMultiRegion = struct {
+    /// The source code to display
+    source: []const u8,
+    /// Multiple regions to highlight
+    regions: []SourceRegion,
+    /// Optional filename for context
+    filename: ?[]const u8,
+};
+
 /// Annotations that can be applied to document content for styling and semantics.
 pub const Annotation = enum {
     /// Basic emphasis (usually bold or bright)
@@ -110,14 +128,6 @@ pub const Annotation = enum {
 
     /// Reflowing text that can wrap and format automatically
     reflowing_text,
-
-    /// Returns true if this annotation typically uses color.
-    pub fn usesColor(self: Annotation) bool {
-        return switch (self) {
-            .emphasized, .dimmed => false,
-            else => true,
-        };
-    }
 
     /// Returns a semantic name for this annotation.
     pub fn semanticName(self: Annotation) []const u8 {
@@ -196,20 +206,10 @@ pub const DocumentElement = union(enum) {
     source_code_region: SourceCodeDisplayRegion,
 
     /// Multiple highlighted regions within the same source code
-    source_code_multi_region: struct {
-        /// The source code to display
-        source: []const u8,
-        /// Multiple regions to highlight
-        regions: []SourceRegion,
-        /// Optional filename for context
-        filename: ?[]const u8,
-    },
-    source_code_with_underlines: struct {
-        /// Overall region to display (determines which lines to show)
-        display_region: SourceCodeDisplayRegion,
-        /// Regions to underline within the displayed code
-        underline_regions: []UnderlineRegion,
-    },
+    source_code_multi_region: SourceCodeMultiRegion,
+
+    /// Source code display with underline regions
+    source_code_with_underlines: SourceCodeWithUnderlines,
 
     /// Get the text content if this is a text element, null otherwise.
     pub fn getText(self: DocumentElement) ?[]const u8 {

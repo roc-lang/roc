@@ -112,7 +112,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "multi_arg_fn")
 			(ty-fn
@@ -178,7 +178,7 @@ multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8|
 result = multi_arg_fn(
 	42, # x1: U64 (type 'a')
 	"hello", # x2: Str (type 'b') - correct
-	"world", # x3: Str (should be 'a' = U64) - MISMATCH  
+	"world", # x3: Str (should be 'a' = U64) - MISMATCH
 	1.5, # x4: F64 (type 'c') - correct
 	3.14, # x5: F64 (should be 'a' = U64) - MISMATCH
 	[1, 2], # x6: List I64 (type 'd') - correct
@@ -231,14 +231,13 @@ result = multi_arg_fn(
 					(ty-rigid-var-lookup (ty-rigid-var (name "e")))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 290)
+		(e-call (constraint-fn-var 325)
 			(e-lookup-local
 				(p-assign (ident "multi_arg_fn")))
-			(e-num (value "42"))
+			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-string
 				(e-literal (string "hello")))
-			(e-string
-				(e-literal (string "world")))
+			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-dec-small (numerator "15") (denominator-power-of-ten "1") (value "1.5"))
 			(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14"))
 			(e-list

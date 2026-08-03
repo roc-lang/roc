@@ -69,67 +69,67 @@ linkFarm name (map unpackZig [
     };
   }
   {
-    name = "N-V-__8AAEvEEA9B1q8qGkm3rJW_bkae4wn1SvyrfDa0w1lp.tar.gz";
+    name = "N-V-__8AAKS-VRH7JXsaDHpnFPSd-B5fSdtnDbh0XrfnncWc.tar.gz";
     path = fetchZig {
       name = "roc_deps_aarch64_macos_none";
-      url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/aarch64-macos-none.tar.xz";
-      hash = "sha256-MiACPvTNxHcXnI2q45kRlpldDm21t270ng1z9ewnhfc=";
+      url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0-binaryen/aarch64-macos-none.tar.xz";
+      hash = "sha256-PHSLa/8IAE0rqFVJGqt0NAQxAfcPy8QciTutttiqCTo=";
     };
   }
   {
-    name = "N-V-__8AAHPjwBNV6lTtxPO6DYe4lg2Gx5Qakmeg1PO7N5k7.tar.gz";
+    name = "N-V-__8AACK4KheKSiltX0PPURTNh0CvJhsopNXzcXpvq9pS.tar.gz";
     path = fetchZig {
       name = "roc_deps_aarch64_linux_musl";
-      url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/aarch64-linux-musl.tar.xz";
-      hash = "sha256-f3U0foiuXE+9p/cg9WEb7fCMEXBAE+Cae745eRQJLJY=";
+      url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0-binaryen/aarch64-linux-musl.tar.xz";
+      hash = "sha256-fQOa0r5EVMenjRH2LhUYN6BKeMKtO5yDRVgOO0+ktIs=";
     };
   }
   {
-    name = "N-V-__8AAI4OFxV11RN1xAhLXxLTyaxZh3Wbi4U1Dza1OESo.tar.gz";
+    name = "N-V-__8AAPEjNhjVXuc6-b70fcyHFGS_ckUIx5_ICD3-3HZk.tar.gz";
     path = fetchZig {
       name = "roc_deps_aarch64_windows_gnu";
-      url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/aarch64-windows-gnu.zip";
-      hash = "sha256-UAZPFs8MfyoOP3NFBWMwbugpMqq18NSN3ztuh773os0=";
+      url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0-binaryen/aarch64-windows-gnu.zip";
+      hash = "sha256-Pb22bvfTgAgMIShfDxejvvVFE9TBLjGAnzNxt1WlD/c=";
     };
   }
   {
-    name = "N-V-__8AAHU1FhRO-2yZIDQWw5rkVVuUYn5purRT9mAqykzw.tar.gz";
+    name = "N-V-__8AAKywPxfY01H2OMTuZllxIuavfyGGm3kpW7-1RmkP.tar.gz";
     path = fetchZig {
       name = "roc_deps_arm_linux_musleabihf";
-      url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/arm-linux-musleabihf.tar.xz";
-      hash = "sha256-oSxJwhRlKIzYLUm21JZSoySaf7pxWjO5/87D8HxlJSU=";
+      url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0-binaryen/arm-linux-musleabihf.tar.xz";
+      hash = "sha256-OEvSYrTtt3sroPN2jxcZw7Oqolb6jHeKY7z+7CgnaWs=";
     };
   }
   {
-    name = "N-V-__8AACNk7BFESU37UNPvVOXf2dGyPMjtDSsji-VYqvmz.tar.gz";
+    name = "N-V-__8AAMg8ihSrg9Udc8ZJ1trVVUgglxJg8CbHoYG51dZq.tar.gz";
     path = fetchZig {
       name = "roc_deps_x86_linux_musl";
-      url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/x86-linux-musl.tar.xz";
-      hash = "sha256-wliAwsrhsON2/GNf5gqnnXPs53B0YBYMGaaJQJ93I2w=";
+      url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0-binaryen/x86-linux-musl.tar.xz";
+      hash = "sha256-9jCTSnMCLmEUbqPX+iDQ/KR+04jy6JlX9jb7fPCgQI4=";
     };
   }
   {
-    name = "N-V-__8AAJmm4xTmXSEZeLYLtOlZWKI_Kitjx2TOzm9vhCWM.tar.gz";
+    name = "N-V-__8AAGJLMhhn8pu3uyxtKTIlha8CxCjE6TNpLYvvj-cz.tar.gz";
     path = fetchZig {
       name = "roc_deps_x86_64_linux_musl";
-      url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/x86_64-linux-musl.tar.xz";
-      hash = "sha256-LjMD6jfUOP1UKvPYSYKlTN01Q5iHYBA0bS4hnFADJdo=";
+      url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0-binaryen/x86_64-linux-musl.tar.xz";
+      hash = "sha256-f7zDjI+VYBAkiBGVRNbSn6FI+2W7zpeoUa1ZuEFibwA=";
     };
   }
   {
-    name = "N-V-__8AAJGgsQ-GR2yR2tLFM4OM0z7ClQ0Rx7SjviQbx8Ks.tar.gz";
+    name = "N-V-__8AAJrG0hG7ZWMT8yxRBa17ivn77bWqDpseO904PYT7.tar.gz";
     path = fetchZig {
       name = "roc_deps_x86_64_macos_none";
-      url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/x86_64-macos-none.tar.xz";
-      hash = "sha256-2Bqk1Xg+1niHcKzxpNl3Cr+ThXeSD5xE1lTzRkrpuDM=";
+      url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0-binaryen/x86_64-macos-none.tar.xz";
+      hash = "sha256-quDJkY/ts7Z7UDrqxOxa+DV4AIfidbO6rZRIHRt3sFQ=";
     };
   }
   {
-    name = "N-V-__8AAJAOJxiRcaWQZpXytjyF8_Q7Mj9g7xXQWtegD-6C.tar.gz";
+    name = "N-V-__8AADfFZhvsrNly3AbA2PmVP9piXKNto_CmeqLuNNsd.tar.gz";
     path = fetchZig {
       name = "roc_deps_x86_64_windows_gnu";
-      url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/x86_64-windows-gnu.zip";
-      hash = "sha256-8jPIAh01og2FZ8DUAor0hHZ3EDWWIhbXa0X1+CvQG0s=";
+      url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0-binaryen/x86_64-windows-gnu.zip";
+      hash = "sha256-aWM3aagVe0qgTtHmcpFKniaqVTdsVJwneDfTtcDVWgE=";
     };
   }
   {

@@ -32,7 +32,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "json.Json") (alias "MyJson"))
 		(s-decl
@@ -49,7 +49,7 @@ NO CHANGE
 	(d-let
 		(p-assign (ident "main"))
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(s-import (module "json.Json")
+	(s-import (mod "json.Json")
 		(exposes)))
 ~~~
 # TYPES

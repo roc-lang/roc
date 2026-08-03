@@ -37,7 +37,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "Decode")
 			(exposing
@@ -53,7 +53,7 @@ EndOfFile,
 					(ty (name "List"))
 					(ty-var (raw "a"))))
 			(where
-				(alias (module-of "a") (name "Decode"))))
+				(alias (mod-of "a") (name "Decode"))))
 		(s-decl
 			(p-ident (raw "decodeThings"))
 			(e-ellipsis))))
@@ -77,7 +77,7 @@ NO CHANGE
 					(ty-rigid-var (name "a"))))
 			(where
 				(alias (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "Decode")))))
-	(s-import (module "Decode")
+	(s-import (mod "Decode")
 		(exposes
 			(exposed (name "Decode") (wildcard false)))))
 ~~~

@@ -48,7 +48,8 @@ _rocCallTrampoline:
 	ldr x9, [x19, #48]
 	stp x0, x1, [x9]
 	ldr x9, [x19, #56]
-	stp q0, q1, [x9]
+	stp q0, q1, [x9, #0]
+	stp q2, q3, [x9, #32]
 	mov sp, x29
 	ldp x19, x20, [sp, #16]
 	ldp x29, x30, [sp], #32

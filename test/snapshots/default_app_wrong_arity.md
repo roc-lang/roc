@@ -2,7 +2,7 @@
 ~~~ini
 description=Error - main! with wrong number of parameters
 type=file
-module_validation_diagnostics=true
+mod_validation_diagnostics=true
 ~~~
 # SOURCE
 ~~~roc
@@ -53,7 +53,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "main!"))

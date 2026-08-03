@@ -55,7 +55,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "ok_or")
 			(ty-fn
@@ -143,47 +143,13 @@ NO CHANGE
 			(e-block
 				(s-let
 					(p-assign (ident "_x"))
-					(e-match
-						(match
-							(cond
-								(e-call (constraint-fn-var 133)
-									(e-lookup-local
-										(p-assign (ident "ok_or")))
-									(e-tag (name "Err")
-										(args
-											(e-string
-												(e-literal (string "")))))
-									(e-tag (name "Exit")
-										(args
-											(e-num (value "5"))))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-nominal-external (builtin)
-												(p-applied-tag))))
-									(value
-										(e-lookup-local
-											(p-assign (ident "#ok")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-nominal-external (builtin)
-												(p-applied-tag))))
-									(value
-										(e-return
-											(e-nominal-external
-												(builtin)
-												(e-tag (name "Err")
-													(args
-														(e-lookup-local
-															(p-assign (ident "#err")))))))))))))
+					(e-runtime-error (tag "erroneous_value_expr")))
 				(e-tag (name "Ok")
 					(args
 						(e-empty_record))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 271)
+		(e-call (constraint-fn-var 324)
 			(e-lookup-local
 				(p-assign (ident "do_something"))))))
 ~~~

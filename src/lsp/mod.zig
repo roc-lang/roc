@@ -29,3 +29,9 @@ pub const handlers = struct {
 pub fn runWithStdIo(allocator: std.mem.Allocator, std_io: std.Io, debug: server.DebugOptions) server.RunWithStdIoError!void {
     try server.runWithStdIo(allocator, std_io, debug);
 }
+
+test {
+    std.testing.refAllDecls(@This());
+    std.testing.refAllDecls(handlers.completion);
+    std.testing.refAllDecls(handlers.document_symbol);
+}

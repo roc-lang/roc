@@ -250,6 +250,7 @@ test "emit unary minus over negative typed numeral parenthesizes receiver" {
         true, // is_negative
         false, // is_fractional
         false, // had_decimal_point
+        true, // is_materialized
     );
 
     const unary_idx = try module_env.store.addExpr(.{

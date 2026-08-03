@@ -37,7 +37,6 @@ We'd also like to express our gratitude to our generous [individual sponsors](ht
 - [Jackson Lucky](https://github.com/jluckyiv)
 - [Agus Zubiaga](https://github.com/agu-z)
 - [Angelo Ceccato](https://github.com/AngeloChecked)
-- [Niclas Overby](https://github.com/noverby)
 - [Krzysztof G.](https://github.com/krzysztofgb)
 - [Sam Mohr](https://github.com/smores56)
 - [Steven Chen](https://github.com/megakilo)

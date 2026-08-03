@@ -2,7 +2,7 @@
 //!
 //! This module provides color palettes, style definitions, and utilities for
 //! rendering styled content across different output targets. It supports
-//! ANSI terminal colors, HTML colors, and plain text fallbacks.
+//! ANSI terminal colors and plain text fallbacks.
 
 const std = @import("std");
 
@@ -49,35 +49,6 @@ pub const AnsiCodes = struct {
     pub const RESET_BLINK = "\x1b[25m";
     pub const RESET_REVERSE = "\x1b[27m";
     pub const RESET_STRIKETHROUGH = "\x1b[29m";
-};
-
-/// HTML color definitions.
-pub const HtmlColors = struct {
-    // Standard colors
-    pub const BLACK = "#000000";
-    pub const RED = "#dc322f";
-    pub const GREEN = "#859900";
-    pub const YELLOW = "#b58900";
-    pub const BLUE = "#268bd2";
-    pub const MAGENTA = "#d33682";
-    pub const CYAN = "#2aa198";
-    pub const WHITE = "#ffffff";
-
-    // Bright colors
-    pub const BRIGHT_RED = "#ff5555";
-    pub const BRIGHT_GREEN = "#50fa7b";
-    pub const BRIGHT_YELLOW = "#f1fa8c";
-    pub const BRIGHT_BLUE = "#8be9fd";
-    pub const BRIGHT_MAGENTA = "#ff79c6";
-    pub const BRIGHT_CYAN = "#8be9fd";
-    pub const BRIGHT_WHITE = "#f8f8f2";
-
-    // Semantic colors
-    pub const ERROR = "#ff5555";
-    pub const WARNING = "#ffb86c";
-    pub const INFO = "#8be9fd";
-    pub const SUCCESS = "#50fa7b";
-    pub const MUTED = "#6272a4";
 };
 
 /// A color palette that can be used across different rendering targets.
@@ -187,34 +158,6 @@ pub const ColorPalette = struct {
         .dim = "",
         .underline = "",
         .italic = "",
-    };
-
-    /// HTML color palette for web rendering.
-    pub const HTML = ColorPalette{
-        // Core colors (CSS classes)
-        .primary = "color: " ++ HtmlColors.CYAN ++ ";",
-        .secondary = "color: " ++ HtmlColors.WHITE ++ ";",
-        .error_color = "color: " ++ HtmlColors.ERROR ++ ";",
-        .warning = "color: " ++ HtmlColors.WARNING ++ ";",
-        .info = "color: " ++ HtmlColors.INFO ++ ";",
-        .success = "color: " ++ HtmlColors.SUCCESS ++ ";",
-        .suggestion = "color: " ++ HtmlColors.SUCCESS ++ ";",
-        .muted = "color: " ++ HtmlColors.MUTED ++ ";",
-
-        // Syntax colors
-        .keyword = "color: " ++ HtmlColors.MAGENTA ++ ";",
-        .type_variable = "color: " ++ HtmlColors.BLUE ++ ";",
-        .literal = "color: " ++ HtmlColors.GREEN ++ ";",
-        .comment = "color: " ++ HtmlColors.MUTED ++ ";",
-        .symbol = "color: " ++ HtmlColors.CYAN ++ ";",
-        .path = "color: " ++ HtmlColors.YELLOW ++ ";",
-
-        // HTML styles
-        .reset = "",
-        .bold = "font-weight: bold;",
-        .dim = "opacity: 0.6;",
-        .underline = "text-decoration: underline;",
-        .italic = "font-style: italic;",
     };
 
     /// Get the appropriate color for an annotation.

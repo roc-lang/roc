@@ -21,7 +21,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "n"))
@@ -48,16 +48,16 @@ r = 1..<n + 1
 		(e-num (value "3")))
 	(d-let
 		(p-assign (ident "r"))
-		(e-call (constraint-fn-var 242)
-			(e-lookup-external
-				(builtin))
-			(e-num (value "1"))
-			(e-dispatch-call (method "plus") (constraint-fn-var 240)
-				(receiver
-					(e-lookup-local
-						(p-assign (ident "n"))))
-				(args
-					(e-num (value "1")))))))
+		(e-dispatch-call (method "range_exclusive") (constraint-fn-var 227)
+			(receiver
+				(e-num (value "1")))
+			(args
+				(e-dispatch-call (method "plus") (constraint-fn-var 221)
+					(receiver
+						(e-lookup-local
+							(p-assign (ident "n"))))
+					(args
+						(e-num (value "1"))))))))
 ~~~
 # TYPES
 ~~~clojure

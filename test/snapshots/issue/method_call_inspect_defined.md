@@ -8,18 +8,25 @@ type=expr
 { x = "hello"; x.inspect() }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - method_call_inspect_defined.md:1:14:1:15
+UNEXPECTED EXPRESSION SYNTAX - method_call_inspect_defined.md:1:14:1:15
 # PROBLEMS
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token ; is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  { x = "hello"; x.inspect() }                                              │
  │               ‾                                                            │
  └─────────────────────────────────────── method_call_inspect_defined.md:1:14 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `;` here.
+    This token is malformed, so it cannot be used as ordinary Roc syntax.
 
 # TOKENS
 ~~~zig
@@ -56,7 +63,7 @@ EndOfFile,
 			(e-literal (string "hello"))))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(e-dispatch-call (method "inspect") (constraint-fn-var 34)
+	(e-dispatch-call (method "inspect") (constraint-fn-var 209)
 		(receiver
 			(e-lookup-local
 				(p-assign (ident "x"))))

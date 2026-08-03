@@ -25,6 +25,7 @@
 target
 !src/target
 generated-docs
+plan.md
 
 zig-out
 zig-pkg
@@ -156,5 +157,5 @@ test/glue/*/roc_platform_abi.zig
 test/echo/builtin_doc_*.roc
 tmp/
 
-# Scratch planning docs (CI forbids tracking these)
+# Local implementation planning notes / scratch planning docs (CI forbids tracking these)
 plan.md

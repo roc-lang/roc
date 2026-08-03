@@ -37,7 +37,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "Tag")
@@ -81,17 +81,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-Tag := [Tag(Str)].{
-	from_quote : Str -> Try(Tag, [BadQuotedBytes(Str)])
-	from_quote = |str| Ok(Tag(str))
-}
-
-single = "Roc".Tag
-
-multi = 
-	\\line one
-	\\line two
-	.Tag
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -13,7 +13,7 @@ jobs:
     if: github.event.label.name == 'P-high'
     steps:
       - name: Send a stream message
-        uses: zulip/github-actions-zulip/send-message@v1
+        uses: zulip/github-actions-zulip/send-message@f675f2b4eb2a95fae974215476dcb7ad8dfeff6b # ratchet:zulip/github-actions-zulip@v2.0.2
         with:
           api-key: ${{ secrets.ZULIP_API_KEY_ISSUE_BOT }}
           email: "high-priority-issues-bot@roc.zulipchat.com"

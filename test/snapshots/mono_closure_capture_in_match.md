@@ -60,7 +60,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "func"))
@@ -136,14 +136,14 @@ EndOfFile,
 													(e-lambda
 														(args
 															(p-assign (ident "y")))
-														(e-dispatch-call (method "plus") (constraint-fn-var 83)
+														(e-dispatch-call (method "plus") (constraint-fn-var 241)
 															(receiver
 																(e-lookup-local
 																	(p-assign (ident "x"))))
 															(args
 																(e-lookup-local
 																	(p-assign (ident "y"))))))))
-											(e-call (constraint-fn-var 120)
+											(e-call (constraint-fn-var 252)
 												(e-lookup-local
 													(p-assign (ident "add_x")))
 												(e-num (value "10"))))))
@@ -157,7 +157,7 @@ EndOfFile,
 					(p-assign (ident "result"))))))
 	(d-let
 		(p-assign (ident "answer"))
-		(e-call (constraint-fn-var 270)
+		(e-call (constraint-fn-var 282)
 			(e-lookup-local
 				(p-assign (ident "func")))
 			(e-num (value "42")))))

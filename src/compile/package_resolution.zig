@@ -44,10 +44,12 @@ const parse = @import("parse");
 const can = @import("can");
 const CoreCtx = @import("ctx").CoreCtx;
 const threading = @import("threading.zig");
+const compiler_platforms = @import("compiler_platforms.zig");
 
 const Allocator = std.mem.Allocator;
 const Version = base.url.Version;
 const ModuleEnv = can.ModuleEnv;
+pub const CompilerOwnedPlatform = compiler_platforms.CompilerOwnedPlatform;
 
 const is_freestanding = threading.is_freestanding;
 
@@ -83,6 +85,8 @@ pub const ScannedDep = struct {
     spec: []const u8,
     /// True only for the platform entry of an app header.
     is_platform: bool,
+    /// Present only for compiler-owned platform references such as `platform glue`.
+    compiler_owned_platform: ?CompilerOwnedPlatform = null,
 };
 
 /// Everything resolution needs to know about one package's contents.
@@ -97,7 +101,19 @@ pub const FetchedPackage = struct {
     /// Combined size of the bundle's extracted files in bytes (0 for local
     /// packages, which are not downloaded and not size-limited).
     content_bytes: u64,
+    /// Present iff this package came from embedded compiler-owned sources.
+    compiler_owned_platform: ?CompilerOwnedPlatform = null,
     deps: []const ScannedDep,
+
+    pub fn deinit(self: *FetchedPackage, allocator: Allocator) void {
+        for (self.deps) |dep| {
+            allocator.free(dep.alias);
+            allocator.free(dep.spec);
+        }
+        allocator.free(self.deps);
+        allocator.free(self.root_file);
+        allocator.free(self.root_dir);
+    }
 };
 
 /// Errors a fetcher can produce for a single package.
@@ -122,6 +138,8 @@ pub const Fetcher = struct {
     fetchUrlFn: *const fn (ctx: ?*anyopaque, allocator: Allocator, url: []const u8, hash: []const u8, max_expanded_bytes: ?u64) FetchError!FetchedPackage,
     /// Load and scan the local package rooted at `root_file_abs`.
     loadLocalFn: *const fn (ctx: ?*anyopaque, allocator: Allocator, root_file_abs: []const u8) FetchError!FetchedPackage,
+    /// Materialize and scan a compiler-owned platform.
+    loadCompilerOwnedPlatformFn: *const fn (ctx: ?*anyopaque, allocator: Allocator, platform: CompilerOwnedPlatform) FetchError!FetchedPackage,
 };
 
 /// One rendered resolution problem. Messages are owned by the resolver and
@@ -170,6 +188,8 @@ pub const Resolved = struct {
         root_source_hash: [32]u8,
         /// Present iff this package came from a URL.
         url: ?UrlInfo,
+        /// Present iff this package came from embedded compiler-owned sources.
+        compiler_owned_platform: ?CompilerOwnedPlatform = null,
         deps: []Dep,
     };
 
@@ -192,18 +212,24 @@ pub const VersionBumpNote = struct {
 /// Collect a note for every package in the final graph that was compiled
 /// against a dependency version it did not declare. In a well-behaved
 /// ecosystem these bumps are compatible, so the notes are only worth showing
-/// when a package fails to compile, attached to the error itself. All
+/// when a package fails to compile, attached to the error itself. Notes are
+/// keyed by `identities[package_index]` (the caller's package-key mapping, in
+/// `Resolved.packages` order) so they match coordinator package names. All
 /// strings are allocated with `allocator`.
-pub fn versionBumpNotes(resolved: *const Resolved, allocator: Allocator) Allocator.Error![]VersionBumpNote {
+pub fn versionBumpNotes(
+    resolved: *const Resolved,
+    identities: []const []const u8,
+    allocator: Allocator,
+) Allocator.Error![]VersionBumpNote {
     var notes = std.ArrayListUnmanaged(VersionBumpNote).empty;
-    for (resolved.packages) |package| {
+    for (resolved.packages, 0..) |package, package_index| {
         for (package.deps) |dep| {
             const declared = dep.declared_version orelse continue;
             const target = resolved.packages[dep.target];
             const resolved_url = target.url orelse continue;
             if (declared.eql(resolved_url.version)) continue;
             try notes.append(allocator, .{
-                .package_identity = try allocator.dupe(u8, package.identity),
+                .package_identity = try allocator.dupe(u8, identities[package_index]),
                 .message = try std.fmt.allocPrint(
                     allocator,
                     "the package this error is in declares its dependency {s} as version {d}.{d}.{d}, " ++
@@ -250,9 +276,10 @@ pub const Sidecar = struct {
         alias: []const u8,
         spec: []const u8,
         is_platform: bool,
+        compiler_owned_platform: ?CompilerOwnedPlatform = null,
     };
 
-    pub const current_format: u32 = 2;
+    pub const current_format: u32 = 3;
 };
 
 const GroupChoice = struct {
@@ -280,6 +307,7 @@ const Edge = struct {
         url: UrlTarget,
         /// Group key ("l@" ++ absolute root file path).
         local: []const u8,
+        compiler_owned: CompilerOwnedPlatform,
         invalid: InvalidSpec,
     };
 
@@ -287,6 +315,7 @@ const Edge = struct {
         unparsable_url,
         insecure_url,
         reserved_version,
+        ambiguous_version,
     };
 };
 
@@ -311,6 +340,7 @@ const WalkResult = struct {
     parents: std.StringHashMapUnmanaged(ParentLink),
     missing_urls: std.ArrayListUnmanaged(Missing),
     missing_locals: std.ArrayListUnmanaged([]const u8),
+    missing_compiler_owned: std.ArrayListUnmanaged(CompilerOwnedPlatform),
     /// Group keys in the order they were first followed (BFS order).
     followed: std.ArrayListUnmanaged([]const u8),
 };
@@ -327,6 +357,8 @@ pub const Resolver = struct {
     url_nodes: std.StringHashMapUnmanaged(FetchedPackage),
     /// Absolute root file path -> scanned local package.
     local_nodes: std.StringHashMapUnmanaged(FetchedPackage),
+    /// Compiler-owned platform -> materialized and scanned embedded package.
+    compiler_owned_nodes: std.AutoHashMapUnmanaged(CompilerOwnedPlatform, FetchedPackage),
 
     /// "group\x00major.minor.patch" -> hash, across every round (including
     /// retracted edges), to detect the same version being served with two
@@ -344,6 +376,13 @@ pub const Resolver = struct {
 
     diagnostics: std.ArrayListUnmanaged(Diagnostic),
 
+    /// The bundle URL the root itself came from, when the build was launched
+    /// from a URL or installed source rather than an ordinary local path. The
+    /// URL is the root's identity; the extracted path is a storage detail.
+    /// Borrowed; must outlive the resolver and have already parsed
+    /// successfully via `base.url.parseUrlPath`.
+    root_url: ?[]const u8 = null,
+
     pub fn init(gpa: Allocator, fetcher: Fetcher, config: Config) Resolver {
         return .{
             .gpa = gpa,
@@ -352,6 +391,7 @@ pub const Resolver = struct {
             .config = config,
             .url_nodes = .{},
             .local_nodes = .{},
+            .compiler_owned_nodes = .{},
             .seen_version_hashes = .{},
             .seen_group_hashes = .{},
             .seen_group_locals = .{},
@@ -361,6 +401,11 @@ pub const Resolver = struct {
 
     pub fn deinit(self: *Resolver) void {
         self.arena_state.deinit();
+    }
+
+    /// Declare the bundle URL the root came from; see `root_url`.
+    pub fn setRootUrl(self: *Resolver, url: []const u8) void {
+        self.root_url = url;
     }
 
     fn arena(self: *Resolver) Allocator {
@@ -383,6 +428,22 @@ pub const Resolver = struct {
                 return error.ResolutionFailed;
             },
         };
+        return self.resolveLoadedRoot(root_path, root_node);
+    }
+
+    /// Resolve using a root header the caller already scanned. The package is
+    /// copied into the resolver's arena so the returned graph owns everything
+    /// it needs independently of the caller.
+    pub fn resolveScannedRoot(self: *Resolver, scanned_root: FetchedPackage) error{ OutOfMemory, ResolutionFailed }!Resolved {
+        const root_node = try copyFetchedPackage(self.arena(), scanned_root);
+        return self.resolveLoadedRoot(root_node.root_file, root_node);
+    }
+
+    fn resolveLoadedRoot(
+        self: *Resolver,
+        root_path: []const u8,
+        root_node: FetchedPackage,
+    ) error{ OutOfMemory, ResolutionFailed }!Resolved {
         try self.local_nodes.put(self.arena(), root_path, root_node);
 
         var chosen: std.StringHashMapUnmanaged(GroupChoice) = .{};
@@ -393,8 +454,15 @@ pub const Resolver = struct {
 
             if (self.diagnostics.items.len > 0) return error.ResolutionFailed;
 
-            if (walk_result.missing_urls.items.len > 0 or walk_result.missing_locals.items.len > 0) {
-                try self.fetchMissing(walk_result.missing_urls.items, walk_result.missing_locals.items);
+            if (walk_result.missing_urls.items.len > 0 or
+                walk_result.missing_locals.items.len > 0 or
+                walk_result.missing_compiler_owned.items.len > 0)
+            {
+                try self.fetchMissing(
+                    walk_result.missing_urls.items,
+                    walk_result.missing_locals.items,
+                    walk_result.missing_compiler_owned.items,
+                );
                 if (self.diagnostics.items.len > 0) return error.ResolutionFailed;
                 try self.checkTransitiveLimits(root_node);
                 if (self.diagnostics.items.len > 0) return error.ResolutionFailed;
@@ -475,6 +543,7 @@ pub const Resolver = struct {
             .parents = .{},
             .missing_urls = .empty,
             .missing_locals = .empty,
+            .missing_compiler_owned = .empty,
             .followed = .empty,
         };
 
@@ -486,6 +555,7 @@ pub const Resolver = struct {
         var visited: std.StringHashMapUnmanaged(void) = .{};
         var missing_url_groups: std.StringHashMapUnmanaged(usize) = .{};
         var missing_local_seen: std.StringHashMapUnmanaged(void) = .{};
+        var missing_compiler_owned_seen: std.AutoHashMapUnmanaged(CompilerOwnedPlatform, void) = .{};
         var queue = std.ArrayListUnmanaged(QueueItem).empty;
         try queue.append(self.arena(), .{ .group = null, .node = root_node });
 
@@ -494,7 +564,43 @@ pub const Resolver = struct {
             const item = queue.items[queue_index];
 
             for (item.node.deps) |dep| {
-                if (specIsUrlLike(dep.spec)) {
+                if (dep.compiler_owned_platform) |platform| {
+                    const group = compiler_platforms.groupKey(platform);
+
+                    try result.edges.append(self.arena(), .{
+                        .parent = item.group,
+                        .alias = dep.alias,
+                        .spec = dep.spec,
+                        .is_platform = dep.is_platform,
+                        .target = .{ .compiler_owned = platform },
+                    });
+
+                    if (!result.candidates.contains(group)) {
+                        try result.candidates.put(self.arena(), group, .{
+                            .version = Version.none,
+                            .url = compiler_platforms.identity(platform),
+                            .hash = compiler_platforms.identity(platform),
+                        });
+                    }
+
+                    if (visited.contains(group)) continue;
+                    try visited.put(self.arena(), group, {});
+                    try result.parents.put(self.arena(), group, .{
+                        .parent = item.group,
+                        .alias = dep.alias,
+                        .spec = dep.spec,
+                    });
+
+                    if (self.compiler_owned_nodes.get(platform)) |node| {
+                        try result.followed.append(self.arena(), group);
+                        try queue.append(self.arena(), .{ .group = group, .node = node });
+                    } else {
+                        const missing_gop = try missing_compiler_owned_seen.getOrPut(self.arena(), platform);
+                        if (!missing_gop.found_existing) {
+                            try result.missing_compiler_owned.append(self.arena(), platform);
+                        }
+                    }
+                } else if (specIsUrlLike(dep.spec)) {
                     if (!base.url.isSafeUrl(dep.spec)) {
                         try result.edges.append(self.arena(), .{
                             .parent = item.group,
@@ -513,16 +619,14 @@ pub const Resolver = struct {
                             .is_platform = dep.is_platform,
                             .target = .{ .invalid = switch (err) {
                                 error.InvalidVersion => .reserved_version,
+                                error.AmbiguousVersion => .ambiguous_version,
                                 else => .unparsable_url,
                             } },
                         });
                         continue;
                     };
 
-                    const group = if (parsed.version.isPresent())
-                        try std.fmt.allocPrint(self.arena(), "v{d}@{s}", .{ parsed.version.major, parsed.urlId(dep.spec) })
-                    else
-                        try std.fmt.allocPrint(self.arena(), "u@{s}", .{dep.spec});
+                    const group = try self.urlGroupKey(parsed, dep.spec);
 
                     const target = UrlTarget{
                         .group = group,
@@ -662,7 +766,12 @@ pub const Resolver = struct {
         return std.fs.path.resolve(self.arena(), &.{ parent_dir, spec });
     }
 
-    fn fetchMissing(self: *Resolver, missing_urls: []const Missing, missing_locals: []const []const u8) Allocator.Error!void {
+    fn fetchMissing(
+        self: *Resolver,
+        missing_urls: []const Missing,
+        missing_locals: []const []const u8,
+        missing_compiler_owned: []const CompilerOwnedPlatform,
+    ) Allocator.Error!void {
         for (missing_locals) |abs| {
             const node = self.fetcher.loadLocalFn(self.fetcher.ctx, self.arena(), abs) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
@@ -672,6 +781,22 @@ pub const Resolver = struct {
                 },
             };
             try self.local_nodes.put(self.arena(), abs, node);
+        }
+
+        for (missing_compiler_owned) |platform| {
+            const fetched = self.fetcher.loadCompilerOwnedPlatformFn(self.fetcher.ctx, self.arena(), platform) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => {
+                    try self.addDiagnostic(
+                        "Invalid Compiler Platform",
+                        "Could not load the compiler-owned platform {s}: {s}.",
+                        .{ compiler_platforms.identity(platform), @errorName(err) },
+                    );
+                    continue;
+                },
+            };
+            const copied = try copyFetchedPackage(self.arena(), fetched);
+            try self.compiler_owned_nodes.put(self.arena(), platform, copied);
         }
 
         if (missing_urls.len == 0) return;
@@ -764,7 +889,7 @@ pub const Resolver = struct {
         const limit = self.config.max_transitive_expanded_bytes orelse return;
 
         for (root_node.deps) |dep| {
-            const start_group = (try self.groupKeyForSpec(root_node.root_dir, dep.spec)) orelse continue;
+            const start_group = (try self.groupKeyForDep(root_node.root_dir, dep)) orelse continue;
 
             var seen_groups: std.StringHashMapUnmanaged(void) = .{};
             var seen_hashes: std.StringHashMapUnmanaged(void) = .{};
@@ -794,10 +919,15 @@ pub const Resolver = struct {
                         try nodes.append(self.arena(), node);
                     }
                 }
+                if (compiler_platforms.fromGroupKey(group)) |platform| {
+                    if (self.compiler_owned_nodes.get(platform)) |node| {
+                        try nodes.append(self.arena(), node);
+                    }
+                }
 
                 for (nodes.items) |node| {
                     for (node.deps) |child_dep| {
-                        const child_group = (try self.groupKeyForSpec(node.root_dir, child_dep.spec)) orelse continue;
+                        const child_group = (try self.groupKeyForDep(node.root_dir, child_dep)) orelse continue;
                         const group_gop = try seen_groups.getOrPut(self.arena(), child_group);
                         if (!group_gop.found_existing) {
                             try frontier.append(self.arena(), child_group);
@@ -817,14 +947,40 @@ pub const Resolver = struct {
         }
     }
 
-    fn groupKeyForSpec(self: *Resolver, parent_dir: []const u8, spec: []const u8) Allocator.Error!?[]const u8 {
+    /// Build the sharing-group key for a parsed package URL. Versions in the
+    /// same group may be swapped for one another during solving: 1.0.0+
+    /// versions group by major, 0.X.Y versions group by 0.X (a 0.minor bump
+    /// signals a breaking change), and versionless URLs only ever match
+    /// themselves exactly. The url id is the prefix and suffix around the
+    /// version, so URLs that only differ in version share a key.
+    fn urlGroupKey(self: *Resolver, parsed: base.url.ParsedUrl, spec: []const u8) Allocator.Error![]const u8 {
+        if (!parsed.version.isPresent()) {
+            return try std.fmt.allocPrint(self.arena(), "u@{s}", .{spec});
+        }
+        if (parsed.version.major == 0) {
+            return try std.fmt.allocPrint(self.arena(), "v0.{d}@{s}{s}", .{
+                parsed.version.minor,
+                parsed.urlIdPrefix(spec),
+                parsed.urlIdSuffix(spec),
+            });
+        }
+        return try std.fmt.allocPrint(self.arena(), "v{d}@{s}{s}", .{
+            parsed.version.major,
+            parsed.urlIdPrefix(spec),
+            parsed.urlIdSuffix(spec),
+        });
+    }
+
+    fn groupKeyForDep(self: *Resolver, parent_dir: []const u8, dep: ScannedDep) Allocator.Error!?[]const u8 {
+        if (dep.compiler_owned_platform) |platform| {
+            return compiler_platforms.groupKey(platform);
+        }
+
+        const spec = dep.spec;
         if (specIsUrlLike(spec)) {
             if (!base.url.isSafeUrl(spec)) return null;
             const parsed = base.url.parseUrlPath(spec) catch return null;
-            if (parsed.version.isPresent()) {
-                return try std.fmt.allocPrint(self.arena(), "v{d}@{s}", .{ parsed.version.major, parsed.urlId(spec) });
-            }
-            return try std.fmt.allocPrint(self.arena(), "u@{s}", .{spec});
+            return try self.urlGroupKey(parsed, spec);
         }
         const abs = try self.resolveLocalPath(parent_dir, spec);
         return try std.fmt.allocPrint(self.arena(), "l@{s}", .{abs});
@@ -855,6 +1011,12 @@ pub const Resolver = struct {
                                 "The lowest publishable package version is 0.0.1.",
                             .{ owner, edge.spec },
                         ),
+                        .ambiguous_version => try self.addDiagnostic(
+                            "Ambiguous Package Version",
+                            "{s} depends on this URL, which contains more than one version number:\n\n    {s}\n\n" ++
+                                "A package URL must contain exactly one MAJOR.MINOR.PATCH version before its hash, so the version is unambiguous.",
+                            .{ owner, edge.spec },
+                        ),
                         .unparsable_url => try self.addDiagnostic(
                             "Invalid Package URL",
                             "{s} depends on this URL, which could not be parsed as a package URL:\n\n    {s}.",
@@ -870,6 +1032,10 @@ pub const Resolver = struct {
                 .local => |group| {
                     const abs = group[2..];
                     const node = self.local_nodes.get(abs).?;
+                    try self.checkEdgeKind(walk_result, edge, node.kind);
+                },
+                .compiler_owned => |platform| {
+                    const node = self.compiler_owned_nodes.get(platform).?;
                     try self.checkEdgeKind(walk_result, edge, node.kind);
                 },
             }
@@ -953,14 +1119,25 @@ pub const Resolver = struct {
 
         var packages = std.ArrayListUnmanaged(Resolved.Package).empty;
 
-        // Index 0: the root.
+        // Index 0: the root. A URL-launched root carries its bundle URL as
+        // both identity and UrlInfo, exactly like a URL dependency would.
+        const root_url_info: ?Resolved.UrlInfo = if (self.root_url) |url| blk: {
+            const parsed = base.url.parseUrlPath(url) catch unreachable;
+            break :blk .{
+                .url = try out.dupe(u8, url),
+                .url_id = parsed.url_id,
+                .version = parsed.version,
+                .hash = try out.dupe(u8, parsed.hash),
+            };
+        } else null;
         try packages.append(out, .{
             .kind = root_node.kind,
-            .identity = try out.dupe(u8, root_path),
+            .identity = if (root_url_info) |info| info.url else try out.dupe(u8, root_path),
             .root_file = try out.dupe(u8, root_node.root_file),
             .root_dir = try out.dupe(u8, root_node.root_dir),
             .root_source_hash = root_node.root_source_hash,
-            .url = null,
+            .url = root_url_info,
+            .compiler_owned_platform = root_node.compiler_owned_platform,
             .deps = &.{},
         });
         const root_local_group = try std.fmt.allocPrint(self.arena(), "l@{s}", .{root_path});
@@ -981,6 +1158,21 @@ pub const Resolver = struct {
                     .root_dir = try out.dupe(u8, node.root_dir),
                     .root_source_hash = node.root_source_hash,
                     .url = null,
+                    .compiler_owned_platform = node.compiler_owned_platform,
+                    .deps = &.{},
+                });
+            } else if (group[0] == 'c') {
+                const platform = compiler_platforms.fromGroupKey(group) orelse return error.ResolutionFailed;
+                const node = self.compiler_owned_nodes.get(platform).?;
+                try group_to_index.put(self.gpa, try self.arena().dupe(u8, group), @intCast(packages.items.len));
+                try packages.append(out, .{
+                    .kind = node.kind,
+                    .identity = try out.dupe(u8, compiler_platforms.identity(platform)),
+                    .root_file = try out.dupe(u8, node.root_file),
+                    .root_dir = try out.dupe(u8, node.root_dir),
+                    .root_source_hash = node.root_source_hash,
+                    .url = null,
+                    .compiler_owned_platform = platform,
                     .deps = &.{},
                 });
             } else {
@@ -999,6 +1191,7 @@ pub const Resolver = struct {
                         .version = parsed.version,
                         .hash = try out.dupe(u8, parsed.hash),
                     },
+                    .compiler_owned_platform = node.compiler_owned_platform,
                     .deps = &.{},
                 });
             }
@@ -1018,6 +1211,7 @@ pub const Resolver = struct {
             const target_group = switch (edge.target) {
                 .url => |t| t.group,
                 .local => |g| g,
+                .compiler_owned => |platform| compiler_platforms.groupKey(platform),
                 .invalid => unreachable, // would have failed above
             };
             const target_index = group_to_index.get(target_group).?;
@@ -1112,6 +1306,7 @@ pub const Resolver = struct {
             const to = switch (edge.target) {
                 .url => |t| t.group,
                 .local => |g| g,
+                .compiler_owned => |platform| compiler_platforms.groupKey(platform),
                 .invalid => continue,
             };
             const gop = try adjacency.getOrPut(self.arena(), from);
@@ -1205,6 +1400,7 @@ fn copyFetchedPackage(allocator: Allocator, fetched: FetchedPackage) Allocator.E
             .alias = try allocator.dupe(u8, source.alias),
             .spec = try allocator.dupe(u8, source.spec),
             .is_platform = source.is_platform,
+            .compiler_owned_platform = source.compiler_owned_platform,
         };
     }
     return .{
@@ -1213,6 +1409,7 @@ fn copyFetchedPackage(allocator: Allocator, fetched: FetchedPackage) Allocator.E
         .root_dir = try allocator.dupe(u8, fetched.root_dir),
         .root_source_hash = fetched.root_source_hash,
         .content_bytes = fetched.content_bytes,
+        .compiler_owned_platform = fetched.compiler_owned_platform,
         .deps = deps,
     };
 }
@@ -1248,39 +1445,68 @@ pub fn scanHeaderSource(
         }
     }
 
+    return scanParsedHeader(allocator, root_file_abs, src, ast, header);
+}
+
+/// Extract dependency-resolution input from an already parsed Roc header.
+/// This lets callers that need other header metadata hand the exact same parse
+/// to the resolver instead of reading and parsing the root file a second time.
+pub fn scanParsedHeader(
+    allocator: Allocator,
+    root_file_abs: []const u8,
+    src: []const u8,
+    ast: *parse.AST,
+    header: parse.AST.Header,
+) error{ OutOfMemory, HeaderParseFailed }!FetchedPackage {
     var deps = std.ArrayListUnmanaged(ScannedDep).empty;
+    errdefer {
+        for (deps.items) |dep| {
+            allocator.free(dep.alias);
+            allocator.free(dep.spec);
+        }
+        deps.deinit(allocator);
+    }
 
     const root_file = try allocator.dupe(u8, root_file_abs);
+    errdefer allocator.free(root_file);
     const root_dir = try allocator.dupe(u8, std.fs.path.dirname(root_file_abs) orelse ".");
+    errdefer allocator.free(root_dir);
 
     const kind: HeaderKind = switch (header) {
         .app => |a| blk: {
             const platform_field = ast.store.getRecordField(a.platform_idx);
             if (platform_field.value) |value_expr| {
-                const spec = (try stringFromExpr(allocator, ast, value_expr)) orelse return error.HeaderParseFailed;
-                try deps.append(allocator, .{
-                    .alias = try allocator.dupe(u8, ast.resolve(platform_field.name)),
-                    .spec = spec,
-                    .is_platform = true,
-                });
+                switch (ast.store.getExpr(value_expr)) {
+                    .string => {
+                        const spec = (try stringFromExpr(allocator, ast, value_expr)) orelse return error.HeaderParseFailed;
+                        try appendScannedDep(allocator, &deps, ast.resolve(platform_field.name), spec, true);
+                    },
+                    .ident => |ident| {
+                        if (ident.qualifiers.span.len != 0) return error.HeaderParseFailed;
+                        const platform = compiler_platforms.fromHeaderIdent(ast.resolve(ident.token)) orelse return error.HeaderParseFailed;
+                        try appendCompilerOwnedScannedDep(allocator, &deps, ast.resolve(platform_field.name), platform);
+                    },
+                    else => return error.HeaderParseFailed,
+                }
             } else {
                 return error.HeaderParseFailed;
             }
             // The packages collection includes the platform field, which is
-            // already recorded above as the platform edge.
-            try appendPackagesCollection(allocator, ast, a.packages, a.platform_idx, &deps);
+            // already recorded above as the platform edge, and the compiler
+            // version pin, which is not a dependency at all.
+            try appendPackagesCollection(allocator, ast, a.packages, a.platform_idx, a.roc_version, &deps);
             break :blk .app;
         },
         .package => |p| blk: {
-            try appendPackagesCollection(allocator, ast, p.packages, null, &deps);
+            try appendPackagesCollection(allocator, ast, p.packages, null, p.roc_version, &deps);
             break :blk .package;
         },
         .platform => |p| blk: {
-            try appendPackagesCollection(allocator, ast, p.packages, null, &deps);
+            try appendPackagesCollection(allocator, ast, p.packages, null, p.roc_version, &deps);
             break :blk .platform;
         },
         .module, .hosted, .type_module, .default_app => .module,
-        .malformed => unreachable,
+        .malformed => return error.HeaderParseFailed,
     };
 
     return .{
@@ -1289,7 +1515,8 @@ pub fn scanHeaderSource(
         .root_dir = root_dir,
         .root_source_hash = sha256Bytes(src),
         .content_bytes = 0,
-        .deps = deps.items,
+        .compiler_owned_platform = null,
+        .deps = try deps.toOwnedSlice(allocator),
     };
 }
 
@@ -1314,24 +1541,59 @@ fn appendPackagesCollection(
     allocator: Allocator,
     ast: *parse.AST,
     packages: parse.AST.Collection.Idx,
-    skip_field: ?parse.AST.RecordField.Idx,
+    skip_platform: ?parse.AST.RecordField.Idx,
+    skip_roc_version: ?parse.AST.RecordField.Idx,
     deps: *std.ArrayListUnmanaged(ScannedDep),
 ) error{ OutOfMemory, HeaderParseFailed }!void {
     const coll = ast.store.getCollection(packages);
     const fields = ast.store.recordFieldSlice(.{ .span = coll.span });
     for (fields) |idx| {
-        if (skip_field) |skip| {
+        if (skip_platform) |skip| {
+            if (idx == skip) continue;
+        }
+        if (skip_roc_version) |skip| {
             if (idx == skip) continue;
         }
         const field = ast.store.getRecordField(idx);
         const value_expr = field.value orelse continue;
         const spec = (try stringFromExpr(allocator, ast, value_expr)) orelse return error.HeaderParseFailed;
-        try deps.append(allocator, .{
-            .alias = try allocator.dupe(u8, ast.resolve(field.name)),
-            .spec = spec,
-            .is_platform = false,
-        });
+        try appendScannedDep(allocator, deps, ast.resolve(field.name), spec, false);
     }
+}
+
+fn appendScannedDep(
+    allocator: Allocator,
+    deps: *std.ArrayListUnmanaged(ScannedDep),
+    alias: []const u8,
+    owned_spec: []const u8,
+    is_platform: bool,
+) Allocator.Error!void {
+    errdefer allocator.free(owned_spec);
+    const owned_alias = try allocator.dupe(u8, alias);
+    errdefer allocator.free(owned_alias);
+    try deps.append(allocator, .{
+        .alias = owned_alias,
+        .spec = owned_spec,
+        .is_platform = is_platform,
+    });
+}
+
+fn appendCompilerOwnedScannedDep(
+    allocator: Allocator,
+    deps: *std.ArrayListUnmanaged(ScannedDep),
+    alias: []const u8,
+    platform: CompilerOwnedPlatform,
+) Allocator.Error!void {
+    const owned_alias = try allocator.dupe(u8, alias);
+    errdefer allocator.free(owned_alias);
+    const spec = try allocator.dupe(u8, compiler_platforms.headerSpecText(platform));
+    errdefer allocator.free(spec);
+    try deps.append(allocator, .{
+        .alias = owned_alias,
+        .spec = spec,
+        .is_platform = true,
+        .compiler_owned_platform = platform,
+    });
 }
 
 fn stringFromExpr(allocator: Allocator, ast: *parse.AST, expr_idx: parse.AST.Expr.Idx) Allocator.Error!?[]const u8 {
@@ -1339,6 +1601,7 @@ fn stringFromExpr(allocator: Allocator, ast: *parse.AST, expr_idx: parse.AST.Exp
     switch (expr) {
         .string => |s| {
             var buf = std.ArrayListUnmanaged(u8).empty;
+            errdefer buf.deinit(allocator);
             for (ast.store.exprSlice(s.parts)) |part_idx| {
                 const part = ast.store.getExpr(part_idx);
                 if (part == .string_part) {
@@ -1346,8 +1609,11 @@ fn stringFromExpr(allocator: Allocator, ast: *parse.AST, expr_idx: parse.AST.Exp
                 }
             }
             // Null bytes are invalid in both file paths and URLs.
-            if (std.mem.findScalar(u8, buf.items, 0) != null) return null;
-            return buf.items;
+            if (std.mem.findScalar(u8, buf.items, 0) != null) {
+                buf.deinit(allocator);
+                return null;
+            }
+            return try buf.toOwnedSlice(allocator);
         },
         else => return null,
     }
@@ -1362,12 +1628,15 @@ pub const CtxFetcher = struct {
     /// Directory holding one subdirectory per bundle hash, or null when
     /// downloads are unsupported (freestanding targets).
     cache_packages_dir: ?[]const u8,
+    /// Optional root for materialized compiler-owned source packages.
+    compiler_owned_source_dir: ?[]const u8 = null,
 
     pub fn fetcher(self: *CtxFetcher) Fetcher {
         return .{
             .ctx = self,
             .fetchUrlFn = fetchUrlImpl,
             .loadLocalFn = loadLocalImpl,
+            .loadCompilerOwnedPlatformFn = loadCompilerOwnedPlatformImpl,
         };
     }
 
@@ -1446,6 +1715,19 @@ pub const CtxFetcher = struct {
         return try scanHeaderSource(allocator, self.gpa, root_file_abs, src);
     }
 
+    fn loadCompilerOwnedPlatformImpl(ctx: ?*anyopaque, allocator: Allocator, platform: CompilerOwnedPlatform) FetchError!FetchedPackage {
+        const self: *CtxFetcher = @ptrCast(@alignCast(ctx.?));
+        const materialized = compiler_platforms.materialize(allocator, self.fs, self.compiler_owned_source_dir, platform) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.Unsupported,
+        };
+        const src = try self.readNormalizedSource(allocator, materialized.root_file);
+        var scanned = try scanHeaderSource(allocator, self.gpa, materialized.root_file, src);
+        scanned.content_bytes = materialized.content_bytes;
+        scanned.compiler_owned_platform = platform;
+        return scanned;
+    }
+
     fn readNormalizedSource(self: *CtxFetcher, allocator: Allocator, root_file_abs: []const u8) FetchError![]u8 {
         var src = self.fs.readFile(root_file_abs, allocator) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
@@ -1491,6 +1773,7 @@ pub const CtxFetcher = struct {
                 .alias = allocator.dupe(u8, source.alias) catch return null,
                 .spec = allocator.dupe(u8, source.spec) catch return null,
                 .is_platform = source.is_platform,
+                .compiler_owned_platform = source.compiler_owned_platform,
             };
         }
 
@@ -1501,6 +1784,7 @@ pub const CtxFetcher = struct {
                 .root_dir = allocator.dupe(u8, package_dir) catch return null,
                 .root_source_hash = parsed.value.root_source_hash,
                 .content_bytes = parsed.value.content_bytes,
+                .compiler_owned_platform = null,
                 .deps = deps,
             },
             .expanded_bytes = parsed.value.expanded_bytes,
@@ -1516,7 +1800,12 @@ pub const CtxFetcher = struct {
     ) (Allocator.Error || error{WriteFailed} || CoreCtx.WriteError || CoreCtx.RenameError)!void {
         const deps = try allocator.alloc(Sidecar.SidecarDep, scanned.deps.len);
         for (deps, scanned.deps) |*dep, source| {
-            dep.* = .{ .alias = source.alias, .spec = source.spec, .is_platform = source.is_platform };
+            dep.* = .{
+                .alias = source.alias,
+                .spec = source.spec,
+                .is_platform = source.is_platform,
+                .compiler_owned_platform = source.compiler_owned_platform,
+            };
         }
         const sidecar = Sidecar{
             .format = Sidecar.current_format,
@@ -1563,6 +1852,25 @@ test "scanHeaderSource ignores tokenizer diagnostics after the header" {
     try std.testing.expectEqualStrings("pf", fetched.deps[0].alias);
     try std.testing.expectEqualStrings("../platform/main.roc", fetched.deps[0].spec);
     try std.testing.expect(fetched.deps[0].is_platform);
+}
+
+test "scanHeaderSource accepts compiler-owned glue platform" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    const src =
+        "app [make_glue] { pf: platform glue }\n" ++
+        "make_glue = |_| Ok([])\n";
+
+    const fetched = try scanHeaderSource(gpa, gpa, "/tmp/root.roc", src);
+
+    try std.testing.expectEqual(HeaderKind.app, fetched.kind);
+    try std.testing.expectEqual(@as(usize, 1), fetched.deps.len);
+    try std.testing.expectEqualStrings("pf", fetched.deps[0].alias);
+    try std.testing.expectEqualStrings("platform glue", fetched.deps[0].spec);
+    try std.testing.expect(fetched.deps[0].is_platform);
+    try std.testing.expectEqual(CompilerOwnedPlatform.glue, fetched.deps[0].compiler_owned_platform.?);
 }
 
 test "scanHeaderSource rejects malformed package headers" {
@@ -1618,6 +1926,7 @@ const TestRegistry = struct {
             .ctx = self,
             .fetchUrlFn = fetchUrlImpl,
             .loadLocalFn = loadLocalImpl,
+            .loadCompilerOwnedPlatformFn = loadCompilerOwnedPlatformImpl,
         };
     }
 
@@ -1631,6 +1940,7 @@ const TestRegistry = struct {
                 .alias = try allocator.dupe(u8, source.alias),
                 .spec = try allocator.dupe(u8, source.spec),
                 .is_platform = source.is_platform,
+                .compiler_owned_platform = source.compiler_owned_platform,
             };
         }
         return .{
@@ -1639,6 +1949,7 @@ const TestRegistry = struct {
             .root_dir = try allocator.dupe(u8, std.fs.path.dirname(root_file) orelse "/"),
             .root_source_hash = sha256Bytes(root_file),
             .content_bytes = package.content_bytes,
+            .compiler_owned_platform = null,
             .deps = deps,
         };
     }
@@ -1672,6 +1983,22 @@ const TestRegistry = struct {
         const key = normalizedLookupKey(&key_buf, root_file_abs);
         const package = self.locals.get(key) orelse return error.FileNotFound;
         return toFetched(allocator, package, root_file_abs, null);
+    }
+
+    fn loadCompilerOwnedPlatformImpl(_: ?*anyopaque, allocator: Allocator, platform: CompilerOwnedPlatform) FetchError!FetchedPackage {
+        const deps = try allocator.alloc(ScannedDep, 0);
+        const root_file = switch (platform) {
+            .glue => "/compiler/glue/main.roc",
+        };
+        return .{
+            .kind = .platform,
+            .root_file = try allocator.dupe(u8, root_file),
+            .root_dir = try allocator.dupe(u8, std.fs.path.dirname(root_file) orelse "/"),
+            .root_source_hash = compiler_platforms.sourceHash(platform),
+            .content_bytes = 1,
+            .compiler_owned_platform = platform,
+            .deps = deps,
+        };
     }
 };
 
@@ -1720,7 +2047,7 @@ test "selects the highest minor.patch within a major version" {
 
     const a_123 = "https://example.com/foo/a/1.2.3/hashA123.tar.zst";
     const a_131 = "https://example.com/foo/a/1.3.1/hashA131.tar.zst";
-    const b_url = "https://example.com/foo/b/2.0.0/hashB200.tar.zst";
+    const b_url = "https://example.com/foo/b/2.0.0/hashB2oo.tar.zst";
 
     try registry.locals.put("/app/main.roc", .{
         .kind = .package,
@@ -1795,11 +2122,11 @@ test "retraction: versions mentioned only by losers do not count" {
     // root -> q 1.2.0 and s 1.0.0; q 1.2.0 -> r 1.5.0; s -> q 1.4.0;
     // q 1.4.0 -> r 1.2.0. Once q resolves to 1.4.0, the mention of r 1.5.0
     // is retracted and r resolves to 1.2.0.
-    const q_120 = "https://example.com/q/1.2.0/hashQ120.tar.zst";
-    const q_140 = "https://example.com/q/1.4.0/hashQ140.tar.zst";
-    const r_150 = "https://example.com/r/1.5.0/hashR150.tar.zst";
-    const r_120 = "https://example.com/r/1.2.0/hashR120.tar.zst";
-    const s_100 = "https://example.com/s/1.0.0/hashS100.tar.zst";
+    const q_120 = "https://example.com/q/1.2.0/hashQ12o.tar.zst";
+    const q_140 = "https://example.com/q/1.4.0/hashQ14o.tar.zst";
+    const r_150 = "https://example.com/r/1.5.0/hashR15o.tar.zst";
+    const r_120 = "https://example.com/r/1.2.0/hashR12o.tar.zst";
+    const s_100 = "https://example.com/s/1.0.0/hashS1oo.tar.zst";
 
     try registry.locals.put("/app/main.roc", .{
         .kind = .package,
@@ -1906,7 +2233,7 @@ test "app declaring two versions of the same package is an error" {
 
     const platform_url = "https://example.com/pf/1.0.0/hashPf.tar.zst";
     const a_123 = "https://example.com/foo/a/1.2.3/hashA123.tar.zst";
-    const a_140 = "https://example.com/foo/a/1.4.0/hashA140.tar.zst";
+    const a_140 = "https://example.com/foo/a/1.4.0/hashA14o.tar.zst";
 
     try registry.locals.put("/app/main.roc", .{
         .kind = .app,
@@ -1932,7 +2259,7 @@ test "same version with two different hashes is an error" {
     var registry = TestRegistry.init(gpa);
     defer registry.deinit();
 
-    const a_via_one = "https://example.com/foo/a/1.3.1/hashOne.tar.zst";
+    const a_via_one = "https://example.com/foo/a/1.3.1/hashFirst.tar.zst";
     const a_via_two = "https://example.com/foo/a/1.3.1/hashTwo.tar.zst";
     const b_url = "https://example.com/foo/b/1.0.0/hashB.tar.zst";
 
@@ -1963,8 +2290,8 @@ test "versionless URLs do not participate in solving" {
 
     // The same url id, hashless-versionless in two different bundles, plus a
     // versioned release of the same url id: all three coexist.
-    const a_plain_one = "https://example.com/foo/a/hashOldOne.tar.zst";
-    const a_plain_two = "https://example.com/foo/a/hashOldTwo.tar.zst";
+    const a_plain_one = "https://example.com/foo/a/hashRetiredA.tar.zst";
+    const a_plain_two = "https://example.com/foo/a/hashRetiredB.tar.zst";
     const a_versioned = "https://example.com/foo/a/1.2.3/hashNew.tar.zst";
     const b_url = "https://example.com/foo/b/1.0.0/hashB.tar.zst";
 
@@ -2002,9 +2329,9 @@ test "oscillating graphs are reported instead of looping" {
     // root -> b 1.0.0; b 1.0.0 -> c 1.0.0; c 1.0.0 -> b 1.1.0; b 1.1.0 has no
     // deps. No stable solution exists: choosing b 1.1.0 retracts c, which
     // retracts the b 1.1.0 mention, which restores b 1.0.0, which restores c.
-    const b_100 = "https://example.com/b/1.0.0/hashB100.tar.zst";
-    const b_110 = "https://example.com/b/1.1.0/hashB110.tar.zst";
-    const c_100 = "https://example.com/c/1.0.0/hashC100.tar.zst";
+    const b_100 = "https://example.com/b/1.0.0/hashB1oo.tar.zst";
+    const b_110 = "https://example.com/b/1.1.0/hashB11o.tar.zst";
+    const c_100 = "https://example.com/c/1.0.0/hashC1oo.tar.zst";
 
     try registry.locals.put("/app/main.roc", .{
         .kind = .package,
@@ -2170,8 +2497,8 @@ test "pin violations report the full chain through deep indirect dependencies" {
     var registry = TestRegistry.init(gpa);
     defer registry.deinit();
 
-    const a_100 = "https://example.com/a/1.0.0/hashA100.tar.zst";
-    const a_101 = "https://example.com/a/1.0.1/hashA101.tar.zst";
+    const a_100 = "https://example.com/a/1.0.0/hashA1oo.tar.zst";
+    const a_101 = "https://example.com/a/1.0.1/hashA1o1.tar.zst";
     const b_url = "https://example.com/b/1.0.0/hashB.tar.zst";
     const c_url = "https://example.com/c/1.0.0/hashC.tar.zst";
     const d_url = "https://example.com/d/1.0.0/hashD.tar.zst";
@@ -2213,11 +2540,11 @@ test "retraction prunes a loser's entire subtree without downloading it" {
     // q 1.2.0 pulls in r, which pulls in t — but s bumps q to 1.4.0 (which
     // has no deps) before q 1.2.0's subtree is ever followed, so r and t are
     // never even downloaded.
-    const q_120 = "https://example.com/q/1.2.0/hashQ120.tar.zst";
-    const q_140 = "https://example.com/q/1.4.0/hashQ140.tar.zst";
-    const r_150 = "https://example.com/r/1.5.0/hashR150.tar.zst";
-    const t_100 = "https://example.com/t/1.0.0/hashT100.tar.zst";
-    const s_100 = "https://example.com/s/1.0.0/hashS100.tar.zst";
+    const q_120 = "https://example.com/q/1.2.0/hashQ12o.tar.zst";
+    const q_140 = "https://example.com/q/1.4.0/hashQ14o.tar.zst";
+    const r_150 = "https://example.com/r/1.5.0/hashR15o.tar.zst";
+    const t_100 = "https://example.com/t/1.0.0/hashT1oo.tar.zst";
+    const s_100 = "https://example.com/s/1.0.0/hashS1oo.tar.zst";
 
     try registry.locals.put("/app/main.roc", .{
         .kind = .package,
@@ -2243,8 +2570,8 @@ test "retraction prunes a loser's entire subtree without downloading it" {
     try std.testing.expect(testFindPackage(&resolved, t_100) == null);
     // The subtree was retracted before ever being followed, so it was never
     // fetched at all.
-    try std.testing.expect(!resolver.url_nodes.contains("hashR150"));
-    try std.testing.expect(!resolver.url_nodes.contains("hashT100"));
+    try std.testing.expect(!resolver.url_nodes.contains("hashR15o"));
+    try std.testing.expect(!resolver.url_nodes.contains("hashT1oo"));
 }
 
 test "an over-downloaded intermediate version is retracted and does not violate the app's pin" {
@@ -2258,10 +2585,10 @@ test "an over-downloaded intermediate version is retracted and does not violate 
     // pinned 1.2.3, and reporting no conflict. The intermediate download is
     // intended waste.
     const a_123 = "https://example.com/a/1.2.3/hashA123.tar.zst";
-    const a_130 = "https://example.com/a/1.3.0/hashA130.tar.zst";
+    const a_130 = "https://example.com/a/1.3.0/hashA13o.tar.zst";
     const b_url = "https://example.com/b/1.0.0/hashB.tar.zst";
-    const c_120 = "https://example.com/c/1.2.0/hashC120.tar.zst";
-    const c_150 = "https://example.com/c/1.5.0/hashC150.tar.zst";
+    const c_120 = "https://example.com/c/1.2.0/hashC12o.tar.zst";
+    const c_150 = "https://example.com/c/1.5.0/hashC15o.tar.zst";
     const d_url = "https://example.com/d/1.0.0/hashD.tar.zst";
 
     try registry.locals.put("/app/main.roc", .{
@@ -2292,7 +2619,7 @@ test "an over-downloaded intermediate version is retracted and does not violate 
     try std.testing.expect(testFindPackage(&resolved, c_150) != null);
     try std.testing.expect(testFindPackage(&resolved, c_120) == null);
     // The losing version really was downloaded along the way.
-    try std.testing.expect(resolver.url_nodes.contains("hashA130"));
+    try std.testing.expect(resolver.url_nodes.contains("hashA13o"));
 }
 
 test "a bumped winner's new dependencies join the graph" {
@@ -2301,8 +2628,8 @@ test "a bumped winner's new dependencies join the graph" {
     defer registry.deinit();
 
     // x 1.0.0 has no deps, but the winning x 1.1.0 introduces z.
-    const x_100 = "https://example.com/x/1.0.0/hashX100.tar.zst";
-    const x_110 = "https://example.com/x/1.1.0/hashX110.tar.zst";
+    const x_100 = "https://example.com/x/1.0.0/hashX1oo.tar.zst";
+    const x_110 = "https://example.com/x/1.1.0/hashX11o.tar.zst";
     const y_url = "https://example.com/y/1.0.0/hashY.tar.zst";
     const z_url = "https://example.com/z/1.0.0/hashZ.tar.zst";
 
@@ -2438,8 +2765,8 @@ test "transitive tally counts retracted downloads against every root that reache
     // it is a safety mechanism over everything resolution caused to enter
     // the graph — and counts it against both direct dependencies, since
     // both reach it.
-    const q_100 = "https://example.com/q/1.0.0/hashQ100.tar.zst";
-    const q_110 = "https://example.com/q/1.1.0/hashQ110.tar.zst";
+    const q_100 = "https://example.com/q/1.0.0/hashQ1oo.tar.zst";
+    const q_110 = "https://example.com/q/1.1.0/hashQ11o.tar.zst";
     const s_url = "https://example.com/s/1.0.0/hashS.tar.zst";
     const t_url = "https://example.com/t/1.0.0/hashT.tar.zst";
     const big_url = "https://example.com/big/1.0.0/hashBig.tar.zst";
@@ -2517,7 +2844,7 @@ test "version solving spans local packages bridging URL dependencies" {
     var registry = TestRegistry.init(gpa);
     defer registry.deinit();
 
-    const a_10 = "https://example.com/a/1.0.0/hashA10.tar.zst";
+    const a_10 = "https://example.com/a/1.0.0/hashA1o.tar.zst";
     const a_11 = "https://example.com/a/1.1.0/hashA11.tar.zst";
 
     try registry.locals.put("/app/main.roc", .{
@@ -2552,7 +2879,7 @@ test "versionBumpNotes reports packages compiled against undeclared versions" {
 
     const a_123 = "https://example.com/foo/a/1.2.3/hashA123.tar.zst";
     const a_131 = "https://example.com/foo/a/1.3.1/hashA131.tar.zst";
-    const b_url = "https://example.com/foo/b/2.0.0/hashB200.tar.zst";
+    const b_url = "https://example.com/foo/b/2.0.0/hashB2oo.tar.zst";
 
     try registry.locals.put("/app/main.roc", .{
         .kind = .package,
@@ -2577,7 +2904,9 @@ test "versionBumpNotes reports packages compiled against undeclared versions" {
     // winner, so only the root gets a note.
     var note_arena = std.heap.ArenaAllocator.init(gpa);
     defer note_arena.deinit();
-    const notes = try versionBumpNotes(&resolved, note_arena.allocator());
+    const identities = try note_arena.allocator().alloc([]const u8, resolved.packages.len);
+    for (resolved.packages, identities) |package, *identity| identity.* = package.identity;
+    const notes = try versionBumpNotes(&resolved, identities, note_arena.allocator());
 
     try std.testing.expectEqual(@as(usize, 1), notes.len);
     try std.testing.expectEqualStrings("/app/main.roc", notes[0].package_identity);
@@ -2600,4 +2929,133 @@ test "insecure URLs are rejected" {
 
     try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
     try std.testing.expectEqualStrings("Insecure Package URL", resolver.diagnostics.items[0].title);
+}
+
+test "0.x versions within the same 0.minor share one package" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    const a_url = "https://example.com/a/1.0.0/hashA.tar.zst";
+    const b_url = "https://example.com/b/1.0.0/hashB.tar.zst";
+    const c_050 = "https://example.com/c/0.5.0/hashCo5o.tar.zst";
+    const c_052 = "https://example.com/c/0.5.2/hashCo52.tar.zst";
+
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .package,
+        .deps = &.{
+            .{ .alias = "a", .spec = a_url, .is_platform = false },
+            .{ .alias = "b", .spec = b_url, .is_platform = false },
+        },
+    });
+    try registry.urls.put(a_url, .{ .deps = &.{.{ .alias = "c", .spec = c_050, .is_platform = false }} });
+    try registry.urls.put(b_url, .{ .deps = &.{.{ .alias = "c", .spec = c_052, .is_platform = false }} });
+    try registry.urls.put(c_050, .{});
+    try registry.urls.put(c_052, .{});
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+
+    var resolved = try resolver.resolve("/app/main.roc");
+    defer resolved.deinit();
+
+    // 0.5.0 and 0.5.2 are the same compatibility group; the max wins.
+    try std.testing.expectEqual(@as(usize, 4), resolved.packages.len);
+    const a = testFindPackage(&resolved, a_url).?;
+    const b = testFindPackage(&resolved, b_url).?;
+    try std.testing.expectEqual(a.deps[0].target, b.deps[0].target);
+    try std.testing.expectEqualStrings(c_052, resolved.packages[a.deps[0].target].identity);
+}
+
+test "different 0.minor versions are different packages" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    const a_05 = "https://example.com/a/0.5.0/hashAo5.tar.zst";
+    const a_06 = "https://example.com/a/0.6.1/hashAo6.tar.zst";
+    const b_url = "https://example.com/b/1.0.0/hashB.tar.zst";
+
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .app,
+        .deps = &.{
+            .{ .alias = "a", .spec = a_05, .is_platform = false },
+            .{ .alias = "b", .spec = b_url, .is_platform = false },
+        },
+    });
+    try registry.urls.put(a_05, .{});
+    try registry.urls.put(a_06, .{});
+    try registry.urls.put(b_url, .{ .deps = &.{.{ .alias = "a", .spec = a_06, .is_platform = false }} });
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+
+    var resolved = try resolver.resolve("/app/main.roc");
+    defer resolved.deinit();
+
+    // A 0.minor bump is a breaking change, so 0.5.x and 0.6.x are different
+    // packages: no conflict, both present.
+    try std.testing.expect(testFindPackage(&resolved, a_05) != null);
+    try std.testing.expect(testFindPackage(&resolved, a_06) != null);
+}
+
+test "app pins constrain their own 0.minor group" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    const a_050 = "https://example.com/a/0.5.0/hashAo5o.tar.zst";
+    const a_052 = "https://example.com/a/0.5.2/hashAo52.tar.zst";
+    const b_url = "https://example.com/b/1.0.0/hashB.tar.zst";
+
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .app,
+        .deps = &.{
+            .{ .alias = "a", .spec = a_050, .is_platform = false },
+            .{ .alias = "b", .spec = b_url, .is_platform = false },
+        },
+    });
+    try registry.urls.put(a_050, .{});
+    try registry.urls.put(a_052, .{});
+    try registry.urls.put(b_url, .{ .deps = &.{.{ .alias = "a", .spec = a_052, .is_platform = false }} });
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+
+    try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
+    try std.testing.expectEqualStrings("Package Version Conflict", resolver.diagnostics.items[0].title);
+}
+
+test "URLs with more than one version are rejected as ambiguous" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .package,
+        .deps = &.{.{ .alias = "a", .spec = "https://example.com/1.2.3/a-4.5.6-hashA.tar.zst", .is_platform = false }},
+    });
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+
+    try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
+    try std.testing.expectEqualStrings("Ambiguous Package Version", resolver.diagnostics.items[0].title);
+}
+
+test "the reserved 0.0.0 version is rejected" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .package,
+        .deps = &.{.{ .alias = "a", .spec = "https://example.com/a/0.0.0/hashA.tar.zst", .is_platform = false }},
+    });
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+
+    try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
+    try std.testing.expectEqualStrings("Invalid Package Version", resolver.diagnostics.items[0].title);
 }

@@ -40,10 +40,17 @@ pub const RootExposure = enum {
 
 /// LIR-owned copy of checked root request metadata.
 pub const RootMetadata = struct {
+    pub const TestPlanMetadata = struct {
+        result_index: u32,
+        module_index: u32,
+        root_index: u32,
+    };
+
     order: u32,
     kind: RootKind,
     abi: RootAbi,
     exposure: RootExposure,
+    test_plan: ?TestPlanMetadata = null,
 
     pub fn fromCheckedRoot(root: checked.RootRequest) RootMetadata {
         return .{

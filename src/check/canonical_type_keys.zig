@@ -8,8 +8,11 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
+const can = @import("can");
 const types = @import("types");
 const canonical = @import("canonical_names.zig");
+
+const ModuleEnv = can.ModuleEnv;
 
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
@@ -27,20 +30,20 @@ pub const TypeKeyInfo = struct {
 pub fn fromVar(
     allocator: Allocator,
     store: *const TypeStore,
-    idents: *const Ident.Store,
+    env: *const ModuleEnv,
     var_: Var,
 ) Allocator.Error!canonical.CanonicalTypeKey {
-    return (try fromVarInfo(allocator, store, idents, var_)).key;
+    return (try fromVarInfo(allocator, store, env, var_)).key;
 }
 
 /// Public `fromVarInfo` function.
 pub fn fromVarInfo(
     allocator: Allocator,
     store: *const TypeStore,
-    idents: *const Ident.Store,
+    env: *const ModuleEnv,
     var_: Var,
 ) Allocator.Error!TypeKeyInfo {
-    var builder = Builder.init(allocator, store, idents);
+    var builder = Builder.init(allocator, store, env);
     defer builder.deinit();
     try builder.writeVar(var_);
     return .{
@@ -49,14 +52,34 @@ pub fn fromVarInfo(
     };
 }
 
+/// Public `identityVarsFromVar` function.
+///
+/// The identity variables (flex/rigid) reachable from `var_`, in the exact
+/// first-encounter order the canonical key digest assigns them slots
+/// (`writeIdentityVariable`). The index in the returned slice IS the identity
+/// slot embedded in the key bytes, so two representations of the same type
+/// (solver vars here, checked payloads in a `CheckedTypeStore`) enumerate
+/// identities in the same order. Caller owns the returned slice.
+pub fn identityVarsFromVar(
+    allocator: Allocator,
+    store: *const TypeStore,
+    env: *const ModuleEnv,
+    var_: Var,
+) Allocator.Error![]types.Var {
+    var builder = Builder.init(allocator, store, env);
+    defer builder.deinit();
+    try builder.writeVar(var_);
+    return try allocator.dupe(types.Var, builder.identity_variables.items);
+}
+
 /// Public `fromConcreteVar` function.
 pub fn fromConcreteVar(
     allocator: Allocator,
     store: *const TypeStore,
-    idents: *const Ident.Store,
+    env: *const ModuleEnv,
     var_: Var,
 ) Allocator.Error!canonical.CanonicalTypeKey {
-    var builder = Builder.init(allocator, store, idents);
+    var builder = Builder.init(allocator, store, env);
     defer builder.deinit();
     builder.require_concrete = true;
     try builder.writeVar(var_);
@@ -85,31 +108,51 @@ pub fn defaultDec(idents: *const Ident.Store) canonical.CanonicalTypeKey {
 pub fn schemeFromVar(
     allocator: Allocator,
     store: *const TypeStore,
-    idents: *const Ident.Store,
+    env: *const ModuleEnv,
     var_: Var,
 ) Allocator.Error!canonical.CanonicalTypeSchemeKey {
-    var builder = Builder.init(allocator, store, idents);
+    var builder = Builder.init(allocator, store, env);
     defer builder.deinit();
     builder.writeTag("canonical_type_scheme");
     try builder.writeVar(var_);
     return .{ .bytes = builder.hasher.finalResult() };
 }
 
+/// Whether the canonical-key traversal for `var_` reaches erroneous checked
+/// type content. This uses the key builder itself in detection mode, so guards
+/// for later key construction cannot accidentally inspect a narrower graph.
+pub fn containsError(
+    allocator: Allocator,
+    store: *const TypeStore,
+    env: *const ModuleEnv,
+    var_: Var,
+) Allocator.Error!bool {
+    var builder = Builder.init(allocator, store, env);
+    defer builder.deinit();
+    builder.detect_errors = true;
+    try builder.writeVar(var_);
+    return builder.contains_error;
+}
+
 const Builder = struct {
     allocator: Allocator,
     store: *const TypeStore,
+    env: *const ModuleEnv,
     idents: *const Ident.Store,
     hasher: std.crypto.hash.sha2.Sha256,
     active: std.ArrayList(Var),
     identity_variables: std.ArrayList(Var),
     require_concrete: bool = false,
     contains_identity_variables: bool = false,
+    detect_errors: bool = false,
+    contains_error: bool = false,
 
-    fn init(allocator: Allocator, store: *const TypeStore, idents: *const Ident.Store) Builder {
+    fn init(allocator: Allocator, store: *const TypeStore, env: *const ModuleEnv) Builder {
         return .{
             .allocator = allocator,
             .store = store,
-            .idents = idents,
+            .env = env,
+            .idents = env.getIdentStoreConst(),
             .hasher = std.crypto.hash.sha2.Sha256.init(.{}),
             .active = .empty,
             .identity_variables = .empty,
@@ -124,6 +167,19 @@ const Builder = struct {
     fn writeVar(self: *Builder, var_: Var) Allocator.Error!void {
         const resolved = self.store.resolveVar(var_);
         const root = resolved.var_;
+
+        // The checker explicitly records when it closes an otherwise
+        // unresolved identity to `[]`. Encode the surviving union-find root so
+        // every reference to that identity shares one checked type digest.
+        if (resolved.desc.empty_tag_union_is_default) {
+            try self.writeIdentityVariable(
+                root,
+                "defaulted_empty_tag_union",
+                null,
+                types.StaticDispatchConstraint.SafeList.Range.empty(),
+            );
+            return;
+        }
 
         switch (resolved.desc.content) {
             .flex => |flex| {
@@ -190,7 +246,10 @@ const Builder = struct {
 
     fn writeContent(self: *Builder, content: types.Content) Allocator.Error!void {
         switch (content) {
-            .err => invariantViolation("canonical type key requested for erroneous checked type"),
+            .err => {
+                if (self.detect_errors) self.contains_error = true;
+                self.writeTag("err");
+            },
             .flex => |flex| {
                 if (self.require_concrete) {
                     if (self.flexLiteralDefaultKind(flex)) |kind| {
@@ -222,32 +281,38 @@ const Builder = struct {
     }
 
     /// INVARIANT: a still-open flex may be keyed as the canonical literal
-    /// default (Dec for numerals, Str for quotes) ONLY when every constraint
-    /// on it came directly from literal conversion — a pure,
-    /// otherwise-unconstrained literal is exactly what the checker's defaulting
-    /// commits to the kind's default.
-    /// Any OTHER constraint origin (binop/method/where-clause usage) feeds the
-    /// checker's candidate probing, which may commit a non-default candidate
-    /// (e.g. an integer-only method commits I64); such a var must already be
-    /// concrete when a concrete key is requested, so finding one still open
-    /// here means an upstream defaulting step was skipped — keying it as the
-    /// default would be a guess, so we raise an invariant violation instead.
+    /// default (Dec for numerals, Str for quotes) ONLY when every constraint on
+    /// it is a literal conversion — either a literal's own `from_literal`
+    /// constraint or a `where`-clause contract naming a literal-conversion hook.
+    /// Such a var is exactly what the checker's defaulting commits to the kind's
+    /// default.
+    /// Any OTHER constraint (binop/method usage, or a `where` clause naming some
+    /// other method) feeds the checker's candidate probing, which may commit a
+    /// non-default candidate (e.g. an integer-only method commits I64); such a
+    /// var must already be concrete when a concrete key is requested, so finding
+    /// one still open here means an upstream defaulting step was skipped —
+    /// keying it as the default would be a guess, so we raise an invariant
+    /// violation instead.
     ///
-    /// A mixed-kind set (both numeral and quote literal-origin constraints,
-    /// reachable only via a flex/flex merge the checker reports as a type
-    /// error, so it never survives to key generation) deterministically picks
-    /// `numeral`. The precedence is enforced by
-    /// `StaticDispatchConstraint.dominantLiteralKind`, the single source of
-    /// truth shared with `varLiteralKind` (Check.zig) and
-    /// `numericDefaultPhaseForConstraints` (checked_artifact.zig).
+    /// Both the kind and the "is this a literal conversion" test come from the
+    /// defaulting oracle (src/types/literal_defaulting.zig), so this key builder
+    /// cannot disagree with the checker's defaulting about which vars default —
+    /// including the mixed-kind set (both numeral and quote literal constraints,
+    /// reachable only via a flex/flex merge the checker reports as a type error,
+    /// so it never survives to key generation), where the oracle's precedence
+    /// deterministically picks `numeral`.
     fn flexLiteralDefaultKind(self: *Builder, flex: types.Flex) ?LiteralKind {
+        const literal_idents = types.literal_defaulting.LiteralMethodIdents{
+            .from_numeral = self.env.idents.from_numeral,
+            .from_quote = self.env.idents.from_quote,
+            .from_interpolation = self.env.idents.from_interpolation,
+        };
         const constraints = self.store.sliceStaticDispatchConstraints(flex.constraints);
-        const kind = types.StaticDispatchConstraint.dominantLiteralKind(constraints);
+        const kind = types.literal_defaulting.dominantKind(literal_idents, constraints);
         var has_other = false;
         for (constraints) |constraint| {
-            switch (constraint.origin) {
-                .from_literal => {},
-                else => has_other = true,
+            if (types.literal_defaulting.constraintLiteralKind(literal_idents, constraint) == null) {
+                has_other = true;
             }
         }
         if (kind != null and has_other) {
@@ -258,9 +323,9 @@ const Builder = struct {
 
     fn writeLiteralDefault(self: *Builder, kind: LiteralKind) void {
         self.writeTag("nominal");
-        switch (kind) {
-            .numeral => self.writeIdent(builtinDecTypeIdent(self.idents)),
-            .quote, .interpolation => self.writeIdent(builtinStrTypeIdent(self.idents)),
+        switch (types.literal_defaulting.defaultTargetForKind(kind)) {
+            .dec => self.writeIdent(builtinDecTypeIdent(self.idents)),
+            .str => self.writeIdent(builtinStrTypeIdent(self.idents)),
         }
         self.writeIdent(builtinModuleIdent(self.idents));
         self.writeOptionalU32(null);
@@ -282,6 +347,9 @@ const Builder = struct {
                 try self.writeVarRange(tuple.elems);
             },
             .nominal_type => |nominal| {
+                if (self.detect_errors and self.store.nominalDeclIsInvalid(nominal)) {
+                    self.contains_error = true;
+                }
                 self.writeTag("nominal");
                 self.writeNamedSourceIdentity(nominal.origin_module, nominal.ident.ident_idx, nominal.sourceDeclOptional());
                 self.writeBool(nominal.isOpaque());
@@ -304,7 +372,6 @@ const Builder = struct {
     }
 
     fn writeFunc(self: *Builder, func: types.Func) Allocator.Error!void {
-        self.writeBool(func.needs_instantiation);
         try self.writeVarRange(func.args);
         try self.writeVar(func.ret);
     }
@@ -548,10 +615,7 @@ const Builder = struct {
             const maybe_num_literal = constraint.origin.numeralInfo();
             self.writeBool(maybe_num_literal != null);
             if (maybe_num_literal) |num_literal| {
-                self.hasher.update(&num_literal.bytes);
-                self.writeBool(num_literal.is_u128);
-                self.writeBool(num_literal.is_negative);
-                self.writeBool(num_literal.is_fractional);
+                self.hasher.update(&num_literal.keyBytes());
             }
         }
     }
@@ -570,8 +634,13 @@ const Builder = struct {
         }
     }
 
-    fn writeNamedSourceIdentity(self: *Builder, origin_module: Ident.Idx, ident: Ident.Idx, source_decl: ?u32) void {
-        self.writeIdent(origin_module);
+    /// Write a named type's source identity: the declaring module's 32-byte
+    /// deep CONTENT identity plus the within-module discriminator, mirroring
+    /// `sameNominalIdentity` in unify.zig exactly. No name text participates
+    /// in the module component, so the digest never depends on coordinator
+    /// naming or build directories.
+    fn writeNamedSourceIdentity(self: *Builder, origin_module: base.ModuleIdentity.Idx, ident: Ident.Idx, source_decl: ?u32) void {
+        self.writeBytes(self.env.moduleIdentityHash(origin_module));
         self.writeOptionalU32(source_decl);
         if (source_decl == null) {
             self.writeIdent(ident);
@@ -652,16 +721,31 @@ test "canonical type key declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
 
+test "erroneous checked types have a canonical key" {
+    const allocator = std.testing.allocator;
+
+    var env = try ModuleEnv.init(allocator, "");
+    defer env.deinit();
+
+    var store = try TypeStore.initCapacity(allocator, 1, 0);
+    defer store.deinit();
+    const err_var = try store.freshFromContent(.err);
+
+    const first = try fromVar(allocator, &store, &env, err_var);
+    const second = try fromVar(allocator, &store, &env, err_var);
+    try std.testing.expectEqual(first, second);
+}
+
 test "concrete keys default open literal flex vars per kind (numeral -> Dec, quote -> Str)" {
     const allocator = std.testing.allocator;
 
-    var idents = try Ident.Store.initCapacity(allocator, 8);
-    defer idents.deinit(allocator);
-    _ = try idents.insert(allocator, Ident.for_text("Builtin"));
-    _ = try idents.insert(allocator, Ident.for_text("Builtin.Num.Dec"));
-    _ = try idents.insert(allocator, Ident.for_text("Builtin.Str"));
-    const from_numeral_ident = try idents.insert(allocator, Ident.for_text("from_numeral"));
-    const from_quote_ident = try idents.insert(allocator, Ident.for_text("from_quote"));
+    var env = try ModuleEnv.init(allocator, "");
+    defer env.deinit();
+    _ = try env.insertIdent(Ident.for_text("Builtin"));
+    _ = try env.insertIdent(Ident.for_text("Builtin.Num.Dec"));
+    _ = try env.insertIdent(Ident.for_text("Builtin.Str"));
+    const from_numeral_ident = try env.insertIdent(Ident.for_text("from_numeral"));
+    const from_quote_ident = try env.insertIdent(Ident.for_text("from_quote"));
 
     var store = try TypeStore.initCapacity(allocator, 16, 8);
     defer store.deinit();
@@ -670,7 +754,7 @@ test "concrete keys default open literal flex vars per kind (numeral -> Dec, quo
     const numeral_constraints = try store.appendStaticDispatchConstraints(&.{.{
         .fn_name = from_numeral_ident,
         .fn_var = numeral_fn_var,
-        .origin = .{ .from_literal = .{ .numeral = types.NumeralInfo.fromI128(1, false, false, base.Region.zero()) } },
+        .origin = .{ .from_literal = .{ .numeral = types.NumeralInfo.testOnlyInt(1, false, base.Region.zero()) } },
     }});
     const numeral_var = try store.freshFromContent(.{
         .flex = types.Flex.init().withConstraints(numeral_constraints),
@@ -686,23 +770,23 @@ test "concrete keys default open literal flex vars per kind (numeral -> Dec, quo
         .flex = types.Flex.init().withConstraints(quote_constraints),
     });
 
-    const numeral_key = try fromConcreteVar(allocator, &store, &idents, numeral_var);
-    const quote_key = try fromConcreteVar(allocator, &store, &idents, quote_var);
+    const numeral_key = try fromConcreteVar(allocator, &store, &env, numeral_var);
+    const quote_key = try fromConcreteVar(allocator, &store, &env, quote_var);
 
     // The two defaults must key as different nominals (Dec vs Str); before
     // per-kind defaulting, a quote-only flex var keyed identically to Dec.
     try std.testing.expect(!std.meta.eql(numeral_key, quote_key));
 
     // Keying is deterministic per kind.
-    const quote_key_again = try fromConcreteVar(allocator, &store, &idents, quote_var);
+    const quote_key_again = try fromConcreteVar(allocator, &store, &env, quote_var);
     try std.testing.expect(std.meta.eql(quote_key, quote_key_again));
 }
 
 test "source type keys normalize closed empty records to empty record" {
     const allocator = std.testing.allocator;
 
-    var idents = try Ident.Store.initCapacity(allocator, 4);
-    defer idents.deinit(allocator);
+    var env = try ModuleEnv.init(allocator, "");
+    defer env.deinit();
 
     var store = try TypeStore.initCapacity(allocator, 16, 8);
     defer store.deinit();
@@ -714,8 +798,8 @@ test "source type keys normalize closed empty records to empty record" {
         .ext = empty,
     } } });
 
-    const empty_key = try fromVar(allocator, &store, &idents, empty);
-    const closed_key = try fromVar(allocator, &store, &idents, closed_empty);
+    const empty_key = try fromVar(allocator, &store, &env, empty);
+    const closed_key = try fromVar(allocator, &store, &env, closed_empty);
 
     try std.testing.expectEqualSlices(u8, empty_key.bytes[0..], closed_key.bytes[0..]);
 }
@@ -723,8 +807,8 @@ test "source type keys normalize closed empty records to empty record" {
 test "source type keys normalize closed empty tag unions to empty tag union" {
     const allocator = std.testing.allocator;
 
-    var idents = try Ident.Store.initCapacity(allocator, 4);
-    defer idents.deinit(allocator);
+    var env = try ModuleEnv.init(allocator, "");
+    defer env.deinit();
 
     var store = try TypeStore.initCapacity(allocator, 16, 8);
     defer store.deinit();
@@ -736,8 +820,31 @@ test "source type keys normalize closed empty tag unions to empty tag union" {
         .ext = empty,
     } } });
 
-    const empty_key = try fromVar(allocator, &store, &idents, empty);
-    const closed_key = try fromVar(allocator, &store, &idents, closed_empty);
+    const empty_key = try fromVar(allocator, &store, &env, empty);
+    const closed_key = try fromVar(allocator, &store, &env, closed_empty);
 
     try std.testing.expectEqualSlices(u8, empty_key.bytes[0..], closed_key.bytes[0..]);
+}
+
+test "canonical error detection traverses alias arguments" {
+    const allocator = std.testing.allocator;
+
+    var env = try ModuleEnv.init(allocator, "");
+    defer env.deinit();
+    try env.setContentIdentity([_]u8{0xA5} ** 32);
+    const alias_ident = try env.insertIdent(Ident.for_text("Alias"));
+
+    var store = try TypeStore.initCapacity(allocator, 16, 8);
+    defer store.deinit();
+
+    const backing = try store.freshFromContent(.{ .structure = .empty_record });
+    const erroneous_arg = try store.freshFromContent(.err);
+    const alias = try store.freshFromContent(try store.mkAlias(
+        .{ .ident_idx = alias_ident },
+        backing,
+        &.{erroneous_arg},
+        env.selfModuleIdentity(),
+    ));
+
+    try std.testing.expect(try containsError(allocator, &store, &env, alias));
 }

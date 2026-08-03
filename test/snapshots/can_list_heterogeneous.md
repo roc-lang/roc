@@ -45,8 +45,7 @@ NO CHANGE
 (e-list
 	(elems
 		(e-num (value "1"))
-		(e-string
-			(e-literal (string "hello")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14"))))
 ~~~
 # TYPES

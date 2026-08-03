@@ -31,7 +31,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "a"))
@@ -44,20 +44,14 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-a = 0->b()
-	.c()
+a = (0 |> b).c()
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(d-let
 		(p-assign (ident "a"))
-		(e-method-call (method "c")
-			(receiver
-				(e-call
-					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-num (value "0"))))
-			(args))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

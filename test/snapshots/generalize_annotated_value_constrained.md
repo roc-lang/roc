@@ -56,7 +56,7 @@ EndOfFile,
 				(ty (name "List"))
 				(ty-var (raw "a")))
 			(where
-				(method (module-of "a") (name "to_str")
+				(method (mod-of "a") (name "to_str")
 					(args
 						(ty-var (raw "a")))
 					(ty (name "Str")))))

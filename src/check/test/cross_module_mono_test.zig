@@ -101,7 +101,6 @@ const MonoTestEnv = struct {
         try can_instance.validateForChecking();
 
         const module_builtin_ctx: Check.BuiltinContext = .{
-            .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
             .bool_stmt = builtin_indices.bool_type,
             .try_stmt = builtin_indices.try_type,
             .str_stmt = builtin_indices.str_type,
@@ -186,6 +185,7 @@ const MonoTestEnv = struct {
             .env = other_env.module_env,
             .statement_idx = statement_idx,
             .qualified_type_ident = other_qualified_ident,
+            .import_identity = .{ .module = other_module_ident },
         });
 
         const parse_ast = try parse.file(gpa, &module_env.common);
@@ -207,7 +207,6 @@ const MonoTestEnv = struct {
         try can_instance.validateForChecking();
 
         const module_builtin_ctx: Check.BuiltinContext = .{
-            .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
             .bool_stmt = builtin_indices.bool_type,
             .try_stmt = builtin_indices.try_type,
             .str_stmt = builtin_indices.str_type,
@@ -303,6 +302,7 @@ const MonoTestEnv = struct {
                 .env = imp.env.module_env,
                 .statement_idx = statement_idx,
                 .qualified_type_ident = other_qualified_ident,
+                .import_identity = .{ .module = other_module_ident },
             });
         }
 
@@ -325,7 +325,6 @@ const MonoTestEnv = struct {
         try can_instance.validateForChecking();
 
         const module_builtin_ctx: Check.BuiltinContext = .{
-            .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
             .bool_stmt = builtin_indices.bool_type,
             .try_stmt = builtin_indices.try_type,
             .str_stmt = builtin_indices.str_type,
@@ -653,7 +652,6 @@ test "type checker catches polymorphic recursion (infinite type)" {
     try can_instance.validateForChecking();
 
     const module_builtin_ctx: Check.BuiltinContext = .{
-        .module_name = try module_env.insertIdent(base.Ident.for_text("Test")),
         .bool_stmt = builtin_indices.bool_type,
         .try_stmt = builtin_indices.try_type,
         .str_stmt = builtin_indices.str_type,

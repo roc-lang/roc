@@ -8,18 +8,24 @@ type=expr
 0b
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - parse_malformed_binary_number.md:1:1:1:3
+UNEXPECTED EXPRESSION SYNTAX - parse_malformed_binary_number.md:1:1:1:3
 # PROBLEMS
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token 0b is not expected in an ───────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  0b                                                                        │
  │  ‾‾                                                                        │
  └────────────────────────────────────── parse_malformed_binary_number.md:1:1 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `0b` here.
 
 # TOKENS
 ~~~zig

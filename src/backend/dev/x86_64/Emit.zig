@@ -230,6 +230,58 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
         }
 
+        /// POPCNT dst, src (population count) — `F3 0F B8 /r`. dst is ModRM.reg.
+        pub fn popcntRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
+            try self.buf.append(self.allocator, 0xF3); // mandatory prefix
+            try self.emitRex(width, dst, src);
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0xB8);
+            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+        }
+
+        /// BSR dst, src (index of highest set bit) — `0F BD /r`. dst is ModRM.reg.
+        ///
+        /// Sets ZF when src is zero and leaves dst architecturally undefined,
+        /// so callers must select the zero result themselves. This is the
+        /// x86-64 baseline's bit scan; LZCNT is the same opcode behind an `F3`
+        /// prefix, which older CPUs ignore, decoding LZCNT as BSR and silently
+        /// answering `63 - n` where LZCNT would answer `n`.
+        pub fn bsrRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
+            try self.emitRex(width, dst, src);
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0xBD);
+            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+        }
+
+        /// BSF dst, src (index of lowest set bit) — `0F BC /r`. dst is ModRM.reg.
+        ///
+        /// Sets ZF when src is zero and leaves dst architecturally undefined.
+        /// See `bsrRegReg` for how this relates to TZCNT.
+        pub fn bsfRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
+            try self.emitRex(width, dst, src);
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0xBC);
+            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+        }
+
+        /// LZCNT dst, src (count leading zeros) — `F3 0F BD /r`. dst is ModRM.reg.
+        pub fn lzcntRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
+            try self.buf.append(self.allocator, 0xF3); // mandatory prefix
+            try self.emitRex(width, dst, src);
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0xBD);
+            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+        }
+
+        /// TZCNT dst, src (count trailing zeros) — `F3 0F BC /r`. dst is ModRM.reg.
+        pub fn tzcntRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
+            try self.buf.append(self.allocator, 0xF3); // mandatory prefix
+            try self.emitRex(width, dst, src);
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0xBC);
+            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+        }
+
         /// MUL r64 - unsigned widening multiply: RDX:RAX = RAX * src
         /// Result: low 64 bits in RAX, high 64 bits in RDX
         pub fn mulReg(self: *Self, width: RegisterWidth, src: GeneralReg) Allocator.Error!void {
@@ -839,6 +891,274 @@ pub fn Emit(comptime target: RocTarget) type {
             }
         }
 
+        pub const VexMap = enum(u5) {
+            map_0f = 1,
+            map_0f38 = 2,
+            map_0f3a = 3,
+        };
+
+        pub const VexPrefix = enum(u2) {
+            none = 0,
+            p66 = 1,
+            pf3 = 2,
+            pf2 = 3,
+        };
+
+        fn emitVex3Prefix(
+            self: *Self,
+            map: VexMap,
+            prefix: VexPrefix,
+            w: bool,
+            dst: FloatReg,
+            src1: ?FloatReg,
+            rm_high: u1,
+        ) Allocator.Error!void {
+            const inv_r: u1 = 1 - dst.rexB();
+            const inv_b: u1 = 1 - rm_high;
+            const byte2: u8 = (@as(u8, inv_r) << 7) |
+                (@as(u8, 1) << 6) | // no index register: inverted X = 1
+                (@as(u8, inv_b) << 5) |
+                @intFromEnum(map);
+            const encoded_vvvv: u4 = if (src1) |reg|
+                @truncate(~@as(u4, @intCast(@intFromEnum(reg))))
+            else
+                0xF;
+            const byte3: u8 = (@as(u8, @intFromBool(w)) << 7) |
+                (@as(u8, encoded_vvvv) << 3) |
+                @intFromEnum(prefix); // L=0: 128-bit operation
+            try self.buf.appendSlice(self.allocator, &.{ 0xC4, byte2, byte3 });
+        }
+
+        /// Emit the legacy (non-VEX) prefixes for a two-operand SSE instruction.
+        fn emitSseLegacyPrefix(
+            self: *Self,
+            map: VexMap,
+            prefix: VexPrefix,
+            dst: FloatReg,
+            rm_high: u1,
+        ) Allocator.Error!void {
+            switch (prefix) {
+                .none => {},
+                .p66 => try self.buf.append(self.allocator, 0x66),
+                .pf3 => try self.buf.append(self.allocator, 0xF3),
+                .pf2 => try self.buf.append(self.allocator, 0xF2),
+            }
+            if (dst.rexB() == 1 or rm_high == 1) {
+                try self.buf.append(self.allocator, rex(0, dst.rexB(), 0, rm_high));
+            }
+            try self.buf.append(self.allocator, 0x0F);
+            switch (map) {
+                .map_0f => {},
+                .map_0f38 => try self.buf.append(self.allocator, 0x38),
+                .map_0f3a => try self.buf.append(self.allocator, 0x3A),
+            }
+        }
+
+        /// Two-register 128-bit SSE instruction in the legacy encoding.
+        ///
+        /// The x86-64 baseline predates VEX, so baseline targets encode the
+        /// same opcodes this way. Legacy SSE is destructive: `dst` is also the
+        /// first source, which is why callers move the left operand into `dst`
+        /// before emitting.
+        pub fn sseRegReg(
+            self: *Self,
+            map: VexMap,
+            prefix: VexPrefix,
+            opcode: u8,
+            dst: FloatReg,
+            src: FloatReg,
+        ) Allocator.Error!void {
+            try self.emitSseLegacyPrefix(map, prefix, dst, src.rexB());
+            try self.buf.append(self.allocator, opcode);
+            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+        }
+
+        /// Two-register 128-bit SSE instruction with an immediate, legacy encoding.
+        pub fn sseRegRegImm8(
+            self: *Self,
+            map: VexMap,
+            prefix: VexPrefix,
+            opcode: u8,
+            dst: FloatReg,
+            src: FloatReg,
+            imm: u8,
+        ) Allocator.Error!void {
+            try self.sseRegReg(map, prefix, opcode, dst, src);
+            try self.buf.append(self.allocator, imm);
+        }
+
+        /// Packed shift by immediate in the legacy encoding. The destination is
+        /// ModR/M.r/m and ModR/M.reg carries the opcode extension.
+        pub fn ssePackedShiftImm8(
+            self: *Self,
+            opcode: u8,
+            extension: u3,
+            dst: FloatReg,
+            imm: u8,
+        ) Allocator.Error!void {
+            try self.buf.append(self.allocator, 0x66);
+            if (dst.rexB() == 1) {
+                try self.buf.append(self.allocator, rex(0, 0, 0, 1));
+            }
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, opcode);
+            try self.buf.append(self.allocator, modRM(0b11, extension, dst.enc()));
+            try self.buf.append(self.allocator, imm);
+        }
+
+        /// Generic three-register 128-bit VEX instruction.
+        pub fn vexRegRegReg(
+            self: *Self,
+            map: VexMap,
+            prefix: VexPrefix,
+            w: bool,
+            opcode: u8,
+            dst: FloatReg,
+            src1: FloatReg,
+            src2: FloatReg,
+        ) Allocator.Error!void {
+            try self.emitVex3Prefix(map, prefix, w, dst, src1, src2.rexB());
+            try self.buf.append(self.allocator, opcode);
+            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src2.enc()));
+        }
+
+        /// Generic three-register 128-bit VEX instruction with an immediate.
+        pub fn vexRegRegRegImm8(
+            self: *Self,
+            map: VexMap,
+            prefix: VexPrefix,
+            w: bool,
+            opcode: u8,
+            dst: FloatReg,
+            src1: FloatReg,
+            src2: FloatReg,
+            imm: u8,
+        ) Allocator.Error!void {
+            try self.vexRegRegReg(map, prefix, w, opcode, dst, src1, src2);
+            try self.buf.append(self.allocator, imm);
+        }
+
+        /// Generic unary 128-bit VEX instruction (VEX.vvvv is reserved).
+        pub fn vexRegReg(
+            self: *Self,
+            map: VexMap,
+            prefix: VexPrefix,
+            w: bool,
+            opcode: u8,
+            dst: FloatReg,
+            src: FloatReg,
+        ) Allocator.Error!void {
+            try self.emitVex3Prefix(map, prefix, w, dst, null, src.rexB());
+            try self.buf.append(self.allocator, opcode);
+            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+        }
+
+        pub fn vexRegRegImm8(
+            self: *Self,
+            map: VexMap,
+            prefix: VexPrefix,
+            w: bool,
+            opcode: u8,
+            dst: FloatReg,
+            src: FloatReg,
+            imm: u8,
+        ) Allocator.Error!void {
+            try self.vexRegReg(map, prefix, w, opcode, dst, src);
+            try self.buf.append(self.allocator, imm);
+        }
+
+        /// VEX packed shift by immediate. These encodings place the
+        /// destination in VEX.vvvv and the source in ModR/M.r/m; ModR/M.reg
+        /// selects the shift operation.
+        pub fn vexPackedShiftImm8(
+            self: *Self,
+            opcode: u8,
+            digit: u3,
+            dst: FloatReg,
+            src: FloatReg,
+            imm: u8,
+        ) Allocator.Error!void {
+            const inv_b: u1 = 1 - src.rexB();
+            const byte2: u8 = 0xC0 | (@as(u8, inv_b) << 5) | @intFromEnum(VexMap.map_0f);
+            const encoded_vvvv: u4 = @truncate(~@as(u4, @intCast(@intFromEnum(dst))));
+            const byte3: u8 = (@as(u8, encoded_vvvv) << 3) | @intFromEnum(VexPrefix.p66);
+            try self.buf.appendSlice(self.allocator, &.{
+                0xC4,
+                byte2,
+                byte3,
+                opcode,
+                modRM(0b11, digit, src.enc()),
+                imm,
+            });
+        }
+
+        pub fn movVectorFromGeneral(self: *Self, dst: FloatReg, src: GeneralReg, qword: bool) Allocator.Error!void {
+            try self.buf.append(self.allocator, 0x66);
+            const w: u1 = @intFromBool(qword);
+            const r: u1 = dst.rexB();
+            const b: u1 = src.rexB();
+            if (w != 0 or r != 0 or b != 0) try self.buf.append(self.allocator, rex(w, r, 0, b));
+            try self.buf.appendSlice(self.allocator, &.{ 0x0F, 0x6E, modRM(0b11, dst.enc(), src.enc()) });
+        }
+
+        pub fn movGeneralFromVector(self: *Self, dst: GeneralReg, src: FloatReg, qword: bool) Allocator.Error!void {
+            try self.buf.append(self.allocator, 0x66);
+            const w: u1 = @intFromBool(qword);
+            const r: u1 = src.rexB();
+            const b: u1 = dst.rexB();
+            if (w != 0 or r != 0 or b != 0) try self.buf.append(self.allocator, rex(w, r, 0, b));
+            try self.buf.appendSlice(self.allocator, &.{ 0x0F, 0x7E, modRM(0b11, src.enc(), dst.enc()) });
+        }
+
+        pub fn insertQword(self: *Self, dst: FloatReg, src: GeneralReg, index: u1) Allocator.Error!void {
+            try self.buf.append(self.allocator, 0x66);
+            try self.buf.append(self.allocator, rex(1, dst.rexB(), 0, src.rexB()));
+            try self.buf.appendSlice(self.allocator, &.{
+                0x0F,
+                0x3A,
+                0x22,
+                modRM(0b11, dst.enc(), src.enc()),
+                index,
+            });
+        }
+
+        pub fn extractQword(self: *Self, dst: GeneralReg, src: FloatReg, index: u1) Allocator.Error!void {
+            try self.buf.append(self.allocator, 0x66);
+            try self.buf.append(self.allocator, rex(1, src.rexB(), 0, dst.rexB()));
+            try self.buf.appendSlice(self.allocator, &.{
+                0x0F,
+                0x3A,
+                0x16,
+                modRM(0b11, src.enc(), dst.enc()),
+                index,
+            });
+        }
+
+        pub fn packedMoveMask(self: *Self, dst: GeneralReg, src: FloatReg, lane_bits: u7) Allocator.Error!void {
+            if (lane_bits <= 16 or lane_bits == 64) try self.buf.append(self.allocator, 0x66);
+            const r: u1 = dst.rexB();
+            const b: u1 = src.rexB();
+            if (r != 0 or b != 0) try self.buf.append(self.allocator, rex(0, r, 0, b));
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, if (lane_bits <= 16) 0xD7 else 0x50);
+            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+        }
+
+        pub fn pext(self: *Self, dst: GeneralReg, value: GeneralReg, mask: GeneralReg) Allocator.Error!void {
+            const inv_r: u1 = 1 - dst.rexR();
+            const inv_b: u1 = 1 - mask.rexB();
+            const byte2: u8 = (@as(u8, inv_r) << 7) | 0x40 | (@as(u8, inv_b) << 5) | 2;
+            const encoded_vvvv: u4 = @truncate(~@as(u4, @intCast(@intFromEnum(value))));
+            const byte3: u8 = 0x80 | (@as(u8, encoded_vvvv) << 3) | 2;
+            try self.buf.appendSlice(self.allocator, &.{
+                0xC4,
+                byte2,
+                byte3,
+                0xF5,
+                modRM(0b11, dst.enc(), mask.enc()),
+            });
+        }
+
         /// MOVSD xmm, xmm (move scalar double)
         pub fn movsdRegReg(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
             try self.buf.append(self.allocator, 0xF2); // REPNE prefix for MOVSD
@@ -854,6 +1174,15 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emitFloatRex(dst, src);
             try self.buf.append(self.allocator, 0x0F);
             try self.buf.append(self.allocator, 0x10);
+            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+        }
+
+        /// MOVDQA xmm, xmm (move an entire 128-bit register)
+        pub fn movdqaRegReg(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
+            try self.buf.append(self.allocator, 0x66);
+            try self.emitFloatRex(dst, src);
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0x6F);
             try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
         }
 
@@ -888,6 +1217,27 @@ pub fn Emit(comptime target: RocTarget) type {
             }
             try self.buf.append(self.allocator, 0x0F);
             try self.buf.append(self.allocator, 0x10);
+
+            const base_enc = base.enc();
+            if (base_enc == 4) {
+                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), 0b100));
+                try self.buf.append(self.allocator, 0x24);
+            } else {
+                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), base_enc));
+            }
+            try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
+        }
+
+        /// MOVDQU xmm, [base + disp32] (load 128-bit unaligned from memory)
+        pub fn movdquRegMem(self: *Self, dst: FloatReg, base: GeneralReg, disp: i32) Allocator.Error!void {
+            try self.buf.append(self.allocator, 0xF3);
+            const r: u1 = dst.rexB();
+            const b: u1 = base.rexB();
+            if (r == 1 or b == 1) {
+                try self.buf.append(self.allocator, rex(0, r, 0, b));
+            }
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0x6F); // MOVDQU xmm, m128
 
             const base_enc = base.enc();
             if (base_enc == 4) {
@@ -1494,6 +1844,59 @@ test "movsd xmm, xmm - all combinations" {
     }
 }
 
+test "movdqu load and store unaligned 128-bit values" {
+    var emit = LinuxEmit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    try emit.movdquRegMem(.XMM0, .RBP, -16);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xF3, 0x0F, 0x6F, 0x85, 0xF0, 0xFF, 0xFF, 0xFF }, emit.buf.items);
+
+    emit.buf.clearRetainingCapacity();
+    try emit.movdquMemReg(.RBP, -16, .XMM0);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xF3, 0x0F, 0x7F, 0x85, 0xF0, 0xFF, 0xFF, 0xFF }, emit.buf.items);
+}
+
+test "packed integer VEX encodings" {
+    var emit = LinuxEmit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // vpaddb xmm3, xmm12, xmm7. The generic emitter deliberately uses the
+    // always-valid three-byte VEX form, including when a two-byte form exists.
+    try emit.vexRegRegReg(.map_0f, .p66, false, 0xFC, .XMM3, .XMM12, .XMM7);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xC4, 0xE1, 0x19, 0xFC, 0xDF }, emit.buf.items);
+
+    emit.buf.clearRetainingCapacity();
+    // vpshufb xmm9, xmm2, xmm15
+    try emit.vexRegRegReg(.map_0f38, .p66, false, 0x00, .XMM9, .XMM2, .XMM15);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xC4, 0x42, 0x69, 0x00, 0xCF }, emit.buf.items);
+
+    emit.buf.clearRetainingCapacity();
+    // vpclmulqdq xmm10, xmm11, xmm13, 0x11
+    try emit.vexRegRegRegImm8(.map_0f3a, .p66, false, 0x44, .XMM10, .XMM11, .XMM13, 0x11);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xC4, 0x43, 0x21, 0x44, 0xD5, 0x11 }, emit.buf.items);
+}
+
+test "packed integer scalar bridges and masks" {
+    var emit = LinuxEmit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    try emit.movVectorFromGeneral(.XMM9, .R10, true);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x66, 0x4D, 0x0F, 0x6E, 0xCA }, emit.buf.items);
+
+    emit.buf.clearRetainingCapacity();
+    try emit.movGeneralFromVector(.R10, .XMM9, true);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x66, 0x4D, 0x0F, 0x7E, 0xCA }, emit.buf.items);
+
+    emit.buf.clearRetainingCapacity();
+    // PMOVMSKB's mandatory 0x66 prefix is part of the integer encoding.
+    try emit.packedMoveMask(.R10, .XMM14, 16);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x66, 0x45, 0x0F, 0xD7, 0xD6 }, emit.buf.items);
+
+    emit.buf.clearRetainingCapacity();
+    try emit.pext(.R9, .R10, .R11);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xC4, 0x42, 0xAA, 0xF5, 0xCB }, emit.buf.items);
+}
+
 test "addsd xmm, xmm - all combinations" {
     var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
@@ -1882,50 +2285,6 @@ test "callRel32 encoding" {
 }
 
 // Multi-target calling convention tests
-
-test "CC constants differ between Windows and System V" {
-    // Windows uses 4 param regs, System V uses 6
-    try std.testing.expectEqual(@as(usize, 4), WinEmit.CC.PARAM_REGS.len);
-    try std.testing.expectEqual(@as(usize, 6), LinuxEmit.CC.PARAM_REGS.len);
-    try std.testing.expectEqual(@as(usize, 6), MacEmit.CC.PARAM_REGS.len);
-
-    // Windows has 32-byte shadow space, System V has none
-    try std.testing.expectEqual(@as(u8, 32), WinEmit.CC.SHADOW_SPACE);
-    try std.testing.expectEqual(@as(u8, 0), LinuxEmit.CC.SHADOW_SPACE);
-    try std.testing.expectEqual(@as(u8, 0), MacEmit.CC.SHADOW_SPACE);
-
-    // Windows first param is RCX, System V is RDI
-    try std.testing.expectEqual(Registers.GeneralReg.RCX, WinEmit.CC.PARAM_REGS[0]);
-    try std.testing.expectEqual(Registers.GeneralReg.RDI, LinuxEmit.CC.PARAM_REGS[0]);
-    try std.testing.expectEqual(Registers.GeneralReg.RDI, MacEmit.CC.PARAM_REGS[0]);
-
-    // Windows uses 4 float param regs, System V uses 8
-    try std.testing.expectEqual(@as(usize, 4), WinEmit.CC.FLOAT_PARAM_REGS.len);
-    try std.testing.expectEqual(@as(usize, 8), LinuxEmit.CC.FLOAT_PARAM_REGS.len);
-    try std.testing.expectEqual(@as(usize, 8), MacEmit.CC.FLOAT_PARAM_REGS.len);
-
-    // Windows returns in RAX only, System V can use RAX+RDX
-    try std.testing.expectEqual(@as(usize, 1), WinEmit.CC.RETURN_REGS.len);
-    try std.testing.expectEqual(@as(usize, 2), LinuxEmit.CC.RETURN_REGS.len);
-    try std.testing.expectEqual(@as(usize, 2), MacEmit.CC.RETURN_REGS.len);
-}
-
-test "CC.canPassStructByValue differs between Windows and System V" {
-    // Windows: only power-of-2 sizes (1, 2, 4, 8)
-    try std.testing.expect(WinEmit.CC.canPassStructByValue(1));
-    try std.testing.expect(WinEmit.CC.canPassStructByValue(2));
-    try std.testing.expect(WinEmit.CC.canPassStructByValue(4));
-    try std.testing.expect(WinEmit.CC.canPassStructByValue(8));
-    try std.testing.expect(!WinEmit.CC.canPassStructByValue(3));
-    try std.testing.expect(!WinEmit.CC.canPassStructByValue(9));
-    try std.testing.expect(!WinEmit.CC.canPassStructByValue(16));
-
-    // System V: any size up to 16
-    try std.testing.expect(LinuxEmit.CC.canPassStructByValue(1));
-    try std.testing.expect(LinuxEmit.CC.canPassStructByValue(9));
-    try std.testing.expect(LinuxEmit.CC.canPassStructByValue(16));
-    try std.testing.expect(!LinuxEmit.CC.canPassStructByValue(17));
-}
 
 test "CC.passI128ByPointer differs between Windows and System V" {
     // Windows requires i128 pass-by-pointer

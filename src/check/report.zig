@@ -47,6 +47,7 @@ const TypePair = problem_mod.TypePair;
 const DispatcherNotNominal = problem_mod.DispatcherNotNominal;
 const DispatcherDoesNotImplMethod = problem_mod.DispatcherDoesNotImplMethod;
 const TypeDoesNotSupportEquality = problem_mod.TypeDoesNotSupportEquality;
+const TypeDoesNotSupportMap = problem_mod.TypeDoesNotSupportMap;
 const UnresolvedDispatcher = problem_mod.UnresolvedDispatcher;
 const RecursiveDispatch = problem_mod.RecursiveDispatch;
 
@@ -63,6 +64,8 @@ const ComptimeCondition = problem_mod.ComptimeCondition;
 const TypeApplyArityMismatch = problem_mod.TypeApplyArityMismatch;
 const RecursiveAlias = problem_mod.RecursiveAlias;
 const UnsupportedAliasWhereClause = problem_mod.UnsupportedAliasWhereClause;
+const WhereClauseReceiverNotIntroduced = problem_mod.WhereClauseReceiverNotIntroduced;
+const InvalidNominalDeclRecursion = problem_mod.InvalidNominalDeclRecursion;
 
 // Nominal type errors
 const CannotAccessOpaqueNominal = problem_mod.CannotAccessOpaqueNominal;
@@ -78,6 +81,7 @@ const AnnotationOnlyValue = problem_mod.AnnotationOnlyValue;
 const PolymorphicVarAnnotation = problem_mod.PolymorphicVarAnnotation;
 const EffectfulTopLevel = problem_mod.EffectfulTopLevel;
 const EffectfulExpect = problem_mod.EffectfulExpect;
+const EffectfulFunctionName = problem_mod.EffectfulFunctionName;
 
 // Comptime errors
 const ComptimeCrash = problem_mod.ComptimeCrash;
@@ -89,6 +93,7 @@ const ComptimeEvalError = problem_mod.ComptimeEvalError;
 // Number errors
 const InvalidNumericLiteral = problem_mod.InvalidNumericLiteral;
 const TupleAccessNeedsAnnotation = problem_mod.TupleAccessNeedsAnnotation;
+const InvalidTupleAccess = problem_mod.InvalidTupleAccess;
 const LiteralDefaulted = problem_mod.LiteralDefaulted;
 
 // Generic errors
@@ -219,6 +224,18 @@ pub const ReportBuilder = struct {
         );
     }
 
+    /// Add source code warning highlighting for a region.
+    fn addSourceWarningRegion(self: *Self, report: *Report, region: Region) Allocator.Error!void {
+        const region_info = self.module_env.calcRegionInfo(region);
+        try report.document.addSourceRegion(
+            region_info,
+            .warning_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+    }
+
     fn addPlatformRequirementSourceHighlight(self: *Self, report: *Report, region: Region) Allocator.Error!void {
         const source = self.platform_requirement_source orelse return;
         const region_info = source.env.calcRegionInfo(region);
@@ -272,6 +289,7 @@ pub const ReportBuilder = struct {
 
     const ProblemRegion = union(enum) {
         simple: Region.Idx,
+        direct: Region,
         focused: struct { outer: Region.Idx, highlight: Region.Idx },
     };
 
@@ -511,6 +529,9 @@ pub const ReportBuilder = struct {
             .simple => |region_idx| {
                 try self.addSourceHighlight(&report, region_idx);
             },
+            .direct => |direct_region| {
+                try self.addSourceHighlightRegion(&report, direct_region);
+            },
             .focused => |ctx| {
                 try self.addFocusedSourceHighlight(&report, ctx.outer, ctx.highlight);
             },
@@ -581,6 +602,7 @@ pub const ReportBuilder = struct {
         // Add the region to highlight
         switch (region) {
             .simple => |region_idx| try self.addSourceHighlight(&report, region_idx),
+            .direct => |direct_region| try self.addSourceHighlightRegion(&report, direct_region),
             .focused => |ctx| try self.addFocusedSourceHighlight(&report, ctx.outer, ctx.highlight),
         }
         try report.document.addLineBreak();
@@ -618,6 +640,9 @@ pub const ReportBuilder = struct {
         switch (region) {
             .simple => |region_idx| {
                 try self.addSourceHighlight(&report, region_idx);
+            },
+            .direct => |direct_region| {
+                try self.addSourceHighlightRegion(&report, direct_region);
             },
             .focused => |ctx| {
                 try self.addFocusedSourceHighlight(&report, ctx.outer, ctx.highlight);
@@ -794,6 +819,7 @@ pub const ReportBuilder = struct {
                     .match_alt_binder => |ctx| self.buildMatchAltBinderReport(mismatch.types, ctx),
                     .match_branch => |ctx| self.buildMatchBranchReport(mismatch.types, ctx),
                     .list_entry => |ctx| self.buildListEntryReport(mismatch.types, ctx),
+                    .interpolation_part => |region| self.buildGenericMismatchAtRegion(mismatch.types, .{ .direct = region }),
                     .fn_call_arity => |ctx| self.buildIncompatibleFnCallArity(mismatch.types, ctx),
                     .fn_call_arg => |ctx| self.buildIncompatibleFnCallArg(mismatch.types, ctx),
                     .binop_lhs => |ctx| self.buildBinopReport(mismatch.types, ctx, .lhs),
@@ -857,6 +883,7 @@ pub const ReportBuilder = struct {
                     .dispatcher_not_nominal => |data| return self.buildStaticDispatchDispatcherNotNominal(data),
                     .dispatcher_does_not_impl_method => |data| return self.buildStaticDispatchDispatcherDoesNotImplMethod(data),
                     .type_does_not_support_equality => |data| return self.buildTypeDoesNotSupportEquality(data),
+                    .type_does_not_support_map => |data| return self.buildTypeDoesNotSupportMap(data),
                     .unresolved_dispatcher => |data| return self.buildStaticDispatchUnresolvedDispatcher(data),
                     .recursive_dispatch => |data| return self.buildStaticDispatchRecursiveDispatch(data),
                 }
@@ -866,6 +893,12 @@ pub const ReportBuilder = struct {
             },
             .unsupported_alias_where_clause => |data| {
                 return self.buildUnsupportedAliasWhereClauseReport(data);
+            },
+            .where_clause_receiver_not_introduced => |data| {
+                return self.buildWhereClauseReceiverNotIntroducedReport(data);
+            },
+            .invalid_nominal_decl_recursion => |data| {
+                return self.buildInvalidNominalDeclRecursionReport(data);
             },
             .infinite_recursion => |data| {
                 return self.buildInfiniteTypeReport(data);
@@ -884,6 +917,9 @@ pub const ReportBuilder = struct {
             },
             .effectful_expect => |data| {
                 return self.buildEffectfulExpectReport(data);
+            },
+            .effectful_function_name => |data| {
+                return self.buildEffectfulFunctionNameReport(data);
             },
             .annotation_only_value => |data| {
                 return self.buildAnnotationOnlyValueReport(data);
@@ -910,6 +946,7 @@ pub const ReportBuilder = struct {
             .comptime_eval_error => |data| return self.buildComptimeEvalErrorReport(data),
             .invalid_numeric_literal => |data| return self.buildInvalidNumericLiteralReport(data),
             .tuple_access_needs_annotation => |data| return self.buildTupleAccessNeedsAnnotationReport(data),
+            .invalid_tuple_access => |data| return self.buildInvalidTupleAccessReport(data),
             .literal_defaulted => |data| return self.buildLiteralDefaultedReport(data),
             .non_exhaustive_match => |data| return self.buildNonExhaustiveMatchReport(data),
             .non_exhaustive_destructure => |data| return self.buildNonExhaustiveDestructureReport(data),
@@ -924,8 +961,12 @@ pub const ReportBuilder = struct {
     // type mismatch //
 
     fn buildGenericMismatch(self: *Self, types: TypePair) Allocator.Error!Report {
+        return self.buildGenericMismatchAtRegion(types, .{ .simple = regionIdxFrom(types.actual_var) });
+    }
+
+    fn buildGenericMismatchAtRegion(self: *Self, types: TypePair, region: ProblemRegion) Allocator.Error!Report {
         return try self.makeMismatchReport(
-            ProblemRegion{ .simple = regionIdxFrom(types.actual_var) },
+            region,
             &.{D.bytes("This expression is used in an unexpected way.")},
             &.{D.bytes("It has the type:")},
             types.actual_snapshot,
@@ -1626,11 +1667,17 @@ pub const ReportBuilder = struct {
         const actual_tag = self.snapshots.tags.get(actual_content.structure.tag_union.tags.start);
         const actual_tag_str = try report.addOwnedString(snapshot.Store.getFormattedTagString(actual_tag));
 
-        // Create expected tag str
+        // The context describes the constructor syntax the user wrote, not the
+        // shape of the nominal's declared backing. In particular, tag syntax
+        // can mismatch a value-, record-, tuple-, or empty-tag-backed nominal.
         const expected_content = self.snapshots.getContentUnwrapAlias(types.expected_snapshot);
-        std.debug.assert(expected_content == .structure);
-        std.debug.assert(expected_content.structure == .tag_union);
-        const expected_num_tags_str = expected_content.structure.tag_union.tags.len();
+        const expected_tag_union = switch (expected_content) {
+            .structure => |structure| switch (structure) {
+                .tag_union => |tag_union| tag_union,
+                else => null,
+            },
+            else => null,
+        };
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(types.actual_var)))) |region| {
             const region_info = self.module_env.calcRegionInfo(region.*);
@@ -1652,16 +1699,20 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
-        // Show the expected tags
-        if (expected_num_tags_str == 1) {
-            const expected_tag = self.snapshots.tags.get(expected_content.structure.tag_union.tags.start);
-            const expected_tag_str = try report.addOwnedString(snapshot.Store.getFormattedTagString(expected_tag));
+        // Show the expected tags when the nominal wraps a non-empty tag union.
+        // Otherwise, explain the backing shape mismatch directly.
+        if (expected_tag_union) |tag_union| {
+            if (tag_union.tags.len() == 1) {
+                const expected_tag = self.snapshots.tags.get(tag_union.tags.start);
+                const expected_tag_str = try report.addOwnedString(snapshot.Store.getFormattedTagString(expected_tag));
 
-            try report.document.addText("But the nominal type needs it to be:");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            try report.document.addCodeBlock(expected_tag_str);
-        } else {
+                try report.document.addText("But the nominal type needs it to be:");
+                try report.document.addLineBreak();
+                try report.document.addLineBreak();
+                try report.document.addCodeBlock(expected_tag_str);
+                return report;
+            }
+
             const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
 
             try report.document.addText("But the nominal type needs it to one of:");
@@ -1671,7 +1722,7 @@ pub const ReportBuilder = struct {
 
             // Check if there's a tag with the same name in the list of possible tags
 
-            var iter = expected_content.structure.tag_union.tags.iterIndices();
+            var iter = tag_union.tags.iterIndices();
             while (iter.next()) |tag_index| {
                 const cur_expected_tag = self.snapshots.tags.get(tag_index);
 
@@ -1688,7 +1739,15 @@ pub const ReportBuilder = struct {
                     break;
                 }
             }
+
+            return report;
         }
+
+        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+        try report.document.addText("But the nominal type wraps:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(expected_type);
 
         return report;
     }
@@ -1993,6 +2052,40 @@ pub const ReportBuilder = struct {
             D.bytes("This syntax was used for abilities, which have been removed from Roc. Use method constraints like"),
             D.bytes("where [a.methodName(args) -> ret]").withAnnotation(.inline_code),
             D.bytes("instead."),
+        }, self, &report);
+
+        return report;
+    }
+
+    /// Build a report for a where constraint whose receiver is not owned by this annotation.
+    fn buildWhereClauseReceiverNotIntroducedReport(
+        self: *Self,
+        data: WhereClauseReceiverNotIntroduced,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Unbound Where Receiver", "", .runtime_error);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
+            D.bytes("The type variable"),
+            D.ident(data.type_var_name).withAnnotation(.inline_code),
+            D.bytes("is not introduced by this annotation's type or a connected method constraint, so this where clause cannot add the"),
+            D.ident(data.method_name).withAnnotation(.symbol),
+            D.bytes("method to it."),
+        }, self, &report, &report.headline);
+
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("A where clause receiver must be introduced by the annotation's type, or by the method type of a receiver that is already connected to the annotation. Connect"),
+            D.ident(data.type_var_name).withAnnotation(.inline_code),
+            D.bytes("to the annotation, or remove this constraint."),
         }, self, &report);
 
         return report;
@@ -2476,6 +2569,41 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    fn buildInvalidTupleAccessReport(
+        self: *Self,
+        data: InvalidTupleAccess,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Invalid Tuple Access", "", .runtime_error);
+        errdefer report.deinit();
+
+        const message = switch (data.reason) {
+            .not_tuple => try std.fmt.allocPrint(
+                self.gpa,
+                "This value is not a tuple, so it has no .{d} element.",
+                .{data.elem_index},
+            ),
+            .index_out_of_bounds => |tuple_length| try std.fmt.allocPrint(
+                self.gpa,
+                "This tuple has {d} elements, so it has no .{d} element.",
+                .{ tuple_length, data.elem_index },
+            ),
+        };
+        defer self.gpa.free(message);
+        const owned_message = try report.addOwnedString(message);
+        try D.renderSliceInto(&.{D.bytes(owned_message)}, self, &report, &report.headline);
+
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+
+        return report;
+    }
+
     /// Build a warning report for a literal (number or string) defaulted at a
     /// generalization boundary (the `-Wtype-defaults` analogue): nothing reachable
     /// from the definition's type constrains the literal, so the checker committed
@@ -2574,6 +2702,47 @@ pub const ReportBuilder = struct {
                 else => {},
             }
         }
+
+        return report;
+    }
+
+    fn buildTypeDoesNotSupportMap(
+        self: *Self,
+        data: TypeDoesNotSupportMap,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Type Does Not Support Map", "This type does not have an unambiguous direct tag payload for compiler-derived mapping.", .runtime_error);
+        errdefer report.deinit();
+
+        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.fn_var)))) |region| {
+            const region_info = self.module_env.calcRegionInfo(region.*);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                self.filename,
+                self.source,
+                self.module_env.getLineStarts(),
+            );
+            try report.document.addLineBreak();
+        }
+
+        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
+        try D.renderSlice(&.{D.bytes("The type is:")}, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(snapshot_str);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("The compiler can derive"),
+            D.ident(data.method_name).withAnnotation(.inline_code),
+            D.bytes("when exactly one direct tag payload is non-zero-sized and every other direct payload is zero-sized."),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("If every payload is zero-sized, one tag must have exactly one payload and every other tag must have no payloads. Opaque payload types always count as non-zero-sized, and nested values are not searched for a different payload to transform."),
+        }, self, &report);
 
         return report;
     }
@@ -3331,6 +3500,65 @@ pub const ReportBuilder = struct {
     }
 
     /// Build a report for infinite type recursion (e.g., `func = |a| func([a])` creates `a = List(a)`)
+    /// Build a report for a nominal type declaration whose backing recursion
+    /// is invalid (structurally infinite, or anonymous recursion that never
+    /// passes back through a nominal declaration).
+    fn buildInvalidNominalDeclRecursionReport(self: *Self, data: InvalidNominalDeclRecursion) Allocator.Error!Report {
+        // Look up display name in import mapping (handles auto-imported builtin types)
+        const type_name_ident = if (self.import_mapping.get(data.type_name)) |display_ident|
+            display_ident
+        else
+            data.type_name;
+
+        var report = try Report.init(self.gpa, "Invalid Recursive Type", "", .runtime_error);
+        errdefer report.deinit();
+
+        switch (data.kind) {
+            .infinite => try D.renderSliceInto(&.{
+                D.bytes("The nominal type"),
+                D.ident(type_name_ident).withAnnotation(.type_variable),
+                D.bytes("refers to itself in a way that would make it infinite."),
+            }, self, &report, &report.headline),
+            .anonymous => try D.renderSliceInto(&.{
+                D.bytes("The nominal type"),
+                D.ident(type_name_ident).withAnnotation(.type_variable),
+                D.bytes("contains recursion that never passes back through a nominal type."),
+            }, self, &report, &report.headline),
+        }
+
+        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.decl_var)))) |region| {
+            const region_info = self.module_env.calcRegionInfo(region.*);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                self.filename,
+                self.source,
+                self.module_env.getLineStarts(),
+            );
+            try report.document.addLineBreak();
+        }
+
+        try D.renderSlice(&.{
+            D.bytes("Its definition is:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        const actual_type_str = try report.addOwnedString(self.getFormattedString(data.snapshot));
+        try report.document.addCodeBlock(actual_type_str);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("Hint:").withAnnotation(.emphasized),
+            D.bytes("Recursion in a nominal type is only allowed inside a tag union payload or record field — for example"),
+            D.bytes("ConsList(a) := [Nil, Cons(a, ConsList(a))]").withAnnotation(.inline_code),
+            D.bytes(".").withNoPrecedingSpace(),
+        }, self, &report);
+
+        return report;
+    }
+
     fn buildInfiniteTypeReport(self: *Self, data: VarWithSnapshot) Allocator.Error!Report {
         var report = try Report.init(self.gpa, "Infinite Type", "I am inferring a weird self-referential type.", .runtime_error);
         errdefer report.deinit();
@@ -3502,6 +3730,14 @@ pub const ReportBuilder = struct {
                 D.bytes(",").withNoPrecedingSpace(),
                 D.bytes("but no exposed module declares a hosted function with that name."),
             }, self, &report, &report.headline),
+            .function_has_implementation => try D.renderSliceInto(&.{
+                D.bytes("The platform header's"),
+                D.bytes("hosted").withAnnotation(.inline_code),
+                D.bytes("section has an entry for"),
+                D.bytes(name).withAnnotation(.inline_code),
+                D.bytes(",").withNoPrecedingSpace(),
+                D.bytes("but that function has an implementation. Hosted functions must have a type annotation without a Roc implementation."),
+            }, self, &report, &report.headline),
             .duplicate_function => try D.renderSliceInto(&.{
                 D.bytes("The platform header's"),
                 D.bytes("hosted").withAnnotation(.inline_code),
@@ -3640,8 +3876,24 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    fn buildEffectfulFunctionNameReport(self: *Self, data: EffectfulFunctionName) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Effectful Function Name", "This function performs an effect, so its name must end in `!`.", .warning);
+        errdefer report.deinit();
+
+        try self.addSourceWarningRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Add a trailing"),
+            D.bytes("!").withAnnotation(.inline_code),
+            D.bytes("to this function name."),
+        }, self, &report);
+        return report;
+    }
+
     fn buildAnnotationOnlyValueReport(self: *Self, data: AnnotationOnlyValue) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Declaration Has No Value", "This declaration has a type annotation but no implementation.", .runtime_error);
+        var report = try Report.init(self.gpa, "Declaration Has No Value", "This declaration has a type annotation but no implementation.", .warning);
         errdefer report.deinit();
 
         try self.addSourceHighlightRegion(&report, data.region);
@@ -4144,6 +4396,8 @@ pub const ReportBuilder = struct {
         if (method_ident.eql(idents.is_gt)) return ">";
         if (method_ident.eql(idents.is_gte)) return ">=";
         if (method_ident.eql(idents.not)) return "not";
+        if (method_ident.eql(idents.range_exclusive)) return "..<";
+        if (method_ident.eql(idents.range_inclusive)) return "..=";
         return null;
     }
 };

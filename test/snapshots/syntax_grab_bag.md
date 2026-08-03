@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-# This is a module comment!
+# This is a mod comment!
 app [main!] { pf: platform "../basic-cli/platform.roc" }
 
 import pf.Stdout exposing [line!, write!]
@@ -214,9 +214,9 @@ expect {
 }
 ~~~
 # EXPECTED
-NOT IMPLEMENTED - syntax_grab_bag.md:6:1:12:4
-MODULE NOT FOUND - syntax_grab_bag.md:16:1:16:27
-MODULE NOT FOUND - syntax_grab_bag.md:17:1:20:20
+EXPECTED RECORD ACCESSOR - syntax_grab_bag.md:154:2:154:5
+MOD NOT FOUND - syntax_grab_bag.md:16:1:16:27
+MOD NOT FOUND - syntax_grab_bag.md:17:1:20:20
 UNDECLARED TYPE - syntax_grab_bag.md:36:8:36:11
 UNDECLARED TYPE - syntax_grab_bag.md:36:13:36:16
 UNDECLARED TYPE - syntax_grab_bag.md:39:2:39:5
@@ -244,6 +244,7 @@ UNUSED VARIABLE - syntax_grab_bag.md:82:2:82:3
 NAME NOT IN SCOPE - syntax_grab_bag.md:141:2:141:6
 UNDECLARED TYPE - syntax_grab_bag.md:143:14:143:20
 NAME NOT IN SCOPE - syntax_grab_bag.md:147:9:147:13
+UNRECOGNIZED SYNTAX - syntax_grab_bag.md:154:2:154:5
 NAME NOT IN SCOPE - syntax_grab_bag.md:158:2:158:11
 NAME NOT IN SCOPE - syntax_grab_bag.md:175:3:175:15
 NAME NOT IN SCOPE - syntax_grab_bag.md:178:63:178:69
@@ -267,7 +268,6 @@ TYPE MISMATCH - syntax_grab_bag.md:70:5:70:8
 MISSING METHOD - syntax_grab_bag.md:99:3:99:8
 MISSING METHOD - syntax_grab_bag.md:101:3:101:8
 TYPE MISMATCH - syntax_grab_bag.md:84:2:84:2
-TYPE MISMATCH - syntax_grab_bag.md:150:3:150:6
 TOO FEW ARGS - syntax_grab_bag.md:155:2:157:3
 TYPE MISMATCH - syntax_grab_bag.md:167:3:167:3
 DECLARATION HAS NO VALUE - syntax_grab_bag.md:201:1:201:25
@@ -275,26 +275,27 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:40
 MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 # PROBLEMS
 
-┌─────────────────┐
-│ NOT IMPLEMENTED ├─ This feature is not yet implemented: malformed import ───┐
-└┬────────────────┘  module name contains invalid control characters.         │
+┌──────────────────────────┐
+│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
+└┬─────────────────────────┘  expected a field name or tuple index.           │
  │                                                                            │
- │  import # Comment after import keyword                                     │
- │      pf # Comment after qualifier                                          │
- │          .StdoutMultiline # Comment after ident                            │
- │          exposing [ # Comment after exposing open                          │
- │              line!, # Comment after exposed item                           │
- │              write!, # Another after exposed item                          │
- │          ] # Comment after exposing close                                  │
- │                                                                            │
- └──────────────────────────────────────────────────── syntax_grab_bag.md:6:1 ┘
+ │  ...                                                                       │
+ │  ‾‾‾                                                                       │
+ └────────────────────────────────────────────────── syntax_grab_bag.md:154:2 ┘
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you
-    want to help improve Roc's error messages!
+    Record access uses a lowercase field name like `.name`. Tuple access uses a
+    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+    valid accessors.
+
+    For example:
+        person.name
+        pair.0
+
+    I found `...` here.
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The module `BadName` was not found in this Roc ─────────┐
+│ MOD NOT FOUND ├─ The mod `BadName` was not found in this Roc ─────────┐
 └┬─────────────────┘  project.                                                │
  │                                                                            │
  │  import BadName as GoodName                                                │
@@ -304,7 +305,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The module `BadNameMultiline` was not found in this ────┐
+│ MOD NOT FOUND ├─ The mod `BadNameMultiline` was not found in this ────┐
 └┬─────────────────┘  Roc project.                                            │
  │                                                                            │
  │  import                                                                    │
@@ -443,7 +444,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
 └┬────────────────┘                                                           │
  │                                                                            │
- │  # This is a module comment!                                               │
+ │  # This is a mod comment!                                                  │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── syntax_grab_bag.md:1:1 ┘
 
@@ -467,7 +468,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
 └┬────────────────┘                                                           │
  │                                                                            │
- │  # This is a module comment!                                               │
+ │  # This is a mod comment!                                                  │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── syntax_grab_bag.md:1:1 ┘
 
@@ -491,7 +492,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
 └┬────────────────┘                                                           │
  │                                                                            │
- │  # This is a module comment!                                               │
+ │  # This is a mod comment!                                                  │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── syntax_grab_bag.md:1:1 ┘
 
@@ -613,6 +614,17 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
  └────────────────────────────────────────────────── syntax_grab_bag.md:147:9 ┘
 
     Is it misspelled, or is there an import missing?
+
+
+┌─────────────────────┐
+│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
+└┬────────────────────┘                                                       │
+ │                                                                            │
+ │  ...                                                                       │
+ │  ‾‾‾                                                                       │
+ └────────────────────────────────────────────────── syntax_grab_bag.md:154:2 ┘
+
+    This might be a syntax error, an unsupported language feature, or a typo.
 
 
 ┌───────────────────┐
@@ -948,26 +960,6 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
     These can never match! Either the pattern or expression has a problem.
 
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This `return` does not match the function's return type. ──┐
-└┬──────────────┘                                                             │
- │                                                                            │
- │  tag # Comment after return statement                                      │
- │  ‾‾‾                                                                       │
- └────────────────────────────────────────────────── syntax_grab_bag.md:150:3 ┘
-
-    It has the type:
-
-        [Blue, ..]
-
-    But the function's return type is:
-
-        Try({}, _d)
-
-    Hint: All `return` statements and the final expression in a function must
-    have the same type.
-
-
 ┌──────────────┐
 │ TOO FEW ARGS ├─ The `match_time` function expects 2 arguments, but it got ──┐
 └┬─────────────┘  1 instead.                                                  │
@@ -1013,7 +1005,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
  └────────────────────────────────────────────────── syntax_grab_bag.md:201:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -1591,8 +1583,7 @@ EndOfFile,
 							(p-ident (raw "tag"))
 							(e-tag (raw "Blue")))
 						(s-return
-							(e-ident (raw "tag")))
-						(e-ellipsis)
+							(e-malformed (reason "expr_dot_suffix_not_allowed")))
 						(e-apply
 							(e-ident (raw "match_time"))
 							(e-ellipsis))
@@ -1775,7 +1766,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-# This is a module comment!
+# This is a mod comment!
 app [main!] { pf: platform "../basic-cli/platform.roc" }
 
 import pf.Stdout exposing [line!, write!]
@@ -1895,7 +1886,7 @@ match_time = |
 		3.14 | 6.28 => 314
 		(1, 2, 3) => 123
 		(1, 2 | 5, 3) => 123
-		{ foo: 1, bar: 2, ..rest } => 12->add(34)
+		{ foo: 1, bar: 2, ..rest } => 12 |> add(34)
 		{ # After pattern record open
 			foo # After pattern record field name
 				: # Before pattern record field value
@@ -1923,12 +1914,11 @@ main! = |_| { # Yeah I can leave a comment here
 	var number = 123
 	expect blah == 1
 	tag = Blue
-	return # Comment after return keyword
-		tag # Comment after return statement
+	return # Comment after return statement
 
 	# Just a random comment!
 
-	...
+		
 	match_time(
 		..., # Single args with comment
 	)
@@ -2011,12 +2001,10 @@ expect {
 				(e-if
 					(if-branches
 						(if-branch
-							(e-lookup-local
-								(p-assign (ident "num")))
+							(e-runtime-error (tag "erroneous_value_use"))
 							(e-block
 								(s-dbg
-									(e-call
-										(e-runtime-error (tag "ident_not_in_scope"))))
+									(e-runtime-error (tag "erroneous_value_expr")))
 								(e-num (value "0")))))
 					(if-else
 						(e-block
@@ -2030,216 +2018,7 @@ expect {
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "match_time"))
-		(e-lambda
-			(args
-				(p-assign (ident "a"))
-				(p-assign (ident "b")))
-			(e-match
-				(match
-					(cond
-						(e-lookup-local
-							(p-assign (ident "a"))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag))
-								(pattern (degenerate false)
-									(p-applied-tag))
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-block
-									(s-let
-										(p-assign (ident "x"))
-										(e-num (value "12")))
-									(e-lookup-local
-										(p-assign (ident "x"))))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag))
-								(pattern (degenerate false)
-									(p-applied-tag))
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-block
-									(s-let
-										(p-assign (ident "x"))
-										(e-num (value "12")))
-									(e-lookup-local
-										(p-assign (ident "x"))))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-assign (ident "lower"))))
-							(value
-								(e-num (value "1"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-str (text "foo"))))
-							(value
-								(e-num (value "100"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-str (text "foo")))
-								(pattern (degenerate false)
-									(p-str (text "bar"))))
-							(value
-								(e-num (value "200"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-list
-										(patterns
-											(p-num (value "1"))
-											(p-num (value "2"))
-											(p-num (value "3")))
-										(rest-at (index 3)
-											(p-assign (ident "rest"))))))
-							(value
-								(e-num (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-list
-										(patterns
-											(p-num (value "1"))
-											(p-runtime-error (tag "not_implemented"))
-											(p-num (value "3")))
-										(rest-at (index 3)
-											(p-assign (ident "rest"))))))
-							(value
-								(e-num (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-list
-										(patterns
-											(p-num (value "1"))
-											(p-runtime-error (tag "not_implemented"))
-											(p-num (value "3")))
-										(rest-at (index 3)
-											(p-assign (ident "rest"))))))
-							(value
-								(e-num (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-small-dec)))
-							(value
-								(e-num (value "314"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-small-dec))
-								(pattern (degenerate false)
-									(p-small-dec)))
-							(value
-								(e-num (value "314"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-tuple
-										(patterns
-											(p-num (value "1"))
-											(p-num (value "2"))
-											(p-num (value "3"))))))
-							(value
-								(e-num (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-tuple
-										(patterns
-											(p-num (value "1"))
-											(p-runtime-error (tag "not_implemented"))
-											(p-num (value "3"))))))
-							(value
-								(e-num (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-record-destructure
-										(destructs
-											(record-destruct (label "foo") (ident "foo")
-												(sub-pattern
-													(p-num (value "1"))))
-											(record-destruct (label "bar") (ident "bar")
-												(sub-pattern
-													(p-num (value "2"))))
-											(record-destruct (label "rest") (ident "rest")
-												(rest-pattern
-													(p-assign (ident "rest"))))))))
-							(value
-								(e-call
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-num (value "12"))
-									(e-num (value "34")))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-record-destructure
-										(destructs
-											(record-destruct (label "foo") (ident "foo")
-												(sub-pattern
-													(p-num (value "1"))))
-											(record-destruct (label "bar") (ident "bar")
-												(sub-pattern
-													(p-num (value "2"))))
-											(record-destruct (label "rest") (ident "rest")
-												(rest-pattern
-													(p-assign (ident "rest"))))))))
-							(value
-								(e-num (value "12"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-record-destructure
-										(destructs
-											(record-destruct (label "foo") (ident "foo")
-												(sub-pattern
-													(p-num (value "1"))))
-											(record-destruct (label "bar") (ident "bar")
-												(sub-pattern
-													(p-runtime-error (tag "not_implemented"))))))))
-							(value
-								(e-num (value "12"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-record-destructure
-										(destructs
-											(record-destruct (label "foo") (ident "foo")
-												(sub-pattern
-													(p-num (value "1"))))
-											(record-destruct (label "bar") (ident "bar")
-												(sub-pattern
-													(p-runtime-error (tag "not_implemented"))))))))
-							(value
-								(e-num (value "12"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-num (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-lookup-local
-									(p-assign (ident "dude")))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-num (value "1000")))))))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda
@@ -2263,27 +2042,17 @@ expect {
 					(p-assign (ident "tag"))
 					(e-tag (name "Blue")))
 				(s-return
-					(e-lookup-local
-						(p-assign (ident "tag"))))
+					(e-runtime-error (tag "expr_not_canonicalized")))
 				(s-expr
-					(e-not-implemented))
+					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-expr
-					(e-call (constraint-fn-var 4267)
-						(e-lookup-local
-							(p-assign (ident "match_time")))
-						(e-not-implemented)))
-				(s-expr
-					(e-call
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-dbg
-							(e-num (value "42")))))
+					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-crash (msg "Unreachable!"))
 				(s-let
 					(p-assign (ident "tag_with_payload"))
 					(e-tag (name "Ok")
 						(args
-							(e-lookup-local
-								(p-assign (ident "number"))))))
+							(e-runtime-error (tag "erroneous_value_use")))))
 				(s-let
 					(p-assign (ident "interpolated"))
 					(e-block
@@ -2291,7 +2060,7 @@ expect {
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 4358)
+						(e-interpolation (constraint-fn-var 1520) (dispatcher-var 373)
 							(first
 								(e-literal (string "Hello, ")))
 							(parts
@@ -2300,147 +2069,40 @@ expect {
 								(e-literal (string ""))))))
 				(s-let
 					(p-assign (ident "list"))
-					(e-list
-						(elems
-							(e-call
-								(e-lookup-local
-									(p-assign (ident "add_one")))
-								(e-dbg
-									(e-lookup-local
-										(p-assign (ident "number")))))
-							(e-num (value "456"))
-							(e-num (value "789")))))
+					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-for
 					(p-assign (ident "n"))
-					(e-lookup-local
-						(p-assign (ident "list")))
+					(e-runtime-error (tag "erroneous_value_use"))
 					(e-block
 						(s-expr
-							(e-call
-								(e-runtime-error (tag "ident_not_in_scope"))
-								(e-block
-									(s-let
-										(p-assign (ident "#interp_1"))
-										(e-lookup-local
-											(p-assign (ident "n"))))
-									(s-let
-										(p-assign (ident "#interp_2"))
-										(e-lookup-local
-											(p-assign (ident "number"))))
-									(e-interpolation
-										(first
-											(e-literal (string "Adding ")))
-										(parts
-											(e-lookup-local
-												(p-assign (ident "#interp_1")))
-											(e-literal (string " to "))
-											(e-lookup-local
-												(p-assign (ident "#interp_2")))
-											(e-literal (string "")))))))
+							(e-runtime-error (tag "erroneous_value_expr")))
 						(s-reassign
 							(p-assign (ident "number"))
-							(e-dispatch-call (method "plus") (constraint-fn-var 4616)
+							(e-dispatch-call (method "plus") (constraint-fn-var 1602)
 								(receiver
-									(e-lookup-local
-										(p-assign (ident "number"))))
+									(e-runtime-error (tag "erroneous_value_use")))
 								(args
-									(e-lookup-local
-										(p-assign (ident "n"))))))
+									(e-runtime-error (tag "erroneous_value_use")))))
 						(e-empty_record)))
 				(s-let
 					(p-assign (ident "record"))
-					(e-record
-						(fields
-							(field (name "foo")
-								(e-num (value "123")))
-							(field (name "bar")
-								(e-string
-									(e-literal (string "Hello"))))
-							(field (name "baz")
-								(e-lookup-local
-									(p-assign (ident "tag"))))
-							(field (name "qux")
-								(e-tag (name "Ok")
-									(args
-										(e-lookup-local
-											(p-assign (ident "world"))))))
-							(field (name "punned")
-								(e-runtime-error (tag "ident_not_in_scope"))))))
+					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-let
 					(p-assign (ident "tuple"))
-					(e-tuple
-						(elems
-							(e-num (value "123"))
-							(e-string
-								(e-literal (string "World")))
-							(e-lookup-local
-								(p-assign (ident "tag")))
-							(e-tag (name "Ok")
-								(args
-									(e-lookup-local
-										(p-assign (ident "world")))))
-							(e-tuple
-								(elems
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-runtime-error (tag "self_referential_definition"))))
-							(e-list
-								(elems
-									(e-num (value "1"))
-									(e-num (value "2"))
-									(e-num (value "3")))))))
+					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-let
 					(p-assign (ident "multiline_tuple"))
-					(e-tuple
-						(elems
-							(e-num (value "123"))
-							(e-string
-								(e-literal (string "World")))
-							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-tag (name "Ok")
-								(args
-									(e-lookup-local
-										(p-assign (ident "world")))))
-							(e-tuple
-								(elems
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-lookup-local
-										(p-assign (ident "tuple")))))
-							(e-list
-								(elems
-									(e-num (value "1"))
-									(e-num (value "2"))
-									(e-num (value "3")))))))
+					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-let
 					(p-assign (ident "bin_op_result"))
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 5094)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 1738)
 									(receiver
-										(e-match
-											(match
-												(cond
-													(e-tag (name "Err")
-														(args
-															(e-runtime-error (tag "ident_not_in_scope")))))
-												(branches
-													(branch
-														(patterns
-															(pattern (degenerate false)
-																(p-nominal-external (builtin)
-																	(p-applied-tag))))
-														(value
-															(e-lookup-local
-																(p-assign (ident "#ok")))))
-													(branch
-														(patterns
-															(pattern (degenerate false)
-																(p-nominal-external (builtin)
-																	(p-applied-tag))))
-														(value
-															(e-num (value "12"))))))))
+										(e-runtime-error (tag "erroneous_value_expr")))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 5089)
+										(e-dispatch-call (method "times") (constraint-fn-var 1735)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -2455,18 +2117,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 5211)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 1771)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 5173)
+															(e-dispatch-call (method "plus") (constraint-fn-var 1761)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 5320)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 1798)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 5282)
+															(e-dispatch-call (method "minus") (constraint-fn-var 1788)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2481,11 +2143,11 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 5439)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 1835)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 5434)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 1832)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -2500,40 +2162,14 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 5505)
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 1893)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 5472)
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 1864)
 																			(receiver
-																				(e-match
-																					(match
-																						(cond
-																							(e-call
-																								(e-runtime-error (tag "ident_not_in_scope"))
-																								(e-runtime-error (tag "ident_not_in_scope"))))
-																						(branches
-																							(branch
-																								(patterns
-																									(pattern (degenerate false)
-																										(p-nominal-external (builtin)
-																											(p-applied-tag))))
-																								(value
-																									(e-runtime-error (tag "erroneous_value_expr"))))
-																							(branch
-																								(patterns
-																									(pattern (degenerate false)
-																										(p-nominal-external (builtin)
-																											(p-applied-tag))))
-																								(value
-																									(e-return
-																										(e-nominal-external
-																											(builtin)
-																											(e-tag (name "Err")
-																												(args
-																													(e-lookup-local
-																														(p-assign (ident "#err")))))))))))))
+																				(e-runtime-error (tag "erroneous_value_expr")))
 																			(args)))
 																	(branches
 																		(branch
@@ -2602,51 +2238,8 @@ expect {
 														(e-lookup-local
 															(p-assign (ident "#err")))))))))))))
 				(s-expr
-					(e-match
-						(match
-							(cond
-								(e-call
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-lookup-local
-										(p-assign (ident "interpolated")))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-nominal-external (builtin)
-												(p-applied-tag))))
-									(value
-										(e-lookup-local
-											(p-assign (ident "#ok")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-nominal-external (builtin)
-												(p-applied-tag))))
-									(value
-										(e-return
-											(e-nominal-external
-												(builtin)
-												(e-tag (name "Err")
-													(args
-														(e-lookup-local
-															(p-assign (ident "#err")))))))))))))
-				(e-call
-					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-block
-						(s-let
-							(p-assign (ident "#interp_3"))
-							(e-call
-								(e-runtime-error (tag "qualified_ident_does_not_exist"))
-								(e-lookup-local
-									(p-assign (ident "number")))))
-						(e-interpolation
-							(first
-								(e-literal (string "How about ")))
-							(parts
-								(e-lookup-local
-									(p-assign (ident "#interp_3")))
-								(e-literal (string " as a string?"))))))))
+					(e-runtime-error (tag "erroneous_value_expr")))
+				(e-runtime-error (tag "erroneous_value_expr"))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
@@ -2664,22 +2257,22 @@ expect {
 		(e-anno-only)
 		(annotation
 			(ty-malformed)))
-	(s-import (module "pf.Stdout")
+	(s-import (mod "pf.Stdout")
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "write!") (wildcard false))))
-	(s-import (module "#malformed_import_0")
+	(s-import (mod "pf.StdoutMultiline")
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "write!") (wildcard false))))
-	(s-import (module "pkg.Something")
+	(s-import (mod "pkg.Something")
 		(exposes
 			(exposed (name "func") (alias "function") (wildcard false))
 			(exposed (name "Type") (alias "ValueCategory") (wildcard false))
 			(exposed (name "Custom") (wildcard true))))
-	(s-import (module "BadName")
+	(s-import (mod "BadName")
 		(exposes))
-	(s-import (module "BadNameMultiline")
+	(s-import (mod "BadNameMultiline")
 		(exposes))
 	(s-alias-decl
 		(ty-header (name "Map")
@@ -2799,7 +2392,7 @@ expect {
 (inferred-types
 	(defs
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "Error -> U64"))
+		(patt (type "U64 -> U64"))
 		(patt (type "[Blue, Green, Red, ..], _arg -> Error"))
 		(patt (type "List(Error) -> Try({}, _d)"))
 		(patt (type "{}"))
@@ -2815,19 +2408,19 @@ expect {
 				(ty-args
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "b")))))
-		(alias (type "Foo")
+		(alias (type "Error")
 			(ty-header (name "Foo")))
-		(alias (type "FooMultiline")
+		(alias (type "Error")
 			(ty-header (name "FooMultiline")))
-		(alias (type "Some(a)")
+		(alias (type "Error")
 			(ty-header (name "Some")
 				(ty-args
 					(ty-rigid-var (name "a")))))
-		(alias (type "SomeMl(a)")
+		(alias (type "Error")
 			(ty-header (name "SomeMl")
 				(ty-args
 					(ty-rigid-var (name "a")))))
-		(alias (type "SomeMultiline(a)")
+		(alias (type "Error")
 			(ty-header (name "SomeMultiline")
 				(ty-args
 					(ty-rigid-var (name "a")))))
@@ -2845,7 +2438,7 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "Error -> U64"))
+		(expr (type "U64 -> U64"))
 		(expr (type "[Blue, Green, Red, ..], _arg -> Error"))
 		(expr (type "List(Error) -> Try({}, _d)"))
 		(expr (type "{}"))

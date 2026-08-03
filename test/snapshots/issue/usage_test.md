@@ -67,7 +67,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "UnusedType")
@@ -92,7 +92,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "value"))
-		(e-num (value "42"))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "UsedType") (local))))
 	(s-nominal-decl

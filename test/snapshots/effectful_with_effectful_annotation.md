@@ -97,22 +97,19 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "msg")))
-			(e-call
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-lookup-local
-					(p-assign (ident "msg")))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful true)
 				(ty-lookup (name "Str") (builtin))
 				(ty-record))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-call (constraint-fn-var 55)
+		(e-call (constraint-fn-var 231)
 			(e-lookup-local
 				(p-assign (ident "print_msg!")))
 			(e-string
 				(e-literal (string "Hello, world!")))))
-	(s-import (module "pf.Stdout")
+	(s-import (mod "pf.Stdout")
 		(exposes)))
 ~~~
 # TYPES

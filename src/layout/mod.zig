@@ -22,6 +22,7 @@ pub const LayoutData = @import("layout.zig").LayoutData;
 pub const Idx = @import("layout.zig").Idx;
 pub const Scalar = @import("layout.zig").Scalar;
 pub const ScalarTag = @import("layout.zig").ScalarTag;
+pub const Vector = @import("layout.zig").Vector;
 pub const ScalarData = @import("layout.zig").ScalarData;
 pub const Closure = @import("layout.zig").Closure;
 // Unified struct types (records and tuples are both structs at the layout level)
@@ -62,8 +63,9 @@ pub const ScalarInfo = @import("layout.zig").ScalarInfo;
 // Per-target C-ABI parameter/return classification.
 pub const abi = @import("abi/mod.zig");
 
-// Record field ordering, shared by the layout store and `roc glue` so the two
-// can never disagree on how a record lays out in memory.
+// Record field ordering used by the layout store when committing record
+// layouts. `roc glue` consumes the committed order rather than reordering
+// fields itself, so both describe the same memory layout.
 pub const field_order = @import("field_order.zig");
 
 // Re-export store functionality

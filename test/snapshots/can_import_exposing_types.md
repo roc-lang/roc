@@ -38,7 +38,7 @@ ServerConfig : {
     defaultResponse : Response,
 }
 
-# Test exposed types with module-qualified usage
+# Test exposed types with mod-qualified usage
 createClient : Config -> Http.Client
 createClient = |config| Http.clientWith(config)
 
@@ -54,7 +54,7 @@ handleResponse = |response|
 combineTrys : Try(Value, Error), Status -> Try(Response, Error)
 combineTrys = |jsonTry, httpStatus|
     match jsonTry {
-        Ok(value) => Ok({ body: Json.encode(value), status: httpStatus })
+        Ok(value) => Ok({ body: Json.to_str(value), status: httpStatus })
         Err(error) => Err(error)
     }
 ~~~
@@ -78,7 +78,7 @@ UNDECLARED TYPE - can_import_exposing_types.md:29:18:29:24
 UNDECLARED TYPE - can_import_exposing_types.md:30:18:30:24
 UNDECLARED TYPE - can_import_exposing_types.md:31:23:31:31
 UNDECLARED TYPE - can_import_exposing_types.md:35:16:35:22
-MODULE NOT FOUND - can_import_exposing_types.md:35:30:35:37
+MOD NOT FOUND - can_import_exposing_types.md:35:30:35:37
 NAME NOT IN SCOPE - can_import_exposing_types.md:36:25:36:40
 UNDECLARED TYPE - can_import_exposing_types.md:39:18:39:26
 NAME NOT IN SCOPE - can_import_exposing_types.md:42:23:42:42
@@ -293,7 +293,7 @@ NAME NOT IN SCOPE - can_import_exposing_types.md:50:33:50:44
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `Client` type is declared to be in ────────────────┐
+│ MOD NOT FOUND ├─ This `Client` type is declared to be in ────────────────┐
 └┬─────────────────┘  `http.Client`, which does not exist.                    │
  │                                                                            │
  │  createClient : Config -> Http.Client                                      │
@@ -395,10 +395,10 @@ NAME NOT IN SCOPE - can_import_exposing_types.md:50:33:50:44
 
 
 ┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `encode` in this scope. ──────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `to_str` in this scope. ──────────────┐
 └┬──────────────────┘                                                         │
  │                                                                            │
- │  Ok(value) => Ok({ body: Json.encode(value), status: httpStatus })         │
+ │  Ok(value) => Ok({ body: Json.to_str(value), status: httpStatus })         │
  │                          ‾‾‾‾‾‾‾‾‾‾‾                                       │
  └──────────────────────────────────────── can_import_exposing_types.md:50:33 ┘
 
@@ -449,7 +449,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "json.Json")
 			(exposing
@@ -616,7 +616,7 @@ EndOfFile,
 								(e-record
 									(field (field "body")
 										(e-apply
-											(e-ident (raw "Json.encode"))
+											(e-ident (raw "Json.to_str"))
 											(e-ident (raw "value"))))
 									(field (field "status")
 										(e-ident (raw "httpStatus"))))))
@@ -662,7 +662,7 @@ ServerConfig : {
 	defaultResponse : Response,
 }
 
-# Test exposed types with module-qualified usage
+# Test exposed types with mod-qualified usage
 createClient : Config -> Http.Client
 createClient = |config| Http.clientWith(config)
 
@@ -678,7 +678,7 @@ handleResponse = |response|
 combineTrys : Try(Value, Error), Status -> Try(Response, Error)
 combineTrys = |jsonTry, httpStatus|
 	match jsonTry {
-		Ok(value) => Ok({ body: Json.encode(value), status: httpStatus })
+		Ok(value) => Ok({ body: Json.to_str(value), status: httpStatus })
 		Err(error) => Err(error)
 	}
 ~~~
@@ -690,10 +690,7 @@ combineTrys = |jsonTry, httpStatus|
 		(e-lambda
 			(args
 				(p-assign (ident "input")))
-			(e-call
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-lookup-local
-					(p-assign (ident "input")))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
@@ -705,39 +702,7 @@ combineTrys = |jsonTry, httpStatus|
 		(e-lambda
 			(args
 				(p-assign (ident "req")))
-			(e-block
-				(s-let
-					(p-assign (ident "result"))
-					(e-call
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-field-access (field "body")
-							(receiver
-								(e-lookup-local
-									(p-assign (ident "req")))))))
-				(e-match
-					(match
-						(cond
-							(e-lookup-local
-								(p-assign (ident "result"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-call
-										(e-runtime-error (tag "ident_not_in_scope"))
-										(e-lookup-local
-											(p-assign (ident "value"))))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-call
-										(e-runtime-error (tag "ident_not_in_scope"))
-										(e-lookup-local
-											(p-assign (ident "error")))))))))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
@@ -748,22 +713,7 @@ combineTrys = |jsonTry, httpStatus|
 			(args
 				(p-assign (ident "config"))
 				(p-assign (ident "values")))
-			(e-call
-				(e-runtime-error (tag "nested_value_not_found"))
-				(e-lookup-local
-					(p-assign (ident "values")))
-				(e-closure
-					(captures
-						(capture (ident "config")))
-					(e-lambda
-						(args
-							(p-assign (ident "v")))
-						(e-call
-							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-lookup-local
-								(p-assign (ident "config")))
-							(e-lookup-local
-								(p-assign (ident "v"))))))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
@@ -778,10 +728,7 @@ combineTrys = |jsonTry, httpStatus|
 		(e-lambda
 			(args
 				(p-assign (ident "config")))
-			(e-call
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-lookup-local
-					(p-assign (ident "config")))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
@@ -796,27 +743,20 @@ combineTrys = |jsonTry, httpStatus|
 					(cond
 						(e-field-access (field "status")
 							(receiver
-								(e-lookup-local
-									(p-assign (ident "response"))))))
+								(e-runtime-error (tag "erroneous_value_use")))))
 					(branches
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-call
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-lookup-local
-										(p-assign (ident "status"))))))
+								(e-runtime-error (tag "erroneous_value_expr"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-call
-									(e-runtime-error (tag "qualified_ident_does_not_exist"))
-									(e-lookup-local
-										(p-assign (ident "error"))))))))))
+								(e-runtime-error (tag "erroneous_value_expr"))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
@@ -827,38 +767,7 @@ combineTrys = |jsonTry, httpStatus|
 			(args
 				(p-assign (ident "jsonTry"))
 				(p-assign (ident "httpStatus")))
-			(e-match
-				(match
-					(cond
-						(e-lookup-local
-							(p-assign (ident "jsonTry"))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-tag (name "Ok")
-									(args
-										(e-record
-											(fields
-												(field (name "body")
-													(e-call
-														(e-runtime-error (tag "ident_not_in_scope"))
-														(e-lookup-local
-															(p-assign (ident "value")))))
-												(field (name "status")
-													(e-lookup-local
-														(p-assign (ident "httpStatus"))))))))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-tag (name "Err")
-									(args
-										(e-lookup-local
-											(p-assign (ident "error")))))))))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "Try") (builtin)
@@ -868,17 +777,17 @@ combineTrys = |jsonTry, httpStatus|
 				(ty-apply (name "Try") (builtin)
 					(ty-malformed)
 					(ty-malformed)))))
-	(s-import (module "json.Json")
+	(s-import (mod "json.Json")
 		(exposes
 			(exposed (name "Value") (wildcard false))
 			(exposed (name "Error") (wildcard false))
 			(exposed (name "Config") (wildcard false))))
-	(s-import (module "http.Client")
+	(s-import (mod "http.Client")
 		(exposes
 			(exposed (name "Request") (wildcard false))
 			(exposed (name "Response") (wildcard false))
 			(exposed (name "Status") (wildcard false))))
-	(s-import (module "utils.Try")
+	(s-import (mod "utils.Try")
 		(exposes
 			(exposed (name "Try") (wildcard false))))
 	(s-alias-decl
@@ -902,7 +811,7 @@ combineTrys = |jsonTry, httpStatus|
 		(patt (type "Error -> Str"))
 		(patt (type "Try(Error, Error), Error -> Try(Error, Error)")))
 	(type_decls
-		(alias (type "ServerConfig")
+		(alias (type "Error")
 			(ty-header (name "ServerConfig"))))
 	(expressions
 		(expr (type "Str -> Try(Error, Error)"))

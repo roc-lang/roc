@@ -116,14 +116,14 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "call_default")
 			(ty-fn
 				(ty-record)
 				(ty-var (raw "thing")))
 			(where
-				(method (module-of "thing") (name "default")
+				(method (mod-of "thing") (name "default")
 					(args)
 					(ty-var (raw "thing")))))
 		(s-decl
@@ -145,7 +145,7 @@ EndOfFile,
 				(ty-var (raw "b"))
 				(ty-var (raw "a")))
 			(where
-				(method (module-of "a") (name "from_b")
+				(method (mod-of "a") (name "from_b")
 					(args
 						(ty-var (raw "b")))
 					(ty-var (raw "a")))))
@@ -169,11 +169,11 @@ EndOfFile,
 				(ty-var (raw "val"))
 				(ty-var (raw "val")))
 			(where
-				(method (module-of "val") (name "transform")
+				(method (mod-of "val") (name "transform")
 					(args
 						(ty-var (raw "val")))
 					(ty-var (raw "val")))
-				(method (module-of "val") (name "validate")
+				(method (mod-of "val") (name "validate")
 					(args
 						(ty-var (raw "val")))
 					(ty (name "Bool")))))
@@ -205,11 +205,11 @@ EndOfFile,
 				(ty-var (raw "x"))
 				(ty-var (raw "x")))
 			(where
-				(method (module-of "x") (name "second")
+				(method (mod-of "x") (name "second")
 					(args
 						(ty-var (raw "x")))
 					(ty-var (raw "x")))
-				(method (module-of "x") (name "first")
+				(method (mod-of "x") (name "first")
 					(args)
 					(ty-var (raw "x")))))
 		(s-decl
@@ -238,11 +238,11 @@ EndOfFile,
 					(ty-var (raw "a"))
 					(ty-var (raw "b"))))
 			(where
-				(method (module-of "a") (name "convert")
+				(method (mod-of "a") (name "convert")
 					(args
 						(ty-var (raw "a")))
 					(ty-var (raw "a")))
-				(method (module-of "b") (name "convert")
+				(method (mod-of "b") (name "convert")
 					(args
 						(ty-var (raw "b")))
 					(ty-var (raw "b")))))
@@ -275,7 +275,7 @@ EndOfFile,
 				(ty (name "Str"))
 				(ty-var (raw "t")))
 			(where
-				(method (module-of "t") (name "create")
+				(method (mod-of "t") (name "create")
 					(args
 						(ty (name "Str"))
 						(ty (name "U64")))
@@ -301,7 +301,7 @@ EndOfFile,
 				(ty (name "Str"))
 				(ty-var (raw "thing")))
 			(where
-				(method (module-of "thing") (name "from_str")
+				(method (mod-of "thing") (name "from_str")
 					(args
 						(ty (name "Str")))
 					(ty-var (raw "thing")))))
@@ -392,7 +392,7 @@ from_str = |str| {
 			(e-block
 				(s-type-var-alias (alias "Thing") (type-var "thing")
 					(ty-rigid-var (name "thing")))
-				(e-type-dispatch-call (method "default") (type-dispatch-stmt 10) (constraint-fn-var 159)
+				(e-type-dispatch-call (method "default") (type-dispatch-stmt 10) (constraint-fn-var 396)
 					(args))))
 		(annotation
 			(ty-fn (effectful false)
@@ -411,7 +411,7 @@ from_str = |str| {
 			(e-block
 				(s-type-var-alias (alias "A") (type-var "a")
 					(ty-rigid-var (name "a")))
-				(e-type-dispatch-call (method "from_b") (type-dispatch-stmt 27) (constraint-fn-var 167)
+				(e-type-dispatch-call (method "from_b") (type-dispatch-stmt 27) (constraint-fn-var 404)
 					(args
 						(e-lookup-local
 							(p-assign (ident "second")))))))
@@ -436,12 +436,12 @@ from_str = |str| {
 				(e-if
 					(if-branches
 						(if-branch
-							(e-type-dispatch-call (method "validate") (type-dispatch-stmt 47) (constraint-fn-var 186)
+							(e-type-dispatch-call (method "validate") (type-dispatch-stmt 47) (constraint-fn-var 416)
 								(args
 									(e-lookup-local
 										(p-assign (ident "input")))))
 							(e-block
-								(e-type-dispatch-call (method "transform") (type-dispatch-stmt 47) (constraint-fn-var 191)
+								(e-type-dispatch-call (method "transform") (type-dispatch-stmt 47) (constraint-fn-var 419)
 									(args
 										(e-lookup-local
 											(p-assign (ident "input"))))))))
@@ -472,9 +472,9 @@ from_str = |str| {
 					(ty-rigid-var (name "x")))
 				(s-let
 					(p-assign (ident "initial"))
-					(e-type-dispatch-call (method "first") (type-dispatch-stmt 73) (constraint-fn-var 200)
+					(e-type-dispatch-call (method "first") (type-dispatch-stmt 73) (constraint-fn-var 428)
 						(args)))
-				(e-type-dispatch-call (method "second") (type-dispatch-stmt 73) (constraint-fn-var 202)
+				(e-type-dispatch-call (method "second") (type-dispatch-stmt 73) (constraint-fn-var 430)
 					(args
 						(e-lookup-local
 							(p-assign (ident "initial")))))))
@@ -503,11 +503,11 @@ from_str = |str| {
 					(ty-rigid-var (name "b")))
 				(e-tuple
 					(elems
-						(e-type-dispatch-call (method "convert") (type-dispatch-stmt 100) (constraint-fn-var 213)
+						(e-type-dispatch-call (method "convert") (type-dispatch-stmt 100) (constraint-fn-var 441)
 							(args
 								(e-lookup-local
 									(p-assign (ident "x")))))
-						(e-type-dispatch-call (method "convert") (type-dispatch-stmt 101) (constraint-fn-var 215)
+						(e-type-dispatch-call (method "convert") (type-dispatch-stmt 101) (constraint-fn-var 443)
 							(args
 								(e-lookup-local
 									(p-assign (ident "y")))))))))
@@ -536,7 +536,7 @@ from_str = |str| {
 			(e-block
 				(s-type-var-alias (alias "T") (type-var "t")
 					(ty-rigid-var (name "t")))
-				(e-type-dispatch-call (method "create") (type-dispatch-stmt 123) (constraint-fn-var 275)
+				(e-type-dispatch-call (method "create") (type-dispatch-stmt 123) (constraint-fn-var 462)
 					(args
 						(e-lookup-local
 							(p-assign (ident "name")))
@@ -560,7 +560,7 @@ from_str = |str| {
 			(e-block
 				(s-type-var-alias (alias "Thing") (type-var "thing")
 					(ty-rigid-var (name "thing")))
-				(e-type-dispatch-call (method "from_str") (type-dispatch-stmt 140) (constraint-fn-var 364)
+				(e-type-dispatch-call (method "from_str") (type-dispatch-stmt 140) (constraint-fn-var 473)
 					(args
 						(e-lookup-local
 							(p-assign (ident "str")))))))

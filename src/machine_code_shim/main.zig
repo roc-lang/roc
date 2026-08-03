@@ -26,10 +26,10 @@ pub const std_options = shim_io.std_options_no_stack_tracing;
 
 const Allocator = std.mem.Allocator;
 const RocOps = builtins.host_abi.RocOps;
+const shim_symbols = builtins.shim_symbols;
 const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
 const hot_reload = ipc.hot_reload;
 const RunImage = backend.RunImage;
-const dev_wrappers = builtins.dev_wrappers;
 
 const DevProgram = struct {
     entrypoints: []const RunImage.Entrypoint,
@@ -78,7 +78,7 @@ const LoadDevProgramError = Allocator.Error || RunImage.ImageError || error{
 };
 
 const RuntimeStateError = ipc.CoordinationError || ipc.platform.SharedMemoryError || LoadDevProgramError || error{
-    SysctlFailed,
+    PageSizeQueryFailed,
 };
 
 var runtime_state_initialized: std.atomic.Value(bool) = .init(false);
@@ -183,12 +183,28 @@ const RelocationContext = struct {
             }
         }
 
+        return self.resolveDataSymbol(name);
+    }
+
+    fn resolveDataSymbol(self: *const RelocationContext, name: []const u8) ?usize {
         for (self.view.data_symbols) |symbol| {
             const symbol_name = self.view.dataSymbolName(symbol) catch return null;
             if (std.mem.eql(u8, symbol_name, name)) {
                 return @intFromPtr(self.view.data.ptr) +
                     @as(usize, @intCast(symbol.data_offset)) +
                     @as(usize, @intCast(symbol.symbol_offset));
+            }
+        }
+
+        return null;
+    }
+
+    fn resolveCodeSymbol(self: *const RelocationContext, name: []const u8) ?usize {
+        for (self.view.code_symbols) |symbol| {
+            const symbol_name = self.view.codeSymbolName(symbol) catch return null;
+            if (std.mem.eql(u8, symbol_name, name)) {
+                if (symbol.code_offset >= self.view.code.len) return null;
+                return self.code_base + @as(usize, @intCast(symbol.code_offset));
             }
         }
 
@@ -267,7 +283,6 @@ fn loadDevProgram(
             },
         }
     }
-
     const stub_size = try jumpStubSize();
     if (function_stubs.items.len > view.function_stubs.len / stub_size) {
         return error.InvalidDevRunImage;
@@ -294,6 +309,7 @@ fn loadDevProgram(
         &relocation_context,
         RelocationContext.resolve,
     );
+    try applyDataRelocations(view, &relocation_context);
     try finishDirectImageRelocation(view);
 
     return .{
@@ -322,6 +338,36 @@ fn createDevProgram(
     return program;
 }
 
+fn applyDataRelocations(
+    view: *const RunImage.ProgramView,
+    relocation_context: *const RelocationContext,
+) LoadDevProgramError!void {
+    for (view.data_relocations) |record| {
+        const name = try view.symbolName(record.symbol);
+        const target_addr = switch (try record.targetKind()) {
+            .address => relocation_context.resolveDataSymbol(name),
+            .function_pointer => relocation_context.resolveCodeSymbol(name),
+        } orelse return error.UnresolvedSymbol;
+        const value = try relocatedDataAddress(target_addr, record.addend);
+        if (record.data_offset > std.math.maxInt(usize)) return error.InvalidDevRunImage;
+        const offset: usize = @intCast(record.data_offset);
+        if (offset > view.data.len or @sizeOf(usize) > view.data.len - offset) return error.InvalidDevRunImage;
+        std.mem.writeInt(usize, view.data[offset..][0..@sizeOf(usize)], value, .little);
+    }
+}
+
+fn relocatedDataAddress(base_addr: usize, addend: i64) RunImage.ImageError!usize {
+    if (addend >= 0) {
+        const positive: usize = @intCast(addend);
+        if (positive > std.math.maxInt(usize) - base_addr) return error.InvalidDevRunImage;
+        return base_addr + positive;
+    }
+    if (addend == std.math.minInt(i64)) return error.InvalidDevRunImage;
+    const negative: usize = @intCast(-addend);
+    if (negative > base_addr) return error.InvalidDevRunImage;
+    return base_addr - negative;
+}
+
 fn destroyDevProgram(gpa: Allocator, program: *DevProgram) void {
     program.deinit();
     gpa.destroy(program);
@@ -334,6 +380,10 @@ fn validateDirectImageLayout(view: *const RunImage.ProgramView) RunImage.ImageEr
     if (!rangeContains(view.executable, view.code)) return error.InvalidDevRunImage;
     if (!rangeContains(view.executable, view.function_stubs)) return error.InvalidDevRunImage;
     if (view.data.len > 0 and @intFromPtr(view.data.ptr) % view.page_size != 0) return error.InvalidDevRunImage;
+    for (view.code_symbols) |symbol| {
+        if (symbol.code_offset >= view.code.len) return error.InvalidDevRunImage;
+        _ = try view.codeSymbolName(symbol);
+    }
     _ = try maxDevDataAlignment(view);
 }
 
@@ -394,14 +444,11 @@ fn ensureFunctionStub(gpa: Allocator, stubs: *std.ArrayList(FunctionStub), name:
 }
 
 fn resolveShimFunction(name: []const u8) ?usize {
-    inline for (std.meta.fields(backend.LirCodeGenMod.BuiltinFn)) |field| {
-        const builtin_fn: backend.LirCodeGenMod.BuiltinFn = @enumFromInt(field.value);
-        const symbol_name = comptime builtin_fn.symbolName();
-        if (std.mem.eql(u8, name, symbol_name)) {
-            return @intFromPtr(&@field(dev_wrappers, symbol_name));
-        }
-    }
-    return null;
+    const registry = builtins.builtin_registry;
+    if (!std.mem.startsWith(u8, name, registry.symbol_prefix)) return null;
+    const suffix = name[registry.symbol_prefix.len..];
+    const builtin_fn = std.meta.stringToEnum(registry.BuiltinFn, suffix) orelse return null;
+    return builtin_fn.wrapperAddress();
 }
 
 fn maxDevDataAlignment(view: *const RunImage.ProgramView) RunImage.ImageError!usize {
@@ -422,10 +469,25 @@ fn maxDevDataAlignment(view: *const RunImage.ProgramView) RunImage.ImageError!us
 
 const JumpStubError = RunImage.ImageError || error{UnsupportedPlatform};
 
+/// Bytes emitted for one host jump stub on x86_64 (`movabs r11, imm64; jmp r11`).
+const x86_64_jump_stub_size = 13;
+/// Bytes emitted for one host jump stub on aarch64 (four `movk`/`movz x16`
+/// instructions followed by `br x16`).
+const aarch64_jump_stub_size = 20;
+
+comptime {
+    // `RunImage` reserves `max_jump_stub_size` bytes per stub in the shared image;
+    // the stub this shim emits for every supported host arch must fit within that
+    // reservation. This is the single compile-time link between the emitted sizes
+    // (owned here) and the reservation (owned by `RunImage`).
+    std.debug.assert(x86_64_jump_stub_size <= RunImage.max_jump_stub_size);
+    std.debug.assert(aarch64_jump_stub_size <= RunImage.max_jump_stub_size);
+}
+
 fn jumpStubSize() JumpStubError!usize {
     return switch (builtin.cpu.arch) {
-        .x86_64 => 13,
-        .aarch64, .aarch64_be => 20,
+        .x86_64 => x86_64_jump_stub_size,
+        .aarch64, .aarch64_be => aarch64_jump_stub_size,
         else => error.UnsupportedPlatform,
     };
 }
@@ -433,7 +495,7 @@ fn jumpStubSize() JumpStubError!usize {
 fn writeJumpStub(buf: []u8, target_addr: usize) JumpStubError!void {
     switch (builtin.cpu.arch) {
         .x86_64 => {
-            if (buf.len < 13) return error.InvalidDevRunImage;
+            if (buf.len < x86_64_jump_stub_size) return error.InvalidDevRunImage;
             buf[0] = 0x49; // movabs r11, imm64
             buf[1] = 0xBB;
             std.mem.writeInt(u64, buf[2..][0..8], @intCast(target_addr), .little);
@@ -442,7 +504,7 @@ fn writeJumpStub(buf: []u8, target_addr: usize) JumpStubError!void {
             buf[12] = 0xE3;
         },
         .aarch64, .aarch64_be => {
-            if (buf.len < 20) return error.InvalidDevRunImage;
+            if (buf.len < aarch64_jump_stub_size) return error.InvalidDevRunImage;
             const addr: u64 = @intCast(target_addr);
             std.mem.writeInt(u32, buf[0..][0..4], movzX16(@truncate(addr), 0), .little);
             std.mem.writeInt(u32, buf[4..][0..4], movkX16(@truncate(addr >> 16), 16), .little);
@@ -701,11 +763,17 @@ pub fn roc_hot_reload_retain_current(return_address: usize) ?*anyopaque {
     return roc_hot_reload_enter(return_address);
 }
 
-export fn roc_shim_get_ops() callconv(.c) *anyopaque {
+comptime {
+    @export(&shimGetOps, .{ .name = shim_symbols.roc_shim_get_ops });
+    @export(&shimEntrypoint, .{ .name = shim_symbols.roc_entrypoint });
+    @export(&shimDefaultMain, .{ .name = shim_symbols.roc_shim_default_main });
+}
+
+fn shimGetOps() callconv(.c) *anyopaque {
     return shim_host_abi.getOpsOpaque();
 }
 
-export fn roc_entrypoint(
+fn shimEntrypoint(
     entry_idx: u32,
     ops: *RocOps,
     ret_ptr: ?*anyopaque,
@@ -719,7 +787,7 @@ export fn roc_entrypoint(
     };
 }
 
-export fn roc_shim_default_main(argc: usize, argv: [*][*:0]const u8) callconv(.c) usize {
+fn shimDefaultMain(argc: usize, argv: [*][*:0]const u8) callconv(.c) usize {
     const ops = shim_host_abi.getOps();
     const app_args = if (argc > 1) argv[1..argc] else argv[0..0];
     var cli_args_list = shim_host_abi.buildDefaultRunCliArgs(app_args, allocator()) catch {
@@ -728,12 +796,14 @@ export fn roc_shim_default_main(argc: usize, argv: [*][*:0]const u8) callconv(.c
     };
 
     var result: u8 align(16) = 0;
+    shim_host_abi.resetInlineExpectFailed();
     evaluateEntrypoint(0, ops, &result, &cli_args_list) catch |err| switch (err) {
         error.ImageUnavailable,
         error.InvalidEntrypoint,
         error.OutOfMemory,
         => return 1,
     };
+    if (result == 0 and shim_host_abi.takeInlineExpectFailed()) return 1;
     return result;
 }
 
@@ -761,6 +831,7 @@ test "loaded dev program borrows direct shared image metadata" {
         &entrypoints,
         &.{},
         &.{},
+        &.{},
     );
     const view = try RunImage.viewMappedImage(header, shm.base_ptr, @intCast(header.image_size));
 
@@ -771,4 +842,101 @@ test "loaded dev program borrows direct shared image metadata" {
     try std.testing.expect(program.code.ptr == view.code.ptr);
     try std.testing.expectEqual(@as(u32, 0), program.entrypoints[0].ordinal);
     try std.testing.expectEqual(@as(u64, 0), program.entrypoints[0].code_offset);
+}
+
+test "data relocations patch data pointers" {
+    var data = [_]u8{0} ** (@sizeOf(usize) + 4);
+    const source_name = "roc__source";
+    const target_name = "roc__target";
+    const symbol_names = source_name ++ target_name;
+    const data_symbols = [_]RunImage.DataSymbol{
+        .{
+            .name = .{ .offset = 0, .len = source_name.len },
+            .data_offset = 0,
+            .len = @sizeOf(usize),
+            .symbol_offset = 0,
+            .alignment = @alignOf(usize),
+        },
+        .{
+            .name = .{ .offset = source_name.len, .len = target_name.len },
+            .data_offset = @sizeOf(usize),
+            .len = data.len - @sizeOf(usize),
+            .symbol_offset = 1,
+            .alignment = 1,
+        },
+    };
+    const data_relocations = [_]RunImage.DataRelocationRecord{
+        .{
+            .data_offset = 0,
+            .symbol = .{ .offset = source_name.len, .len = target_name.len },
+            .addend = 2,
+            .target_kind = @intFromEnum(RunImage.StaticDataTargetKind.address),
+        },
+    };
+    const view = RunImage.ProgramView{
+        .executable = &.{},
+        .code = &.{},
+        .function_stubs = &.{},
+        .entrypoints = &.{},
+        .code_symbols = &.{},
+        .relocations = &.{},
+        .data_relocations = &data_relocations,
+        .symbol_names = symbol_names,
+        .data = &data,
+        .data_symbols = &data_symbols,
+        .page_size = 4096,
+    };
+    const relocation_context = RelocationContext{
+        .view = &view,
+        .function_stubs = &.{},
+        .code_base = 0,
+    };
+
+    try applyDataRelocations(&view, &relocation_context);
+
+    const expected = @intFromPtr(data[0..].ptr) + @sizeOf(usize) + 1 + 2;
+    try std.testing.expectEqual(expected, std.mem.readInt(usize, data[0..@sizeOf(usize)], .little));
+}
+
+test "function-pointer data relocations patch generated Roc code pointers" {
+    var code = [_]u8{ 0, 0, 0, 0 };
+    var data = [_]u8{0} ** @sizeOf(usize);
+    const proc_name = "roc__proc_2a";
+    const code_symbols = [_]RunImage.CodeSymbol{
+        .{
+            .name = .{ .offset = 0, .len = proc_name.len },
+            .code_offset = 2,
+        },
+    };
+    const data_relocations = [_]RunImage.DataRelocationRecord{
+        .{
+            .data_offset = 0,
+            .symbol = .{ .offset = 0, .len = proc_name.len },
+            .addend = 0,
+            .target_kind = @intFromEnum(RunImage.StaticDataTargetKind.function_pointer),
+        },
+    };
+    const view = RunImage.ProgramView{
+        .executable = &code,
+        .code = &code,
+        .function_stubs = &.{},
+        .entrypoints = &.{},
+        .code_symbols = &code_symbols,
+        .relocations = &.{},
+        .data_relocations = &data_relocations,
+        .symbol_names = proc_name,
+        .data = &data,
+        .data_symbols = &.{},
+        .page_size = 4096,
+    };
+    const relocation_context = RelocationContext{
+        .view = &view,
+        .function_stubs = &.{},
+        .code_base = @intFromPtr(code[0..].ptr),
+    };
+
+    try applyDataRelocations(&view, &relocation_context);
+
+    const expected = @intFromPtr(code[0..].ptr) + 2;
+    try std.testing.expectEqual(expected, std.mem.readInt(usize, data[0..], .little));
 }

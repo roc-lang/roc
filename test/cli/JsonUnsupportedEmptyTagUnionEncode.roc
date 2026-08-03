@@ -5,5 +5,5 @@ value = {
 	crash "unreachable"
 }
 
-main : Try(Str, [])
-main = Json.encode(value)
+main : Str
+main = Json.to_str(value)

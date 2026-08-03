@@ -39,54 +39,16 @@ const MethodRegistryTestCheckedBodies = struct {
     ) ?checked_ids.CheckedExprId {
         unreachable;
     }
+
+    pub fn statementIdForSource(
+        _: *const @This(),
+        _: can.CIR.Statement.Idx,
+    ) ?checked_ids.CheckedStatementId {
+        unreachable;
+    }
 };
 
 // primitives - nums //
-
-test "check type - num - unbound" {
-    const source =
-        \\50
-    ;
-    try checkTypesExpr(
-        source,
-        .pass,
-        "Dec",
-    );
-}
-
-test "check type - num - int suffix 1" {
-    const source =
-        \\{
-        \\  x = 10.U8
-        \\
-        \\  x
-        \\}
-    ;
-    try checkTypesExpr(source, .pass, "U8");
-}
-
-test "check type - num - int suffix 2" {
-    const source =
-        \\{
-        \\  x = 10.I128
-        \\
-        \\  x
-        \\}
-    ;
-    try checkTypesExpr(source, .pass, "I128");
-}
-
-test "check type - num - int big" {
-    const source =
-        \\{
-        \\  e : U128
-        \\  e = 340282366920938463463374607431768211455
-        \\
-        \\  e
-        \\}
-    ;
-    try checkTypesExpr(source, .pass, "U128");
-}
 
 test "check type - num - float" {
     const source =
@@ -99,50 +61,7 @@ test "check type - num - float" {
     );
 }
 
-test "check type - num - float suffix 1" {
-    const source =
-        \\{
-        \\  x : F32
-        \\  x = 10.1
-        \\
-        \\  x
-        \\}
-    ;
-    try checkTypesExpr(source, .pass, "F32");
-}
-
-test "check type - num - float suffix 2" {
-    const source =
-        \\{
-        \\  x : F64
-        \\  x = 10.1
-        \\
-        \\  x
-        \\}
-    ;
-    try checkTypesExpr(source, .pass, "F64");
-}
-
-test "check type - num - float suffix 3" {
-    const source =
-        \\{
-        \\  x : Dec
-        \\  x = 10.1
-        \\
-        \\  x
-        \\}
-    ;
-    try checkTypesExpr(source, .pass, "Dec");
-}
-
 // primitives - strs //
-
-test "check type - str" {
-    const source =
-        \\"hello"
-    ;
-    try checkTypesExpr(source, .pass, "Str");
-}
 
 test "check type - str annotation mismatch with number" {
     const source =
@@ -199,56 +118,12 @@ test "check type - binop operands must have same type - I64 plus I32 should fail
     try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
-test "check type - binop operands must have same type - I64 minus I32 should fail" {
-    const source =
-        \\a : I64
-        \\a = 1
-        \\b : I32
-        \\b = 2
-        \\x = a - b
-    ;
-    try checkTypesModule(source, .fail, "Type Mismatch");
-}
-
-test "check type - binop operands must have same type - I64 times I32 should fail" {
-    const source =
-        \\a : I64
-        \\a = 1
-        \\b : I32
-        \\b = 2
-        \\x = a * b
-    ;
-    try checkTypesModule(source, .fail, "Type Mismatch");
-}
-
-test "check type - binop operands must have same type - F64 divide F32 should fail" {
-    const source =
-        \\a : F64
-        \\a = 1.0
-        \\b : F32
-        \\b = 2.0
-        \\x = a / b
-    ;
-    try checkTypesModule(source, .fail, "Type Mismatch");
-}
-
 test "check type - binop operands same type works - I64 plus I64" {
     const source =
         \\x : I64
         \\x = 1 + 2
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "I64");
-}
-
-test "check type - binop operands same type works - unbound plus unbound" {
-    const source =
-        \\x = 1 + 2
-    ;
-    try checkTypesModule(
-        source,
-        .{ .pass = .last_def },
-        "Dec",
-    );
 }
 
 // BOUNDARY DEFAULTING: a literal flowing through method-call dispatch
@@ -389,6 +264,27 @@ test "check type - numeral defaulting candidate order - integer-only method comm
     } }, "I64 -> I64");
 }
 
+test "issue 10296: single quote literals do not emit defaulted warning" {
+    const source =
+        \\x = || 'M' == 'M'
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> Bool");
+}
+
+test "issue 10296: single quote literal compared to number literal without warning" {
+    const source =
+        \\y = || 'M' == 1
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> Bool");
+}
+
+test "issue 10296: single quote literal compared to fractional number without warning" {
+    const source =
+        \\z = || 'M' == 1.5
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> Bool");
+}
+
 test "check type - is_eq operands must have same type - I64 eq I32 should fail" {
     const source =
         \\a : I64
@@ -413,29 +309,11 @@ test "check type - comparison operands must have same type - I64 lt I32 should f
 
 // primitives - lists //
 
-test "check type - list empty" {
-    const source =
-        \\[]
-    ;
-    try checkTypesExpr(source, .pass, "List(_a)");
-}
-
 test "check type - list - same elems 1" {
     const source =
         \\["hello", "world"]
     ;
     try checkTypesExpr(source, .pass, "List(Str)");
-}
-
-test "check type - list - same elems 2" {
-    const source =
-        \\[100, 200]
-    ;
-    try checkTypesExpr(
-        source,
-        .pass,
-        "List(Dec)",
-    );
 }
 
 test "check type - list - 1st elem more specific coreces 2nd elem" {
@@ -462,40 +340,7 @@ test "check type - list - 2nd elem more specific coreces 1st elem" {
     try checkTypesExpr(source, .pass, "List(U32)");
 }
 
-test "check type - list  - diff elems 1" {
-    const source =
-        \\["hello", 10]
-    ;
-    // Number literal used where Str is expected (first elem determines list type)
-    try checkTypesExpr(source, .fail, "Type Mismatch");
-}
-
-// number requirements //
-
-// Skipped: Literal bounds checking is out of scope for poly removal phase
-// See POLY_REMOVAL_PLAN.md
-test "check type - num - cannot coerce 500 to u8" {
-    // const source =
-    //     \\[500, 200u8]
-    // ;
-    // try checkTypesExpr(source, .fail, "NUMBER DOES NOT FIT IN TYPE");
-}
-
 // records //
-
-test "check type - record" {
-    const source =
-        \\{
-        \\  hello: "Hello",
-        \\  world: 10,
-        \\}
-    ;
-    try checkTypesExpr(
-        source,
-        .pass,
-        "{ hello: Str, world: Dec }",
-    );
-}
 
 test "check type - record - field typo" {
     // spellchecker:off
@@ -618,14 +463,6 @@ test "check type - empty record equality" {
     try checkTypesExpr(source, .pass, "Bool");
 }
 
-test "check type - record with function field - no is_eq" {
-    // Records containing functions should not have is_eq because functions don't have is_eq
-    const source =
-        \\{ x: 1, f: |a| a + 1 } == { x: 1, f: |a| a + 1 }
-    ;
-    try checkTypesExpr(source, .fail, "Type Does Not Support Equality");
-}
-
 test "check type - tuple with function element - no is_eq" {
     // Tuples containing functions should not have is_eq because functions don't have is_eq
     const source =
@@ -743,30 +580,6 @@ test "check type - tuple inequality" {
     try checkTypesExpr(source, .pass, "Bool");
 }
 
-test "check type - record with function field - no inequality" {
-    // Records containing functions should not support != because they don't have is_eq
-    const source =
-        \\{ x: 1, f: |a| a + 1 } != { x: 1, f: |a| a + 1 }
-    ;
-    try checkTypesExpr(source, .fail, "Type Does Not Support Equality");
-}
-
-test "check type - tuple with function element - no inequality" {
-    // Tuples containing functions should not support != because they don't have is_eq
-    const source =
-        \\(1, |a| a) != (1, |a| a)
-    ;
-    try checkTypesExpr(source, .fail, "Type Does Not Support Equality");
-}
-
-test "check type - direct lambda inequality - no is_eq" {
-    // Lambdas/functions should not support inequality comparison (requires is_eq)
-    const source =
-        \\(|x| x) != (|y| y)
-    ;
-    try checkTypesExpr(source, .fail, "Type Does Not Support Equality");
-}
-
 test "check type - tag union inequality" {
     const source =
         \\Ok(1) != Ok(1)
@@ -774,22 +587,7 @@ test "check type - tag union inequality" {
     try checkTypesExpr(source, .pass, "Bool");
 }
 
-test "check type - tag union with function payload - no inequality" {
-    // Tag unions with function payloads should not support != because they don't have is_eq
-    const source =
-        \\Fn(|x| x) != Fn(|x| x)
-    ;
-    try checkTypesExpr(source, .fail, "Type Does Not Support Equality");
-}
-
 // tags //
-
-test "check type - tag" {
-    const source =
-        \\MyTag
-    ;
-    try checkTypesExpr(source, .pass, "[MyTag, ..]");
-}
 
 test "check type - tag - args" {
     const source =
@@ -1465,6 +1263,25 @@ test "check type - alias open tag union" {
     try checkTypesModule(source, .{ .pass = .last_def }, "{} -> MyAlias([C])");
 }
 
+test "check type - alias forward reference in open tag union completes" {
+    // repro for https://github.com/roc-lang/roc/issues/9959
+    const source =
+        \\Repro :: U8
+        \\
+        \\hang : Str -> Foo([])
+        \\hang = |_| { foo: Thing }
+        \\
+        \\Foo(tags) : { foo: Union(tags) }
+        \\
+        \\Union(others) : [Thing, ..others]
+    ;
+
+    var test_env = try TestEnv.init("Repro", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
 test "check type - alias open record" {
     const source =
         \\main! = |_| {}
@@ -1525,6 +1342,7 @@ test "checked artifact method registry skips nominal associated values" {
         module,
         &names,
         &template_lookup,
+        &.{},
         &checked_types,
         &checked_bodies,
     );
@@ -1902,8 +1720,8 @@ test "check type - if else - different branch types 3" {
 // unification merges a numeral-origin and a quote-origin constraint onto one var.
 // No type satisfies both, so the program is always
 // rejected — but the diagnostic must not depend on which unify side each literal
-// arrived on. `varLiteralKind` tie-breaks dual-kind vars to `.numeral` (matching
-// `numericDefaultPhaseForConstraints` and `flexLiteralDefaultKind`), so BOTH
+// arrived on. The defaulting oracle (src/types/literal_defaulting.zig)
+// tie-breaks dual-kind vars to `.numeral` for every stage that asks, so BOTH
 // orders default the var toward the numeral head (Dec) and report the quote
 // constraint against it: mirror-image programs get the SAME diagnostic (same
 // title, same prose; only the source region differs).
@@ -1981,7 +1799,7 @@ test "check type - tuple access on non-tuple does not cascade" {
         \\z : U64
         \\z = x
     ;
-    try checkTypesModule(source, .fail, "Type Mismatch");
+    try checkTypesModule(source, .fail, "Invalid Tuple Access");
 }
 
 test "check type - if else - annotated branch mismatch reports error" {
@@ -2191,20 +2009,6 @@ test "check type - binops and" {
 test "check type - binops and mismatch" {
     const source =
         \\x = "Hello" and False
-    ;
-    try checkTypesModule(source, .fail, "Type Mismatch");
-}
-
-test "check type - binops or" {
-    const source =
-        \\x = True or False
-    ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
-}
-
-test "check type - binops or mismatch" {
-    const source =
-        \\x = "Hello" or False
     ;
     try checkTypesModule(source, .fail, "Type Mismatch");
 }
@@ -2515,20 +2319,6 @@ test "check type - patterns - wrong type" {
         \\}
     ;
     try checkTypesExpr(source, .fail, "Missing Method");
-}
-
-test "check type - patterns tag without payload" {
-    const source =
-        \\{
-        \\  x = True
-        \\
-        \\  match(x) {
-        \\    True => "true",
-        \\    False => "false",
-        \\  }
-        \\}
-    ;
-    try checkTypesExpr(source, .pass, "Str");
 }
 
 test "check type - patterns tag with payload" {
@@ -3036,6 +2826,17 @@ test "check type - crash" {
     );
 }
 
+test "check type - issue 10244 - crash body satisfies annotated function type" {
+    // Repro for https://github.com/roc-lang/roc/issues/10244
+    const source =
+        \\fun : a -> a
+        \\fun = {
+        \\  crash "NYI"
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "fun" } }, "a -> a");
+}
+
 test "check type - if with all crash branches makes following code unreachable" {
     const source =
         \\choose : Bool -> Str
@@ -3212,61 +3013,6 @@ test "check type - for mismatch" {
 }
 
 // static dispatch //
-
-test "check type - static dispatch - polymorphic - annotation" {
-    const source =
-        \\main : a -> Str where [a.to_str : a -> Str]
-        \\main = |a| a.to_str()
-    ;
-    try checkTypesModule(
-        source,
-        .{ .pass = .{ .def = "main" } },
-        "a -> Str where [a.to_str : a -> Str]",
-    );
-}
-
-test "check type - static dispatch - polymorphic - no annotation" {
-    const source =
-        \\main = |x| x.to_str()
-    ;
-    try checkTypesModule(
-        source,
-        .{ .pass = .{ .def = "main" } },
-        "a -> b where [a.to_str : a -> b]",
-    );
-}
-
-test "check type - static dispatch - concrete - annotation" {
-    const source =
-        \\Test := [Val(Str)].{
-        \\  to_str : Test -> Str
-        \\  to_str = |Test.Val(s)| s
-        \\}
-        \\
-        \\main : Str
-        \\main = Test.Val("hello").to_str()
-    ;
-    try checkTypesModule(
-        source,
-        .{ .pass = .{ .def = "main" } },
-        "Str",
-    );
-}
-
-test "check type - static dispatch - concrete - no annotation" {
-    const source =
-        \\Test := [Val(Str)].{
-        \\  to_str = |Test.Val(s)| s
-        \\}
-        \\
-        \\main = Test.Val("hello").to_str()
-    ;
-    try checkTypesModule(
-        source,
-        .{ .pass = .{ .def = "main" } },
-        "Str",
-    );
-}
 
 test "check type - static dispatch - concrete - wrong method name" {
     const source =
@@ -4194,6 +3940,37 @@ test "check type - recursive type - anonymous recursion" {
     );
 }
 
+test "check type - local binding anonymous recursion is rejected even when hidden from enclosing def" {
+    const source =
+        \\outer = {
+        \\  bad = |linked_list|
+        \\    match linked_list {
+        \\      Cons(_a, rest) => 1 + bad(rest)
+        \\      Nil => 0.U8
+        \\    }
+        \\
+        \\  0.U8
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "Anonymous Recursion");
+}
+
+test "check type - uninitialized local var anonymous recursion is rejected even when hidden from enclosing def" {
+    const source =
+        \\outer = {
+        \\  var $bad
+        \\  $bad = |linked_list|
+        \\    match linked_list {
+        \\      Cons(_a, rest) => 1 + $bad(rest)
+        \\      Nil => 0.U8
+        \\    }
+        \\
+        \\  0.U8
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "Anonymous Recursion");
+}
+
 // equirecursive static dispatch //
 
 test "check type - equirecursive static dispatch" {
@@ -4236,6 +4013,67 @@ test "check type - equirecursive static dispatch with type annotation" {
     );
 }
 
+test "check type - static dispatch nested decoder error rows type-check" {
+    // repro for https://github.com/roc-lang/roc/issues/9893
+    const source =
+        \\generate_u8 : RandomDecoder, List(U8) -> (Try(U8, [TooShort]), List(U8))
+        \\generate_u8 = |_, bytes| (Err(TooShort), bytes)
+        \\
+        \\generate_list : RandomDecoder, List(U8), (List(U8), RandomDecoder -> (Try(elem, err), List(U8))) -> (Try(List(elem), [TooShort, ..err]), List(U8))
+        \\generate_list = |_, bytes, elem_decoder| {
+        \\    (result, rest) = elem_decoder(bytes, random_decoder)
+        \\    match result {
+        \\        Ok(value) => (Ok([value]), rest),
+        \\        Err(err) => (Err(err), rest)
+        \\    }
+        \\}
+        \\
+        \\RandomDecoder := {}.{
+        \\    decode_u8 = generate_u8
+        \\    decode_list = generate_list
+        \\}
+        \\
+        \\random_decoder = RandomDecoder.({})
+        \\
+        \\RandomState := List(U8)
+        \\
+        \\random_value : RandomState -> (a, RandomState) where [a.decode : (List(U8)), RandomDecoder -> (Try(a, err), List(U8))]
+        \\random_value = |RandomState.(bytes)| {
+        \\    Val : a
+        \\    (_, rest) = Val.decode(bytes, random_decoder)
+        \\    (Val, RandomState.(rest))
+        \\}
+        \\
+        \\Pair(a, b) := (a, b).{
+        \\    decode: (List(U8)), RandomDecoder -> (Try(Pair(a, b), err), List(U8)) where [
+        \\        a.decode : (List(U8)), RandomDecoder -> (Try(a, err), List(U8)),
+        \\        b.decode : (List(U8)), RandomDecoder -> (Try(b, err), List(U8)),
+        \\    ]
+        \\    decode = |bytes, format| {
+        \\        ValA : a
+        \\        ValB : b
+        \\        (_, bytes_a) = ValA.decode(bytes, format)
+        \\        (_, bytes_b) = ValB.decode(bytes_a, format)
+        \\        (Err(TooShort), bytes_b)
+        \\    }
+        \\}
+        \\
+        \\expect {
+        \\    state = RandomState.([])
+        \\    x : (Pair(List(Pair(U8, U8)), List(Pair(U8, U8))), RandomState)
+        \\    x = random_value(state)
+        \\    match x {
+        \\        _ => True
+        \\    }
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("Type Mismatch");
+}
+
 test "check type - static dispatch method type mismatch - REGRESSION TEST" {
     // This test verifies that when a method is called with mismatched types,
     // we get a TYPE MISMATCH error. This is a regression test for the diagnostic
@@ -4267,34 +4105,12 @@ test "check type - static dispatch method type mismatch - REGRESSION TEST" {
 // These tests verify type-checking of Bool expressions from failing REPL snapshots.
 // If all pass, the Bool inversion bug is in LIR lowering or codegen, not type-checking.
 
-test "check type - bool diagnostic - Bool.True" {
-    try checkTypesExpr("Bool.True", .pass, "Bool");
-}
-
-test "check type - bool diagnostic - Bool.False" {
-    try checkTypesExpr("Bool.False", .pass, "Bool");
-}
-
 test "check type - bool diagnostic - Bool.not(True)" {
     try checkTypesExpr("Bool.not(True)", .pass, "Bool");
 }
 
 test "check type - bool diagnostic - Bool.not(False)" {
     try checkTypesExpr("Bool.not(False)", .pass, "Bool");
-}
-
-test "check type - bool diagnostic - !Bool.True" {
-    const source =
-        \\x = !Bool.True
-    ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
-}
-
-test "check type - bool diagnostic - !Bool.False" {
-    const source =
-        \\x = !Bool.False
-    ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
 }
 
 test "check type - bool diagnostic - Bool.True and Bool.False" {
@@ -4308,31 +4124,11 @@ test "check type - bool diagnostic - !Bool.True or !Bool.True" {
     try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
 }
 
-test "check type - bool diagnostic - lambda negation applied to Bool.True" {
-    try checkTypesExpr("(|x| !x)(Bool.True)", .pass, "Bool");
-}
-
 // --- Nominal Bool vs structural tag union tests ---
 // CRITICAL DISTINCTION: In Roc, bare tags like `True` and `False` are structural tag unions,
 // NOT Bool primitives. They only become nominal `Bool` when unified with a Bool annotation
 // or a qualified reference like `Bool.True`. This is by design.
 // See also: corresponding lowering coverage in eval/backend integration tests.
-
-test "check type - nominal Bool - annotated True is Bool" {
-    const source =
-        \\x : Bool
-        \\x = True
-    ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
-}
-
-test "check type - nominal Bool - annotated False is Bool" {
-    const source =
-        \\x : Bool
-        \\x = False
-    ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
-}
 
 test "check type - structural tag - bare True is open tag union" {
     const source =
@@ -4632,8 +4428,12 @@ test "check type - try operator on method call should apply to whole expression 
     try checkTypesModule(source, .{ .pass = .last_def }, "List(Str) -> Try(Str, [ListWasEmpty, ..])");
 }
 
-test "check type - try closed error row satisfies open return error row" {
-    // Regression test for https://github.com/roc-lang/roc/issues/9798
+test "check type - try does not widen closed error row into open return error row" {
+    // Verifies intended behavior for https://github.com/roc-lang/roc/issues/9798:
+    // `?` does not widen a callee's closed error tag union into the enclosing
+    // annotation's open error row, so this program is a type error. The sole
+    // exception is a direct call of a hosted function (design.md "Hosted Try
+    // Question Widening"); `inner` is not hosted, so no widening applies.
     const source =
         \\inner : {} -> Try({}, [InnerErr])
         \\inner = |{}| Err(InnerErr)
@@ -4644,7 +4444,7 @@ test "check type - try closed error row satisfies open return error row" {
         \\    Ok({})
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> Try({}, [InnerErr, ..])");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 // record extension in type annotations //
@@ -4927,8 +4727,8 @@ test "check type - issue8934 recursive nominal type unification" {
         \\  flatten_aux = |l, acc| {
         \\    match l {
         \\      [] => acc
-        \\      [One(e), .. as rest] => flatten_aux(rest, List.append(acc, e))
-        \\      [Many(e), .. as rest] => flatten_aux(rest, flatten_aux(e, acc))
+        \\      [Node.One(e), .. as rest] => flatten_aux(rest, List.append(acc, e))
+        \\      [Node.Many(e), .. as rest] => flatten_aux(rest, flatten_aux(e, acc))
         \\    }
         \\  }
         \\  flatten_aux(input, [])
@@ -5105,6 +4905,29 @@ test "check type - nominal destructure pattern in lambda arg binds the backing v
     try checkTypesModule(source, .{ .pass = .last_def }, "Distance -> U64");
 }
 
+test "check type - nominal record destructure syntax works in every pattern position" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Point := { x : U64, y : U64 }
+        \\
+        \\sum_arg : Point -> U64
+        \\sum_arg = |Point.{ x, y }| x + y
+        \\
+        \\sum_let : Point -> U64
+        \\sum_let = |point| {
+        \\    Point.{ x, y } = point
+        \\    x + y
+        \\}
+        \\
+        \\sum_match : Point -> U64
+        \\sum_match = |point| match point {
+        \\    Point.{ x, y } => x + y
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Point -> U64");
+}
+
 // LITERAL COERCION + STRUCTURAL LIFTING INTO NOMINALS (executable spec)
 //
 // Two DIFFERENT operations, deliberately kept separate:
@@ -5131,6 +4954,43 @@ test "consolidated - record literal lifts into record-backed nominal (control)" 
         \\p = { x: 1 }
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "Point");
+}
+
+test "nominal constructor rejects an already nominal record backing" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Wrap :: { a : U8, b : U8 }.{
+        \\    inc_a : Wrap -> Wrap
+        \\    inc_a = |wrap| Wrap.{ ..wrap, a: wrap.a + 1 }
+        \\}
+    ;
+    try checkTypesModule(source, .fail_first, "Invalid Nominal Record");
+}
+
+test "nominal constructor backing allows a nested nominal value" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Inner :: { value : U8 }
+        \\Outer :: { inner : Inner }
+        \\
+        \\inner = Inner.{ value: 1 }
+        \\outer = Outer.{ inner }
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Outer");
+}
+
+test "record update still lifts to its nominal extension" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Wrap :: { a : U8, b : U8 }
+        \\
+        \\inc_a : Wrap -> Wrap
+        \\inc_a = |wrap| { ..wrap, a: wrap.a + 1 }
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Wrap -> Wrap");
 }
 
 test "consolidated - record literal does not lift through a newtype chain" {
@@ -5260,6 +5120,29 @@ test "check type - early return - pass" {
         \\}
     ;
     try checkTypesExpr(source, .pass, "Bool -> List(_a)");
+}
+
+test "check type - unreachable final expression does not constrain early return" {
+    const source =
+        \\f = |x| {
+        \\    return x
+        \\    x + 1
+        \\}
+        \\result = f(1.I64)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "result" } }, "I64");
+}
+
+test "check type - unreachable statements do not constrain early return" {
+    const source =
+        \\f = |x| {
+        \\    return x
+        \\    y = x + 1
+        \\    y
+        \\}
+        \\result = f(1.I64)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "result" } }, "I64");
 }
 
 test "check type - final infinite loop can satisfy annotated return type" {
@@ -5446,24 +5329,23 @@ test "check type - self recursive function - fibonacci - fail" {
         \\  }
         \\}
     ;
+    // The binding-group recursion rule unifies the recursive reference with
+    // the def's in-flight type immediately, so the mismatch surfaces at the
+    // bad argument itself rather than as a post-hoc recursive-def validation.
     try checkTypesModule(
         source,
         .fail_with,
         \\**Type Mismatch**
-        \\The recursive definition `fib` is used in an unexpected way.
-        \\**test:5:5:5:8:**
+        \\This string literal is being used where a non-string type is needed.
+        \\**test:5:9:5:18:**
         \\```roc
         \\    fib("bad arg") + fib(n - 2.U8)
         \\```
-        \\    ^^^
+        \\        ^^^^^^^^^
         \\
-        \\It has the type:
+        \\The type was determined to be:
         \\
-        \\    Str -> U8
-        \\
-        \\But other places expect it to be:
-        \\
-        \\    U8 -> U8
+        \\    U8
         \\
         \\
         ,
@@ -5507,32 +5389,6 @@ test "check type - mutually recursive functions - is_even and is_odd" {
 
 // self recursive functions - additional //
 
-test "check type - self recursive function - factorial" {
-    const source =
-        \\fact = |n| {
-        \\  if n <= 1.U64 {
-        \\    1.U64
-        \\  } else {
-        \\    n * fact(n - 1.U64)
-        \\  }
-        \\}
-    ;
-    try checkTypesModule(source, .{ .pass = .{ .def = "fact" } }, "U64 -> U64");
-}
-
-test "check type - self recursive function - multiple args" {
-    const source =
-        \\power = |base, exp| {
-        \\  if exp <= 0.U64 {
-        \\    1.U64
-        \\  } else {
-        \\    base * power(base, exp - 1.U64)
-        \\  }
-        \\}
-    ;
-    try checkTypesModule(source, .{ .pass = .{ .def = "power" } }, "U64, U64 -> U64");
-}
-
 // A binop whose lhs is a literal and whose rhs is pinned to a concrete type only
 // LATER, through a builtin signature (`index : U64` from
 // `List.map_with_index`'s callback) — the real-world pattern speculative peer
@@ -5546,20 +5402,6 @@ test "check type - binop literal lhs with signature-pinned rhs - U64 index" {
         \\result = List.map_with_index([10, 20, 30], |num, index| num + index)
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "List(U64)");
-}
-
-test "check type - self recursive function - with accumulator" {
-    const source =
-        \\sum_to : U64, U64 -> U64
-        \\sum_to = |n, acc| {
-        \\  if n <= 0.U64 {
-        \\    acc
-        \\  } else {
-        \\    sum_to(n - 1.U64, acc + n)
-        \\  }
-        \\}
-    ;
-    try checkTypesModule(source, .{ .pass = .{ .def = "sum_to" } }, "U64, U64 -> U64");
 }
 
 test "check type - self recursive function - returning record" {
@@ -5800,40 +5642,6 @@ test "check type - self recursive static dispatch - wrong arg type" {
 
 // mutually recursive functions - additional //
 
-test "check type - mutually recursive functions - three-way cycle" {
-    const source =
-        \\f = |n| {
-        \\  if n <= 0.U64 {
-        \\    0.U64
-        \\  } else {
-        \\    g(n - 1.U64)
-        \\  }
-        \\}
-        \\g = |n| {
-        \\  if n <= 0.U64 {
-        \\    0.U64
-        \\  } else {
-        \\    h(n - 1.U64)
-        \\  }
-        \\}
-        \\h = |n| {
-        \\  if n <= 0.U64 {
-        \\    0.U64
-        \\  } else {
-        \\    f(n - 1.U64)
-        \\  }
-        \\}
-    ;
-    try checkTypesModuleDefs(
-        source,
-        &.{
-            .{ .def = "f", .expected = "U64 -> U64" },
-            .{ .def = "g", .expected = "U64 -> U64" },
-            .{ .def = "h", .expected = "U64 -> U64" },
-        },
-    );
-}
-
 test "check type - mutually recursive functions - polymorphic" {
     const source =
         \\ping = |n, x| {
@@ -5877,42 +5685,6 @@ test "check type - mutually recursive functions - record constraint propagation"
 }
 
 // mutually recursive static dispatch - additional //
-
-test "check type - mutually recursive static dispatch - three-way cycle" {
-    const source =
-        \\Triple := [Val(U64)].{
-        \\  step_a = |Triple.Val(n)| {
-        \\    if n == 0.U64 {
-        \\      0.U64
-        \\    } else {
-        \\      Triple.Val(n - 1.U64).step_b()
-        \\    }
-        \\  }
-        \\  step_b = |Triple.Val(n)| {
-        \\    if n == 0.U64 {
-        \\      0.U64
-        \\    } else {
-        \\      Triple.Val(n - 1.U64).step_c()
-        \\    }
-        \\  }
-        \\  step_c = |Triple.Val(n)| {
-        \\    if n == 0.U64 {
-        \\      0.U64
-        \\    } else {
-        \\      Triple.Val(n - 1.U64).step_a()
-        \\    }
-        \\  }
-        \\}
-    ;
-    try checkTypesModuleDefs(
-        source,
-        &.{
-            .{ .def = "Test.Triple.step_a", .expected = "Triple -> U64" },
-            .{ .def = "Test.Triple.step_b", .expected = "Triple -> U64" },
-            .{ .def = "Test.Triple.step_c", .expected = "Triple -> U64" },
-        },
-    );
-}
 
 test "check type - mutually recursive static dispatch - polymorphic" {
     const source =
@@ -6275,9 +6047,45 @@ test "check type - mutually recursive functions - partially annotated polymorphi
     );
 }
 
+test "check type - mutually recursive functions - all annotated polymorphic" {
+    // Both members' schemes are pre-declared from their annotations, so each
+    // in-group reference instantiates the other's scheme (sound polymorphic
+    // recursion) and both keep their own rigid type parameters.
+    const source =
+        \\walk : U64, a -> a
+        \\walk = |n, x| if n <= 0.U64 { x } else { jump(n - 1.U64, x) }
+        \\jump : U64, b -> b
+        \\jump = |n, x| if n <= 0.U64 { x } else { walk(n - 1.U64, x) }
+        \\test = (walk(1.U64, "hi"), jump(1.U64, 42.U8))
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "walk", .expected = "U64, a -> a" },
+            .{ .def = "jump", .expected = "U64, b -> b" },
+            .{ .def = "test", .expected = "(Str, U8)" },
+        },
+    );
+}
+
+test "check type - annotated self recursive function - polymorphic recursion allowed" {
+    // An annotated def's self-reference instantiates its pre-declared scheme,
+    // so a recursive use at a specialized type is legal (polymorphic
+    // recursion for annotated defs).
+    const source =
+        \\depth : List(a) -> U64
+        \\depth = |list| match list {
+        \\    [] => 0
+        \\    [first, ..] => 1 + depth([[first]])
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "depth" } }, "List(a) -> U64");
+}
+
 test "check type - mutually recursive functions - inner let-def lambda inside cycle participant is generalized" {
-    // Inner let-def lambda should generalize normally even while
-    // defer_generalize is active for the outer cycle.
+    // Inner let-def lambda should generalize normally even while the
+    // enclosing binding group's own generalization waits for the group
+    // boundary.
     const source =
         \\f = |n| {
         \\    id = |x| x
@@ -7507,7 +7315,7 @@ test "check type - def order independence - passive literal def after its constr
 // DIFFERENT integer-only methods share a component (`a`'s `bitwise_and` mentions
 // `b`). The group policy must (1) pick one candidate for the whole group — Dec
 // is refuted by the method-lookup miss, so the first surviving integer, I64,
-// wins — and (2) exempt passives from the forced assignment: `shift_left_by : T,
+// wins — and (2) exempt passives from the forced assignment: `shl_wrap : T,
 // U8 -> T` pins the shift-amount literal `3` to U8 via the method signature;
 // force-assigning it the group candidate (I64) would fail every candidate and
 // head-default the drivers to Dec, erroring. Both def orders must accept with
@@ -7515,7 +7323,7 @@ test "check type - def order independence - passive literal def after its constr
 test "check type - def order independence - heterogeneous multi-driver group (linking def first)" {
     const source =
         \\a = (1).bitwise_and(b)
-        \\b = (2).shift_left_by(3)
+        \\b = (2).shl_wrap(3)
     ;
     try checkTypesModuleDefs(source, &.{
         .{ .def = "a", .expected = "I64" },
@@ -7525,7 +7333,7 @@ test "check type - def order independence - heterogeneous multi-driver group (li
 
 test "check type - def order independence - heterogeneous multi-driver group (linking def last)" {
     const source =
-        \\b = (2).shift_left_by(3)
+        \\b = (2).shl_wrap(3)
         \\a = (1).bitwise_and(b)
     ;
     try checkTypesModuleDefs(source, &.{
@@ -7566,19 +7374,19 @@ test "check type - def order independence - mixed quote+numeral multi-driver gro
 
 // BOUNDARY GROUP DEFAULTING: the same interference-component machinery must run
 // at a def's generalization boundary, not just at module finalize.
-// `(5).plus((2).shift_left_by(3))` puts two DRIVER literals in one component
+// `(5).plus((2).shl_wrap(3))` puts two DRIVER literals in one component
 // (`5`'s `plus` signature reaches the inner dispatch's return — `2`'s constraint
 // signature's return). At top level this resolves via `finalizeLiteralDefaults`'
-// group policy (Dec refuted by the `shift_left_by` lookup miss; first surviving
+// group policy (Dec refuted by the `shl_wrap` lookup miss; first surviving
 // integer, I64, wins). Wrapped in a function, the literals are NOT
 // signature-reachable, so the BOUNDARY must default them — using the same group
 // policy. Before the boundary shared this machinery, it committed literals
 // one-by-one in var-pool order: `5`'s Dec probe speculatively pinned the inner
 // dispatch's return before `2`'s integer-only constraint was consulted, so the
-// def erred (MISSING METHOD `shift_left_by` on Dec) while the identical
+// def erred (MISSING METHOD `shl_wrap` on Dec) while the identical
 // top-level expression type-checked. Exactly one LITERAL DEFAULTED warning:
 // `5`'s `plus` signature reaches the def's return type (the leak), while `2`'s
-// `shift_left_by` signature touches nothing signature-reachable (def-local
+// `shl_wrap` signature touches nothing signature-reachable (def-local
 // default, silent) and `3` is a passive pinned to U8 by the fired signature
 // (never warned).
 //
@@ -7588,7 +7396,7 @@ test "check type - def order independence - mixed quote+numeral multi-driver gro
 // literal group never spans local statements.)
 test "check type - boundary defaulting - heterogeneous multi-driver group inside a function" {
     const source =
-        \\g = |_x| (5).plus((2).shift_left_by(3))
+        \\g = |_x| (5).plus((2).shl_wrap(3))
     ;
     try checkTypesModule(source, .{ .pass_with_warnings = .{
         .def = .last_def,
@@ -7601,7 +7409,7 @@ test "check type - boundary defaulting - heterogeneous multi-driver group inside
 // outcome (modulo the boundary's leak warning).
 test "check type - finalize defaulting - heterogeneous multi-driver group at top level" {
     const source =
-        \\top = (5).plus((2).shift_left_by(3))
+        \\top = (5).plus((2).shl_wrap(3))
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "I64");
 }

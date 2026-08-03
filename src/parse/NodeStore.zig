@@ -368,6 +368,7 @@ pub fn addNumericLiteral(
         .flags = .{
             .is_negative = parsed.is_negative,
             .had_decimal_point = parsed.had_decimal_point,
+            .is_materialized = parsed.is_materialized,
         },
     });
     return idx;
@@ -410,6 +411,7 @@ pub fn addCollection(store: *NodeStore, tag: Node.Tag, collection: AST.Collectio
             .rhs = collection.span.len,
         },
         .region = collection.region,
+        .collection_layout = collection.layout,
     });
     return @enumFromInt(@intFromEnum(nid));
 }
@@ -432,10 +434,13 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!
             node.main_token = @intFromEnum(app.platform_idx);
             // Store provides collection
             node.data.lhs = @intFromEnum(app.provides);
-            node.data.rhs = @intFromEnum(app.packages);
+            // `packages` and the optional `roc` version pin do not both fit in
+            // the node, so they share an extra_data record.
+            const ed_start = try store.reserveExtraDataStart(2);
+            store.extra_data.appendAssumeCapacity(@intFromEnum(app.packages));
+            store.extra_data.appendAssumeCapacity(try packOptionalIndex(app.roc_version));
+            node.data.rhs = ed_start;
             node.region = app.region;
-
-            try store.extra_data.append(store.gpa, @intFromEnum(app.platform_idx));
         },
         .module => |mod| {
             node.tag = .module_header;
@@ -451,13 +456,16 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!
             node.tag = .package_header;
             node.data.lhs = @intFromEnum(package.exposes);
             node.data.rhs = @intFromEnum(package.packages);
+            // A package header has no name token, so the optional `roc`
+            // version pin fits in main_token without an extra_data record.
+            node.main_token = try packOptionalIndex(package.roc_version);
             node.region = package.region;
         },
         .platform => |platform| {
             node.tag = .platform_header;
             node.main_token = platform.name;
 
-            const ed_start = try store.reserveExtraDataStart(9);
+            const ed_start = try store.reserveExtraDataStart(15);
             // Store requires_entries span (start and len)
             store.extra_data.appendAssumeCapacity(platform.requires_entries.span.start);
             store.extra_data.appendAssumeCapacity(platform.requires_entries.span.len);
@@ -465,12 +473,20 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!
             store.extra_data.appendAssumeCapacity(@intFromEnum(platform.packages));
             store.extra_data.appendAssumeCapacity(platform.provides.span.start);
             store.extra_data.appendAssumeCapacity(platform.provides.span.len);
+            store.extra_data.appendAssumeCapacity(platform.provides.region.start);
+            store.extra_data.appendAssumeCapacity(platform.provides.region.end);
             store.extra_data.appendAssumeCapacity(platform.hosted.span.start);
             store.extra_data.appendAssumeCapacity(platform.hosted.span.len);
+            store.extra_data.appendAssumeCapacity(platform.hosted.region.start);
+            store.extra_data.appendAssumeCapacity(platform.hosted.region.end);
+            const symbol_map_layouts: u32 = @intFromEnum(platform.provides.layout) |
+                (@as(u32, @intFromEnum(platform.hosted.layout)) << 8);
+            store.extra_data.appendAssumeCapacity(symbol_map_layouts);
             store.extra_data.appendAssumeCapacity(try packOptionalIndex(platform.targets));
+            store.extra_data.appendAssumeCapacity(try packOptionalIndex(platform.roc_version));
 
             node.data.lhs = ed_start;
-            node.data.rhs = 9;
+            node.data.rhs = 15;
 
             node.region = platform.region;
         },
@@ -508,7 +524,14 @@ pub fn addExposedItem(store: *NodeStore, item: AST.ExposedItem) std.mem.Allocato
         .lower_ident => |i| {
             node.tag = .exposed_item_lower;
             node.main_token = i.ident;
-            if (i.as) |a| {
+            if (i.qualifiers.span.len > 0) {
+                const extra_start = @as(u32, @intCast(store.extra_data.items.len));
+                try store.extra_data.append(store.gpa, i.qualifiers.span.start);
+                try store.extra_data.append(store.gpa, i.qualifiers.span.len);
+                try store.extra_data.append(store.gpa, if (i.as) |a| a else 0);
+                node.data.lhs = extra_start;
+                node.data.rhs = 2;
+            } else if (i.as) |a| {
                 std.debug.assert(a > 0);
                 node.data.lhs = a;
                 node.data.rhs = 1;
@@ -518,7 +541,14 @@ pub fn addExposedItem(store: *NodeStore, item: AST.ExposedItem) std.mem.Allocato
         .upper_ident => |i| {
             node.tag = .exposed_item_upper;
             node.main_token = i.ident;
-            if (i.as) |a| {
+            if (i.qualifiers.span.len > 0) {
+                const extra_start = @as(u32, @intCast(store.extra_data.items.len));
+                try store.extra_data.append(store.gpa, i.qualifiers.span.start);
+                try store.extra_data.append(store.gpa, i.qualifiers.span.len);
+                try store.extra_data.append(store.gpa, if (i.as) |a| a else 0);
+                node.data.lhs = extra_start;
+                node.data.rhs = 2;
+            } else if (i.as) |a| {
                 std.debug.assert(a > 0);
                 node.data.lhs = a;
                 node.data.rhs = 1;
@@ -528,6 +558,8 @@ pub fn addExposedItem(store: *NodeStore, item: AST.ExposedItem) std.mem.Allocato
         .upper_ident_star => |i| {
             node.tag = .exposed_item_upper_star;
             node.main_token = i.ident;
+            node.data.lhs = i.qualifiers.span.start;
+            node.data.rhs = i.qualifiers.span.len;
             node.region = i.region;
         },
         .malformed => |m| {
@@ -612,20 +644,30 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
         .import => |i| {
             node.tag = .import;
             node.region = i.region;
-            node.main_token = i.module_name_tok;
+            node.main_token = i.target.module_name_tok;
             var rhs = AST.ImportRhs{
                 .aliased = 0,
                 .qualified = 0,
-                .num_exposes = @as(u30, @intCast(i.exposes.span.len)),
+                .has_nested = @intFromBool(i.target.hasNestedTypes()),
+                .origin = @intFromEnum(i.target.origin),
+                .base = @intFromEnum(i.target.base),
+                .reserved = 0,
             };
 
-            // Store all import data in a flat format:
-            // [exposes.span.start, exposes.span.len, qualifier_tok?, alias_tok?]
+            // [exposes.start, exposes.len, target.start, target.path_start,
+            //  parent_count, nested_start?, nested_len, qualifier?, alias?]
             const data_start = @as(u32, @intCast(store.extra_data.items.len));
             try store.extra_data.append(store.gpa, i.exposes.span.start);
             try store.extra_data.append(store.gpa, i.exposes.span.len);
+            try store.extra_data.append(store.gpa, i.target.start_tok);
+            try store.extra_data.append(store.gpa, i.target.path_start_tok);
+            try store.extra_data.append(store.gpa, i.target.parent_count);
+            if (i.target.nested_start_tok) |tok| {
+                try store.extra_data.append(store.gpa, tok);
+            }
+            try store.extra_data.append(store.gpa, i.target.nested_len);
 
-            if (i.qualifier_tok) |tok| {
+            if (i.target.qualifier_tok) |tok| {
                 rhs.qualified = 1;
                 try store.extra_data.append(store.gpa, tok);
             }
@@ -729,11 +771,14 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) std.mem.Allocator.Err
             node.main_token = i.ident_tok;
         },
         .tag => |t| {
+            std.debug.assert(!t.record_shorthand or (t.backing_value and t.args.span.len == 1));
             const data_start = @as(u32, @intCast(store.extra_data.items.len));
             try store.extra_data.append(store.gpa, t.args.span.len);
             try store.extra_data.append(store.gpa, t.qualifiers.span.start);
             try store.extra_data.append(store.gpa, t.qualifiers.span.len);
             try store.extra_data.append(store.gpa, @intFromBool(t.backing_value));
+            try store.extra_data.append(store.gpa, @intFromBool(t.has_args));
+            try store.extra_data.append(store.gpa, @intFromBool(t.record_shorthand));
 
             node.tag = .tag_patt;
             node.region = t.region;
@@ -1239,6 +1284,7 @@ pub fn addWhereClause(store: *NodeStore, clause: AST.WhereClause) std.mem.Alloca
             try store.extra_data.append(store.gpa, @intFromEnum(c.args));
             try store.extra_data.append(store.gpa, @intFromEnum(c.ret_anno));
             node.data.lhs = @intCast(ed_start);
+            node.data.rhs = @intFromBool(c.effectful);
         },
         .mod_alias => |c| {
             node.tag = .where_mod_alias;
@@ -1417,7 +1463,23 @@ pub fn getCollection(store: *const NodeStore, collection_idx: AST.Collection.Idx
             .len = node.data.rhs,
         },
         .region = node.region,
+        .layout = node.collection_layout,
     };
+}
+
+/// Sets the parser-produced layout fact for a collection-owning node.
+pub fn setCollectionLayout(store: *NodeStore, idx: anytype, layout: AST.CollectionLayout) void {
+    store.nodes.items.items(.collection_layout)[@intFromEnum(idx)] = layout;
+}
+
+/// Returns the parser-produced layout fact for a collection-owning node.
+pub fn getCollectionLayout(store: *const NodeStore, idx: anytype) AST.CollectionLayout {
+    return store.nodes.items.items(.collection_layout)[@intFromEnum(idx)];
+}
+
+/// Returns the number of nodes in the store.
+pub fn nodeCount(store: *const NodeStore) usize {
+    return store.nodes.len();
 }
 
 /// Retrieves header data from a stored header node, reconstructing the appropriate header type.
@@ -1425,10 +1487,12 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
     const node = store.nodes.get(@enumFromInt(@intFromEnum(header_idx)));
     switch (node.tag) {
         .app_header => {
+            const ed_start = node.data.rhs;
             return .{ .app = .{
                 .platform_idx = @enumFromInt(node.main_token),
                 .provides = @enumFromInt(node.data.lhs),
-                .packages = @enumFromInt(node.data.rhs),
+                .packages = @enumFromInt(store.extra_data.items[ed_start]),
+                .roc_version = unpackOptionalIndex(AST.RecordField.Idx, store.extra_data.items[ed_start + 1]),
                 .region = node.region,
             } };
         },
@@ -1448,15 +1512,18 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
             return .{ .package = .{
                 .exposes = @enumFromInt(node.data.lhs),
                 .packages = @enumFromInt(node.data.rhs),
+                .roc_version = unpackOptionalIndex(AST.RecordField.Idx, node.main_token),
                 .region = node.region,
             } };
         },
         .platform_header => {
             const ed_start = node.data.lhs;
-            std.debug.assert(node.data.rhs == 9);
+            std.debug.assert(node.data.rhs == 15);
 
-            const targets_val = store.extra_data.items[ed_start + 8];
+            const symbol_map_layouts = store.extra_data.items[ed_start + 12];
+            const targets_val = store.extra_data.items[ed_start + 13];
             const targets = unpackOptionalIndex(AST.TargetsSection.Idx, targets_val);
+            const roc_version = unpackOptionalIndex(AST.RecordField.Idx, store.extra_data.items[ed_start + 14]);
 
             return .{ .platform = .{
                 .name = node.main_token,
@@ -1466,14 +1533,21 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
                 } },
                 .exposes = @enumFromInt(store.extra_data.items[ed_start + 2]),
                 .packages = @enumFromInt(store.extra_data.items[ed_start + 3]),
+                .roc_version = roc_version,
                 .provides = .{ .span = .{
                     .start = store.extra_data.items[ed_start + 4],
                     .len = store.extra_data.items[ed_start + 5],
-                } },
-                .hosted = .{ .span = .{
+                }, .region = .{
                     .start = store.extra_data.items[ed_start + 6],
-                    .len = store.extra_data.items[ed_start + 7],
-                } },
+                    .end = store.extra_data.items[ed_start + 7],
+                }, .layout = @enumFromInt(symbol_map_layouts & 0xff) },
+                .hosted = .{ .span = .{
+                    .start = store.extra_data.items[ed_start + 8],
+                    .len = store.extra_data.items[ed_start + 9],
+                }, .region = .{
+                    .start = store.extra_data.items[ed_start + 10],
+                    .end = store.extra_data.items[ed_start + 11],
+                }, .layout = @enumFromInt((symbol_map_layouts >> 8) & 0xff) },
                 .targets = targets,
                 .region = node.region,
             } };
@@ -1506,30 +1580,56 @@ pub fn getExposedItem(store: *const NodeStore, exposed_item_idx: AST.ExposedItem
     const node = store.nodes.get(@enumFromInt(@intFromEnum(exposed_item_idx)));
     switch (node.tag) {
         .exposed_item_lower => {
-            if (node.data.rhs == 1) {
+            if (node.data.rhs == 2) {
+                const extra_start = node.data.lhs;
+                const q_start = store.extra_data.items[extra_start];
+                const q_len = store.extra_data.items[extra_start + 1];
+                const as_tok = store.extra_data.items[extra_start + 2];
                 return .{ .lower_ident = .{
                     .region = node.region,
                     .ident = node.main_token,
+                    .qualifiers = .{ .span = .{ .start = q_start, .len = q_len } },
+                    .as = if (as_tok != 0) as_tok else null,
+                } };
+            } else if (node.data.rhs == 1) {
+                return .{ .lower_ident = .{
+                    .region = node.region,
+                    .ident = node.main_token,
+                    .qualifiers = .{ .span = base.DataSpan.empty() },
                     .as = node.data.lhs,
                 } };
             }
             return .{ .lower_ident = .{
                 .region = node.region,
                 .ident = node.main_token,
+                .qualifiers = .{ .span = base.DataSpan.empty() },
                 .as = null,
             } };
         },
         .exposed_item_upper => {
-            if (node.data.rhs == 1) {
+            if (node.data.rhs == 2) {
+                const extra_start = node.data.lhs;
+                const q_start = store.extra_data.items[extra_start];
+                const q_len = store.extra_data.items[extra_start + 1];
+                const as_tok = store.extra_data.items[extra_start + 2];
                 return .{ .upper_ident = .{
                     .region = node.region,
                     .ident = node.main_token,
+                    .qualifiers = .{ .span = .{ .start = q_start, .len = q_len } },
+                    .as = if (as_tok != 0) as_tok else null,
+                } };
+            } else if (node.data.rhs == 1) {
+                return .{ .upper_ident = .{
+                    .region = node.region,
+                    .ident = node.main_token,
+                    .qualifiers = .{ .span = base.DataSpan.empty() },
                     .as = node.data.lhs,
                 } };
             }
             return .{ .upper_ident = .{
                 .region = node.region,
                 .ident = node.main_token,
+                .qualifiers = .{ .span = base.DataSpan.empty() },
                 .as = null,
             } };
         },
@@ -1537,6 +1637,7 @@ pub fn getExposedItem(store: *const NodeStore, exposed_item_idx: AST.ExposedItem
             return .{ .upper_ident_star = .{
                 .region = node.region,
                 .ident = node.main_token,
+                .qualifiers = .{ .span = .{ .start = node.data.lhs, .len = node.data.rhs } },
             } };
         },
         .malformed => {
@@ -1578,11 +1679,24 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
         .import => {
             const rhs = @as(AST.ImportRhs, @bitCast(node.data.rhs));
 
-            // Read flat data format: [exposes.span.start, exposes.span.len, qualifier_tok?, alias_tok?]
             var extra_data_pos = node.data.lhs;
             const exposes_start = store.extra_data.items[extra_data_pos];
             extra_data_pos += 1;
             const exposes_len = store.extra_data.items[extra_data_pos];
+            extra_data_pos += 1;
+            const target_start_tok = store.extra_data.items[extra_data_pos];
+            extra_data_pos += 1;
+            const path_start_tok = store.extra_data.items[extra_data_pos];
+            extra_data_pos += 1;
+            const parent_count: u16 = @intCast(store.extra_data.items[extra_data_pos]);
+            extra_data_pos += 1;
+
+            var nested_start_tok: ?Token.Idx = null;
+            if (rhs.has_nested == 1) {
+                nested_start_tok = store.extra_data.items[extra_data_pos];
+                extra_data_pos += 1;
+            }
+            const nested_len: u16 = @intCast(store.extra_data.items[extra_data_pos]);
             extra_data_pos += 1;
 
             var qualifier_tok: ?Token.Idx = null;
@@ -1596,14 +1710,22 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
             }
 
             return AST.Statement{ .import = .{
-                .module_name_tok = node.main_token,
-                .qualifier_tok = qualifier_tok,
+                .target = .{
+                    .origin = @enumFromInt(rhs.origin),
+                    .base = @enumFromInt(rhs.base),
+                    .parent_count = parent_count,
+                    .start_tok = target_start_tok,
+                    .path_start_tok = path_start_tok,
+                    .module_name_tok = node.main_token,
+                    .qualifier_tok = qualifier_tok,
+                    .nested_start_tok = nested_start_tok,
+                    .nested_len = nested_len,
+                },
                 .alias_tok = alias_tok,
                 .exposes = .{ .span = .{
                     .start = exposes_start,
                     .len = exposes_len,
                 } },
-                .nested_import = false,
                 .region = node.region,
             } };
         },
@@ -1752,6 +1874,8 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pat
             const qualifiers_start = store.extra_data.items[ed_start + 1];
             const qualifiers_len = store.extra_data.items[ed_start + 2];
             const backing_value = store.extra_data.items[ed_start + 3] != 0;
+            const has_args = store.extra_data.items[ed_start + 4] != 0;
+            const record_shorthand = store.extra_data.items[ed_start + 5] != 0;
 
             return .{ .tag = .{
                 .tag_tok = node.main_token,
@@ -1764,6 +1888,8 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pat
                     .len = qualifiers_len,
                 } },
                 .backing_value = backing_value,
+                .has_args = has_args,
+                .record_shorthand = record_shorthand,
                 .region = node.region,
             } };
         },
@@ -2238,6 +2364,26 @@ pub fn getRecordField(store: *const NodeStore, field_idx: AST.RecordField.Idx) A
     };
 }
 
+/// The token holding the whole text of a string literal that is made of
+/// exactly one literal part, i.e. a plain string with no interpolation.
+///
+/// Returns null for any other expression, and for strings whose text is split
+/// across several parts (interpolation, escapes, line continuations) — callers
+/// use this to read short literals like a pinned compiler version straight out
+/// of the source, which is only sound when the source says it verbatim.
+pub fn singleStringPartToken(store: *const NodeStore, expr_idx: AST.Expr.Idx) ?Token.Idx {
+    const string = switch (store.getExpr(expr_idx)) {
+        .string => |string| string,
+        else => return null,
+    };
+    const parts = store.exprSlice(string.parts);
+    if (parts.len != 1) return null;
+    return switch (store.getExpr(parts[0])) {
+        .string_part => |part| part.token,
+        else => null,
+    };
+}
+
 /// Retrieves match branch data from a stored match branch node.
 pub fn getBranch(store: *const NodeStore, branch_idx: AST.MatchBranch.Idx) AST.MatchBranch {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(branch_idx)));
@@ -2309,6 +2455,7 @@ pub fn getWhereClause(store: *const NodeStore, where_clause_idx: AST.WhereClause
                 .name_tok = name_tok,
                 .args = @enumFromInt(args),
                 .ret_anno = @enumFromInt(ret_anno),
+                .effectful = node.data.rhs != 0,
             } };
         },
         .where_mod_alias => {
@@ -2994,9 +3141,10 @@ pub fn addTargetFile(store: *NodeStore, file: AST.TargetFile) std.mem.Allocator.
     };
 
     switch (file) {
-        .string_literal => |tok| {
+        .string_literal => |maybe_tok| {
             node.tag = .target_file_string;
-            node.main_token = tok;
+            node.data.lhs = @intFromBool(maybe_tok != null);
+            if (maybe_tok) |tok| node.main_token = tok;
         },
         .special_ident => |tok| {
             node.tag = .target_file_ident;
@@ -3057,8 +3205,9 @@ pub fn addTargetConfigValue(store: *NodeStore, value: AST.TargetConfigValue) std
             node.main_token = tok;
             node.data.lhs = @intFromEnum(TargetConfigValueNodeTag.int_literal);
         },
-        .string_literal => |tok| {
-            node.main_token = tok;
+        .string_literal => |maybe_tok| {
+            node.data.rhs = @intFromBool(maybe_tok != null);
+            if (maybe_tok) |tok| node.main_token = tok;
             node.data.lhs = @intFromEnum(TargetConfigValueNodeTag.string_literal);
         },
         .tag_literal => |tok| {
@@ -3232,7 +3381,7 @@ pub fn clearScratchSymbolMapEntriesFrom(store: *NodeStore, start: u32) void {
 }
 
 /// Creates a SymbolMapEntry span from scratch entries added since start.
-pub fn symbolMapEntrySpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.SymbolMapEntry.Span {
+pub fn symbolMapEntrySpanFrom(store: *NodeStore, start: u32, region: AST.TokenizedRegion, layout: AST.CollectionLayout) std.mem.Allocator.Error!AST.SymbolMapEntry.Span {
     const end = store.scratch_symbol_map_entries.top();
     defer store.scratch_symbol_map_entries.clearFrom(start);
     var i = @as(usize, @intCast(start));
@@ -3241,7 +3390,7 @@ pub fn symbolMapEntrySpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.E
         try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_symbol_map_entries.items.items[i]));
         i += 1;
     }
-    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start }, .region = region, .layout = layout };
 }
 
 /// Returns a SymbolMapEntry slice for iteration over a span.
@@ -3304,7 +3453,7 @@ pub fn getTargetFile(store: *const NodeStore, idx: AST.TargetFile.Idx) AST.Targe
 
     switch (node.tag) {
         .target_file_string => {
-            return .{ .string_literal = node.main_token };
+            return .{ .string_literal = if (node.data.lhs != 0) node.main_token else null };
         },
         .target_file_ident => {
             return .{ .special_ident = node.main_token };
@@ -3352,7 +3501,7 @@ pub fn getTargetConfigValue(store: *const NodeStore, idx: AST.TargetConfigValue.
     const tag: TargetConfigValueNodeTag = @enumFromInt(node.data.lhs);
     return switch (tag) {
         .int_literal => .{ .int_literal = node.main_token },
-        .string_literal => .{ .string_literal = node.main_token },
+        .string_literal => .{ .string_literal = if (node.data.rhs != 0) node.main_token else null },
         .tag_literal => .{ .tag_literal = node.main_token },
         .ident => .{ .ident = node.main_token },
         .list => blk: {

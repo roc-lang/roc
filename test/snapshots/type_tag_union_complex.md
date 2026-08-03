@@ -32,22 +32,20 @@ handleResponse = |_response| "handled"
 main! = |_| {}
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - type_tag_union_complex.md:7:1:7:52
+BUILTIN TYPE SHADOWED - type_tag_union_complex.md:7:1:7:52
 # PROBLEMS
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `Try` is being redeclared here. ───────────┐
-└┬─────────────────────┘                                                      │
+┌───────────────────────┐
+│ BUILTIN TYPE SHADOWED ├─ The type `Try` shadows a builtin type. ────────────┐
+└┬──────────────────────┘                                                     │
  │                                                                            │
  │  Try : [Success(Str), Error(Str), Warning(Str, I32)]                       │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                       │
  └───────────────────────────────────────────── type_tag_union_complex.md:7:1 ┘
 
-    In this scope, `Try` was already defined here:
-      ┌───────────────────────────────────────────────────────────────────────┐
-    1 │  app [main!] { pf: platform "../basic-cli/main.roc" }                 │
-      │  ‾                                                                    │
-      └──────────────────────────────────────── type_tag_union_complex.md:1:1 ┘
+    This may make the builtin type inaccessible in this scope.
+
+    The new declaration is here:
 
 # TOKENS
 ~~~zig

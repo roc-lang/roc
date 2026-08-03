@@ -61,7 +61,7 @@ EndOfFile,
 		|_| {
 			x = 10
 			x
-		},
+		}
 	)({}) # Inner `x` should be used; outer `x` is not captured (it should be a shadowing warning)
 	y
 }
@@ -74,7 +74,7 @@ EndOfFile,
 		(e-num (value "5")))
 	(s-let
 		(p-assign (ident "y"))
-		(e-call (constraint-fn-var 90)
+		(e-call (constraint-fn-var 222)
 			(e-lambda
 				(args
 					(p-underscore))

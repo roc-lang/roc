@@ -20,6 +20,7 @@ const TypeVar = types_mod.Var;
 pub const NodeStore = @import("NodeStore.zig");
 pub const Node = @import("Node.zig");
 pub const Expr = @import("Expression.zig").Expr;
+pub const DerivedMethodKind = @import("Expression.zig").DerivedMethodKind;
 pub const Pattern = @import("Pattern.zig").Pattern;
 pub const Statement = @import("Statement.zig").Statement;
 pub const TypeAnno = @import("TypeAnnotation.zig").TypeAnno;
@@ -46,8 +47,8 @@ pub const BuiltinIndices = struct {
     field_type: Statement.Idx,
     json_state_type: Statement.Idx,
     json_encode_state_type: Statement.Idx,
+    json_container_encode_state_type: Statement.Idx,
     json_encoding_type: Statement.Idx,
-    json_type: Statement.Idx,
     http_header_state_type: Statement.Idx,
     http_header_encoding_type: Statement.Idx,
     http_header_type: Statement.Idx,
@@ -65,6 +66,14 @@ pub const BuiltinIndices = struct {
     dec_type: Statement.Idx,
     f32_type: Statement.Idx,
     f64_type: Statement.Idx,
+    u8x16_type: Statement.Idx,
+    i8x16_type: Statement.Idx,
+    u16x8_type: Statement.Idx,
+    i16x8_type: Statement.Idx,
+    u32x4_type: Statement.Idx,
+    i32x4_type: Statement.Idx,
+    u64x2_type: Statement.Idx,
+    i64x2_type: Statement.Idx,
     numeral_type: Statement.Idx,
     crypto_type: Statement.Idx,
     crypto_digest_bytes_err_type: Statement.Idx,
@@ -90,8 +99,8 @@ pub const BuiltinIndices = struct {
     field_ident: Ident.Idx,
     json_state_ident: Ident.Idx,
     json_encode_state_ident: Ident.Idx,
+    json_container_encode_state_ident: Ident.Idx,
     json_encoding_ident: Ident.Idx,
-    json_ident: Ident.Idx,
     http_header_state_ident: Ident.Idx,
     http_header_encoding_ident: Ident.Idx,
     http_header_ident: Ident.Idx,
@@ -109,6 +118,14 @@ pub const BuiltinIndices = struct {
     dec_ident: Ident.Idx,
     f32_ident: Ident.Idx,
     f64_ident: Ident.Idx,
+    u8x16_ident: Ident.Idx,
+    i8x16_ident: Ident.Idx,
+    u16x8_ident: Ident.Idx,
+    i16x8_ident: Ident.Idx,
+    u32x4_ident: Ident.Idx,
+    i32x4_ident: Ident.Idx,
+    u64x2_ident: Ident.Idx,
+    i64x2_ident: Ident.Idx,
     numeral_ident: Ident.Idx,
     crypto_ident: Ident.Idx,
     crypto_digest_bytes_err_ident: Ident.Idx,
@@ -171,8 +188,8 @@ pub const builtin_type_specs = [_]BuiltinTypeSpec{
     .{ .display_name = "FieldName", .qualified_name = "Builtin.Encoding.FieldName", .type_field = "field_type", .ident_field = "field_ident", .lookup = .{ .qualified = "Builtin.Encoding.FieldName" }, .auto_import = false },
     .{ .display_name = "JsonState", .qualified_name = "Builtin.Encoding.JsonState", .type_field = "json_state_type", .ident_field = "json_state_ident", .lookup = .{ .qualified = "Builtin.Encoding.JsonState" }, .auto_import = false },
     .{ .display_name = "JsonEncodeState", .qualified_name = "Builtin.Encoding.JsonEncodeState", .type_field = "json_encode_state_type", .ident_field = "json_encode_state_ident", .lookup = .{ .qualified = "Builtin.Encoding.JsonEncodeState" }, .auto_import = false },
+    .{ .display_name = "JsonContainerEncodeState", .qualified_name = "Builtin.Encoding.JsonContainerEncodeState", .type_field = "json_container_encode_state_type", .ident_field = "json_container_encode_state_ident", .lookup = .{ .qualified = "Builtin.Encoding.JsonContainerEncodeState" }, .auto_import = false },
     .{ .display_name = "JsonEncoding", .qualified_name = "Builtin.Encoding.JsonEncoding", .type_field = "json_encoding_type", .ident_field = "json_encoding_ident", .lookup = .{ .qualified = "Builtin.Encoding.JsonEncoding" }, .auto_import = false },
-    .{ .display_name = "Json", .qualified_name = "Builtin.Encoding.Json", .type_field = "json_type", .ident_field = "json_ident", .lookup = .{ .nested = .{ .parent = "Encoding", .name = "Json" } } },
     .{ .display_name = "HttpHeaderState", .qualified_name = "Builtin.Encoding.HttpHeaderState", .type_field = "http_header_state_type", .ident_field = "http_header_state_ident", .lookup = .{ .qualified = "Builtin.Encoding.HttpHeaderState" }, .auto_import = false },
     .{ .display_name = "HttpHeaderEncoding", .qualified_name = "Builtin.Encoding.HttpHeaderEncoding", .type_field = "http_header_encoding_type", .ident_field = "http_header_encoding_ident", .lookup = .{ .qualified = "Builtin.Encoding.HttpHeaderEncoding" }, .auto_import = false },
     .{ .display_name = "HttpHeader", .qualified_name = "Builtin.Encoding.HttpHeader", .type_field = "http_header_type", .ident_field = "http_header_ident", .lookup = .{ .nested = .{ .parent = "Encoding", .name = "HttpHeader" } }, .auto_import = false },
@@ -190,6 +207,14 @@ pub const builtin_type_specs = [_]BuiltinTypeSpec{
     .{ .display_name = "Dec", .qualified_name = "Builtin.Num.Dec", .type_field = "dec_type", .ident_field = "dec_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "Dec" } }, .num_kind = .dec },
     .{ .display_name = "F32", .qualified_name = "Builtin.Num.F32", .type_field = "f32_type", .ident_field = "f32_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "F32" } }, .num_kind = .f32 },
     .{ .display_name = "F64", .qualified_name = "Builtin.Num.F64", .type_field = "f64_type", .ident_field = "f64_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "F64" } }, .num_kind = .f64 },
+    .{ .display_name = "U8x16", .qualified_name = "Builtin.Num.U8x16", .type_field = "u8x16_type", .ident_field = "u8x16_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "U8x16" } } },
+    .{ .display_name = "I8x16", .qualified_name = "Builtin.Num.I8x16", .type_field = "i8x16_type", .ident_field = "i8x16_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "I8x16" } } },
+    .{ .display_name = "U16x8", .qualified_name = "Builtin.Num.U16x8", .type_field = "u16x8_type", .ident_field = "u16x8_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "U16x8" } } },
+    .{ .display_name = "I16x8", .qualified_name = "Builtin.Num.I16x8", .type_field = "i16x8_type", .ident_field = "i16x8_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "I16x8" } } },
+    .{ .display_name = "U32x4", .qualified_name = "Builtin.Num.U32x4", .type_field = "u32x4_type", .ident_field = "u32x4_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "U32x4" } } },
+    .{ .display_name = "I32x4", .qualified_name = "Builtin.Num.I32x4", .type_field = "i32x4_type", .ident_field = "i32x4_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "I32x4" } } },
+    .{ .display_name = "U64x2", .qualified_name = "Builtin.Num.U64x2", .type_field = "u64x2_type", .ident_field = "u64x2_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "U64x2" } } },
+    .{ .display_name = "I64x2", .qualified_name = "Builtin.Num.I64x2", .type_field = "i64x2_type", .ident_field = "i64x2_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "I64x2" } } },
     .{ .display_name = "Numeral", .qualified_name = "Builtin.Num.Numeral", .type_field = "numeral_type", .ident_field = "numeral_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "Numeral" } } },
     .{ .display_name = "Crypto", .qualified_name = "Builtin.Crypto", .type_field = "crypto_type", .ident_field = "crypto_ident", .lookup = .{ .top_level = "Crypto" } },
     .{ .display_name = "DigestBytesErr", .qualified_name = "Builtin.Crypto.DigestBytesErr", .type_field = "crypto_digest_bytes_err_type", .ident_field = "crypto_digest_bytes_err_ident", .lookup = .{ .qualified = "Builtin.Crypto.DigestBytesErr" }, .auto_import = false },
@@ -205,6 +230,7 @@ pub const builtin_type_container_names = [_][]const u8{
     "Builtin",
     "Builtin.Num",
     "Builtin.Encoding",
+    "Builtin.Encoding.Json",
     "Builtin.Crypto",
     "Builtin.Crypto.SHA256",
     "Builtin.Crypto.BLAKE3",
@@ -403,13 +429,26 @@ pub const TypeHeader = struct {
 /// Represents a where clause constraint in type definitions
 pub const WhereClause = union(enum) {
     pub const Idx = enum(u32) { _ };
-    pub const Span = extern struct { span: base.DataSpan };
+    pub const IdxSpan = extern struct { span: base.DataSpan };
+    pub const Owner = extern struct {
+        rigid_var: TypeAnno.Idx,
+        clauses: IdxSpan,
+        owned_by_annotation: bool,
+        _padding: [3]u8 = .{ 0, 0, 0 },
+
+        pub const Span = extern struct { span: base.DataSpan };
+    };
+    pub const Span = extern struct {
+        span: base.DataSpan,
+        owners: Owner.Span,
+    };
 
     w_method: struct {
         var_: TypeAnno.Idx,
         method_name: base.Ident.Idx,
         args: TypeAnno.Span,
         ret: TypeAnno.Idx,
+        effectful: bool,
     },
     w_alias: struct {
         var_: TypeAnno.Idx,
@@ -435,6 +474,7 @@ pub const WhereClause = union(enum) {
 
                 const method_name_str = cir.getIdent(method.method_name);
                 try tree.pushStringPair("name", method_name_str);
+                if (method.effectful) try tree.pushBoolPair("effectful", true);
 
                 const attrs = tree.beginNode();
 
@@ -498,6 +538,12 @@ pub const Annotation = struct {
     /// Whether `anno` *introduces* a type variable (`.rigid_var`). Derived and
     /// populated like `mentions_type_var`.
     introduces_type_var: bool = false,
+    /// Whether the annotation contains an `_` inference hole — in `anno` or in
+    /// any where-clause method signature. Derived by `addAnnotation` and
+    /// populated on read by `getAnnotation`; the value passed at construction is
+    /// ignored. A hole is inferred from the def's body, so an annotation
+    /// containing one does not on its own determine a generalized scheme.
+    contains_underscore: bool = false,
 
     pub fn pushToSExprTree(self: *const @This(), env: anytype, tree: *SExprTree, idx: Annotation.Idx) Allocator.Error!void {
         const annotation = self.*;
@@ -570,15 +616,6 @@ pub const SmallDecValue = struct {
         return numerator_f64 / divisor;
     }
 
-    /// Calculate the int requirements of a SmallDecValue
-    pub fn toFracRequirements(self: SmallDecValue) types_mod.FracRequirements {
-        const f64_val = self.toF64();
-        return types_mod.FracRequirements{
-            .fits_in_f32 = fitsInF32(f64_val),
-            .fits_in_dec = fitsInDec(f64_val),
-        };
-    }
-
     /// Convert to RocDec representation (i128 scaled by 10^18)
     pub fn toRocDec(self: SmallDecValue) RocDec {
         return RocDec.fromFraction(self.numerator, self.denominator_power_of_ten);
@@ -621,44 +658,7 @@ pub const SmallDecValue = struct {
             try std.testing.expectEqual(@as(f64, -32768.0), val.toF64());
         }
     }
-
-    test "SmallDecValue.toFracRequirements - fits in all types" {
-        // Small integer - fits in everything
-        {
-            const val = SmallDecValue{ .numerator = 100, .denominator_power_of_ten = 0 };
-            const req = val.toFracRequirements();
-            try std.testing.expect(req.fits_in_f32);
-            try std.testing.expect(req.fits_in_dec);
-        }
-
-        // Pi approximation - fits in everything
-        {
-            const val = SmallDecValue{ .numerator = 31416, .denominator_power_of_ten = 4 };
-            const req = val.toFracRequirements();
-            try std.testing.expect(req.fits_in_f32);
-            try std.testing.expect(req.fits_in_dec);
-        }
-    }
 };
-
-/// Check if the given f64 fits in f32 range (ignoring precision loss)
-pub fn fitsInF32(f64_val: f64) bool {
-    // Check if it's within the range that f32 can represent.
-    // This includes normal, subnormal, and zero values.
-    // (This is a magnitude check, so take the abs value to check
-    // positive and negative at the same time.)
-    const abs_val = @abs(f64_val);
-    return abs_val == 0.0 or (abs_val >= std.math.floatTrueMin(f32) and abs_val <= std.math.floatMax(f32));
-}
-
-/// Check if a float value can be represented accurately in RocDec
-pub fn fitsInDec(value: f64) bool {
-    // RocDec uses i128 with 18 decimal places
-    const max_dec_value = 170141183460469231731.0;
-    const min_dec_value = -170141183460469231731.0;
-
-    return value >= min_dec_value and value <= max_dec_value;
-}
 
 /// Represents an arbitrary precision integer value
 pub const IntValue = struct {
@@ -695,84 +695,6 @@ pub const IntValue = struct {
         errdefer tree.discardReservedStringBuffer(begin);
         const value_str = self.bufPrint(tree.reservedStringBuffer(begin)[0..40]) catch unreachable;
         try tree.pushReservedStringPair(key, begin, value_str);
-    }
-
-    /// Calculate the int requirements of an IntValue
-    pub fn toIntRequirements(self: IntValue) types_mod.IntRequirements {
-        var is_negated = false;
-        var u128_val: u128 = undefined;
-
-        switch (self.kind) {
-            .i128 => {
-                const val: i128 = @bitCast(self.bytes);
-                is_negated = val < 0;
-                u128_val = if (val < 0) @abs(val) else @intCast(val);
-            },
-            .u128 => {
-                const val: u128 = @bitCast(self.bytes);
-                is_negated = false;
-                u128_val = val;
-            },
-        }
-
-        // Special handling for minimum signed values
-        // These are the exact minimum values for each signed integer type.
-        // They need special handling because their absolute value is one more
-        // than the maximum positive value of the same signed type.
-        // For example: i8 range is -128 to 127, so abs(-128) = 128 doesn't fit in i8's positive range
-        const is_minimum_signed = is_negated and switch (u128_val) {
-            @as(u128, @intCast(std.math.maxInt(i8))) + 1 => true,
-            @as(u128, @intCast(std.math.maxInt(i16))) + 1 => true,
-            @as(u128, @intCast(std.math.maxInt(i32))) + 1 => true,
-            @as(u128, @intCast(std.math.maxInt(i64))) + 1 => true,
-            @as(u128, @intCast(std.math.maxInt(i128))) + 1 => true,
-            else => false,
-        };
-
-        // For minimum signed values, subtract 1 from the magnitude
-        // This makes the bit calculation work correctly with the "n-1 bits for magnitude" rule
-        const adjusted_val = if (is_minimum_signed) u128_val - 1 else u128_val;
-        const bits_needed = types_mod.Int.BitsNeeded.fromValue(adjusted_val);
-        return types_mod.IntRequirements{
-            .sign_needed = is_negated and u128_val != 0, // -0 doesn't need a sign
-            .bits_needed = bits_needed.toBits(),
-            .is_minimum_signed = is_minimum_signed,
-        };
-    }
-
-    /// Calculate the frac requirements of an IntValue
-    pub fn toFracRequirements(self: IntValue) types_mod.FracRequirements {
-        // Convert to f64 for checking
-        const f64_val: f64 = switch (self.kind) {
-            .i128 => builtins.compiler_rt_128.i128_to_f64(@as(i128, @bitCast(self.bytes))),
-            .u128 => blk: {
-                const val = @as(u128, @bitCast(self.bytes));
-                if (val > @as(u128, 1) << 64) {
-                    break :blk std.math.inf(f64);
-                }
-                break :blk builtins.compiler_rt_128.u128_to_f64(val);
-            },
-        };
-
-        // For integers, check both range AND exact representability in f32
-        const fits_in_f32 = blk: {
-            // Check range
-            if (!fitsInF32(f64_val)) {
-                break :blk false;
-            }
-
-            // Additionally check exact representability for integers
-            // F32 can exactly represent integers only up to 2^24
-            const f32_max_exact_int = 16777216.0; // 2^24
-            break :blk @abs(f64_val) <= f32_max_exact_int;
-        };
-
-        const fits_in_dec = fitsInDec(f64_val);
-
-        return types_mod.FracRequirements{
-            .fits_in_f32 = fits_in_f32,
-            .fits_in_dec = fits_in_dec,
-        };
     }
 };
 
@@ -822,7 +744,7 @@ pub const NumeralDigits = struct {
     /// Number of bytes for digits_after_pt
     after_pt_len: u16,
     /// Number of decimal digits after the point before base-256 encoding
-    after_pt_digit_count: u32,
+    after_pt_digit_count: u64,
     /// Whether the literal had a minus sign
     is_negative: bool,
 
@@ -843,8 +765,7 @@ pub const NumeralDigits = struct {
     }
 };
 
-// RocDec type definition (for missing export)
-// Must match the structure of builtins.RocDec
+// Re-export of the canonical Dec type so CIR consumers can name it locally.
 pub const RocDec = builtins.dec.RocDec;
 
 /// Converts a RocDec to an i128 integer
@@ -855,7 +776,7 @@ pub fn toI128(self: RocDec) i128 {
 /// Creates a RocDec from an f64 value, returns null if conversion fails
 pub fn fromF64(f: f64) ?RocDec {
     // Simple conversion - the real implementation is in builtins/dec.zig
-    const scaled = builtins.compiler_rt_128.f64_to_i128(f * 1_000_000_000_000_000_000.0);
+    const scaled = builtins.compiler_rt_128.f64_to_i128(f * @as(f64, @floatFromInt(RocDec.one_point_zero_i128)));
     return RocDec{ .num = scaled };
 }
 

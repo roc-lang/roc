@@ -109,8 +109,7 @@ match Answer {
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-string
-						(e-literal (string "hello")))))
+					(e-runtime-error (tag "erroneous_value_expr"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)

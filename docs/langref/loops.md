@@ -9,18 +9,22 @@ A `for` loop lets you run code on each item in an [iterator](iterators). For exa
 ```roc
 var $sum = 0
 
-for n in 1.to(5) {
+for n in 1..<5 {
     $sum = $sum + n
 }
 ```
 
-> The `to` method returns a [range](numbers#ranges) which is an `Iter` of the number in question. For example, `I64.to` returns `Iter(I64)`, and so `n` in this example would be an `I64`.
+> `1..<5` is a [range](numbers#ranges): an `Iter` of the numbers from 1 up to (but not including) 5. Writing `1..=5` instead would include the 5. A range is an `Iter` of its bounds' type — for example, if the bounds are `I64` values, the range is an `Iter(I64)`, and so `n` in this example would be an `I64`.
 
 A loop body only includes statements; it does not have a final expression. The loop itself evaluates to `{}`.
 
 ### Iterating over types that have `iter`
 
-`for` can also be used on types that have an `iter` method, as long as that method returns an [`Iter`](builtins/Iter). For example, [`List`](builtins/list) has (`List.iter`)[builtins/List#iter], so you can do a `for` loop over a list:
+`for` can also be used on types that have an
+[`iter`](static-dispatch#iteration) method, as long as that method returns an
+[`Iter`](../Iter). The loop then calls `next` on the returned iterator.
+For example, [`List`](../List) has `List.iter`, so you can do a `for`
+loop over a list:
 
 ```roc
 var $sum = 0
@@ -30,7 +34,7 @@ for n in [1, 2, 3, 4] {
 }
 ```
 
-At runtime, this `[1, 2, 3, 4]` code snippet is exactly as efficient as the earlier `1.to(5)` one. In one case, `1.to(5)` will be evaluated to an `Iter` at compile time, and in the other, `[1, 2, 3, 4].iter()` will be evaluated at compile time to an identical `Iter`. By the time either program actually runs, they will have the same memory contents and will be executing the same instructions.
+This `[1, 2, 3, 4]` code snippet works the same way as the earlier `1..<5` one. In one case, `1..<5` evaluates to an `Iter` of the numbers 1 through 4, and in the other, `[1, 2, 3, 4].iter()` evaluates to an `Iter` of those same numbers. Either way, the loop proceeds by repeatedly calling `next` on that `Iter`.
 
 ### Pattern matching in `for`
 
@@ -52,7 +56,7 @@ for _ in items {
 }
 ```
 
-Just like with [assignments](statements#assignments), the pattern you use here must be [exhaustive](pattern-matching#exhaustiveness). For example, the following would give an exhaustiveness error because the loop body couldn't know what value to use for `amount_to_add` if the item was ever `Err` at runtime:
+Just like with [assignments](statements#assignment), the pattern you use here must be [exhaustive](pattern-matching#exhaustiveness). For example, the following would give an exhaustiveness error because the loop body couldn't know what value to use for `amount_to_add` if the item was ever `Err` at runtime:
 
 ```roc
 var $count = 0
@@ -62,6 +66,8 @@ for Ok(amount_to_add) in items {
 ```
 
 If you can't write an exhaustive pattern-match, you can name the entire iterator item and then use [`match`](pattern-matching#match) on it inside the loop body.
+
+(Note: the dedicated exhaustiveness error is not implemented yet for `for` patterns, even though it is for [assignments](statements#assignment). Currently, a non-exhaustive tag pattern like this one is reported as a type mismatch instead, and non-exhaustive patterns that the type checker can't rule out—such as a number literal pattern—are not caught at compile time and crash at runtime.)
 
 ## `while` Loops
 
@@ -107,4 +113,8 @@ for i in [1, 2, 3] {
 }
 ```
 
-Loops typically use [variable reassignment](./statements.md#reassignment) or for calling [effectful functions](./functions.md#effectful-functions).
+Loops are typically used for [variable reassignment](statements#reassignment) or for calling [effectful functions](functions#effectful-functions).
+
+## Infinite Loops
+
+TODO

@@ -711,99 +711,92 @@ test "SmallStringInterner enableRuntimeInserts copies frozen data and permits in
     try std.testing.expectEqualStrings("beta", roundtrip.interner.getText(beta));
 }
 
-// TODO: CompactWriter doesn't support serializing multiple independent structures
-// This test needs to be redesigned to either use separate writers or a containing structure
-// test "SmallStringInterner multiple interners CompactWriter roundtrip" {
-//     const gpa = std.testing.allocator;
+test "SmallStringInterner multiple interners CompactWriter roundtrip" {
+    const gpa = std.testing.allocator;
 
-//     // Create multiple interners to test alignment and offset handling
-//     var interner1 = try SmallStringInterner.initCapacity(gpa, 5);
-//     defer interner1.deinit(gpa);
+    // Create multiple interners to test alignment and offset handling
+    var interner1 = try SmallStringInterner.initCapacity(gpa, 5);
+    defer interner1.deinit(gpa);
 
-//     var interner2 = try SmallStringInterner.initCapacity(gpa, 5);
-//     defer interner2.deinit(gpa);
+    var interner2 = try SmallStringInterner.initCapacity(gpa, 5);
+    defer interner2.deinit(gpa);
 
-//     var interner3 = try SmallStringInterner.initCapacity(gpa, 5);
-//     defer interner3.deinit(gpa);
+    var interner3 = try SmallStringInterner.initCapacity(gpa, 5);
+    defer interner3.deinit(gpa);
 
-//     // Populate with different strings
-//     const idx1_1 = try interner1.insert(gpa, "interner1_string1");
-//     const idx1_2 = try interner1.insert(gpa, "interner1_string2");
+    // Populate with different strings
+    const idx1_1 = try interner1.insert(gpa, "interner1_string1");
+    const idx1_2 = try interner1.insert(gpa, "interner1_string2");
 
-//     const idx2_1 = try interner2.insert(gpa, "interner2_string1");
-//     const idx2_2 = try interner2.insert(gpa, "interner2_string2");
-//     const idx2_3 = try interner2.insert(gpa, "interner2_string3");
+    const idx2_1 = try interner2.insert(gpa, "interner2_string1");
+    const idx2_2 = try interner2.insert(gpa, "interner2_string2");
+    const idx2_3 = try interner2.insert(gpa, "interner2_string3");
 
-//     const idx3_1 = try interner3.insert(gpa, "interner3_string1");
+    const idx3_1 = try interner3.insert(gpa, "interner3_string1");
 
-//     // Freeze the second one
-//     interner2.freeze();
+    // Create a temp file
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
 
-//     // Create a temp file
-//     var tmp_dir = std.testing.tmpDir(.{});
-//     defer tmp_dir.cleanup();
+    const io = std.testing.io;
+    const file = try tmp_dir.dir.createFile(io, "test_multiple_interners.dat", .{ .read = true });
+    defer file.close(io);
 
-//     const file = try tmp_dir.dir.createFile("test_multiple_interners.dat", .{ .read = true });
-//     defer file.close();
+    // Serialize using arena allocator
+    var arena = collections.SingleThreadArena.init(gpa);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
 
-//     // Use arena allocator for serialization
-//     var arena = std.heap.ArenaAllocator.init(gpa);
-//     defer arena.deinit();
-//     const arena_allocator = arena.allocator();
+    var writer = CompactWriter.init();
+    defer writer.deinit(arena_allocator);
 
-//     // Serialize all three
-//     var writer = CompactWriter{
-//         .iovecs = .{},
-//         .total_bytes = 0,
-//         .allocated_memory = .{},
-//     };
-//     defer writer.deinit(arena_allocator);
+    // Serialize all three into one buffer, recording where each struct starts.
+    // appendAlloc pads to the struct's alignment before writing it, so pad first
+    // and then record the offset.
+    try writer.padToAlignment(arena_allocator, @alignOf(SmallStringInterner));
+    const offset1 = writer.total_bytes;
+    _ = try interner1.serialize(arena_allocator, &writer);
 
-//     // Track where each interner starts in the serialized data
-//     const offset1: usize = 0; // First interner starts at 0
-//     _ = try interner1.serialize(arena_allocator, &writer);
-//     const offset1_end = writer.total_bytes;
+    try writer.padToAlignment(arena_allocator, @alignOf(SmallStringInterner));
+    const offset2 = writer.total_bytes;
+    _ = try interner2.serialize(arena_allocator, &writer);
 
-//     const offset2 = offset1_end; // Second interner starts where first ended
-//     _ = try interner2.serialize(arena_allocator, &writer);
-//     const offset2_end = writer.total_bytes;
+    try writer.padToAlignment(arena_allocator, @alignOf(SmallStringInterner));
+    const offset3 = writer.total_bytes;
+    _ = try interner3.serialize(arena_allocator, &writer);
 
-//     const offset3 = offset2_end; // Third interner starts where second ended
-//     _ = try interner3.serialize(arena_allocator, &writer);
+    // Write to file
+    try writer.writeGather(file, io);
 
-//     // Write to file
-//     try writer.writeGather(file);
+    // Read back
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", writer.total_bytes);
+    defer gpa.free(buffer);
 
-//     // Read back
-//     try file.seekTo(0);
-//     const file_size = try file.getEndPos();
-//     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
-//     defer gpa.free(buffer);
+    _ = try file.readPositionalAll(io, buffer, 0);
 
-//     _ = try file.read(buffer);
+    // Cast and relocate all three; every serialized pointer is an offset from the
+    // start of the whole buffer, so each root relocates by the same base address.
+    const deserialized1 = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr + offset1)));
+    deserialized1.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
 
-//     // Cast and relocate all three
-//     const deserialized1 = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr + offset1)));
-//     deserialized1.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+    const deserialized2 = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr + offset2)));
+    deserialized2.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
 
-//     const deserialized2 = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr + offset2)));
-//     deserialized2.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+    const deserialized3 = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr + offset3)));
+    deserialized3.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
 
-//     const deserialized3 = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr + offset3)));
-//     deserialized3.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+    // Verify interner 1
+    try std.testing.expectEqualStrings("interner1_string1", deserialized1.getText(idx1_1));
+    try std.testing.expectEqualStrings("interner1_string2", deserialized1.getText(idx1_2));
+    try std.testing.expectEqual(@as(u32, 2), deserialized1.entry_count);
 
-//     // Verify interner 1
-//     try std.testing.expectEqualStrings("interner1_string1", deserialized1.getText(idx1_1));
-//     try std.testing.expectEqualStrings("interner1_string2", deserialized1.getText(idx1_2));
-//     try std.testing.expectEqual(@as(u32, 2), deserialized1.entry_count);
+    // Verify interner 2
+    try std.testing.expectEqualStrings("interner2_string1", deserialized2.getText(idx2_1));
+    try std.testing.expectEqualStrings("interner2_string2", deserialized2.getText(idx2_2));
+    try std.testing.expectEqualStrings("interner2_string3", deserialized2.getText(idx2_3));
+    try std.testing.expectEqual(@as(u32, 3), deserialized2.entry_count);
 
-//     // Verify interner 2
-//     try std.testing.expectEqualStrings("interner2_string1", deserialized2.getText(idx2_1));
-//     try std.testing.expectEqualStrings("interner2_string2", deserialized2.getText(idx2_2));
-//     try std.testing.expectEqualStrings("interner2_string3", deserialized2.getText(idx2_3));
-//     try std.testing.expectEqual(@as(u32, 3), deserialized2.entry_count);
-
-//     // Verify interner 3
-//     try std.testing.expectEqualStrings("interner3_string1", deserialized3.getText(idx3_1));
-//     try std.testing.expectEqual(@as(u32, 1), deserialized3.entry_count);
-// } // End of commented test
+    // Verify interner 3
+    try std.testing.expectEqualStrings("interner3_string1", deserialized3.getText(idx3_1));
+    try std.testing.expectEqual(@as(u32, 1), deserialized3.entry_count);
+}

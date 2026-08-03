@@ -213,14 +213,14 @@ package
 
 value1 = \\This is a "string" with just one line
 
-value2 = 
+value2 =
 	\\This is a "string" with just one line
 
 value3 = \\This is a string
 	\\With multiple lines
 	\\${value1}
 
-value4 = 
+value4 =
 	\\This is a string
 	# A comment in between
 	\\With multiple lines
@@ -241,7 +241,6 @@ value5 = {
 	],
 	d: (
 		0 - \\
-		,
 	),
 	e: !\\
 	,
@@ -270,7 +269,7 @@ x = {
 				(p-assign (ident "#interp_0"))
 				(e-lookup-local
 					(p-assign (ident "value1"))))
-			(e-interpolation (constraint-fn-var 148)
+			(e-interpolation (constraint-fn-var 278) (dispatcher-var 15)
 				(first
 					(e-literal (string "This is a string
 With multiple lines
@@ -286,7 +285,7 @@ With multiple lines
 				(p-assign (ident "#interp_1"))
 				(e-lookup-local
 					(p-assign (ident "value2"))))
-			(e-interpolation (constraint-fn-var 204)
+			(e-interpolation (constraint-fn-var 296) (dispatcher-var 25)
 				(first
 					(e-literal (string "This is a string
 With multiple lines
@@ -315,16 +314,9 @@ With multiple lines
 							(e-string
 								(e-literal (string "multiline"))))))
 				(field (name "d")
-					(e-dispatch-call (method "minus") (constraint-fn-var 318)
-						(receiver
-							(e-num (value "0")))
-						(args
-							(e-string))))
+					(e-runtime-error (tag "erroneous_value_expr")))
 				(field (name "e")
-					(e-dispatch-call (method "not") (constraint-fn-var 333)
-						(receiver
-							(e-string))
-						(args))))))
+					(e-runtime-error (tag "erroneous_value_expr"))))))
 	(d-let
 		(p-assign (ident "x"))
 		(e-block
@@ -340,13 +332,13 @@ With multiple lines
 		(patt (type "Str"))
 		(patt (type "Str"))
 		(patt (type "Str"))
-		(patt (type "{ a: Str, b: (Str, Str), c: List(Str), d: Error, e: Error }"))
+		(patt (type "{ a: Str, b: (Str, Str), c: List(Str), d: Dec, e: Str }"))
 		(patt (type "Str")))
 	(expressions
 		(expr (type "Str"))
 		(expr (type "Str"))
 		(expr (type "Str"))
 		(expr (type "Str"))
-		(expr (type "{ a: Str, b: (Str, Str), c: List(Str), d: Error, e: Error }"))
+		(expr (type "{ a: Str, b: (Str, Str), c: List(Str), d: Dec, e: Str }"))
 		(expr (type "Str"))))
 ~~~

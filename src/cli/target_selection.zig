@@ -27,6 +27,7 @@ pub const SelectedTarget = struct {
 /// Result of resolving a requested or default platform target.
 pub const SelectionResult = union(enum) {
     selected: SelectedTarget,
+    requires_executable: SelectedTarget,
     invalid_target: []const u8,
     unsupported_target: RocTarget,
     no_default,
@@ -34,7 +35,9 @@ pub const SelectionResult = union(enum) {
 };
 
 fn isBuildDefaultTarget(target: RocTarget) bool {
-    return target == .wasm32 or target.matchesHostOsAndArch();
+    // Compare the architecture rather than the target, so both the default and
+    // the baseline spelling of wasm are covered.
+    return target.toCpuArch() == .wasm32 or target.matchesHostOsAndArch();
 }
 
 fn selectExplicitBuildTarget(config: TargetsConfig, target: RocTarget) SelectionResult {
@@ -83,7 +86,12 @@ fn selectRunTargetForParsed(config: TargetsConfig, target: RocTarget, source: Se
     };
 
     if (link_spec.output != .exe) {
-        return .{ .unsupported_target = target };
+        return .{ .requires_executable = .{
+            .target = target,
+            .output = link_spec.output,
+            .link_spec = link_spec,
+            .source = source,
+        } };
     }
 
     if (!target.isExecutableOnHost()) {
@@ -107,6 +115,7 @@ pub fn selectRunTarget(config: TargetsConfig, target_arg: ?[]const u8) Selection
         return selectRunTargetForParsed(config, target, .explicit);
     }
 
+    var default_non_executable: ?SelectedTarget = null;
     for (config.getSupportedTargets()) |link_spec| {
         if (link_spec.output == .exe and link_spec.target.isExecutableOnHost()) {
             return .{ .selected = .{
@@ -116,8 +125,17 @@ pub fn selectRunTarget(config: TargetsConfig, target_arg: ?[]const u8) Selection
                 .source = .default,
             } };
         }
+        if (default_non_executable == null and link_spec.output != .exe and isBuildDefaultTarget(link_spec.target)) {
+            default_non_executable = .{
+                .target = link_spec.target,
+                .output = link_spec.output,
+                .link_spec = link_spec,
+                .source = .default,
+            };
+        }
     }
 
+    if (default_non_executable) |selected| return .{ .requires_executable = selected };
     return .no_default;
 }
 
@@ -146,6 +164,13 @@ fn expectSelected(result: SelectionResult) error{ExpectedSelectedTarget}!Selecte
     return switch (result) {
         .selected => |selected| selected,
         else => error.ExpectedSelectedTarget,
+    };
+}
+
+fn expectRequiresExecutable(result: SelectionResult) error{ExpectedRequiresExecutableTarget}!SelectedTarget {
+    return switch (result) {
+        .requires_executable => |selected| selected,
+        else => error.ExpectedRequiresExecutableTarget,
     };
 }
 
@@ -199,8 +224,15 @@ test "run target requires host exe target" {
         },
     };
 
-    try std.testing.expectEqual(SelectionResult.no_default, selectRunTarget(config, null));
-    try std.testing.expectEqual(SelectionResult{ .unsupported_target = .wasm32 }, selectRunTarget(config, "wasm32"));
+    const default_selected = try expectRequiresExecutable(selectRunTarget(config, null));
+    try std.testing.expectEqual(RocTarget.wasm32, default_selected.target);
+    try std.testing.expectEqual(OutputKind.shared, default_selected.output);
+    try std.testing.expectEqual(SelectionSource.default, default_selected.source);
+
+    const explicit_selected = try expectRequiresExecutable(selectRunTarget(config, "wasm32"));
+    try std.testing.expectEqual(RocTarget.wasm32, explicit_selected.target);
+    try std.testing.expectEqual(OutputKind.shared, explicit_selected.output);
+    try std.testing.expectEqual(SelectionSource.explicit, explicit_selected.source);
 }
 
 test "run target excludes wasm exe targets" {
@@ -223,14 +255,16 @@ test "run target excludes non-exe outputs" {
         },
     };
 
-    try std.testing.expectEqual(SelectionResult.no_default, selectRunTarget(config, null));
+    const selected = try expectRequiresExecutable(selectRunTarget(config, null));
+    try std.testing.expectEqual(RocTarget.detectNative(), selected.target);
+    try std.testing.expectEqual(OutputKind.shared, selected.output);
 }
 
 test "run target selects native exe target" {
     const config = TargetsConfig{
         .inputs_dir = null,
         .targets = &.{
-            .{ .target = .wasm32, .output = .exe, .items = &.{.app} },
+            .{ .target = .wasm32, .output = .shared, .items = &.{.app} },
             .{ .target = RocTarget.detectNative(), .output = .exe, .items = &.{.app} },
         },
     };
@@ -247,4 +281,22 @@ test "wasm shared module output extension is wasm" {
 test "archive output extension follows target convention" {
     const expected: []const u8 = if (builtin.target.os.tag == .windows) ".lib" else ".a";
     try std.testing.expectEqualStrings(expected, defaultBuildOutputExtension(.archive, RocTarget.detectNative()));
+}
+
+test "baseline wasm is a build default target like its default twin" {
+    // Both spellings of wasm build from any host, so both are eligible as a
+    // build default. Comparing against `.wasm32` alone silently excluded
+    // `wasm32v1` and sent it down the native path instead.
+    try std.testing.expect(isBuildDefaultTarget(.wasm32));
+    try std.testing.expect(isBuildDefaultTarget(.wasm32v1));
+}
+
+test "a v1 target is a build default exactly when its default twin is" {
+    for (std.enums.values(RocTarget)) |target| {
+        if (target.cpuLevel() != .v1) continue;
+        try std.testing.expectEqual(
+            isBuildDefaultTarget(target.defaultCpuTarget()),
+            isBuildDefaultTarget(target),
+        );
+    }
 }

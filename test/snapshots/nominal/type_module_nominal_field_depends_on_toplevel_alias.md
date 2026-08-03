@@ -1,13 +1,13 @@
 # META
 ~~~ini
-description=Nominal type module whose field depends on a top-level type ALIAS. No warning expected: aliases are structurally transparent, so other modules can still see the field's structure.
-type=file:ModuleType.roc
+description=Nominal type mod whose field depends on a top-level type ALIAS. No warning expected: aliases are structurally transparent, so other mods can still see the field's structure.
+type=file:ModType.roc
 ~~~
 # SOURCE
 ~~~roc
 InternalType : [Some, Other]
 
-ModuleType := {
+ModType := {
     field : InternalType,
 }
 ~~~
@@ -26,7 +26,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "InternalType")
@@ -36,7 +36,7 @@ EndOfFile,
 					(ty (name "Some"))
 					(ty (name "Other")))))
 		(s-type-decl
-			(header (name "ModuleType")
+			(header (name "ModType")
 				(args))
 			(ty-record
 				(anno-record-field (name "field")
@@ -46,7 +46,7 @@ EndOfFile,
 ~~~roc
 InternalType : [Some, Other]
 
-ModuleType := {
+ModType := {
 	field : InternalType,
 }
 ~~~
@@ -59,7 +59,7 @@ ModuleType := {
 			(ty-tag-name (name "Some"))
 			(ty-tag-name (name "Other"))))
 	(s-nominal-decl
-		(ty-header (name "ModuleType"))
+		(ty-header (name "ModType"))
 		(ty-record
 			(field (field "field")
 				(ty-lookup (name "InternalType") (local))))))
@@ -71,7 +71,7 @@ ModuleType := {
 	(type_decls
 		(alias (type "InternalType")
 			(ty-header (name "InternalType")))
-		(nominal (type "ModuleType")
-			(ty-header (name "ModuleType"))))
+		(nominal (type "ModType")
+			(ty-header (name "ModType"))))
 	(expressions))
 ~~~

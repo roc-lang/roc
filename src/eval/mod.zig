@@ -6,13 +6,10 @@ const std = @import("std");
 const builtin = @import("builtin");
 const backend = @import("backend");
 
+/// Backend-neutral execution contract for inspect-wrapped LIR roots.
+pub const InspectedRun = @import("inspected_run.zig");
 /// Backends available for evaluating Roc code.
-pub const EvalBackend = enum {
-    interpreter,
-    dev,
-    wasm,
-    llvm,
-};
+pub const EvalBackend = InspectedRun.Backend;
 
 /// Whether a backend is currently implemented in this compiler build.
 pub fn backendAvailable(backend_kind: EvalBackend) bool {
@@ -27,6 +24,8 @@ pub fn backendAvailable(backend_kind: EvalBackend) bool {
 
 /// Executable memory for running generated code (re-exported from backend module)
 pub const ExecutableMemory = backend.ExecutableMemory;
+/// Shared dynamic-library loader for LLVM-generated libraries.
+pub const DynLib = @import("dynlib.zig").DynLib;
 /// Layout module (re-exported for result type information)
 pub const layout = @import("layout");
 /// Utilities for loading compiled builtin modules
@@ -72,6 +71,7 @@ pub const interpreter = if (builtin.target.os.tag == .freestanding) struct {
             _: *const @import("lir").LirStore,
             _: *const @import("layout").Store,
             _: *const @import("builtins").host_abi.RocOps,
+            _: @import("builtins").float_bits.NanMode,
         ) error{BackendUnavailable}!@This() {
             return error.BackendUnavailable;
         }
@@ -95,16 +95,18 @@ pub const wasm_runner = if (builtin.target.os.tag == .freestanding) struct {
         allocation_count: u32,
     };
 
-    pub fn runWasmStr(_: std.mem.Allocator, _: []const u8, _: bool) EvalError![]u8 {
+    pub fn runWasmStr(_: std.mem.Allocator, _: []const u8, _: u32, _: bool) EvalError![]u8 {
         return error.WasmExecFailed;
     }
 
-    pub fn runWasmStrWithStats(_: std.mem.Allocator, _: []const u8, _: bool) EvalError!RunWasmStrResult {
+    pub fn runWasmStrWithStats(_: std.mem.Allocator, _: []const u8, _: u32, _: bool) EvalError!RunWasmStrResult {
         return error.WasmExecFailed;
     }
 } else @import("wasm_runner.zig");
 /// Shared eval test helpers routed through checked artifacts.
 pub const test_helpers = @import("test_helpers.zig");
+/// Debug-only conformance check between `RcEffect` rows and builtin behavior.
+pub const rc_conformance = @import("rc_conformance.zig");
 
 test "eval tests" {
     std.testing.refAllDecls(@This());
@@ -112,15 +114,17 @@ test "eval tests" {
     std.testing.refAllDecls(@import("builtins.zig"));
     std.testing.refAllDecls(@import("crash_context.zig"));
     std.testing.refAllDecls(@import("value.zig"));
-    std.testing.refAllDecls(@import("interpreter_values.zig"));
     std.testing.refAllDecls(@import("interpreter.zig"));
     std.testing.refAllDecls(@import("host_trampoline.zig"));
     std.testing.refAllDecls(@import("compile_time_finalization.zig"));
     std.testing.refAllDecls(@import("compiler_host.zig"));
     std.testing.refAllDecls(@import("compile_time_host.zig"));
     std.testing.refAllDecls(@import("const_store_writer.zig"));
+    std.testing.refAllDecls(@import("inspected_run.zig"));
+    std.testing.refAllDecls(@import("rc_conformance.zig"));
     std.testing.refAllDecls(@import("stack.zig"));
     std.testing.refAllDecls(@import("test_helpers.zig"));
+    std.testing.refAllDecls(@import("test/host_trampoline_assembly_test.zig"));
     std.testing.refAllDecls(@import("test/RuntimeHostEnv.zig"));
     std.testing.refAllDecls(@import("test/stack_test.zig"));
 }

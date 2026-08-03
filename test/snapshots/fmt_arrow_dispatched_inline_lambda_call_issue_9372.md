@@ -19,7 +19,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "test1"))
@@ -35,18 +35,18 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+test1 = 10 |> (|x| x + 1)
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(d-let
 		(p-assign (ident "test1"))
-		(e-call (constraint-fn-var 83)
+		(e-call (constraint-fn-var 215)
 			(e-lambda
 				(args
 					(p-assign (ident "x")))
-				(e-dispatch-call (method "plus") (constraint-fn-var 48)
+				(e-dispatch-call (method "plus") (constraint-fn-var 206)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "x"))))

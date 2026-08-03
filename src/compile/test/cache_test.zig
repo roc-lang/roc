@@ -6,6 +6,20 @@ const CacheConfig = @import("../cache_config.zig").CacheConfig;
 const CoreCtx = ctx_mod.CoreCtx;
 const testing = std.testing;
 
+const WarningCapture = struct {
+    allocator: std.mem.Allocator,
+    stderr: std.ArrayList(u8) = .empty,
+
+    fn deinit(self: *WarningCapture) void {
+        self.stderr.deinit(self.allocator);
+    }
+};
+
+fn captureStderr(ctx: ?*anyopaque, _: std.Io, bytes: []const u8) CoreCtx.StdioError!void {
+    const capture: *WarningCapture = @ptrCast(@alignCast(ctx.?));
+    capture.stderr.appendSlice(capture.allocator, bytes) catch return error.IoError;
+}
+
 test "getTestCacheDir returns test subdirectory" {
     const allocator = testing.allocator;
     // Use an explicit cache_dir so the test does not depend on HOME/XDG env vars
@@ -105,4 +119,22 @@ test "loadRawBytes returns null on miss" {
 
     // Stats should record a miss
     try testing.expectEqual(@as(u64, 1), manager.stats.misses);
+}
+
+test "recordStoreFailure prints non-verbose warning once" {
+    const allocator = testing.allocator;
+
+    var capture = WarningCapture{ .allocator = allocator };
+    defer capture.deinit();
+
+    var filesystem = CoreCtx.testing(allocator, allocator);
+    filesystem.ctx = &capture;
+    filesystem.vtable.writeStderr = &captureStderr;
+
+    var manager = CacheManager.init(allocator, .{ .roc_ctx = filesystem }, filesystem);
+    manager.recordStoreFailure();
+    manager.recordStoreFailure();
+
+    try testing.expectEqual(@as(u64, 2), manager.stats.store_failures);
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, capture.stderr.items, "Roc cache writes are failing"));
 }

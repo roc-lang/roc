@@ -28,7 +28,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "foo"))
@@ -66,7 +66,7 @@ foo = |num| {
 				(p-assign (ident "num")))
 			(e-block
 				(s-dbg
-					(e-dispatch-call (method "to_str") (constraint-fn-var 18)
+					(e-dispatch-call (method "to_str") (constraint-fn-var 201)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "num"))))

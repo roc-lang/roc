@@ -81,7 +81,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "Color")
@@ -208,7 +208,7 @@ c3 = Color.Blue
 # Test equality - same values should be equal
 expect c1 == c2
 
-# Test inequality - different values should not be equal 
+# Test inequality - different values should not be equal
 expect c1 != c3
 ~~~
 # CANONICALIZE

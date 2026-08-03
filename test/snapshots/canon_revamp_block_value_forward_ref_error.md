@@ -48,7 +48,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "x"))
@@ -75,11 +75,7 @@ x = {
 		(p-assign (ident "x"))
 		(e-block
 			(s-expr
-				(e-dispatch-call (method "plus") (constraint-fn-var 52)
-					(receiver
-						(e-runtime-error (tag "ident_not_in_scope")))
-					(args
-						(e-num (value "1")))))
+				(e-runtime-error (tag "erroneous_value_expr")))
 			(s-let
 				(p-assign (ident "y"))
 				(e-num (value "5")))

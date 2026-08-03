@@ -21,6 +21,10 @@ pub const Diagnostic = union(enum) {
         ident: Ident.Idx,
         region: Region,
     },
+    provided_value_is_required: struct {
+        ident: Ident.Idx,
+        region: Region,
+    },
     redundant_exposed: struct {
         ident: Ident.Idx,
         region: Region,
@@ -271,6 +275,12 @@ pub const Diagnostic = union(enum) {
     module_header_deprecated: struct {
         region: Region,
     },
+    /// The header pins a compiler version that is not the one running.
+    roc_version_mismatch: struct {
+        pinned: Ident.Idx,
+        running: Ident.Idx,
+        region: Region,
+    },
     redundant_expose_main_type: struct {
         type_name: Ident.Idx,
         module_name: Ident.Idx,
@@ -295,7 +305,10 @@ pub const Diagnostic = union(enum) {
         name: Ident.Idx,
         region: Region,
         original_region: Region,
-        cross_scope: bool,
+    },
+    builtin_type_shadowed_warning: struct {
+        name: Ident.Idx,
+        region: Region,
     },
     type_parameter_conflict: struct {
         name: Ident.Idx,
@@ -386,6 +399,7 @@ pub const Diagnostic = union(enum) {
         return switch (self) {
             .not_implemented => |d| d.region,
             .exposed_but_not_implemented => |d| d.region,
+            .provided_value_is_required => |d| d.region,
             .redundant_exposed => |d| d.region,
             .invalid_num_literal => |d| d.region,
             .ident_already_in_scope => |d| d.region,
@@ -442,11 +456,13 @@ pub const Diagnostic = union(enum) {
             .execution_requires_app_or_default_app => |d| d.region,
             .type_name_case_mismatch => |d| d.region,
             .module_header_deprecated => |d| d.region,
+            .roc_version_mismatch => |d| d.region,
             .redundant_expose_main_type => |d| d.region,
             .invalid_main_type_rename_in_exposing => |d| d.region,
             .type_alias_redeclared => |d| d.redeclared_region,
             .nominal_type_redeclared => |d| d.redeclared_region,
             .type_shadowed_warning => |d| d.region,
+            .builtin_type_shadowed_warning => |d| d.region,
             .type_parameter_conflict => |d| d.region,
             .unused_variable => |d| d.region,
             .used_underscore_variable => |d| d.region,
@@ -1145,59 +1161,77 @@ pub const Diagnostic = union(enum) {
         return report;
     }
 
-    /// Build a report for "type shadowed warning" diagnostic
+    /// Build a report for shadowing a type from an outer lexical scope.
     pub fn buildTypeShadowedWarningReport(
         allocator: Allocator,
         type_name: []const u8,
         new_region_info: base.RegionInfo,
         original_region_info: base.RegionInfo,
-        cross_scope: bool,
         filename: []const u8,
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        const severity = if (cross_scope) reporting.Severity.warning else reporting.Severity.runtime_error;
-        const title = if (cross_scope) "Type Shadowed" else "Type Duplicate";
-
-        var report = try Report.init(allocator, title, "", severity);
+        var report = try Report.init(allocator, "Type Shadowed", "", .warning);
         const owned_type_name = try report.addOwnedString(type_name);
 
-        if (cross_scope) {
-            try report.headline.addText("The type ");
-            try report.headline.addUnqualifiedSymbol(owned_type_name);
-            try report.headline.addText(" shadows a type from an outer scope.");
-            try report.document.addReflowingText("This may make the outer type inaccessible in this scope.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-        } else {
-            try report.headline.addText("The type ");
-            try report.headline.addUnqualifiedSymbol(owned_type_name);
-            try report.headline.addText(" is being redeclared in the same scope.");
-        }
+        try report.headline.addText("The type ");
+        try report.headline.addUnqualifiedSymbol(owned_type_name);
+        try report.headline.addText(" shadows a type from an outer scope.");
 
-        // Show where the new declaration is
+        try report.document.addReflowingText("This may make the outer type inaccessible in this scope.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
         try report.document.addText("The new declaration is here:");
         try report.document.addLineBreak();
+
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             new_region_info,
-            .error_highlight,
+            .warning_highlight,
+            owned_filename,
+            source,
+            line_starts,
+        );
+        try report.document.addLineBreak();
+        try report.document.addText("The outer type was declared here:");
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(
+            original_region_info,
+            .dimmed,
             owned_filename,
             source,
             line_starts,
         );
 
+        return report;
+    }
+
+    /// Build a report for shadowing a compiler-owned builtin type.
+    pub fn buildBuiltinTypeShadowedWarningReport(
+        allocator: Allocator,
+        type_name: []const u8,
+        new_region_info: base.RegionInfo,
+        filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
+    ) Allocator.Error!Report {
+        var report = try Report.init(allocator, "Builtin Type Shadowed", "", .warning);
+        const owned_type_name = try report.addOwnedString(type_name);
+
+        try report.headline.addText("The type ");
+        try report.headline.addUnqualifiedSymbol(owned_type_name);
+        try report.headline.addText(" shadows a builtin type.");
+
+        try report.document.addReflowingText("This may make the builtin type inaccessible in this scope.");
         try report.document.addLineBreak();
-        const scope_text = if (cross_scope) "outer scope" else "same scope";
-        try report.document.addText("But ");
-        try report.document.addUnqualifiedSymbol(owned_type_name);
-        try report.document.addText(" was already declared in the ");
-        try report.document.addText(scope_text);
-        try report.document.addText(" here:");
         try report.document.addLineBreak();
+        try report.document.addText("The new declaration is here:");
+        try report.document.addLineBreak();
+
+        const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
-            original_region_info,
-            .dimmed,
+            new_region_info,
+            .warning_highlight,
             owned_filename,
             source,
             line_starts,

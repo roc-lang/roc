@@ -539,6 +539,37 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emit32(inst);
         }
 
+        /// CLZ reg, reg (count leading zeros). Data-processing (1 source):
+        /// `sf 1 0 11010110 00000 000100 Rn Rd` (base 0xDAC01000).
+        pub fn clzRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
+            const sf = width.sf();
+            const inst: u32 = (@as(u32, sf) << 31) |
+                (0b1 << 30) |
+                (0b0 << 29) |
+                (0b11010110 << 21) |
+                (0b00000 << 16) |
+                (0b000100 << 10) |
+                (@as(u32, src.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
+        }
+
+        /// RBIT reg, reg (reverse bits). Data-processing (1 source):
+        /// `sf 1 0 11010110 00000 000000 Rn Rd` (base 0xDAC00000). Count
+        /// trailing zeros is composed as RBIT followed by CLZ.
+        pub fn rbitRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
+            const sf = width.sf();
+            const inst: u32 = (@as(u32, sf) << 31) |
+                (0b1 << 30) |
+                (0b0 << 29) |
+                (0b11010110 << 21) |
+                (0b00000 << 16) |
+                (0b000000 << 10) |
+                (@as(u32, src.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
+        }
+
         /// CMP reg, reg (compare - alias for SUBS with XZR destination)
         pub fn cmpRegReg(self: *Self, width: RegisterWidth, lhs: GeneralReg, rhs: GeneralReg) Allocator.Error!void {
             // SUBS XZR, Xn, Xm
@@ -770,6 +801,63 @@ pub fn Emit(comptime target: RocTarget) type {
         pub fn adrp(self: *Self, rd: GeneralReg) Allocator.Error!void {
             const inst: u32 = 0x90000000 | @as(u32, rd.enc());
             try self.emit32(inst);
+        }
+
+        /// The 4-instruction PC-relative address sequence used to materialize
+        /// internal code addresses: ADR Xd, #0 — MOVZ Xs, #lo16 — MOVK Xs,
+        /// #hi16, LSL #16 — ADD/SUB Xd, Xd, Xs.
+        ///
+        /// The sequence encodes a pure byte delta from the ADR's own address, so
+        /// it is correct wherever the code lands: linked sections load at
+        /// arbitrary in-page offsets, and page-based sequences (ADRP) would be
+        /// wrong there by the section's load bias. The MOVZ/MOVK pair gives the
+        /// delta 32 bits of range.
+        ///
+        /// These encoders are the single source of truth for the sequence's
+        /// words: `pcRelAddrSequence` emits them, and the address patcher
+        /// rewrites already-emitted sequences with them, so the two can never
+        /// drift.
+        pub fn encodeAdrZero(rd: GeneralReg) u32 {
+            return (0b10000 << 24) | @as(u32, rd.enc());
+        }
+
+        pub fn encodeMovz64(rd: GeneralReg, imm16: u16, hw: u2) u32 {
+            return (1 << 31) |
+                (0b10100101 << 23) |
+                (@as(u32, hw) << 21) |
+                (@as(u32, imm16) << 5) |
+                rd.enc();
+        }
+
+        pub fn encodeMovk64(rd: GeneralReg, imm16: u16, hw: u2) u32 {
+            return (1 << 31) |
+                (0b11100101 << 23) |
+                (@as(u32, hw) << 21) |
+                (@as(u32, imm16) << 5) |
+                rd.enc();
+        }
+
+        /// ADD/SUB Xd, Xn, Xm (shifted-register form, LSL #0). The sequence's
+        /// registers are always ordinary temporaries, never SP, so the
+        /// shifted-register form is always the right encoding.
+        pub fn encodeAddSubRegRegReg64(rd: GeneralReg, rn: GeneralReg, rm: GeneralReg, subtract: bool) u32 {
+            std.debug.assert(rd != .ZRSP and rn != .ZRSP);
+            const op: u32 = if (subtract) 0b1001011 else 0b0001011;
+            return (1 << 31) |
+                (op << 24) |
+                (@as(u32, rm.enc()) << 16) |
+                (@as(u32, rn.enc()) << 5) |
+                rd.enc();
+        }
+
+        /// Emit the full PC-relative address sequence. `lo16`/`hi16` hold the
+        /// absolute byte delta, `subtract` its sign; all-zero immediates with
+        /// `subtract = false` reserve a sequence for later patching.
+        pub fn pcRelAddrSequence(self: *Self, dst: GeneralReg, scratch: GeneralReg, lo16: u16, hi16: u16, subtract: bool) Allocator.Error!void {
+            try self.emit32(encodeAdrZero(dst));
+            try self.emit32(encodeMovz64(scratch, lo16, 0));
+            try self.emit32(encodeMovk64(scratch, hi16, 1));
+            try self.emit32(encodeAddSubRegRegReg64(dst, dst, scratch, subtract));
         }
 
         /// BLR Xn (branch with link to register - call to address in register)
@@ -1389,6 +1477,100 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emit32(inst);
         }
 
+        /// MOV Vd.16B, Vn.16B (alias of ORR Vd.16B, Vn.16B, Vn.16B).
+        pub fn movVectorRegReg(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
+            const inst: u32 = 0x4EA01C00 |
+                (@as(u32, src.enc()) << 16) |
+                (@as(u32, src.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
+        }
+
+        /// Emit a register-only Advanced SIMD instruction whose opcode bits
+        /// are supplied without Rm, Rn, or Rd.
+        pub fn simdThreeReg(
+            self: *Self,
+            opcode: u32,
+            dst: FloatReg,
+            lhs: FloatReg,
+            rhs: FloatReg,
+        ) Allocator.Error!void {
+            std.debug.assert((opcode & 0x001F03FF) == 0);
+            try self.emit32(opcode |
+                (@as(u32, rhs.enc()) << 16) |
+                (@as(u32, lhs.enc()) << 5) |
+                dst.enc());
+        }
+
+        /// Emit a register-only Advanced SIMD instruction whose opcode bits
+        /// are supplied without Rn or Rd.
+        pub fn simdTwoReg(
+            self: *Self,
+            opcode: u32,
+            dst: FloatReg,
+            src: FloatReg,
+        ) Allocator.Error!void {
+            std.debug.assert((opcode & 0x000003FF) == 0);
+            try self.emit32(opcode |
+                (@as(u32, src.enc()) << 5) |
+                dst.enc());
+        }
+
+        fn simdElementImm5(lane_bits: u7, index: u4) u5 {
+            return switch (lane_bits) {
+                8 => (@as(u5, index) << 1) | 1,
+                16 => (@as(u5, index) << 2) | 2,
+                32 => (@as(u5, index) << 3) | 4,
+                64 => (@as(u5, index) << 4) | 8,
+                else => unreachable,
+            };
+        }
+
+        pub fn duplicateGeneralToVector(
+            self: *Self,
+            dst: FloatReg,
+            src: GeneralReg,
+            lane_bits: u7,
+        ) Allocator.Error!void {
+            const opcode: u32 = switch (lane_bits) {
+                8 => 0x4E010C00,
+                16 => 0x4E020C00,
+                32 => 0x4E040C00,
+                64 => 0x4E080C00,
+                else => unreachable,
+            };
+            try self.emit32(opcode | (@as(u32, src.enc()) << 5) | dst.enc());
+        }
+
+        pub fn insertGeneralVectorLane(
+            self: *Self,
+            dst: FloatReg,
+            src: GeneralReg,
+            lane_bits: u7,
+            index: u4,
+        ) Allocator.Error!void {
+            const imm5 = simdElementImm5(lane_bits, index);
+            try self.emit32(0x4E001C00 |
+                (@as(u32, imm5) << 16) |
+                (@as(u32, src.enc()) << 5) |
+                dst.enc());
+        }
+
+        pub fn extractVectorLaneUnsigned(
+            self: *Self,
+            dst: GeneralReg,
+            src: FloatReg,
+            lane_bits: u7,
+            index: u4,
+        ) Allocator.Error!void {
+            const imm5 = simdElementImm5(lane_bits, index);
+            const opcode: u32 = if (lane_bits == 64) 0x4E003C00 else 0x0E003C00;
+            try self.emit32(opcode |
+                (@as(u32, imm5) << 16) |
+                (@as(u32, src.enc()) << 5) |
+                dst.enc());
+        }
+
         /// FMOV from general register to float register
         pub fn fmovFloatFromGen(self: *Self, ftype: FloatType, dst: FloatReg, src: GeneralReg) Allocator.Error!void {
             // FMOV <Sd>, <Wn> (single) or FMOV <Dd>, <Xn> (double)
@@ -1721,6 +1903,50 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emitAddressOffset(scratch, base, offset);
             try self.fstrRegMemUoff(ftype, src, scratch, 0);
         }
+
+        /// LDR <Qt>, [<Xn|SP>, #<pimm>] (128-bit SIMD register).
+        pub fn ldrQRegMemUoff(self: *Self, dst: FloatReg, base: GeneralReg, uoffset: u12) Allocator.Error!void {
+            const inst: u32 = 0x3dc00000 |
+                (@as(u32, uoffset) << 10) |
+                (@as(u32, base.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
+        }
+
+        /// STR <Qt>, [<Xn|SP>, #<pimm>] (128-bit SIMD register).
+        pub fn strQRegMemUoff(self: *Self, src: FloatReg, base: GeneralReg, uoffset: u12) Allocator.Error!void {
+            const inst: u32 = 0x3d800000 |
+                (@as(u32, uoffset) << 10) |
+                (@as(u32, base.enc()) << 5) |
+                src.enc();
+            try self.emit32(inst);
+        }
+
+        pub fn ldrQRegMemSoff(self: *Self, dst: FloatReg, base: GeneralReg, offset: i32) Allocator.Error!void {
+            if (offset >= 0) {
+                const uoff: u32 = @intCast(offset);
+                if ((uoff & 15) == 0 and uoff / 16 <= 4095) {
+                    try self.ldrQRegMemUoff(dst, base, @intCast(uoff / 16));
+                    return;
+                }
+            }
+            const scratch = addressScratchReg(base, null);
+            try self.emitAddressOffset(scratch, base, offset);
+            try self.ldrQRegMemUoff(dst, scratch, 0);
+        }
+
+        pub fn strQRegMemSoff(self: *Self, src: FloatReg, base: GeneralReg, offset: i32) Allocator.Error!void {
+            if (offset >= 0) {
+                const uoff: u32 = @intCast(offset);
+                if ((uoff & 15) == 0 and uoff / 16 <= 4095) {
+                    try self.strQRegMemUoff(src, base, @intCast(uoff / 16));
+                    return;
+                }
+            }
+            const scratch = addressScratchReg(base, null);
+            try self.emitAddressOffset(scratch, base, offset);
+            try self.strQRegMemUoff(src, scratch, 0);
+        }
     }; // end of struct returned by Emit
 }
 
@@ -1811,6 +2037,39 @@ test "fadd" {
     try std.testing.expectEqualSlices(u8, &[_]u8{ 0x20, 0x28, 0x62, 0x1E }, asm_buf.buf.items);
 }
 
+test "packed integer vector encodings" {
+    var asm_buf = LinuxEmit.init(std.testing.allocator);
+    defer asm_buf.deinit();
+
+    // mov v3.16b, v7.16b
+    try asm_buf.movVectorRegReg(.V3, .V7);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xE3, 0x1C, 0xA7, 0x4E }, asm_buf.buf.items);
+
+    asm_buf.buf.clearRetainingCapacity();
+    // add v3.16b, v7.16b, v12.16b
+    try asm_buf.simdThreeReg(0x4E208400, .V3, .V7, .V12);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xE3, 0x84, 0x2C, 0x4E }, asm_buf.buf.items);
+}
+
+test "packed integer scalar lane bridges" {
+    var asm_buf = LinuxEmit.init(std.testing.allocator);
+    defer asm_buf.deinit();
+
+    // dup v9.4s, w10
+    try asm_buf.duplicateGeneralToVector(.V9, .X10, 32);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x49, 0x0D, 0x04, 0x4E }, asm_buf.buf.items);
+
+    asm_buf.buf.clearRetainingCapacity();
+    // ins v9.s[3], w10
+    try asm_buf.insertGeneralVectorLane(.V9, .X10, 32, 3);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x49, 0x1D, 0x1C, 0x4E }, asm_buf.buf.items);
+
+    asm_buf.buf.clearRetainingCapacity();
+    // umov w10, v9.h[5]
+    try asm_buf.extractVectorLaneUnsigned(.X10, .V9, 16, 5);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x2A, 0x3D, 0x16, 0x0E }, asm_buf.buf.items);
+}
+
 test "signed-offset memory helpers use exact byte offsets" {
     var asm_buf = LinuxEmit.init(std.testing.allocator);
     defer asm_buf.deinit();
@@ -1896,4 +2155,66 @@ test "CC.returnI128ByPointer is false for all aarch64 targets" {
     try std.testing.expect(!LinuxEmit.CC.returnI128ByPointer());
     try std.testing.expect(!WinEmit.CC.returnI128ByPointer());
     try std.testing.expect(!MacEmit.CC.returnI128ByPointer());
+}
+
+/// What the PC-relative address sequence actually computes at run time, given
+/// where the sequence sits in memory. Mirrors the hardware so the test below
+/// checks the resulting address rather than just the bits.
+fn evalPcRelSequence(base: u64, instr_offset: u64, words: [4]u32) u64 {
+    // ADR Xd, #imm — anchor. The test emits it with imm 0, so Xd = PC.
+    const adr = words[0];
+    std.debug.assert((adr >> 24) & 0x1F == 0b10000 and adr >> 31 == 0);
+    const anchor = base + instr_offset;
+    // MOVZ Xs, #lo16 then MOVK Xs, #hi16, LSL #16.
+    const lo16: u64 = (words[1] >> 5) & 0xFFFF;
+    const hi16: u64 = (words[2] >> 5) & 0xFFFF;
+    const magnitude = (hi16 << 16) | lo16;
+    // ADD or SUB Xd, Xd, Xs.
+    const subtract = (words[3] >> 30) & 1 == 1;
+    return if (subtract) anchor - magnitude else anchor + magnitude;
+}
+
+test "pc-relative address sequence reaches targets past ADR's range" {
+    // A pair of 12-bit immediates could only express 16 MiB, and a page-based
+    // ADRP form is wrong by the load bias whenever the code does not land
+    // page-aligned. These cases cover both failure shapes: distances past
+    // 16 MiB, and bases at arbitrary in-page offsets.
+    const cases = [_]struct { instr: u64, target: u64 }{
+        .{ .instr = 0, .target = 0 },
+        .{ .instr = 0x1000, .target = 0 },
+        .{ .instr = 0, .target = 0xFFF },
+        .{ .instr = 0x40, .target = 0x1_000_000 },
+        .{ .instr = 0x1_000_000, .target = 0x40 },
+        .{ .instr = 0x100, .target = 0x22E_4B2C },
+        .{ .instr = 0x22E_4B2C, .target = 0x100 },
+        .{ .instr = 0, .target = 0x7FFF_F000 },
+    };
+
+    for (cases) |case| {
+        // Bases deliberately not page-aligned: linked sections land mid-page.
+        for ([_]u64{ 0x1_0000_0000, 0x4000, 0x1_0000_2830 }) |base| {
+            var asm_buf = LinuxEmit.init(std.testing.allocator);
+            defer asm_buf.deinit();
+
+            const rel: i64 = @as(i64, @intCast(case.target)) - @as(i64, @intCast(case.instr));
+            const subtract = rel < 0;
+            const abs_rel: u64 = if (subtract) @intCast(-rel) else @intCast(rel);
+            try asm_buf.pcRelAddrSequence(
+                .X3,
+                .X9,
+                @truncate(abs_rel),
+                @truncate(abs_rel >> 16),
+                subtract,
+            );
+
+            var words: [4]u32 = undefined;
+            for (0..4) |i| {
+                words[i] = @bitCast(asm_buf.buf.items[i * 4 ..][0..4].*);
+            }
+            try std.testing.expectEqual(
+                base + case.target,
+                evalPcRelSequence(base, case.instr, words),
+            );
+        }
+    }
 }

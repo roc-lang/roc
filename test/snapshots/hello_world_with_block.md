@@ -96,19 +96,8 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "main!"))
-		(e-lambda
-			(args
-				(p-underscore))
-			(e-block
-				(s-let
-					(p-assign (ident "world"))
-					(e-string
-						(e-literal (string "World"))))
-				(e-call
-					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-string
-						(e-literal (string "Hello, world!")))))))
-	(s-import (module "pf.Stdout")
+		(e-runtime-error (tag "erroneous_value_expr")))
+	(s-import (mod "pf.Stdout")
 		(exposes)))
 ~~~
 # TYPES

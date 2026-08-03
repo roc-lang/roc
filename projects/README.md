@@ -4,126 +4,209 @@ This folder contains self-contained project specifications for structural
 improvements to the compiler. Each `.md` file is written so that someone brand
 new to the codebase (human or agent) can read that one file and understand the
 problem, the solution approach, what success looks like, how to evaluate the
-result for long-term correctness and performance, and what tests to add.
+result for long-term correctness and performance, and what tests to add. Each
+doc's "What success looks like" section is a completion contract: the project
+is not done until every criterion listed there holds.
 
-- `small/` — projects on the order of days each: localized, mostly additive
-  checks or deletions, low design risk.
+- `small/` — localized, mostly additive checks or deletions, low design risk;
+  hours to days each.
 - `big/` — projects on the order of weeks each: cross-cutting, and several
   require a design decision before implementation starts.
 
-The projects came out of a root-cause analysis of eight weeks of bug fixes
-(May–June 2026). The recurring disease across independent bug clusters was:
-facts proven during checking get re-derived downstream from type, name, or
-structure content instead of traveling as explicit data, keyed by fragile
-identity (name strings, positional order, mutable keys) and enforced only by
-panics at the consumption site. Most of these projects either move a fact into
-an explicit artifact, assign an identity once and carry it, or delete a
-duplicated computation. `design.md` at the repo root is the authoritative
-post-check design; these projects implement its stated principles more
-completely.
+The projects come from a root-cause analysis of eight weeks of bug fixes
+(May–June 2026), a July 2026 duplication audit, and a July 2026 differential
+re-analysis of the fixes that landed since. The recurring disease across
+independent bug clusters was: facts proven during checking get re-derived
+downstream from type, name, or structure content instead of traveling as
+explicit data, keyed by fragile identity (name strings, positional order,
+mutable keys) and enforced only by panics at the consumption site. The
+re-analysis added a second-order lesson: generators whose mechanism was
+*deleted* stayed dead, while generators that were centralized but left a
+parallel old path kept firing on uncovered axes — so each project's finishing
+move is deleting the re-derivation path, not just adding the carried fact
+beside it. `design.md` at the repo root is the authoritative post-check
+design; these projects implement its stated principles more completely.
+
+A second batch of projects came out of the 2026-07 comparative review of
+the post-check pipeline against the cor `lss` prototype it was
+productionized from (stage-by-stage divergence review; no shipped
+miscompile found, but several unstated load-bearing invariants, one
+termination hazard, and one verification coverage gap):
+
+- [small/spec-constr-specialization-limits.md](small/spec-constr-specialization-limits.md)
+  — termination budgets for call-pattern specialization (compile-time
+  divergence is reachable today).
+- [small/empty-tag-union-yield-provenance.md](small/empty-tag-union-yield-provenance.md)
+  — key Lambda Solved's one unification escape hatch on carried provenance
+  instead of shape.
+- [small/pin-lambda-solved-invariants.md](small/pin-lambda-solved-invariants.md)
+  — state, assert, and test the four invariants that make monomorphic
+  lambda-set solving sound.
+- [small/lambda-mono-oracle-fidelity.md](small/lambda-mono-oracle-fidelity.md)
+  — agreement asserts and contract pins for the Debug Lambda Mono oracle;
+  delete its dead Queue.
+- [small/monotype-machinery-hardening.md](small/monotype-machinery-hardening.md)
+  — release-gate verification-only type checks; measure-first fixes for
+  digest depth fallback, unify memo, spec duplication, cross-store reuse.
+- [small/lift-capture-single-sourcing.md](small/lift-capture-single-sourcing.md)
+  — one capture-fixpoint driver, the `if_initialized_payload` binder
+  question, and the capture-id override path.
+
+Within this batch the projects are independent.
+`spec-constr-specialization-limits` pairs naturally with
+`spec-constr-static-match-soundness`.
+
+A third batch came out of a whole-codebase competing-sources-of-truth
+audit (2026-07-18): a sweep of every subsystem for the same fact
+encoded independently in N places with no cross-check. The sweep also
+confirmed the prevailing single-source pattern holds in most places
+(escape alphabet, `LowLevel` vocabulary, `layout/abi` classification,
+`RocTarget`, precedence table, snapshot file format, serde audits) —
+these projects close the holdouts. All are independent of the earlier
+batches and of each other:
+
+- [big/runtime-representation-single-sourcing.md](big/runtime-representation-single-sourcing.md)
+  — backends stop re-encoding RocStr/RocList offsets, flag bits, the
+  refcount contract, and C-ABI thresholds as magic numbers.
+- [big/host-boundary-single-sourcing.md](big/host-boundary-single-sourcing.md)
+  — glue templates, glue-platform struct mirrors, shim symbol
+  strings, and test-host boilerplate get generated or lock-tested
+  against `host_abi.zig`/builtins.
+- [big/one-report-renderer.md](big/one-report-renderer.md) — collapse
+  the four per-target diagnostic renderers onto one walker plus style
+  data; delete the duplicated annotation-color switch.
+- [small/llvm-conversion-op-explicit-dispatch.md](small/llvm-conversion-op-explicit-dispatch.md)
+  — end the LLVM backend's `@tagName`-substring dispatch for numeric
+  conversion ops (the one backend exempt from switch exhaustiveness).
+- [small/bundle-unbundle-shared-path-rules.md](small/bundle-unbundle-shared-path-rules.md)
+  — one archive path-safety validator; the writer's and reader's
+  copies already disagree.
+- [small/nodestore-serde-enrollment.md](small/nodestore-serde-enrollment.md)
+  — comptime-drive NodeStore's eight hand-enumerated field lists;
+  derive the parse-side node counts.
+- [small/frontend-name-and-sentinel-single-sourcing.md](small/frontend-name-and-sentinel-single-sourcing.md)
+  — six frontend seams: duplicate NumKind map, hardcoded Bool
+  discriminant, method-name literals, hand-written builtin-name maps,
+  five row comparators, default-cased lowering switches.
+- [small/syntax-fact-single-sourcing.md](small/syntax-fact-single-sourcing.md)
+  — keyword spellings (tokenizer vs ~25 fmt literals), the
+  numeric-suffix bidirectional pair, the twice-scanned number
+  grammar.
+- [small/severity-and-report-collection.md](small/severity-and-report-collection.md)
+  — `Severity.isError`/`toLspSeverity` helpers; snapshot tool and
+  playground call the compiler's report-collection loop instead of
+  copying it.
+- [small/lsp-and-docs-truth-reuse.md](small/lsp-and-docs-truth-reuse.md)
+  — the forked doc-comment gatherer (LSP and docs already disagree on
+  `###`), three line/column implementations, the positional
+  semantic-token legend, the hand-copied completion roster.
+- [small/build-and-ci-single-lists.md](small/build-and-ci-single-lists.md)
+  — one module inventory (seven restatements plus minici's copy, with
+  existing test-coverage divergence), one CI gate list, one Zig pin.
+- [small/cli-declarative-flags.md](small/cli-declarative-flags.md)
+  — each subcommand's struct/parser/help triple becomes one table;
+  target rosters and defaults render from their enums.
+
+A fourth batch (2026-07-20) targets operational robustness and
+build-throughput gaps rather than sources of truth. The projects are
+independent of the earlier batches and of each other:
+
+- [big/parallel-backend-codegen.md](big/parallel-backend-codegen.md)
+  — dev-backend code generation moves from one sequential proc loop to
+  per-proc worker generation feeding a single deterministic writer; no
+  new IR, the per-proc code/relocation artifacts are the handoff unit.
+- [big/unreachable-rationale-comments.md](big/unreachable-rationale-comments.md)
+  — every `unreachable` under `src/` carries a same-line rationale (or
+  is converted to a checked invariant), enforced forever by a CI lint
+  with a shrinking allowlist.
+- [small/ice-crash-context.md](small/ice-crash-context.md)
+  — a panic handler that prints what the compiler was doing (phase,
+  module, def) plus a repro command before the stack trace, built from
+  thread-local context frames pushed at existing phase boundaries.
 
 ## Recommended order
 
-### Start here
+### Start here — enforcement layers, cheap and load-bearing
 
-1. [small/check-app-against-platform-requires.md](small/check-app-against-platform-requires.md)
-   — highest leverage per unit of work in the whole set. Deletes the
-   coordinator's shadow-validation layer, kills the most active bug cascade,
-   and is a prerequisite for two big projects (total dispatch plans, exact
-   numeral pipeline).
+1. [small/cross-phase-coverage-parity-tests.md](small/cross-phase-coverage-parity-tests.md)
+   — the divergence-classification parity suite; a regression net the big
+   lowering projects inherit.
+2. [small/silent-drift-guards.md](small/silent-drift-guards.md)
+   — finishes the monotype identity unification: one identity-field
+   visitor for digest and equality, and alias-transparent cached digests.
+3. [small/rceffect-conformance.md](small/rceffect-conformance.md)
+   — comptime validity plus a per-op refcount conformance harness for the
+   central ownership table (the PR 10023 bug class).
+4. [small/cache-and-identity-residuals.md](small/cache-and-identity-residuals.md)
+   — closes the four small seams left after the identity/cache cures
+   (name-text fallback, hand-enrolled serde contracts, split version
+   hashes, `type_name` in nominal keys).
 
-### Dependency chains
+### Chain A — dispatch evidence, consumed everywhere
 
-**Chain A — dispatch:**
-1. `small/check-app-against-platform-requires.md` (prerequisite: dispatch
-   plans cannot be total while platform-typed values are still flex at check
-   time)
-2. [big/total-dispatch-plans.md](big/total-dispatch-plans.md)
-3. [big/generalization-time-ambiguity.md](big/generalization-time-ambiguity.md)
-   — shares the constraint-provenance foundation with total dispatch plans;
-   doable before it, but cheaper after.
+1. [small/hoist-consumes-dispatch-evidence.md](small/hoist-consumes-dispatch-evidence.md)
+   — hoist selection reads the dispatch resolution instead of re-deriving
+   evidence-dependence from type-var content (the PR 10073 seam), and
+   recovers the hoisting its conservative gate gives up.
 
-**Chain B — identity:**
-1. [small/single-package-identity-function.md](small/single-package-identity-function.md)
-   — the interim fix; small and immediately useful.
-2. [big/content-based-nominal-identity.md](big/content-based-nominal-identity.md)
-   — the durable fix; absorbs and supersedes the interim one.
-3. [big/immutable-specialization-identity.md](big/immutable-specialization-identity.md)
-   — can proceed independently using today's module digests, but its
-   `CallableIdentity` components get cleaner after content-based identity.
+### Chain B — the host/platform boundary
 
-Chain B also strengthens Chain A (stable cross-module references for resolved
-dispatch targets) and the glue project, but does not block them.
+1. [small/hosted-extern-declared-abi.md](small/hosted-extern-declared-abi.md)
+   — the invariant that a hosted extern is only specialized at its declared
+   type, enforced at the producer instead of by a checker rewrite.
 
-**Chain C — captures:**
-- [big/canonical-capture-id.md](big/canonical-capture-id.md) is independent,
-  but do it before or together with the evidence-threading part of
-  `big/total-dispatch-plans.md`: where-clause evidence flows through nested
-  closures exactly like a compile-time capture, and it should ride the same
-  identity discipline rather than invent a parallel one.
+The solver-rewrite audit that followed this chain has landed: design.md's
+"Solver-Mutating Rewrites" section holds the mechanism/policy inventory,
+`Store.dangerousSetVarRedirect` requires a declared `RedirectRule` at every
+call site, and the 9966 widening is the declared Hosted Try Question
+Widening rule, scoped to direct hosted calls with both sides pinned by
+tests.
 
-**Chain D — ARC:**
-1. [small/surface-arc-certifier-skips.md](small/surface-arc-certifier-skips.md)
-   — trivial; do immediately so the current certification hole is visible.
-2. [big/arc-certifier-lattice-join.md](big/arc-certifier-lattice-join.md)
-   — closes the hole for real and centralizes ownership-transfer keying.
+The platform-relation migration that concluded this chain has landed:
+checking records each platform requirement's solution in the app's checked
+artifact, finalization consumes it, and the platform root is published
+once — the name-keyed re-resolution and double publication are deleted.
 
-**Chain E — numerics:**
-1. `small/check-app-against-platform-requires.md` (removes one of the two
-   places literal range facts get dropped)
-2. [big/exact-numeral-pipeline.md](big/exact-numeral-pipeline.md)
-- [small/checked-arithmetic-lir-ops.md](small/checked-arithmetic-lir-ops.md)
-  is independent of both and can land any time.
+### Chain C — specialization sealing
+
+1. [small/pin-deferred-spec-requests.md](small/pin-deferred-spec-requests.md)
+   — seal-time instrumentation, the snapshot-regime pin, and the
+   `unifyThroughBacking` decision; end state: `row_default` unreachable
+   for checker-constrained rows.
 
 ### Independent — start any time, in any order
 
 Small:
-- [small/cross-phase-coverage-parity-tests.md](small/cross-phase-coverage-parity-tests.md)
-  — cheap insurance; ideally land early so later projects inherit the harness.
-- [small/centralize-slice-reuse-predicate.md](small/centralize-slice-reuse-predicate.md)
-- [small/store-generation-counters.md](small/store-generation-counters.md)
-- [small/shared-checked-type-traversal.md](small/shared-checked-type-traversal.md)
-- [small/cache-hardening.md](small/cache-hardening.md)
-- [small/glue-consumes-committed-layouts.md](small/glue-consumes-committed-layouts.md)
-  — benefits mildly from content-based identity but does not depend on it.
-- [small/structural-hoist-contexts.md](small/structural-hoist-contexts.md)
+- [small/frame-partitioned-checker-state.md](small/frame-partitioned-checker-state.md)
+  — inventory and convert frame-scoped checker/canonicalizer state to
+  dedicated frame storage (the 9929→10010 and 10001 shape).
+- [small/compact-constant-aggregates.md](small/compact-constant-aggregates.md)
+  — static-data and builtin-call materialization for constant/repeated
+  lists, ending the one-local-per-element explosion behind issue 9898.
 
-Big:
-- [big/decision-tree-match-compiler.md](big/decision-tree-match-compiler.md)
-  — independent; benefits from landing the coverage-parity test harness first,
-  and pairs naturally with pipeline unification (below) since today every
-  match-lowering change must be made twice.
-- [big/unify-build-pipelines.md](big/unify-build-pipelines.md) — independent;
-  benefits from `small/single-package-identity-function.md` landing first so
-  the shared layer starts with one naming scheme.
-- [big/row-subsumption.md](big/row-subsumption.md) — independent of all other
-  projects, but requires a language-semantics decision before implementation
-  starts (see the file).
+The decision-tree match compiler has landed: both LIR pipelines lower
+`match` through one shared Maranget-style module
+(src/postcheck/match_tree.zig) — one multiway switch per tested position,
+one discriminant read, strings and list-length buckets as ordinary arms —
+with the sharing invariant documented in design.md and enforced by a debug
+statement-count lint.
+
+Single-source builtin registration has landed: the seven hand-typed
+`roc_builtins_*` symbol/ABI tables now derive from one comptime registry
+(src/builtins/builtin_registry.zig), and the LowLevel-to-builtin member
+choice is shared across backends via `base.LowLevelBuiltins`.
 
 ### Suggested overall sequence
 
-If one person or agent works through everything serially, this order front-loads
-leverage and keeps prerequisites satisfied:
+If one person or agent works through everything serially, this order
+front-loads leverage and keeps prerequisites satisfied:
 
-1. `small/surface-arc-certifier-skips.md`
-2. `small/cross-phase-coverage-parity-tests.md`
-3. `small/check-app-against-platform-requires.md`
-4. `small/single-package-identity-function.md`
-5. `small/centralize-slice-reuse-predicate.md`
-6. `small/store-generation-counters.md`
-7. `small/checked-arithmetic-lir-ops.md`
-8. `big/total-dispatch-plans.md`
-9. `big/canonical-capture-id.md` (or interleave with 8; see Chain C)
-10. `big/content-based-nominal-identity.md`
-11. `big/immutable-specialization-identity.md`
-12. `small/shared-checked-type-traversal.md`
-13. `small/cache-hardening.md`
-14. `big/arc-certifier-lattice-join.md`
-15. `big/exact-numeral-pipeline.md`
-16. `big/generalization-time-ambiguity.md`
-17. `big/unify-build-pipelines.md`
-18. `big/decision-tree-match-compiler.md`
-19. `small/glue-consumes-committed-layouts.md`
-20. `small/structural-hoist-contexts.md`
-21. `big/row-subsumption.md` (whenever the language decision is made; nothing
-    blocks on it)
+1. `small/cross-phase-coverage-parity-tests.md`
+2. `small/silent-drift-guards.md`
+3. `small/rceffect-conformance.md`
+4. `small/cache-and-identity-residuals.md`
+5. `small/pin-deferred-spec-requests.md`
+6. `small/hoist-consumes-dispatch-evidence.md`
+7. `small/hosted-extern-declared-abi.md`
+8. `small/frame-partitioned-checker-state.md`
+9. `small/compact-constant-aggregates.md`

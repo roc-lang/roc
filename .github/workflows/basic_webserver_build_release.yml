@@ -28,7 +28,7 @@ jobs:
       - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_apple_silicon-latest.tar.gz
 
       - name: Save roc_nightly archives
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           path: roc_nightly-*
 
@@ -39,7 +39,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Download the previously uploaded roc_nightly archives
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8.0.1
 
       - name: build basic-webserver with legacy linker
         env:
@@ -47,7 +47,7 @@ jobs:
         run: ./ci/build_basic_webserver.sh linux_x86_64
 
       - name: Save .rh, .rm and .a file
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: linux-x86_64-files
           path: |
@@ -62,7 +62,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Download the previously uploaded roc_nightly archives
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8.0.1
 
       - name: build basic-webserver
         env:
@@ -70,7 +70,7 @@ jobs:
         run: ./ci/build_basic_webserver.sh linux_arm64
 
       - name: Save .a file
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: linux-arm64-files
           path: |
@@ -83,12 +83,12 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Download the previously uploaded roc_nightly archives
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8.0.1
 
       - run: ./ci/build_basic_webserver.sh macos_x86_64
 
       - name: Save .a files
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: macos-x86_64-files
           path: |
@@ -102,12 +102,12 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Download the previously uploaded roc_nightly archives
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8.0.1
 
       - run: ./ci/build_basic_webserver.sh macos_apple_silicon
 
       - name: Save macos-arm64.a file
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: macos-apple-silicon-files
           path: |
@@ -130,7 +130,7 @@ jobs:
         run: ls | grep -v  ci | xargs rm -rf
 
       - name: Download the previously uploaded files
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8.0.1
 
       - name: mv roc nightly and simplify name
         run: mv $(ls -d artifact/* | grep "roc_nightly.*tar\.gz" | grep "linux_x86_64") ./roc_nightly.tar.gz
@@ -163,7 +163,7 @@ jobs:
       - run: echo "TAR_FILENAME=$(ls -d basic-webserver/platform/* | grep ${{ env.ARCHIVE_FORMAT }})" >> $GITHUB_ENV
 
       - name: Upload platform archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: basic-webserver-platform
           path: |
@@ -177,7 +177,7 @@ jobs:
           tar -czvf docs.tar.gz generated-docs/
 
       - name: Upload docs archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: release-assets-docs
           path: |
@@ -191,7 +191,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Download the previously uploaded files
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8.0.1
 
       - name: Set OS-specific variables
         id: vars

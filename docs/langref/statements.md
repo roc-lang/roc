@@ -1,13 +1,19 @@
 # Statements
 
 Statements are run as soon as they are encountered at runtime.
-They do not [evaluate](expressions.md#evaluation) to a [value](expressions.md#value).
+They do not [evaluate](expressions#evaluation) to a [value](expressions#values).
 
 ## [`=` (assignment)](#assignment) {#assignment}
 
-An _assignment statement_ gives a name to a [value](expressions.md#value) inside the current scope.
+An _assignment statement_ gives a name to a [value](expressions#values) inside the current scope.
 
-### [Pattern matching in assignments](#import-exposing) {#import-exposing}
+```roc
+answer = 42
+```
+
+The name an assignment gives must be a valid Roc [lowercase name](naming#lowercase-names).
+
+### [Pattern matching in assignments](#assignment-patterns) {#assignment-patterns}
 
 You can use [pattern matching](pattern-matching) in assignments to do things like destructuring:
 
@@ -64,17 +70,17 @@ x = |arg| if arg >= 1 { y(arg + 1) } else { 0 }
 y = |arg| if arg <= 9 { x(arg + 1) } else { 0 }
 ```
 
-### [Reassignment](#reassignment) {#reassignment}
+### [Reassignment with `var`](#reassignment) {#reassignment}
 
 Reassigning to an existing name is only allowed when the name was declared with
-[`var`](pattern-matching#var). This is allowed:
+[`var`](naming#var-keyword). This is allowed:
 
 ```roc
 var $foo = 0
 $foo = 1
 ```
 
-However, this gives a [shadowing](naming.md#shadowing) error:
+However, this gives a [shadowing](naming#shadowing) warning:
 
 ```roc
 foo = 0
@@ -83,7 +89,7 @@ foo = 1
 
 ## [`import`](#import) {#import}
 
-The `import` statement imports a [type](types.md) into scope from a [type module](modules.md#type-modules).
+The `import` statement imports a [type](types) into scope from a [type module](modules#type-modules).
 
 ### [`import` with `exposing`](#import-exposing) {#import-exposing}
 
@@ -123,7 +129,7 @@ my_func = |arg| {
 
 ## [`break`](#break) {#break}
 
-(This has not been implemented yet. It will exit a `for` or `while` loop.)
+The `break` statement immediately exits the innermost `for` or `while` loop. See [loops](loops#break-statement) for details.
 
 ## [`continue`](#continue) {#continue}
 
@@ -148,9 +154,9 @@ and have some way of continuing the process, but others may terminate the proces
 ## [Block Statements](#block-statements) {#block-statements}
 
 A _block statement_ is a group of statements which has its own scope, so
-anything [assigned](#assignment) in it can't be accessed outsdie the block.
+anything [assigned](#assignment) in it can't be accessed outside the block.
 
-It's different from a [block expression](expressions.md#block-expressions) in that
+It's different from a [block expression](expressions#block-expressions) in that
 a block statement does not have an expression at the end. A common block
 statement is one that does an early `return` in a conditional branch:
 
@@ -164,7 +170,7 @@ if foo {
 }
 ```
 
-Having a single statement in a block expression is allowed:
+Having a single statement in a block statement is allowed:
 
 ```roc
 if foo {

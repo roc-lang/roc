@@ -53,7 +53,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "BadBase")
@@ -79,8 +79,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "value"))
-		(e-string
-			(e-literal (string "test")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "GoodAlias") (local))))
 	(s-nominal-decl

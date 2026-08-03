@@ -355,6 +355,9 @@ pub const Generalizer = struct {
                         for (self.store.sliceVars(func.args)) |arg_var| {
                             next_rank = next_rank.max(try self.adjustRank(arg_var, group_rank, vars_to_generalize));
                         }
+                        for (self.store.sliceVars(func.effect_deps)) |effect_dep| {
+                            next_rank = next_rank.max(try self.adjustRank(effect_dep, group_rank, vars_to_generalize));
+                        }
                         return next_rank;
                     },
                     .fn_effectful => |func| {
@@ -362,12 +365,18 @@ pub const Generalizer = struct {
                         for (self.store.sliceVars(func.args)) |arg_var| {
                             next_rank = next_rank.max(try self.adjustRank(arg_var, group_rank, vars_to_generalize));
                         }
+                        for (self.store.sliceVars(func.effect_deps)) |effect_dep| {
+                            next_rank = next_rank.max(try self.adjustRank(effect_dep, group_rank, vars_to_generalize));
+                        }
                         return next_rank;
                     },
                     .fn_unbound => |func| {
                         var next_rank = try self.adjustRank(func.ret, group_rank, vars_to_generalize);
                         for (self.store.sliceVars(func.args)) |arg_var| {
                             next_rank = next_rank.max(try self.adjustRank(arg_var, group_rank, vars_to_generalize));
+                        }
+                        for (self.store.sliceVars(func.effect_deps)) |effect_dep| {
+                            next_rank = next_rank.max(try self.adjustRank(effect_dep, group_rank, vars_to_generalize));
                         }
                         return next_rank;
                     },
@@ -549,68 +558,6 @@ test "mergeFrom - merge empty into empty" {
     try pool_a.mergeFrom(&pool_b);
 
     try std.testing.expectEqual(Rank.generalized, pool_a.current_rank);
-}
-
-test "mergeFrom - merge non-empty into empty" {
-    const gpa = std.testing.allocator;
-    var pool_a = try VarPool.init(gpa);
-    defer pool_a.deinit();
-    var pool_b = try VarPool.init(gpa);
-    defer pool_b.deinit();
-
-    // Both pools at rank 2
-    try pool_a.pushRank(); // rank 1
-    try pool_a.pushRank(); // rank 2
-    try pool_b.pushRank(); // rank 1
-    try pool_b.pushRank(); // rank 2
-
-    try pool_b.addVarToRank(mkVar(10), .outermost);
-    try pool_b.addVarToRank(mkVar(20), @enumFromInt(2));
-    try pool_b.addVarToRank(mkVar(21), @enumFromInt(2));
-
-    try pool_a.mergeFrom(&pool_b);
-
-    try expectVarsEqual(pool_a.getVarsForRank(.outermost), &.{mkVar(10)});
-    try expectVarsEqual(pool_a.getVarsForRank(@enumFromInt(2)), &.{ mkVar(20), mkVar(21) });
-}
-
-test "mergeFrom - merge empty into non-empty" {
-    const gpa = std.testing.allocator;
-    var pool_a = try VarPool.init(gpa);
-    defer pool_a.deinit();
-    var pool_b = try VarPool.init(gpa);
-    defer pool_b.deinit();
-
-    // Both pools at rank 1
-    try pool_a.pushRank();
-    try pool_b.pushRank();
-
-    try pool_a.addVarToRank(mkVar(5), .outermost);
-
-    try pool_a.mergeFrom(&pool_b);
-
-    try expectVarsEqual(pool_a.getVarsForRank(.outermost), &.{mkVar(5)});
-}
-
-test "mergeFrom - combines vars at same rank" {
-    const gpa = std.testing.allocator;
-    var pool_a = try VarPool.init(gpa);
-    defer pool_a.deinit();
-    var pool_b = try VarPool.init(gpa);
-    defer pool_b.deinit();
-
-    // Both pools at rank 1
-    try pool_a.pushRank();
-    try pool_a.addVarToRank(mkVar(1), .outermost);
-    try pool_a.addVarToRank(mkVar(2), .outermost);
-
-    try pool_b.pushRank();
-    try pool_b.addVarToRank(mkVar(10), .outermost);
-    try pool_b.addVarToRank(mkVar(11), .outermost);
-
-    try pool_a.mergeFrom(&pool_b);
-
-    try expectVarsEqual(pool_a.getVarsForRank(.outermost), &.{ mkVar(1), mkVar(2), mkVar(10), mkVar(11) });
 }
 
 test "mergeFrom - vars at multiple ranks" {

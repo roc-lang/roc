@@ -21,7 +21,6 @@ boxed = Container(X)
 # EXPECTED
 UNDECLARED TYPE VARIABLE - nominal_associated_in_tuples.md:9:13:9:14
 UNDECLARED TYPE VARIABLE - nominal_associated_in_tuples.md:9:29:9:30
-TOO MANY ARGS - nominal_associated_in_tuples.md:11:9:11:27
 # PROBLEMS
 
 ┌──────────────────────────┐
@@ -47,16 +46,6 @@ TOO MANY ARGS - nominal_associated_in_tuples.md:11:9:11:27
     Type variables must be introduced in a type annotation before they can be
     used.
 
-
-┌───────────────┐
-│ TOO MANY ARGS ├─ The type Container expects 0 arguments, but got 1 ─────────┐
-└┬──────────────┘  instead.                                                   │
- │                                                                            │
- │  boxed : Container(Foo.Bar)                                                │
- │          ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
- └────────────────────────────────────── nominal_associated_in_tuples.md:11:9 ┘
-
-
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -73,7 +62,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "Foo")
@@ -194,7 +183,7 @@ boxed = Container(X)
 			(ty-header (name "Foo.Bar")))
 		(nominal (type "Foo.Baz")
 			(ty-header (name "Foo.Baz")))
-		(alias (type "Container")
+		(alias (type "Error")
 			(ty-header (name "Container"))))
 	(expressions
 		(expr (type "(Foo.Bar, Foo.Baz)"))

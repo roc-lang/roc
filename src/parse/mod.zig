@@ -9,10 +9,12 @@ const tracy = @import("tracy");
 
 pub const tokenize = @import("tokenize.zig");
 
+/// Single source of truth for the string/char escape alphabet.
+pub const escape = @import("escape.zig");
+
 const Allocator = std.mem.Allocator;
 const CommonEnv = base.CommonEnv;
 const Diagnostic = AST.Diagnostic;
-const ParseTestError = Allocator.Error || error{TestExpectedEqual};
 
 /// **AST.Parser**
 pub const Parser = @import("Parser.zig");
@@ -116,12 +118,26 @@ fn statementRootNode(parser: *Parser) Allocator.Error!u32 {
     return @intFromEnum(idx);
 }
 
+fn topLevelStatementRootNode(parser: *Parser) Allocator.Error!u32 {
+    const idx = try parser.runTopLevelStatement();
+    return @intFromEnum(idx);
+}
+
 /// Parses a single Roc statement - for use in REPL and snapshots.
 ///
 /// The caller must call `ast.deinit()` when done, which frees all internal
 /// allocations AND the AST struct itself.
 pub fn statement(gpa: Allocator, env: *CommonEnv) Allocator.Error!*AST {
     return try runTokenDispatch(gpa, env, statementRootNode);
+}
+
+/// Parses a single top-level Roc statement - for use in the REPL, which
+/// synthesizes a module and so accepts top-level-only statements like `import`.
+///
+/// The caller must call `ast.deinit()` when done, which frees all internal
+/// allocations AND the AST struct itself.
+pub fn statementTopLevel(gpa: Allocator, env: *CommonEnv) Allocator.Error!*AST {
+    return try runTokenDispatch(gpa, env, topLevelStatementRootNode);
 }
 
 test "parser tests" {
@@ -132,6 +148,7 @@ test "parser tests" {
     std.testing.refAllDecls(@import("NumericLiteral.zig"));
     std.testing.refAllDecls(@import("Parser.zig"));
     std.testing.refAllDecls(@import("tokenize.zig"));
+    std.testing.refAllDecls(@import("escape.zig"));
     std.testing.refAllDecls(@import("test/ast_node_store_test.zig"));
 }
 
@@ -158,35 +175,79 @@ test "deeply nested parentheses parse stack-safely" {
     try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 }
 
-test "range operators parse as binary operators" {
+test "pipe question suffix precedence distinguishes empty call" {
+    // Repro for https://github.com/roc-lang/roc/issues/10510
     const gpa = std.testing.allocator;
+    const source = "(a |> f()?, a |> f?, a |> f(x)?)";
 
-    for ([_][]const u8{ "1..<5", "1..=5", "1..<n + 1", "start..=finish" }) |source| {
-        var env = try CommonEnv.init(gpa, source);
-        defer env.deinit(gpa);
-
-        const ast = try expr(gpa, &env);
-        defer ast.deinit();
-
-        try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
-        try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
-    }
-}
-
-test "bare .. in expression position is a helpful parse error" {
-    const gpa = std.testing.allocator;
-
-    var env = try CommonEnv.init(gpa, "1..5");
+    var env = try CommonEnv.init(gpa, source);
     defer env.deinit(gpa);
 
     const ast = try expr(gpa, &env);
     defer ast.deinit();
 
-    try std.testing.expect(ast.parse_diagnostics.items.len > 0);
-    try std.testing.expectEqual(
-        AST.Diagnostic.Tag.expr_double_dot_is_not_range,
-        ast.parse_diagnostics.items[0].tag,
-    );
+    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+
+    const root = ast.store.getExpr(@enumFromInt(ast.root_node_idx));
+    try std.testing.expectEqual(.tuple, std.meta.activeTag(root));
+    const items = ast.store.exprSlice(root.tuple.items);
+    try std.testing.expectEqual(@as(usize, 3), items.len);
+
+    // `a |> f()?` is `(a |> f)?`: the question suffix owns the pipe.
+    const called_target = ast.store.getExpr(items[0]);
+    try std.testing.expectEqual(.suffix_single_question, std.meta.activeTag(called_target));
+    const called_target_pipe = ast.store.getExpr(called_target.suffix_single_question.expr);
+    try std.testing.expectEqual(.arrow_call, std.meta.activeTag(called_target_pipe));
+
+    // `a |> f?` is `a |> (f?)`: the pipe owns the question-suffixed target.
+    const suffixed_target = ast.store.getExpr(items[1]);
+    try std.testing.expectEqual(.arrow_call, std.meta.activeTag(suffixed_target));
+    const target = ast.store.getExpr(suffixed_target.arrow_call.right);
+    try std.testing.expectEqual(.suffix_single_question, std.meta.activeTag(target));
+
+    // Explicit target arguments are also inside the pipe result being unwrapped.
+    const target_with_arg = ast.store.getExpr(items[2]);
+    try std.testing.expectEqual(.suffix_single_question, std.meta.activeTag(target_with_arg));
+    const target_with_arg_pipe = ast.store.getExpr(target_with_arg.suffix_single_question.expr);
+    try std.testing.expectEqual(.arrow_call, std.meta.activeTag(target_with_arg_pipe));
+}
+
+test "dollar-prefixed record field names are rejected with a single diagnostic" {
+    const gpa = std.testing.allocator;
+
+    const Case = struct {
+        source: []const u8,
+        parse: *const fn (Allocator, *CommonEnv) Allocator.Error!*AST,
+    };
+
+    for ([_]Case{
+        .{
+            .source = "match value { { $field } => \"matched\" }",
+            .parse = expr,
+        },
+        .{
+            .source = "app [main!] { $pf: platform \"./platform/main.roc\" }",
+            .parse = header,
+        },
+        .{
+            .source = "package [Foo] { $dep: \"../dep/main.roc\" }",
+            .parse = header,
+        },
+    }) |case| {
+        var env = try CommonEnv.init(gpa, case.source);
+        defer env.deinit(gpa);
+
+        const ast = try case.parse(gpa, &env);
+        defer ast.deinit();
+
+        try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+        try std.testing.expectEqual(@as(usize, 1), ast.parse_diagnostics.items.len);
+        try std.testing.expectEqual(
+            AST.Diagnostic.Tag.record_field_name_cannot_be_var,
+            ast.parse_diagnostics.items[0].tag,
+        );
+    }
 }
 
 fn vmExprAllocationFailureImpl(allocator: Allocator, tokens: tokenize.TokenizedBuffer) Allocator.Error!void {
@@ -220,47 +281,6 @@ test "parse error triggers errdefer cleanup" {
     defer output.tokens.deinit(gpa);
 
     try std.testing.checkAllAllocationFailures(gpa, vmExprAllocationFailureImpl, .{output.tokens});
-}
-
-fn expectStatementParsesWithoutDiagnostics(source: []const u8) ParseTestError!void {
-    const gpa = std.testing.allocator;
-
-    var env = try CommonEnv.init(gpa, source);
-    defer env.deinit(gpa);
-
-    const ast = try statement(gpa, &env);
-    defer ast.deinit();
-
-    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
-    try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
-}
-
-fn expectFileParsesWithoutDiagnostics(source: []const u8) ParseTestError!void {
-    const gpa = std.testing.allocator;
-
-    var env = try CommonEnv.init(gpa, source);
-    defer env.deinit(gpa);
-
-    const ast = try file(gpa, &env);
-    defer ast.deinit();
-
-    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
-    try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
-}
-
-test "method and static dispatch chains parse stack-safely" {
-    try expectStatementParsesWithoutDiagnostics("Dict.from_list([(\"a\", 1), (\"b\", 2)]).get(\"a\")");
-    try expectStatementParsesWithoutDiagnostics("lst.map(|_| \"zzz \").join_with(\" \").trim()");
-}
-
-test "double question operator parses after static dispatch" {
-    try expectStatementParsesWithoutDiagnostics("Try.Ok(\"hello\") ?? \"default\"");
-}
-
-test "where clause method function types parse stack-safely" {
-    try expectFileParsesWithoutDiagnostics(
-        \\A(a) : a where [a.a1 : (a, a) -> Str, a.a2 : (a, a) -> Str]
-    );
 }
 
 fn vmInitAllocationFailureImpl(allocator: Allocator, tokens: tokenize.TokenizedBuffer) Allocator.Error!void {

@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=
+description=if expression without an else branch produces a parse error
 type=snippet
 ~~~
 # SOURCE
@@ -43,7 +43,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "foo"))
@@ -64,7 +64,7 @@ NO CHANGE
 			(if-branches
 				(if-branch
 					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-num (value "0"))))
+					(e-runtime-error (tag "erroneous_value_expr"))))
 			(if-else
 				(e-empty_record)))))
 ~~~

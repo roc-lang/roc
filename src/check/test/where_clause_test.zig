@@ -43,6 +43,23 @@ test "where clause - basic method constraint infers correctly" {
     try test_env_b.assertDefType("main", "Str");
 }
 
+test "where clause - effectful method constraint preserves callable kind" {
+    const source =
+        \\helper! : a => {} where [a.run! : () => {}]
+        \\helper! = |_| {
+        \\  A : a
+        \\  A.run!()
+        \\}
+    ;
+    var test_env = try TestEnv.init("EffectfulWhere", source);
+    defer test_env.deinit();
+
+    try test_env.assertDefType(
+        "helper!",
+        "a => {} where [a.run! : ({}) => {}]",
+    );
+}
+
 test "where clause - polymorphic return type" {
     const source_a =
         \\A := [Val(Str)].{
@@ -101,6 +118,99 @@ test "where clause - constraint with multiple args" {
 
 // Multiple constraints tests
 
+test "where clause - constraint-only receiver is linked through another constraint" {
+    const source =
+        \\chain : c -> a where [c.get : c -> item, item.get : item -> a]
+        \\chain = |value| value.get().get()
+    ;
+    var test_env = try TestEnv.init("ConstraintChain", source);
+    defer test_env.deinit();
+
+    try test_env.assertDefType(
+        "chain",
+        "c -> a where [c.get : c -> item, item.get : item -> a]",
+    );
+}
+
+test "where clause - constraint-only receiver is independent of declaration order" {
+    const source =
+        \\chain : c -> a where [item.get : item -> a, c.get : c -> item]
+        \\chain = |value| value.get().get()
+    ;
+    var test_env = try TestEnv.init("ConstraintChainReversed", source);
+    defer test_env.deinit();
+
+    try test_env.assertDefType(
+        "chain",
+        "c -> a where [c.get : c -> item, item.get : item -> a]",
+    );
+}
+
+test "where clause - issue 10084 nested iterator constraint resolves" {
+    const source =
+        \\join : c -> Iter(Iter(a)) where [c.iter : c -> Iter(item), item.iter : item -> Iter(a)]
+        \\join = |iters| iters.iter().map(|item| item.iter())
+    ;
+    var test_env = try TestEnv.init("NestedIteratorConstraint", source);
+    defer test_env.deinit();
+
+    try test_env.assertDefType(
+        "join",
+        "c -> Iter(Iter(a)) where [c.iter : c -> Iter(item), item.iter : item -> Iter(a)]",
+    );
+}
+
+test "where clause - cyclic constraint signatures resolve through canonical owners" {
+    const source =
+        \\cycle : a -> a where [a.next : a -> b, b.prev : b -> a]
+        \\cycle = |value| value.next().prev()
+    ;
+    var test_env = try TestEnv.init("CyclicConstraintOwners", source);
+    defer test_env.deinit();
+
+    try test_env.assertDefType(
+        "cycle",
+        "a -> a where [a.next : a -> b, b.prev : b -> a]",
+    );
+}
+
+test "where clause - cannot constrain rigid introduced by enclosing annotation" {
+    const source =
+        \\outer : a -> Str
+        \\outer = |value| {
+        \\    inner : a -> Str where [a.show : a -> Str]
+        \\    inner = |_ignored| "ok"
+        \\    inner(value)
+        \\}
+    ;
+    var test_env = try TestEnv.init("EnclosingWhereReceiver", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Unbound Where Receiver");
+    try std.testing.expectEqual(
+        .where_clause_receiver_not_introduced,
+        std.meta.activeTag(test_env.checker.problems.problems.items[0]),
+    );
+}
+
+test "where clause - detached receiver cannot introduce itself" {
+    const source =
+        \\foo : {} -> {} where [a.decode : {} -> {}]
+        \\foo = |_| {
+        \\    A : a
+        \\    A.decode({})
+        \\}
+    ;
+    var test_env = try TestEnv.init("DetachedWhereReceiver", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Unbound Where Receiver");
+    try std.testing.expectEqual(
+        .where_clause_receiver_not_introduced,
+        std.meta.activeTag(test_env.checker.problems.problems.items[0]),
+    );
+}
+
 test "where clause - multiple constraints on same variable" {
     const source_a =
         \\A := [D(Str, U64)].{
@@ -130,6 +240,34 @@ test "where clause - multiple constraints on same variable" {
         "a -> (Str, U64) where [a.to_str : a -> Str, a.to_u64 : a -> U64]",
     );
     try test_env_b.assertDefType("main", "(Str, U64)");
+}
+
+test "where clause - duplicate identical method constraints share one obligation" {
+    const source =
+        \\f : a -> {} where [a.foo : a, {} -> {}, a.foo : a, {} -> {}]
+        \\f = |x| {
+        \\    _ = x.foo({})
+        \\    {}
+        \\}
+    ;
+    var test_env = try TestEnv.init("DuplicateWhereConstraint", source);
+    defer test_env.deinit();
+
+    try test_env.assertDefType(
+        "f",
+        "a -> {} where [a.foo : a, {} -> {}]",
+    );
+}
+
+test "where clause - duplicate incompatible method constraints report a mismatch" {
+    const source =
+        \\f : a -> {} where [a.foo : a, {} -> {}, a.foo : a, Str -> {}]
+        \\f = |_| {}
+    ;
+    var test_env = try TestEnv.init("ConflictingDuplicateWhereConstraint", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("Type Mismatch");
 }
 
 // Cross-module where clause tests

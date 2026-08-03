@@ -4,57 +4,59 @@ Format := [Default].{
 	rename_field : Format, Str -> Str
 	rename_field = |_, name| underscores_to_dashes(name)
 
-	parse_str : Format, State -> Try({ value : Str, rest : State }, [MissingRequired])
+	parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError, ..])
 	parse_str = |_, state|
 		match state {
 			Value(value) => Ok({ value, rest: Done })
 			FooValue => Ok({ value: "abcdefghijklmnopqrstuvwxyz", rest: CacheName })
 			CacheValue => Ok({ value: "no-cache", rest: ContentLengthName })
-			Key(_, _) | Start | FooName | CacheName | ContentLengthName | ContentLengthValue | RequestCountName | RequestCountValue | Done => Err(MissingRequired)
+			Key(_, _) | Start | FooName | CacheName | ContentLengthName | ContentLengthValue | RequestCountName | RequestCountValue | Done => Err(FormatError)
 		}
 
-	parse_u64 : Format, State -> Try({ value : U64, rest : State }, [MissingRequired])
+	parse_u64 : Format, State -> Try({ value : U64, rest : State }, [FormatError, ..])
 	parse_u64 = |_, state|
 		match state {
 			ContentLengthValue => Ok({ value: 5, rest: RequestCountName })
 			RequestCountValue => Ok({ value: 17, rest: Done })
-			Key(_, _) | Value(_) | Start | FooName | FooValue | CacheName | CacheValue | ContentLengthName | RequestCountName | Done => Err(MissingRequired)
+			Key(_, _) | Value(_) | Start | FooName | FooValue | CacheName | CacheValue | ContentLengthName | RequestCountName | Done => Err(FormatError)
 		}
 
-	parse_record_field : Format, Encoding.FieldName.FieldNames(_shape), State -> Try(
+	parse_record_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [FormatError, ..])
+	parse_record_start = |_, state| Ok(Uncounted(state))
+
+	parse_record_field : Format,
+	Encoding.FieldName.FieldNames(_shape),
+	State -> Try(
 		[
 			Field({ field : Encoding.FieldName(_shape), rest : State }),
 			TryField({ name : Str, rest : State }),
 			TryFieldCaseless({ name : Str, rest : State }),
-			Continue({ rest : State }),
-			Done({ rest : State }),
+			Continue(State),
+			Done(State),
 		],
-		[MissingRequired],
+		[FormatError, ..],
 	)
 	parse_record_field = |_, fields, state|
 		match state {
 			Key(name, value) => Ok(TryFieldCaseless({ name, rest: Value(value) }))
 			Start =>
 				if Encoding.FieldName.FieldNames.shortest_name(fields) == 3 and Encoding.FieldName.FieldNames.longest_name(fields) == 14 {
-					Ok(Continue({ rest: FooName }))
+					Ok(Continue(FooName))
 				} else {
-					Ok(Done({ rest: Done }))
+					Ok(Done(Done))
 				}
 			FooName => Ok(TryFieldCaseless({ name: "fOo", rest: FooValue }))
 			CacheName => Ok(TryFieldCaseless({ name: "Cache-Control", rest: CacheValue }))
 			ContentLengthName => Ok(TryFieldCaseless({ name: "Content-Length", rest: ContentLengthValue }))
 			RequestCountName => Ok(TryFieldCaseless({ name: "Request-Count", rest: RequestCountValue }))
-			Value(_) | FooValue | CacheValue | ContentLengthValue | RequestCountValue | Done => Ok(Done({ rest: Done }))
+			Value(_) | FooValue | CacheValue | ContentLengthValue | RequestCountValue | Done => Ok(Done(Done))
 		}
 
-	skip_record_field : Format, State -> Try(State, [MissingRequired])
+	parse_record_after_field : Format, State -> Try([Continue(State), Done(State)], [FormatError, ..])
+	parse_record_after_field = |_, state| Ok(Continue(state))
+
+	skip_record_field : Format, State -> Try(State, [FormatError, ..])
 	skip_record_field = |_, _| Ok(Done)
-
-	missing_record_field : Format, Str, State -> [MissingRequired]
-	missing_record_field = |_, _, _| MissingRequired
-
-	missing_optional_field : Format, Str, State -> [Missing]
-	missing_optional_field = |_, _, _| Missing
 }
 
 State := [
@@ -74,7 +76,7 @@ State := [
 
 Shape : { foo : Str }
 
-parse_shape : State -> Try({ value : { foo : Str }, rest : State }, [MissingRequired])
+parse_shape : State -> Try({ value : { foo : Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
 parse_shape = Shape.parser_for(Format.Default)
 
 expect {
@@ -100,7 +102,7 @@ parse_http_shape : State -> Try(
 		},
 		rest : State,
 	},
-	[MissingRequired],
+	[FormatError, MissingRequiredField(Str)],
 )
 parse_http_shape = HttpShape.parser_for(Format.Default)
 
@@ -117,7 +119,7 @@ expect {
 
 underscores_to_dashes : Str -> Str
 underscores_to_dashes = |text|
-	match text.find_first("_") {
+	match text.split_first("_") {
 		Ok({ before, after }) =>
 			before.concat("-").concat(underscores_to_dashes(after))
 

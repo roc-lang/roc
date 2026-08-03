@@ -49,25 +49,23 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - type_alias_decl.md:7:1:7:34
+BUILTIN TYPE SHADOWED - type_alias_decl.md:7:1:7:34
 OPEN EXT NOT ALLOWED IN TYPE DECLARATION - type_alias_decl.md:22:18:22:20
 UNUSED VARIABLE - type_alias_decl.md:36:5:36:11
 UNUSED VARIABLE - type_alias_decl.md:39:5:39:10
 # PROBLEMS
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `Try` is being redeclared here. ───────────┐
-└┬─────────────────────┘                                                      │
+┌───────────────────────┐
+│ BUILTIN TYPE SHADOWED ├─ The type `Try` shadows a builtin type. ────────────┐
+└┬──────────────────────┘                                                     │
  │                                                                            │
  │  Try(ok, err) : [Ok(ok), Err(err)]                                         │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
  └──────────────────────────────────────────────────── type_alias_decl.md:7:1 ┘
 
-    In this scope, `Try` was already defined here:
-      ┌───────────────────────────────────────────────────────────────────────┐
-    1 │  app [main!] { pf: platform "../basic-cli/main.roc" }                 │
-      │  ‾                                                                    │
-      └─────────────────────────────────────────────── type_alias_decl.md:1:1 ┘
+    This may make the builtin type inaccessible in this scope.
+
+    The new declaration is here:
 
 
 ┌──────────────────────────────────────────┐
@@ -276,10 +274,7 @@ Color : [Red, Green, Blue, Custom(U8, U8, U8)]
 Letters : [A, B, ..]
 
 # Type declaration with records and generics
-Container(item) : {
-	contents : List(item),
-	metadata : { size : U64, created : Str },
-}
+Container(item) : { contents : List(item), metadata : { size : U64, created : Str } }
 
 main! = |_| {
 	# Use the types to validate they work
@@ -410,7 +405,7 @@ main! = |_| {
 					(ty-rigid-var (name "data")))))
 		(alias (type "Color")
 			(ty-header (name "Color")))
-		(alias (type "Letters")
+		(alias (type "Error")
 			(ty-header (name "Letters")))
 		(alias (type "Container(item)")
 			(ty-header (name "Container")

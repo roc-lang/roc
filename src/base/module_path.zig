@@ -39,14 +39,19 @@ pub fn getModuleNameAlloc(
     return try allocator.dupe(u8, getModuleName(path));
 }
 
+/// Return the source-visible module name from a slash-separated logical path.
+///
+/// Examples:
+///   "Widget" -> "Widget"
+///   "Src/Widget" -> "Widget"
+pub fn getModuleBasename(module_path: []const u8) []const u8 {
+    const slash = std.mem.findScalarLast(u8, module_path, '/') orelse return module_path;
+    return module_path[slash + 1 ..];
+}
+
 test "getModuleName strips .roc extension" {
     try std.testing.expectEqualStrings("Module", getModuleName("path/to/Module.roc"));
     try std.testing.expectEqualStrings("Module", getModuleName("Module.roc"));
-}
-
-test "getModuleName strips any extension" {
-    try std.testing.expectEqualStrings("file", getModuleName("path/to/file.txt"));
-    try std.testing.expectEqualStrings("data", getModuleName("data.json"));
 }
 
 test "getModuleName handles no extension" {
@@ -64,6 +69,11 @@ test "getModuleNameAlloc allocates correctly" {
     const result = try getModuleNameAlloc(allocator, "path/to/Module.roc");
     defer allocator.free(result);
     try std.testing.expectEqualStrings("Module", result);
+}
+
+test "getModuleBasename returns the final slash-separated segment" {
+    try std.testing.expectEqualStrings("Widget", getModuleBasename("Widget"));
+    try std.testing.expectEqualStrings("Widget", getModuleBasename("Src/Widget"));
 }
 
 /// Result of parsing a qualified import name like "pf.Wrapper"

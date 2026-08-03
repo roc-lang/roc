@@ -5,11 +5,11 @@ type=snippet
 ~~~
 # SOURCE
 ~~~roc
-import A .B as
+import A / B as
     X1
-import A .B .C as
+import A / B / C as
     X2
-import A .B .C .D as
+import A / B / C / D as
     X3
 ~~~
 # EXPECTED
@@ -18,43 +18,37 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwImport,UpperIdent,DotUpperIdent,KwAs,
+KwImport,UpperIdent,OpSlash,UpperIdent,KwAs,
 UpperIdent,
-KwImport,UpperIdent,DotUpperIdent,DotUpperIdent,KwAs,
+KwImport,UpperIdent,OpSlash,UpperIdent,OpSlash,UpperIdent,KwAs,
 UpperIdent,
-KwImport,UpperIdent,DotUpperIdent,DotUpperIdent,DotUpperIdent,KwAs,
+KwImport,UpperIdent,OpSlash,UpperIdent,OpSlash,UpperIdent,OpSlash,UpperIdent,KwAs,
 UpperIdent,
 EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
-		(s-import (raw "A .B") (alias "X1"))
-		(s-import (raw "A .B .C") (alias "X2"))
-		(s-import (raw "A .B .C .D") (alias "X3"))))
+		(s-import (raw "A / B") (alias "X1"))
+		(s-import (raw "A / B / C") (alias "X2"))
+		(s-import (raw "A / B / C / D") (alias "X3"))))
 ~~~
 # FORMATTED
 ~~~roc
-import A
-	.B as X1 exposing []
-import A
-	.B
-	.C as X2 exposing []
-import A
-	.B
-	.C
-	.D as X3 exposing []
+import A/B as X1
+import A/B/C as X2
+import A/B/C/D as X3
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-import (module "A")
+	(s-import (mod "A/B")
 		(exposes))
-	(s-import (module "A")
+	(s-import (mod "A/B/C")
 		(exposes))
-	(s-import (module "A")
+	(s-import (mod "A/B/C/D")
 		(exposes)))
 ~~~
 # TYPES

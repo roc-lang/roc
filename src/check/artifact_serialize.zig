@@ -13,6 +13,7 @@
 //! side-list (transform B) treatment instead and must NOT use this helper.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const collections = @import("collections");
 
 const Allocator = std.mem.Allocator;
@@ -25,20 +26,80 @@ const CompactWriter = collections.CompactWriter;
 /// would silently dangle after relocation, so we reject it at compile time
 /// (such a type needs the transform-B side-list treatment instead).
 pub fn assertRelocatablePod(comptime T: type) void {
+    comptime {
+        // CheckedModuleArtifact.Serialized is intentionally a large recursive
+        // union. Validate its complete shape rather than depending on Zig's
+        // default comptime branch quota.
+        @setEvalBranchQuota(1_000_000);
+        assertRelocatablePodInner(T);
+    }
+}
+
+fn assertRelocatablePodInner(comptime T: type) void {
     switch (@typeInfo(T)) {
         .int, .float, .bool, .void, .@"enum", .error_set, .vector => {},
-        .optional => |o| assertRelocatablePod(o.child),
-        .array => |a| assertRelocatablePod(a.child),
+        .optional => |o| assertRelocatablePodInner(o.child),
+        .array => |a| assertRelocatablePodInner(a.child),
         .@"struct" => |s| {
-            for (s.fields) |f| assertRelocatablePod(f.type);
+            for (s.fields) |f| assertRelocatablePodInner(f.type);
         },
         .@"union" => |u| {
-            for (u.fields) |f| assertRelocatablePod(f.type);
+            for (u.fields) |f| assertRelocatablePodInner(f.type);
         },
         .pointer => @compileError("SerializedSlice element type '" ++ @typeName(T) ++
             "' contains a pointer/slice; it is not relocation-invariant. Use a side-list (transform B) instead."),
         else => @compileError("SerializedSlice element type '" ++ @typeName(T) ++
             "' has an unsupported (possibly non-POD) representation: " ++ @tagName(@typeInfo(T))),
+    }
+}
+
+/// `@compileError` unless `T` is safe to persist as checked-cache bytes across
+/// supported compiler hosts. This is separate from `assertRelocatablePod`: a
+/// type can have no pointers and still be non-portable if it contains native
+/// width integers such as `usize`/`isize`.
+pub fn assertPortableSerialized(comptime T: type) void {
+    comptime {
+        @setEvalBranchQuota(20_000_000);
+        if (builtin.cpu.arch.endian() != .little) {
+            @compileError("checked cache portable raw-byte format currently requires little-endian compiler hosts");
+        }
+        assertPortableSerializedInner(T);
+    }
+}
+
+fn assertPortableSerializedInner(comptime T: type) void {
+    comptime {
+        if (T == usize or T == isize) {
+            @compileError("Serialized type '" ++ @typeName(T) ++
+                "' uses native pointer-width integer storage; use an explicit fixed-width integer");
+        }
+
+        switch (@typeInfo(T)) {
+            .int, .float, .bool, .void, .@"enum", .error_set, .vector => {},
+            .optional => |o| assertPortableSerializedInner(o.child),
+            .array => |a| assertPortableSerializedInner(a.child),
+            .@"struct" => |s| {
+                if (@hasDecl(T, "SerializedElement")) {
+                    assertPortableSerializedInner(T.SerializedElement);
+                }
+                for (s.fields) |f| assertPortableSerializedInner(f.type);
+            },
+            .@"union" => |u| {
+                if (u.tag_type) |tag| {
+                    assertPortableSerializedInner(tag);
+                } else {
+                    if (u.layout != .@"extern" or !@hasDecl(T, "serialized_portable_extern_union")) {
+                        @compileError("Serialized type '" ++ @typeName(T) ++
+                            "' contains an untagged union; use an explicit serialized representation or a proven extern payload");
+                    }
+                }
+                for (u.fields) |f| assertPortableSerializedInner(f.type);
+            },
+            .pointer => @compileError("Serialized type '" ++ @typeName(T) ++
+                "' contains a pointer/slice; use a relocatable marker or explicit fixed-width storage"),
+            else => @compileError("Serialized type '" ++ @typeName(T) ++
+                "' has an unsupported representation for checked-cache portability: " ++ @tagName(@typeInfo(T))),
+        }
     }
 }
 
@@ -114,6 +175,7 @@ pub fn assertSerializedRelocatable(comptime T: type) void {
 /// relocatable base pointer (`offset`), regardless of `len`.
 pub fn SerializedSlice(comptime T: type) type {
     comptime assertRelocatablePod(T);
+    comptime assertPortableSerialized(T);
     comptime assertSerializedDefaultsDefined(T);
     comptime std.debug.assert(@alignOf(T) <= CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits());
     return extern struct {
@@ -171,31 +233,6 @@ pub fn validateOffsetLen(elem_size: u64, elem_align: u64, offset: i64, len: u64,
     return collections.validateRelocatedSpan(elem_align, offset, bytes, backing_len);
 }
 
-/// True if `T` transitively embeds a relocatable marker (a type declaring
-/// `serialized_relocatable_pointers`). Used by `validateSerialized` to reject a
-/// marker hidden inside a union variant, where validation cannot pick the active
-/// variant without a tag.
-fn comptimeHasMarker(comptime T: type) bool {
-    return switch (@typeInfo(T)) {
-        .@"struct" => |s| blk: {
-            if (@hasDecl(T, "serialized_relocatable_pointers")) break :blk true;
-            inline for (s.fields) |f| {
-                if (comptimeHasMarker(f.type)) break :blk true;
-            }
-            break :blk false;
-        },
-        .@"union" => |u| blk: {
-            inline for (u.fields) |f| {
-                if (comptimeHasMarker(f.type)) break :blk true;
-            }
-            break :blk false;
-        },
-        .array => |a| comptimeHasMarker(a.child),
-        .optional => |o| comptimeHasMarker(o.child),
-        else => false,
-    };
-}
-
 /// L-10 whole-artifact validation pass: walk a relocated `Serialized` value and
 /// bounds-check every relocatable marker's `(offset, len)` against `backing_len`
 /// BEFORE any consumer dereferences it, so a truncated or corrupt blob produces a
@@ -204,25 +241,7 @@ fn comptimeHasMarker(comptime T: type) bool {
 /// `validateRelocations`; everything else is recursed into. Pure structural walk
 /// driven by the type, mirroring `relocatablePointerCount`/`assertSerializedRelocatable`.
 pub fn validateSerialized(comptime T: type, self: *const T, backing_len: u64) error{CorruptArtifact}!void {
-    switch (@typeInfo(T)) {
-        .@"struct" => |s| {
-            if (@hasDecl(T, "serialized_relocatable_pointers")) {
-                try self.validateRelocations(backing_len);
-                return;
-            }
-            inline for (s.fields) |f| {
-                try validateSerialized(f.type, &@field(self, f.name), backing_len);
-            }
-        },
-        .array => |a| {
-            for (self) |*elem| try validateSerialized(a.child, elem, backing_len);
-        },
-        .@"union" => {
-            if (comptime comptimeHasMarker(T)) @compileError("Serialized union '" ++ @typeName(T) ++
-                "' has a variant containing a relocatable marker; L-10 validation cannot pick the active variant without a tag. Restructure so the marker is a plain struct field.");
-        },
-        else => {},
-    }
+    try collections.validateSerializedRelocations(T, self, backing_len);
 }
 
 /// Relocatable serialized form of an `?T` of POD `T`. Encodes presence as a
@@ -231,6 +250,7 @@ pub fn validateSerialized(comptime T: type, self: *const T, backing_len: u64) er
 /// field). One relocatable pointer.
 pub fn SerializedOptional(comptime T: type) type {
     comptime assertRelocatablePod(T);
+    comptime assertPortableSerialized(T);
     return extern struct {
         slot: SerializedSlice(T) = .{},
 
@@ -355,6 +375,7 @@ fn splitmix64(x: u64) u64 {
 /// mismatched struct. Bump `version` for a semantic change the fingerprint can't see.
 pub fn layoutVersionHash(comptime T: type, comptime version: u32) [32]u8 {
     @setEvalBranchQuota(20_000_000);
+    comptime assertPortableSerialized(T);
     var hasher = LayoutHasher{};
     hasher.update(std.fmt.comptimePrint("roc-serialized-v{d};fixups={d};", .{
         version,

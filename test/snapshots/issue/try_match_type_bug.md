@@ -40,7 +40,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "get_greeting")
 			(ty-fn
@@ -112,7 +112,7 @@ get_greeting = |{}| {
 												(e-match
 													(match
 														(cond
-															(e-call (constraint-fn-var 274)
+															(e-call (constraint-fn-var 294)
 																(e-lookup-external
 																	(builtin))
 																(e-list

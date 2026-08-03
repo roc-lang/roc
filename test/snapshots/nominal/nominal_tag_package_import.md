@@ -5,20 +5,20 @@ type=snippet
 ~~~
 # SOURCE
 ~~~roc
-# import the Color module from styles package as CC
+# import the Color mod from styles package as CC
 import styles.Color as CC
 
-# instantiating an RGB nominal tab union from the styles.Color module
+# instantiating an RGB nominal tab union from the styles.Color mod
 blue : CC.Color
 blue = CC.Color.RGB(0,0,255)
 ~~~
 # EXPECTED
-MODULE NOT FOUND - nominal_tag_package_import.md:5:10:5:16
-MODULE NOT FOUND - nominal_tag_package_import.md:6:10:6:16
+MOD NOT FOUND - nominal_tag_package_import.md:5:10:5:16
+MOD NOT FOUND - nominal_tag_package_import.md:6:10:6:16
 # PROBLEMS
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `Color` type is declared to be in ─────────────────┐
+│ MOD NOT FOUND ├─ This `Color` type is declared to be in ─────────────────┐
 └┬─────────────────┘  `styles.Color`, which does not exist.                   │
  │                                                                            │
  │  blue : CC.Color                                                           │
@@ -28,7 +28,7 @@ MODULE NOT FOUND - nominal_tag_package_import.md:6:10:6:16
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `Color` type is declared to be in ─────────────────┐
+│ MOD NOT FOUND ├─ This `Color` type is declared to be in ─────────────────┐
 └┬─────────────────┘  `styles.Color`, which does not exist.                   │
  │                                                                            │
  │  blue = CC.Color.RGB(0,0,255)                                              │
@@ -46,7 +46,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "styles.Color") (alias "CC"))
 		(s-type-anno (name "blue")
@@ -61,10 +61,10 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-# import the Color module from styles package as CC
+# import the Color mod from styles package as CC
 import styles.Color as CC
 
-# instantiating an RGB nominal tab union from the styles.Color module
+# instantiating an RGB nominal tab union from the styles.Color mod
 blue : CC.Color
 blue = CC.Color.RGB(0, 0, 255)
 ~~~
@@ -73,10 +73,10 @@ blue = CC.Color.RGB(0, 0, 255)
 (can-ir
 	(d-let
 		(p-assign (ident "blue"))
-		(e-runtime-error (tag "type_from_missing_module"))
+		(e-runtime-error (tag "type_from_missing_mod"))
 		(annotation
 			(ty-malformed)))
-	(s-import (module "styles.Color")
+	(s-import (mod "styles.Color")
 		(exposes)))
 ~~~
 # TYPES

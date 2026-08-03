@@ -8,6 +8,7 @@
 //! Other afl commands also available in `./zig-out/AFLplusplus/bin`
 
 const std = @import("std");
+const build_options = @import("build_options");
 const fmt = @import("fmt");
 
 /// Hook for AFL++ to initialize the fuzz test environment.
@@ -22,9 +23,9 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
 pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     // We reinitialize the gpa on every loop of the fuzzer.
     // This enables the gpa to do leak checking on each iteration.
-    var gpa_impl = std.heap.DebugAllocator(.{}){};
+    var gpa_impl = std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
     defer {
-        _ = gpa_impl.deinit();
+        _ = build_options.debugGpaOk(gpa_impl.deinit());
     }
     const gpa = gpa_impl.allocator();
 

@@ -70,7 +70,7 @@ ASCII control characters are not allowed in Roc source code.
  │  ‾‾‾‾‾‾‾‾‾                                                                 │
  └───────────────────────────────────────────────────── fuzz_crash_048.md:1:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -82,7 +82,7 @@ ASCII control characters are not allowed in Roc source code.
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
  └───────────────────────────────────────────────────── fuzz_crash_048.md:2:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -94,7 +94,7 @@ ASCII control characters are not allowed in Roc source code.
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
  └───────────────────────────────────────────────────── fuzz_crash_048.md:3:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -107,7 +107,7 @@ ASCII control characters are not allowed in Roc source code.
  │                                                                            │
  └───────────────────────────────────────────────────── fuzz_crash_048.md:4:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -119,7 +119,7 @@ ASCII control characters are not allowed in Roc source code.
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                        │
  └───────────────────────────────────────────────────── fuzz_crash_048.md:6:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -131,7 +131,7 @@ ASCII control characters are not allowed in Roc source code.
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                              │
  └───────────────────────────────────────────────────── fuzz_crash_048.md:7:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 # TOKENS
@@ -148,7 +148,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "foo")
 			(ty (name "U64")))

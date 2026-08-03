@@ -7,18 +7,18 @@ Every `.roc` file is a _module_. Modules have two purposes:
 
 Roc has several different categories of modules, and they each hide different things:
 
-- [Type modules](#type-modules) expose a single [type](types.md), including all its associated items (methods, nested types, etc.) and hide implementation details such as private helper functions called by that type's methods.
+- [Type modules](#type-modules) expose a single [type](types), including all its associated items (methods, nested types, etc.) and hide implementation details such as private helper functions called by that type's methods.
 - [Package modules](#package-modules) expose one or more [type modules](#type-modules) and hide private modules that are only used behind the scenes.
-- [Application modules](#app-modules) expose the entrypoints (e.g. `main`) required by the platform, and hide the implementation details which go into building those entrypoints.
-- [Platform modules](#platform-modules) expose the [type modules](#type-modules) that application authors can import from the platform, and hide the configuration it uses to communicate with its lower-level [host](platforms.md#host) implementation.
+- [Application modules](#application-modules) expose the entrypoints (e.g. `main`) required by the platform, and hide the implementation details which go into building those entrypoints.
+- [Platform modules](#platform-modules) expose the [type modules](#type-modules) that application authors can import from the platform, and hide the configuration it uses to communicate with its lower-level [host](platforms#host) implementation.
 
 ## Type Modules
 
 Type modules are specified by a .roc file with a capitalized name, such as `Url.roc`.
 
-The file must contain a top-level [nominal type](types.md#nominal-types)
-(defined with `:=`, or optionally with `::` to make it [opaque](types.md#opaque-types)) whose name is
-the same as the filename without the `.roc` extension. Note that [type aliases](types.md#type-aliases)
+The file must contain a top-level [nominal type](types#nominal-types)
+(defined with `:=`, or optionally with `::` to make it [opaque](types#opaque-nominal-types)) whose name is
+the same as the filename without the `.roc` extension. Note that [type aliases](types#type-aliases)
 (defined with `:`) don't satisfy this requirement.
 
 So for example, if a type module has a filename of `Url.roc`, then it must have
@@ -48,7 +48,7 @@ Url :: { self : Str }.{
 
 In this example, since `Url.ParseErr` is itself a type, you can nest other types inside it
 to get something like `Url.ParseErr.Foo.blah`. The nesting can go as deep as you like, and
-other modules can flatten out the nesting using `import` with the [`as` keyword](#import-as).
+other modules can flatten out the nesting using `import` with the [`as` keyword](#renaming-imported-modules-with-as).
 
 ### Alias modules
 
@@ -68,7 +68,10 @@ Now you could import `ParseErr` directly. This isn't commonly done for things li
 though, because having it qualified as `Url.ParseErr` is useful; it tells you that it's
 specifically a URL parsing error, which is more informative than a generic name like `ParseErr`.
 
-Alias modules are more useful when exporting [mutually recursive types](#mutually-recursive-type-modules).
+Alias modules are more useful when exporting [mutually recursive types](#importing-mutually-recursive-types).
+
+(Note: alias modules have not been implemented yet. Currently, the compiler requires a type
+module's type to be nominal, and reports an error if it's a type alias.)
 
 ### "Void" modules
 
@@ -91,9 +94,9 @@ private_helper_fn : …
 ```
 
 This is known as a _void module_ because it exposes an opaque _void type_ (namely, `[]`, which is
-the [empty tag union type](tag-unions.md#void); the empty tag union type is known as "void" for short).
+the [empty tag union type](tag-unions#void); the empty tag union type is known as "void" for short).
 
-`Util` is [opaque](types.md#opaque-types), which prevents other modules from instantiating it,
+`Util` is [opaque](types#opaque-nominal-types), which prevents other modules from instantiating it,
 and its backing type is `[]`, which means it can't even be instantiated inside `Util.roc`
 itself. Choosing `[]` over `{}` for the backing type makes it clear that the `Util` type's
 purpose is just to be a namespace, not to be a value that ever gets passed anywhere.
@@ -121,11 +124,11 @@ annotations, where `Url` is the module name and `ParseError` is the type.
 
 Similarly, if you have a module like `Util.elm`, you still capitalize it, and still use `Util.foo`
 to call a `foo` function it exposes, but you don't have to define a `Util` type like you do in Roc.
-Mutually recursive types (discussed [below](#mutually-recursive-types)) work similarly in Elm to how
+Mutually recursive types (discussed [below](#importing-mutually-recursive-types)) work similarly in Elm to how
 they work in Roc; you'd define `FooBar.elm` which exposes the mutually recursive types `Foo` and `Bar`,
 and then import them using something like `import FooBar exposing (Foo, Bar)`.
 
-Comparing Roc and Elm, the `Util` case is nicer in Elm (you don't the void `Util` type),
+Comparing Roc and Elm, the `Util` case is nicer in Elm (you don't need the void `Util` type),
 and it's more obvious how to organize mutually recursive types (in Elm, you're already doing
 `import ____ exposing ____` as a matter of course).
 
@@ -146,7 +149,7 @@ the _type_, because the `url` _module_ is commonly lowercase in Rust.
 
 Rust does not share Elm's strong cultural norm of organizing a module around a particular type.
 This does happen, such as in the standard library's [`string` module](https://doc.rust-lang.org/stable/std/string/index.html)
-module being organized around the [`String` type](https://doc.rust-lang.org/stable/std/string/struct.String.html),
+being organized around the [`String` type](https://doc.rust-lang.org/stable/std/string/struct.String.html),
 but you also see examples like the [`ffi` module](https://doc.rust-lang.org/stable/std/ffi/index.html) which
 exposes the types [`CStr`](https://doc.rust-lang.org/stable/std/ffi/struct.CStr.html),
 [`CString`](https://doc.rust-lang.org/stable/std/ffi/struct.CString.html),
@@ -196,11 +199,11 @@ Rust allows cyclic module imports because it caches at the package ("crate" in R
 level rather than the module level. (As a similar consequence, Rust disallows packages from
 cyclically depending on one another, as do Elm and Roc.) Cyclic module imports can be
 convenient in Rust, but Rust's lack of module-level caching is a significant contributing
-factor to Elm and Roc being generally being known for much faster build times than Rust.
+factor to Elm and Roc generally being known for much faster build times than Rust.
 
 ## `import` Statements
 
-Roc's `import` statement brings a [type](types.md) into scope from a [type module](#type-modules):
+Roc's `import` statement brings a [type](types) into scope from a [type module](#type-modules):
 
 ```roc
 import Color
@@ -216,11 +219,11 @@ They can't be used with any other category of module besides type modules.
 Use `exposing` to bring specific items into scope without a package qualifier or module prefix:
 
 ```roc
-import pkg.Json exposing [encode, decode]
+import pkg.Json exposing [to_str, decode]
 import Http exposing [Request, Response]
 ```
 
-Now `encode` and `decode` can be called directly instead of `pkg.Json.encode` and `pkg.Json.decode`. Types like `Request` and `Response` can be used in annotations without the `Http.` prefix.
+Now `to_str` and `decode` can be called directly instead of `pkg.Json.to_str` and `pkg.Json.decode`. Types like `Request` and `Response` can be used in annotations without the `Http.` prefix.
 
 ### Renaming imported modules with `as`
 
@@ -230,6 +233,53 @@ Use `as` to give an import a different name:
 import Color as CC
 import json.Parser as JP
 ```
+
+### Modules in subdirectories
+
+Use `/` for source-directory traversal and `.` for types nested inside a
+module. Binding clauses do not change which source file is selected. For
+example:
+
+```roc
+import Src/Widget as Widget
+import Internal/Http/Client exposing [send]
+```
+
+These imports load `Src/Widget.roc` and `Internal/Http/Client.roc`, respectively,
+relative to the importing file. A bare target and a target beginning with `./`
+use that base; `../` moves toward the package root, and a leading `/` starts at
+the package root:
+
+```roc
+import Helper
+import ./Internal/Parser
+import ../Shared/Codec
+import /Public/Api
+```
+
+In every form, a dot begins nested-type selection. `import Url.ParseErr` loads
+`Url.roc` and imports `ParseErr`; `import Url/ParseErr` loads
+`Url/ParseErr.roc`. Adding `as` or `exposing` never changes that distinction.
+
+A package can expose a module stored in a subdirectory by naming its import
+alias in the package header:
+
+```roc
+package [Widget] {}
+
+import Src/Widget as Widget
+```
+
+Package-qualified imports use one dot after the lowercase package alias, then
+the public module name. Further dots select nested types:
+
+```roc
+import json.Parser
+import json.Parser.ParseErr as PE
+```
+
+Directory traversal is private to the package that declares the public module;
+consumers use its public name rather than its internal source path.
 
 ### Importing types from packages
 
@@ -260,11 +310,11 @@ Foo := [BarVal(Bar), Nothing]
 Bar := [FooVal(Foo), Nothing]
 ```
 
-These [mutually recursive types](types.md#mutually-recursive) do not come up often, but when
+These [mutually recursive types](types#mutually-recursive) do not come up often, but when
 they do, there's a helpful technique you can use to make them easier to import.
 
 Since type modules expose a single type, you can't expose both `Foo` and `Bar` from the
-same `.roc` file. However, you can wrap them both in a [void module](#void-module) named something like `FooBar.roc`:
+same `.roc` file. However, you can wrap them both in a [void module](#void-modules) named something like `FooBar.roc`:
 
 ```roc
 FooBar :: {}.{
@@ -297,6 +347,9 @@ module for purposes of referencing each other. This technique can be especially 
 [package modules](#package-modules), which can choose to expose `Foo` and `Bar` but not
 `FooBar`, such that end users don't even see the `FooBar` wrapper type.
 
+(Note: as mentioned in the [alias modules](#alias-modules) section, alias modules have not
+been implemented yet, so this technique doesn't work yet either.)
+
 ### Design Notes on Imports
 
 Obviously, mutually recursive types take more effort to work with than other types.
@@ -321,7 +374,7 @@ fast when a code base is small.
 Roc intentionally disallows import cycles in order to prevent this from happening. If you
 want to have modules reference each other, you have to put them in the same `.roc` file. This
 adds friction (imports get more verbose, and the antidote for that is to create alias modules,
-which is also extra effort), and that friction is the language naturally pushes back on a code
+which is also extra effort), and that friction is how the language naturally pushes back on a code
 organization strategy which unavoidably harms build times.
 
 Having a large module cycle is easy to do by accident when cyclic imports are allowed,
@@ -347,22 +400,6 @@ Exactly what information goes in which headers will be discussed below.
 
 Packages are collections of types that can depend on other packages.
 
-They have their own (lowercase) namespaces, so for example:
-
-```roc
-package [] {
-
-} depends [
-# TODO what's the new syntax for this? introduce package shorthands here, since app modules are down below
-]
-```
-
-### Package Shorthands
-
-TODO
-
-## Package Modules
-
 A _package module_ provides types to be shared with packages, applications and platforms. The module header specifies which types are exposed, and also includes package aliases for importing other packages:
 
 ```roc
@@ -373,6 +410,10 @@ package [
 ] { json: "..." }
 ```
 
+### Package Shorthands
+
+TODO
+
 ## Platform Modules
 
 A _platform module_ defines the interface between a Roc application and the host program.
@@ -382,8 +423,8 @@ platform "my-platform"
     requires { main : Str -> Str }
     exposes [Http, File]
     packages { json: "../json/main.roc" }
-    provides { entrypoint: "roc__entrypoint" }
-    targets { ... }
+    provides { "roc__entrypoint": main }
+    targets : { ... }
 ```
 
 ### requires
@@ -426,10 +467,10 @@ packages { json: "../json/main.roc" }
 
 ### provides
 
-The `provides` section maps function identifiers to the symbols names Roc will link with the platform host:
+The `provides` section maps each symbol name Roc will link with the platform host to the function that will be exposed under that symbol:
 
 ```roc
-provides { entrypoint: "roc__entrypoint" }
+provides { "roc__entrypoint": main }
 ```
 
 ### targets
@@ -445,7 +486,7 @@ targets : {
 }
 ```
 
-- `inputs`: The directory containing target-specific files within a package `.tar.zst` bundle.
+- `inputs_dir`: The directory containing target-specific files within a package `.tar.zst` bundle.
 - Each target entry lists its link `inputs` and an optional `output` kind.
 
 The `output` field declares the artifact kind the target produces:
@@ -491,6 +532,57 @@ app [main!] {
 }
 ```
 
+### Pinning a Roc version
+
+Any app, package or platform header may pin the version of the Roc compiler it
+is written for, using the reserved `roc` entry in its packages record:
+
+```roc
+app [main!] {
+    pf: platform "../basic-cli/main.roc",
+    roc: "nightly-2026-July-31-123c5d7"
+}
+```
+
+This is optional. When present, the value must be a version string of the kind
+`roc version` prints: either a nightly tag such as
+`nightly-2026-July-31-123c5d7` or a release version such as `0.1.0`. Because
+`roc` names the compiler version, it cannot also be used as the shorthand for a
+platform or package.
+
+Compiling a file whose pin names a different compiler than the one you are
+running reports a warning; it does not stop the build.
+
+`roc fmt` keeps a pinned nightly up to date: when the compiler running it is a
+nightly at least as new as the pin, it rewrites the pin to name that compiler.
+A pinned release version is left alone, since pinning a release is a deliberate
+choice rather than a snapshot of whatever nightly was current. Because this is
+part of formatting, `roc fmt --check` reports a file whose nightly pin is out
+of date as needing formatting.
+
+### Nominal type identity across packages
+
+A nominal type's identity is determined by the *content* of the module that
+declares it: the module's name, its source bytes, and (recursively) the same
+for every module it imports. Two nominal types are the same type exactly when
+they have the same declared name and their declaring modules have
+byte-identical content all the way down through their imports.
+
+A practical consequence: if the same module content is reached through two
+different package downloads — two versions of a package where that module did
+not change, the same package fetched from two mirror URLs, or a vendored copy
+of a dependency — the types it declares are all the same type, and values of
+those types interoperate freely. A type that did not change keeps working
+across a version bump. Conversely, if the declaring module (or anything it
+imports) changed at all, its types are new, distinct types, even when every
+name and structure looks the same.
+
+The exceptions are bindings whose meaning comes from outside the compiled
+program: `hosted` functions and `provides` entrypoints are identified by the
+symbol strings in the platform header, never by module content, so two
+identical hosted declarations bound to different symbols always remain
+distinct.
+
 ### Headerless Application Modules
 
 To facilitate tutorials, Roc permits application modules to omit the header entirely.
@@ -501,7 +593,7 @@ a UI for displaying printed output) in WebAssembly. This `echo!` function is aut
 imported unqualified into the application's scope, so that a complete Hello World in Roc can be:
 
 ```roc
-main! = |_args| echo! "Hello, World!"
+main! = |_args| echo!("Hello, World!")
 ```
 
 The `main!` function the Echo Platform receives will get command-line arguments, if applicable,

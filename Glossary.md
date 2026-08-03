@@ -21,7 +21,7 @@ A .roc file forms one module.
 
 Types of modules:
 - app [(example)](https://github.com/roc-lang/examples/blob/main/examples/HelloWorld/main.roc): Applications are combined with a platform and compiled into an executable.
-- module [(example)](https://github.com/roc-lang/examples/blob/main/examples/MultipleRocFiles/Hello.roc): Provide types and functions which can be imported into other modules.
+- importable Roc file [(example)](https://github.com/roc-lang/examples/blob/main/examples/MultipleRocFiles/Hello.roc): Provides types and functions which can be imported into other modules.
 - package [(example)](https://github.com/lukewilliamboswell/roc-json/blob/main/package/main.roc): Organises modules to share functionality across applications and platforms.
 - platform [(example)](https://github.com/roc-lang/basic-cli/blob/main/platform/main.roc): Provides memory management and effects like writing to files, network communication,... to interface with the outside world. [Detailed explanation](https://www.roc-lang.org/platforms).
 - hosted [(example)](https://github.com/roc-lang/basic-cli/blob/main/platform/Host.roc): Lists all Roc types and functions provided by the platform.
@@ -37,23 +37,18 @@ It is generated after the source code is parsed and before target code is produc
 
 Example for:
 ```roc
-module []
-
 foo : U64
 ```
 [Token](#tokenization) IR:
 ```
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(3:1-3:4),OpColon(3:5-3:6),UpperIdent(3:7-3:10),Newline(1:1-1:1)
+LowerIdent(1:1-1:4),OpColon(1:5-1:6),UpperIdent(1:7-1:10),Newline(1:1-1:1)
 ```
 [AST](#ast) IR:
 ```
 (file
-    (module (1:1-1:10))
-    (type_anno (3:1-4:4)
+    (type_anno (1:1-1:10)
         "foo"
-        (tag (3:7-3:10) "U64")))
+        (tag (1:7-1:10) "U64")))
 ```
 
 
@@ -186,15 +181,11 @@ This step makes [parsing](#parsing) simpler.
 
 Example source code:
 ```roc
-module []
-
 foo : U64
 ```
 Corresponding tokens:
 ```
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(3:1-3:4),OpColon(3:5-3:6),UpperIdent(3:7-3:10),Newline(1:1-1:1)
+LowerIdent(1:1-1:4),OpColon(1:5-1:6),UpperIdent(1:7-1:10),Newline(1:1-1:1)
 ```
 
 Implementation: [tokenize.zig](src/parse/tokenize.zig)
@@ -206,18 +197,15 @@ Implementation: [tokenize.zig](src/parse/tokenize.zig)
 An AST organizes and represents the source code as a tree-like structure.
 So for the code below:
 ```roc
-module []
-
 foo : U64
 ```
 
 The AST is:
 ```
 (file
-    (module (1:1-1:10))
-    (type_anno (3:1-4:4)
+    (type_anno (1:1-1:10)
         "foo"
-        (tag (3:7-3:10) "U64")))
+        (tag (1:7-1:10) "U64")))
 ```
 
 It captures the meaning of the code, while ignoring purely syntactic details like parentheses, commas, semicolons,... .

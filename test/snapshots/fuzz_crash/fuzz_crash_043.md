@@ -9,56 +9,82 @@ app[]{f:platform""}{
 o:0}0
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_043.md:1:20:1:21
-UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_043.md:2:3:2:4
-PARSE ERROR - fuzz_crash_043.md:2:4:2:5
-PARSE ERROR - fuzz_crash_043.md:2:5:2:6
+UNEXPECTED STATEMENT - fuzz_crash_043.md:1:20:1:21
+UNEXPECTED TYPE SYNTAX - fuzz_crash_043.md:2:3:2:4
+UNEXPECTED STATEMENT - fuzz_crash_043.md:2:4:2:5
+UNEXPECTED STATEMENT - fuzz_crash_043.md:2:5:2:6
 MALFORMED TYPE - fuzz_crash_043.md:2:3:2:4
 DECLARATION HAS NO VALUE - fuzz_crash_043.md:2:1:2:4
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  app[]{f:platform""}{                                                      │
  │                     ‾                                                      │
  └──────────────────────────────────────────────────── fuzz_crash_043.md:1:20 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `{` here.
 
 
-┌─────────────────────────────────────┐
-│ UNEXPECTED TOKEN IN TYPE ANNOTATION ├─ The token 0 is not expected in a ────┐
-└┬────────────────────────────────────┘  type annotation.                     │
+┌────────────────────────┐
+│ UNEXPECTED TYPE SYNTAX ├─ I was parsing a type annotation, and this token ──┐
+└┬───────────────────────┘  cannot start a type here.                         │
  │                                                                            │
  │  o:0}0                                                                     │
  │    ‾                                                                       │
  └───────────────────────────────────────────────────── fuzz_crash_043.md:2:3 ┘
 
-    Type annotations should contain types like Str, Num a, or List U64.
+    Types can be type variables, uppercase type names, function types, tuples,
+    records, or tag unions.
+
+    For example:
+        List(U64)
+
+    I found `0` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  o:0}0                                                                     │
  │     ‾                                                                      │
  └───────────────────────────────────────────────────── fuzz_crash_043.md:2:4 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `}` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  o:0}0                                                                     │
  │      ‾                                                                     │
  └───────────────────────────────────────────────────── fuzz_crash_043.md:2:5 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `0` here.
 
 
 ┌────────────────┐
@@ -79,7 +105,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_043.md:2:1:2:4
  │  ‾‾‾                                                                       │
  └───────────────────────────────────────────────────── fuzz_crash_043.md:2:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 # TOKENS
@@ -111,7 +137,7 @@ EndOfFile,
 ~~~roc
 app [] { f: platform "" }
 
-o : 
+o :
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -152,6 +152,7 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "hover shows documentation for function without type annotation", .run = hoverShowsDocumentationForFunctionWithoutTypeAnnotation },
     .{ .name = "hover shows documentation for local variable", .run = hoverShowsDocumentationForLocalVariable },
     .{ .name = "hover shows documentation for method call via static dispatch", .run = hoverShowsDocumentationForMethodCallViaStaticDispatch },
+    .{ .name = "hover on record field does not use same-name method documentation", .run = hoverOnRecordFieldDoesNotUseSameNameMethodDocumentation },
     .{ .name = "hover without documentation shows only type", .run = hoverWithoutDocumentationShowsOnlyType },
 };
 
@@ -955,6 +956,41 @@ pub fn hoverShowsDocumentationForMethodCallViaStaticDispatch() integration_spec.
         defer h.allocator.free(text);
         // Should contain the doc comment from the method definition
         try std.testing.expect(std.mem.find(u8, text, "Doubles the value") != null);
+    } else {
+        return error.TestUnexpectedResult;
+    }
+}
+
+/// Verifies field hover never consults the method registry, even when the
+/// receiver's nominal type has a same-name attached method.
+pub fn hoverOnRecordFieldDoesNotUseSameNameMethodDocumentation() integration_spec.SpecError!void {
+    var h = try TestHarness.init();
+    defer h.deinit();
+
+    const source = try h.formatSource(
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\Thing := {{ f : I64 -> I64 }}.{{
+        \\  ## This documentation belongs only to the method.
+        \\  f : Thing, I64 -> I64
+        \\  f = |_, value| value - 1
+        \\}}
+        \\
+        \\thing : Thing
+        \\thing = {{ f: |value| value + 1 }}
+        \\
+        \\main = (thing.f)(10)
+        \\
+    );
+    defer h.allocator.free(source);
+
+    try h.writeFile("hover_record_field.roc", source);
+    try h.check(source);
+
+    const hover = try h.getHover(source, 11, 14);
+    if (hover) |text| {
+        defer h.allocator.free(text);
+        try std.testing.expect(std.mem.find(u8, text, "belongs only to the method") == null);
     } else {
         return error.TestUnexpectedResult;
     }

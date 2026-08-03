@@ -8,6 +8,7 @@ const base = @import("base");
 const check = @import("check");
 const can = @import("can");
 const builtins = @import("builtins");
+const collections = @import("collections");
 
 const Common = @import("../common.zig");
 const Mono = @import("../monotype/ast.zig");
@@ -15,8 +16,19 @@ const MonoType = @import("../monotype/type.zig");
 const Lifted = @import("../monotype_lifted/ast.zig");
 const Type = @import("type.zig");
 const names = check.CheckedNames;
+const GuardedList = collections.GuardedList;
 
 const checked = check.CheckedModule;
+
+/// Guarded growable list for mutable Lambda Mono program storage.
+pub fn ProgramList(comptime T: type, comptime field_name: []const u8) type {
+    return GuardedList.List(T, "lambda_mono.Program." ++ field_name);
+}
+
+/// Guarded immutable span borrow for a named Lambda Mono program list.
+pub fn ProgramSpanBorrow(comptime T: type, comptime field_name: []const u8) type {
+    return GuardedList.BorrowSpan(T, "lambda_mono.Program." ++ field_name);
+}
 
 /// Identifier for an expression in Lambda Mono IR.
 pub const ExprId = enum(u32) { _ };
@@ -28,6 +40,8 @@ pub const StmtId = enum(u32) { _ };
 pub const FnId = Type.FnId;
 /// Identifier for a local binding in Lambda Mono IR.
 pub const LocalId = enum(u32) { _ };
+/// Lifted join-point identity retained by the debug materialized tree.
+pub const JoinPointId = Lifted.JoinPointId;
 /// Owned string literal id shared with the lifted stage.
 pub const StringLiteralId = Lifted.StringLiteralId;
 /// Identifier for a compile-time-observed control-flow site.
@@ -57,6 +71,20 @@ pub const Local = struct {
 pub const TypedLocal = struct {
     local: LocalId,
     ty: Type.TypeId,
+};
+
+/// A typed shared continuation retained by debug Lambda Mono materialization.
+pub const JoinPointExpr = struct {
+    id: JoinPointId,
+    params: Span(TypedLocal),
+    body: ExprId,
+    remainder: ExprId,
+};
+
+/// Transfer to a lexically enclosing join point.
+pub const JumpExpr = struct {
+    target: JoinPointId,
+    args: Span(ExprId),
 };
 
 /// Record field expression entry.
@@ -185,16 +213,27 @@ pub const Expr = struct {
     data: ExprData,
 };
 
+/// A restored compile-time value that may lower to static data once the final
+/// LIR const plan and target layout are known.
+pub const StaticDataCandidate = struct {
+    static_data: Common.StaticDataId,
+    runtime_expr: ExprId,
+};
+
 /// Lambda Mono expression forms.
 pub const ExprData = union(enum) {
     local: LocalId,
     unit,
+    /// Block-final marker dominated by a terminating statement. Direct LIR
+    /// lowering erases it without emitting runtime code.
+    @"unreachable",
     int_lit: can.CIR.IntValue,
     frac_f32_lit: f32,
     frac_f64_lit: f64,
     dec_lit: builtins.dec.RocDec,
     str_lit: StringLiteralId,
     bytes_lit: StringLiteralId,
+    static_data_candidate: StaticDataCandidate,
     list: Span(ExprId),
     tuple: Span(ExprId),
     record: Span(FieldExpr),
@@ -268,6 +307,8 @@ pub const ExprData = union(enum) {
     continue_: struct {
         values: Span(ExprId),
     },
+    join_point: JoinPointExpr,
+    jump: JumpExpr,
     return_: ExprId,
     crash: StringLiteralId,
     comptime_branch_taken: ComptimeBranchTaken,
@@ -395,6 +436,8 @@ pub const Root = struct {
 pub const LayoutRequest = struct {
     checked_type: checked.CheckedTypeId,
     ty: Type.TypeId,
+    initializer: ?FnId = null,
+    const_locator: ?checked.ConstLocator = null,
 };
 
 /// Runtime schema requested for a named runtime value shape.
@@ -403,46 +446,52 @@ pub const RuntimeSchemaRequest = struct {
     ty: Type.TypeId,
 };
 
+/// Request to make a Lambda Mono value available as static data.
+pub const StaticDataValue = Common.StaticDataRequest;
+
 /// Complete Lambda Mono program plus side arrays.
 pub const Program = struct {
     allocator: std.mem.Allocator,
     names: names.NameStore,
     next_symbol: u32,
     types: Type.Store,
-    fns: std.ArrayList(Fn),
-    exprs: std.ArrayList(Expr),
-    pats: std.ArrayList(Pat),
-    stmts: std.ArrayList(Stmt),
-    locals: std.ArrayList(Local),
-    expr_ids: std.ArrayList(ExprId),
-    pat_ids: std.ArrayList(PatId),
-    typed_locals: std.ArrayList(TypedLocal),
-    stmt_ids: std.ArrayList(StmtId),
-    field_exprs: std.ArrayList(FieldExpr),
-    record_destructs: std.ArrayList(RecordDestruct),
-    str_pattern_steps: std.ArrayList(StrPatternStep),
-    branches: std.ArrayList(Branch),
-    if_branches: std.ArrayList(IfBranch),
-    string_literals: std.ArrayList(Mono.StringLiteral),
+    fns: ProgramList(Fn, "fns"),
+    const_fn_evidence: ProgramList(check.ConstStore.ConstFnEvidence, "const_fn_evidence"),
+    const_fn_evidence_frames: ProgramList(check.ConstStore.ConstFnEvidenceFrame, "const_fn_evidence_frames"),
+    exprs: ProgramList(Expr, "exprs"),
+    pats: ProgramList(Pat, "pats"),
+    stmts: ProgramList(Stmt, "stmts"),
+    locals: ProgramList(Local, "locals"),
+    expr_ids: ProgramList(ExprId, "expr_ids"),
+    pat_ids: ProgramList(PatId, "pat_ids"),
+    typed_locals: ProgramList(TypedLocal, "typed_locals"),
+    stmt_ids: ProgramList(StmtId, "stmt_ids"),
+    field_exprs: ProgramList(FieldExpr, "field_exprs"),
+    record_destructs: ProgramList(RecordDestruct, "record_destructs"),
+    str_pattern_steps: ProgramList(StrPatternStep, "str_pattern_steps"),
+    branches: ProgramList(Branch, "branches"),
+    if_branches: ProgramList(IfBranch, "if_branches"),
+    string_literals: ProgramList(Mono.StringLiteral, "string_literals"),
     proc_debug_names: ProcDebugNameMap,
-    roots: std.ArrayList(Root),
-    layout_requests: std.ArrayList(LayoutRequest),
-    runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
-    comptime_sites: std.ArrayList(ComptimeSite),
+    roots: ProgramList(Root, "roots"),
+    layout_requests: ProgramList(LayoutRequest, "layout_requests"),
+    runtime_schema_requests: ProgramList(RuntimeSchemaRequest, "runtime_schema_requests"),
+    static_data_values: ProgramList(StaticDataValue, "static_data_values"),
+    comptime_sites: ProgramList(ComptimeSite, "comptime_sites"),
     /// Source file table for `SourceLoc.file` indices (copied from the lifted
     /// program; owned by this program).
-    source_files: std.ArrayList([]const u8),
+    source_files: ProgramList([]const u8, "source_files"),
     /// Source location per expression, parallel to `exprs`.
-    expr_locs: std.ArrayList(base.SourceLoc),
+    expr_locs: ProgramList(base.SourceLoc, "expr_locs"),
     /// Checked source region per expression, parallel to `exprs`.
-    expr_regions: std.ArrayList(base.Region),
+    expr_regions: ProgramList(base.Region, "expr_regions"),
     /// Source location per statement, parallel to `stmts`.
-    stmt_locs: std.ArrayList(base.SourceLoc),
+    stmt_locs: ProgramList(base.SourceLoc, "stmt_locs"),
     /// Checked source region per statement, parallel to `stmts`.
-    stmt_regions: std.ArrayList(base.Region),
+    stmt_regions: ProgramList(base.Region, "stmt_regions"),
     /// Source-level name per local, parallel to `locals` (empty for
     /// compiler-generated temporaries; owned by this program).
-    local_names: std.ArrayList([]const u8),
+    local_names: ProgramList([]const u8, "local_names"),
     /// Ambient location recorded by `addExpr`/`addStmt`. Lowering sets this on
     /// entry to each lifted node, so synthetic nodes inherit a location.
     current_loc: base.SourceLoc,
@@ -453,6 +502,8 @@ pub const Program = struct {
         allocator: std.mem.Allocator,
         name_store: names.NameStore,
         string_literals: std.ArrayList(Mono.StringLiteral),
+        const_fn_evidence: std.ArrayList(check.ConstStore.ConstFnEvidence),
+        const_fn_evidence_frames: std.ArrayList(check.ConstStore.ConstFnEvidenceFrame),
     ) Program {
         return .{
             .allocator = allocator,
@@ -460,6 +511,8 @@ pub const Program = struct {
             .next_symbol = 0,
             .types = Type.Store.init(allocator),
             .fns = .empty,
+            .const_fn_evidence = ProgramList(check.ConstStore.ConstFnEvidence, "const_fn_evidence").fromArrayList(const_fn_evidence),
+            .const_fn_evidence_frames = ProgramList(check.ConstStore.ConstFnEvidenceFrame, "const_fn_evidence_frames").fromArrayList(const_fn_evidence_frames),
             .exprs = .empty,
             .pats = .empty,
             .stmts = .empty,
@@ -473,11 +526,12 @@ pub const Program = struct {
             .str_pattern_steps = .empty,
             .branches = .empty,
             .if_branches = .empty,
-            .string_literals = string_literals,
+            .string_literals = ProgramList(Mono.StringLiteral, "string_literals").fromArrayList(string_literals),
             .proc_debug_names = ProcDebugNameMap.init(allocator),
             .roots = .empty,
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
+            .static_data_values = .empty,
             .comptime_sites = .empty,
             .source_files = .empty,
             .expr_locs = .empty,
@@ -491,7 +545,7 @@ pub const Program = struct {
     }
 
     pub fn deinit(self: *Program) void {
-        for (self.local_names.items) |name| {
+        for (self.local_names.unsafeRawItemsForView()) |name| {
             if (name.len > 0) self.allocator.free(name);
         }
         self.local_names.deinit(self.allocator);
@@ -499,17 +553,18 @@ pub const Program = struct {
         self.stmt_locs.deinit(self.allocator);
         self.expr_regions.deinit(self.allocator);
         self.expr_locs.deinit(self.allocator);
-        for (self.source_files.items) |file| self.allocator.free(file);
+        for (self.source_files.unsafeRawItemsForView()) |file| self.allocator.free(file);
         self.source_files.deinit(self.allocator);
-        for (self.comptime_sites.items) |site| {
+        for (self.comptime_sites.unsafeRawItemsForView()) |site| {
             self.allocator.free(site.branch_regions);
         }
         self.comptime_sites.deinit(self.allocator);
+        self.static_data_values.deinit(self.allocator);
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
         self.proc_debug_names.deinit();
-        for (self.string_literals.items) |literal| self.allocator.free(literal.backing);
+        for (self.string_literals.unsafeRawItemsForView()) |literal| self.allocator.free(literal.backing);
         self.string_literals.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
         self.branches.deinit(self.allocator);
@@ -525,12 +580,22 @@ pub const Program = struct {
         self.pats.deinit(self.allocator);
         self.exprs.deinit(self.allocator);
         self.fns.deinit(self.allocator);
+        self.const_fn_evidence.deinit(self.allocator);
+        self.const_fn_evidence_frames.deinit(self.allocator);
         self.types.deinit();
         self.names.deinit();
     }
 
+    pub fn constFnEvidence(self: *const Program, span: Mono.Span(check.ConstStore.ConstFnEvidence)) []const check.ConstStore.ConstFnEvidence {
+        return self.const_fn_evidence.unsafeRawItemsForView()[span.start..][0..span.len];
+    }
+
+    pub fn constFnEvidenceFrames(self: *const Program, span: Mono.Span(check.ConstStore.ConstFnEvidenceFrame)) []const check.ConstStore.ConstFnEvidenceFrame {
+        return self.const_fn_evidence_frames.unsafeRawItemsForView()[span.start..][0..span.len];
+    }
+
     pub fn addFn(self: *Program, fn_: Fn) std.mem.Allocator.Error!FnId {
-        const id: FnId = @enumFromInt(@as(u32, @intCast(self.fns.items.len)));
+        const id: FnId = @enumFromInt(@as(u32, @intCast(self.fns.len())));
         try self.fns.append(self.allocator, fn_);
         return id;
     }
@@ -544,7 +609,7 @@ pub const Program = struct {
     }
 
     pub fn addExpr(self: *Program, expr: Expr) std.mem.Allocator.Error!ExprId {
-        const id: ExprId = @enumFromInt(@as(u32, @intCast(self.exprs.items.len)));
+        const id: ExprId = @enumFromInt(@as(u32, @intCast(self.exprs.len())));
         try self.exprs.append(self.allocator, expr);
         try self.expr_locs.append(self.allocator, self.current_loc);
         try self.expr_regions.append(self.allocator, self.current_region);
@@ -553,32 +618,32 @@ pub const Program = struct {
 
     /// Source location of an expression.
     pub fn exprLoc(self: *const Program, id: ExprId) base.SourceLoc {
-        return self.expr_locs.items[@intFromEnum(id)];
+        return self.expr_locs.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
     /// Checked source region of an expression.
     pub fn exprRegion(self: *const Program, id: ExprId) base.Region {
-        return self.expr_regions.items[@intFromEnum(id)];
+        return self.expr_regions.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
     /// Source location of a statement.
     pub fn stmtLoc(self: *const Program, id: StmtId) base.SourceLoc {
-        return self.stmt_locs.items[@intFromEnum(id)];
+        return self.stmt_locs.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
     /// Checked source region of a statement.
     pub fn stmtRegion(self: *const Program, id: StmtId) base.Region {
-        return self.stmt_regions.items[@intFromEnum(id)];
+        return self.stmt_regions.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
     pub fn addPat(self: *Program, pat: Pat) std.mem.Allocator.Error!PatId {
-        const id: PatId = @enumFromInt(@as(u32, @intCast(self.pats.items.len)));
+        const id: PatId = @enumFromInt(@as(u32, @intCast(self.pats.len())));
         try self.pats.append(self.allocator, pat);
         return id;
     }
 
     pub fn addStmt(self: *Program, stmt: Stmt) std.mem.Allocator.Error!StmtId {
-        const id: StmtId = @enumFromInt(@as(u32, @intCast(self.stmts.items.len)));
+        const id: StmtId = @enumFromInt(@as(u32, @intCast(self.stmts.len())));
         try self.stmts.append(self.allocator, stmt);
         try self.stmt_locs.append(self.allocator, self.current_loc);
         try self.stmt_regions.append(self.allocator, self.current_region);
@@ -594,7 +659,7 @@ pub const Program = struct {
     ) std.mem.Allocator.Error!ComptimeSiteId {
         const owned_branch_regions = try self.allocator.dupe(base.Region, branch_regions);
         errdefer self.allocator.free(owned_branch_regions);
-        const id: ComptimeSiteId = @enumFromInt(@as(u32, @intCast(self.comptime_sites.items.len)));
+        const id: ComptimeSiteId = @enumFromInt(@as(u32, @intCast(self.comptime_sites.len())));
         try self.comptime_sites.append(self.allocator, .{
             .kind = kind,
             .region = region,
@@ -605,7 +670,7 @@ pub const Program = struct {
     }
 
     pub fn comptimeSite(self: *const Program, id: ComptimeSiteId) ComptimeSite {
-        return self.comptime_sites.items[@intFromEnum(id)];
+        return self.comptime_sites.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
     pub fn addLocal(self: *Program, symbol: Common.Symbol, ty: Type.TypeId) std.mem.Allocator.Error!LocalId {
@@ -618,7 +683,7 @@ pub const Program = struct {
         ty: Type.TypeId,
         binder: ?checked.PatternBinderId,
     ) std.mem.Allocator.Error!LocalId {
-        const id: LocalId = @enumFromInt(@as(u32, @intCast(self.locals.items.len)));
+        const id: LocalId = @enumFromInt(@as(u32, @intCast(self.locals.len())));
         try self.locals.append(self.allocator, .{ .id = id, .symbol = symbol, .ty = ty, .binder = binder });
         try self.local_names.append(self.allocator, "");
         return id;
@@ -627,104 +692,172 @@ pub const Program = struct {
     /// Record the source-level name of a local (dupes; empty means none).
     pub fn setLocalName(self: *Program, id: LocalId, name: []const u8) std.mem.Allocator.Error!void {
         if (name.len == 0) return;
-        const slot = &self.local_names.items[@intFromEnum(id)];
+        const slot = self.local_names.getPtrImmediate(@intFromEnum(id));
         if (slot.len > 0) self.allocator.free(slot.*);
         slot.* = try self.allocator.dupe(u8, name);
     }
 
     /// Source-level name of a local; empty for compiler-generated temporaries.
     pub fn localName(self: *const Program, id: LocalId) []const u8 {
-        return self.local_names.items[@intFromEnum(id)];
+        return self.local_names.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
     pub fn addExprSpan(self: *Program, ids: []const ExprId) std.mem.Allocator.Error!Span(ExprId) {
-        const start: u32 = @intCast(self.expr_ids.items.len);
+        const start: u32 = @intCast(self.expr_ids.len());
         try self.expr_ids.appendSlice(self.allocator, ids);
         return .{ .start = start, .len = @intCast(ids.len) };
     }
 
     pub fn addPatSpan(self: *Program, ids: []const PatId) std.mem.Allocator.Error!Span(PatId) {
-        const start: u32 = @intCast(self.pat_ids.items.len);
+        const start: u32 = @intCast(self.pat_ids.len());
         try self.pat_ids.appendSlice(self.allocator, ids);
         return .{ .start = start, .len = @intCast(ids.len) };
     }
 
     pub fn addTypedLocalSpan(self: *Program, values: []const TypedLocal) std.mem.Allocator.Error!Span(TypedLocal) {
-        const start: u32 = @intCast(self.typed_locals.items.len);
+        const start: u32 = @intCast(self.typed_locals.len());
         try self.typed_locals.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addStmtSpan(self: *Program, ids: []const StmtId) std.mem.Allocator.Error!Span(StmtId) {
-        const start: u32 = @intCast(self.stmt_ids.items.len);
+        const start: u32 = @intCast(self.stmt_ids.len());
         try self.stmt_ids.appendSlice(self.allocator, ids);
         return .{ .start = start, .len = @intCast(ids.len) };
     }
 
     pub fn addFieldExprSpan(self: *Program, values: []const FieldExpr) std.mem.Allocator.Error!Span(FieldExpr) {
-        const start: u32 = @intCast(self.field_exprs.items.len);
+        const start: u32 = @intCast(self.field_exprs.len());
         try self.field_exprs.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addRecordDestructSpan(self: *Program, values: []const RecordDestruct) std.mem.Allocator.Error!Span(RecordDestruct) {
-        const start: u32 = @intCast(self.record_destructs.items.len);
+        const start: u32 = @intCast(self.record_destructs.len());
         try self.record_destructs.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addStrPatternStepSpan(self: *Program, values: []const StrPatternStep) std.mem.Allocator.Error!Span(StrPatternStep) {
-        const start: u32 = @intCast(self.str_pattern_steps.items.len);
+        const start: u32 = @intCast(self.str_pattern_steps.len());
         try self.str_pattern_steps.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addBranchSpan(self: *Program, values: []const Branch) std.mem.Allocator.Error!Span(Branch) {
-        const start: u32 = @intCast(self.branches.items.len);
+        const start: u32 = @intCast(self.branches.len());
         try self.branches.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addIfBranchSpan(self: *Program, values: []const IfBranch) std.mem.Allocator.Error!Span(IfBranch) {
-        const start: u32 = @intCast(self.if_branches.items.len);
+        const start: u32 = @intCast(self.if_branches.len());
         try self.if_branches.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
-    pub fn exprSpan(self: *const Program, span_: Span(ExprId)) []const ExprId {
-        return self.expr_ids.items[span_.start..][0..span_.len];
+    pub fn exprSpan(self: *const Program, span_: Span(ExprId)) ProgramSpanBorrow(ExprId, "expr_ids") {
+        return self.expr_ids.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn patSpan(self: *const Program, span_: Span(PatId)) []const PatId {
-        return self.pat_ids.items[span_.start..][0..span_.len];
+    pub fn patSpan(self: *const Program, span_: Span(PatId)) ProgramSpanBorrow(PatId, "pat_ids") {
+        return self.pat_ids.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn typedLocalSpan(self: *const Program, span_: Span(TypedLocal)) []const TypedLocal {
-        return self.typed_locals.items[span_.start..][0..span_.len];
+    pub fn typedLocalSpan(self: *const Program, span_: Span(TypedLocal)) ProgramSpanBorrow(TypedLocal, "typed_locals") {
+        return self.typed_locals.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn stmtSpan(self: *const Program, span_: Span(StmtId)) []const StmtId {
-        return self.stmt_ids.items[span_.start..][0..span_.len];
+    pub fn stmtSpan(self: *const Program, span_: Span(StmtId)) ProgramSpanBorrow(StmtId, "stmt_ids") {
+        return self.stmt_ids.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn fieldExprSpan(self: *const Program, span_: Span(FieldExpr)) []const FieldExpr {
-        return self.field_exprs.items[span_.start..][0..span_.len];
+    pub fn fieldExprSpan(self: *const Program, span_: Span(FieldExpr)) ProgramSpanBorrow(FieldExpr, "field_exprs") {
+        return self.field_exprs.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn recordDestructSpan(self: *const Program, span_: Span(RecordDestruct)) []const RecordDestruct {
-        return self.record_destructs.items[span_.start..][0..span_.len];
+    pub fn recordDestructSpan(self: *const Program, span_: Span(RecordDestruct)) ProgramSpanBorrow(RecordDestruct, "record_destructs") {
+        return self.record_destructs.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn strPatternStepSpan(self: *const Program, span_: Span(StrPatternStep)) []const StrPatternStep {
-        return self.str_pattern_steps.items[span_.start..][0..span_.len];
+    pub fn strPatternStepSpan(self: *const Program, span_: Span(StrPatternStep)) ProgramSpanBorrow(StrPatternStep, "str_pattern_steps") {
+        return self.str_pattern_steps.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn branchSpan(self: *const Program, span_: Span(Branch)) []const Branch {
-        return self.branches.items[span_.start..][0..span_.len];
+    pub fn branchSpan(self: *const Program, span_: Span(Branch)) ProgramSpanBorrow(Branch, "branches") {
+        return self.branches.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn ifBranchSpan(self: *const Program, span_: Span(IfBranch)) []const IfBranch {
-        return self.if_branches.items[span_.start..][0..span_.len];
+    pub fn ifBranchSpan(self: *const Program, span_: Span(IfBranch)) ProgramSpanBorrow(IfBranch, "if_branches") {
+        return self.if_branches.borrowSpan(span_.start, span_.len);
+    }
+
+    pub fn fnCount(self: *const Program) usize {
+        return self.fns.len();
+    }
+
+    pub fn localCount(self: *const Program) usize {
+        return self.locals.len();
+    }
+
+    pub fn comptimeSiteCount(self: *const Program) usize {
+        return self.comptime_sites.len();
+    }
+
+    pub fn rootCount(self: *const Program) usize {
+        return self.roots.len();
+    }
+
+    pub fn layoutRequestCount(self: *const Program) usize {
+        return self.layout_requests.len();
+    }
+
+    pub fn runtimeSchemaRequestCount(self: *const Program) usize {
+        return self.runtime_schema_requests.len();
+    }
+
+    pub fn sourceFileNames(self: *const Program) []const []const u8 {
+        return self.source_files.unsafeRawItemsForView();
+    }
+
+    pub fn fnsView(self: *const Program) []const Fn {
+        return self.fns.unsafeRawItemsForView();
+    }
+
+    pub fn rootsView(self: *const Program) []const Root {
+        return self.roots.unsafeRawItemsForView();
+    }
+
+    pub fn layoutRequestsView(self: *const Program) []const LayoutRequest {
+        return self.layout_requests.unsafeRawItemsForView();
+    }
+
+    pub fn runtimeSchemaRequestsView(self: *const Program) []const RuntimeSchemaRequest {
+        return self.runtime_schema_requests.unsafeRawItemsForView();
+    }
+
+    pub fn getFn(self: *const Program, id: FnId) Fn {
+        return self.fns.unsafeRawItemsForView()[@intFromEnum(id)];
+    }
+
+    pub fn setFn(self: *Program, id: FnId, fn_: Fn) void {
+        self.fns.set(@intFromEnum(id), fn_);
+    }
+
+    pub fn getExpr(self: *const Program, id: ExprId) Expr {
+        return self.exprs.unsafeRawItemsForView()[@intFromEnum(id)];
+    }
+
+    pub fn getPat(self: *const Program, id: PatId) Pat {
+        return self.pats.unsafeRawItemsForView()[@intFromEnum(id)];
+    }
+
+    pub fn getStmt(self: *const Program, id: StmtId) Stmt {
+        return self.stmts.unsafeRawItemsForView()[@intFromEnum(id)];
+    }
+
+    pub fn getLocal(self: *const Program, id: LocalId) Local {
+        return self.locals.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
     pub fn stringLiteralText(self: *const Program, id: StringLiteralId) []const u8 {
@@ -732,7 +865,7 @@ pub const Program = struct {
     }
 
     pub fn stringLiteral(self: *const Program, id: StringLiteralId) Mono.StringLiteral {
-        return self.string_literals.items[@intFromEnum(id)];
+        return self.string_literals.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 };
 

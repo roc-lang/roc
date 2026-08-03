@@ -1,6 +1,16 @@
 on:
   workflow_call:
+    inputs:
+      full-run:
+        type: boolean
+        default: false
+        description: Run everything unconditionally (nightly gate); bypasses path filters.
   workflow_dispatch:
+    inputs:
+      full-run:
+        type: boolean
+        default: false
+        description: Run everything unconditionally (nightly gate); bypasses path filters.
 
 name: CI New Compiler
 
@@ -27,20 +37,27 @@ jobs:
             exit 1
           fi
 
-      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
+      - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.16.0
           use-cache: true
 
       - name: Cache Zig dependency packages
-        uses: actions/cache@v4 # ratchet:actions/cache@v4
+        uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
         with:
           # Zig stores fetched packages in the `p/` subdir of the global cache.
           # Caching just that under a stable build.zig.zon-hash key keeps deps
           # present across runs: it is read every run, so it stays warm and is
-          # not evicted by mlugg's churnier per-run cache. A cold runner then no
+          # not evicted by the setup action's churnier per-run cache. A cold runner then no
           # longer re-downloads deps from GitHub and hits HttpConnectionClosing,
-          # while mlugg's own cache still handles build artifacts for speed.
+          #
+          # Note this step is currently the ONLY working cache. The setup
+          # action also caches build artifacts, but `.zig-cache` exceeds its
+          # 2048 MiB cache-size-limit on every platform, so the action clears
+          # the directory in its post step and saves nothing -- every run then
+          # starts from a cold build cache. See the "Report .zig-cache
+          # composition" step in ci_manager.yml; sizing the limit is a
+          # follow-up.
           path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
           key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
           restore-keys: |
@@ -50,7 +67,6 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: zig build run-check-zig-lints
-          error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout|bad HTTP response code"
           retry_count: 3
 
       - name: code tidiness
@@ -72,9 +88,9 @@ jobs:
         run: |
           zig build run-check-test-wiring
 
-      - name: Check fx platform test coverage
+      - name: Check test asset coverage
         run: |
-          zig build run-check-fx-platform-test-coverage
+          zig build run-check-test-asset-coverage
 
       - name: Check type checker patterns
         run: zig build run-check-type-checker-patterns
@@ -126,7 +142,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          for target in tokenize parse canonicalize typecheck; do
+          for target in tokenize parse canonicalize typecheck build; do
             export ROC_FUZZ_TARGET="$target"
             export ROC_FUZZ_INPUT="/tmp/roc-${target}-fuzz-input"
 
@@ -195,20 +211,27 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
-      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
+      - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.16.0
           use-cache: true
 
       - name: Cache Zig dependency packages
-        uses: actions/cache@v4 # ratchet:actions/cache@v4
+        uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
         with:
           # Zig stores fetched packages in the `p/` subdir of the global cache.
           # Caching just that under a stable build.zig.zon-hash key keeps deps
           # present across runs: it is read every run, so it stays warm and is
-          # not evicted by mlugg's churnier per-run cache. A cold runner then no
+          # not evicted by the setup action's churnier per-run cache. A cold runner then no
           # longer re-downloads deps from GitHub and hits HttpConnectionClosing,
-          # while mlugg's own cache still handles build artifacts for speed.
+          #
+          # Note this step is currently the ONLY working cache. The setup
+          # action also caches build artifacts, but `.zig-cache` exceeds its
+          # 2048 MiB cache-size-limit on every platform, so the action clears
+          # the directory in its post step and saves nothing -- every run then
+          # starts from a cold build cache. See the "Report .zig-cache
+          # composition" step in ci_manager.yml; sizing the limit is a
+          # follow-up.
           path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
           key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
           restore-keys: |
@@ -218,7 +241,7 @@ jobs:
       # linker locates the Windows SDK/MSVC libpaths at runtime.
       - name: Setup MSVC (Windows)
         if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # ratchet:ilammy/msvc-dev-cmd@v1.13.0
+        uses: TheMrMilchmann/setup-msvc-dev@79dac248aac9d0059f86eae9d8b5bfab4e95e97c # ratchet:TheMrMilchmann/setup-msvc-dev@v4.0.0
         with:
           arch: x64
 
@@ -227,7 +250,6 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: zig build run-test-eval -- --llvm
-          error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout|bad HTTP response code"
           retry_count: 3
 
       # Windows has no fork(), so the runner spawns a fresh worker process per
@@ -243,17 +265,10 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: zig build run-test-eval -- --llvm --timeout 120000
-          error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout|bad HTTP response code"
           retry_count: 3
 
       - name: Run CLI platform tests (LLVM size/speed backends)
-        if: runner.os != 'Windows'
         run: zig build run-test-cli -- --include-llvm --filter "[size]" --filter "[speed]"
-
-      - name: Run CLI platform tests (LLVM size/speed backends, Windows)
-        if: runner.os == 'Windows'
-        run: |
-          zig build run-test-cli -- --include-llvm --filter "[size]" --filter "[speed]"
 
       - name: Shared-library build-and-run test (roc build --opt=size)
         run: zig build run-test-dylib
@@ -269,47 +284,71 @@ jobs:
       matrix:
         include:
           - os: macos-15-intel
-            cpu_flag: -Dcpu=x86_64_v3
+            cpu_flag: ''
             target_flag: ''
             release_jobs_flag: ''
+            zig_test_timeout_flag: ''
           - os: macos-15
             cpu_flag: ''
             target_flag: ''
             release_jobs_flag: ''
+            zig_test_timeout_flag: ''
           - os: ubuntu-24.04
             cpu_flag: ""
             target_flag: -Dtarget=x86_64-linux-musl
             release_jobs_flag: ''
+            zig_test_timeout_flag: ''
           - os: ubuntu-24.04-arm
             cpu_flag: ''
             target_flag: ''  # Native build for kcov (Zig 0.15.2 x86_64 has DWARF bug) # TODO ZIG 16: re-check if DWARF bug is fixed in 0.16
-            release_jobs_flag: -j4  # Avoid hosted ARM runner disconnects under full ReleaseFast parallelism.
+            release_jobs_flag: -j2  # Avoid hosted ARM runner disconnects under ReleaseFast parallelism.
+            zig_test_timeout_flag: ''
           - os: windows-2022
-            cpu_flag: -Dcpu=x86_64_v3
+            cpu_flag: ''
             target_flag: ''
             release_jobs_flag: ''
+            zig_test_timeout_flag: --test-timeout 5m
           - os: windows-2025
-            cpu_flag: -Dcpu=x86_64_v3
+            cpu_flag: ''
             target_flag: ''
             release_jobs_flag: ''
+            zig_test_timeout_flag: --test-timeout 5m
 
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
-      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
+      - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.16.0
           use-cache: true
 
+      - name: Install Rust wasm target
+        run: rustup target add wasm32-unknown-unknown
+
+      # The RustGlue glue-runtime contract case compiles a `#![no_std]` host
+      # with `rustc --target <arch>-unknown-linux-musl --crate-type staticlib`,
+      # which needs that target's precompiled `core`. Install the native musl
+      # target per runner arch (x64 and arm64 Linux both run run-test-cli here).
+      - name: Install Rust musl target (Linux)
+        if: runner.os == 'Linux'
+        run: rustup target add ${{ runner.arch == 'ARM64' && 'aarch64-unknown-linux-musl' || 'x86_64-unknown-linux-musl' }}
+
       - name: Cache Zig dependency packages
-        uses: actions/cache@v4 # ratchet:actions/cache@v4
+        uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
         with:
           # Zig stores fetched packages in the `p/` subdir of the global cache.
           # Caching just that under a stable build.zig.zon-hash key keeps deps
           # present across runs: it is read every run, so it stays warm and is
-          # not evicted by mlugg's churnier per-run cache. A cold runner then no
+          # not evicted by the setup action's churnier per-run cache. A cold runner then no
           # longer re-downloads deps from GitHub and hits HttpConnectionClosing,
-          # while mlugg's own cache still handles build artifacts for speed.
+          #
+          # Note this step is currently the ONLY working cache. The setup
+          # action also caches build artifacts, but `.zig-cache` exceeds its
+          # 2048 MiB cache-size-limit on every platform, so the action clears
+          # the directory in its post step and saves nothing -- every run then
+          # starts from a cold build cache. See the "Report .zig-cache
+          # composition" step in ci_manager.yml; sizing the limit is a
+          # follow-up.
           path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
           key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
           restore-keys: |
@@ -324,7 +363,6 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: zig build ${{ matrix.release_jobs_flag }} -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}
-          error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout|bad HTTP response code"
           retry_count: 3
 
       - name: Run Test Platforms (Unix)
@@ -333,7 +371,7 @@ jobs:
 
       - name: Setup MSVC (Windows)
         if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # ratchet:ilammy/msvc-dev-cmd@v1.13.0
+        uses: TheMrMilchmann/setup-msvc-dev@79dac248aac9d0059f86eae9d8b5bfab4e95e97c # ratchet:TheMrMilchmann/setup-msvc-dev@v4.0.0
         with:
           arch: ${{ matrix.os == 'windows-11-arm' && 'arm64' || 'x64' }}
 
@@ -341,6 +379,15 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           zig build run-test-cli
+
+      - name: Run machine-code shim tests
+        run: zig build run-test-zig-machine-code-shim
+
+      - name: Run host-effects eval tests
+        run: zig build run-test-eval-host-effects
+
+      - name: Run WASM static library tests
+        run: zig build run-test-wasm-static-lib
 
       - name: roc executable minimal check (Unix)
         if: runner.os != 'Windows'
@@ -357,11 +404,18 @@ jobs:
 
       # 1) in debug mode
       - name: build and execute tests, build repro executables
-        run: zig build run-test-zig -Dfuzz -Dsystem-afl=false ${{ matrix.target_flag }}
+        run: zig build ${{ matrix.zig_test_timeout_flag }} run-test-zig -Dfuzz -Dsystem-afl=false ${{ matrix.target_flag }}
+
+      # The full 1,700+ case sweep is deliberately a daily full-suite gate,
+      # not a PR MiniCI phase. Debug-only: release builds never materialize
+      # the Lambda Mono tree.
+      - name: Lambda Mono body-lowering differential harness
+        if: inputs.full-run && matrix.os == 'ubuntu-24.04'
+        run: zig build run-test-lambda-mono-differential ${{ matrix.target_flag }}
 
       # 2) in release mode
       - name: Build and execute tests, build repro executables. All in release mode.
-        run: zig build ${{ matrix.release_jobs_flag }} run-test-zig -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}
+        run: zig build ${{ matrix.release_jobs_flag }} ${{ matrix.zig_test_timeout_flag }} run-test-zig -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}
 
       - name: Check for snapshot changes
         run: |
@@ -422,26 +476,37 @@ jobs:
           echo "=== Files found ==="
           cat kcov-output/parser/parse_unit_coverage/coverage.json | jq -r '.files[].file' | head -10
 
+      - name: Eval Code Coverage
+        if: matrix.os == 'ubuntu-24.04-arm'
+        run: zig build run-coverage-eval
+
   zig-valgrind:
     needs: check-once
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
-      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
+      - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.16.0
           use-cache: true
 
       - name: Cache Zig dependency packages
-        uses: actions/cache@v4 # ratchet:actions/cache@v4
+        uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
         with:
           # Zig stores fetched packages in the `p/` subdir of the global cache.
           # Caching just that under a stable build.zig.zon-hash key keeps deps
           # present across runs: it is read every run, so it stays warm and is
-          # not evicted by mlugg's churnier per-run cache. A cold runner then no
+          # not evicted by the setup action's churnier per-run cache. A cold runner then no
           # longer re-downloads deps from GitHub and hits HttpConnectionClosing,
-          # while mlugg's own cache still handles build artifacts for speed.
+          #
+          # Note this step is currently the ONLY working cache. The setup
+          # action also caches build artifacts, but `.zig-cache` exceeds its
+          # 2048 MiB cache-size-limit on every platform, so the action clears
+          # the directory in its post step and saves nothing -- every run then
+          # starts from a cold build cache. See the "Report .zig-cache
+          # composition" step in ci_manager.yml; sizing the limit is a
+          # follow-up.
           path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
           key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
           restore-keys: |
@@ -450,8 +515,16 @@ jobs:
       - name: build roc + repro executables for valgrind
         uses: ./.github/actions/flaky-retry
         with:
-          command: git clean -fdx && zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dcpu=x86_64_v3 -Dtarget=x86_64-linux-musl -Dstrip=false -Dshared-memory-size=268435456
-          error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout|bad HTTP response code"
+          # `-e .zig-cache` is load-bearing: `git clean -x` removes ignored
+          # files, so without it this deletes the `p/` package dir that the
+          # cache step above restored one step earlier -- forcing a full
+          # re-download of every dependency and producing exactly the
+          # HttpConnectionClosing flake that this flaky-retry wrapper then
+          # absorbs. Keeping the rest of `.zig-cache` is safe: Zig keys cache
+          # entries on the full build configuration, so the valgrind build
+          # (-Dvalgrind=true, musl target, ReleaseFast) hashes to different
+          # entries than any other job's and cannot pick up stale artifacts.
+          command: git clean -fdx -e .zig-cache && zig build -Dvalgrind=true -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dtarget=x86_64-linux-musl -Dstrip=false -Dshared-memory-size=268435456
           retry_count: 3
 
       - name: install valgrind
@@ -463,8 +536,8 @@ jobs:
 
       - name: valgrind platform apps
         run: |
-          ./zig-out/bin/test_runner ./zig-out/bin/roc str --mode=valgrind --app=test/str/app.roc
-          ./zig-out/bin/test_runner ./zig-out/bin/roc int --mode=valgrind --app=test/int/app.roc
+          ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache test/str/app.roc
+          ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache test/int/app.roc
 
       - name: valgrind snapshots
         run: |
@@ -487,20 +560,27 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
-      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
+      - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.16.0
           use-cache: true
 
       - name: Cache Zig dependency packages
-        uses: actions/cache@v4 # ratchet:actions/cache@v4
+        uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
         with:
           # Zig stores fetched packages in the `p/` subdir of the global cache.
           # Caching just that under a stable build.zig.zon-hash key keeps deps
           # present across runs: it is read every run, so it stays warm and is
-          # not evicted by mlugg's churnier per-run cache. A cold runner then no
+          # not evicted by the setup action's churnier per-run cache. A cold runner then no
           # longer re-downloads deps from GitHub and hits HttpConnectionClosing,
-          # while mlugg's own cache still handles build artifacts for speed.
+          #
+          # Note this step is currently the ONLY working cache. The setup
+          # action also caches build artifacts, but `.zig-cache` exceeds its
+          # 2048 MiB cache-size-limit on every platform, so the action clears
+          # the directory in its post step and saves nothing -- every run then
+          # starts from a cold build cache. See the "Report .zig-cache
+          # composition" step in ci_manager.yml; sizing the limit is a
+          # follow-up.
           path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
           key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
           restore-keys: |
@@ -510,21 +590,24 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: zig build -Dtarget=${{ matrix.target }}
-          error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout|bad HTTP response code"
           retry_count: 3
 
   # Test cross-compilation with Roc's cross-compilation system (musl + glibc)
   roc-cross-compile:
     uses: ./.github/workflows/ci_cross_compile.yml
 
-  # Check if nix-related files changed
+  # Check if nix-related files changed. On full runs (nightly gate) the
+  # paths-filter is bypassed: dorny/paths-filter cannot run on schedule
+  # events (no diff base), and the gate must build nix unconditionally.
   check-nix-changes:
     runs-on: ubuntu-24.04
     outputs:
-      nix: ${{ steps.filter.outputs.nix }}
+      nix: ${{ inputs.full-run || steps.filter.outputs.nix == 'true' }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
-      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # ratchet:dorny/paths-filter@v4.0.1
+      - if: ${{ !inputs.full-run }}
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+      - if: ${{ !inputs.full-run }}
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # ratchet:dorny/paths-filter@v4.0.1
         id: filter
         with:
           filters: |
@@ -539,8 +622,3 @@ jobs:
     needs: [check-once, check-nix-changes]
     if: needs.check-nix-changes.outputs.nix == 'true'
     uses: ./.github/workflows/ci_zig_nix.yml
-
-  # Benchmark interpreter performance (main vs PR)
-  zig-benchmarks:
-    needs: check-once
-    uses: ./.github/workflows/ci_zig_benchmarks.yml

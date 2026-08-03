@@ -1,11 +1,13 @@
 //! Explicit inline eligibility analysis over Lambda Solved IR.
 
 const std = @import("std");
+const collections = @import("collections");
 
 const Common = @import("common.zig");
 const Lifted = @import("monotype_lifted/ast.zig");
 const Solved = @import("lambda_solved/ast.zig");
 const SolvedType = @import("lambda_solved/type.zig");
+const GuardedList = collections.GuardedList;
 
 /// Post-check inline analysis mode.
 pub const Mode = enum {
@@ -69,6 +71,7 @@ const Decision = union(enum) {
 const WrapperAnalyzer = struct {
     allocator: std.mem.Allocator,
     solved: *const Solved.Program,
+    solved_types: SolvedType.Store.View,
     decisions: []Decision,
     stack: std.ArrayList(Lifted.FnId),
 
@@ -76,19 +79,20 @@ const WrapperAnalyzer = struct {
         allocator: std.mem.Allocator,
         solved: *const Solved.Program,
     ) std.mem.Allocator.Error!OwnedPlan {
-        const decisions = try allocator.alloc(Decision, solved.lifted.fns.items.len);
+        const decisions = try allocator.alloc(Decision, solved.lifted.fnCount());
         errdefer allocator.free(decisions);
         @memset(decisions, .unknown);
 
         var analyzer = WrapperAnalyzer{
             .allocator = allocator,
             .solved = solved,
+            .solved_types = solved.types.view(),
             .decisions = decisions,
             .stack = .empty,
         };
         defer analyzer.stack.deinit(allocator);
 
-        for (solved.lifted.fns.items, 0..) |_, index| {
+        for (0..solved.lifted.fnCount()) |index| {
             const fn_id: Lifted.FnId = @enumFromInt(@as(u32, @intCast(index)));
             _ = try analyzer.inlineBody(fn_id);
         }
@@ -158,7 +162,7 @@ const WrapperAnalyzer = struct {
     }
 
     fn wrapperCandidate(self: *const WrapperAnalyzer, fn_id: Lifted.FnId) ?Lifted.ExprId {
-        const source_fn = self.solved.lifted.fns.items[@intFromEnum(fn_id)];
+        const source_fn = self.solved.lifted.getFn(fn_id);
         if (self.solved.lifted.typedLocalSpan(source_fn.captures).len != 0) return null;
         if (self.solvedCaptureCount(fn_id) != 0) return null;
 
@@ -174,11 +178,11 @@ const WrapperAnalyzer = struct {
 
     fn solvedCaptureCount(self: *const WrapperAnalyzer, fn_id: Lifted.FnId) usize {
         const captures = self.solvedCapturesForFn(fn_id);
-        return self.solved.types.captureSpan(captures).len;
+        return self.solved_types.captureSpan(captures).len;
     }
 
     fn solvedCapturesForFn(self: *const WrapperAnalyzer, fn_id: Lifted.FnId) SolvedType.Span {
-        const fn_symbol = self.solved.lifted.fns.items[@intFromEnum(fn_id)].symbol;
+        const fn_symbol = self.solved.lifted.getFn(fn_id).symbol;
         const func = switch (self.solved.types.rootContent(self.solved.fn_tys.items[@intFromEnum(fn_id)])) {
             .func => |func| func,
             else => Common.invariant("direct Lambda Mono function table contains a non-function type"),
@@ -188,21 +192,22 @@ const WrapperAnalyzer = struct {
             .erased => |erased| erased.members,
             else => Common.invariant("callable value did not have a resolved callable slot"),
         };
-        for (self.solved.types.memberSpan(callable)) |member| {
+        for (self.solved_types.memberSpan(callable)) |member| {
             if (member.lambda == fn_symbol) return member.captures;
         }
         return .empty();
     }
 
     fn bodyReadsOnlyArgs(self: *const WrapperAnalyzer, fn_id: Lifted.FnId, body: Lifted.ExprId) bool {
-        const source_fn = self.solved.lifted.fns.items[@intFromEnum(fn_id)];
+        const source_fn = self.solved.lifted.getFn(fn_id);
         return self.exprReadsOnlyArgs(body, self.solved.lifted.typedLocalSpan(source_fn.args));
     }
 
-    fn exprReadsOnlyArgs(self: *const WrapperAnalyzer, expr_id: Lifted.ExprId, args: []const Lifted.TypedLocal) bool {
-        const expr = self.solved.lifted.exprs.items[@intFromEnum(expr_id)];
+    fn exprReadsOnlyArgs(self: *const WrapperAnalyzer, expr_id: Lifted.ExprId, args: anytype) bool {
+        const expr = self.solved.lifted.getExpr(expr_id);
         return switch (expr.data) {
             .local => |local| localIsArg(local, args),
+            .@"unreachable",
             .unit,
             .int_lit,
             .frac_f32_lit,
@@ -217,12 +222,15 @@ const WrapperAnalyzer = struct {
             .tuple,
             => |items| self.exprSpanReadsOnlyArgs(items, args),
             .record => |fields| {
-                for (self.solved.lifted.fieldExprSpan(fields)) |field| {
+                const field_exprs = self.solved.lifted.fieldExprSpan(fields);
+                for (0..field_exprs.len) |index| {
+                    const field = GuardedList.at(field_exprs, index);
                     if (!self.exprReadsOnlyArgs(field.value, args)) return false;
                 }
                 return true;
             },
             .tag => |tag| self.exprSpanReadsOnlyArgs(tag.payloads, args),
+            .static_data_candidate => |candidate| self.exprReadsOnlyArgs(candidate.runtime_expr, args),
             .nominal,
             .dbg,
             .expect,
@@ -253,35 +261,42 @@ const WrapperAnalyzer = struct {
             .loop_,
             .break_,
             .continue_,
+            .join_point,
+            .jump,
             .crash,
             .comptime_exhaustiveness_failed,
             => false,
         };
     }
 
-    fn exprSpanReadsOnlyArgs(self: *const WrapperAnalyzer, span: Lifted.Span(Lifted.ExprId), args: []const Lifted.TypedLocal) bool {
-        for (self.solved.lifted.exprSpan(span)) |expr| {
+    fn exprSpanReadsOnlyArgs(self: *const WrapperAnalyzer, span: Lifted.Span(Lifted.ExprId), args: anytype) bool {
+        const exprs = self.solved.lifted.exprSpan(span);
+        for (0..exprs.len) |index| {
+            const expr = GuardedList.at(exprs, index);
             if (!self.exprReadsOnlyArgs(expr, args)) return false;
         }
         return true;
     }
 
-    fn captureOperandSpanReadsOnlyArgs(self: *const WrapperAnalyzer, span: Lifted.Span(Lifted.CaptureOperand), args: []const Lifted.TypedLocal) bool {
-        for (self.solved.lifted.captureOperandSpan(span)) |operand| {
+    fn captureOperandSpanReadsOnlyArgs(self: *const WrapperAnalyzer, span: Lifted.Span(Lifted.CaptureOperand), args: anytype) bool {
+        const operands = self.solved.lifted.captureOperandSpan(span);
+        for (0..operands.len) |index| {
+            const operand = GuardedList.at(operands, index);
             if (!self.exprReadsOnlyArgs(operand.value, args)) return false;
         }
         return true;
     }
 
-    fn localIsArg(local: Lifted.LocalId, args: []const Lifted.TypedLocal) bool {
-        for (args) |arg| {
+    fn localIsArg(local: Lifted.LocalId, args: anytype) bool {
+        for (0..args.len) |index| {
+            const arg = GuardedList.at(args, index);
             if (arg.local == local) return true;
         }
         return false;
     }
 
     fn isInlineableWrapperBody(self: *const WrapperAnalyzer, expr_id: Lifted.ExprId) bool {
-        const expr = self.solved.lifted.exprs.items[@intFromEnum(expr_id)];
+        const expr = self.solved.lifted.getExpr(expr_id);
         return switch (expr.data) {
             .call_proc, .low_level => true,
             .block => |block| self.solved.lifted.stmtSpan(block.statements).len == 0 and
@@ -295,8 +310,9 @@ const WrapperAnalyzer = struct {
     /// operands or other call arguments, mirroring the shapes accepted by
     /// `exprReadsOnlyArgs`.
     fn visitBodyCallees(self: *WrapperAnalyzer, expr_id: Lifted.ExprId) std.mem.Allocator.Error!void {
-        const expr = self.solved.lifted.exprs.items[@intFromEnum(expr_id)];
+        const expr = self.solved.lifted.getExpr(expr_id);
         switch (expr.data) {
+            .@"unreachable",
             .local,
             .unit,
             .int_lit,
@@ -312,11 +328,14 @@ const WrapperAnalyzer = struct {
             .tuple,
             => |items| try self.visitSpanCallees(items),
             .record => |fields| {
-                for (self.solved.lifted.fieldExprSpan(fields)) |field| {
+                const field_exprs = self.solved.lifted.fieldExprSpan(fields);
+                for (0..field_exprs.len) |index| {
+                    const field = GuardedList.at(field_exprs, index);
                     try self.visitBodyCallees(field.value);
                 }
             },
             .tag => |tag| try self.visitSpanCallees(tag.payloads),
+            .static_data_candidate => |candidate| try self.visitBodyCallees(candidate.runtime_expr),
             .nominal,
             .dbg,
             .expect,
@@ -347,6 +366,11 @@ const WrapperAnalyzer = struct {
                 try self.visitBodyCallees(h.hasher);
             },
             .block => |block| try self.visitBodyCallees(block.final_expr),
+            .join_point => |join_point| {
+                try self.visitBodyCallees(join_point.body);
+                try self.visitBodyCallees(join_point.remainder);
+            },
+            .jump => |jump| try self.visitSpanCallees(jump.args),
             .lambda,
             .fn_def,
             .let_,
@@ -367,13 +391,17 @@ const WrapperAnalyzer = struct {
     }
 
     fn visitSpanCallees(self: *WrapperAnalyzer, span: Lifted.Span(Lifted.ExprId)) std.mem.Allocator.Error!void {
-        for (self.solved.lifted.exprSpan(span)) |child| {
+        const exprs = self.solved.lifted.exprSpan(span);
+        for (0..exprs.len) |index| {
+            const child = GuardedList.at(exprs, index);
             try self.visitBodyCallees(child);
         }
     }
 
     fn visitCaptureOperandSpanCallees(self: *WrapperAnalyzer, span: Lifted.Span(Lifted.CaptureOperand)) std.mem.Allocator.Error!void {
-        for (self.solved.lifted.captureOperandSpan(span)) |operand| {
+        const operands = self.solved.lifted.captureOperandSpan(span);
+        for (0..operands.len) |index| {
+            const operand = GuardedList.at(operands, index);
             try self.visitBodyCallees(operand.value);
         }
     }

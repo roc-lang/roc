@@ -68,6 +68,12 @@ pub const SyntaxChecker = struct {
     builtin_modules: ?*eval.BuiltinModules = null,
     /// Dependency graph for tracking module relationships and invalidation.
     dependency_graph: DependencyGraph,
+    /// Absolute workspace root from LSP initialize (`rootUri`), used to prefer
+    /// `{workspace_root}/main.roc` for package-alias resolution.
+    workspace_root: ?[]u8 = null,
+    /// URIs for which we last published a non-empty diagnostic set. Used to
+    /// emit empty clears when those diagnostics are no longer valid.
+    published_diagnostic_uris: std.StringHashMapUnmanaged(void) = .{},
     cache_config: CacheConfig,
     log_file: ?std.Io.File = null,
     debug: DebugFlags,
@@ -148,6 +154,13 @@ pub const SyntaxChecker = struct {
         // Free hashmap allocations
         self.snapshot_envs.deinit(self.allocator);
 
+        if (self.workspace_root) |root| {
+            self.allocator.free(root);
+            self.workspace_root = null;
+        }
+        self.clearPublishedDiagnosticUris();
+        self.published_diagnostic_uris.deinit(self.allocator);
+
         if (self.builtin_modules) |builtin_modules| {
             builtin_modules.deinit();
             self.allocator.destroy(builtin_modules);
@@ -155,6 +168,42 @@ pub const SyntaxChecker = struct {
         }
 
         self.dependency_graph.deinit();
+    }
+
+    fn clearPublishedDiagnosticUris(self: *SyntaxChecker) void {
+        var it = self.published_diagnostic_uris.keyIterator();
+        while (it.next()) |key| {
+            self.allocator.free(key.*);
+        }
+        self.published_diagnostic_uris.clearRetainingCapacity();
+    }
+
+    /// Test helper: record a URI as having published non-empty diagnostics.
+    ///
+    /// Not gated on `builtin.is_test` (unlike `getDocumentForTesting` in server.zig):
+    /// the LSP integration harness runs as a plain executable (`addExecutable`, not
+    /// `addTest`), so `builtin.is_test` is false there and such a guard would make
+    /// this helper silently inert for the integration specs that rely on it.
+    pub fn seedPublishedDiagnosticUriForTesting(self: *SyntaxChecker, uri: []const u8) Allocator.Error!void {
+        const owned = try self.allocator.dupe(u8, uri);
+        const gop = try self.published_diagnostic_uris.getOrPut(self.allocator, owned);
+        if (gop.found_existing) self.allocator.free(owned);
+    }
+
+    /// Test helper: whether a URI is tracked as having published non-empty diagnostics.
+    /// See `seedPublishedDiagnosticUriForTesting` for why this isn't gated on `builtin.is_test`.
+    pub fn hasPublishedDiagnosticUriForTesting(self: *SyntaxChecker, uri: []const u8) bool {
+        return self.published_diagnostic_uris.contains(uri);
+    }
+
+    fn updateWorkspaceRoot(self: *SyntaxChecker, workspace_root: ?[]const u8) Allocator.Error!void {
+        if (self.workspace_root) |old| {
+            self.allocator.free(old);
+            self.workspace_root = null;
+        }
+        if (workspace_root) |root| {
+            self.workspace_root = try self.allocator.dupe(u8, root);
+        }
     }
 
     fn documentIdentityFromText(self: *SyntaxChecker, uri: []const u8, text: []const u8) Allocator.Error!DocumentIdentity {
@@ -228,7 +277,7 @@ pub const SyntaxChecker = struct {
         const env_handle = try self.createFreshBuildEnv();
         const env = env_handle.envPtr();
 
-        var session = try BuildSession.init(self.allocator, self.std_io, env, uri, override_text);
+        var session = try BuildSession.init(self.allocator, self.std_io, env, uri, override_text, self.workspace_root);
         errdefer session.deinit();
 
         const has_reports = self.documentHasReports(session.absolute_path, session.drained_reports);
@@ -253,10 +302,10 @@ pub const SyntaxChecker = struct {
 
     /// Check the file referenced by the URI and return diagnostics grouped by URI.
     pub fn check(self: *SyntaxChecker, uri: []const u8, override_text: ?[]const u8, workspace_root: ?[]const u8) CheckError![]Diagnostics.PublishDiagnostics {
-        _ = workspace_root; // Reserved for future use
-
         self.mutex.lockUncancelable(self.std_io);
         defer self.mutex.unlock(self.std_io);
+
+        try self.updateWorkspaceRoot(workspace_root);
 
         // Check if content has changed using hash comparison BEFORE building.
         // This avoids unnecessary rebuilds on focus/blur events.
@@ -301,7 +350,7 @@ pub const SyntaxChecker = struct {
         const env_handle = try self.createFreshBuildEnv();
         const env = env_handle.envPtr();
 
-        var session = try BuildSession.init(self.allocator, self.std_io, env, uri, override_text);
+        var session = try BuildSession.init(self.allocator, self.std_io, env, uri, override_text, self.workspace_root);
         defer session.deinit();
 
         const absolute_path = session.absolute_path;
@@ -363,6 +412,7 @@ pub const SyntaxChecker = struct {
                 });
             }
 
+            try self.finishDiagnosticPublishes(&publish_list, uri);
             return publish_list.toOwnedSlice(self.allocator);
         } else {
             // No reports drained, return a diagnostic showing the failure to get diagnostics
@@ -380,7 +430,61 @@ pub const SyntaxChecker = struct {
                     },
                 }),
             });
+            try self.finishDiagnosticPublishes(&publish_list, uri);
             return publish_list.toOwnedSlice(self.allocator);
+        }
+    }
+
+    fn publishListContainsUri(publish_list: *const std.ArrayList(Diagnostics.PublishDiagnostics), uri: []const u8) bool {
+        for (publish_list.items) |set| {
+            if (std.mem.eql(u8, set.uri, uri)) return true;
+        }
+        return false;
+    }
+
+    /// Ensure the checked URI is published, clear stale URIs from prior publishes,
+    /// and refresh the set of URIs that currently have non-empty diagnostics.
+    fn finishDiagnosticPublishes(
+        self: *SyntaxChecker,
+        publish_list: *std.ArrayList(Diagnostics.PublishDiagnostics),
+        checked_uri: []const u8,
+    ) Allocator.Error!void {
+        if (!publishListContainsUri(publish_list, checked_uri)) {
+            try publish_list.append(self.allocator, .{
+                .uri = try self.allocator.dupe(u8, checked_uri),
+                .diagnostics = &.{},
+            });
+        }
+
+        var stale_uris: std.ArrayList([]const u8) = .empty;
+        defer {
+            for (stale_uris.items) |stale_uri| self.allocator.free(stale_uri);
+            stale_uris.deinit(self.allocator);
+        }
+
+        var it = self.published_diagnostic_uris.keyIterator();
+        while (it.next()) |prev| {
+            if (!publishListContainsUri(publish_list, prev.*)) {
+                try stale_uris.append(self.allocator, try self.allocator.dupe(u8, prev.*));
+            }
+        }
+        for (stale_uris.items) |stale_uri| {
+            try publish_list.append(self.allocator, .{
+                .uri = try self.allocator.dupe(u8, stale_uri),
+                .diagnostics = &.{},
+            });
+        }
+
+        self.clearPublishedDiagnosticUris();
+        for (publish_list.items) |set| {
+            if (set.diagnostics.len == 0) continue;
+            const owned = try self.allocator.dupe(u8, set.uri);
+            const gop = try self.published_diagnostic_uris.getOrPut(self.allocator, owned);
+            if (gop.found_existing) {
+                self.allocator.free(owned);
+            } else {
+                gop.key_ptr.* = owned;
+            }
         }
     }
 
@@ -536,7 +640,7 @@ pub const SyntaxChecker = struct {
         // Prefer current build_env if it exists and has modules
         if (self.build_env) |handle| {
             const env = handle.envPtr();
-            if (env.schedulers.count() > 0) {
+            if (env.hasCompiledModules()) {
                 return env;
             }
         }
@@ -564,20 +668,8 @@ pub const SyntaxChecker = struct {
 
     /// Look up a ModuleEnv by its file path from a specific BuildEnv.
     fn getModuleEnvByPathInEnv(_: *SyntaxChecker, env: *BuildEnv, path: []const u8) ?*ModuleEnv {
-        // Iterate through all schedulers (packages)
-        var sched_it = env.schedulers.iterator();
-        while (sched_it.next()) |entry| {
-            const sched = entry.value_ptr.*;
-            // Iterate through all modules in this package
-            for (sched.modules.items) |*module_state| {
-                if (std.mem.eql(u8, module_state.path, path)) {
-                    if (module_state.moduleEnv()) |mod_env| {
-                        return mod_env;
-                    }
-                }
-            }
-        }
-        return null;
+        const module_state = env.findModuleByPath(path) orelse return null;
+        return module_state.moduleEnv();
     }
 
     /// Get all imported ModuleEnvs for a given module.
@@ -586,23 +678,24 @@ pub const SyntaxChecker = struct {
     pub fn getImportedModuleEnvs(self: *SyntaxChecker, module_path: []const u8) Allocator.Error!?[]*ModuleEnv {
         const env = self.getModuleLookupEnv() orelse return null;
 
-        // First, find the module and its scheduler
-        var target_sched: ?*compile.package.PackageEnv = null;
-        var target_module_imports: ?[]const u32 = null;
+        // First, find the module and its coordinator package.
+        var target_pkg: ?*compile.coordinator.PackageState = null;
+        var target_module_imports: ?[]const compile.coordinator.LocalImportEdge = null;
 
-        var sched_it = env.schedulers.iterator();
-        outer: while (sched_it.next()) |entry| {
-            const sched = entry.value_ptr.*;
-            for (sched.modules.items) |*module_state| {
+        const coord = env.coordinator orelse return null;
+        var pkg_it = coord.packages.iterator();
+        outer: while (pkg_it.next()) |entry| {
+            const pkg = entry.value_ptr.*;
+            for (pkg.modules.items) |*module_state| {
                 if (std.mem.eql(u8, module_state.path, module_path)) {
-                    target_sched = sched;
+                    target_pkg = pkg;
                     target_module_imports = module_state.imports.items;
                     break :outer;
                 }
             }
         }
 
-        const sched = target_sched orelse return null;
+        const pkg = target_pkg orelse return null;
         const imports = target_module_imports orelse return null;
 
         // Collect ModuleEnvs for all imports
@@ -610,9 +703,9 @@ pub const SyntaxChecker = struct {
         errdefer imported_envs.deinit(self.allocator);
 
         // Local imports (within same package)
-        for (imports) |import_id| {
-            if (import_id < sched.modules.items.len) {
-                const imported_module = &sched.modules.items[import_id];
+        for (imports) |edge| {
+            if (edge.module_id < pkg.modules.items.len) {
+                const imported_module = &pkg.modules.items[edge.module_id];
                 if (imported_module.moduleEnv()) |imp_env| {
                     try imported_envs.append(self.allocator, imp_env);
                 }
@@ -634,18 +727,18 @@ pub const SyntaxChecker = struct {
         var total_modules: usize = 0;
         var exports_computed: usize = 0;
 
-        // Iterate through all schedulers (packages) and build the graph
-        var sched_it = env.schedulers.iterator();
-        while (sched_it.next()) |entry| {
+        const coord = env.coordinator orelse return;
+        var pkg_it = coord.packages.iterator();
+        while (pkg_it.next()) |entry| {
             const pkg_name = entry.key_ptr.*;
-            const sched = entry.value_ptr.*;
+            const pkg = entry.value_ptr.*;
 
-            self.logDebug(.build, "[DEPS] Processing package '{s}' with {d} modules", .{ pkg_name, sched.modules.items.len });
+            self.logDebug(.build, "[DEPS] Processing package '{s}' with {d} modules", .{ pkg_name, pkg.modules.items.len });
 
-            try self.dependency_graph.buildFromPackageEnv(sched);
+            try self.dependency_graph.buildFromPackageState(pkg);
 
             // Compute and store exports hash for each module with a valid ModuleEnv
-            for (sched.modules.items) |*module_state| {
+            for (pkg.modules.items) |*module_state| {
                 total_modules += 1;
 
                 if (module_state.moduleEnv()) |module_env| {
@@ -1090,7 +1183,7 @@ pub const SyntaxChecker = struct {
         return null;
     }
 
-    /// Resolve documentation for a lookup expression (local, external, or dot access).
+    /// Resolve documentation for a local lookup, external lookup, or attached method dispatch.
     fn resolveDocForLookup(self: *SyntaxChecker, env: *BuildEnv, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) Allocator.Error!?[]const u8 {
         const source = module_env.common.source;
         const store = &module_env.store;
@@ -1124,30 +1217,6 @@ pub const SyntaxChecker = struct {
 
                     if (findExternalModuleEnv(env, module_name)) |external_env| {
                         return try findDocInModule(self.allocator, external_env, function_name);
-                    }
-                }
-            },
-            .e_field_access => |dot| {
-                // Method call - resolve receiver type to find the providing module
-                const field_name = module_env.getSource(dot.field_name_region);
-                const receiver_type_var = ModuleEnv.varFrom(dot.receiver);
-                if (resolveMethodOwnerForLookup(module_env, receiver_type_var)) |method_owner| {
-                    // Prefer local method docs first (e.g. static-dispatch methods
-                    // defined in the current module), then fall back to external
-                    // module lookup for builtin/qualified providers.
-                    if (try findMethodDocForOwnerAndName(self.allocator, module_env, method_owner.owner, field_name)) |local_doc| {
-                        return local_doc;
-                    }
-
-                    const type_name = module_env.getIdentText(method_owner.type_ident);
-                    if (findExternalModuleEnvForMethodOwner(env, method_owner, type_name)) |external_env| {
-                        const qualified_name = try std.fmt.allocPrint(
-                            self.allocator,
-                            "{s}.{s}",
-                            .{ type_name, field_name },
-                        );
-                        defer self.allocator.free(qualified_name);
-                        return try findDocInModule(self.allocator, external_env, qualified_name);
                     }
                 }
             },
@@ -1308,7 +1377,7 @@ pub const SyntaxChecker = struct {
             return env.builtin_modules.builtin_module.env;
         }
 
-        // Delegate to module_lookup for scheduler-based lookup
+        // Delegate to module_lookup for Coordinator-owned module lookup.
         if (module_lookup.findModuleByName(env, module_name)) |info| {
             return info.module_env;
         }
@@ -1486,7 +1555,7 @@ pub const SyntaxChecker = struct {
                     // Get the module name from the import
                     const module_name = module_env.common.idents.getText(import_stmt.module_name_tok);
 
-                    // Try to find the module in the schedulers
+                    // Try to find the module in the coordinator state.
                     if (self.findModuleByName(module_name, oom)) |result| {
                         return result;
                     }
@@ -1571,35 +1640,6 @@ pub const SyntaxChecker = struct {
                     self.logDebug(.build, "[DEF] e_lookup_external: could not extract module name from '{s}'", .{region_text});
                     return null;
                 },
-                .e_field_access => |dot| {
-                    // Static dispatch - cursor is on method name
-                    // Get the type of the receiver to find which module provides the method
-                    const receiver_type_var = ModuleEnv.varFrom(dot.receiver);
-                    var type_writer = module_env.initTypeWriter() catch |err| {
-                        self.logDebug(.build, "[DEF] initTypeWriter failed: {s}", .{@errorName(err)});
-                        oom.* = err;
-                        return null;
-                    };
-                    defer type_writer.deinit();
-
-                    type_writer.write(receiver_type_var, .one_line) catch |err| switch (err) {
-                        error.OutOfMemory => {
-                            oom.* = error.OutOfMemory;
-                            return null;
-                        },
-                        error.WriteFailed => {
-                            self.logDebug(.build, "[DEF] type_writer.write failed: {s}", .{@errorName(err)});
-                            return null;
-                        },
-                    };
-                    const type_str = type_writer.get();
-
-                    const base_type = extractBaseTypeName(type_str);
-
-                    self.logDebug(.build, "[DEF] e_dot_access type_str='{s}', base_type='{s}'", .{ type_str, base_type });
-
-                    return self.findModuleByName(base_type, oom);
-                },
                 .e_dispatch_call => |method_call| {
                     // Attached method call - navigate to the provider module for the receiver type
                     // Get the type of the receiver to find which module provides the method
@@ -1626,7 +1666,7 @@ pub const SyntaxChecker = struct {
                     // Extract the base type name (e.g., "Str" from complex type)
                     const base_type = extractBaseTypeName(type_str);
 
-                    self.logDebug(.build, "[DEF] e_field_access type_str='{s}', base_type='{s}'", .{ type_str, base_type });
+                    self.logDebug(.build, "[DEF] e_dispatch_call type_str='{s}', base_type='{s}'", .{ type_str, base_type });
 
                     // Find the module for this type
                     // TODO: Also navigate to the specific method definition within the module
@@ -1706,25 +1746,20 @@ pub const SyntaxChecker = struct {
             };
         }
 
-        // Search all schedulers for a module matching this name
-        var sched_it = env.schedulers.iterator();
-        while (sched_it.next()) |entry| {
-            const sched = entry.value_ptr.*;
-            if (sched.getModuleState(base_name)) |mod_state| {
-                const module_uri = uri_util.pathToUri(self.allocator, mod_state.path) catch |err| {
-                    oom.* = err;
-                    return null;
-                };
-                return DefinitionResult{
-                    .uri = module_uri,
-                    .range = .{
-                        .start_line = 0,
-                        .start_col = 0,
-                        .end_line = 0,
-                        .end_col = 0,
-                    },
-                };
-            }
+        if (env.findModuleByName(base_name)) |mod_state| {
+            const module_uri = uri_util.pathToUri(self.allocator, mod_state.path) catch |err| {
+                oom.* = err;
+                return null;
+            };
+            return DefinitionResult{
+                .uri = module_uri,
+                .range = .{
+                    .start_line = 0,
+                    .start_col = 0,
+                    .end_line = 0,
+                    .end_col = 0,
+                },
+            };
         }
         return null;
     }
@@ -2210,12 +2245,8 @@ pub const SyntaxChecker = struct {
             return env.builtin_modules.builtin_module.env;
         }
 
-        var sched_it = module_lookup_env.schedulers.iterator();
-        while (sched_it.next()) |entry| {
-            const sched = entry.value_ptr.*;
-            if (sched.getModuleState(module_name)) |mod_state| {
-                if (mod_state.moduleEnv()) |mod_env| return mod_env;
-            }
+        if (module_lookup_env.findModuleByName(module_name)) |mod_state| {
+            if (mod_state.moduleEnv()) |mod_env| return mod_env;
         }
 
         return null;
@@ -2515,12 +2546,12 @@ pub const SyntaxChecker = struct {
                     if (added) {} else {}
                 }
             },
-            .after_value_dot => |record_access| {
-                self.logDebug(.completion, "completion: after_record_dot for '{s}' at offset {d}", .{ record_access.access_chain, record_access.member_start });
+            .after_value_dot => |value_dot| {
+                self.logDebug(.completion, "completion: after_value_dot for '{s}' at offset {d}", .{ value_dot.access_chain, value_dot.receiver_segment_start });
                 if (module_env_opt) |module_env| {
                     var chain_resolved = false;
                     var chain_oom: ?Allocator.Error = null;
-                    if (resolveAccessChainTypeVar(self, &builder, module_env, module_lookup_env, env, record_access.access_chain, record_access.chain_start, &chain_oom)) |resolved| {
+                    if (resolveAccessChainTypeVar(self, &builder, module_env, module_lookup_env, env, value_dot.access_chain, value_dot.chain_start, &chain_oom)) |resolved| {
                         chain_resolved = true;
                         try builder.addFieldsFromTypeVar(resolved.module_env, resolved.type_var);
                         try builder.addTupleIndexCompletions(resolved.module_env, resolved.type_var);
@@ -2532,32 +2563,31 @@ pub const SyntaxChecker = struct {
                     // type-based traversal fails, try namespace-style member
                     // completion from qualified definition names.
                     var namespace_resolved = false;
-                    if (!chain_resolved and record_access.access_chain.len > 0 and std.ascii.isUpper(record_access.access_chain[0])) {
-                        namespace_resolved = try builder.addNamespaceMemberCompletions(module_env, record_access.access_chain);
+                    if (!chain_resolved and value_dot.access_chain.len > 0 and std.ascii.isUpper(value_dot.access_chain[0])) {
+                        namespace_resolved = try builder.addNamespaceMemberCompletions(module_env, value_dot.access_chain);
                     }
 
                     if (!chain_resolved and !namespace_resolved) {
-                        const variable_name = lastChainSegment(record_access.access_chain);
-                        const variable_start = record_access.member_start;
+                        const variable_name = lastChainSegment(value_dot.access_chain);
+                        const variable_start = value_dot.receiver_segment_start;
 
-                        // Try the precise CIR-based lookup first: findDotReceiverTypeVar
-                        // specifically looks for e_field_access nodes and returns the
-                        // receiver's type, which is semantically correct for dot
-                        // completions. Fall back to findExprEndingAt for cases where
-                        // the CIR lacks a dot access node (e.g., incomplete code).
+                        // A prior complete snapshot may have a field-access node at
+                        // this position. Its receiver type remains useful for this
+                        // incomplete value-dot prefix; it does not select field or
+                        // method semantics. Otherwise, query the preceding expression.
                         var resolved_type_var: ?types.Var = null;
-                        if (cir_queries.findDotReceiverTypeVar(module_env, cursor_offset)) |type_var| {
+                        if (cir_queries.findFieldAccessReceiverTypeVar(module_env, cursor_offset)) |type_var| {
                             resolved_type_var = type_var;
                         }
-                        if (resolved_type_var == null and record_access.dot_offset > 0) {
-                            if (cir_queries.findExprEndingAt(module_env, record_access.dot_offset)) |type_at| {
+                        if (resolved_type_var == null and value_dot.dot_offset > 0) {
+                            if (cir_queries.findExprEndingAt(module_env, value_dot.dot_offset)) |type_at| {
                                 resolved_type_var = type_at.type_var;
                             }
                         }
                         // When using snapshot, cursor positions don't correspond to snapshot CIR
                         // So we must look up by name instead of analyzing the dot expression
                         if (used_snapshot or resolved_type_var == null) {
-                            self.logDebug(.completion, "completion: using name-based lookup (snapshot={}, or findDotReceiverTypeVar failed)", .{used_snapshot});
+                            self.logDebug(.completion, "completion: using name-based lookup (snapshot={}, or receiver-type lookup failed)", .{used_snapshot});
                             try builder.addRecordFieldCompletions(module_env, variable_name, variable_start);
                             self.logDebug(.completion, "completion: after addRecordFieldCompletions, items={d}", .{items.items.len});
                             try builder.addMethodCompletions(module_env, variable_name, variable_start);
@@ -2570,18 +2600,18 @@ pub const SyntaxChecker = struct {
                         }
                     }
                 } else {
-                    self.logDebug(.completion, "completion: NO module_env for record/method completions", .{});
+                    self.logDebug(.completion, "completion: NO module_env for value-dot completions", .{});
                 }
             },
             .after_receiver_dot => |info| {
                 // Use CIR to resolve receiver types for chained calls (e.g., value.func().).
                 // This avoids brittle text parsing and keeps completion tied to the AST.
                 if (module_env_opt) |module_env| {
-                    // Prefer findDotReceiverTypeVar (semantic dot-access lookup)
-                    // and fall back to findExprEndingAt (position-based) when the
-                    // CIR doesn't have a dot access node for this position.
+                    // A prior complete snapshot may have a field access at this
+                    // position. Use only its receiver type for the unfinished
+                    // prefix; field and method candidates remain independent.
                     var resolved_type_var: ?types.Var = null;
-                    if (cir_queries.findDotReceiverTypeVar(module_env, cursor_offset)) |type_var| {
+                    if (cir_queries.findFieldAccessReceiverTypeVar(module_env, cursor_offset)) |type_var| {
                         resolved_type_var = type_var;
                     }
                     if (resolved_type_var == null and info.dot_offset > 0) {

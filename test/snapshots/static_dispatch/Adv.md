@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=
+description=Static dispatch through chained and nested method calls
 type=file
 ~~~
 # SOURCE
@@ -130,7 +130,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "Adv")
@@ -406,29 +406,37 @@ main = {
 								(e-literal (string "hello")))))))
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-dispatch-call (method "update_str") (constraint-fn-var 539)
+				(e-dispatch-call (method "update_str") (constraint-fn-var 454)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "val"))))
 					(args
-						(e-num (value "100")))))
+						(e-runtime-error (tag "erroneous_value_expr")))))
 			(e-lookup-local
 				(p-assign (ident "next_val")))))
 	(d-let
 		(p-assign (ident "mismatch2"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-block
+			(s-let
+				(p-assign (ident "val"))
+				(e-nominal (nominal "Adv")
+					(e-tag (name "Val")
+						(args
+							(e-num (value "10"))
+							(e-string
+								(e-literal (string "hello")))))))
+			(s-let
+				(p-assign (ident "next_val"))
+				(e-runtime-error (tag "erroneous_value_expr")))
+			(e-runtime-error (tag "erroneous_value_use"))))
 	(d-let
 		(p-assign (ident "mismatch3"))
 		(e-block
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-dispatch-call (method "update") (constraint-fn-var 780)
-					(receiver
-						(e-string
-							(e-literal (string "Hello"))))
-					(args
-						(e-num (value "100")))))
-			(e-runtime-error (tag "erroneous_value_use"))))
+				(e-runtime-error (tag "erroneous_value_expr")))
+			(e-lookup-local
+				(p-assign (ident "next_val")))))
 	(d-let
 		(p-assign (ident "main"))
 		(e-block
@@ -442,9 +450,9 @@ main = {
 								(e-literal (string "hello")))))))
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-dispatch-call (method "update_u64") (constraint-fn-var 1023)
+				(e-dispatch-call (method "update_u64") (constraint-fn-var 554)
 					(receiver
-						(e-dispatch-call (method "update_str") (constraint-fn-var 964)
+						(e-dispatch-call (method "update_str") (constraint-fn-var 545)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "val"))))
@@ -455,12 +463,12 @@ main = {
 						(e-num (value "20")))))
 			(e-tuple
 				(elems
-					(e-dispatch-call (method "to_str") (constraint-fn-var 1110)
+					(e-dispatch-call (method "to_str") (constraint-fn-var 560)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "next_val"))))
 						(args))
-					(e-dispatch-call (method "to_u64") (constraint-fn-var 1112)
+					(e-dispatch-call (method "to_u64") (constraint-fn-var 562)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "next_val"))))
@@ -485,8 +493,8 @@ main = {
 		(patt (type "Adv, Str -> Adv"))
 		(patt (type "Adv, U64 -> Adv"))
 		(patt (type "Adv"))
-		(patt (type "Error"))
-		(patt (type "Error"))
+		(patt (type "_a"))
+		(patt (type "_a"))
 		(patt (type "(Str, U64)")))
 	(type_decls
 		(nominal (type "Adv")
@@ -497,7 +505,7 @@ main = {
 		(expr (type "Adv, Str -> Adv"))
 		(expr (type "Adv, U64 -> Adv"))
 		(expr (type "Adv"))
-		(expr (type "Error"))
-		(expr (type "Error"))
+		(expr (type "_a"))
+		(expr (type "_a"))
 		(expr (type "(Str, U64)"))))
 ~~~

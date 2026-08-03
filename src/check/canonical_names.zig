@@ -26,6 +26,10 @@ pub const NameInterner = base.SerialStringInterner;
 
 /// Public `ModuleNameId` declaration.
 pub const ModuleNameId = enum(u32) { _ };
+/// Dense id of a 32-byte deep module content identity interned in a
+/// `CanonicalNameStore` (see `base.module_identity`). Store-local: crossing
+/// stores rebases through the 32-byte hash, never through name text.
+pub const ModuleIdentityId = enum(u32) { _ };
 /// Public `TypeNameId` declaration.
 pub const TypeNameId = enum(u32) { _ };
 /// Public `MethodNameId` declaration.
@@ -75,6 +79,11 @@ pub const ProcedureTemplateRef = struct {
 
 /// Short name for a checked procedure template reference.
 pub const ProcTemplate = ProcedureTemplateRef;
+
+/// Return the checked module digest that owns a procedure value.
+pub fn procedureValueModuleDigest(procedure: ProcedureValueRef) CheckedModuleDigest {
+    return procedure.artifact;
+}
 
 /// Return the checked module digest that owns a procedure template.
 pub fn procTemplateModuleDigest(template: ProcTemplate) CheckedModuleDigest {
@@ -255,8 +264,15 @@ pub const ProcBaseKey = struct {
 };
 
 /// Public `NominalTypeKey` declaration.
+///
+/// Identifies a nominal type by (declaring module's deep content identity,
+/// declared module-relative name, declaring statement). The statement is a
+/// within-module discriminator: block-local declarations may share one name
+/// (e.g. two `Local :=` decls in different blocks), and statement indices are
+/// stable across artifacts because equal content identities imply
+/// byte-identical module source. No module name text participates.
 pub const NominalTypeKey = struct {
-    module_name: ModuleNameId,
+    module: ModuleIdentityId,
     type_name: TypeNameId,
     source_decl: ?u32 = null,
 };
@@ -270,6 +286,11 @@ pub const CanonicalNameStore = struct {
     // Each name-kind is a relocatable, serial-id interner (transform C). Default
     // `.{}` is a valid empty interner that lazily initializes on first insert.
     module_names: NameInterner = .{},
+    /// 32-byte deep module content identities (see `base.module_identity`),
+    /// interned like names: dense ids, deduplicated, relocatable. The map
+    /// compares full 256-bit values on insert, so a hash collision is
+    /// detected (distinct entries), never silently merged.
+    module_identities: NameInterner = .{},
     type_names: NameInterner = .{},
     method_names: NameInterner = .{},
     record_field_labels: NameInterner = .{},
@@ -306,6 +327,7 @@ pub const CanonicalNameStore = struct {
             // Interners no-op their own free when frozen, but `proc_bases` is a
             // plain SafeList with no frozen flag, so guard the whole owned set.
             self.module_names.deinit(self.allocator);
+            self.module_identities.deinit(self.allocator);
             self.type_names.deinit(self.allocator);
             self.method_names.deinit(self.allocator);
             self.record_field_labels.deinit(self.allocator);
@@ -324,6 +346,7 @@ pub const CanonicalNameStore = struct {
     /// Relocatable serialized form (build-only dedup/scratch fields excluded).
     pub const Serialized = extern struct {
         module_names: NameInterner.Serialized,
+        module_identities: NameInterner.Serialized,
         type_names: NameInterner.Serialized,
         method_names: NameInterner.Serialized,
         record_field_labels: NameInterner.Serialized,
@@ -343,6 +366,26 @@ pub const CanonicalNameStore = struct {
 
     pub fn internModuleIdent(self: *CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) Allocator.Error!ModuleNameId {
         return self.internModuleName(idents.getText(ident));
+    }
+
+    /// Intern a 32-byte deep module content identity, returning its dense id.
+    pub fn internModuleIdentity(self: *CanonicalNameStore, hash: *const [32]u8) Allocator.Error!ModuleIdentityId {
+        return @enumFromInt(try self.module_identities.insert(self.allocator, hash));
+    }
+
+    /// Look up a module content identity without inserting. This is the single
+    /// cross-artifact identity resolution operation (rebase): one map probe per
+    /// distinct identity, comparing full 256-bit values.
+    pub fn lookupModuleIdentity(self: *const CanonicalNameStore, hash: *const [32]u8) ?ModuleIdentityId {
+        const id = self.module_identities.lookup(hash) orelse return null;
+        return @enumFromInt(id);
+    }
+
+    /// The 32-byte content identity for a dense id in this store.
+    pub fn moduleIdentityBytes(self: *const CanonicalNameStore, id: ModuleIdentityId) *const [32]u8 {
+        const bytes = self.module_identities.getText(@intFromEnum(id));
+        std.debug.assert(bytes.len == 32);
+        return @ptrCast(bytes.ptr);
     }
 
     pub fn internTypeIdent(self: *CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) Allocator.Error!TypeNameId {
@@ -488,6 +531,10 @@ pub const CanonicalNameStore = struct {
         return self.record_field_labels.getText(@intFromEnum(id));
     }
 
+    pub fn recordFieldLabelCount(self: *const CanonicalNameStore) u32 {
+        return self.record_field_labels.count();
+    }
+
     /// Compare two record field label ids by their canonical text.
     pub fn recordFieldLabelTextEql(self: *const CanonicalNameStore, a: RecordFieldLabelId, b: RecordFieldLabelId) bool {
         return Ident.textEql(self.recordFieldLabelText(a), self.recordFieldLabelText(b));
@@ -500,6 +547,10 @@ pub const CanonicalNameStore = struct {
 
     pub fn tagLabelText(self: *const CanonicalNameStore, id: TagLabelId) []const u8 {
         return self.tag_labels.getText(@intFromEnum(id));
+    }
+
+    pub fn tagLabelCount(self: *const CanonicalNameStore) u32 {
+        return self.tag_labels.count();
     }
 
     /// Compare two tag label ids by their canonical text.

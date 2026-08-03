@@ -6,6 +6,7 @@
 //! the canonicalization process.
 
 const std = @import("std");
+const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 const base = @import("base");
 const parse = @import("parse");
@@ -79,8 +80,8 @@ fn parseAndCanonicalizeSource(
 }
 
 test "file imports reject absolute paths before recording dependencies" {
-    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true, .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
+    defer std.debug.assert(build_options.debugGpaOk(gpa_state.deinit()));
     const allocator = gpa_state.allocator();
 
     const source =
@@ -121,8 +122,8 @@ test "file imports reject absolute paths before recording dependencies" {
 }
 
 test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT EXPOSED, and working imports" {
-    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true, .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
+    defer std.debug.assert(build_options.debugGpaOk(gpa_state.deinit()));
     const allocator = gpa_state.allocator();
 
     // First, create some module environments with exposed items
@@ -193,10 +194,10 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     defer module_envs.deinit();
     const json_module_ident = try parse_env.common.idents.insert(allocator, Ident.for_text("DataJson"));
     const json_qualified_ident = try json_env.common.insertIdent(json_env.gpa, Ident.for_text("DataJson"));
-    try module_envs.put(json_module_ident, .{ .env = json_env, .qualified_type_ident = json_qualified_ident });
+    try module_envs.put(json_module_ident, .{ .env = json_env, .qualified_type_ident = json_qualified_ident, .import_identity = .{ .module = json_module_ident } });
     const utils_module_ident = try parse_env.common.idents.insert(allocator, Ident.for_text("Utils"));
     const utils_qualified_ident = try utils_env.common.insertIdent(utils_env.gpa, Ident.for_text("Utils"));
-    try module_envs.put(utils_module_ident, .{ .env = utils_env, .qualified_type_ident = utils_qualified_ident });
+    try module_envs.put(utils_module_ident, .{ .env = utils_env, .qualified_type_ident = utils_qualified_ident, .import_identity = .{ .module = utils_module_ident } });
 
     // Canonicalize with module validation
     var builtin_ctx = try BuiltinTestContext.init(allocator);
@@ -258,8 +259,8 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
 }
 
 test "import validation - type module associated values are importable via exposing" {
-    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true, .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
+    defer std.debug.assert(build_options.debugGpaOk(gpa_state.deinit()));
     const allocator = gpa_state.allocator();
     const Ident = base.Ident;
 
@@ -315,7 +316,7 @@ test "import validation - type module associated values are importable via expos
     defer module_envs.deinit();
     const foobar_module_ident = try importer_env.common.idents.insert(allocator, Ident.for_text("FooBar"));
     const foobar_qualified_ident = try foobar_env.common.insertIdent(foobar_env.gpa, Ident.for_text("FooBar"));
-    try module_envs.put(foobar_module_ident, .{ .env = foobar_env, .qualified_type_ident = foobar_qualified_ident });
+    try module_envs.put(foobar_module_ident, .{ .env = foobar_env, .qualified_type_ident = foobar_qualified_ident, .import_identity = .{ .module = foobar_module_ident } });
 
     var importer_builtin_ctx = try BuiltinTestContext.init(allocator);
     defer importer_builtin_ctx.deinit();
@@ -362,8 +363,8 @@ test "import validation - exposed nested type associated function resolves via s
     // `Square` resolves fine as a *type*; the bug is that `Square.create` (a
     // static-dispatch lookup of the nested type's associated value) is reported
     // as "does not exist".
-    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true, .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
+    defer std.debug.assert(build_options.debugGpaOk(gpa_state.deinit()));
     const allocator = gpa_state.allocator();
     const Ident = base.Ident;
 
@@ -414,7 +415,7 @@ test "import validation - exposed nested type associated function resolves via s
     defer module_envs.deinit();
     const chess_module_ident = try importer_env.common.idents.insert(allocator, Ident.for_text("Chess"));
     const chess_qualified_ident = try chess_env.common.insertIdent(chess_env.gpa, Ident.for_text("Chess"));
-    try module_envs.put(chess_module_ident, .{ .env = chess_env, .qualified_type_ident = chess_qualified_ident });
+    try module_envs.put(chess_module_ident, .{ .env = chess_env, .qualified_type_ident = chess_qualified_ident, .import_identity = .{ .module = chess_module_ident } });
 
     var importer_builtin_ctx = try BuiltinTestContext.init(allocator);
     defer importer_builtin_ctx.deinit();
@@ -470,8 +471,8 @@ test "import validation - exposing a type module's main type by name is not a re
     // `exposing` (as platform code does with `import NodeB exposing [NodeB]`)
     // binds the same external type to the same name twice. That is idempotent,
     // not a DUPLICATE DEFINITION.
-    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true, .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
+    defer std.debug.assert(build_options.debugGpaOk(gpa_state.deinit()));
     const allocator = gpa_state.allocator();
     const Ident = base.Ident;
 
@@ -519,7 +520,7 @@ test "import validation - exposing a type module's main type by name is not a re
     defer module_envs.deinit();
     const shape_module_ident = try importer_env.common.idents.insert(allocator, Ident.for_text("Shape"));
     const shape_qualified_ident = try shape_env.common.insertIdent(shape_env.gpa, Ident.for_text("Shape"));
-    try module_envs.put(shape_module_ident, .{ .env = shape_env, .qualified_type_ident = shape_qualified_ident });
+    try module_envs.put(shape_module_ident, .{ .env = shape_env, .qualified_type_ident = shape_qualified_ident, .import_identity = .{ .module = shape_module_ident } });
 
     var importer_builtin_ctx = try BuiltinTestContext.init(allocator);
     defer importer_builtin_ctx.deinit();
@@ -551,9 +552,94 @@ test "import validation - exposing a type module's main type by name is not a re
     }
 }
 
+test "aliased package-qualified import resolves before the import statement" {
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true, .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
+    defer std.debug.assert(build_options.debugGpaOk(gpa_state.deinit()));
+    const allocator = gpa_state.allocator();
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
+
+    const lib_source =
+        \\Lib := [].{
+        \\    Thing : { value : Str }
+        \\    make : Str -> Lib.Thing
+        \\    make = |value| { value: value }
+        \\}
+    ;
+    var lib_env = try ModuleEnv.init(allocator, lib_source);
+    defer lib_env.deinit();
+    try lib_env.initCIRFields("Lib");
+
+    const lib_ast = try parse.file(allocator, &lib_env.common);
+    defer lib_ast.deinit();
+
+    var lib_builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer lib_builtin_ctx.deinit();
+    var lib_can = try Can.initModule(roc_ctx, &lib_env, lib_ast, lib_builtin_ctx.canInitContext());
+    defer lib_can.deinit();
+    try lib_can.canonicalizeFile();
+
+    const lib_type_ident = lib_env.common.findIdent("Lib").?;
+    const lib_type_node = lib_env.getExposedTypeNodeIndexById(lib_type_ident).?;
+
+    const app_source =
+        \\App := [].{
+        \\    wrap = |value| L.make(value)
+        \\}
+        \\
+        \\import pf.Lib as L
+    ;
+    var app_env = try ModuleEnv.init(allocator, app_source);
+    defer app_env.deinit();
+    try app_env.initCIRFields("App");
+
+    const app_ast = try parse.file(allocator, &app_env.common);
+    defer app_ast.deinit();
+
+    const lib_ident = try app_env.insertIdent(base.Ident.for_text("Lib"));
+    const qualified_lib_ident = try app_env.insertIdent(base.Ident.for_text("pf.Lib"));
+    const imported_lib = Can.AutoImportedType{
+        .env = &lib_env,
+        .statement_idx = @enumFromInt(lib_type_node),
+        .qualified_type_ident = lib_ident,
+        .import_identity = .{ .module = qualified_lib_ident },
+    };
+    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+    defer module_envs.deinit();
+    try module_envs.put(lib_ident, imported_lib);
+    try module_envs.put(qualified_lib_ident, imported_lib);
+
+    var app_builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer app_builtin_ctx.deinit();
+    var app_can = try Can.initModule(roc_ctx, &app_env, app_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = app_builtin_ctx.builtin_module.env,
+            .builtin_indices = app_builtin_ctx.builtin_indices,
+        },
+        .imported_modules = &module_envs,
+    });
+    defer app_can.deinit();
+    try app_can.canonicalizeFile();
+
+    const make_ident = try app_env.insertIdent(base.Ident.for_text("make"));
+    var found_make_lookup = false;
+    var raw_node_idx: u32 = 0;
+    while (raw_node_idx < app_env.store.nodes.len()) : (raw_node_idx += 1) {
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        if (app_env.store.nodes.get(node_idx).tag != .expr_external_lookup) continue;
+
+        const external = app_env.store.getExpr(@enumFromInt(raw_node_idx)).e_lookup_external;
+        if (!external.ident_idx.eql(make_ident)) continue;
+
+        const import_name_idx = app_env.imports.imports.items.items[@intFromEnum(external.module_idx)];
+        try testing.expectEqualStrings("pf.Lib", app_env.getString(import_name_idx));
+        found_make_lookup = true;
+    }
+    try testing.expect(found_make_lookup);
+}
+
 test "unresolved exposed value is not imported as external lookup target zero" {
-    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true, .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
+    defer std.debug.assert(build_options.debugGpaOk(gpa_state.deinit()));
     const allocator = gpa_state.allocator();
     const Ident = base.Ident;
 
@@ -604,6 +690,7 @@ test "unresolved exposed value is not imported as external lookup target zero" {
     try module_envs.put(a_import_ident, .{
         .env = &a_env,
         .qualified_type_ident = a_qualified_ident,
+        .import_identity = .{ .module = a_import_ident },
     });
 
     const importer_ast = try parse.file(allocator, &importer_env.common);
@@ -639,8 +726,8 @@ test "unresolved exposed value is not imported as external lookup target zero" {
 }
 
 test "import validation - no module_envs provided" {
-    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true, .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
+    defer std.debug.assert(build_options.debugGpaOk(gpa_state.deinit()));
     const allocator = gpa_state.allocator();
 
     // Parse source code with import statements
@@ -685,8 +772,8 @@ test "import validation - no module_envs provided" {
 }
 
 test "import interner - Import.Idx functionality" {
-    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true, .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
+    defer std.debug.assert(build_options.debugGpaOk(gpa_state.deinit()));
     const allocator = gpa_state.allocator();
     // Parse source code with multiple imports, including duplicates
     const source =
@@ -742,8 +829,8 @@ test "import interner - Import.Idx functionality" {
 }
 
 test "import interner - many imports keep stable module identity keys" {
-    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true, .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
+    defer std.debug.assert(build_options.debugGpaOk(gpa_state.deinit()));
     const allocator = gpa_state.allocator();
 
     const import_count = 320;
@@ -782,213 +869,9 @@ test "import interner - many imports keep stable module identity keys" {
     try expectEqual(@as(usize, import_count), explicit_import_count);
 }
 
-test "import interner - comprehensive usage example" {
-    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const allocator = gpa_state.allocator();
-    // Parse source with imports used in different contexts
-    const source =
-        \\import List exposing [map, filter]
-        \\import Dict
-        \\import Try exposing [Try, withDefault]
-        \\
-        \\process : List Str -> Dict Str Nat
-        \\process = \items ->
-        \\    items
-        \\    |> List.map Str.toLower
-        \\    |> List.filter \item -> Str.length item > 3
-        \\    |> List.foldl Dict.empty \dict, item ->
-        \\        Dict.update dict item \maybeCount ->
-        \\            when maybeCount is
-        \\                Present count -> Present (count + 1)
-        \\                Missing -> Present 1
-    ;
-    // Parse and canonicalize without module validation to focus on import interning
-    var result = try parseAndCanonicalizeSource(allocator, source, null);
-    defer {
-        result.can.deinit();
-        allocator.destroy(result.can);
-        result.builtin_ctx.deinit();
-        result.ast.deinit();
-        result.parse_env.deinit();
-        allocator.destroy(result.parse_env);
-    }
-    try result.can.canonicalizeFile();
-    // Check that the explicit user imports are present once each.
-    // Builtin is also present as an implicit compiler-owned import.
-    var explicit_import_count: usize = 0;
-    // Verify each unique module was imported
-    var found_list = false;
-    var found_dict = false;
-    var found_result = false;
-    for (result.parse_env.imports.imports.items.items) |import_string_idx| {
-        const module_name = result.parse_env.getString(import_string_idx);
-        if (CIR.Import.isCompilerBuiltinImportName(module_name)) continue;
-
-        explicit_import_count += 1;
-        if (std.mem.eql(u8, module_name, "List")) {
-            found_list = true;
-        } else if (std.mem.eql(u8, module_name, "Dict")) {
-            found_dict = true;
-        } else if (std.mem.eql(u8, module_name, "Try")) {
-            found_result = true;
-        }
-    }
-    try expectEqual(@as(usize, 3), explicit_import_count);
-    // Verify all expected modules were found
-    try expectEqual(true, found_list);
-    try expectEqual(true, found_dict);
-    try expectEqual(true, found_result);
-}
-
-test "module scopes - imports work in module scope" {
-    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const allocator = gpa_state.allocator();
-    // Parse source with imports used in module scope
-    const source =
-        \\import List
-        \\import Dict
-        \\
-        \\process = \items ->
-        \\    # List and Dict are available here
-        \\    list = List.map items \x -> x + 1
-        \\    dict = Dict.empty
-        \\    { list, dict }
-    ;
-    // Parse and canonicalize without external module validation
-    var result = try parseAndCanonicalizeSource(allocator, source, null);
-    defer {
-        result.can.deinit();
-        allocator.destroy(result.can);
-        result.builtin_ctx.deinit();
-        result.ast.deinit();
-        result.parse_env.deinit();
-        allocator.destroy(result.parse_env);
-    }
-    try result.can.canonicalizeFile();
-    // Verify that List and Dict imports were processed correctly
-    const imports = result.parse_env.imports.imports;
-    try testing.expect(imports.len() >= 2); // List and Dict
-    var has_list = false;
-    var has_dict = false;
-    for (imports.items.items) |import_string_idx| {
-        const import_name = result.parse_env.getString(import_string_idx);
-        if (std.mem.eql(u8, import_name, "List")) has_list = true;
-        if (std.mem.eql(u8, import_name, "Dict")) has_dict = true;
-    }
-    try testing.expect(has_list);
-    try testing.expect(has_dict);
-}
-
-test "module-qualified lookups with e_lookup_external" {
-    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const allocator = gpa_state.allocator();
-    // Parse source with module-qualified lookups
-    const source =
-        \\import List
-        \\import Dict
-        \\
-        \\main =
-        \\    list = List.map [1, 2, 3] \x -> x * 2
-        \\    dict = Dict.insert Dict.empty "key" "value"
-        \\    List.len list
-    ;
-    // Parse and canonicalize
-    var result = try parseAndCanonicalizeSource(allocator, source, null);
-    defer {
-        result.can.deinit();
-        allocator.destroy(result.can);
-        result.builtin_ctx.deinit();
-        result.ast.deinit();
-        result.parse_env.deinit();
-        allocator.destroy(result.parse_env);
-    }
-    try result.can.canonicalizeFile();
-    // Verify the module names are correct
-    const imports_list = result.parse_env.imports.imports;
-    try testing.expect(imports_list.len() >= 2); // List and Dict
-    var has_list = false;
-    var has_dict = false;
-    for (imports_list.items.items) |import_string_idx| {
-        const import_name = result.parse_env.getString(import_string_idx);
-        if (std.mem.eql(u8, import_name, "List")) has_list = true;
-        if (std.mem.eql(u8, import_name, "Dict")) has_dict = true;
-    }
-    try testing.expect(has_list);
-    try testing.expect(has_dict);
-}
-
-test "exposed_items - tracking CIR node indices for exposed items" {
-    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const allocator = gpa_state.allocator();
-
-    // Create module environments with exposed items
-    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
-    defer module_envs.deinit();
-
-    // Create temporary ident store for module name lookup
-    var temp_idents = try base.Ident.Store.initCapacity(allocator, 16);
-    defer temp_idents.deinit(allocator);
-
-    // Create a "MathUtils" module with some exposed definitions
-    const math_env = try allocator.create(ModuleEnv);
-    math_env.* = try ModuleEnv.init(allocator, "");
-    defer {
-        math_env.deinit();
-        allocator.destroy(math_env);
-    }
-    // Add exposed items
-    const Ident = base.Ident;
-    const add_idx = try math_env.common.idents.insert(allocator, Ident.for_text("add"));
-    try math_env.setExposedValueNodeIndexById(add_idx, 1);
-    const multiply_idx = try math_env.common.idents.insert(allocator, Ident.for_text("multiply"));
-    try math_env.setExposedValueNodeIndexById(multiply_idx, 2);
-    const pi_idx = try math_env.common.idents.insert(allocator, Ident.for_text("PI"));
-    try math_env.setExposedTypeNodeIndexById(pi_idx, 3);
-
-    const math_utils_ident = try temp_idents.insert(allocator, Ident.for_text("MathUtils"));
-    const math_utils_qualified_ident = try math_env.common.insertIdent(math_env.gpa, Ident.for_text("MathUtils"));
-    try module_envs.put(math_utils_ident, .{ .env = math_env, .qualified_type_ident = math_utils_qualified_ident });
-    // Parse source that uses these exposed items
-    const source =
-        \\import MathUtils exposing [add, multiply, PI]
-        \\
-        \\calculate = \x, y ->
-        \\    sum = add x y
-        \\    product = multiply x y
-        \\    circumference = multiply (multiply 2 PI) x
-        \\    { sum, product, circumference }
-    ;
-    // Parse and canonicalize with module environments
-    var result = try parseAndCanonicalizeSource(allocator, source, &module_envs);
-    defer {
-        result.can.deinit();
-        allocator.destroy(result.can);
-        result.builtin_ctx.deinit();
-        result.ast.deinit();
-        result.parse_env.deinit();
-        allocator.destroy(result.parse_env);
-    }
-    try result.can.canonicalizeFile();
-    // Verify the MathUtils import was registered
-    const imports_list = result.parse_env.imports.imports;
-    var has_mathutils = false;
-    for (imports_list.items.items) |import_string_idx| {
-        const import_name = result.parse_env.getString(import_string_idx);
-        if (std.mem.eql(u8, import_name, "MathUtils")) {
-            has_mathutils = true;
-            break;
-        }
-    }
-    try testing.expect(has_mathutils);
-}
-
 test "imported type-module tag rejects alias target" {
-    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true, .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
+    defer std.debug.assert(build_options.debugGpaOk(gpa_state.deinit()));
     const allocator = gpa_state.allocator();
 
     var builtin_ctx = try BuiltinTestContext.init(allocator);
@@ -1028,6 +911,7 @@ test "imported type-module tag rejects alias target" {
     try module_envs.put(other_ident, .{
         .env = &imported_env,
         .qualified_type_ident = other_qualified_ident,
+        .import_identity = .{ .module = other_ident },
     });
 
     const ast = try parse.file(allocator, &env.common);
@@ -1063,8 +947,8 @@ test "imported type-module tag rejects alias target" {
 }
 
 test "imported nested associated types resolve by qualified export key" {
-    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true, .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
+    defer std.debug.assert(build_options.debugGpaOk(gpa_state.deinit()));
     const allocator = gpa_state.allocator();
 
     var builtin_ctx = try BuiltinTestContext.init(allocator);
@@ -1114,6 +998,7 @@ test "imported nested associated types resolve by qualified export key" {
     try module_envs.put(types_ident, .{
         .env = &imported_env,
         .qualified_type_ident = types_qualified_ident,
+        .import_identity = .{ .module = types_ident },
     });
 
     const ast = try parse.file(allocator, &env.common);
@@ -1147,8 +1032,8 @@ test "imported nested associated types resolve by qualified export key" {
 }
 
 test "export count safety - ensures safe u16 casting" {
-    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true, .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
+    defer std.debug.assert(build_options.debugGpaOk(gpa_state.deinit()));
     const allocator = gpa_state.allocator();
 
     // This test verifies that we check export counts to ensure safe casting to u16

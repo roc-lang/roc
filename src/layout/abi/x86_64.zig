@@ -29,7 +29,9 @@ pub const Class = enum {
     x87up,
     none,
     memory,
-    /// Win64 passes 128-bit integers in memory but returns them in an SSE register.
+    /// A Win64 128-bit leaf: scalar integers and vectors are indirect as
+    /// arguments and return in XMM0; the caller-facing lowering separately
+    /// keeps generated C aggregates such as RocDec indirect on return.
     win_i128,
     /// An SSE eightbyte holding a single f32.
     float,
@@ -77,6 +79,16 @@ pub fn classifyWindows(store: *const Store, idx: Idx) Class {
     const size = store.layoutSize(lay);
     std.debug.assert(size > 0);
 
+    // Generated glue unwraps a single-variant tag union to its payload. A
+    // zero-discriminant layout is therefore the same C ABI type, including
+    // the otherwise special float and native-vector classes.
+    if (lay.tag == .tag_union) {
+        const info = store.getTagUnionInfo(lay);
+        if (info.variants.len == 1 and info.data.discriminant_size == 0) {
+            return classifyWindows(store, info.variants.get(0).payload_layout);
+        }
+    }
+
     switch (lay.tag) {
         .scalar => {
             const scalar = lay.getScalar();
@@ -89,6 +101,9 @@ pub fn classifyWindows(store: *const Store, idx: Idx) Class {
                 .int, .opaque_ptr => {},
                 // RocStr is a 24-byte aggregate -> by reference.
                 .str => return .memory,
+                // A native 128-bit vector is indirect as an argument and XMM0 as a return;
+                // the caller-facing lowering applies the context-sensitive half.
+                .vector => return .win_i128,
             }
         },
         .box, .box_of_zst, .ptr => return .integer, // single pointer
@@ -109,9 +124,8 @@ pub fn classifyWindows(store: *const Store, idx: Idx) Class {
 /// Classify under the System V AMD64 ABI. Returns up to eight eightbyte classes; unused
 /// trailing slots are `.none`.
 pub fn classifySystemV(store: *const Store, idx: Idx, ctx: Context) [8]Class {
-    // Roc has no f16, f128, or SIMD vector types, so the only ABI types whose classification
-    // depends on arg-vs-return position do not occur here; `ctx` is accepted for API
-    // symmetry with the consumer (which threads it through) but is not needed.
+    // Roc has no ABI type whose System V classification depends on arg-vs-return
+    // position; `ctx` is accepted for symmetry with the consumer.
     _ = ctx;
     const lay = store.getLayout(idx);
     const size = store.layoutSize(lay);
@@ -130,6 +144,9 @@ pub fn classifySystemV(store: *const Store, idx: Idx, ctx: Context) [8]Class {
                 },
                 // RocStr: three integer eightbytes -> exceeds 16 bytes -> memory.
                 .str => return integerAggregateSysV(size),
+                // One native 128-bit vector occupies one XMM register: SSE followed
+                // by SSEUP, not two independent SSE registers.
+                .vector => return .{ .sse, .sseup, .none, .none, .none, .none, .none, .none },
             }
         },
         // An erased callable is a refcounted pointer to its boxed payload,
@@ -286,6 +303,21 @@ test "x86_64 SysV: scalars" {
     try testing.expectEqual(Class.f64, classifySystemV(&store, .f64, .arg));
 }
 
+test "x86_64 SysV: native vectors use one SSE register recursively" {
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    const vector_class = [8]Class{ .sse, .sseup, .none, .none, .none, .none, .none, .none };
+    inline for (.{ Idx.u8x16, Idx.i8x16, Idx.u16x8, Idx.i16x8, Idx.u32x4, Idx.i32x4, Idx.u64x2, Idx.i64x2 }) |vector_idx| {
+        try testing.expectEqual(vector_class, classifySystemV(&store, vector_idx, .arg));
+        const wrapped = try testStruct(&store, &.{vector_idx});
+        try testing.expectEqual(vector_class, classifySystemV(&store, wrapped, .ret));
+    }
+
+    const mixed = try testStruct(&store, &.{ .u8x16, .u8 });
+    try testing.expectEqual(Class.stack, classifySystemV(&store, mixed, .arg));
+}
+
 test "x86_64 SysV: Plant and other small structs use registers" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
@@ -368,4 +400,10 @@ test "x86_64 Win64: size-based classification" {
 
     // RocStr/RocList -> memory.
     try testing.expectEqual(Class.memory, classifyWindows(&store, .str));
+
+    // A direct vector has Win64's vector argument/return rule; wrapping it in
+    // a record makes it an ordinary 16-byte aggregate passed indirectly.
+    try testing.expectEqual(Class.win_i128, classifyWindows(&store, .u8x16));
+    const wrapped_vector = try testStruct(&store, &.{.u8x16});
+    try testing.expectEqual(Class.memory, classifyWindows(&store, wrapped_vector));
 }

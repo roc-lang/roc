@@ -66,7 +66,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-file-import
 			(path "users.json")
@@ -91,11 +91,8 @@ NO CHANGE
 		(e-runtime-error (tag "file_import_not_found")))
 	(d-let
 		(p-assign (ident "foo"))
-		(e-call
-			(e-runtime-error (tag "erroneous_value_expr"))
-			(e-lookup-local
-				(p-assign (ident "data")))))
-	(s-import (module "Json")
+		(e-runtime-error (tag "erroneous_value_expr")))
+	(s-import (mod "Json")
 		(exposes)))
 ~~~
 # TYPES

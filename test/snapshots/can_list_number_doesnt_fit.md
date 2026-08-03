@@ -43,7 +43,7 @@ NO CHANGE
 ~~~clojure
 (e-list
 	(elems
-		(e-typed-int (value "1") (type "U8"))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(e-typed-int (value "2") (type "U8"))
 		(e-num (value "300"))))
 ~~~

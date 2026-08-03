@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Comprehensive import test with various module access patterns
+description=Comprehensive import test with various mod access patterns
 type=snippet
 ~~~
 # SOURCE
@@ -14,13 +14,13 @@ main = {
     parser = Json.utf8
     helper = Str.trim
 
-    # Test direct module access
+    # Test direct mod access
     result1 = Json.parse
 
-    # Test aliased module access
+    # Test aliased mod access
     result2 = Http.post
 
-    # Test exposed items (should work without module prefix)
+    # Test exposed items (should work without mod prefix)
     result3 = get
     result4 = post
 
@@ -199,7 +199,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "json.Json"))
 		(s-import (raw "http.Client") (alias "Http")
@@ -258,13 +258,13 @@ main = {
 	parser = Json.utf8
 	helper = Str.trim
 
-	# Test direct module access
+	# Test direct mod access
 	result1 = Json.parse
 
-	# Test aliased module access
+	# Test aliased mod access
 	result2 = Http.post
 
-	# Test exposed items (should work without module prefix)
+	# Test exposed items (should work without mod prefix)
 	result3 = get
 	result4 = post
 
@@ -288,56 +288,14 @@ main = {
 (can-ir
 	(d-let
 		(p-assign (ident "main"))
-		(e-block
-			(s-let
-				(p-assign (ident "client"))
-				(e-runtime-error (tag "ident_not_in_scope")))
-			(s-let
-				(p-assign (ident "parser"))
-				(e-runtime-error (tag "ident_not_in_scope")))
-			(s-let
-				(p-assign (ident "helper"))
-				(e-runtime-error (tag "ident_not_in_scope")))
-			(s-let
-				(p-assign (ident "result1"))
-				(e-runtime-error (tag "ident_not_in_scope")))
-			(s-let
-				(p-assign (ident "result2"))
-				(e-runtime-error (tag "ident_not_in_scope")))
-			(s-let
-				(p-assign (ident "result3"))
-				(e-runtime-error (tag "ident_not_in_scope")))
-			(s-let
-				(p-assign (ident "result4"))
-				(e-runtime-error (tag "ident_not_in_scope")))
-			(s-let
-				(p-assign (ident "combined"))
-				(e-runtime-error (tag "ident_not_in_scope")))
-			(e-tuple
-				(elems
-					(e-lookup-local
-						(p-assign (ident "client")))
-					(e-lookup-local
-						(p-assign (ident "parser")))
-					(e-lookup-local
-						(p-assign (ident "helper")))
-					(e-lookup-local
-						(p-assign (ident "result1")))
-					(e-lookup-local
-						(p-assign (ident "result2")))
-					(e-lookup-local
-						(p-assign (ident "result3")))
-					(e-lookup-local
-						(p-assign (ident "result4")))
-					(e-lookup-local
-						(p-assign (ident "combined")))))))
-	(s-import (module "json.Json")
+		(e-runtime-error (tag "erroneous_value_expr")))
+	(s-import (mod "json.Json")
 		(exposes))
-	(s-import (module "http.Client")
+	(s-import (mod "http.Client")
 		(exposes
 			(exposed (name "get") (wildcard false))
 			(exposed (name "post") (wildcard false))))
-	(s-import (module "utils.String")
+	(s-import (mod "utils.String")
 		(exposes)))
 ~~~
 # TYPES

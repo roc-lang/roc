@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Invalid type module - type name doesn't match module name
+description=Invalid type mod - type name doesn't match mod name
 type=file
 ~~~
 # SOURCE
@@ -19,7 +19,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "SomeOtherName")

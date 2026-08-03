@@ -7,18 +7,30 @@ pub const Ident = @import("Ident.zig");
 pub const Region = @import("Region.zig");
 pub const StringLiteral = @import("StringLiteral.zig");
 pub const LowLevel = @import("LowLevel.zig").LowLevel;
+pub const LowLevelBuiltins = @import("LowLevelBuiltins.zig");
+/// Structural rules for `LowLevel.rcEffect()` rows, enforced over the whole
+/// table by the comptime block below.
+pub const rc_effect_rules = @import("rc_effect_rules.zig");
+
+comptime {
+    rc_effect_rules.assertTableConforms();
+}
+
 pub const RegionInfo = @import("RegionInfo.zig");
 pub const SourceLoc = @import("source_loc.zig").SourceLoc;
 pub const Scratch = @import("Scratch.zig").Scratch;
 pub const parallel = @import("parallel.zig");
+pub const ConcurrentU64 = @import("ConcurrentU64.zig").ConcurrentU64;
 pub const SmallStringInterner = @import("SmallStringInterner.zig");
 pub const SerialStringInterner = @import("SerialStringInterner.zig");
+pub const ModuleIdentity = @import("module_identity.zig");
 
 /// Single-threaded arena allocator, re-exported from `collections` for callers
 /// that already depend on `base`.
 pub const SingleThreadArena = @import("collections").SingleThreadArena;
 
 pub const safe_memory = @import("safe_memory.zig");
+pub const process_memory = @import("process_memory.zig");
 pub const signal_handler = @import("signal_handler.zig");
 pub const stack_overflow = @import("stack_overflow.zig");
 pub const elf_self_relocate = @import("elf_self_relocate.zig");
@@ -33,6 +45,8 @@ pub const CommonEnv = @import("CommonEnv.zig");
 pub const source_utils = @import("source_utils.zig");
 pub const module_path = @import("module_path.zig");
 pub const url = @import("url.zig");
+pub const roc_version = @import("roc_version.zig");
+pub const doc_comment = @import("doc_comment.zig");
 
 /// The default general-purpose allocator for the current target (fast, not leak-checking).
 /// Prefers libc's malloc (its ASan/Valgrind/LD_PRELOAD tooling, and on LLVM paths
@@ -50,6 +64,7 @@ test {
     const module_path_mod = @import("module_path.zig");
     std.testing.refAllDecls(ident);
     std.testing.refAllDecls(module_path_mod);
+    std.testing.refAllDecls(@import("roc_version.zig"));
 }
 
 /// Whether a function calls itself.
@@ -84,9 +99,6 @@ pub const CalledVia = enum {
     /// Try.parallel(get("a"), get("b"), (|foo, bar | { foo, bar }))
     /// ```
     record_builder,
-    /// This call is the result of desugaring range syntax,
-    /// e.g. `1..<5` becomes `Iter.exclusive_range(1, 5)`.
-    range,
 };
 
 /// Represents a value written as-is in a Roc source file.
@@ -130,22 +142,27 @@ pub const Numeral = union(enum) {
 
 test "base tests" {
     std.testing.refAllDecls(@import("CommonEnv.zig"));
+    std.testing.refAllDecls(@import("ConcurrentU64.zig"));
     std.testing.refAllDecls(@import("DataSpan.zig"));
     std.testing.refAllDecls(@import("Ident.zig"));
     std.testing.refAllDecls(@import("InternedBytes.zig"));
+    std.testing.refAllDecls(@import("module_identity.zig"));
     std.testing.refAllDecls(@import("PackedDataSpan.zig"));
     std.testing.refAllDecls(@import("parallel.zig"));
     std.testing.refAllDecls(@import("Region.zig"));
     std.testing.refAllDecls(@import("RegionInfo.zig"));
+    std.testing.refAllDecls(@import("rc_effect_rules.zig"));
     std.testing.refAllDecls(@import("safe_memory.zig"));
     std.testing.refAllDecls(@import("signal_handler.zig"));
     std.testing.refAllDecls(@import("Scratch.zig"));
     std.testing.refAllDecls(@import("SExprTree.zig"));
     std.testing.refAllDecls(@import("SerialStringInterner.zig"));
     std.testing.refAllDecls(@import("SmallStringInterner.zig"));
+    std.testing.refAllDecls(@import("elf_self_relocate.zig"));
     std.testing.refAllDecls(@import("source_utils.zig"));
     std.testing.refAllDecls(@import("stack_overflow.zig"));
     std.testing.refAllDecls(@import("StringLiteral.zig"));
     std.testing.refAllDecls(@import("target.zig"));
     std.testing.refAllDecls(@import("url.zig"));
+    std.testing.refAllDecls(@import("doc_comment.zig"));
 }

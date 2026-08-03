@@ -21,26 +21,26 @@ DECLARATION HAS NO VALUE - hosted.md:7:1:7:16
 # PROBLEMS
 
 ┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The module header says that `a!` is exposed, ────┐
-└┬────────────────────────┘  but it is not defined anywhere in this module.   │
+│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `a!` is exposed, ────┐
+└┬────────────────────────┘  but it is not defined anywhere in this mod.   │
  │                                                                            │
  │  a!,                                                                       │
  │  ‾‾                                                                        │
  └───────────────────────────────────────────────────────────── hosted.md:2:2 ┘
 
-    You can fix this by either defining `a!` in this module, or by removing it
+    You can fix this by either defining `a!` in this mod, or by removing it
     from the list of exposed values.
 
 
 ┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The module header says that `b!` is exposed, ────┐
-└┬────────────────────────┘  but it is not defined anywhere in this module.   │
+│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `b!` is exposed, ────┐
+└┬────────────────────────┘  but it is not defined anywhere in this mod.   │
  │                                                                            │
  │  b!                                                                        │
  │  ‾‾                                                                        │
  └───────────────────────────────────────────────────────────── hosted.md:3:2 ┘
 
-    You can fix this by either defining `b!` in this module, or by removing it
+    You can fix this by either defining `b!` in this mod, or by removing it
     from the list of exposed values.
 
 
@@ -52,7 +52,7 @@ DECLARATION HAS NO VALUE - hosted.md:7:1:7:16
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
  └───────────────────────────────────────────────────────────── hosted.md:6:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -64,7 +64,7 @@ DECLARATION HAS NO VALUE - hosted.md:7:1:7:16
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
  └───────────────────────────────────────────────────────────── hosted.md:7:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 # TOKENS
@@ -98,10 +98,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-hosted [
-	a!,
-	b!,
-]
+hosted [a!, b!]
 
 a! : Str => Str
 

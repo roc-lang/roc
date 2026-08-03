@@ -7,6 +7,7 @@
 //! first and then runs this tool to emit `zig-out/lib/echo.wasm.zst`.
 
 const std = @import("std");
+const build_options = @import("build_options");
 const bundle = @import("bundle");
 
 const ArchiveError = std.process.Args.ToSliceError ||
@@ -20,8 +21,8 @@ const ArchiveError = std.process.Args.ToSliceError ||
 pub fn main(init: std.process.Init) ArchiveError!void {
     const io = init.io;
 
-    var gpa_impl: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = gpa_impl.deinit();
+    var gpa_impl: std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }) = .init;
+    defer _ = build_options.debugGpaOk(gpa_impl.deinit());
     var gpa = gpa_impl.allocator();
 
     var arena_impl = std.heap.ArenaAllocator.init(gpa);

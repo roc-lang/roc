@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Error for undefined deeply nested tag (no fallback to module)
+description=Error for undefined deeply nested tag (no fallback to mod)
 type=snippet
 ~~~
 # SOURCE
@@ -8,7 +8,7 @@ type=snippet
 Foo := [A, B, C]
 
 # This should error as "undeclared type Foo.Bar.Baz"
-# NOT try to interpret it as a module import
+# NOT try to interpret it as a mod import
 x = Foo.Bar.Baz.X
 ~~~
 # EXPECTED
@@ -33,7 +33,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "Foo")

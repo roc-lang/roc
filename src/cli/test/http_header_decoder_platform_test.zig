@@ -53,6 +53,9 @@ const cache_control_value = "no-cache";
 const request_body = "hello";
 const request_count_value: u64 = 17;
 const long_unknown_header_name = "X-Super-Long-Unknown-Header-Name-That-Would-Allocate-If-Converted";
+// Shorter than the shortest field name, so it takes the other length-bucket
+// skip branch in parse_record_field.
+const short_unknown_header_name = "Ab";
 
 const optional_headers = [_]OptionalHeader{
     .{ .name = "Explicit-Optional", .value = "abc" },
@@ -100,8 +103,8 @@ test "HTTP header parsing platform derives structural parser without runtime all
     defer allocator.free(output_path);
 
     if (prebuilt_path == null) {
-        var env_map = try util.buildIsolatedTestEnvMap(io, allocator, null);
-        defer env_map.deinit();
+        var env = try util.buildIsolatedTestEnvMap(io, allocator, null);
+        defer env.deinit(io, allocator);
 
         const target_arg = try std.fmt.allocPrint(allocator, "--target={s}", .{target_name});
         defer allocator.free(target_arg);
@@ -117,7 +120,7 @@ test "HTTP header parsing platform derives structural parser without runtime all
             output_arg,
             "test/http-headers/app.roc",
         }, .{
-            .env_map = &env_map,
+            .env_map = &env.env_map,
             .max_output_bytes = 10 * 1024 * 1024,
         });
         defer allocator.free(build_result.stdout);
@@ -145,7 +148,7 @@ test "HTTP header parsing platform derives structural parser without runtime all
         }
     }
 
-    try expectBinaryOmits(allocator, output_path, &.{ "cache_control", "content_length", "request_count", "x_auth_token" });
+    try expectBinaryOmits(allocator, output_path, &.{ "cache_control", "content_length", "request_count", "route_method", "route_path", "x_auth_token" });
 
     for (0..(@as(usize, 1) << optional_headers.len)) |case_index| {
         const mask: u8 = @intCast(case_index);
@@ -177,6 +180,11 @@ test "HTTP header parsing platform derives structural parser without runtime all
     defer allocator.free(scrambled_order_response);
     try runServerAndCheckResponse(allocator, output_path, scrambled_order_request, scrambled_order_response);
 
+    // These case-varying header names dispatch through the LLVM-emitted
+    // `emitSwarCaselessAsciiEqualMasked` (this app is built with `--opt=speed`,
+    // i.e. the LLVM backend). They are the end-to-end drift guard for that
+    // routine against `builtins.str.wordCaselessAsciiEqualMasked`, whose raw
+    // word-level contract is pinned by `swar_caseless_word_vectors`.
     const lower_case_request = try buildCacheControlCaseRequest(allocator, "cache-control");
     defer allocator.free(lower_case_request);
     const lower_case_response = try buildExpectedResponse(allocator, expectedHeaderLength(0));
@@ -212,6 +220,12 @@ test "HTTP header parsing platform derives structural parser without runtime all
     const missing_required_response = try buildExpectedResponse(allocator, 999999);
     defer allocator.free(missing_required_response);
     try runServerAndCheckResponse(allocator, output_path, missing_required_request, missing_required_response);
+
+    const route_pattern_request = try buildRoutePatternRequest(allocator);
+    defer allocator.free(route_pattern_request);
+    const route_pattern_response = try buildExpectedResponse(allocator, expectedHeaderLength(0) + 3007);
+    defer allocator.free(route_pattern_response);
+    try runServerAndCheckResponse(allocator, output_path, route_pattern_request, route_pattern_response);
 
     const bad_header_request = try buildBadHeaderRequest(allocator);
     defer allocator.free(bad_header_request);
@@ -256,6 +270,7 @@ fn buildRequest(allocator: std.mem.Allocator, optional_mask: u8) TestError![]u8 
     try request.appendSlice(allocator, "GET /header-lengths HTTP/1.1\r\n");
     try request.appendSlice(allocator, "Host: localhost\r\n");
     try appendHeader(&request, allocator, long_unknown_header_name, "ignored");
+    try appendHeader(&request, allocator, short_unknown_header_name, "ignored");
     try appendHeader(&request, allocator, "Cache-Control", cache_control_value);
 
     if ((optional_mask & 1) == 0) {
@@ -346,6 +361,7 @@ fn buildKnownHeadersScrambledOrderRequest(allocator: std.mem.Allocator) TestErro
     try appendHeader(&request, allocator, optional_headers[2].name, optional_headers[2].value);
     try appendHeader(&request, allocator, "Cache-Control", cache_control_value);
     try appendHeader(&request, allocator, long_unknown_header_name, "ignored");
+    try appendHeader(&request, allocator, short_unknown_header_name, "ignored");
     try appendHeader(&request, allocator, optional_headers[0].name, optional_headers[0].value);
     try appendHeader(&request, allocator, "Foo", required_foo_value);
     try appendHeader(&request, allocator, "X-Unknown-Middle", "ignored");
@@ -427,6 +443,24 @@ fn buildMissingRequiredRequest(allocator: std.mem.Allocator) TestError![]u8 {
     try appendHeader(&request, allocator, "Request-Count", "17");
     try request.appendSlice(allocator, "Content-Length: 0\r\n");
     try request.appendSlice(allocator, "\r\n");
+
+    return request.toOwnedSlice(allocator);
+}
+
+fn buildRoutePatternRequest(allocator: std.mem.Allocator) TestError![]u8 {
+    var request: std.ArrayList(u8) = .empty;
+    errdefer request.deinit(allocator);
+
+    try request.appendSlice(allocator, "GET /users/alice/posts/42 HTTP/1.1\r\n");
+    try request.appendSlice(allocator, "Host: localhost\r\n");
+    try appendHeader(&request, allocator, "Cache-Control", cache_control_value);
+    try appendHeader(&request, allocator, "Foo", required_foo_value);
+    try appendHeader(&request, allocator, "Request-Count", "17");
+    try appendHeader(&request, allocator, "Route-Method", "GET");
+    try appendHeader(&request, allocator, "Route-Path", "/users/alice/posts/42");
+    try appendHeader(&request, allocator, "Content-Length", "5");
+    try request.appendSlice(allocator, "\r\n");
+    try request.appendSlice(allocator, request_body);
 
     return request.toOwnedSlice(allocator);
 }

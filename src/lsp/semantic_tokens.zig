@@ -60,154 +60,42 @@ pub const SemanticToken = struct {
 
 /// Maps a Roc Token.Tag to an LSP semantic type index.
 /// Returns null for tokens that should not be highlighted (punctuation, etc.).
+///
+/// Classification is driven by `Token.Tag.highlightCategory`, the single source
+/// of truth shared with the playground's HTML token view; this function only
+/// projects each category onto the LSP `SemanticType` index it corresponds to.
 pub fn tokenTagToSemanticType(tag: Token.Tag) ?u32 {
-    return switch (tag) {
-        // Keywords
-        .KwApp,
-        .KwAs,
-        .KwCrash,
-        .KwDbg,
-        .KwElse,
-        .KwExpect,
-        .KwExposes,
-        .KwExposing,
-        .KwFor,
-        .KwGenerates,
-        .KwHas,
-        .KwHosted,
-        .KwIf,
-        .KwImplements,
-        .KwImport,
-        .KwImports,
-        .KwIn,
-        .KwInterface,
-        .KwMatch,
-        .KwModule,
-        .KwPackage,
-        .KwPackages,
-        .KwPlatform,
-        .KwProvides,
-        .KwRequires,
-        .KwReturn,
-        .KwTargets,
-        .KwVar,
-        .KwWhere,
-        .KwWhile,
-        .KwWith,
-        .KwBreak,
-        => @intFromEnum(SemanticType.keyword),
+    return switch (tag.highlightCategory()) {
+        .keyword => @intFromEnum(SemanticType.keyword),
+        .type => @intFromEnum(SemanticType.type),
+        .variable => @intFromEnum(SemanticType.variable),
+        .field => @intFromEnum(SemanticType.property),
+        .tag => @intFromEnum(SemanticType.enumMember),
+        .number => @intFromEnum(SemanticType.number),
+        .string => @intFromEnum(SemanticType.string),
+        .operator => @intFromEnum(SemanticType.operator),
 
-        // Type identifiers
-        .UpperIdent => @intFromEnum(SemanticType.type),
-
-        // Variable identifiers
-        .LowerIdent => @intFromEnum(SemanticType.variable),
-
-        // Property access (record fields)
-        .DotLowerIdent,
-        .NoSpaceDotLowerIdent,
-        => @intFromEnum(SemanticType.property),
-
-        // Tag access (enum members)
-        .DotUpperIdent,
-        .NoSpaceDotUpperIdent,
-        => @intFromEnum(SemanticType.enumMember),
-
-        // Numeric literals
-        .Int,
-        .Float,
-        .DotInt,
-        .NoSpaceDotInt,
-        .MalformedNumberBadSuffix,
-        .MalformedNumberUnicodeSuffix,
-        .MalformedNumberNoDigits,
-        .MalformedNumberNoExponentDigits,
-        => @intFromEnum(SemanticType.number),
-
-        // String literals
-        .StringStart,
-        .StringEnd,
-        .StringPart,
-        .MultilineStringStart,
-        .SingleQuote,
-        .MalformedSingleQuote,
-        .MalformedStringPart,
-        .MalformedInvalidUnicodeEscapeSequence,
-        .MalformedInvalidEscapeSequence,
-        => @intFromEnum(SemanticType.string),
-
-        // Operators
-        .OpPlus,
-        .OpStar,
-        .OpPizza,
-        .OpAssign,
-        .OpBinaryMinus,
-        .OpUnaryMinus,
-        .OpNotEquals,
-        .OpBang,
-        .OpAnd,
-        .OpAmpersand,
-        .OpQuestion,
-        .OpDoubleQuestion,
-        .OpOr,
-        .OpBar,
-        .OpDoubleSlash,
-        .OpSlash,
-        .OpPercent,
-        .OpCaret,
-        .OpGreaterThanOrEq,
-        .OpGreaterThan,
-        .OpLessThanOrEq,
-        .OpBackArrow,
-        .OpLessThan,
-        .OpDoubleDotLessThan,
-        .OpDoubleDotEquals,
-        .OpEquals,
-        .OpColonEqual,
-        .OpDoubleColon,
-        .NoSpaceOpQuestion,
-        .OpColon,
-        .OpArrow,
-        .OpFatArrow,
-        .OpBackslash,
-        .DoubleDot,
-        .TripleDot,
-        .DotStar,
-        => @intFromEnum(SemanticType.operator),
-
-        // Named underscore and opaque names
-        .NamedUnderscore,
-        .MalformedNamedUnderscoreUnicode,
-        => @intFromEnum(SemanticType.variable),
-
-        .OpaqueName,
-        .MalformedOpaqueNameUnicode,
-        .MalformedOpaqueNameWithoutName,
-        => @intFromEnum(SemanticType.type),
-
-        // Unicode identifier variants
-        .MalformedUnicodeIdent,
-        .MalformedDotUnicodeIdent,
-        .MalformedNoSpaceDotUnicodeIdent,
-        => @intFromEnum(SemanticType.variable),
-
-        // Punctuation and structural tokens (not highlighted)
-        .EndOfFile,
-        .OpenRound,
-        .CloseRound,
-        .OpenSquare,
-        .CloseSquare,
-        .OpenCurly,
-        .CloseCurly,
-        .OpenStringInterpolation,
-        .CloseStringInterpolation,
-        .NoSpaceOpenRound,
-        .Comma,
-        .Dot,
-        .Underscore,
-        .MalformedUnknownToken,
-        => null,
+        // Brackets, structural punctuation, and non-highlighted tokens carry no
+        // semantic-token type.
+        .bracket, .punctuation, .default => null,
     };
+}
+
+/// Classifies a token using the syntax encoded by its neighboring token tags.
+/// A dotted lowercase name followed immediately by `(` cannot be record field
+/// access. The parser separately distinguishes an attached method call from an
+/// uppercase-qualified lookup; both use the LSP `function` token category.
+fn tokenSemanticTypeAt(tags: []const Token.Tag, token_index: usize) ?u32 {
+    const tag = tags[token_index];
+
+    if (tag == .NoSpaceDotLowerIdent and
+        token_index + 1 < tags.len and
+        tags[token_index + 1] == .NoSpaceOpenRound)
+    {
+        return @intFromEnum(SemanticType.function);
+    }
+
+    return tokenTagToSemanticType(tag);
 }
 
 /// Extracts semantic tokens from Roc source code.
@@ -240,8 +128,8 @@ pub fn extractSemanticTokens(
     var tokens: std.ArrayListUnmanaged(SemanticToken) = .empty;
     errdefer tokens.deinit(allocator);
 
-    for (tags, regions) |tag, region| {
-        const semantic_type = tokenTagToSemanticType(tag) orelse continue;
+    for (tags, regions, 0..) |_, region, token_index| {
+        const semantic_type = tokenSemanticTypeAt(tags, token_index) orelse continue;
 
         const start_offset = region.start.offset;
         const end_offset = region.end.offset;
@@ -584,13 +472,13 @@ const SemanticCollector = struct {
         var prev_tag: ?Token.Tag = null;
         var prev_region: ?base.Region = null;
 
-        for (tags, regions) |tag, region| {
+        for (tags, regions, 0..) |tag, region, token_index| {
             defer {
                 prev_tag = tag;
                 prev_region = region;
             }
 
-            var semantic_type = tokenTagToSemanticType(tag) orelse continue;
+            var semantic_type = tokenSemanticTypeAt(tags, token_index) orelse continue;
 
             const start_offset = region.start.offset;
             const end_offset = region.end.offset;
@@ -598,9 +486,7 @@ const SemanticCollector = struct {
 
             if (length == 0) continue;
 
-            // Check for Module.function pattern:
-            // Previous token was UpperIdent (module name) and current is DotLowerIdent
-            if ((tag == .DotLowerIdent or tag == .NoSpaceDotLowerIdent) and
+            if (tag == .NoSpaceDotLowerIdent and
                 prev_tag != null and prev_tag.? == .UpperIdent)
             {
                 if (prev_region) |prev_reg| {

@@ -168,28 +168,29 @@ expect {
 # EXPECTED
 LEADING ZERO - :0:0:0:0
 UNCLOSED STRING - fuzz_crash_027.md:118:8:118:22
-PARSE ERROR - fuzz_crash_027.md:40:5:40:6
-PARSE ERROR - fuzz_crash_027.md:40:7:40:8
-PARSE ERROR - fuzz_crash_027.md:40:9:40:10
-PARSE ERROR - fuzz_crash_027.md:41:1:41:2
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:124:3:124:4
-LIST NOT CLOSED - fuzz_crash_027.md:125:3:125:4
-PARSE ERROR - fuzz_crash_027.md:126:2:126:3
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:131:9:131:10
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:132:8:132:9
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:133:10:133:11
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:141:8:141:9
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:142:8:142:9
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:148:1:148:2
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:150:7:150:8
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:151:7:151:8
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:153:7:153:8
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:155:1:155:7
-LIST NOT CLOSED - fuzz_crash_027.md:160:1:160:1
-PARSE ERROR - fuzz_crash_027.md:160:1:160:1
-MODULE NOT FOUND - fuzz_crash_027.md:6:1:8:4
-MODULE NOT FOUND - fuzz_crash_027.md:12:1:12:19
-MODULE NOT FOUND - fuzz_crash_027.md:13:1:14:4
+TYPE APPLICATION NEEDS PARENTHESES - fuzz_crash_027.md:40:5:40:6
+UNEXPECTED STATEMENT - fuzz_crash_027.md:40:7:40:8
+UNEXPECTED STATEMENT - fuzz_crash_027.md:40:9:40:10
+UNEXPECTED STATEMENT - fuzz_crash_027.md:41:1:41:2
+EXPECTED RECORD ACCESSOR - fuzz_crash_027.md:110:2:110:5
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:124:3:124:4
+EXPECTED LIST SEPARATOR - fuzz_crash_027.md:125:3:125:4
+EXPECTED CALL ARGUMENT END - fuzz_crash_027.md:126:2:126:3
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:131:9:131:10
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:132:8:132:9
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:133:10:133:11
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:141:8:141:9
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:142:8:142:9
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:148:1:148:2
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:150:7:150:8
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:151:7:151:8
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:153:7:153:8
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:155:1:155:7
+EXPECTED LIST SEPARATOR - fuzz_crash_027.md:160:1:160:1
+EXPECTED CLOSING BRACE - fuzz_crash_027.md:160:1:160:1
+MOD NOT FOUND - fuzz_crash_027.md:6:1:8:4
+MOD NOT FOUND - fuzz_crash_027.md:12:1:12:19
+MOD NOT FOUND - fuzz_crash_027.md:13:1:14:4
 UNDECLARED TYPE - fuzz_crash_027.md:26:8:26:11
 UNDECLARED TYPE - fuzz_crash_027.md:26:13:26:16
 UNDECLARED TYPE - fuzz_crash_027.md:29:2:29:5
@@ -216,8 +217,10 @@ UNUSED VARIABLE - fuzz_crash_027.md:62:2:62:3
 NAME NOT IN SCOPE - fuzz_crash_027.md:97:2:97:6
 UNDECLARED TYPE - fuzz_crash_027.md:99:14:99:20
 NAME NOT IN SCOPE - fuzz_crash_027.md:103:9:103:13
+UNRECOGNIZED SYNTAX - fuzz_crash_027.md:110:2:110:5
 NAME NOT IN SCOPE - fuzz_crash_027.md:114:2:114:11
 UNRECOGNIZED SYNTAX - fuzz_crash_027.md:1:1:1:1
+UNUSED VARIABLE - fuzz_crash_027.md:104:2:104:5
 UNUSED VARIABLE - fuzz_crash_027.md:119:2:119:10
 UNUSED VARIABLE - fuzz_crash_027.md:120:2:120:6
 UNUSED VARIABLE - fuzz_crash_027.md:121:2:121:6
@@ -228,7 +231,6 @@ TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
 MISSING METHOD - fuzz_crash_027.md:68:3:68:8
 MISSING METHOD - fuzz_crash_027.md:70:3:70:8
 TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
-TYPE MISMATCH - fuzz_crash_027.md:106:3:106:6
 TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 # PROBLEMS
 
@@ -248,231 +250,363 @@ Numbers cannot have leading zeros.
 
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
-└┬────────────┘  arguments.                                                   │
+┌────────────────────────────────────┐
+│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
+└┬───────────────────────────────────┘  and I found a type argument without   │
+ │                                      parentheses.                          │
  │                                                                            │
  │  Maya) : [ #                                                               │
  │      ‾                                                                     │
  └──────────────────────────────────────────────────── fuzz_crash_027.md:40:5 ┘
 
-    I found a type followed by what looks like a type argument, but they need
-    to be connected with parentheses.
+    Roc type applications use parentheses around their arguments. Write
+    `List(U8)`, not `List U8`.
 
-    Instead of:
-        List U8
-
-    Use:
+    For example:
         List(U8)
 
-    Other valid examples:
-        Dict(Str, Num)
-        Try(a, Str)
-        Maybe(List(U64))
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  Maya) : [ #                                                               │
  │        ‾                                                                   │
  └──────────────────────────────────────────────────── fuzz_crash_027.md:40:7 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `:` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  Maya) : [ #                                                               │
  │          ‾                                                                 │
  └──────────────────────────────────────────────────── fuzz_crash_027.md:40:9 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `[` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  ] #se                                                                     │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── fuzz_crash_027.md:41:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `]` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token , is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────┐
+│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
+└┬─────────────────────────┘  expected a field name or tuple index.           │
+ │                                                                            │
+ │  ...                                                                       │
+ │  ‾‾‾                                                                       │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:110:2 ┘
+
+    Record access uses a lowercase field name like `.name`. Tuple access uses a
+    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+    valid accessors.
+
+    For example:
+        person.name
+        pair.0
+
+    I found `...` here.
+
+
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  e[, # afarg                                                               │
  │    ‾                                                                       │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:124:3 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌─────────────────┐
-│ LIST NOT CLOSED ├─ This list is missing a closing bracket or has a syntax ──┐
-└┬────────────────┘  error.                                                   │
+┌─────────────────────────┐
+│ EXPECTED LIST SEPARATOR ├─ I was parsing a list expression, and I ──────────┐
+└┬────────────────────────┘  expected `,` or `]`.                             │
  │                                                                            │
  │  ), 456, # ee                                                              │
  │  ‾                                                                         │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:125:3 ┘
 
-    Lists must be closed with ] and list items must be separated by commas.
-    For example:     [1, 2, 3]
+    Separate list elements with commas and close the list with `]`.
+
+    For example:
+        [1, 2, 3]
+
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: expected_expr_apply_close_round ───┐
-└┬────────────┘                                                               │
+┌────────────────────────────┐
+│ EXPECTED CALL ARGUMENT END ├─ I was parsing function or method call ────────┐
+└┬───────────────────────────┘  arguments, and I expected `)`.                │
  │                                                                            │
  │  ]                                                                         │
  │  ‾                                                                         │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:126:2 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Function call arguments go inside parentheses and are separated with commas.
+
+    For example:
+        add(1, 2)
+
+    I found `]` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token = is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }     │
  │         ‾                                                                  │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:131:9 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `=` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token = is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])        │
  │        ‾                                                                   │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:132:8 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `=` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token = is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  m_tuple = (                                                               │
  │          ‾                                                                 │
  └────────────────────────────────────────────────── fuzz_crash_027.md:133:10 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `=` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token = is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3… │
  │        ‾                                                                   │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:141:8 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `=` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token = is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  stale = some_fn(arg1)?.statod()?.ned()?.recd?                             │
  │        ‾                                                                   │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:142:8 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `=` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token } is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  } # Commenl decl                                                          │
  │  ‾                                                                         │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:148:1 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `}` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token : is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  empty : {}                                                                │
  │        ‾                                                                   │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:150:7 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `:` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token = is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  empty = {}                                                                │
  │        ‾                                                                   │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:151:7 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `=` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token : is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  tuple : Value((a, b, c))                                                  │
  │        ‾                                                                   │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:153:7 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `:` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token expect is not expected in an ───┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  expect {                                                                  │
  │  ‾‾‾‾‾‾                                                                    │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:155:1 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `expect` here.
+    That word is reserved by Roc, so it cannot be used as a name in this
+    position.
 
 
-┌─────────────────┐
-│ LIST NOT CLOSED ├─ This list is missing a closing bracket or has a syntax ──┐
-└┬────────────────┘  error.                                                   │
+┌─────────────────────────┐
+│ EXPECTED LIST SEPARATOR ├─ I was parsing a list expression, and I ──────────┐
+└┬────────────────────────┘  expected `,` or `]`.                             │
  │                                                                            │
  │                                                                            │
  │  ‾                                                                         │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:160:1 ┘
 
-    Lists must be closed with ] and list items must be separated by commas.
-    For example:     [1, 2, 3]
+    Separate list elements with commas and close the list with `]`.
+
+    For example:
+        [1, 2, 3]
+
+    I reached the end of the file before this construct was complete.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: expected_expr_close_curly ─────────┐
-└┬────────────┘                                                               │
+┌────────────────────────┐
+│ EXPECTED CLOSING BRACE ├─ I was parsing a block expression, and I ──────────┐
+└┬───────────────────────┘  expected `}` before the file ended.               │
  │                                                                            │
  │                                                                            │
  │  ‾                                                                         │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:160:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Close the block after its final statement or expression.
+
+    For example:
+        {
+            answer = 42
+            answer
+        }
+
+    I reached the end of the file before this construct was complete.
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The module `Stdot` was not found in this Roc project. ──┐
+│ MOD NOT FOUND ├─ The mod `Stdot` was not found in this Roc project. ──┐
 └┬─────────────────┘                                                          │
  │                                                                            │
  │  import Stdot                                                              │
@@ -484,7 +618,7 @@ Numbers cannot have leading zeros.
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The module `Bae` was not found in this Roc project. ────┐
+│ MOD NOT FOUND ├─ The mod `Bae` was not found in this Roc project. ────┐
 └┬─────────────────┘                                                          │
  │                                                                            │
  │  import Bae as Gooe                                                        │
@@ -494,7 +628,7 @@ Numbers cannot have leading zeros.
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The module `Ba` was not found in this Roc project. ─────┐
+│ MOD NOT FOUND ├─ The mod `Ba` was not found in this Roc project. ─────┐
 └┬─────────────────┘                                                          │
  │                                                                            │
  │  import                                                                    │
@@ -789,6 +923,17 @@ Numbers cannot have leading zeros.
     Is it misspelled, or is there an import missing?
 
 
+┌─────────────────────┐
+│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
+└┬────────────────────┘                                                       │
+ │                                                                            │
+ │  ...                                                                       │
+ │  ‾‾‾                                                                       │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:110:2 ┘
+
+    This might be a syntax error, an unsupported language feature, or a typo.
+
+
 ┌───────────────────┐
 │ NAME NOT IN SCOPE ├─ Nothing is named `some_func` in this scope. ───────────┐
 └┬──────────────────┘                                                         │
@@ -809,6 +954,18 @@ Numbers cannot have leading zeros.
  └───────────────────────────────────────────────────── fuzz_crash_027.md:1:1 ┘
 
     This might be a syntax error, an unsupported language feature, or a typo.
+
+
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `tag` is defined here and then never used. ─────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  tag = Blue                                                                │
+ │  ‾‾‾                                                                       │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:104:2 ┘
+
+    If you don't need this variable, prefix it with an underscore like `_tag`
+    to suppress this warning.
 
 
 ┌─────────────────┐
@@ -869,7 +1026,7 @@ Numbers cannot have leading zeros.
  │                                                                            │
  └──────────────────────────────────────────────────── fuzz_crash_027.md:28:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -1016,26 +1173,6 @@ Numbers cannot have leading zeros.
         [Blue, Red, ..]
 
     These can never match! Either the pattern or expression has a problem.
-
-
-┌───────────────┐
-│ TYPE MISMATCH ├─ This `return` does not match the function's return type. ──┐
-└┬──────────────┘                                                             │
- │                                                                            │
- │  tag                                                                       │
- │  ‾‾‾                                                                       │
- └─────────────────────────────────────────────────── fuzz_crash_027.md:106:3 ┘
-
-    It has the type:
-
-        [Blue, ..]
-
-    But the function's return type is:
-
-        Try({}, _d)
-
-    Hint: All `return` statements and the final expression in a function must
-    have the same type.
 
 
 ┌──────────────┐
@@ -1485,8 +1622,7 @@ EndOfFile,
 							(p-ident (raw "tag"))
 							(e-tag (raw "Blue")))
 						(s-return
-							(e-ident (raw "tag")))
-						(e-ellipsis)
+							(e-malformed (reason "expr_dot_suffix_not_allowed")))
 						(e-apply
 							(e-ident (raw "match_time"))
 							(e-ellipsis))
@@ -1533,7 +1669,8 @@ MapML( # Cere
 	b,
 ) # Ag
 	: # Aon
-		List(),
+		List( # rg
+		),
 		(a -> b) -> # row
 			List(b) #
 
@@ -1590,14 +1727,12 @@ match_time = |
 			=> ment
 
 		[1, 2 | 5, 3, .. as rest] => 123
-		[
-			ist,
-		] => 123
+		[ist] => 123
 		3.14 => 314
 		3.14 | 6.28 => 314
 		(1, 2, 3) => 123
 		(1, 2 | 5, 3) => 123
-		{ foo: 1, bar: 2, ..rest } => 12->add(34)
+		{ foo: 1, bar: 2, ..rest } => 12 |> add(34)
 		{ # Afrd open
 			foo #
 				: # ue
@@ -1621,12 +1756,11 @@ main! = |_| { # Yeah Ie
 	var number = 123
 	expect blah == 1
 	tag = Blue
-	return # Comd
-		tag
+	return
 
 	# Jusnt!
 
-	...
+		
 	match_time(
 		..., #
 	)
@@ -1637,7 +1771,7 @@ main! = |_| { # Yeah Ie
 	crash "Unreachtement"
 	tag_with = Ok(number)
 	ited = "Hello, ${world}"
-	list = 
+	list =
 		
 }
 ~~~
@@ -1676,8 +1810,7 @@ main! = |_| { # Yeah Ie
 				(e-if
 					(if-branches
 						(if-branch
-							(e-lookup-local
-								(p-assign (ident "num")))
+							(e-runtime-error (tag "erroneous_value_use"))
 							(e-block
 								(s-dbg
 									(e-runtime-error (tag "empty_tuple")))
@@ -1694,177 +1827,7 @@ main! = |_| { # Yeah Ie
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "match_time"))
-		(e-lambda
-			(args
-				(p-assign (ident "a"))
-				(p-assign (ident "b")))
-			(e-match
-				(match
-					(cond
-						(e-lookup-local
-							(p-assign (ident "a"))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-assign (ident "lue")))
-								(pattern (degenerate true)
-									(p-applied-tag)))
-							(value
-								(e-block
-									(s-expr
-										(e-runtime-error (tag "ident_not_in_scope")))
-									(e-runtime-error (tag "ident_not_in_scope")))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-num (value "1"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-str (text "foo"))))
-							(value
-								(e-num (value "0"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-str (text "foo")))
-								(pattern (degenerate false)
-									(p-str (text "bar"))))
-							(value
-								(e-num (value "20"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-list
-										(patterns
-											(p-num (value "1"))
-											(p-num (value "2"))
-											(p-num (value "3")))
-										(rest-at (index 3)
-											(p-assign (ident "rest"))))))
-							(value
-								(e-runtime-error (tag "ident_not_in_scope"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-list
-										(patterns
-											(p-num (value "1"))
-											(p-runtime-error (tag "not_implemented"))
-											(p-num (value "3")))
-										(rest-at (index 3)
-											(p-assign (ident "rest"))))))
-							(value
-								(e-num (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-list
-										(patterns
-											(p-assign (ident "ist"))))))
-							(value
-								(e-num (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-small-dec)))
-							(value
-								(e-num (value "314"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-small-dec))
-								(pattern (degenerate false)
-									(p-small-dec)))
-							(value
-								(e-num (value "314"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-tuple
-										(patterns
-											(p-num (value "1"))
-											(p-num (value "2"))
-											(p-num (value "3"))))))
-							(value
-								(e-num (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-tuple
-										(patterns
-											(p-num (value "1"))
-											(p-runtime-error (tag "not_implemented"))
-											(p-num (value "3"))))))
-							(value
-								(e-num (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-record-destructure
-										(destructs
-											(record-destruct (label "foo") (ident "foo")
-												(sub-pattern
-													(p-num (value "1"))))
-											(record-destruct (label "bar") (ident "bar")
-												(sub-pattern
-													(p-num (value "2"))))
-											(record-destruct (label "rest") (ident "rest")
-												(rest-pattern
-													(p-assign (ident "rest"))))))))
-							(value
-								(e-call
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-num (value "12"))
-									(e-num (value "34")))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-record-destructure
-										(destructs
-											(record-destruct (label "foo") (ident "foo")
-												(sub-pattern
-													(p-num (value "1"))))
-											(record-destruct (label "bar") (ident "bar")
-												(sub-pattern
-													(p-num (value "2"))))
-											(record-destruct (label "#others") (ident "#others")
-												(rest-pattern
-													(p-underscore)))))))
-							(value
-								(e-num (value "12"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-record-destructure
-										(destructs
-											(record-destruct (label "foo") (ident "foo")
-												(sub-pattern
-													(p-num (value "1"))))
-											(record-destruct (label "bar") (ident "bar")
-												(sub-pattern
-													(p-runtime-error (tag "not_implemented"))))))))
-							(value
-								(e-num (value "12"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-record-destructure
-										(destructs
-											(record-destruct (label "foo") (ident "foo")
-												(sub-pattern
-													(p-num (value "1"))))))))
-							(value
-								(e-num (value "12"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-num (value "121000")))))))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda
@@ -1888,20 +1851,11 @@ main! = |_| { # Yeah Ie
 					(p-assign (ident "tag"))
 					(e-tag (name "Blue")))
 				(s-return
-					(e-lookup-local
-						(p-assign (ident "tag"))))
+					(e-runtime-error (tag "expr_not_canonicalized")))
 				(s-expr
-					(e-not-implemented))
+					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-expr
-					(e-call (constraint-fn-var 3592)
-						(e-lookup-local
-							(p-assign (ident "match_time")))
-						(e-not-implemented)))
-				(s-expr
-					(e-call
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-dbg
-							(e-num (value "42")))))
+					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-crash (msg "Unreachtement"))
 				(s-let
 					(p-assign (ident "tag_with"))
@@ -1916,7 +1870,7 @@ main! = |_| { # Yeah Ie
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 3683)
+						(e-interpolation (constraint-fn-var 1094) (dispatcher-var 315)
 							(first
 								(e-literal (string "Hello, ")))
 							(parts
@@ -1934,19 +1888,19 @@ main! = |_| { # Yeah Ie
 				(ty-apply (name "Try") (builtin)
 					(ty-record)
 					(ty-underscore)))))
-	(s-import (module "pf.Stdout")
+	(s-import (mod "pf.Stdout")
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "e!") (wildcard false))))
-	(s-import (module "Stdot")
+	(s-import (mod "Stdot")
 		(exposes))
-	(s-import (module "pkg.S")
+	(s-import (mod "pkg.S")
 		(exposes
 			(exposed (name "func") (alias "fry") (wildcard false))
 			(exposed (name "Custom") (wildcard true))))
-	(s-import (module "Bae")
+	(s-import (mod "Bae")
 		(exposes))
-	(s-import (module "Ba")
+	(s-import (mod "Ba")
 		(exposes))
 	(s-alias-decl
 		(ty-header (name "Map")
@@ -2033,26 +1987,26 @@ main! = |_| { # Yeah Ie
 				(ty-args
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "b")))))
-		(alias (type "MapML(a, b)")
+		(alias (type "Error")
 			(ty-header (name "MapML")
 				(ty-args
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "b")))))
-		(alias (type "Foo")
+		(alias (type "Error")
 			(ty-header (name "Foo")))
-		(alias (type "Some(a)")
+		(alias (type "Error")
 			(ty-header (name "Some")
 				(ty-args
 					(ty-rigid-var (name "a")))))
-		(alias (type "Ml(a)")
+		(alias (type "Error")
 			(ty-header (name "Ml")
 				(ty-args
 					(ty-rigid-var (name "a")))))
-		(alias (type "Soine(a)")
+		(alias (type "Error")
 			(ty-header (name "Soine")
 				(ty-args
 					(ty-rigid-var (name "a")))))
-		(alias (type "Func(a)")
+		(alias (type "Error")
 			(ty-header (name "Func")
 				(ty-args
 					(ty-rigid-var (name "a"))))))

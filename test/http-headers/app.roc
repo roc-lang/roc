@@ -7,6 +7,8 @@ Shape : {
 	foo : Str,
 	question_optional : Try(Str, [Missing]),
 	request_count : U64,
+	route_method : Try(Str, [Missing]),
+	route_path : Try(Str, [Missing]),
 	wildcard_optional : Try(Str, [Missing]),
 	x_auth_token : Try(Str, [Missing]),
 }
@@ -19,10 +21,12 @@ parse_headers : Str -> Try(
 		foo : Str,
 		question_optional : Try(Str, [Missing]),
 		request_count : U64,
+		route_method : Try(Str, [Missing]),
+		route_path : Try(Str, [Missing]),
 		wildcard_optional : Try(Str, [Missing]),
 		x_auth_token : Try(Str, [Missing]),
 	},
-	Encoding.HttpHeader,
+	[BadHeader, MissingRequiredField(Str)],
 )
 parse_headers = Encoding.HttpHeader.parser_for()
 
@@ -36,10 +40,12 @@ main! = |headers| {
 			foo : Str,
 			question_optional : Try(Str, [Missing]),
 			request_count : U64,
+			route_method : Try(Str, [Missing]),
+			route_path : Try(Str, [Missing]),
 			wildcard_optional : Try(Str, _),
 			x_auth_token : Try(Str, [Missing]),
 		},
-		Encoding.HttpHeader,
+		[BadHeader, MissingRequiredField(Str)],
 	)
 	decoded_result = parse_headers(headers)
 
@@ -66,6 +72,11 @@ main! = |headers| {
 				Err(Missing) => 0
 			}
 
+			route_bonus = match (decoded.route_method, decoded.route_path) {
+				(Ok(method), Ok(path)) => route_score(method, path)
+				_ => 0
+			}
+
 			decoded.content_length
 				+ decoded.request_count
 				+ Str.count_utf8_bytes(decoded.cache_control)
@@ -74,9 +85,10 @@ main! = |headers| {
 				+ wildcard_optional_length
 				+ question_optional_length
 				+ x_auth_token_length
+				+ route_bonus
 		}
-		Err(Encoding.HttpHeader.MissingRequired) => 999999
-		Err(Encoding.HttpHeader.BadHeader) => 999999
+		Err(MissingRequiredField(_)) => 999999
+		Err(BadHeader) => 999999
 	}
 }
 
@@ -84,4 +96,29 @@ question_length : Try(Str, [Missing]) -> Try(U64, [Missing])
 question_length = |maybe| {
 	value = maybe?
 	Ok(Str.count_utf8_bytes(value))
+}
+
+route_score : Str, Str -> U64
+route_score = |verb, path| {
+	match (verb, path) {
+		("GET", "/users/${id}/${page}") =>
+			match page {
+				"" | "profile" => 1000 + Str.count_utf8_bytes(id)
+				"settings" => 2000 + Str.count_utf8_bytes(id)
+				"posts/${post_id}" =>
+					3000
+						+ Str.count_utf8_bytes(id)
+						+ Str.count_utf8_bytes(post_id)
+				_ => 404
+			}
+
+		("GET", "/users/${id}") =>
+			1000 + Str.count_utf8_bytes(id)
+
+		("POST", "/posts/new") =>
+			201
+
+		_ =>
+			404
+		}
 }

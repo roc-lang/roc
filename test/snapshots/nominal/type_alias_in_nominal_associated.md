@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Type alias from module scope used in nominal associated items
+description=Type alias from mod scope used in nominal associated items
 type=snippet
 ~~~
 # SOURCE
@@ -28,7 +28,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "NodeKind")

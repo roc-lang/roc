@@ -2,60 +2,117 @@
     .name = .roc,
     .version = "0.0.0",
     .minimum_zig_version = "0.16.0",
+    // CPU baseline notes for each dependency.
+    //
+    // Dependencies fall into two groups that behave differently under `-Dcpu`:
+    //
+    //   Prebuilt (`roc_deps_*`) arrive as compiled archives, so `-Dcpu` cannot
+    //   reach them. They run at whatever CPU floor roc-lang/roc-bootstrap built
+    //   them at.
+    //
+    //   From source (`bytebox`, `zstd`) are compiled by us against the selected
+    //   target, so they inherit `-Dcpu` exactly.
+    //
+    // Within both groups, what matters is whether a dependency does runtime CPU
+    // dispatch: run cpuid, then call one of several implementations that were
+    // each compiled at a different instruction set level. A dependency that
+    // dispatches keeps its fast paths on new CPUs while still starting on old
+    // ones, so lowering `-Dcpu` costs it nothing. A dependency that does not
+    // dispatch runs at its compiled-in floor everywhere. Each entry below
+    // records which it is, because that is what decides the cost of a lower
+    // floor.
+    //
+    // Verified by disassembling the x86_64-linux-musl archives on 2026-08-02.
+    // Re-check when bumping a dependency.
     .dependencies = .{
+        // Fuzzing only, and lazy, so it never reaches a release binary.
         .afl_kit = .{
             .url = "https://github.com/bhansconnect/zig-afl-kit/archive/c1f7353e006cf326ffab0a35b6e454cb5d8a5d7b.tar.gz",
             .hash = "afl_kit-0.1.0-NdJ3csgfAABGuiQ4P99kFuaVSy4DHMilISiGF_VKX3xl",
             .lazy = true,
         },
+        // The `roc_deps_*` archives below carry prebuilt LLVM, LLD, Binaryen and
+        // zlib. Every one of those libraries is plain baseline x86-64 except
+        // LLVM's vendored BLAKE3, which does textbook runtime dispatch:
+        // `blake3_dispatch.c` runs cpuid/xgetbv, caches the answer in
+        // `g_cpu_features`, and selects among portable/sse2/sse41/avx2/avx512
+        // implementations, so no above-baseline instruction is reachable unless
+        // its feature check passed. LLD, Binaryen and zlib contain no SIMD at
+        // all, so they have nothing to dispatch and give up nothing by running
+        // at baseline.
+        //
+        // These archives also ship a libzstd, but roc does not link it: only
+        // `z` is linked by name from these prebuilts, and `llvm_libs` in
+        // build.zig does not name zstd. Roc's zstd is the source dependency
+        // below.
+        //
+        // Net effect: these stay correct on any CPU of their architecture no
+        // matter which `-Dcpu` roc itself is built with.
         .roc_deps_aarch64_macos_none = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/aarch64-macos-none.tar.xz",
-            .hash = "N-V-__8AAEvEEA9B1q8qGkm3rJW_bkae4wn1SvyrfDa0w1lp",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0-binaryen/aarch64-macos-none.tar.xz",
+            .hash = "N-V-__8AAKS-VRH7JXsaDHpnFPSd-B5fSdtnDbh0XrfnncWc",
             .lazy = true,
         },
         .roc_deps_aarch64_linux_musl = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/aarch64-linux-musl.tar.xz",
-            .hash = "N-V-__8AAHPjwBNV6lTtxPO6DYe4lg2Gx5Qakmeg1PO7N5k7",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0-binaryen/aarch64-linux-musl.tar.xz",
+            .hash = "N-V-__8AACK4KheKSiltX0PPURTNh0CvJhsopNXzcXpvq9pS",
             .lazy = true,
         },
         .roc_deps_aarch64_windows_gnu = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/aarch64-windows-gnu.zip",
-            .hash = "N-V-__8AAI4OFxV11RN1xAhLXxLTyaxZh3Wbi4U1Dza1OESo",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0-binaryen/aarch64-windows-gnu.zip",
+            .hash = "N-V-__8AAPEjNhjVXuc6-b70fcyHFGS_ckUIx5_ICD3-3HZk",
             .lazy = true,
         },
         .roc_deps_arm_linux_musleabihf = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/arm-linux-musleabihf.tar.xz",
-            .hash = "N-V-__8AAHU1FhRO-2yZIDQWw5rkVVuUYn5purRT9mAqykzw",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0-binaryen/arm-linux-musleabihf.tar.xz",
+            .hash = "N-V-__8AAKywPxfY01H2OMTuZllxIuavfyGGm3kpW7-1RmkP",
             .lazy = true,
         },
         .roc_deps_x86_linux_musl = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/x86-linux-musl.tar.xz",
-            .hash = "N-V-__8AACNk7BFESU37UNPvVOXf2dGyPMjtDSsji-VYqvmz",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0-binaryen/x86-linux-musl.tar.xz",
+            .hash = "N-V-__8AAMg8ihSrg9Udc8ZJ1trVVUgglxJg8CbHoYG51dZq",
             .lazy = true,
         },
         .roc_deps_x86_64_linux_musl = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/x86_64-linux-musl.tar.xz",
-            .hash = "N-V-__8AAJmm4xTmXSEZeLYLtOlZWKI_Kitjx2TOzm9vhCWM",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0-binaryen/x86_64-linux-musl.tar.xz",
+            .hash = "N-V-__8AAGJLMhhn8pu3uyxtKTIlha8CxCjE6TNpLYvvj-cz",
             .lazy = true,
         },
         .roc_deps_x86_64_macos_none = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/x86_64-macos-none.tar.xz",
-            .hash = "N-V-__8AAJGgsQ-GR2yR2tLFM4OM0z7ClQ0Rx7SjviQbx8Ks",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0-binaryen/x86_64-macos-none.tar.xz",
+            .hash = "N-V-__8AAJrG0hG7ZWMT8yxRBa17ivn77bWqDpseO904PYT7",
             .lazy = true,
         },
         .roc_deps_x86_64_windows_gnu = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/x86_64-windows-gnu.zip",
-            .hash = "N-V-__8AAJAOJxiRcaWQZpXytjyF8_Q7Mj9g7xXQWtegD-6C",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0-binaryen/x86_64-windows-gnu.zip",
+            .hash = "N-V-__8AADfFZhvsrNly3AbA2PmVP9piXKNto_CmeqLuNNsd",
             .lazy = true,
         },
+        // No runtime dispatch, and nothing that would benefit from it: every
+        // `@Vector` in bytebox implements wasm's fixed-128-bit `v128` semantics,
+        // which is already the natural SSE2 lowering. A lower `-Dcpu` costs it
+        // nothing.
         .bytebox = .{
             .url = "https://github.com/lukewilliamboswell/bytebox/archive/88a4b79230eece88030e6779f69ed9683906c02a.tar.gz",
             .hash = "bytebox-0.0.1-SXc2saRyDwDEw8AkDhp4Hfmd9ZhRmMnIzS7FfzDCmc8r",
         },
+        // Used for `roc bundle`, `roc unbundle`, and downloading .tar.zst bundles.
+        //
+        // zstd has runtime BMI2 dispatch, but it enables that dispatch only when
+        // BMI2 is *not* already on at compile time: `DYNAMIC_BMI2` in
+        // lib/common/portability_macros.h is gated on `!defined(__BMI2__)`.
+        //
+        // So building this at x86-64-v3 turns the dispatch off and hardcodes
+        // BMI2 into every entry point, while building at baseline or v2 compiles
+        // both variants and picks between them via zstd's own cpuid at runtime.
+        // Building it at v3 is therefore strictly worse than building it at
+        // baseline: it gives up portability without gaining any speed on the
+        // CPUs that do have BMI2.
         .zstd = .{
             .url = "https://github.com/allyourcodebase/zstd/archive/e1a501be57f42c541e8a5597e4b59a074dfd09a3.tar.gz", // 1.5.7-1
             .hash = "zstd-1.5.7-1-KEItkAMwAAD6OKY3m0OOmXG7aL-aLUfrDqbP5J5oYapU",
         },
+        // Coverage tooling only, and lazy, so it never reaches a release binary.
         .kcov = .{
             .url = "https://github.com/roc-lang/zig-kcov/archive/5e1954e53ce775a6ecf65abd03ae67deee64ac3c.tar.gz",
             .hash = "kcov-42.0.1-EuAG4XacCwBu0G8YHvv6sFHfbMPZuwyBuZGqcRMi8IXq",

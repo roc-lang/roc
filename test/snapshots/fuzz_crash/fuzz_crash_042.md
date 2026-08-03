@@ -8,24 +8,32 @@ type=snippet
 import u.R}g:r->R.a.E
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_042.md:1:11:1:12
-MODULE NOT FOUND - fuzz_crash_042.md:1:20:1:22
+UNEXPECTED STATEMENT - fuzz_crash_042.md:1:11:1:12
+MOD NOT FOUND - fuzz_crash_042.md:1:20:1:22
 DECLARATION HAS NO VALUE - fuzz_crash_042.md:1:12:1:22
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  import u.R}g:r->R.a.E                                                     │
  │            ‾                                                               │
  └──────────────────────────────────────────────────── fuzz_crash_042.md:1:11 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `}` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `a.E` type is declared to be in `u.R`, which ──────┐
+│ MOD NOT FOUND ├─ This `a.E` type is declared to be in `u.R`, which ──────┐
 └┬─────────────────┘  does not exist.                                         │
  │                                                                            │
  │  import u.R}g:r->R.a.E                                                     │
@@ -42,7 +50,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_042.md:1:12:1:22
  │             ‾‾‾‾‾‾‾‾‾‾                                                     │
  └──────────────────────────────────────────────────── fuzz_crash_042.md:1:12 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 # TOKENS
@@ -53,7 +61,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "u.R"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -77,7 +85,7 @@ g : r -> R.a.E
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "r"))
 				(ty-malformed))))
-	(s-import (module "u.R")
+	(s-import (mod "u.R")
 		(exposes)))
 ~~~
 # TYPES

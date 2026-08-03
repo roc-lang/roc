@@ -27,13 +27,88 @@
 #define ROC_STATIC_ASSERT(cond, message) _Static_assert(cond, message)
 #endif
 
+static inline void roc_abi_copy_bytes(void* dst, const void* src, size_t count) {
+    uint8_t* dst_bytes = (uint8_t*)dst;
+    const uint8_t* src_bytes = (const uint8_t*)src;
+    for (size_t index = 0; index < count; index++) {
+        dst_bytes[index] = src_bytes[index];
+    }
+}
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-// =============================================================================
 // Core Roc Types
-// =============================================================================
+
+typedef struct {
+    __int128 num;
+} RocDec;
+
+ROC_STATIC_ASSERT(sizeof(RocDec) == 16, "RocDec must be sixteen bytes");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(RocDec) == 16, "RocDec must be 16-byte aligned");
+
+#if defined(_MSC_VER) && !defined(__clang__) && defined(_M_X64)
+#include <intrin.h>
+typedef __m128i RocU8x16;
+typedef __m128i RocI8x16;
+typedef __m128i RocU16x8;
+typedef __m128i RocI16x8;
+typedef __m128i RocU32x4;
+typedef __m128i RocI32x4;
+typedef __m128i RocU64x2;
+typedef __m128i RocI64x2;
+#elif defined(_MSC_VER) && !defined(__clang__) && defined(_M_ARM64)
+#include <arm64_neon.h>
+typedef uint8x16_t RocU8x16;
+typedef int8x16_t RocI8x16;
+typedef uint16x8_t RocU16x8;
+typedef int16x8_t RocI16x8;
+typedef uint32x4_t RocU32x4;
+typedef int32x4_t RocI32x4;
+typedef uint64x2_t RocU64x2;
+typedef int64x2_t RocI64x2;
+#elif defined(__aarch64__)
+#include <arm_neon.h>
+typedef uint8x16_t RocU8x16;
+typedef int8x16_t RocI8x16;
+typedef uint16x8_t RocU16x8;
+typedef int16x8_t RocI16x8;
+typedef uint32x4_t RocU32x4;
+typedef int32x4_t RocI32x4;
+typedef uint64x2_t RocU64x2;
+typedef int64x2_t RocI64x2;
+#elif defined(__wasm_simd128__)
+#include <wasm_simd128.h>
+typedef v128_t RocU8x16;
+typedef v128_t RocI8x16;
+typedef v128_t RocU16x8;
+typedef v128_t RocI16x8;
+typedef v128_t RocU32x4;
+typedef v128_t RocI32x4;
+typedef v128_t RocU64x2;
+typedef v128_t RocI64x2;
+#else
+typedef uint8_t RocU8x16 __attribute__((vector_size(16)));
+typedef int8_t RocI8x16 __attribute__((vector_size(16)));
+typedef uint16_t RocU16x8 __attribute__((vector_size(16)));
+typedef int16_t RocI16x8 __attribute__((vector_size(16)));
+typedef uint32_t RocU32x4 __attribute__((vector_size(16)));
+typedef int32_t RocI32x4 __attribute__((vector_size(16)));
+typedef uint64_t RocU64x2 __attribute__((vector_size(16)));
+typedef int64_t RocI64x2 __attribute__((vector_size(16)));
+#endif
+
+#define ROC_ASSERT_VECTOR(T) ROC_STATIC_ASSERT(sizeof(T) == 16, #T " size mismatch"); ROC_STATIC_ASSERT(ROC_ALIGNOF(T) == 16, #T " alignment mismatch")
+ROC_ASSERT_VECTOR(RocU8x16);
+ROC_ASSERT_VECTOR(RocI8x16);
+ROC_ASSERT_VECTOR(RocU16x8);
+ROC_ASSERT_VECTOR(RocI16x8);
+ROC_ASSERT_VECTOR(RocU32x4);
+ROC_ASSERT_VECTOR(RocI32x4);
+ROC_ASSERT_VECTOR(RocU64x2);
+ROC_ASSERT_VECTOR(RocI64x2);
+#undef ROC_ASSERT_VECTOR
 
 typedef struct {
     uint8_t* bytes;
@@ -43,6 +118,9 @@ typedef struct {
 
 ROC_STATIC_ASSERT(sizeof(RocStr) == 3 * sizeof(size_t), "RocStr must be three pointer-sized words");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(RocStr) == ROC_ALIGNOF(size_t), "RocStr must be pointer-word aligned");
+ROC_STATIC_ASSERT(offsetof(RocStr, bytes) == 0, "RocStr.bytes offset mismatch");
+ROC_STATIC_ASSERT(offsetof(RocStr, capacity_or_alloc_ptr) == sizeof(size_t), "RocStr.capacity_or_alloc_ptr offset mismatch");
+ROC_STATIC_ASSERT(offsetof(RocStr, length) == 2 * sizeof(size_t), "RocStr.length offset mismatch");
 
 typedef struct {
     void* elements;
@@ -52,17 +130,23 @@ typedef struct {
 
 ROC_STATIC_ASSERT(sizeof(RocList) == 3 * sizeof(size_t), "RocList must be three pointer-sized words");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(RocList) == ROC_ALIGNOF(size_t), "RocList must be pointer-word aligned");
+ROC_STATIC_ASSERT(offsetof(RocList, elements) == 0, "RocList.elements offset mismatch");
+ROC_STATIC_ASSERT(offsetof(RocList, length) == sizeof(size_t), "RocList.length offset mismatch");
+ROC_STATIC_ASSERT(offsetof(RocList, capacity_or_alloc_ptr) == 2 * sizeof(size_t), "RocList.capacity_or_alloc_ptr offset mismatch");
 
 typedef void* RocBox;
 
 struct RocOps;
 
-typedef void (*RocErasedCallableFn)(struct RocOps* ops, uint8_t* ret, const uint8_t* args, uint8_t* capture);
+/* `reuse` is nullable. Non-null must be the callable data pointer whose inline capture begins at `capture`; it transfers one owned reference to the callee. The caller must not use or decref that ownership unit after the call. The callee consumes it exactly once, whether or not the result can reuse the allocation. */
+typedef void (*RocErasedCallableFn)(struct RocOps* ops, uint8_t* ret, const uint8_t* args, uint8_t* capture, uint8_t* reuse);
 typedef void (*RocErasedCallableOnDrop)(uint8_t* capture, struct RocOps* ops);
 typedef struct {
     RocErasedCallableFn callable_fn_ptr;
     RocErasedCallableOnDrop on_drop;
 } RocErasedCallablePayload;
+ROC_STATIC_ASSERT(offsetof(RocErasedCallablePayload, callable_fn_ptr) == 0, "RocErasedCallablePayload.callable_fn_ptr offset mismatch");
+ROC_STATIC_ASSERT(offsetof(RocErasedCallablePayload, on_drop) == sizeof(RocErasedCallableFn), "RocErasedCallablePayload.on_drop offset mismatch");
 typedef uint8_t* RocErasedCallable;
 #define ROC_ERASED_CALLABLE_CAPTURE_ALIGNMENT 16u
 #define ROC_ERASED_CALLABLE_PAYLOAD_ALIGNMENT 16u
@@ -76,57 +160,174 @@ static inline uint8_t* roc_erased_callable_capture_ptr(RocErasedCallable callabl
 }
 
 
-// =============================================================================
 // Reflected Roc Types
-// =============================================================================
 
-typedef struct {
-    ROC_ALIGNAS(8) uint8_t bytes[32];
-} Builder;
+typedef struct Builder Builder;
+typedef struct HostTree HostTree;
+typedef struct Host Host;
+typedef struct Padded Padded;
+
 #if UINTPTR_MAX == UINT64_MAX
+struct Builder {
+    RocStr value;
+    uint64_t count;
+};
 ROC_STATIC_ASSERT(sizeof(Builder) == 32, "Builder size mismatch");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(Builder) == 8, "Builder alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(Builder, value) == 0, "Builder.value offset mismatch");
+ROC_STATIC_ASSERT(offsetof(Builder, count) == 24, "Builder.count offset mismatch");
+#else
+struct Builder {
+    RocStr value;
+    uint64_t count;
+};
+ROC_STATIC_ASSERT(sizeof(Builder) == 24, "Builder size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(Builder) == 8, "Builder alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(Builder, value) == 0, "Builder.value offset mismatch");
+ROC_STATIC_ASSERT(offsetof(Builder, count) == 16, "Builder.count offset mismatch");
 #endif
 
-typedef struct {
-    ROC_ALIGNAS(8) uint8_t bytes[24];
-} HostTree;
 #if UINTPTR_MAX == UINT64_MAX
+typedef struct {
+    HostTree* _0;
+    HostTree* _1;
+} HostTreeNodePayload;
+ROC_STATIC_ASSERT(sizeof(HostTreeNodePayload) == 16, "HostTreeNodePayload size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(HostTreeNodePayload) == 8, "HostTreeNodePayload alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(HostTreeNodePayload, _0) == 0, "HostTreeNodePayload._0 offset mismatch");
+ROC_STATIC_ASSERT(offsetof(HostTreeNodePayload, _1) == 8, "HostTreeNodePayload._1 offset mismatch");
+#else
+typedef struct {
+    HostTree* _0;
+    HostTree* _1;
+} HostTreeNodePayload;
+ROC_STATIC_ASSERT(sizeof(HostTreeNodePayload) == 8, "HostTreeNodePayload size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(HostTreeNodePayload) == 4, "HostTreeNodePayload alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(HostTreeNodePayload, _0) == 0, "HostTreeNodePayload._0 offset mismatch");
+ROC_STATIC_ASSERT(offsetof(HostTreeNodePayload, _1) == 4, "HostTreeNodePayload._1 offset mismatch");
+#endif
+
+typedef uint8_t HostTreeTag;
+enum {
+    HostTreeTag_Leaf = 0,
+    HostTreeTag_Node = 1
+};
+typedef union {
+    int64_t leaf;
+    HostTreeNodePayload node;
+} HostTreeTagPayloadStorage;
+#if UINTPTR_MAX == UINT64_MAX
+struct HostTree {
+    HostTreeTagPayloadStorage payload;
+    HostTreeTag tag;
+};
 ROC_STATIC_ASSERT(sizeof(HostTree) == 24, "HostTree size mismatch");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(HostTree) == 8, "HostTree alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(HostTree, tag) == 16, "HostTree.tag offset mismatch");
+#else
+struct HostTree {
+    ROC_ALIGNAS(8) uint8_t payload[8];
+    HostTreeTag tag;
+};
+ROC_STATIC_ASSERT(sizeof(HostTree) == 16, "HostTree size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(HostTree) == 8, "HostTree alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(HostTree, tag) == 8, "HostTree.tag offset mismatch");
 #endif
-
-typedef struct {
-    ROC_ALIGNAS(8) uint8_t bytes[24];
-} Host;
+static inline HostTree HostTree_make_leaf(int64_t payload) {
+    HostTree out = {0};
+    out.tag = HostTreeTag_Leaf;
 #if UINTPTR_MAX == UINT64_MAX
+    out.payload.leaf = payload;
+#else
+    roc_abi_copy_bytes(out.payload, &payload, sizeof(payload));
+#endif
+    return out;
+}
+
+static inline HostTree HostTree_make_node(HostTreeNodePayload payload) {
+    HostTree out = {0};
+    out.tag = HostTreeTag_Node;
+#if UINTPTR_MAX == UINT64_MAX
+    out.payload.node = payload;
+#else
+    roc_abi_copy_bytes(out.payload, &payload, sizeof(payload));
+#endif
+    return out;
+}
+
+static inline int64_t HostTree_payload_leaf(const HostTree* value) {
+#if UINTPTR_MAX == UINT64_MAX
+    return value->payload.leaf;
+#else
+    int64_t payload;
+    roc_abi_copy_bytes(&payload, value->payload, sizeof(payload));
+    return payload;
+#endif
+}
+
+static inline HostTreeNodePayload HostTree_payload_node(const HostTree* value) {
+#if UINTPTR_MAX == UINT64_MAX
+    return value->payload.node;
+#else
+    HostTreeNodePayload payload;
+    roc_abi_copy_bytes(&payload, value->payload, sizeof(payload));
+    return payload;
+#endif
+}
+
+#if UINTPTR_MAX == UINT64_MAX
+struct Host {
+    RocStr name;
+};
 ROC_STATIC_ASSERT(sizeof(Host) == 24, "Host size mismatch");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(Host) == 8, "Host alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(Host, name) == 0, "Host.name offset mismatch");
+#else
+struct Host {
+    RocStr name;
+};
+ROC_STATIC_ASSERT(sizeof(Host) == 12, "Host size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(Host) == 4, "Host alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(Host, name) == 0, "Host.name offset mismatch");
 #endif
 
-typedef struct {
-    ROC_ALIGNAS(4) uint8_t bytes[12];
-} Padded;
 #if UINTPTR_MAX == UINT64_MAX
+struct Padded {
+    uint32_t z;
+    uint8_t _pad0[4];
+    uint32_t a;
+};
 ROC_STATIC_ASSERT(sizeof(Padded) == 12, "Padded size mismatch");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(Padded) == 4, "Padded alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(Padded, z) == 0, "Padded.z offset mismatch");
+ROC_STATIC_ASSERT(offsetof(Padded, a) == 8, "Padded.a offset mismatch");
+#else
+struct Padded {
+    uint32_t z;
+    uint8_t _pad0[4];
+    uint32_t a;
+};
+ROC_STATIC_ASSERT(sizeof(Padded) == 12, "Padded size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(Padded) == 4, "Padded alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(Padded, z) == 0, "Padded.z offset mismatch");
+ROC_STATIC_ASSERT(offsetof(Padded, a) == 8, "Padded.a offset mismatch");
 #endif
 
 
-// =============================================================================
+// Platform Type Aliases
+
+typedef HostTree HostTreeNode;
+
 // Hosted Function Infrastructure
-// =============================================================================
 
 struct RocOps;
 
 typedef void (*HostedFn)(void);
 
 
-// =============================================================================
 // Hosted Function Count
-// =============================================================================
 
-#define HOSTED_FUNCTION_COUNT 17
+#define HOSTED_FUNCTION_COUNT 19
 
 
 #define HOSTED_IDX_BUILDER_PRINT_VALUE 0
@@ -134,22 +335,22 @@ typedef void (*HostedFn)(void);
 #define HOSTED_IDX_HOST_BOXED_DROP_REPORT 2
 #define HOSTED_IDX_HOST_BOXED_NESTED_RECORD 3
 #define HOSTED_IDX_HOST_BOXED_RECURSIVE_TREE 4
-#define HOSTED_IDX_HOST_BOXED_WITH_BOXED_CAPTURE 5
-#define HOSTED_IDX_HOST_CALL_BOXED 6
-#define HOSTED_IDX_HOST_GET_GREETING 7
-#define HOSTED_IDX_HOST_RELEASE_STORED_BOXED 8
-#define HOSTED_IDX_HOST_RESET_BOXED_DROP_REPORT 9
-#define HOSTED_IDX_HOST_ROUNDTRIP_BOXED 10
-#define HOSTED_IDX_HOST_STORE_BOXED 11
-#define HOSTED_IDX_HOST_STORED_BOXED_CALL 12
-#define HOSTED_IDX_PADDED_CHECK 13
-#define HOSTED_IDX_STDERR_LINE 14
-#define HOSTED_IDX_STDIN_LINE 15
-#define HOSTED_IDX_STDOUT_LINE 16
+#define HOSTED_IDX_HOST_BOXED_TRANSITION 5
+#define HOSTED_IDX_HOST_BOXED_WITH_BOXED_CAPTURE 6
+#define HOSTED_IDX_HOST_CALL_BOXED 7
+#define HOSTED_IDX_HOST_CALL_BOXED_TRANSITION 8
+#define HOSTED_IDX_HOST_GET_GREETING 9
+#define HOSTED_IDX_HOST_RELEASE_STORED_BOXED 10
+#define HOSTED_IDX_HOST_RESET_BOXED_DROP_REPORT 11
+#define HOSTED_IDX_HOST_ROUNDTRIP_BOXED 12
+#define HOSTED_IDX_HOST_STORE_BOXED 13
+#define HOSTED_IDX_HOST_STORED_BOXED_CALL 14
+#define HOSTED_IDX_PADDED_CHECK 15
+#define HOSTED_IDX_STDERR_LINE 16
+#define HOSTED_IDX_STDIN_LINE 17
+#define HOSTED_IDX_STDOUT_LINE 18
 
-// =============================================================================
 // Argument Structures
-// =============================================================================
 
 
 /**
@@ -157,12 +358,19 @@ typedef void (*HostedFn)(void);
  * Roc signature: Builder => {}
  * Refcounted fields are owned by the hosted function.
  */
+#if UINTPTR_MAX == UINT64_MAX
 typedef struct {
     RocStr value;
     uint64_t count;
 } BuilderPrintValueArgs;
-#if UINTPTR_MAX == UINT64_MAX
 ROC_STATIC_ASSERT(sizeof(BuilderPrintValueArgs) == 32, "BuilderPrintValueArgs size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(BuilderPrintValueArgs) == 8, "BuilderPrintValueArgs alignment mismatch");
+#else
+typedef struct {
+    RocStr value;
+    uint64_t count;
+} BuilderPrintValueArgs;
+ROC_STATIC_ASSERT(sizeof(BuilderPrintValueArgs) == 24, "BuilderPrintValueArgs size mismatch");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(BuilderPrintValueArgs) == 8, "BuilderPrintValueArgs alignment mismatch");
 #endif
 
@@ -194,6 +402,15 @@ typedef struct {
 } HostBoxedRecursiveTreeArgs;
 
 /**
+ * Arguments for Host.boxed_transition!
+ * Roc signature: I64 => Box({} -> Box({} -> I64))
+ * Refcounted fields are owned by the hosted function.
+ */
+typedef struct {
+    int64_t arg0;
+} HostBoxedTransitionArgs;
+
+/**
  * Arguments for Host.boxed_with_boxed_capture!
  * Roc signature: Box(I64 -> I64), I64 => Box(I64 -> I64)
  * Refcounted fields are owned by the hosted function.
@@ -214,16 +431,31 @@ typedef struct {
 } HostCallBoxedArgs;
 
 /**
+ * Arguments for Host.call_boxed_transition!
+ * Roc signature: Box({} -> Box({} -> I64)) => I64
+ * Refcounted fields are owned by the hosted function.
+ */
+typedef struct {
+    RocErasedCallable arg0;
+} HostCallBoxedTransitionArgs;
+
+/**
  * Arguments for Host.get_greeting!
  * Roc signature: Host => Str
  * Refcounted fields are owned by the hosted function.
  */
+#if UINTPTR_MAX == UINT64_MAX
 typedef struct {
     RocStr name;
 } HostGetGreetingArgs;
-#if UINTPTR_MAX == UINT64_MAX
 ROC_STATIC_ASSERT(sizeof(HostGetGreetingArgs) == 24, "HostGetGreetingArgs size mismatch");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(HostGetGreetingArgs) == 8, "HostGetGreetingArgs alignment mismatch");
+#else
+typedef struct {
+    RocStr name;
+} HostGetGreetingArgs;
+ROC_STATIC_ASSERT(sizeof(HostGetGreetingArgs) == 12, "HostGetGreetingArgs size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(HostGetGreetingArgs) == 4, "HostGetGreetingArgs alignment mismatch");
 #endif
 
 /**
@@ -258,12 +490,20 @@ typedef struct {
  * Roc signature: Padded => Str
  * Refcounted fields are owned by the hosted function.
  */
+#if UINTPTR_MAX == UINT64_MAX
 typedef struct {
     uint32_t z;
     uint8_t _pad0[4];
     uint32_t a;
 } PaddedCheckArgs;
-#if UINTPTR_MAX == UINT64_MAX
+ROC_STATIC_ASSERT(sizeof(PaddedCheckArgs) == 12, "PaddedCheckArgs size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(PaddedCheckArgs) == 4, "PaddedCheckArgs alignment mismatch");
+#else
+typedef struct {
+    uint32_t z;
+    uint8_t _pad0[4];
+    uint32_t a;
+} PaddedCheckArgs;
 ROC_STATIC_ASSERT(sizeof(PaddedCheckArgs) == 12, "PaddedCheckArgs size mismatch");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(PaddedCheckArgs) == 4, "PaddedCheckArgs alignment mismatch");
 #endif
@@ -287,9 +527,7 @@ typedef struct {
 } StdoutLineArgs;
 
 
-// =============================================================================
 // Hosted Symbols
-// =============================================================================
 
 /* Builder.print_value!: Builder => {} */
 extern void roc_builder_print_value(Builder arg0);
@@ -306,11 +544,17 @@ extern RocErasedCallable roc_host_boxed_nested_record(RocStr arg0);
 /* Host.boxed_recursive_tree!: Host.Tree => Box(I64 -> I64) */
 extern RocErasedCallable roc_host_boxed_recursive_tree(HostTree arg0);
 
+/* Host.boxed_transition!: I64 => Box({} -> Box({} -> I64)) */
+extern RocErasedCallable roc_host_boxed_transition(int64_t arg0);
+
 /* Host.boxed_with_boxed_capture!: Box(I64 -> I64), I64 => Box(I64 -> I64) */
 extern RocErasedCallable roc_host_boxed_with_boxed_capture(RocErasedCallable arg0, int64_t arg1);
 
 /* Host.call_boxed!: Box(I64 -> I64), I64 => I64 */
 extern int64_t roc_host_call_boxed(RocErasedCallable arg0, int64_t arg1);
+
+/* Host.call_boxed_transition!: Box({} -> Box({} -> I64)) => I64 */
+extern int64_t roc_host_call_boxed_transition(RocErasedCallable arg0);
 
 /* Host.get_greeting!: Host => Str */
 extern RocStr roc_host_get_greeting(Host arg0);
@@ -343,17 +587,13 @@ extern RocStr roc_stdin_line(void);
 extern void roc_stdout_line(RocStr arg0);
 
 
-// =============================================================================
 // Provided Symbols
-// =============================================================================
 
 /* Entrypoint: main_for_host! */
 extern void roc_main(void);
 
 
-// =============================================================================
 // HostedFunctions Registry
-// =============================================================================
 
 /**
  * Registry of all hosted function implementations.
@@ -365,18 +605,20 @@ typedef struct {
     HostedFn host_boxed_drop_report_bang;  /* index 2, C name: host_boxed_drop_report */
     HostedFn host_boxed_nested_record_bang;  /* index 3, C name: host_boxed_nested_record */
     HostedFn host_boxed_recursive_tree_bang;  /* index 4, C name: host_boxed_recursive_tree */
-    HostedFn host_boxed_with_boxed_capture_bang;  /* index 5, C name: host_boxed_with_boxed_capture */
-    HostedFn host_call_boxed_bang;  /* index 6, C name: host_call_boxed */
-    HostedFn host_get_greeting_bang;  /* index 7, C name: host_get_greeting */
-    HostedFn host_release_stored_boxed_bang;  /* index 8, C name: host_release_stored_boxed */
-    HostedFn host_reset_boxed_drop_report_bang;  /* index 9, C name: host_reset_boxed_drop_report */
-    HostedFn host_roundtrip_boxed_bang;  /* index 10, C name: host_roundtrip_boxed */
-    HostedFn host_store_boxed_bang;  /* index 11, C name: host_store_boxed */
-    HostedFn host_stored_boxed_call_bang;  /* index 12, C name: host_stored_boxed_call */
-    HostedFn padded_check_bang;  /* index 13, C name: padded_check */
-    HostedFn stderr_line_bang;  /* index 14, C name: stderr_line */
-    HostedFn stdin_line_bang;  /* index 15, C name: stdin_line */
-    HostedFn stdout_line_bang;  /* index 16, C name: stdout_line */
+    HostedFn host_boxed_transition_bang;  /* index 5, C name: host_boxed_transition */
+    HostedFn host_boxed_with_boxed_capture_bang;  /* index 6, C name: host_boxed_with_boxed_capture */
+    HostedFn host_call_boxed_bang;  /* index 7, C name: host_call_boxed */
+    HostedFn host_call_boxed_transition_bang;  /* index 8, C name: host_call_boxed_transition */
+    HostedFn host_get_greeting_bang;  /* index 9, C name: host_get_greeting */
+    HostedFn host_release_stored_boxed_bang;  /* index 10, C name: host_release_stored_boxed */
+    HostedFn host_reset_boxed_drop_report_bang;  /* index 11, C name: host_reset_boxed_drop_report */
+    HostedFn host_roundtrip_boxed_bang;  /* index 12, C name: host_roundtrip_boxed */
+    HostedFn host_store_boxed_bang;  /* index 13, C name: host_store_boxed */
+    HostedFn host_stored_boxed_call_bang;  /* index 14, C name: host_stored_boxed_call */
+    HostedFn padded_check_bang;  /* index 15, C name: padded_check */
+    HostedFn stderr_line_bang;  /* index 16, C name: stderr_line */
+    HostedFn stdin_line_bang;  /* index 17, C name: stdin_line */
+    HostedFn stdout_line_bang;  /* index 18, C name: stdout_line */
 } HostedFunctions;
 
 

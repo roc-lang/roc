@@ -200,6 +200,20 @@ test "hoist roots selected for direct closed static dispatch function body" {
     try expectExprTag(&test_env, roots[0].expr, .e_dispatch_call);
 }
 
+test "hoist roots are not selected for static dispatch requiring where evidence" {
+    var test_env = try TestEnv.init("Test",
+        \\f : a -> _ where [a.f : {}]
+        \\f = |_| {
+        \\    A : a
+        \\    A.f
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
 test "hoist roots are not selected for ordinary call with runtime argument" {
     var test_env = try TestEnv.init("Test",
         \\add_one = |n| n + 1.I64
@@ -267,6 +281,266 @@ test "hoist roots are not selected for nested lambda body depending on its argum
 
     try test_env.assertNoErrors();
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist context matrix selects roots in unguarded eligible positions" {
+    const cases = [_]struct {
+        name: []const u8,
+        source: []const u8,
+        expected_call_roots: usize,
+        expected_comptime_condition_warnings: usize = 0,
+    }{
+        .{
+            .name = "statement_rhs",
+            .source =
+            \\add_one = |n| n + 1.I64
+            \\
+            \\main = |arg| {
+            \\    x = add_one(41.I64)
+            \\    x + arg
+            \\}
+            ,
+            .expected_call_roots = 1,
+        },
+        .{
+            .name = "eager_list_child",
+            .source =
+            \\add_one = |n| n + 1.I64
+            \\
+            \\main = |arg| {
+            \\    _ = [add_one(41.I64), arg]
+            \\    arg
+            \\}
+            ,
+            .expected_call_roots = 1,
+        },
+        .{
+            .name = "first_if_condition",
+            .source =
+            \\is_answer = |n| n == 41.I64
+            \\
+            \\main = |arg| if is_answer(41.I64) {
+            \\    arg
+            \\} else {
+            \\    arg
+            \\}
+            ,
+            .expected_call_roots = 1,
+            .expected_comptime_condition_warnings = 1,
+        },
+        .{
+            .name = "match_scrutinee",
+            .source =
+            \\add_one = |n| n + 1.I64
+            \\
+            \\main = |arg| match add_one(41.I64) {
+            \\    _ => arg
+            \\}
+            ,
+            .expected_call_roots = 1,
+            .expected_comptime_condition_warnings = 1,
+        },
+        .{
+            .name = "for_iterable",
+            .source =
+            \\make_list = |n| [n]
+            \\
+            \\main = |arg| {
+            \\    for _n in make_list(41.I64) {
+            \\        _ = arg
+            \\    }
+            \\    arg
+            \\}
+            ,
+            .expected_call_roots = 1,
+        },
+        .{
+            .name = "while_condition",
+            .source =
+            \\is_answer = |n| n == 41.I64
+            \\
+            \\main = |_| {
+            \\    while is_answer(41.I64) {
+            \\        break
+            \\    }
+            \\    0.I64
+            \\}
+            ,
+            .expected_call_roots = 1,
+        },
+        .{
+            .name = "dbg_operand",
+            .source =
+            \\add_one = |n| n + 1.I64
+            \\
+            \\main = |_| {
+            \\    dbg add_one(41.I64)
+            \\    0.I64
+            \\}
+            ,
+            .expected_call_roots = 1,
+        },
+    };
+
+    for (&cases) |matrix_case| {
+        var test_env = try TestEnv.init(matrix_case.name, matrix_case.source);
+        defer test_env.deinit();
+
+        if (matrix_case.expected_comptime_condition_warnings == 0) {
+            try test_env.assertNoErrors();
+        } else {
+            try expectOnlyComptimeConditionWarnings(&test_env, matrix_case.expected_comptime_condition_warnings);
+        }
+        try std.testing.expectEqual(matrix_case.expected_call_roots, countExprRootsByTag(&test_env, .e_call));
+    }
+}
+
+test "hoist context matrix suppresses guarded and default-suppressed positions" {
+    const cases = [_]struct {
+        name: []const u8,
+        source: []const u8,
+        expected_comptime_condition_warnings: usize = 0,
+    }{
+        .{
+            .name = "if_branch_body",
+            .source =
+            \\add_one = |n| n + 1.I64
+            \\
+            \\main = |arg| if arg == 0.I64 {
+            \\    add_one(41.I64)
+            \\} else {
+            \\    arg
+            \\}
+            ,
+        },
+        .{
+            .name = "later_if_condition",
+            .source =
+            \\is_answer = |n| n == 41.I64
+            \\
+            \\main = |arg| if arg == 0.I64 {
+            \\    arg
+            \\} else if is_answer(41.I64) {
+            \\    arg
+            \\} else {
+            \\    arg
+            \\}
+            ,
+            .expected_comptime_condition_warnings = 1,
+        },
+        .{
+            .name = "match_guard",
+            .source =
+            \\is_answer = |n| n == 41.I64
+            \\
+            \\main = |arg| match arg {
+            \\    x if is_answer(41.I64) => x
+            \\    _ => arg
+            \\}
+            ,
+            .expected_comptime_condition_warnings = 1,
+        },
+        .{
+            .name = "match_branch_body",
+            .source =
+            \\add_one = |n| n + 1.I64
+            \\
+            \\main = |arg| {
+            \\    input = if arg == 0.I64 { A } else { B }
+            \\    match input {
+            \\        A => add_one(41.I64)
+            \\        B => arg
+            \\    }
+            \\}
+            ,
+        },
+        .{
+            .name = "expect_body",
+            .source =
+            \\add_one = |n| n + 1.I64
+            \\
+            \\main = |arg| {
+            \\    expect {
+            \\        result = add_one(41.I64)
+            \\        result == 42.I64
+            \\    }
+            \\    arg
+            \\}
+            ,
+        },
+        .{
+            .name = "lambda_inside_branch_body",
+            .source =
+            \\main = |arg| if arg == 0.I64 {
+            \\    f = |_| 1.I64 + 2.I64
+            \\    f(arg)
+            \\} else {
+            \\    arg
+            \\}
+            ,
+        },
+        .{
+            .name = "for_body",
+            .source =
+            \\add_one = |n| n + 1.I64
+            \\
+            \\main = |items| {
+            \\    for _n in items {
+            \\        _ = add_one(41.I64)
+            \\    }
+            \\    items
+            \\}
+            ,
+        },
+        .{
+            .name = "while_body",
+            .source =
+            \\add_one = |n| n + 1.I64
+            \\
+            \\main = |arg| {
+            \\    while arg == 0.I64 {
+            \\        _ = add_one(41.I64)
+            \\        break
+            \\    }
+            \\    arg
+            \\}
+            ,
+        },
+        .{
+            .name = "block_final_after_dbg",
+            .source =
+            \\add_one = |n| n + 1.I64
+            \\
+            \\main = |_| {
+            \\    dbg 0.I64
+            \\    add_one(41.I64)
+            \\}
+            ,
+        },
+        .{
+            .name = "lambda_inside_expect_body",
+            .source =
+            \\add_one = |n| n + 1.I64
+            \\
+            \\expect {
+            \\    f = |_| add_one(41.I64)
+            \\    f(0.I64) == 42.I64
+            \\}
+            ,
+        },
+    };
+
+    for (&cases) |matrix_case| {
+        var test_env = try TestEnv.init(matrix_case.name, matrix_case.source);
+        defer test_env.deinit();
+
+        if (matrix_case.expected_comptime_condition_warnings == 0) {
+            try test_env.assertNoErrors();
+        } else {
+            try expectOnlyComptimeConditionWarnings(&test_env, matrix_case.expected_comptime_condition_warnings);
+        }
+        try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
+    }
 }
 
 test "hoist roots selected for record destructure extraction binders" {
@@ -594,6 +868,7 @@ fn countMatchExprRoots(test_env: *const TestEnv) usize {
             .e_runtime_error,
             .e_ellipsis,
             .e_anno_only,
+            .e_derived_method,
             .e_crash,
             .e_closure,
             .e_lambda,
@@ -740,25 +1015,6 @@ test "hoist roots with non-concrete compile-time types are pruned" {
 }
 
 test "hoist arbitrary block roots with non-concrete internal locals are pruned" {
-    var test_env = try TestEnv.init("Test",
-        \\main = |arg| {
-        \\    _ = [
-        \\        {
-        \\            x = []
-        \\            List.len(x).to_i64_wrap()
-        \\        },
-        \\        arg,
-        \\    ]
-        \\    arg
-        \\}
-    );
-    defer test_env.deinit();
-
-    try test_env.assertNoErrors();
-    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
-}
-
-test "hoist exact non-concrete internal local repro roots are pruned" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {
         \\    _ = [
@@ -968,6 +1224,109 @@ test "hoist roots are not selected for effectful static dispatch calls" {
         \\    {}
         \\}
     );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots are not selected when an effectful function argument is called" {
+    // Repro for https://github.com/roc-lang/roc/issues/10154
+    var test_env = try TestEnv.init("Test",
+        \\effect! : () => I64
+        \\effect! = || 42.I64
+        \\
+        \\call! = |effect_arg!| effect_arg!()
+        \\
+        \\main! = |runtime| {
+        \\    value = call!(effect!)
+        \\    value + runtime
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots remain selectable when a pure function argument is called" {
+    var test_env = try TestEnv.init("Test",
+        \\pure : () -> I64
+        \\pure = || 42.I64
+        \\
+        \\call! = |function| function()
+        \\
+        \\main! = |runtime| {
+        \\    value = call!(pure)
+        \\    value + runtime
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 1), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots are not selected through transitive function effect dependencies" {
+    var test_env = try TestEnv.init("Test",
+        \\effect! : () => I64
+        \\effect! = || 42.I64
+        \\
+        \\call_once! = |effect_arg!| effect_arg!()
+        \\call_transitively! = |effect_arg!| call_once!(effect_arg!)
+        \\
+        \\main! = |runtime| {
+        \\    value = call_transitively!(effect!)
+        \\    value + runtime
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots resolve function effect dependencies through a recursive group" {
+    var test_env = try TestEnv.init("Test",
+        \\effect! : () => I64
+        \\effect! = || 42.I64
+        \\
+        \\first! = |n, effect_arg!| {
+        \\    if n == 0.U64 effect_arg!() else second!(n - 1.U64, effect_arg!)
+        \\}
+        \\second! = |n, effect_arg!| {
+        \\    if n == 0.U64 0.I64 else first!(n - 1.U64, effect_arg!)
+        \\}
+        \\
+        \\main! = |runtime| {
+        \\    value = second!(1.U64, effect!)
+        \\    value + runtime
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots preserve function effect dependencies across modules" {
+    var helper_env = try TestEnv.init("Helper",
+        \\call! = |effect_arg!| effect_arg!()
+    );
+    defer helper_env.deinit();
+    try helper_env.assertNoErrors();
+
+    var test_env = try TestEnv.initWithImport("Test",
+        \\import Helper
+        \\
+        \\effect! : () => I64
+        \\effect! = || 42.I64
+        \\
+        \\main! = |runtime| {
+        \\    value = Helper.call!(effect!)
+        \\    value + runtime
+        \\}
+    , "Helper", &helper_env);
     defer test_env.deinit();
 
     try test_env.assertNoErrors();

@@ -49,10 +49,8 @@ fn __umodti3(a: u128, b: u128) callconv(.c) u128 {
     return compiler_rt.rem_u128(a, b);
 }
 
-// f32 widens to f64 losslessly, so the f32 conversions route through the f64
-// implementation, which already saturates out-of-range inputs like compiler-rt.
 fn __fixsfti(a: f32) callconv(.c) i128 {
-    return compiler_rt.f64_to_i128(a);
+    return compiler_rt.f32_to_i128(a);
 }
 
 fn __fixdfti(a: f64) callconv(.c) i128 {
@@ -60,7 +58,7 @@ fn __fixdfti(a: f64) callconv(.c) i128 {
 }
 
 fn __fixunssfti(a: f32) callconv(.c) u128 {
-    return compiler_rt.f64_to_u128(a);
+    return compiler_rt.f32_to_u128(a);
 }
 
 fn __fixunsdfti(a: f64) callconv(.c) u128 {
@@ -133,7 +131,7 @@ test "resolve maps known compiler-rt symbols and rejects others" {
     try std.testing.expect(resolve("__fixsfti") != null);
     try std.testing.expect(resolve("__floatuntidf") != null);
     try std.testing.expect(resolve("not_a_runtime_symbol") == null);
-    try std.testing.expect(resolve("roc_builtins_float_tan") == null);
+    try std.testing.expect(resolve(@import("builtin_registry.zig").BuiltinFn.float_tan.symbolName()) == null);
 }
 
 test "resolved division and remainder match native i128 arithmetic" {

@@ -128,16 +128,17 @@ h == foo
 }
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_020.md:52:16:52:16
-PARSE ERROR - fuzz_crash_020.md:58:4:58:4
-PARSE ERROR - fuzz_crash_020.md:59:3:59:3
-PARSE ERROR - fuzz_crash_020.md:60:16:60:16
-PARSE ERROR - fuzz_crash_020.md:62:5:62:5
-PARSE ERROR - fuzz_crash_020.md:63:7:63:7
-PARSE ERROR - fuzz_crash_020.md:66:12:66:12
-MODULE NOT FOUND - fuzz_crash_020.md:6:1:8:6
-MODULE NOT FOUND - fuzz_crash_020.md:10:1:10:19
-MODULE NOT FOUND - fuzz_crash_020.md:11:1:12:4
+MISSING MATCH ARROW - fuzz_crash_020.md:52:16:52:16
+MISSING MATCH ARROW - fuzz_crash_020.md:58:4:58:4
+MISSING MATCH ARROW - fuzz_crash_020.md:59:3:59:3
+MISSING MATCH ARROW - fuzz_crash_020.md:60:16:60:16
+MISSING MATCH ARROW - fuzz_crash_020.md:62:5:62:5
+MISSING MATCH ARROW - fuzz_crash_020.md:63:7:63:7
+MISSING MATCH ARROW - fuzz_crash_020.md:66:12:66:12
+EXPECTED RECORD ACCESSOR - fuzz_crash_020.md:83:2:83:5
+MOD NOT FOUND - fuzz_crash_020.md:6:1:8:6
+MOD NOT FOUND - fuzz_crash_020.md:10:1:10:19
+MOD NOT FOUND - fuzz_crash_020.md:11:1:12:4
 UNDECLARED TYPE - fuzz_crash_020.md:13:13:13:16
 UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:13:19:13:21
 UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:19:4:19:6
@@ -158,7 +159,7 @@ UNUSED VARIABLE - fuzz_crash_020.md:60:12:60:15
 NAME NOT IN SCOPE - fuzz_crash_020.md:72:2:72:4
 UNDECLARED TYPE - fuzz_crash_020.md:74:9:74:15
 NAME NOT IN SCOPE - fuzz_crash_020.md:78:9:78:14
-NAME NOT IN SCOPE - fuzz_crash_020.md:80:3:80:6
+UNRECOGNIZED SYNTAX - fuzz_crash_020.md:83:2:83:5
 CRASH EXPECTS STRING - fuzz_crash_020.md:86:3:86:11
 NAME NOT IN SCOPE - fuzz_crash_020.md:87:11:87:12
 NAME NOT IN SCOPE - fuzz_crash_020.md:92:11:92:15
@@ -196,96 +197,150 @@ MISSING METHOD - fuzz_crash_020.md:39:2:39:3
 MISSING METHOD - fuzz_crash_020.md:58:6:58:11
 TYPE MISMATCH - fuzz_crash_020.md:52:2:52:2
 DECLARATION HAS NO VALUE - fuzz_crash_020.md:74:1:74:22
+DECLARATION HAS NO VALUE - fuzz_crash_020.md:113:1:113:7
 MISSING METHOD - fuzz_crash_020.md:86:11:86:17
 TYPE MISMATCH - fuzz_crash_020.md:98:4:104:3
 TYPE MISMATCH - fuzz_crash_020.md:105:2:105:54
 TYPE MISMATCH - fuzz_crash_020.md:93:22:93:24
-DECLARATION HAS NO VALUE - fuzz_crash_020.md:113:1:113:7
 DECLARATION HAS NO VALUE - fuzz_crash_020.md:116:1:116:13
 TYPE MISMATCH - fuzz_crash_020.md:119:2:119:10
 MISSING METHOD - fuzz_crash_020.md:105:55:105:66
 MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: match_branch_missing_arrow ────────┐
-└┬────────────┘                                                               │
+┌─────────────────────┐
+│ MISSING MATCH ARROW ├─ I was parsing a match branch, and I expected `=>` ───┐
+└┬────────────────────┘  before the branch body.                              │
  │                                                                            │
  │  match a {lue  {                                                           │
  │                ‾                                                           │
  └─────────────────────────────────────────────────── fuzz_crash_020.md:52:16 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Add `=>` after the pattern or guard.
+
+    For example:
+        Err(msg) => crash msg
+
+    I reached the end of the file before this construct was complete.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: match_branch_missing_arrow ────────┐
-└┬────────────┘                                                               │
+┌─────────────────────┐
+│ MISSING MATCH ARROW ├─ I was parsing a match branch, and I expected `=>` ───┐
+└┬────────────────────┘  before the branch body.                              │
  │                                                                            │
  │  1 "for" => 20[1, ] # t                                                    │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── fuzz_crash_020.md:58:4 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Add `=>` after the pattern or guard.
+
+    For example:
+        Err(msg) => crash msg
+
+    I reached the end of the file before this construct was complete.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: match_branch_missing_arrow ────────┐
-└┬────────────┘                                                               │
+┌─────────────────────┐
+│ MISSING MATCH ARROW ├─ I was parsing a match branch, and I expected `=>` ───┐
+└┬────────────────────┘  before the branch body.                              │
  │                                                                            │
  │  ment                                                                      │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── fuzz_crash_020.md:59:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Add `=>` after the pattern or guard.
+
+    For example:
+        Err(msg) => crash msg
+
+    I reached the end of the file before this construct was complete.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: match_branch_missing_arrow ────────┐
-└┬────────────┘                                                               │
+┌─────────────────────┐
+│ MISSING MATCH ARROW ├─ I was parsing a match branch, and I expected `=>` ───┐
+└┬────────────────────┘  before the branch body.                              │
  │                                                                            │
  │  [1, 2, 3,est]123                                                          │
  │               ‾                                                            │
  └─────────────────────────────────────────────────── fuzz_crash_020.md:60:16 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Add `=>` after the pattern or guard.
+
+    For example:
+        Err(msg) => crash msg
+
+    I reached the end of the file before this construct was complete.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: match_branch_missing_arrow ────────┐
-└┬────────────┘                                                               │
+┌─────────────────────┐
+│ MISSING MATCH ARROW ├─ I was parsing a match branch, and I expected `=>` ───┐
+└┬────────────────────┘  before the branch body.                              │
  │                                                                            │
  │  ] 23                                                                      │
  │    ‾                                                                       │
  └──────────────────────────────────────────────────── fuzz_crash_020.md:62:5 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Add `=>` after the pattern or guard.
+
+    For example:
+        Err(msg) => crash msg
+
+    I reached the end of the file before this construct was complete.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: match_branch_missing_arrow ────────┐
-└┬────────────┘                                                               │
+┌─────────────────────┐
+│ MISSING MATCH ARROW ├─ I was parsing a match branch, and I expected `=>` ───┐
+└┬────────────────────┘  before the branch body.                              │
  │                                                                            │
  │  3.1 314                                                                   │
  │      ‾                                                                     │
  └──────────────────────────────────────────────────── fuzz_crash_020.md:63:7 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Add `=>` after the pattern or guard.
+
+    For example:
+        Err(msg) => crash msg
+
+    I reached the end of the file before this construct was complete.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: match_branch_missing_arrow ────────┐
-└┬────────────┘                                                               │
+┌─────────────────────┐
+│ MISSING MATCH ARROW ├─ I was parsing a match branch, and I expected `=>` ───┐
+└┬────────────────────┘  before the branch body.                              │
  │                                                                            │
  │  (1, 2, 3)123                                                              │
  │           ‾                                                                │
  └─────────────────────────────────────────────────── fuzz_crash_020.md:66:12 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Add `=>` after the pattern or guard.
+
+    For example:
+        Err(msg) => crash msg
+
+    I reached the end of the file before this construct was complete.
+
+
+┌──────────────────────────┐
+│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
+└┬─────────────────────────┘  expected a field name or tuple index.           │
+ │                                                                            │
+ │  ...                                                                       │
+ │  ‾‾‾                                                                       │
+ └──────────────────────────────────────────────────── fuzz_crash_020.md:83:2 ┘
+
+    Record access uses a lowercase field name like `.name`. Tuple access uses a
+    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+    valid accessors.
+
+    For example:
+        person.name
+        pair.0
+
+    I found `...` here.
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The module `Stdot` was not found in this Roc project. ──┐
+│ MOD NOT FOUND ├─ The mod `Stdot` was not found in this Roc project. ──┐
 └┬─────────────────┘                                                          │
  │                                                                            │
  │  import Stdot                                                              │
@@ -297,7 +352,7 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The module `Bae` was not found in this Roc project. ────┐
+│ MOD NOT FOUND ├─ The mod `Bae` was not found in this Roc project. ────┐
 └┬─────────────────┘                                                          │
  │                                                                            │
  │  import Bae as Gooe                                                        │
@@ -307,7 +362,7 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The module `Ba` was not found in this Roc project. ─────┐
+│ MOD NOT FOUND ├─ The mod `Ba` was not found in this Roc project. ─────┐
 └┬─────────────────┘                                                          │
  │                                                                            │
  │  import                                                                    │
@@ -540,15 +595,15 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
     Is it misspelled, or is there an import missing?
 
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `tag` in this scope. ─────────────────┐
-└┬──────────────────┘                                                         │
+┌─────────────────────┐
+│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
+└┬────────────────────┘                                                       │
  │                                                                            │
- │  tag                                                                       │
+ │  ...                                                                       │
  │  ‾‾‾                                                                       │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:80:3 ┘
+ └──────────────────────────────────────────────────── fuzz_crash_020.md:83:2 ┘
 
-    Is it misspelled, or is there an import missing?
+    This might be a syntax error, an unsupported language feature, or a typo.
 
 
 ┌──────────────────────┐
@@ -881,15 +936,15 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 
 
 ┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The module header says that `main!` is ──────────┐
+│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `main!` is ──────────┐
 └┬────────────────────────┘  exposed, but it is not defined anywhere in       │
- │                           this module.                                     │
+ │                           this mod.                                     │
  │                                                                            │
  │  app [main!] { pf: platform "c" }                                          │
  │       ‾‾‾‾‾                                                                │
  └───────────────────────────────────────────────────── fuzz_crash_020.md:2:6 ┘
 
-    You can fix this by either defining `main!` in this module, or by removing
+    You can fix this by either defining `main!` in this mod, or by removing
     it from the list of exposed values.
 
 
@@ -913,7 +968,7 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
  │                                                                            │
  └──────────────────────────────────────────────────── fuzz_crash_020.md:22:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -925,7 +980,7 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
  │  ‾‾‾‾‾‾‾‾                                                                  │
  └──────────────────────────────────────────────────── fuzz_crash_020.md:37:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -1003,7 +1058,19 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
  └──────────────────────────────────────────────────── fuzz_crash_020.md:74:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
+    they are published through the host boundary.
+
+
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  y : {}                                                                    │
+ │  ‾‾‾‾‾‾                                                                    │
+ └─────────────────────────────────────────────────── fuzz_crash_020.md:113:1 ┘
+
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -1036,11 +1103,11 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 
     It has the type:
 
-        (f, j, Error, [O, ..], (Error, Error), List(k))
+        (f, j, Error, [O, ..], (Error, Error), List(l))
           where [
             f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),
             j.from_quote : Str -> Try(j, [BadQuotedBytes(Str)]),
-            k.from_numeral : Numeral -> Try(k, [InvalidNumeral(Str)]),
+            l.from_numeral : Numeral -> Try(l, [InvalidNumeral(Str)]),
           ]
 
     Since this expression is used as a statement, it must evaluate to `{}`.
@@ -1084,23 +1151,11 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
  │                                                                            │
- │  y : {}                                                                    │
- │  ‾‾‾‾‾‾                                                                    │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:113:1 ┘
-
-    Add a value body here, or put hosted functions in a platform type module so
-    they are published through the host boundary.
-
-
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
  │  t : V((a,c))                                                              │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
  └─────────────────────────────────────────────────── fuzz_crash_020.md:116:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -1454,8 +1509,7 @@ EndOfFile,
 						(s-expect
 							(e-ident (raw "blaue")))
 						(s-return
-							(e-ident (raw "tag")))
-						(e-ellipsis)
+							(e-malformed (reason "expr_dot_suffix_not_allowed")))
 						(e-apply
 							(e-ident (raw "me"))
 							(e-ellipsis))
@@ -1621,17 +1675,21 @@ Map(a, b) : Lis, (ab) -> List(b)
 
 MapML # Ag
 	: # Aon
-		List(),
+		List( # rg
+		),
 		(ab) -> # row
 			List(b) # z)
 
-line : () # Co
+line : ( # Cm
+) # Co
 
 Som : { foo : O, bar : g }
 
-Ml(a) : {}
+Ml(a) : { # ld
+}
 
-Soine(a) : {} #
+Soine(a) : { #
+} #
 
 Maybe(a) : [Somne]
 
@@ -1694,11 +1752,10 @@ ma = |_| {
 	w = "d"
 	var er = 123
 	expect blaue
-	return # d
-		tag
+	return
 
 	#
-	...
+		
 	me(
 		..., # r
 	)
@@ -1775,133 +1832,10 @@ expect {
 			(ty-malformed)))
 	(d-let
 		(p-assign (ident "add"))
-		(e-lambda
-			(args
-				(p-applied-tag))
-			(e-block
-				(s-expr
-					(e-num (value "1")))
-				(e-if
-					(if-branches
-						(if-branch
-							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-block
-								(s-dbg
-									(e-runtime-error (tag "ident_not_in_scope")))
-								(e-runtime-error (tag "ident_not_in_scope")))))
-					(if-else
-						(e-block
-							(s-dbg
-								(e-num (value "123")))
-							(e-runtime-error (tag "ident_not_in_scope"))))))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "me"))
-		(e-lambda
-			(args
-				(p-assign (ident "a")))
-			(e-match
-				(match
-					(cond
-						(e-lookup-local
-							(p-assign (ident "a"))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-assign (ident "lue"))))
-							(value
-								(e-block
-									(e-runtime-error (tag "ident_not_in_scope")))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-block
-									(e-runtime-error (tag "ident_not_in_scope")))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-assign (ident "er"))))
-							(value
-								(e-num (value "1"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-str (text "for"))))
-							(value
-								(e-num (value "20"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-list
-										(patterns
-											(p-num (value "1"))))))
-							(value
-								(e-runtime-error (tag "ident_not_in_scope"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-list
-										(patterns
-											(p-num (value "1"))
-											(p-num (value "2"))
-											(p-num (value "3"))
-											(p-assign (ident "est"))))))
-							(value
-								(e-num (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-list
-										(patterns))))
-							(value
-								(e-num (value "23"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-small-dec)))
-							(value
-								(e-num (value "314"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-small-dec))
-								(pattern (degenerate false)
-									(p-small-dec)))
-							(value
-								(e-num (value "314"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-tuple
-										(patterns
-											(p-num (value "1"))))))
-							(value
-								(e-num (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-tuple
-										(patterns
-											(p-num (value "1"))
-											(p-num (value "2"))
-											(p-num (value "3"))))))
-							(value
-								(e-num (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-record-destructure
-										(destructs))))
-							(value
-								(e-num (value "12"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-num (value "12")))))))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-anno-only)
@@ -1909,339 +1843,7 @@ expect {
 			(ty-malformed)))
 	(d-let
 		(p-assign (ident "ma"))
-		(e-lambda
-			(args
-				(p-underscore))
-			(e-block
-				(s-expr
-					(e-lookup-local
-						(p-assign (ident "e"))))
-				(s-let
-					(p-assign (ident "w"))
-					(e-string
-						(e-literal (string "d"))))
-				(s-var
-					(p-assign (ident "er"))
-					(e-num (value "123")))
-				(s-expect
-					(e-runtime-error (tag "ident_not_in_scope")))
-				(s-return
-					(e-runtime-error (tag "ident_not_in_scope")))
-				(s-expr
-					(e-not-implemented))
-				(s-expr
-					(e-call (constraint-fn-var 2309)
-						(e-lookup-local
-							(p-assign (ident "me")))
-						(e-not-implemented)))
-				(s-runtime-error (tag "crash_expects_string"))
-				(s-expr
-					(e-string
-						(e-literal (string "Unr!"))))
-				(s-let
-					(p-assign (ident "i"))
-					(e-block
-						(s-let
-							(p-assign (ident "#interp_0"))
-							(e-runtime-error (tag "ident_not_in_scope")))
-						(e-interpolation
-							(first
-								(e-literal (string "H, ")))
-							(parts
-								(e-lookup-local
-									(p-assign (ident "#interp_0")))
-								(e-literal (string ""))))))
-				(s-let
-					(p-assign (ident "t"))
-					(e-list
-						(elems
-							(e-call
-								(e-lookup-local
-									(p-assign (ident "one")))
-								(e-lookup-local
-									(p-assign (ident "er"))))
-							(e-num (value "456"))
-							(e-num (value "9")))))
-				(s-for
-					(p-assign (ident "n"))
-					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-block
-						(s-expr
-							(e-call
-								(e-runtime-error (tag "ident_not_in_scope"))
-								(e-block
-									(s-let
-										(p-assign (ident "#interp_1"))
-										(e-lookup-local
-											(p-assign (ident "n"))))
-									(s-let
-										(p-assign (ident "#interp_2"))
-										(e-lookup-local
-											(p-assign (ident "er"))))
-									(e-interpolation (constraint-fn-var 2593)
-										(first
-											(e-literal (string "Ag ")))
-										(parts
-											(e-lookup-local
-												(p-assign (ident "#interp_1")))
-											(e-literal (string " to "))
-											(e-lookup-local
-												(p-assign (ident "#interp_2")))
-											(e-literal (string "")))))))
-						(e-dispatch-call (method "plus") (constraint-fn-var 2596)
-							(receiver
-								(e-runtime-error (tag "ident_not_in_scope")))
-							(args
-								(e-lookup-local
-									(p-assign (ident "n")))))))
-				(s-let
-					(p-assign (ident "rd"))
-					(e-record
-						(fields
-							(field (name "foo")
-								(e-num (value "123")))
-							(field (name "bar")
-								(e-string
-									(e-literal (string "H"))))
-							(field (name "baz")
-								(e-runtime-error (tag "ident_not_in_scope")))
-							(field (name "qux")
-								(e-tag (name "Ok")
-									(args
-										(e-runtime-error (tag "ident_not_in_scope")))))
-							(field (name "ned")
-								(e-runtime-error (tag "ident_not_in_scope"))))))
-				(s-let
-					(p-assign (ident "t"))
-					(e-tuple
-						(elems
-							(e-num (value "123"))
-							(e-string
-								(e-literal (string "World")))
-							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-tag (name "O"))
-							(e-tuple
-								(elems
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-runtime-error (tag "self_referential_definition"))))
-							(e-list
-								(elems
-									(e-num (value "1"))
-									(e-num (value "2"))
-									(e-num (value "3")))))))
-				(s-expr
-					(e-runtime-error (tag "ident_not_in_scope")))
-				(s-expr
-					(e-tuple
-						(elems
-							(e-num (value "123"))
-							(e-string
-								(e-literal (string "World")))
-							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-tag (name "O"))
-							(e-tuple
-								(elems
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-runtime-error (tag "ident_not_in_scope"))))
-							(e-list
-								(elems
-									(e-num (value "1"))
-									(e-num (value "2"))
-									(e-num (value "3")))))))
-				(s-expr
-					(e-if
-						(if-branches
-							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 3042)
-									(receiver
-										(e-match
-											(match
-												(cond
-													(e-runtime-error (tag "ident_not_in_scope")))
-												(branches
-													(branch
-														(patterns
-															(pattern (degenerate false)
-																(p-nominal-external (builtin)
-																	(p-applied-tag))))
-														(value
-															(e-lookup-local
-																(p-assign (ident "#ok")))))
-													(branch
-														(patterns
-															(pattern (degenerate false)
-																(p-nominal-external (builtin)
-																	(p-applied-tag))))
-														(value
-															(e-num (value "12"))))))))
-									(args
-										(e-num (value "5"))))
-								(e-nominal-external
-									(builtin)
-									(e-tag (name "True")))))
-						(if-else
-							(e-if
-								(if-branches
-									(if-branch
-										(e-if
-											(if-branches
-												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 3159)
-														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 3121)
-																(receiver
-																	(e-num (value "13")))
-																(args
-																	(e-num (value "2")))))
-														(args
-															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 3268)
-														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 3230)
-																(receiver
-																	(e-num (value "10")))
-																(args
-																	(e-num (value "1")))))
-														(args
-															(e-num (value "16"))))))
-											(if-else
-												(e-nominal-external
-													(builtin)
-													(e-tag (name "False")))))
-										(e-nominal-external
-											(builtin)
-											(e-tag (name "True")))))
-								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 3352)
-										(receiver
-											(e-num (value "12")))
-										(args
-											(e-num (value "3")))))))))
-				(s-expr
-					(e-match
-						(match
-							(cond
-								(e-field-access (field "recd")
-									(receiver
-										(e-match
-											(match
-												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 3419)
-														(receiver
-															(e-match
-																(match
-																	(cond
-																		(e-dispatch-call (method "od") (constraint-fn-var 3386)
-																			(receiver
-																				(e-match
-																					(match
-																						(cond
-																							(e-call
-																								(e-runtime-error (tag "ident_not_in_scope"))
-																								(e-runtime-error (tag "ident_not_in_scope"))))
-																						(branches
-																							(branch
-																								(patterns
-																									(pattern (degenerate false)
-																										(p-nominal-external (builtin)
-																											(p-applied-tag))))
-																								(value
-																									(e-runtime-error (tag "erroneous_value_expr"))))
-																							(branch
-																								(patterns
-																									(pattern (degenerate false)
-																										(p-nominal-external (builtin)
-																											(p-applied-tag))))
-																								(value
-																									(e-return
-																										(e-nominal-external
-																											(builtin)
-																											(e-tag (name "Err")
-																												(args
-																													(e-lookup-local
-																														(p-assign (ident "#err")))))))))))))
-																			(args)))
-																	(branches
-																		(branch
-																			(patterns
-																				(pattern (degenerate false)
-																					(p-nominal-external (builtin)
-																						(p-applied-tag))))
-																			(value
-																				(e-runtime-error (tag "erroneous_value_expr"))))
-																		(branch
-																			(patterns
-																				(pattern (degenerate false)
-																					(p-nominal-external (builtin)
-																						(p-applied-tag))))
-																			(value
-																				(e-return
-																					(e-nominal-external
-																						(builtin)
-																						(e-tag (name "Err")
-																							(args
-																								(e-lookup-local
-																									(p-assign (ident "#err")))))))))))))
-														(args)))
-												(branches
-													(branch
-														(patterns
-															(pattern (degenerate false)
-																(p-nominal-external (builtin)
-																	(p-applied-tag))))
-														(value
-															(e-lookup-local
-																(p-assign (ident "#ok")))))
-													(branch
-														(patterns
-															(pattern (degenerate false)
-																(p-nominal-external (builtin)
-																	(p-applied-tag))))
-														(value
-															(e-return
-																(e-nominal-external
-																	(builtin)
-																	(e-tag (name "Err")
-																		(args
-																			(e-lookup-local
-																				(p-assign (ident "#err")))))))))))))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-nominal-external (builtin)
-												(p-applied-tag))))
-									(value
-										(e-lookup-local
-											(p-assign (ident "#ok")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-nominal-external (builtin)
-												(p-applied-tag))))
-									(value
-										(e-return
-											(e-nominal-external
-												(builtin)
-												(e-tag (name "Err")
-													(args
-														(e-lookup-local
-															(p-assign (ident "#err")))))))))))))
-				(e-tag (name "Stdo!")
-					(args
-						(e-block
-							(s-let
-								(p-assign (ident "#interp_3"))
-								(e-call
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-runtime-error (tag "ident_not_in_scope"))))
-							(e-interpolation
-								(first
-									(e-literal (string "Ho")))
-								(parts
-									(e-lookup-local
-										(p-assign (ident "#interp_3")))
-									(e-literal (string " "))))))))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "y"))
 		(e-anno-only)
@@ -2255,15 +1857,15 @@ expect {
 		(e-anno-only)
 		(annotation
 			(ty-malformed)))
-	(s-import (module "pf.Stdout")
+	(s-import (mod "pf.Stdout")
 		(exposes
 			(exposed (name "line!") (wildcard false))))
-	(s-import (module "Stdot")
+	(s-import (mod "Stdot")
 		(exposes
 			(exposed (name "Cust") (wildcard false))))
-	(s-import (module "Bae")
+	(s-import (mod "Bae")
 		(exposes))
-	(s-import (module "Ba")
+	(s-import (mod "Ba")
 		(exposes))
 	(s-alias-decl
 		(ty-header (name "Map")
@@ -2343,14 +1945,14 @@ expect {
 		(patt (type "{}"))
 		(patt (type "Error")))
 	(type_decls
-		(alias (type "Map(a, b)")
+		(alias (type "Error")
 			(ty-header (name "Map")
 				(ty-args
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "b")))))
-		(alias (type "MapML")
+		(alias (type "Error")
 			(ty-header (name "MapML")))
-		(alias (type "Som")
+		(alias (type "Error")
 			(ty-header (name "Som")))
 		(alias (type "Ml(a)")
 			(ty-header (name "Ml")

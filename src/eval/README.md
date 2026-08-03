@@ -37,10 +37,14 @@ checked modules → post-check IRs → LIR → TRMC/TCE → ARC → Interpret
    and LIR, rewrites tail recursion via TRMC/TCE (`src/lir/trmc.zig`), and
    inserts ARC, producing a `LirStore`, committed layouts, and explicit root
    procedures.
-3. **Interpretation** — `LirInterpreter.init()` creates the interpreter, then
-   `eval()` (by proc id) or `runEntrypoint()` (by platform entrypoint ordinal,
-   for LIR images) evaluates a root procedure.
-4. **Statement walk** — `execStmtChain` executes each frame's statement chain
+3. **Execution** — On native compiler hosts, compile-time roots execute as
+   dev-backend machine code. When the compiler itself targets wasm32 or another
+   freestanding host, compile-time roots execute through `LirInterpreter`.
+   This host-platform choice is not configurable. Both compile-time paths
+   unconditionally use `.normalize`, so stored f32/f64 NaNs have canonical,
+   host-independent bits; runtime consumers unconditionally use `.preserve`.
+4. **Interpreter statement walk** — When the interpreter is the selected
+   execution engine, `execStmtChain` executes each frame's statement chain
    iteratively, dispatching per `CFStmt` variant; low-level ops go through
    `evalLowLevel`.
 5. **Crash handling** — Crash/expect expressions delegate to the host via

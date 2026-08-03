@@ -160,49 +160,50 @@ ASCII CONTROL CHARACTER - :0:0:0:0
 ASCII CONTROL CHARACTER - :0:0:0:0
 LEADING ZERO - :0:0:0:0
 UNCLOSED STRING - fuzz_crash_028.md:111:8:111:14
-PARSE ERROR - fuzz_crash_028.md:10:1:10:7
-PARSE ERROR - fuzz_crash_028.md:12:12:12:14
-PARSE ERROR - fuzz_crash_028.md:13:1:13:7
-PARSE ERROR - fuzz_crash_028.md:15:1:15:4
-PARSE ERROR - fuzz_crash_028.md:15:4:15:5
-PARSE ERROR - fuzz_crash_028.md:15:5:15:6
-PARSE ERROR - fuzz_crash_028.md:15:6:15:7
-PARSE ERROR - fuzz_crash_028.md:15:8:15:9
-PARSE ERROR - fuzz_crash_028.md:15:9:15:10
-PARSE ERROR - fuzz_crash_028.md:15:11:15:12
-PARSE ERROR - fuzz_crash_028.md:15:20:15:21
-PARSE ERROR - fuzz_crash_028.md:15:22:15:23
-PARSE ERROR - fuzz_crash_028.md:15:23:15:24
-PARSE ERROR - fuzz_crash_028.md:15:25:15:27
-PARSE ERROR - fuzz_crash_028.md:15:28:15:29
-PARSE ERROR - fuzz_crash_028.md:15:29:15:30
-PARSE ERROR - fuzz_crash_028.md:15:31:15:33
-PARSE ERROR - fuzz_crash_028.md:16:1:16:6
-PARSE ERROR - fuzz_crash_028.md:16:6:16:7
-PARSE ERROR - fuzz_crash_028.md:17:2:17:3
-PARSE ERROR - fuzz_crash_028.md:17:3:17:4
-PARSE ERROR - fuzz_crash_028.md:18:2:18:3
-PARSE ERROR - fuzz_crash_028.md:18:3:18:4
-PARSE ERROR - fuzz_crash_028.md:19:1:19:2
-PARSE ERROR - fuzz_crash_028.md:20:2:20:3
-PARSE ERROR - fuzz_crash_028.md:22:4:22:5
-PARSE ERROR - fuzz_crash_028.md:23:3:23:4
-PARSE ERROR - fuzz_crash_028.md:23:4:23:5
-PARSE ERROR - fuzz_crash_028.md:23:6:23:8
-PARSE ERROR - fuzz_crash_028.md:23:9:23:10
-PARSE ERROR - fuzz_crash_028.md:23:10:23:11
-PARSE ERROR - fuzz_crash_028.md:23:12:23:14
-PARSE ERROR - fuzz_crash_028.md:26:1:26:4
-PARSE ERROR - fuzz_crash_028.md:26:5:26:6
-PARSE ERROR - fuzz_crash_028.md:26:7:26:8
-PARSE ERROR - fuzz_crash_028.md:26:11:26:12
-PARSE ERROR - fuzz_crash_028.md:26:16:26:17
-PARSE ERROR - fuzz_crash_028.md:40:5:40:6
-PARSE ERROR - fuzz_crash_028.md:40:7:40:8
-PARSE ERROR - fuzz_crash_028.md:40:9:40:10
-PARSE ERROR - fuzz_crash_028.md:41:1:41:2
-PARSE ERROR - fuzz_crash_028.md:48:1:48:5
-MODULE NOT FOUND - fuzz_crash_028.md:6:1:8:4
+INCOMPLETE IMPORT - fuzz_crash_028.md:10:1:10:7
+TYPE APPLICATION NEEDS PARENTHESES - fuzz_crash_028.md:12:12:12:14
+TYPE APPLICATION NEEDS PARENTHESES - fuzz_crash_028.md:13:1:13:7
+TYPE APPLICATION NEEDS PARENTHESES - fuzz_crash_028.md:15:1:15:4
+UNEXPECTED STATEMENT - fuzz_crash_028.md:15:4:15:5
+UNEXPECTED STATEMENT - fuzz_crash_028.md:15:5:15:6
+UNEXPECTED STATEMENT - fuzz_crash_028.md:15:6:15:7
+UNEXPECTED STATEMENT - fuzz_crash_028.md:15:8:15:9
+UNEXPECTED STATEMENT - fuzz_crash_028.md:15:9:15:10
+UNEXPECTED STATEMENT - fuzz_crash_028.md:15:11:15:12
+TYPE APPLICATION NEEDS PARENTHESES - fuzz_crash_028.md:15:20:15:21
+UNEXPECTED STATEMENT - fuzz_crash_028.md:15:22:15:23
+UNEXPECTED STATEMENT - fuzz_crash_028.md:15:23:15:24
+AMBIGUOUS FUNCTION TYPE - fuzz_crash_028.md:15:25:15:27
+UNEXPECTED STATEMENT - fuzz_crash_028.md:15:28:15:29
+UNEXPECTED STATEMENT - fuzz_crash_028.md:15:29:15:30
+AMBIGUOUS FUNCTION TYPE - fuzz_crash_028.md:15:31:15:33
+TYPE APPLICATION NEEDS PARENTHESES - fuzz_crash_028.md:16:1:16:6
+UNEXPECTED STATEMENT - fuzz_crash_028.md:16:6:16:7
+UNEXPECTED STATEMENT - fuzz_crash_028.md:17:2:17:3
+UNEXPECTED STATEMENT - fuzz_crash_028.md:17:3:17:4
+UNEXPECTED STATEMENT - fuzz_crash_028.md:18:2:18:3
+UNEXPECTED STATEMENT - fuzz_crash_028.md:18:3:18:4
+UNEXPECTED STATEMENT - fuzz_crash_028.md:19:1:19:2
+UNEXPECTED STATEMENT - fuzz_crash_028.md:20:2:20:3
+TYPE APPLICATION NEEDS PARENTHESES - fuzz_crash_028.md:22:4:22:5
+UNEXPECTED STATEMENT - fuzz_crash_028.md:23:3:23:4
+UNEXPECTED STATEMENT - fuzz_crash_028.md:23:4:23:5
+AMBIGUOUS FUNCTION TYPE - fuzz_crash_028.md:23:6:23:8
+UNEXPECTED STATEMENT - fuzz_crash_028.md:23:9:23:10
+UNEXPECTED STATEMENT - fuzz_crash_028.md:23:10:23:11
+AMBIGUOUS FUNCTION TYPE - fuzz_crash_028.md:23:12:23:14
+TYPE APPLICATION NEEDS PARENTHESES - fuzz_crash_028.md:26:1:26:4
+UNEXPECTED STATEMENT - fuzz_crash_028.md:26:5:26:6
+UNEXPECTED STATEMENT - fuzz_crash_028.md:26:7:26:8
+TYPE APPLICATION NEEDS PARENTHESES - fuzz_crash_028.md:26:11:26:12
+TYPE APPLICATION NEEDS PARENTHESES - fuzz_crash_028.md:26:16:26:17
+TYPE APPLICATION NEEDS PARENTHESES - fuzz_crash_028.md:40:5:40:6
+UNEXPECTED STATEMENT - fuzz_crash_028.md:40:7:40:8
+UNEXPECTED STATEMENT - fuzz_crash_028.md:40:9:40:10
+UNEXPECTED STATEMENT - fuzz_crash_028.md:41:1:41:2
+UNEXPECTED STATEMENT - fuzz_crash_028.md:48:1:48:5
+EXPECTED RECORD ACCESSOR - fuzz_crash_028.md:103:2:103:5
+MOD NOT FOUND - fuzz_crash_028.md:6:1:8:4
 UNDECLARED TYPE - fuzz_crash_028.md:29:2:29:5
 UNDECLARED TYPE - fuzz_crash_028.md:30:2:30:5
 UNDECLARED TYPE - fuzz_crash_028.md:32:19:32:21
@@ -227,6 +228,7 @@ NAME NOT IN SCOPE - fuzz_crash_028.md:93:2:93:6
 UNDECLARED TYPE - fuzz_crash_028.md:95:10:95:16
 UNDECLARED TYPE - fuzz_crash_028.md:95:21:95:27
 NAME NOT IN SCOPE - fuzz_crash_028.md:99:9:99:13
+UNRECOGNIZED SYNTAX - fuzz_crash_028.md:103:2:103:5
 NAME NOT IN SCOPE - fuzz_crash_028.md:107:1:107:3
 NAME NOT IN SCOPE - fuzz_crash_028.md:116:1:116:3
 NAME NOT IN SCOPE - fuzz_crash_028.md:119:11:119:15
@@ -259,7 +261,6 @@ MISSING METHOD - fuzz_crash_028.md:68:3:68:8
 MISSING METHOD - fuzz_crash_028.md:70:3:70:8
 TYPE MISMATCH - fuzz_crash_028.md:64:2:64:2
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:95:1:95:34
-TYPE MISMATCH - fuzz_crash_028.md:102:8:102:11
 TOO FEW ARGS - fuzz_crash_028.md:104:2:106:3
 TYPE MISMATCH - fuzz_crash_028.md:115:3:115:3
 TYPE MISMATCH - fuzz_crash_028.md:133:5:133:12
@@ -297,606 +298,796 @@ Numbers cannot have leading zeros.
 
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: incomplete_import ─────────────────┐
-└┬────────────┘                                                               │
+┌───────────────────┐
+│ INCOMPLETE IMPORT ├─ I was parsing an import, and the mod path is ───────┐
+└┬──────────────────┘  incomplete.                                            │
  │                                                                            │
  │  import p                                                                 │
  │  ‾‾‾‾‾‾                                                                    │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:10:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Imports must name a mod, optionally with a qualifier and exposing list.
+
+    For example:
+        import Json/Decode exposing [decode]
+
+    I found `import` here.
+    That word is reserved by Roc, so it cannot be used as a name in this
+    position.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
-└┬────────────┘  arguments.                                                   │
+┌────────────────────────────────────┐
+│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
+└┬───────────────────────────────────┘  and I found a type argument without   │
+ │                                      parentheses.                          │
  │                                                                            │
  │  import Bae as Gooe                                                        │
  │             ‾‾                                                             │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:12:12 ┘
 
-    I found a type followed by what looks like a type argument, but they need
-    to be connected with parentheses.
+    Roc type applications use parentheses around their arguments. Write
+    `List(U8)`, not `List U8`.
 
-    Instead of:
-        List U8
-
-    Use:
+    For example:
         List(U8)
 
-    Other valid examples:
-        Dict(Str, Num)
-        Try(a, Str)
-        Maybe(List(U64))
+    I found `as` here.
+    That word is reserved by Roc, so it cannot be used as a name in this
+    position.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
-└┬────────────┘  arguments.                                                   │
+┌────────────────────────────────────┐
+│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
+└┬───────────────────────────────────┘  and I found a type argument without   │
+ │                                      parentheses.                          │
  │                                                                            │
  │  import                                                                    │
  │  ‾‾‾‾‾‾                                                                    │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:13:1 ┘
 
-    I found a type followed by what looks like a type argument, but they need
-    to be connected with parentheses.
+    Roc type applications use parentheses around their arguments. Write
+    `List(U8)`, not `List U8`.
 
-    Instead of:
-        List U8
-
-    Use:
+    For example:
         List(U8)
 
-    Other valid examples:
-        Dict(Str, Num)
-        Try(a, Str)
-        Maybe(List(U64))
+    I found `import` here.
+    That word is reserved by Roc, so it cannot be used as a name in this
+    position.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
-└┬────────────┘  arguments.                                                   │
+┌────────────────────────────────────┐
+│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
+└┬───────────────────────────────────┘  and I found a type argument without   │
+ │                                      parentheses.                          │
  │                                                                            │
  │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
  │  ‾‾‾                                                                       │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:15:1 ┘
 
-    I found a type followed by what looks like a type argument, but they need
-    to be connected with parentheses.
+    Roc type applications use parentheses around their arguments. Write
+    `List(U8)`, not `List U8`.
 
-    Instead of:
-        List U8
-
-    Use:
+    For example:
         List(U8)
 
-    Other valid examples:
-        Dict(Str, Num)
-        Try(a, Str)
-        Maybe(List(U64))
+    I found `Map` here.
+    Names that start with uppercase letters are used for tags, type names, and
+    mod names in Roc.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
  │     ‾                                                                      │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:15:4 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `(` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
  │      ‾                                                                     │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:15:5 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `a` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
  │       ‾                                                                    │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:15:6 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
  │         ‾                                                                  │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:15:8 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `b` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
  │          ‾                                                                 │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:15:9 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
  │            ‾                                                               │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:15:11 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `:` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
-└┬────────────┘  arguments.                                                   │
+┌────────────────────────────────────┐
+│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
+└┬───────────────────────────────────┘  and I found a type argument without   │
+ │                                      parentheses.                          │
  │                                                                            │
  │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
  │                     ‾                                                      │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:15:20 ┘
 
-    I found a type followed by what looks like a type argument, but they need
-    to be connected with parentheses.
+    Roc type applications use parentheses around their arguments. Write
+    `List(U8)`, not `List U8`.
 
-    Instead of:
-        List U8
-
-    Use:
+    For example:
         List(U8)
 
-    Other valid examples:
-        Dict(Str, Num)
-        Try(a, Str)
-        Maybe(List(U64))
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
  │                       ‾                                                    │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:15:22 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `(` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
  │                        ‾                                                   │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:15:23 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `a` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Function types with multiple arrows need parentheses. ───────┐
-└┬────────────┘                                                               │
+┌─────────────────────────┐
+│ AMBIGUOUS FUNCTION TYPE ├─ I was parsing a function type, and multiple ─────┐
+└┬────────────────────────┘  arrows need parentheses.                         │
  │                                                                            │
  │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
  │                          ‾‾                                                │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:15:25 ┘
 
-    Instead of writing a -> b -> c, use parentheses to clarify which you mean:
-            a -> (b -> c) for a curried function (a function that returns
-            another function)
-            (a -> b) -> c for a higher-order function (a function that takes
-            another function)
+    Use parentheses to say whether the function returns another function or
+    takes a function as an argument.
+
+    For example:
+        a -> (b -> c)
+        (a -> b) -> c
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
  │                             ‾                                              │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:15:28 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `b` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
  │                              ‾                                             │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:15:29 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Function types with multiple arrows need parentheses. ───────┐
-└┬────────────┘                                                               │
+┌─────────────────────────┐
+│ AMBIGUOUS FUNCTION TYPE ├─ I was parsing a function type, and multiple ─────┐
+└┬────────────────────────┘  arrows need parentheses.                         │
  │                                                                            │
  │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
  │                                ‾‾                                          │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:15:31 ┘
 
-    Instead of writing a -> b -> c, use parentheses to clarify which you mean:
-            a -> (b -> c) for a curried function (a function that returns
-            another function)
-            (a -> b) -> c for a higher-order function (a function that takes
-            another function)
+    Use parentheses to say whether the function returns another function or
+    takes a function as an argument.
+
+    For example:
+        a -> (b -> c)
+        (a -> b) -> c
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
-└┬────────────┘  arguments.                                                   │
+┌────────────────────────────────────┐
+│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
+└┬───────────────────────────────────┘  and I found a type argument without   │
+ │                                      parentheses.                          │
  │                                                                            │
  │  MapML( # Cere                                                             │
  │  ‾‾‾‾‾                                                                     │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:16:1 ┘
 
-    I found a type followed by what looks like a type argument, but they need
-    to be connected with parentheses.
+    Roc type applications use parentheses around their arguments. Write
+    `List(U8)`, not `List U8`.
 
-    Instead of:
-        List U8
-
-    Use:
+    For example:
         List(U8)
 
-    Other valid examples:
-        Dict(Str, Num)
-        Try(a, Str)
-        Maybe(List(U64))
+    I found `MapML` here.
+    Names that start with uppercase letters are used for tags, type names, and
+    mod names in Roc.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  MapML( # Cere                                                             │
  │       ‾                                                                    │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:16:6 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `(` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  a, # Anre                                                                 │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:17:2 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `a` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  a, # Anre                                                                 │
  │   ‾                                                                        │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:17:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  b,                                                                        │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:18:2 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `b` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  b,                                                                        │
  │   ‾                                                                        │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:18:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  ) # Ag                                                                    │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:19:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  : # Aon                                                                   │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:20:2 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `:` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
-└┬────────────┘  arguments.                                                   │
+┌────────────────────────────────────┐
+│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
+└┬───────────────────────────────────┘  and I found a type argument without   │
+ │                                      parentheses.                          │
  │                                                                            │
  │  ),                                                                        │
  │   ‾                                                                        │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:22:4 ┘
 
-    I found a type followed by what looks like a type argument, but they need
-    to be connected with parentheses.
+    Roc type applications use parentheses around their arguments. Write
+    `List(U8)`, not `List U8`.
 
-    Instead of:
-        List U8
-
-    Use:
+    For example:
         List(U8)
 
-    Other valid examples:
-        Dict(Str, Num)
-        Try(a, Str)
-        Maybe(List(U64))
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  (a -> b) -> # row                                                         │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:23:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `(` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  (a -> b) -> # row                                                         │
  │   ‾                                                                        │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:23:4 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `a` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Function types with multiple arrows need parentheses. ───────┐
-└┬────────────┘                                                               │
+┌─────────────────────────┐
+│ AMBIGUOUS FUNCTION TYPE ├─ I was parsing a function type, and multiple ─────┐
+└┬────────────────────────┘  arrows need parentheses.                         │
  │                                                                            │
  │  (a -> b) -> # row                                                         │
  │     ‾‾                                                                     │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:23:6 ┘
 
-    Instead of writing a -> b -> c, use parentheses to clarify which you mean:
-            a -> (b -> c) for a curried function (a function that returns
-            another function)
-            (a -> b) -> c for a higher-order function (a function that takes
-            another function)
+    Use parentheses to say whether the function returns another function or
+    takes a function as an argument.
+
+    For example:
+        a -> (b -> c)
+        (a -> b) -> c
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  (a -> b) -> # row                                                         │
  │        ‾                                                                   │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:23:9 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `b` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  (a -> b) -> # row                                                         │
  │         ‾                                                                  │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:23:10 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Function types with multiple arrows need parentheses. ───────┐
-└┬────────────┘                                                               │
+┌─────────────────────────┐
+│ AMBIGUOUS FUNCTION TYPE ├─ I was parsing a function type, and multiple ─────┐
+└┬────────────────────────┘  arrows need parentheses.                         │
  │                                                                            │
  │  (a -> b) -> # row                                                         │
  │           ‾‾                                                               │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:23:12 ┘
 
-    Instead of writing a -> b -> c, use parentheses to clarify which you mean:
-            a -> (b -> c) for a curried function (a function that returns
-            another function)
-            (a -> b) -> c for a higher-order function (a function that takes
-            another function)
+    Use parentheses to say whether the function returns another function or
+    takes a function as an argument.
+
+    For example:
+        a -> (b -> c)
+        (a -> b) -> c
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
-└┬────────────┘  arguments.                                                   │
+┌────────────────────────────────────┐
+│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
+└┬───────────────────────────────────┘  and I found a type argument without   │
+ │                                      parentheses.                          │
  │                                                                            │
  │  Foo : (Bar, Baz)                                                          │
  │  ‾‾‾                                                                       │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:26:1 ┘
 
-    I found a type followed by what looks like a type argument, but they need
-    to be connected with parentheses.
+    Roc type applications use parentheses around their arguments. Write
+    `List(U8)`, not `List U8`.
 
-    Instead of:
-        List U8
-
-    Use:
+    For example:
         List(U8)
 
-    Other valid examples:
-        Dict(Str, Num)
-        Try(a, Str)
-        Maybe(List(U64))
+    I found `Foo` here.
+    Names that start with uppercase letters are used for tags, type names, and
+    mod names in Roc.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  Foo : (Bar, Baz)                                                          │
  │      ‾                                                                     │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:26:5 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `:` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  Foo : (Bar, Baz)                                                          │
  │        ‾                                                                   │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:26:7 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `(` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
-└┬────────────┘  arguments.                                                   │
+┌────────────────────────────────────┐
+│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
+└┬───────────────────────────────────┘  and I found a type argument without   │
+ │                                      parentheses.                          │
  │                                                                            │
  │  Foo : (Bar, Baz)                                                          │
  │            ‾                                                               │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:26:11 ┘
 
-    I found a type followed by what looks like a type argument, but they need
-    to be connected with parentheses.
+    Roc type applications use parentheses around their arguments. Write
+    `List(U8)`, not `List U8`.
 
-    Instead of:
-        List U8
-
-    Use:
+    For example:
         List(U8)
 
-    Other valid examples:
-        Dict(Str, Num)
-        Try(a, Str)
-        Maybe(List(U64))
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
-└┬────────────┘  arguments.                                                   │
+┌────────────────────────────────────┐
+│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
+└┬───────────────────────────────────┘  and I found a type argument without   │
+ │                                      parentheses.                          │
  │                                                                            │
  │  Foo : (Bar, Baz)                                                          │
  │                 ‾                                                          │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:26:16 ┘
 
-    I found a type followed by what looks like a type argument, but they need
-    to be connected with parentheses.
+    Roc type applications use parentheses around their arguments. Write
+    `List(U8)`, not `List U8`.
 
-    Instead of:
-        List U8
-
-    Use:
+    For example:
         List(U8)
 
-    Other valid examples:
-        Dict(Str, Num)
-        Try(a, Str)
-        Maybe(List(U64))
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
-└┬────────────┘  arguments.                                                   │
+┌────────────────────────────────────┐
+│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
+└┬───────────────────────────────────┘  and I found a type argument without   │
+ │                                      parentheses.                          │
  │                                                                            │
  │  Maya) : [ #                                                               │
  │      ‾                                                                     │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:40:5 ┘
 
-    I found a type followed by what looks like a type argument, but they need
-    to be connected with parentheses.
+    Roc type applications use parentheses around their arguments. Write
+    `List(U8)`, not `List U8`.
 
-    Instead of:
-        List U8
-
-    Use:
+    For example:
         List(U8)
 
-    Other valid examples:
-        Dict(Str, Num)
-        Try(a, Str)
-        Maybe(List(U64))
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  Maya) : [ #                                                               │
  │        ‾                                                                   │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:40:7 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `:` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  Maya) : [ #                                                               │
  │          ‾                                                                 │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:40:9 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `[` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  ] #se                                                                     │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:41:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `]` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  add_ne = |num| {                                                         │
  │  ‾‾‾‾                                                                      │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:48:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `add_` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
+
+
+┌──────────────────────────┐
+│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
+└┬─────────────────────────┘  expected a field name or tuple index.           │
+ │                                                                            │
+ │  ...                                                                       │
+ │  ‾‾‾                                                                       │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:103:2 ┘
+
+    Record access uses a lowercase field name like `.name`. Tuple access uses a
+    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+    valid accessors.
+
+    For example:
+        person.name
+        pair.0
+
+    I found `...` here.
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The module `Stdot` was not found in this Roc project. ──┐
+│ MOD NOT FOUND ├─ The mod `Stdot` was not found in this Roc project. ──┐
 └┬─────────────────┘                                                          │
  │                                                                            │
  │  import Stdot                                                              │
@@ -1168,6 +1359,17 @@ Numbers cannot have leading zeros.
  └──────────────────────────────────────────────────── fuzz_crash_028.md:99:9 ┘
 
     Is it misspelled, or is there an import missing?
+
+
+┌─────────────────────┐
+│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
+└┬────────────────────┘                                                       │
+ │                                                                            │
+ │  ...                                                                       │
+ │  ‾‾‾                                                                       │
+ └─────────────────────────────────────────────────── fuzz_crash_028.md:103:2 ┘
+
+    This might be a syntax error, an unsupported language feature, or a typo.
 
 
 ┌───────────────────┐
@@ -1445,15 +1647,15 @@ Numbers cannot have leading zeros.
 
 
 ┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The module header says that `main!` is ──────────┐
+│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `main!` is ──────────┐
 └┬────────────────────────┘  exposed, but it is not defined anywhere in       │
- │                           this module.                                     │
+ │                           this mod.                                     │
  │                                                                            │
  │  app [main!] { pf: platform "c" }                                          │
  │       ‾‾‾‾‾                                                                │
  └───────────────────────────────────────────────────── fuzz_crash_028.md:2:6 ┘
 
-    You can fix this by either defining `main!` in this module, or by removing
+    You can fix this by either defining `main!` in this mod, or by removing
     it from the list of exposed values.
 
 
@@ -1468,7 +1670,7 @@ Numbers cannot have leading zeros.
  │                                                                            │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:28:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -1480,7 +1682,7 @@ Numbers cannot have leading zeros.
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:47:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -1614,24 +1816,8 @@ Numbers cannot have leading zeros.
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
  └──────────────────────────────────────────────────── fuzz_crash_028.md:95:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
-
-
-┌───────────────┐
-│ TYPE MISMATCH ├─ This expression produces a value, but it's not being ──────┐
-└┬──────────────┘  used.                                                      │
- │                                                                            │
- │  tag  Jus                                                                  │
- │       ‾‾‾                                                                  │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:102:8 ┘
-
-    It has the type:
-
-        [Jus, ..]
-
-    Since this expression is used as a statement, it must evaluate to `{}`.
-    If you don't need the value, you can ignore it with `_ =`.
 
 
 ┌──────────────┐
@@ -1698,7 +1884,7 @@ Numbers cannot have leading zeros.
  │  ‾‾‾‾‾‾                                                                    │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:141:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -1710,7 +1896,7 @@ Numbers cannot have leading zeros.
  │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
  └─────────────────────────────────────────────────── fuzz_crash_028.md:144:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -2162,8 +2348,7 @@ EndOfFile,
 							(e-tag (raw "Blue")))
 						(s-return
 							(e-ident (raw "tag")))
-						(e-tag (raw "Jus"))
-						(e-ellipsis)
+						(e-malformed (reason "expr_dot_suffix_not_allowed"))
 						(e-apply
 							(e-ident (raw "match_time"))
 							(e-ellipsis))
@@ -2407,7 +2592,7 @@ match_time = |
 		3.14 | 6.28 => 314
 		(1, 2, 3) => 123
 		(1, 2 | 5, 3) => 123
-		{ foo: 1, bar: 2, ..rest } => 12->add(34)
+		{ foo: 1, bar: 2, ..rest } => 12 |> add(34)
 		{ # Afpen
 			oo #
 				: # ue
@@ -2425,8 +2610,7 @@ match_time = |
 expect # Cord
 	blah == 1 # nt
 
-main! : (String # Thnt!
-) -> Result({}, _)
+main! : (String) -> Result({}, _)
 
 ma = |_| { # Yee
 	world = "d"
@@ -2435,11 +2619,8 @@ ma = |_| { # Yee
 	tag = Blue
 	return # d
 		tag
-	Jus
-	...
-	match_time(
-		...,
-	)
+	
+	match_time(...)
 	nc(
 		dbg # bug
 			2,
@@ -2544,176 +2725,7 @@ expect {
 								(p-assign (ident "other")))))))))
 	(d-let
 		(p-assign (ident "match_time"))
-		(e-lambda
-			(args
-				(p-assign (ident "a"))
-				(p-assign (ident "b")))
-			(e-match
-				(match
-					(cond
-						(e-lookup-local
-							(p-assign (ident "a"))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-assign (ident "lue")))
-								(pattern (degenerate true)
-									(p-applied-tag)))
-							(value
-								(e-block
-									(s-expr
-										(e-runtime-error (tag "ident_not_in_scope")))
-									(e-runtime-error (tag "ident_not_in_scope")))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-num (value "1"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-str (text "foo"))))
-							(value
-								(e-num (value "0"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-str (text "foo")))
-								(pattern (degenerate false)
-									(p-str (text "bar"))))
-							(value
-								(e-num (value "20"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-list
-										(patterns
-											(p-num (value "1"))
-											(p-num (value "2"))
-											(p-num (value "3")))
-										(rest-at (index 3)
-											(p-assign (ident "rest"))))))
-							(value
-								(e-runtime-error (tag "ident_not_in_scope"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-list
-										(patterns
-											(p-num (value "1"))
-											(p-runtime-error (tag "not_implemented"))
-											(p-num (value "3")))
-										(rest-at (index 3)
-											(p-assign (ident "rest"))))))
-							(value
-								(e-num (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-list
-										(patterns))))
-							(value
-								(e-num (value "1"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-small-dec)))
-							(value
-								(e-num (value "314"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-small-dec))
-								(pattern (degenerate false)
-									(p-small-dec)))
-							(value
-								(e-num (value "314"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-tuple
-										(patterns
-											(p-num (value "1"))
-											(p-num (value "2"))
-											(p-num (value "3"))))))
-							(value
-								(e-num (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-tuple
-										(patterns
-											(p-num (value "1"))
-											(p-runtime-error (tag "not_implemented"))
-											(p-num (value "3"))))))
-							(value
-								(e-num (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-record-destructure
-										(destructs
-											(record-destruct (label "foo") (ident "foo")
-												(sub-pattern
-													(p-num (value "1"))))
-											(record-destruct (label "bar") (ident "bar")
-												(sub-pattern
-													(p-num (value "2"))))
-											(record-destruct (label "rest") (ident "rest")
-												(rest-pattern
-													(p-assign (ident "rest"))))))))
-							(value
-								(e-call
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-num (value "12"))
-									(e-num (value "34")))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-record-destructure
-										(destructs
-											(record-destruct (label "oo") (ident "oo")
-												(sub-pattern
-													(p-num (value "1"))))
-											(record-destruct (label "ar") (ident "ar")
-												(sub-pattern
-													(p-num (value "2"))))
-											(record-destruct (label "#others") (ident "#others")
-												(rest-pattern
-													(p-underscore)))))))
-							(value
-								(e-num (value "12"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-record-destructure
-										(destructs
-											(record-destruct (label "foo") (ident "foo")
-												(sub-pattern
-													(p-num (value "1"))))
-											(record-destruct (label "bar") (ident "bar")
-												(sub-pattern
-													(p-runtime-error (tag "not_implemented"))))))))
-							(value
-								(e-num (value "12"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-record-destructure
-										(destructs
-											(record-destruct (label "o") (ident "o")
-												(sub-pattern
-													(p-num (value "1"))))))))
-							(value
-								(e-num (value "212"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-num (value "12")))))))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-anno-only)
@@ -2724,372 +2736,7 @@ expect {
 				(ty-malformed))))
 	(d-let
 		(p-assign (ident "ma"))
-		(e-lambda
-			(args
-				(p-underscore))
-			(e-block
-				(s-let
-					(p-assign (ident "world"))
-					(e-string
-						(e-literal (string "d"))))
-				(s-var
-					(p-assign (ident "number"))
-					(e-num (value "123")))
-				(s-expect
-					(e-method-eq (negated "false")
-						(lhs
-							(e-runtime-error (tag "ident_not_in_scope")))
-						(rhs
-							(e-num (value "1")))))
-				(s-let
-					(p-assign (ident "tag"))
-					(e-tag (name "Blue")))
-				(s-return
-					(e-lookup-local
-						(p-assign (ident "tag"))))
-				(s-expr
-					(e-tag (name "Jus")))
-				(s-expr
-					(e-not-implemented))
-				(s-expr
-					(e-call (constraint-fn-var 3709)
-						(e-lookup-local
-							(p-assign (ident "match_time")))
-						(e-not-implemented)))
-				(s-expr
-					(e-call
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-dbg
-							(e-num (value "2")))))
-				(s-crash (msg "Unrnt"))
-				(s-let
-					(p-assign (ident "tag_"))
-					(e-tag (name "Ok")
-						(args
-							(e-lookup-local
-								(p-assign (ident "number"))))))
-				(s-let
-					(p-assign (ident "i"))
-					(e-block
-						(s-let
-							(p-assign (ident "#interp_0"))
-							(e-lookup-local
-								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 3800)
-							(first
-								(e-literal (string "H, ")))
-							(parts
-								(e-lookup-local
-									(p-assign (ident "#interp_0")))
-								(e-literal (string ""))))))
-				(s-let
-					(p-assign (ident "t"))
-					(e-list
-						(elems
-							(e-call
-								(e-lookup-local
-									(p-assign (ident "add_one")))
-								(e-dbg
-									(e-runtime-error (tag "ident_not_in_scope"))))
-							(e-num (value "456")))))
-				(s-for
-					(p-assign (ident "n"))
-					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-block
-						(e-dispatch-call (method "plus") (constraint-fn-var 3978)
-							(receiver
-								(e-call
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-block
-										(s-let
-											(p-assign (ident "#interp_1"))
-											(e-lookup-local
-												(p-assign (ident "n"))))
-										(s-let
-											(p-assign (ident "#interp_2"))
-											(e-runtime-error (tag "ident_not_in_scope")))
-										(e-interpolation
-											(first
-												(e-literal (string "Ag ")))
-											(parts
-												(e-lookup-local
-													(p-assign (ident "#interp_1")))
-												(e-literal (string " to "))
-												(e-lookup-local
-													(p-assign (ident "#interp_2")))
-												(e-literal (string "")))))))
-							(args
-								(e-lookup-local
-									(p-assign (ident "n")))))))
-				(s-let
-					(p-assign (ident "rd"))
-					(e-record
-						(fields
-							(field (name "foo")
-								(e-num (value "123")))
-							(field (name "bar")
-								(e-string
-									(e-literal (string "H"))))
-							(field (name "baz")
-								(e-lookup-local
-									(p-assign (ident "tag"))))
-							(field (name "qux")
-								(e-tag (name "Ok")
-									(args
-										(e-lookup-local
-											(p-assign (ident "world"))))))
-							(field (name "ned")
-								(e-runtime-error (tag "ident_not_in_scope"))))))
-				(s-let
-					(p-assign (ident "tuple"))
-					(e-tuple
-						(elems
-							(e-num (value "123"))
-							(e-string
-								(e-literal (string "World")))
-							(e-lookup-local
-								(p-assign (ident "tag")))
-							(e-tag (name "Ok")
-								(args
-									(e-lookup-local
-										(p-assign (ident "world")))))
-							(e-tuple
-								(elems
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-runtime-error (tag "self_referential_definition"))))
-							(e-list
-								(elems
-									(e-num (value "1"))
-									(e-num (value "2"))
-									(e-num (value "3")))))))
-				(s-let
-					(p-assign (ident "mle"))
-					(e-tuple
-						(elems
-							(e-num (value "123"))
-							(e-string
-								(e-literal (string "World")))
-							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-tag (name "Ok")
-								(args
-									(e-lookup-local
-										(p-assign (ident "world")))))
-							(e-tuple
-								(elems
-									(e-lookup-local
-										(p-assign (ident "ne")))
-									(e-lookup-local
-										(p-assign (ident "tuple")))))
-							(e-list
-								(elems
-									(e-num (value "1"))
-									(e-num (value "2"))
-									(e-num (value "3")))))))
-				(s-let
-					(p-assign (ident "b"))
-					(e-if
-						(if-branches
-							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 4464)
-									(receiver
-										(e-match
-											(match
-												(cond
-													(e-tag (name "Err")
-														(args
-															(e-runtime-error (tag "ident_not_in_scope")))))
-												(branches
-													(branch
-														(patterns
-															(pattern (degenerate false)
-																(p-nominal-external (builtin)
-																	(p-applied-tag))))
-														(value
-															(e-lookup-local
-																(p-assign (ident "#ok")))))
-													(branch
-														(patterns
-															(pattern (degenerate false)
-																(p-nominal-external (builtin)
-																	(p-applied-tag))))
-														(value
-															(e-num (value "12"))))))))
-									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 4459)
-											(receiver
-												(e-num (value "5")))
-											(args
-												(e-num (value "5"))))))
-								(e-nominal-external
-									(builtin)
-									(e-tag (name "True")))))
-						(if-else
-							(e-if
-								(if-branches
-									(if-branch
-										(e-if
-											(if-branches
-												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 4581)
-														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 4543)
-																(receiver
-																	(e-num (value "13")))
-																(args
-																	(e-num (value "2")))))
-														(args
-															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 4690)
-														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 4652)
-																(receiver
-																	(e-num (value "10")))
-																(args
-																	(e-num (value "1")))))
-														(args
-															(e-num (value "16"))))))
-											(if-else
-												(e-nominal-external
-													(builtin)
-													(e-tag (name "False")))))
-										(e-nominal-external
-											(builtin)
-											(e-tag (name "True")))))
-								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 4809)
-										(receiver
-											(e-num (value "12")))
-										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 4804)
-												(receiver
-													(e-num (value "3")))
-												(args
-													(e-num (value "5")))))))))))
-				(s-let
-					(p-assign (ident "le"))
-					(e-match
-						(match
-							(cond
-								(e-field-access (field "recd")
-									(receiver
-										(e-match
-											(match
-												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 4875)
-														(receiver
-															(e-match
-																(match
-																	(cond
-																		(e-dispatch-call (method "od") (constraint-fn-var 4842)
-																			(receiver
-																				(e-match
-																					(match
-																						(cond
-																							(e-runtime-error (tag "ident_not_in_scope")))
-																						(branches
-																							(branch
-																								(patterns
-																									(pattern (degenerate false)
-																										(p-nominal-external (builtin)
-																											(p-applied-tag))))
-																								(value
-																									(e-runtime-error (tag "erroneous_value_expr"))))
-																							(branch
-																								(patterns
-																									(pattern (degenerate false)
-																										(p-nominal-external (builtin)
-																											(p-applied-tag))))
-																								(value
-																									(e-return
-																										(e-nominal-external
-																											(builtin)
-																											(e-tag (name "Err")
-																												(args
-																													(e-lookup-local
-																														(p-assign (ident "#err")))))))))))))
-																			(args)))
-																	(branches
-																		(branch
-																			(patterns
-																				(pattern (degenerate false)
-																					(p-nominal-external (builtin)
-																						(p-applied-tag))))
-																			(value
-																				(e-runtime-error (tag "erroneous_value_expr"))))
-																		(branch
-																			(patterns
-																				(pattern (degenerate false)
-																					(p-nominal-external (builtin)
-																						(p-applied-tag))))
-																			(value
-																				(e-return
-																					(e-nominal-external
-																						(builtin)
-																						(e-tag (name "Err")
-																							(args
-																								(e-lookup-local
-																									(p-assign (ident "#err")))))))))))))
-														(args)))
-												(branches
-													(branch
-														(patterns
-															(pattern (degenerate false)
-																(p-nominal-external (builtin)
-																	(p-applied-tag))))
-														(value
-															(e-lookup-local
-																(p-assign (ident "#ok")))))
-													(branch
-														(patterns
-															(pattern (degenerate false)
-																(p-nominal-external (builtin)
-																	(p-applied-tag))))
-														(value
-															(e-return
-																(e-nominal-external
-																	(builtin)
-																	(e-tag (name "Err")
-																		(args
-																			(e-lookup-local
-																				(p-assign (ident "#err")))))))))))))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-nominal-external (builtin)
-												(p-applied-tag))))
-									(value
-										(e-lookup-local
-											(p-assign (ident "#ok")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-nominal-external (builtin)
-												(p-applied-tag))))
-									(value
-										(e-return
-											(e-nominal-external
-												(builtin)
-												(e-tag (name "Err")
-													(args
-														(e-lookup-local
-															(p-assign (ident "#err")))))))))))))
-				(e-call
-					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-block
-						(s-let
-							(p-assign (ident "#interp_3"))
-							(e-call
-								(e-runtime-error (tag "ident_not_in_scope"))
-								(e-lookup-local
-									(p-assign (ident "number")))))
-						(e-interpolation
-							(first
-								(e-literal (string "Ho")))
-							(parts
-								(e-lookup-local
-									(p-assign (ident "#interp_3")))
-								(e-literal (string " ")))))))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "y"))
 		(e-anno-only)
@@ -3103,11 +2750,11 @@ expect {
 		(e-anno-only)
 		(annotation
 			(ty-malformed)))
-	(s-import (module "pf.Stdout")
+	(s-import (mod "pf.Stdout")
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "e!") (wildcard false))))
-	(s-import (module "Stdot")
+	(s-import (mod "Stdot")
 		(exposes))
 	(s-alias-decl
 		(ty-header (name "Some")
@@ -3163,7 +2810,7 @@ expect {
 	(defs
 		(patt (type "(Error, Error)"))
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "Error -> U64"))
+		(patt (type "U64 -> U64"))
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "[Blue, Red, ..], _arg -> Error"))
 		(patt (type "Error -> Error"))
@@ -3172,26 +2819,26 @@ expect {
 		(patt (type "{}"))
 		(patt (type "Error")))
 	(type_decls
-		(alias (type "Some(a)")
+		(alias (type "Error")
 			(ty-header (name "Some")
 				(ty-args
 					(ty-rigid-var (name "a")))))
-		(alias (type "Ml(a)")
+		(alias (type "Error")
 			(ty-header (name "Ml")
 				(ty-args
 					(ty-rigid-var (name "a")))))
-		(alias (type "Soine(a)")
+		(alias (type "Error")
 			(ty-header (name "Soine")
 				(ty-args
 					(ty-rigid-var (name "a")))))
-		(alias (type "Func(a)")
+		(alias (type "Error")
 			(ty-header (name "Func")
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "(Error, Error)"))
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "Error -> U64"))
+		(expr (type "U64 -> U64"))
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "[Blue, Red, ..], _arg -> Error"))
 		(expr (type "Error -> Error"))

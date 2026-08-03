@@ -25,8 +25,11 @@ pub const LowLevel = enum(u16) {
     str_drop_prefix,
     str_drop_prefix_caseless_ascii,
     str_drop_suffix,
-    str_find_first,
+    str_split_first,
+    str_split_last,
     str_count_utf8_bytes,
+    str_get_utf8_byte_unsafe,
+    str_substring_unsafe,
     str_with_capacity,
     str_reserve,
     str_release_excess_capacity,
@@ -125,12 +128,24 @@ pub const LowLevel = enum(u16) {
     num_abs,
     num_abs_diff,
     num_plus,
+    num_plus_wrap,
+    num_plus_checked,
     num_minus,
+    num_minus_wrap,
+    num_minus_checked,
     num_times,
+    num_times_wrap,
+    num_times_checked,
     num_div_by,
+    num_div_by_checked,
     num_div_trunc_by,
+    num_div_trunc_by_checked,
     num_rem_by,
+    num_rem_by_checked,
     num_mod_by,
+    num_mod_by_checked,
+    num_negate_checked,
+    num_abs_checked,
     num_pow,
     num_sqrt,
     num_sin,
@@ -160,8 +175,77 @@ pub const LowLevel = enum(u16) {
     num_bitwise_xor,
     num_bitwise_not,
 
+    // Bit-counting operations (integer types only). Each takes an integer
+    // operand and returns a U8, regardless of the operand's width.
+    num_count_one_bits,
+    num_count_leading_zero_bits,
+    num_count_trailing_zero_bits,
+
+    // Read a little-endian integer out of a byte list. The result layout
+    // carries the width, so a single low-level op serves every multi-byte
+    // integer type. The bounds check lives in the Roc wrapper, so this op
+    // requires the caller to have proven the bytes are in range.
+    num_from_le_bytes_unchecked,
+
+    // Fixed-width integer SIMD operations. Lane width and signedness are
+    // carried by the operand/result layouts; these operations never encode a
+    // concrete vector type in their identity.
+    simd_load_16_unchecked,
+    simd_store_16_unchecked,
+    simd_append_16,
+    simd_splat,
+    simd_get_lane_unchecked,
+    simd_with_lane_unchecked,
+    simd_to_u128_bits,
+    simd_from_u128_bits,
+    simd_add_wrap,
+    simd_sub_wrap,
+    simd_add_sat,
+    simd_sub_sat,
+    simd_neg_wrap,
+    simd_abs_wrap,
+    simd_min,
+    simd_max,
+    simd_abs_diff,
+    simd_avg_rounded,
+    simd_mul_wrap,
+    simd_mul_high,
+    simd_mul_q15_sat,
+    simd_mul_wide_lo,
+    simd_mul_wide_hi,
+    simd_dot_pairs,
+    simd_dot_pairs_sat,
+    simd_sad,
+    simd_and,
+    simd_or,
+    simd_xor,
+    simd_not,
+    simd_bit_select,
+    simd_eq_lanes,
+    simd_gt_lanes,
+    simd_gte_lanes,
+    simd_bitmask,
+    simd_shl_wrap,
+    simd_shr_wrap,
+    simd_shr_zf_wrap,
+    simd_shr_rounded,
+    simd_interleave_lo,
+    simd_interleave_hi,
+    simd_even_lanes,
+    simd_odd_lanes,
+    simd_reverse_lanes,
+    simd_table_lookup,
+    simd_concat_shift_bytes,
+    simd_widen_lo,
+    simd_widen_hi,
+    simd_pairwise_add_widen,
+    simd_narrow_wrap,
+    simd_narrow_sat,
+    simd_sum_lanes,
+    simd_sum_lanes_wrap,
+    simd_clmul_lo,
+    simd_clmul_hi,
     // Numeric parsing operations
-    num_from_numeral,
     u8_from_str,
     i8_from_str,
     u16_from_str,
@@ -451,6 +535,11 @@ pub const LowLevel = enum(u16) {
     // Box operations
     box_box,
     box_unbox,
+    /// Box(T) -> Box(T): consume a box and return a unique box containing the
+    /// same payload. Reuses the allocation when uniqueness is known or the
+    /// runtime check succeeds; otherwise copies the payload into a fresh box,
+    /// retains nested payload children, and releases the consumed input.
+    box_prepare_update,
     erased_capture_load,
 
     // Compiler-internal pointer operations, introduced by the TRMC pass
@@ -477,8 +566,122 @@ pub const LowLevel = enum(u16) {
     // Crash/panic
     crash,
 
+    /// Index into `builtins.simd.Op`. The SIMD entries are intentionally one
+    /// contiguous, order-pinned block so the interpreter and compile-time
+    /// evaluator share the semantic oracle's operation vocabulary without a
+    /// module cycle.
+    pub fn simdOpIndex(self: LowLevel) ?u8 {
+        return switch (self) {
+            .simd_load_16_unchecked,
+            .simd_store_16_unchecked,
+            .simd_append_16,
+            .simd_splat,
+            .simd_get_lane_unchecked,
+            .simd_with_lane_unchecked,
+            .simd_to_u128_bits,
+            .simd_from_u128_bits,
+            .simd_add_wrap,
+            .simd_sub_wrap,
+            .simd_add_sat,
+            .simd_sub_sat,
+            .simd_neg_wrap,
+            .simd_abs_wrap,
+            .simd_min,
+            .simd_max,
+            .simd_abs_diff,
+            .simd_avg_rounded,
+            .simd_mul_wrap,
+            .simd_mul_high,
+            .simd_mul_q15_sat,
+            .simd_mul_wide_lo,
+            .simd_mul_wide_hi,
+            .simd_dot_pairs,
+            .simd_dot_pairs_sat,
+            .simd_sad,
+            .simd_and,
+            .simd_or,
+            .simd_xor,
+            .simd_not,
+            .simd_bit_select,
+            .simd_eq_lanes,
+            .simd_gt_lanes,
+            .simd_gte_lanes,
+            .simd_bitmask,
+            .simd_shl_wrap,
+            .simd_shr_wrap,
+            .simd_shr_zf_wrap,
+            .simd_shr_rounded,
+            .simd_interleave_lo,
+            .simd_interleave_hi,
+            .simd_even_lanes,
+            .simd_odd_lanes,
+            .simd_reverse_lanes,
+            .simd_table_lookup,
+            .simd_concat_shift_bytes,
+            .simd_widen_lo,
+            .simd_widen_hi,
+            .simd_pairwise_add_widen,
+            .simd_narrow_wrap,
+            .simd_narrow_sat,
+            .simd_sum_lanes,
+            .simd_sum_lanes_wrap,
+            .simd_clmul_lo,
+            .simd_clmul_hi,
+            => @intCast(@intFromEnum(self) - @intFromEnum(LowLevel.simd_load_16_unchecked)),
+            else => null,
+        };
+    }
+
     /// Reference-counting behavior exposed by this primitive before LIR ARC
     /// insertion. This is explicit primitive metadata, not backend policy.
+    ///
+    /// ## What a row promises
+    ///
+    /// Every row is a claim about the Zig builtin the op lowers to, and ARC
+    /// generates code that is correct only if the claim is true. Writing a row
+    /// means discharging these obligations for the implementation, not
+    /// pattern-matching a neighboring row:
+    ///
+    /// - `may_allocate`: the op may call `allocateWithRefcount`. A row that
+    ///   omits it promises the op never births an allocation.
+    /// - `may_retain_or_release`: the op may change some allocation's count.
+    ///   A row that omits it promises every count the op can reach is
+    ///   untouched.
+    /// - `may_runtime_uniqueness_check_args`: the op reads those arguments'
+    ///   counts to choose between mutating in place and copying. ARC may prove
+    ///   the check redundant and pass `unique_args`, which lets the builtin
+    ///   take the in-place path unconditionally — so a named position must be
+    ///   one the op consumes, and the in-place path must be sound whenever the
+    ///   argument really is unique.
+    /// - `consume_args`: the op takes one ownership unit of those arguments.
+    ///   ARC stops accounting for them at this statement, so the op must
+    ///   release each one (or move it into the result) on every path.
+    /// - `result_aliases_consumed_args`: the unit taken from those consumed
+    ///   arguments lives on in the result. Only consumed positions may appear.
+    /// - `retain_args`: the op adds one count to those arguments — typically
+    ///   because it stores a handle to them inside the result. ARC emits no
+    ///   retain of its own, so an op that declares this and does not retain
+    ///   leaves the stored handle undercounted.
+    /// - `retain_result`: the result is read out of a structure that stays
+    ///   live (an element, a box payload, a capture), so ARC retains it after
+    ///   the op rather than treating it as freshly owned.
+    /// - `result_borrows_args`: the result points into those arguments'
+    ///   payloads without owning them. ARC keeps the lender live across every
+    ///   use of the result instead of retaining the result.
+    /// - `result_shares_args`: the result is a fresh owned outer value whose
+    ///   interior shares those arguments' allocations (seamless slices, byte
+    ///   reinterpretations). Host-visibility analysis links result and
+    ///   argument in both directions.
+    /// - `result_unique`: the result's outermost allocation has count 1 on
+    ///   return, so ARC records a birth. A result that shares an argument's
+    ///   outer allocation is never unique; interior sharing is irrelevant.
+    ///
+    /// ## What checks the claims
+    ///
+    /// - `base/rc_effect_rules.zig` rejects rows whose fields contradict each
+    ///   other, over the whole table, at comptime.
+    /// - `eval/rc_conformance.zig` runs each op through the interpreter and
+    ///   compares the refcount traffic it actually produces against the row.
     pub const RcEffect = struct {
         may_allocate: bool = false,
         may_retain_or_release: bool = false,
@@ -599,7 +802,6 @@ pub const LowLevel = enum(u16) {
             return .{
                 .may_retain_or_release = true,
                 .result_shares_args = mask,
-                .result_unique = true,
             };
         }
 
@@ -608,15 +810,6 @@ pub const LowLevel = enum(u16) {
                 .may_retain_or_release = mask != 0,
                 .retain_args = mask,
                 .result_shares_args = mask,
-                .result_unique = true,
-            };
-        }
-
-        pub fn allocatesSharingArgs(mask: u64) RcEffect {
-            return .{
-                .may_allocate = true,
-                .result_shares_args = mask,
-                .result_unique = true,
             };
         }
 
@@ -625,7 +818,6 @@ pub const LowLevel = enum(u16) {
                 .may_allocate = true,
                 .may_retain_or_release = true,
                 .result_shares_args = mask,
-                .result_unique = true,
             };
         }
 
@@ -653,9 +845,16 @@ pub const LowLevel = enum(u16) {
     pub fn rcEffect(self: LowLevel) RcEffect {
         return switch (self) {
             .str_concat => RcEffect.runtimeUniqueness(argMask(&.{0})),
+
+            // Trimming a shared string returns a seamless slice of it rather
+            // than copying, so the result's outermost allocation is the
+            // argument's and its count is whatever the argument's was. Same
+            // regime as the list slice ops below.
             .str_trim,
             .str_trim_start,
             .str_trim_end,
+            => RcEffect.runtimeUniquenessMaybeSharedResult(argMask(&.{0})),
+
             .str_with_ascii_lowercased,
             .str_with_ascii_uppercased,
             .str_reserve,
@@ -663,10 +862,14 @@ pub const LowLevel = enum(u16) {
             => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
             .str_drop_prefix,
-            .str_drop_prefix_caseless_ascii,
             .str_drop_suffix,
-            .str_find_first,
+            .str_substring_unsafe,
             => RcEffect.retainsSharingArgs(argMask(&.{0})),
+
+            .str_drop_prefix_caseless_ascii,
+            .str_split_first,
+            .str_split_last,
+            => RcEffect.retainsOrReleasesSharingArgs(argMask(&.{0})),
 
             .str_from_utf8 => RcEffect.retainsOrReleasesSharingArgs(argMask(&.{0})),
 
@@ -686,6 +889,12 @@ pub const LowLevel = enum(u16) {
             .list_reserve,
             .list_release_excess_capacity,
             => RcEffect.runtimeUniqueness(argMask(&.{0})),
+
+            // SIMD byte stores and appends consume/update their List(U8),
+            // which is argument 1 in both primitive signatures.
+            .simd_store_16_unchecked,
+            .simd_append_16,
+            => RcEffect.runtimeUniqueness(argMask(&.{1})),
 
             .list_prepend => RcEffect.runtimeUniquenessRetainingArgs(argMask(&.{0}), argMask(&.{1})),
 
@@ -721,7 +930,9 @@ pub const LowLevel = enum(u16) {
             .list_get_unsafe,
             => RcEffect.retainsResultBorrowingArgs(argMask(&.{0})),
 
-            .str_split_on => RcEffect.allocatesSharingArgs(argMask(&.{0})),
+            // Allocates the list of segments, and counts the source string
+            // once per segment it slices out of it.
+            .str_split_on => RcEffect.allocatesAndRetainsOrReleasesSharingArgs(argMask(&.{0})),
 
             .str_repeat,
             .str_from_utf8_lossy,
@@ -758,6 +969,8 @@ pub const LowLevel = enum(u16) {
 
             .box_unbox => RcEffect.retainsResultBorrowingArgs(argMask(&.{0})),
 
+            .box_prepare_update => RcEffect.runtimeUniqueness(argMask(&.{0})),
+
             // The capture environment is read through the executing frame's
             // closure, not through an explicit refcounted argument, so the
             // result cannot name a lender to borrow from.
@@ -783,6 +996,7 @@ pub const LowLevel = enum(u16) {
             .str_starts_with,
             .str_ends_with,
             .str_count_utf8_bytes,
+            .str_get_utf8_byte_unsafe,
             .list_len,
             .bool_not,
             .dict_pseudo_seed,
@@ -809,15 +1023,27 @@ pub const LowLevel = enum(u16) {
             .num_is_lt,
             .num_is_lte,
             .num_negate,
+            .num_negate_checked,
             .num_abs,
+            .num_abs_checked,
             .num_abs_diff,
             .num_plus,
+            .num_plus_wrap,
+            .num_plus_checked,
             .num_minus,
+            .num_minus_wrap,
+            .num_minus_checked,
             .num_times,
+            .num_times_wrap,
+            .num_times_checked,
             .num_div_by,
+            .num_div_by_checked,
             .num_div_trunc_by,
+            .num_div_trunc_by_checked,
             .num_rem_by,
+            .num_rem_by_checked,
             .num_mod_by,
+            .num_mod_by_checked,
             .num_pow,
             .num_sqrt,
             .num_sin,
@@ -841,7 +1067,63 @@ pub const LowLevel = enum(u16) {
             .num_bitwise_or,
             .num_bitwise_xor,
             .num_bitwise_not,
-            .num_from_numeral,
+            .num_count_one_bits,
+            .num_count_leading_zero_bits,
+            .num_count_trailing_zero_bits,
+            .num_from_le_bytes_unchecked,
+            .simd_load_16_unchecked,
+            .simd_splat,
+            .simd_get_lane_unchecked,
+            .simd_with_lane_unchecked,
+            .simd_to_u128_bits,
+            .simd_from_u128_bits,
+            .simd_add_wrap,
+            .simd_sub_wrap,
+            .simd_add_sat,
+            .simd_sub_sat,
+            .simd_neg_wrap,
+            .simd_abs_wrap,
+            .simd_min,
+            .simd_max,
+            .simd_abs_diff,
+            .simd_avg_rounded,
+            .simd_mul_wrap,
+            .simd_mul_high,
+            .simd_mul_q15_sat,
+            .simd_mul_wide_lo,
+            .simd_mul_wide_hi,
+            .simd_dot_pairs,
+            .simd_dot_pairs_sat,
+            .simd_sad,
+            .simd_and,
+            .simd_or,
+            .simd_xor,
+            .simd_not,
+            .simd_bit_select,
+            .simd_eq_lanes,
+            .simd_gt_lanes,
+            .simd_gte_lanes,
+            .simd_bitmask,
+            .simd_shl_wrap,
+            .simd_shr_wrap,
+            .simd_shr_zf_wrap,
+            .simd_shr_rounded,
+            .simd_interleave_lo,
+            .simd_interleave_hi,
+            .simd_even_lanes,
+            .simd_odd_lanes,
+            .simd_reverse_lanes,
+            .simd_table_lookup,
+            .simd_concat_shift_bytes,
+            .simd_widen_lo,
+            .simd_widen_hi,
+            .simd_pairwise_add_widen,
+            .simd_narrow_wrap,
+            .simd_narrow_sat,
+            .simd_sum_lanes,
+            .simd_sum_lanes_wrap,
+            .simd_clmul_lo,
+            .simd_clmul_hi,
             .u8_from_str,
             .i8_from_str,
             .u16_from_str,

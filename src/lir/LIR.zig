@@ -64,6 +64,22 @@ pub const CFStmtId = enum(u32) {
     _,
 };
 
+/// Identifier of one virtual source frame introduced by inlining.
+pub const InlineScopeId = enum(u32) {
+    _,
+
+    pub const none: InlineScopeId = @enumFromInt(std.math.maxInt(u32));
+};
+
+/// A virtual source frame retained independently of physical procedures.
+pub const InlineScope = extern struct {
+    source_symbol: Symbol,
+    source_name: StringLiteral.Idx,
+    source_loc: base.SourceLoc,
+    call_site: base.SourceLoc,
+    parent: InlineScopeId,
+};
+
 /// Identifier of a compile-time-observed control-flow site.
 pub const ComptimeSiteId = enum(u32) {
     _,
@@ -100,7 +116,7 @@ pub const Local = struct {
 /// Span into flat local-id storage.
 pub const LocalSpan = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
 
     /// Returns an empty local-id span.
     pub fn empty() LocalSpan {
@@ -137,6 +153,11 @@ pub const StrLiteral = struct {
     backing: StringLiteral.Idx,
     offset: u32,
     len: u32,
+};
+
+/// Identifier for one readonly data object emitted by static-data materialization.
+pub const StaticDataId = enum(u32) {
+    _,
 };
 
 /// How a string interpolation pattern must finish after its last step.
@@ -267,6 +288,7 @@ pub const LiteralValue = union(enum) {
     f32_literal: f32,
     dec_literal: i128,
     str_literal: StrLiteral,
+    static_data: StaticDataId,
     bytes_literal: StrLiteral,
     null_ptr,
     proc_ref: LirProcSpecId,
@@ -435,6 +457,19 @@ pub const CFStmt = union(enum) {
         target: LocalId,
         closure: LocalId,
         args: LocalSpan,
+        /// Consume the allocation denoted by `closure` as the destination for
+        /// an erased-callable result.
+        /// The erased callee may repack it when the returned capture payload has
+        /// the same committed size and alignment; otherwise it releases the
+        /// consumed allocation and returns a fresh one. At the machine ABI this
+        /// passes the callable data pointer as the nullable fifth argument.
+        reuse_closure: bool = false,
+        /// Ownership source consumed by `reuse_closure`. This may be an outer
+        /// transparent nominal/tag wrapper of `closure`; both must denote the
+        /// same erased-callable allocation, while this local carries its owned
+        /// unit. Debug certification proves that allocation identity through
+        /// the exact representation-transparent producer chain.
+        reuse_source: ?LocalId = null,
         next: CFStmtId,
     },
     assign_packed_erased_fn: struct {
@@ -443,6 +478,17 @@ pub const CFStmt = union(enum) {
         capture: ?LocalId,
         capture_layout: ?layout.Idx,
         on_drop: ErasedCallableOnDrop,
+        /// Optional local containing a consumed erased callable allocation to
+        /// repack. The local itself is present statically, but its runtime value
+        /// may be null when an ABI caller declined to transfer ownership.
+        ///
+        /// When present, this statement returns a unique erased callable with
+        /// the new proc/drop/capture. If `reuse_unique` is true, ARC proved the
+        /// consumed allocation is uniquely owned at the statement. Otherwise,
+        /// consumers must runtime-check uniqueness and take the fresh allocate
+        /// path when the old allocation is shared.
+        reuse: ?LocalId = null,
+        reuse_unique: bool = false,
         next: CFStmtId,
     },
     assign_low_level: struct {
@@ -479,6 +525,20 @@ pub const CFStmt = union(enum) {
     },
     assign_tag: struct {
         target: LocalId,
+        variant_index: u16,
+        discriminant: u16,
+        payload: ?LocalId,
+        next: CFStmtId,
+    },
+    store_struct: struct {
+        dest: LocalId,
+        struct_layout: layout.Idx,
+        fields: LocalSpan,
+        next: CFStmtId,
+    },
+    store_tag: struct {
+        dest: LocalId,
+        tag_layout: layout.Idx,
         variant_index: u16,
         discriminant: u16,
         payload: ?LocalId,
@@ -558,9 +618,12 @@ pub const CFStmt = union(enum) {
         /// expected to be cold. Backends may use this for branch weights or
         /// block placement, but must not infer it from source names or shapes.
         default_is_cold: bool = false,
-        /// Common continuation used by structured branch-result switches, when
-        /// the branch bodies flow back to a shared suffix. ARC insertion uses
-        /// this to release branch-local owned values before the shared suffix.
+        /// Common continuation used by structured branch-result switches. Direct
+        /// lowering must provide this when branch bodies reach one exact shared
+        /// suffix within the same control-flow region. `null` means there is no
+        /// such same-region suffix; branches may still converge across a join.
+        /// ARC insertion uses the continuation to release branch-local owned
+        /// values before the shared suffix.
         continuation: ?CFStmtId = null,
     },
     /// Branch on a condition that is compiler-proven to describe whether
@@ -626,16 +689,33 @@ pub const CFStmt = union(enum) {
     },
 };
 
+/// Return whether an erased call's reuse flag and consumed ownership source
+/// describe the same optional reuse operation.
+pub fn erasedCallReuseFieldsMatch(assign: anytype) bool {
+    return assign.reuse_closure == (assign.reuse_source != null);
+}
+
 /// Lowered proc specification rooted either at a statement body or at explicit
 /// hosted-proc metadata.
 pub const LirProcSpec = struct {
     name: Symbol,
     args: LocalSpan,
+    /// Hidden erased-callable ownership input. Every erased-callable ABI proc
+    /// records its final argument here, regardless of whether its result can
+    /// reuse the allocation. Its local has erased-callable layout so ARC always
+    /// consumes a non-null transfer; its runtime pointer may be null when the
+    /// caller declines reuse. Internal Roc-ABI destination variants preserve
+    /// this marker when they forward the same input.
+    erased_reuse_arg: ?LocalId = null,
     frame_locals: LocalSpan = LocalSpan.empty(),
     join_points: JoinPointSpan = JoinPointSpan.empty(),
     body: ?CFStmtId = null,
     ret_layout: layout.Idx,
     abi: ProcAbi = .roc,
+    /// This closed proc exists only so target static-data materialization can
+    /// execute its exact post-layout construction. Runtime backends register
+    /// and emit only ordinary procedures.
+    is_static_initializer: bool = false,
     /// Hosted call ABI metadata, when this proc is provided by the platform.
     hosted: ?HostedProc = null,
     /// Tail-recursion rewrite applied by the TRMC pass, if any.

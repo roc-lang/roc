@@ -12,20 +12,47 @@ const embedded_lld = @import("embedded_lld");
 const stack_probe = embedded_lld.stack_probe;
 const CodeSignature = @import("vendor_macho").CodeSignature;
 const DwarfSplice = @import("macho/DwarfSplice.zig");
+const backend = @import("backend");
 const roc_target = @import("roc_target");
 const RocTarget = roc_target.RocTarget;
 const cli_ctx = @import("CliCtx.zig");
 const CliCtx = cli_ctx.CliCtx;
 const Io = cli_ctx.Io;
 
-/// Suppress linker warnings in release builds only. Debug builds of the
-/// compiler surface them: lld reports flags it parsed but ignored (e.g. a
-/// MachO `-r`) only as warnings, and suppressing those hides real bugs from
-/// compiler developers.
-const suppress_linker_warnings = builtin.mode != .Debug;
+/// Suppress embedded LLD warnings by default. Build the compiler with
+/// `-Dlinker-warnings=true` to surface all LLD diagnostics (including ignored
+/// flags that lld only reports as warnings).
+const suppress_linker_warnings = !build_options.linker_warnings;
 
 /// The embedded LLD entrypoints are only linked into LLVM-enabled CLI builds.
 const llvm_available = if (@import("builtin").is_test) false else @import("config").llvm;
+const binaryen_available = if (@import("builtin").is_test) false else @import("config").binaryen;
+
+const RocBinaryenOptimizeConfig = extern struct {
+    optimize_level: c_int,
+    shrink_level: c_int,
+    zero_filled_memory: u8,
+    debug_info: u8,
+    strip_debug: u8,
+    strip_producers: u8,
+    strip_target_features: u8,
+    validate: u8,
+};
+
+const RocBinaryenBuffer = extern struct {
+    ptr: ?[*]u8,
+    len: usize,
+};
+
+const binaryen_externs = if (binaryen_available) struct {
+    extern fn RocBinaryenOptimizeWasm(
+        input: [*]const u8,
+        input_len: usize,
+        config: RocBinaryenOptimizeConfig,
+        output: *RocBinaryenBuffer,
+    ) c_int;
+    extern fn RocBinaryenFree(ptr: ?*anyopaque) void;
+} else struct {};
 
 /// Supported target formats for linking
 pub const TargetFormat = embedded_lld.Format;
@@ -47,6 +74,13 @@ pub const OutputKind = enum {
     exe,
     /// Shared/dynamic library (.so, .dylib, .dll).
     shared_lib,
+};
+
+/// Binaryen optimization mode requested for WebAssembly output.
+pub const WasmOptimizeMode = enum {
+    none,
+    size,
+    speed,
 };
 
 /// Default WASM initial memory: 64MB
@@ -125,10 +159,20 @@ pub const LinkConfig = struct {
     /// Whether the final WASM module imports `env.memory` instead of defining memory.
     wasm_import_memory: bool = false,
 
+    /// Whether the final WASM memory is guaranteed to start zero-filled.
+    wasm_zero_filled_memory: bool = false,
+
+    /// Whether to preserve debug information when optimizing linked wasm output.
+    wasm_debug_info: bool = false,
+
+    /// Whether to run Binaryen over linked wasm output.
+    wasm_optimize: WasmOptimizeMode = .none,
+
     /// Optional data/global base for freestanding WASM links.
     wasm_global_base: ?u32 = null,
 
-    /// Function exports derived from explicit platform host object exports.
+    /// Function exports from the platform host object that are part of the
+    /// final wasm module's host-visible ABI.
     wasm_exports: []const []const u8 = &.{},
 
     /// Platform files directory (absolute path). Used to find platform-bundled sysroots.
@@ -441,11 +485,7 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
 
             // Add architecture flag
             try args.append("-arch");
-            switch (target_arch) {
-                .aarch64 => try args.append("arm64"),
-                .x86_64 => try args.append("x86_64"),
-                else => try args.append("arm64"), // default to arm64
-            }
+            try args.append(roc_target.machoArchName(target_arch) catch return LinkError.LinkFailed);
 
             // Roc rewrites the ad-hoc code signature after patching Mach-O
             // load commands. Suppress lld's content-derived LC_UUID so the
@@ -516,7 +556,6 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             // Stamp a build id so stripped copies of the binary can be
             // matched back to their debug info.
             try args.append("--build-id");
-            // TODO make the confirugable instead of using comments
             // Suppress linker warnings
             if (suppress_linker_warnings) {
                 try args.append("-w");
@@ -647,6 +686,7 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             try args.append("/defaultlib:kernel32");
             try args.append("/defaultlib:ntdll");
             try args.append("/defaultlib:msvcrt");
+            try args.append("/defaultlib:shell32");
 
             // Suppress warnings using Windows style
             try args.append("/ignore:4217"); // Ignore locally defined symbol imported warnings
@@ -672,6 +712,42 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
                 }) catch return LinkError.OutOfMemory;
                 @import("backend").writeFileWindowsAvSafe(ctx.io.std_io, stack_probe_path, stack_probe_obj) catch return LinkError.OutOfMemory;
                 try args.append(stack_probe_path);
+            }
+        },
+        .freebsd, .openbsd, .netbsd => {
+            try args.append("ld.lld");
+
+            try args.append("-o");
+            try args.append(config.output_path);
+
+            // Prevent hidden linker behaviour -- only explicit platform dependencies
+            try args.append("-nostdlib");
+            // Remove unused sections to reduce binary size
+            try args.append("--gc-sections");
+            // Stamp a build id so stripped copies of the binary can be
+            // matched back to their debug info.
+            try args.append("--build-id");
+            // Match what each BSD's own toolchain produces: relocations
+            // resolved eagerly at load and their section mapped read-only
+            // afterwards.
+            try args.append("-z");
+            try args.append("relro");
+            try args.append("-z");
+            try args.append("now");
+            // Suppress linker warnings
+            if (suppress_linker_warnings) {
+                try args.append("-w");
+            }
+
+            if (is_shared_lib) {
+                // Shared libraries have no program interpreter; the loading
+                // process's dynamic linker resolves them.
+                try args.append("-shared");
+            } else {
+                const interpreter = roc_target.bsdProgramInterpreter(target_os) orelse
+                    return LinkError.LinkFailed;
+                try args.append("-dynamic-linker");
+                try args.append(interpreter);
             }
         },
         .freestanding => {
@@ -834,6 +910,13 @@ pub fn link(ctx: *CliCtx, config: LinkConfig) LinkError!void {
         error.LinkFailed => return LinkError.LinkFailed,
     };
 
+    if (config.target_format == .wasm and config.wasm_optimize != .none and !config.disable_output) {
+        optimizeWasmOutput(ctx, config) catch |err| {
+            std.log.warn("Failed to optimize wasm output {s}: {}", .{ config.output_path, err });
+            return LinkError.LinkFailed;
+        };
+    }
+
     // On macOS, ld64.lld does not write LC_MAIN.stacksize from a `-stack_size`
     // arg (zig's own MachO linker does, but we link via the LLVM ld64.lld C
     // API). Patch it ourselves so the main thread gets 64 MiB instead of the
@@ -857,6 +940,75 @@ pub fn link(ctx: *CliCtx, config: LinkConfig) LinkError!void {
             std.log.warn("Failed to re-sign {s} after stacksize patch: {}", .{ config.output_path, err });
         };
     }
+}
+
+fn binaryenStatusName(status: c_int) []const u8 {
+    return switch (status) {
+        1 => "invalid arguments",
+        2 => "read failed",
+        3 => "validation failed",
+        4 => "write failed",
+        else => "unknown error",
+    };
+}
+
+fn binaryenConfig(config: LinkConfig) RocBinaryenOptimizeConfig {
+    const Levels = struct {
+        optimize: c_int,
+        shrink: c_int,
+    };
+    const levels: Levels = switch (config.wasm_optimize) {
+        .none => unreachable,
+        .size => .{ .optimize = 2, .shrink = 2 },
+        .speed => .{ .optimize = 3, .shrink = 0 },
+    };
+    return .{
+        .optimize_level = levels.optimize,
+        .shrink_level = levels.shrink,
+        .zero_filled_memory = @intFromBool(config.wasm_zero_filled_memory),
+        .debug_info = @intFromBool(config.wasm_debug_info),
+        .strip_debug = @intFromBool(!config.wasm_debug_info),
+        .strip_producers = 1,
+        .strip_target_features = @intFromBool(config.wasm_optimize == .size and !config.wasm_debug_info),
+        .validate = 1,
+    };
+}
+
+fn optimizeWasmOutput(ctx: *CliCtx, config: LinkConfig) LinkError!void {
+    if (comptime !binaryen_available) {
+        // This roc build has no bundled Binaryen (a system-LLVM or custom-LLVM
+        // build, where the roc-bootstrap tarball's libbinaryen.a is absent), so
+        // the optimization step is skipped and the already-written wasm at
+        // config.output_path is kept unoptimized. Because binaryen_available is
+        // a comptime build option, in normal builds this whole branch — warning
+        // string included — is compile-time eliminated and costs nothing.
+        std.log.warn("Skipping wasm optimization for {s}: this roc build has no bundled Binaryen (system-LLVM or custom-LLVM build), so the wasm output is left unoptimized.", .{config.output_path});
+        return;
+    }
+
+    const bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, config.output_path, ctx.gpa, .limited(std.math.maxInt(u32))) catch |err| switch (err) {
+        error.OutOfMemory => return LinkError.OutOfMemory,
+        else => return LinkError.LinkFailed,
+    };
+    defer ctx.gpa.free(bytes);
+
+    var output = RocBinaryenBuffer{ .ptr = null, .len = 0 };
+    const status = binaryen_externs.RocBinaryenOptimizeWasm(
+        bytes.ptr,
+        bytes.len,
+        binaryenConfig(config),
+        &output,
+    );
+    defer if (output.ptr) |ptr| binaryen_externs.RocBinaryenFree(@ptrCast(ptr));
+
+    if (status != 0) {
+        std.log.err("Binaryen failed for {s}: {s}", .{ config.output_path, binaryenStatusName(status) });
+        return LinkError.LinkFailed;
+    }
+
+    const output_ptr = output.ptr orelse return LinkError.LinkFailed;
+    const output_bytes = output_ptr[0..output.len];
+    backend.writeFileWindowsAvSafe(ctx.io.std_io, config.output_path, output_bytes) catch return LinkError.LinkFailed;
 }
 
 const macho = std.macho;
@@ -1000,6 +1152,16 @@ fn findArg(args: []const []const u8, needle: []const u8) ?usize {
     return null;
 }
 
+/// Whether `args` contains `flag` immediately followed by `value`, for the
+/// linker options that are spelled as two separate arguments.
+fn hasArgPair(args: []const []const u8, flag: []const u8, value: []const u8) bool {
+    if (args.len == 0) return false;
+    for (args[0 .. args.len - 1], 0..) |arg, i| {
+        if (std.mem.eql(u8, arg, flag) and std.mem.eql(u8, args[i + 1], value)) return true;
+    }
+    return false;
+}
+
 /// Convenience function to link two object files into an executable
 pub fn linkTwoObjects(ctx: *CliCtx, obj1: []const u8, obj2: []const u8, output: []const u8) LinkError!void {
     if (comptime !llvm_available) {
@@ -1028,26 +1190,15 @@ pub fn linkObjects(ctx: *CliCtx, object_files: []const []const u8, output: []con
     return link(ctx, config);
 }
 
-test "link config creation" {
-    const config = LinkConfig{
-        .output_path = "test_output",
-        .object_files = &.{ "file1.o", "file2.o" },
-    };
+test "size wasm strips final target feature metadata" {
+    const size = binaryenConfig(.{ .output_path = "out.wasm", .object_files = &.{}, .wasm_optimize = .size });
+    try std.testing.expectEqual(@as(u8, 1), size.strip_target_features);
 
-    try std.testing.expect(config.target_format == TargetFormat.detectFromSystem());
-    try std.testing.expectEqualStrings("test_output", config.output_path);
-    try std.testing.expectEqual(@as(usize, 2), config.object_files.len);
-    try std.testing.expectEqual(@as(usize, 0), config.platform_files_pre.len);
-    try std.testing.expectEqual(@as(usize, 0), config.platform_files_post.len);
-}
+    const size_debug = binaryenConfig(.{ .output_path = "out.wasm", .object_files = &.{}, .wasm_optimize = .size, .wasm_debug_info = true });
+    try std.testing.expectEqual(@as(u8, 0), size_debug.strip_target_features);
 
-test "target format detection" {
-    const detected = TargetFormat.detectFromSystem();
-
-    // Should detect a valid format
-    switch (detected) {
-        .elf, .coff, .macho, .wasm => {},
-    }
+    const speed = binaryenConfig(.{ .output_path = "out.wasm", .object_files = &.{}, .wasm_optimize = .speed });
+    try std.testing.expectEqual(@as(u8, 0), speed.strip_target_features);
 }
 
 test "force undefined symbols use target linker spelling" {
@@ -1187,6 +1338,66 @@ test "macOS non-archive platform files are passed directly" {
     try std.testing.expectEqual(@as(?usize, null), findArg(args.items, "-all_load"));
     try std.testing.expectEqual(@as(?usize, null), findArg(args.items, "-force_load"));
     _ = findArg(args.items, object_path) orelse return error.MissingObjectFile;
+}
+
+test "BSD executables name their OS program interpreter" {
+    const cases = [_]struct { os: std.Target.Os.Tag, interpreter: []const u8 }{
+        .{ .os = .freebsd, .interpreter = "/libexec/ld-elf.so.1" },
+        .{ .os = .openbsd, .interpreter = "/usr/libexec/ld.so" },
+        .{ .os = .netbsd, .interpreter = "/usr/libexec/ld.elf_so" },
+    };
+
+    for (cases) |case| {
+        var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
+        defer arena_instance.deinit();
+
+        var io = Io.create(std.testing.io);
+        var ctx = CliCtx.init(std.testing.allocator, arena_instance.allocator(), &io, .build);
+        ctx.initIo();
+        defer ctx.deinit();
+
+        const config = LinkConfig{
+            .target_format = .elf,
+            .target_os = case.os,
+            .target_arch = .x86_64,
+            .output_path = "test_output",
+            .object_files = &.{"libroc_interpreter_shim.a"},
+        };
+
+        const args = try buildLinkArgs(&ctx, config);
+
+        try std.testing.expectEqualStrings("ld.lld", args.items[0]);
+        const linker_idx = findArg(args.items, "-dynamic-linker") orelse return error.MissingDynamicLinker;
+        try std.testing.expect(linker_idx + 1 < args.items.len);
+        try std.testing.expectEqualStrings(case.interpreter, args.items[linker_idx + 1]);
+
+        try std.testing.expect(hasArgPair(args.items, "-z", "relro"));
+        try std.testing.expect(hasArgPair(args.items, "-z", "now"));
+    }
+}
+
+test "BSD shared libraries have no program interpreter" {
+    var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena_instance.deinit();
+
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(std.testing.allocator, arena_instance.allocator(), &io, .build);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    const config = LinkConfig{
+        .target_format = .elf,
+        .target_os = .openbsd,
+        .target_arch = .x86_64,
+        .output_path = "test_output",
+        .output_kind = .shared_lib,
+        .object_files = &.{"libroc_interpreter_shim.a"},
+    };
+
+    const args = try buildLinkArgs(&ctx, config);
+
+    _ = findArg(args.items, "-shared") orelse return error.MissingSharedFlag;
+    try std.testing.expectEqual(@as(?usize, null), findArg(args.items, "-dynamic-linker"));
 }
 
 test "link error when LLVM not available" {

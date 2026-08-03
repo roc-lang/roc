@@ -6,25 +6,22 @@
 
 const std = @import("std");
 const builtins = @import("builtins");
+const roc_args = @import("roc_args");
 
 const Allocator = std.mem.Allocator;
 const RocOps = builtins.host_abi.RocOps;
 const RocList = builtins.list.RocList;
 const RocStr = builtins.str.RocStr;
 
-const extern_host = struct {
-    extern fn roc_alloc(length: usize, alignment: usize) ?*anyopaque;
-    extern fn roc_dealloc(ptr: *anyopaque, alignment: usize) void;
-    extern fn roc_realloc(ptr: *anyopaque, new_length: usize, alignment: usize) ?*anyopaque;
-    extern fn roc_dbg(bytes: [*]const u8, len: usize) void;
-    extern fn roc_expect_failed(bytes: [*]const u8, len: usize) void;
-    extern fn roc_crashed(bytes: [*]const u8, len: usize) void;
-};
+const extern_host = builtins.host_abi.extern_host;
+const shim_symbols = builtins.shim_symbols;
 
 /// Hosted dispatch table defined by the generated platform shim module, in
 /// hosted-section order.
-extern const roc_shim_hosted_fns: [*]const builtins.host_abi.HostedFn;
-extern const roc_shim_hosted_count: usize;
+const roc_shim_hosted_fns: *const [*]const builtins.host_abi.HostedFn =
+    @extern(*const [*]const builtins.host_abi.HostedFn, .{ .name = shim_symbols.roc_shim_hosted_fns });
+const roc_shim_hosted_count: *const usize =
+    @extern(*const usize, .{ .name = shim_symbols.roc_shim_hosted_count });
 
 fn shimAlloc(_: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
     return extern_host.roc_alloc(length, alignment);
@@ -42,7 +39,10 @@ fn shimDbg(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
     extern_host.roc_dbg(bytes, len);
 }
 
+var inline_expect_failed = false;
+
 fn shimExpectFailed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    inline_expect_failed = true;
     extern_host.roc_expect_failed(bytes, len);
 }
 
@@ -65,8 +65,8 @@ pub fn getOps() *RocOps {
             .roc_expect_failed = shimExpectFailed,
             .roc_crashed = shimCrashed,
             .hosted_fns = .{
-                .count = @intCast(roc_shim_hosted_count),
-                .fns = @constCast(roc_shim_hosted_fns),
+                .count = @intCast(roc_shim_hosted_count.*),
+                .fns = @constCast(roc_shim_hosted_fns.*),
             },
         };
         shim_ops_initialized = true;
@@ -77,6 +77,19 @@ pub fn getOps() *RocOps {
 /// Return the RocOps value as an opaque pointer for the C ABI export.
 pub fn getOpsOpaque() *anyopaque {
     return @ptrCast(getOps());
+}
+
+/// Clear the default-run inline expect status before entering Roc code.
+pub fn resetInlineExpectFailed() void {
+    inline_expect_failed = false;
+}
+
+/// Return and clear whether the current default-run invocation failed an inline
+/// expect through this shim's RocOps.
+pub fn takeInlineExpectFailed() bool {
+    const failed = inline_expect_failed;
+    inline_expect_failed = false;
+    return failed;
 }
 
 /// Build the default platform's `List(Str)` CLI argument value.
@@ -98,39 +111,5 @@ pub fn buildDefaultRunCliArgs(app_args: []const [*:0]const u8, gpa: Allocator) A
 }
 
 fn sanitizeUtf8(input: []const u8, gpa: Allocator) Allocator.Error![]const u8 {
-    if (std.unicode.utf8ValidateSlice(input)) return input;
-
-    const buf = try gpa.alloc(u8, input.len * 3);
-    var out_i: usize = 0;
-    var in_i: usize = 0;
-    while (in_i < input.len) {
-        const seq_len = std.unicode.utf8ByteSequenceLength(input[in_i]) catch {
-            buf[out_i] = 0xEF;
-            buf[out_i + 1] = 0xBF;
-            buf[out_i + 2] = 0xBD;
-            out_i += 3;
-            in_i += 1;
-            continue;
-        };
-        if (in_i + seq_len > input.len) {
-            buf[out_i] = 0xEF;
-            buf[out_i + 1] = 0xBF;
-            buf[out_i + 2] = 0xBD;
-            out_i += 3;
-            in_i += 1;
-            continue;
-        }
-        if (std.unicode.utf8Decode(input[in_i..][0..seq_len])) |_| {
-            @memcpy(buf[out_i..][0..seq_len], input[in_i..][0..seq_len]);
-            out_i += seq_len;
-            in_i += seq_len;
-        } else |_| {
-            buf[out_i] = 0xEF;
-            buf[out_i + 1] = 0xBF;
-            buf[out_i + 2] = 0xBD;
-            out_i += 3;
-            in_i += 1;
-        }
-    }
-    return try gpa.realloc(buf, out_i);
+    return roc_args.sanitizeUtf8(input, gpa);
 }

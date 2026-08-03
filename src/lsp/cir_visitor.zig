@@ -344,6 +344,7 @@ pub fn CirVisitor(comptime Context: type) type {
                 .e_crash,
                 .e_ellipsis,
                 .e_anno_only,
+                .e_derived_method,
                 .e_break,
                 .e_bytes_literal,
                 => {},
@@ -539,6 +540,7 @@ pub fn CirVisitor(comptime Context: type) type {
                 // Leaf patterns - no children to traverse
                 .assign,
                 .num_literal,
+                .num_from_numeral_literal,
                 .small_dec_literal,
                 .dec_literal,
                 .frac_f32_literal,

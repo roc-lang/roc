@@ -12,29 +12,77 @@ const roc_target = @import("roc_target");
 
 const Coordinator = @import("../coordinator.zig").Coordinator;
 const CoreCtx = @import("ctx").CoreCtx;
+const static_data_exports = @import("static_data");
 
 const HoistedConstantsTestError = std.mem.Allocator.Error ||
+    Coordinator.AppDiscoveryError ||
+    check.CheckedArtifact.CompileTimeFinalizer.Error ||
+    eval.BuiltinModules.InitError ||
     std.Io.Dir.CreateDirPathError ||
+    std.Io.Dir.RealPathFileAllocError ||
     std.Io.Dir.WriteFileError ||
     std.Io.File.Writer.Error ||
+    std.Thread.SpawnError ||
     error{
         AfterRootHadNoRequest,
         BeforeRootHadNoRequest,
+        BuiltinLowLevelAnnotationMustBeFunction,
+        DownloadFailed,
         ExportedRuntimeEntrypointNotFound,
+        ExpectedPlatformString,
+        ExpectedString,
+        FileError,
         HoistedConstWasNotI64,
         HoistedConstWasNotScalar,
         HoistedRootDidNotStoreConstNode,
         HoistedRootKindMismatch,
         HoistedTemplateWasNotStored,
+        Internal,
+        InvalidDependency,
+        InvalidNullByteInPath,
+        InvalidUrl,
+        Issue806MissingStackProbe,
+        Issue806UnsafeLargeStackCallArgument,
+        Issue806UnsafeLargeStackCallReturn,
+        Issue806UnsafeLargeStackClosureCapture,
+        Issue806UnsafeLargeStackJoinParam,
+        Issue806UnsafeLargeStackPatternPayload,
+        Issue806UnsafeLargeStackReturn,
+        Issue806UnsafeLargeStackSetLocalCopy,
+        Issue806UnsafeLargeStackStructAssign,
+        Issue806UnsafeLargeStackTagAssign,
+        LowLevelOperationsNotFound,
+        NoCacheDir,
+        NoPackageSource,
         OutOfMemory,
         PatternExtractionMissingCheckedRootPattern,
         PatternExtractionMissingSourcePattern,
         PatternExtractionRootValueWasNotSyntheticLookup,
         PatternExtractionRootWasNotSyntheticMatch,
+        PathOutsideWorkspace,
         RootDidNotStoreConstNode,
+        StaticDataLiteralNotFound,
+        StaticDataSymbolNotFound,
         TestExpectedEqual,
         TestUnexpectedResult,
+        UnsupportedBuiltinAnnotationOnly,
+        UnsupportedHeader,
+        WriteFailed,
     };
+
+var shared_test_builtins: ?eval.BuiltinModules = null;
+var shared_test_builtins_mutex: std.Io.Mutex = .init;
+
+fn sharedBuiltinModules() eval.BuiltinModules.InitError!*eval.BuiltinModules {
+    shared_test_builtins_mutex.lockUncancelable(std.testing.io);
+    defer shared_test_builtins_mutex.unlock(std.testing.io);
+
+    if (shared_test_builtins == null) {
+        shared_test_builtins = try eval.BuiltinModules.init(std.heap.page_allocator);
+    }
+
+    return &shared_test_builtins.?;
+}
 
 test "hoisted local constants are finalized and restored during runtime lowering" {
     const gpa = std.testing.allocator;
@@ -60,6 +108,7 @@ test "hoisted local constants are finalized and restored during runtime lowering
         \\}
         \\
         \\top_add_five = |n| n + 5.I64
+        \\top_add_five_alias = top_add_five
         \\
         \\indirect_top_helper = |n| {
         \\    indirect_local = 123.I64
@@ -78,6 +127,7 @@ test "hoisted local constants are finalized and restored during runtime lowering
         \\    y = x + 1.I64
         \\    called = top_callable(41.I64)
         \\    called_unique = top_add_five(72.I64)
+        \\    called_alias = top_add_five_alias(73.I64)
         \\    dispatched = DispatchBox.Val(89.I64).add(2.I64).unwrap()
         \\    block_value = {
         \\        block_x = 52.I64
@@ -107,6 +157,7 @@ test "hoisted local constants are finalized and restored during runtime lowering
         \\    _ = y + List.len(args).to_i64_wrap()
         \\    _ = called + List.len(args).to_i64_wrap()
         \\    _ = called_unique + List.len(args).to_i64_wrap()
+        \\    _ = called_alias + List.len(args).to_i64_wrap()
         \\    _ = dispatched + List.len(args).to_i64_wrap()
         \\    _ = indirect_top_value + List.len(args).to_i64_wrap()
         \\    _ = block_value + List.len(args).to_i64_wrap()
@@ -133,9 +184,11 @@ test "hoisted local constants are finalized and restored during runtime lowering
         \\
         \\import Echo
         \\
+        \\main_alias! = main!
+        \\
         \\main_for_host! : List(Str) => I8
         \\main_for_host! = |args|
-        \\    match main!(args) {
+        \\    match main_alias!(args) {
         \\        Ok({}) => 0
         \\        Err(Exit(code)) => code
         \\        Err(other) => {
@@ -160,15 +213,14 @@ test "hoisted local constants are finalized and restored during runtime lowering
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
-    var builtin_modules = try eval.BuiltinModules.init(gpa);
-    defer builtin_modules.deinit();
+    const builtin_modules = try sharedBuiltinModules();
 
     var coord = try Coordinator.init(
         gpa,
         .single_threaded,
         1,
         roc_target.RocTarget.detectNative(),
-        &builtin_modules,
+        builtin_modules,
         build_options.compiler_version,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
@@ -191,7 +243,7 @@ test "hoisted local constants are finalized and restored during runtime lowering
     try std.testing.expect(!coord.hasUserErrors());
 
     const root = coord.executableRootCheckedArtifact();
-    const app_artifact = coord.rootCheckedArtifact("app");
+    const app_artifact = coord.appRootCheckedArtifact();
     const app_view = check.CheckedArtifact.importedView(app_artifact);
     const imports = try coord.collectImportedArtifactViews(arena, root);
     const relations = try coord.collectRelationArtifactViews(arena, root);
@@ -206,6 +258,7 @@ test "hoisted local constants are finalized and restored during runtime lowering
     try expectCompileTimeRootKindsPresent(app);
     try expectCompileTimeRootKindsPresent(app_view);
     try expectExportedRuntimeEntrypoint(app_artifact);
+    try expectPendingProcedureAliasRoot(root, "main_alias!");
 
     const top_a = findStoredCompileTimeRootI64(app_view, .constant, 40) orelse return error.TopLevelFortyNotFound;
     const top_b = findStoredCompileTimeRootI64(app_view, .constant, 41) orelse return error.TopLevelFortyOneNotFound;
@@ -223,6 +276,7 @@ test "hoisted local constants are finalized and restored during runtime lowering
     _ = findStoredI64(app_view, 91) orelse return error.HoistedStaticDispatchCallNotFound;
     try std.testing.expect(countStoredHoistedI64(app_view, 42) >= 2);
     try std.testing.expect(countCompileTimeRootKind(app_artifact, .callable_binding) >= 1);
+    try expectPendingProcedureAliasRoot(app_artifact, "top_add_five_alias");
     try std.testing.expect(countHoistedMatchRoots(app_artifact) >= 1);
 
     try expectRootRequestBefore(app_artifact, top_a.id, top_b.id);
@@ -332,15 +386,14 @@ test "imported checked bodies restore their module's hoisted constants" {
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
-    var builtin_modules = try eval.BuiltinModules.init(gpa);
-    defer builtin_modules.deinit();
+    const builtin_modules = try sharedBuiltinModules();
 
     var coord = try Coordinator.init(
         gpa,
         .single_threaded,
         1,
         roc_target.RocTarget.detectNative(),
-        &builtin_modules,
+        builtin_modules,
         build_options.compiler_version,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
@@ -357,7 +410,7 @@ test "imported checked bodies restore their module's hoisted constants" {
     try std.testing.expect(!coord.hasUserErrors());
 
     const root = coord.executableRootCheckedArtifact();
-    const app_artifact = coord.rootCheckedArtifact("app");
+    const app_artifact = coord.appRootCheckedArtifact();
     const app_view = check.CheckedArtifact.importedView(app_artifact);
     const imports = try coord.collectImportedArtifactViews(arena, root);
     const relations = try coord.collectRelationArtifactViews(arena, root);
@@ -385,6 +438,341 @@ test "imported checked bodies restore their module's hoisted constants" {
         .{ .target_usize = base.target.TargetUsize.native },
     );
     defer lowered.deinit();
+}
+
+test "hoisted list constants lower to internal static data" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\numbers = [11.I64, 22.I64, 33.I64, 44.I64]
+        \\
+        \\main! = |args| {
+        \\    var $sum = List.len(args).to_i64_wrap()
+        \\    for n in numbers {
+        \\        $sum = $sum + n
+        \\    }
+        \\    _ = $sum
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    const builtin_modules = try sharedBuiltinModules();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        .x64linux,
+        builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .imports = imports,
+        },
+        .{
+            .requests = lir_roots,
+            .include_provided_data_exports = true,
+            .include_internal_static_data = true,
+        },
+        .{ .target_usize = base.target.TargetUsize.u64 },
+    );
+    defer lowered.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), lowered.lir_result.static_data_values.items.len);
+    try expectStaticInitializersMaterializationOnly(&lowered.lir_result);
+    try expectStaticDataLiteralPresent(&lowered.lir_result);
+
+    const exports = try static_data_exports.buildStaticData(
+        gpa,
+        .{
+            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .imports = imports,
+        },
+        &lowered,
+        .x64linux,
+        .{ .include_provided_exports = true },
+    );
+    defer static_data_exports.deinitStaticData(gpa, exports);
+
+    for (lowered.lir_result.static_data_values.items, 0..) |_, index| {
+        const static_data_id: lir.LIR.StaticDataId = @enumFromInt(@as(u32, @intCast(index)));
+        const expected_symbol = try lir.Program.staticDataSymbolName(gpa, static_data_id);
+        defer gpa.free(expected_symbol);
+
+        for (exports) |static_export| {
+            if (!std.mem.eql(u8, static_export.symbol_name, expected_symbol)) continue;
+
+            try std.testing.expect(static_export.bytes.len != 0);
+            try std.testing.expect(static_export.alignment != 0);
+            try std.testing.expect(static_export.is_global);
+            try std.testing.expect(!static_export.is_exported);
+            return;
+        }
+    }
+    return error.StaticDataSymbolNotFound;
+}
+
+test "inline list iter constants lower to internal static data" {
+    try expectInlineListStaticDataLiteral(
+        std.testing.allocator,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\main! = |args| {
+        \\    var $sum = List.len(args).to_i64_wrap()
+        \\    for n in [11.I64, 22.I64, 33.I64, 44.I64].iter() {
+        \\        $sum = $sum + n
+        \\    }
+        \\    _ = $sum
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    );
+}
+
+test "inline list for constants lower to internal static data" {
+    try expectInlineListStaticDataLiteral(
+        std.testing.allocator,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\main! = |args| {
+        \\    var $sum = List.len(args).to_i64_wrap()
+        \\    for n in [11.I64, 22.I64, 33.I64, 44.I64] {
+        \\        $sum = $sum + n
+        \\    }
+        \\    _ = $sum
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    );
+}
+
+fn expectInlineListStaticDataLiteral(gpa: std.mem.Allocator, source: []const u8) HoistedConstantsTestError!void {
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data = source,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    const builtin_modules = try sharedBuiltinModules();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        .x64linux,
+        builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .imports = imports,
+        },
+        .{
+            .requests = lir_roots,
+            .include_provided_data_exports = true,
+            .include_internal_static_data = true,
+        },
+        .{
+            .target_usize = base.target.TargetUsize.u32,
+            .inline_mode = .wrappers,
+            .list_in_place_map = true,
+            .tag_reachability = true,
+        },
+    );
+    defer lowered.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), lowered.lir_result.static_data_values.items.len);
+    try expectStaticInitializersMaterializationOnly(&lowered.lir_result);
+    try expectStaticDataLiteralPresent(&lowered.lir_result);
+}
+
+test "callable binding with alias annotation is const-evaluated" {
+    // Regression test: a function-typed top-level def whose annotation
+    // mentions a type alias (here `MyErr`) must still be scheduled for
+    // compile-time evaluation when the alias expands to a fully concrete
+    // type. The internal type store conservatively marks any type that
+    // mentions an alias as needing instantiation; if the published checked
+    // type inherits that flag, the def is kept template-only and silently
+    // degrades to runtime construction (observed with Json.parser_camel()).
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.createDirPath(std.testing.io, ".roc_echo_platform");
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\MyErr : [Small(Str)]
+        \\
+        \\make_validator = |limit| {
+        \\    |n| if n > limit { Ok(n) } else { Err(Small("too small")) }
+        \\}
+        \\
+        \\validate : I64 -> Try(I64, MyErr)
+        \\validate = make_validator(0.I64)
+        \\
+        \\main! = |args| {
+        \\    validated = match validate(List.len(args).to_i64_wrap()) {
+        \\        Ok(n) => n
+        \\        Err(Small(_)) => 0.I64
+        \\    }
+        \\    _ = validated
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = ".roc_echo_platform/main.roc",
+        .data =
+        \\platform ""
+        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        \\    exposes [Echo]
+        \\    packages {}
+        \\    provides { "roc_main": main_for_host! }
+        \\    hosted { "roc_echo_line": Echo.line! }
+        \\
+        \\import Echo
+        \\
+        \\main_for_host! : List(Str) => I8
+        \\main_for_host! = |args|
+        \\    match main!(args) {
+        \\        Ok({}) => 0
+        \\        Err(Exit(code)) => code
+        \\        Err(other) => {
+        \\            Echo.line!("Program exited with error: ${Str.inspect(other)}")
+        \\            1
+        \\        }
+        \\    }
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = ".roc_echo_platform/Echo.roc",
+        .data =
+        \\Echo := [].{
+        \\    line! : Str => {}
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    const builtin_modules = try sharedBuiltinModules();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finalizeExecutableArtifacts();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const app_artifact = coord.appRootCheckedArtifact();
+    var saw_callable_binding = false;
+    for (app_artifact.compile_time_roots.roots) |root| {
+        if (root.kind != .callable_binding) continue;
+        saw_callable_binding = true;
+        if (root.payload != .fn_value) return error.CallableBindingConstFnNotStored;
+    }
+    try std.testing.expect(saw_callable_binding);
 }
 
 test "hoisted constant crash reports original source region" {
@@ -448,15 +836,14 @@ test "hoisted constant crash reports original source region" {
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
-    var builtin_modules = try eval.BuiltinModules.init(gpa);
-    defer builtin_modules.deinit();
+    const builtin_modules = try sharedBuiltinModules();
 
     var coord = try Coordinator.init(
         gpa,
         .single_threaded,
         1,
         roc_target.RocTarget.detectNative(),
-        &builtin_modules,
+        builtin_modules,
         build_options.compiler_version,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
@@ -550,15 +937,14 @@ test "inlined hoisted constant crash reports hoisted source region" {
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
-    var builtin_modules = try eval.BuiltinModules.init(gpa);
-    defer builtin_modules.deinit();
+    const builtin_modules = try sharedBuiltinModules();
 
     var coord = try Coordinator.init(
         gpa,
         .single_threaded,
         1,
         roc_target.RocTarget.detectNative(),
-        &builtin_modules,
+        builtin_modules,
         build_options.compiler_version,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
@@ -647,15 +1033,14 @@ test "hoisted pattern extraction failure reports original destructure region" {
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
-    var builtin_modules = try eval.BuiltinModules.init(gpa);
-    defer builtin_modules.deinit();
+    const builtin_modules = try sharedBuiltinModules();
 
     var coord = try Coordinator.init(
         gpa,
         .single_threaded,
         1,
         roc_target.RocTarget.detectNative(),
-        &builtin_modules,
+        builtin_modules,
         build_options.compiler_version,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
@@ -746,15 +1131,14 @@ test "hoisted pattern extraction base match failure reports match" {
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
-    var builtin_modules = try eval.BuiltinModules.init(gpa);
-    defer builtin_modules.deinit();
+    const builtin_modules = try sharedBuiltinModules();
 
     var coord = try Coordinator.init(
         gpa,
         .single_threaded,
         1,
         roc_target.RocTarget.detectNative(),
-        &builtin_modules,
+        builtin_modules,
         build_options.compiler_version,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
@@ -848,15 +1232,14 @@ test "hoisted pattern extraction successful base match resolves pending diagnost
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
-    var builtin_modules = try eval.BuiltinModules.init(gpa);
-    defer builtin_modules.deinit();
+    const builtin_modules = try sharedBuiltinModules();
 
     var coord = try Coordinator.init(
         gpa,
         .single_threaded,
         1,
         roc_target.RocTarget.detectNative(),
-        &builtin_modules,
+        builtin_modules,
         build_options.compiler_version,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
@@ -902,15 +1285,14 @@ test "hoisted match guard does not report unused branch warning" {
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
-    var builtin_modules = try eval.BuiltinModules.init(gpa);
-    defer builtin_modules.deinit();
+    const builtin_modules = try sharedBuiltinModules();
 
     var coord = try Coordinator.init(
         gpa,
         .single_threaded,
         1,
         roc_target.RocTarget.detectNative(),
-        &builtin_modules,
+        builtin_modules,
         build_options.compiler_version,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
@@ -930,7 +1312,7 @@ test "hoisted match guard does not report unused branch warning" {
     }
     try std.testing.expect(!found_unused_branch);
 
-    const artifact = coord.rootCheckedArtifact("app");
+    const artifact = coord.appRootCheckedArtifact();
     var found_hoisted_root = false;
     for (artifact.compile_time_roots.roots) |root| {
         if (root.kind == .hoisted_constant) found_hoisted_root = true;
@@ -979,15 +1361,14 @@ test "hoisted successful call does not clear runtime reachable helper exhaustive
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
-    var builtin_modules = try eval.BuiltinModules.init(gpa);
-    defer builtin_modules.deinit();
+    const builtin_modules = try sharedBuiltinModules();
 
     var coord = try Coordinator.init(
         gpa,
         .single_threaded,
         1,
         roc_target.RocTarget.detectNative(),
-        &builtin_modules,
+        builtin_modules,
         build_options.compiler_version,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
@@ -1051,15 +1432,14 @@ test "hoisted failing call into runtime reachable helper reports static diagnost
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
-    var builtin_modules = try eval.BuiltinModules.init(gpa);
-    defer builtin_modules.deinit();
+    const builtin_modules = try sharedBuiltinModules();
 
     var coord = try Coordinator.init(
         gpa,
         .single_threaded,
         1,
         roc_target.RocTarget.detectNative(),
-        &builtin_modules,
+        builtin_modules,
         build_options.compiler_version,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
@@ -1121,6 +1501,25 @@ fn expectCompileTimeRootKindsPresent(
     try std.testing.expect(saw_top_level_constant);
     try std.testing.expect(saw_top_level_callable);
     try std.testing.expect(saw_hoisted_constant);
+}
+
+fn expectPendingProcedureAliasRoot(
+    artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    source_name: []const u8,
+) HoistedConstantsTestError!void {
+    for (artifact.top_level_values.entries) |entry| {
+        if (!std.mem.eql(u8, artifact.canonical_names.exportNameText(entry.source_name), source_name)) continue;
+        const root_id = artifact.compile_time_roots.lookupIdByPattern(entry.pattern) orelse {
+            try std.testing.expect(false);
+            return;
+        };
+        const root = artifact.compile_time_roots.root(root_id);
+        try std.testing.expectEqual(check.CheckedArtifact.CompileTimeRootKind.callable_binding, root.kind);
+        try std.testing.expectEqual(check.CheckedArtifact.CompileTimeRootPayload.pending, root.payload);
+        try std.testing.expect(compileTimeRequestIndexForRoot(artifact, root.id) == null);
+        return;
+    }
+    try std.testing.expect(false);
 }
 
 fn expectExportedRuntimeEntrypoint(
@@ -1222,15 +1621,7 @@ fn expectPatternExtractionSyntheticRegions(
         const match_data = switch (synthetic_match.data) {
             .match_ => |match_| match_,
             .pending,
-            .num,
-            .frac_f32,
-            .frac_f64,
-            .dec,
-            .dec_small,
-            .num_from_numeral,
-            .typed_int,
-            .typed_frac,
-            .typed_num_from_numeral,
+            .numeral,
             .str_from_quote,
             .str_segment,
             .str,
@@ -1305,15 +1696,7 @@ fn expectPatternExtractionSyntheticRegions(
         const lookup = switch (synthetic_lookup.data) {
             .lookup_local => |lookup| lookup,
             .pending,
-            .num,
-            .frac_f32,
-            .frac_f64,
-            .dec,
-            .dec_small,
-            .num_from_numeral,
-            .typed_int,
-            .typed_frac,
-            .typed_num_from_numeral,
+            .numeral,
             .str_from_quote,
             .str_segment,
             .str,
@@ -1493,6 +1876,66 @@ fn countCompileTimeRootKind(
     return count;
 }
 
+fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedConstantsTestError!void {
+    for (result.store.getCFStmts()) |stmt| {
+        switch (stmt) {
+            .assign_literal => |assign| switch (assign.value) {
+                .static_data => return,
+                .i64_literal,
+                .i128_literal,
+                .f64_literal,
+                .f32_literal,
+                .dec_literal,
+                .str_literal,
+                .bytes_literal,
+                .null_ptr,
+                .proc_ref,
+                => {},
+            },
+            .init_uninitialized,
+            .assign_ref,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            .incref,
+            .decref,
+            .decref_if_initialized,
+            .free,
+            => {},
+        }
+    }
+    return error.StaticDataLiteralNotFound;
+}
+
+fn expectStaticInitializersMaterializationOnly(result: *const lir.Program.Result) HoistedConstantsTestError!void {
+    for (result.static_data_values.items) |value| {
+        try std.testing.expect(result.store.getProcSpec(value.initializer).is_static_initializer);
+    }
+}
+
 fn storedI64(
     artifact: check.CheckedArtifact.ImportedModuleView,
     entry: check.CheckedArtifact.HoistedConstEntry,
@@ -1606,15 +2049,14 @@ test "issue 9733: nested expect statements are collected as test roots" {
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
-    var builtin_modules = try eval.BuiltinModules.init(gpa);
-    defer builtin_modules.deinit();
+    const builtin_modules = try sharedBuiltinModules();
 
     var coord = try Coordinator.init(
         gpa,
         .single_threaded,
         1,
         roc_target.RocTarget.detectNative(),
-        &builtin_modules,
+        builtin_modules,
         build_options.compiler_version,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
@@ -1630,7 +2072,7 @@ test "issue 9733: nested expect statements are collected as test roots" {
     try coord.finalizeExecutableArtifacts();
     try std.testing.expect(!coord.hasUserErrors());
 
-    const app_artifact = coord.rootCheckedArtifact("app");
+    const app_artifact = coord.appRootCheckedArtifact();
 
     try std.testing.expectEqual(
         @as(usize, 2),

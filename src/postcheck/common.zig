@@ -23,12 +23,42 @@ pub const RootRequests = struct {
     requests: []const checked.RootRequest = &.{},
     layout_requests: []const checked.CheckedTypeId = &.{},
     static_data_requests: []const StaticDataRequest = &.{},
+    test_plan_metadata: []const RootTestPlanMetadata = &.{},
 };
 
 /// Checked const data that must produce a runtime layout and callable entries.
 pub const StaticDataRequest = struct {
-    data: checked.ProvidedDataExport,
+    const_locator: checked.ConstLocator,
+    node: ?checked.ConstNodeId = null,
+    checked_type: checked.CheckedTypeId,
 };
+
+/// Stage-local readonly static-data value id.
+pub const StaticDataId = enum(u32) { _ };
+
+/// Optional command-level test-plan metadata for a checked root request.
+pub const RootTestPlanMetadata = struct {
+    root_order: u32,
+    result_index: u32,
+    module_index: u32,
+    root_index: u32,
+};
+
+/// Return the command-level test-plan metadata for a checked root request.
+pub fn testPlanMetadataForRoot(
+    roots: RootRequests,
+    root: checked.RootRequest,
+) ?lir_core.RootMetadata.RootMetadata.TestPlanMetadata {
+    for (roots.test_plan_metadata) |metadata| {
+        if (metadata.root_order != root.order) continue;
+        return .{
+            .result_index = metadata.result_index,
+            .module_index = metadata.module_index,
+            .root_index = metadata.root_index,
+        };
+    }
+    return null;
+}
 
 /// Target settings carried through post-check lowering.
 pub const Target = struct {
@@ -73,6 +103,7 @@ pub fn hasherWriteOp(primitive: MonoType.Primitive) LIR.LowLevel {
         .f32 => .hasher_write_f32,
         .f64 => .hasher_write_f64,
         .dec => .hasher_write_dec,
+        .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => .hasher_write_u128,
     };
 }
 
@@ -82,6 +113,27 @@ pub fn invariant(comptime message: []const u8) noreturn {
         std.debug.panic("postcheck invariant violated: {s}", .{message});
     }
     unreachable;
+}
+
+/// `invariant` with runtime context formatted into the panic message.
+pub fn invariantFmt(comptime fmt: []const u8, args: anytype) noreturn {
+    if (@import("builtin").mode == .Debug) {
+        std.debug.panic("postcheck invariant violated: " ++ fmt, args);
+    }
+    unreachable;
+}
+
+/// Stop the build with a compiler-bug message in every build mode.
+///
+/// `invariant` compiles to `unreachable` outside debug builds, which is the
+/// right cost for a consistency check whose violation cannot change the code
+/// a release build emits. A violated host ABI contract is the other kind: the
+/// extern would be emitted at a layout the host was never compiled against and
+/// the host's return value would be misread at runtime, with no diagnostic and
+/// no crash. That check has to hold in release builds too, so this one reports
+/// and aborts instead of becoming undefined behavior.
+pub fn compilerBug(message: []const u8) noreturn {
+    std.debug.panic("compiler bug: {s}", .{message});
 }
 
 /// Monotonic symbol id generator for post-check stages.

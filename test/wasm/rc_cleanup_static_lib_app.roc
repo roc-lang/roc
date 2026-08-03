@@ -3,6 +3,7 @@ app [main!] { pf: platform "./static-lib-platform/main.roc" }
 step : Box(U64) -> Box(U64)
 step = |boxed| {
     model = Box.unbox(boxed)
+    expect model == model
     temp = List.concat([1.U8, 2.U8, 3.U8], [4.U8, 5.U8, 6.U8])
 
     Box.box(model + List.len(temp))

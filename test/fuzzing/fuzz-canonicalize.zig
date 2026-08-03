@@ -37,8 +37,10 @@
 //! Other afl commands also available in `./zig-out/AFLplusplus/bin`
 
 const std = @import("std");
+const build_options = @import("build_options");
 const compile = @import("compile");
 const roc_target = @import("roc_target");
+const FuzzHarness = @import("FuzzHarness.zig");
 
 const BuildEnv = compile.BuildEnv;
 
@@ -54,9 +56,9 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
 pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     // We reinitialize the gpa on every loop of the fuzzer.
     // This enables the gpa to do leak checking on each iteration.
-    var gpa_impl = std.heap.DebugAllocator(.{}){};
+    var gpa_impl = std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
     defer {
-        _ = gpa_impl.deinit();
+        _ = build_options.debugGpaOk(gpa_impl.deinit());
     }
     const gpa = gpa_impl.allocator();
 
@@ -66,20 +68,12 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
         std.debug.print("Input:\n==========\n{s}\n==========\n\n", .{input});
     }
 
-    // Write input to a temporary file
     const fuzz_io = std.Io.Threaded.global_single_threaded.io();
-    const tmp_dir_path = "/tmp/roc-fuzz-canonicalize";
-    const tmp_dir = std.Io.Dir.openDirAbsolute(fuzz_io, tmp_dir_path, .{}) catch blk: {
-        std.Io.Dir.createDirAbsolute(fuzz_io, tmp_dir_path, .default_dir) catch return;
-        break :blk std.Io.Dir.openDirAbsolute(fuzz_io, tmp_dir_path, .{}) catch return;
+    const generated_files = [_]FuzzHarness.GeneratedFile{
+        .{ .name = "fuzz_input.roc", .source = input },
     };
-
-    const tmp_file_path = "fuzz_input.roc";
-    tmp_dir.writeFile(fuzz_io, .{ .sub_path = tmp_file_path, .data = input }) catch return;
-
-    // Get absolute path
-    const abs_path = tmp_dir.realPathFileAlloc(fuzz_io, tmp_file_path, gpa) catch return;
-    defer gpa.free(abs_path);
+    const abs_paths = FuzzHarness.writeGeneratedFiles(gpa, fuzz_io, "/tmp/roc-fuzz-canonicalize", &generated_files) catch return;
+    defer FuzzHarness.freeGeneratedPaths(gpa, abs_paths);
 
     // Process the input through BuildEnv
     // Panic on OOM so AFL++ knows it's a resource issue, not a bug in the fuzzed code
@@ -88,7 +82,7 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     var build_env = BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, fuzz_io) catch @panic("OOM during BuildEnv init");
     defer build_env.deinit();
 
-    build_env.build(abs_path) catch |err| {
+    build_env.build(abs_paths[0]) catch |err| {
         switch (err) {
             error.OutOfMemory => @panic("OOM"),
             else => {},

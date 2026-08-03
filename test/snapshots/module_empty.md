@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=An empty module with no exposes
+description=An empty mod with no exposes
 type=snippet
 ~~~
 # SOURCE
@@ -18,7 +18,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements))
 ~~~
 # FORMATTED

@@ -25,211 +25,312 @@ ar,
 ~~~
 # EXPECTED
 EXPECTED OPENING BRACE - fuzz_crash_029.md:11:3:11:8
-PARSE ERROR - fuzz_crash_029.md:12:3:12:4
-UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_029.md:13:6:13:7
-PARSE ERROR - fuzz_crash_029.md:13:7:13:10
-PARSE ERROR - fuzz_crash_029.md:13:10:13:11
-PARSE ERROR - fuzz_crash_029.md:13:11:13:12
-PARSE ERROR - fuzz_crash_029.md:13:13:13:17
-PARSE ERROR - fuzz_crash_029.md:13:19:13:20
-PARSE ERROR - fuzz_crash_029.md:14:2:14:10
-PARSE ERROR - fuzz_crash_029.md:15:3:15:4
-PARSE ERROR - fuzz_crash_029.md:15:14:15:15
-PARSE ERROR - fuzz_crash_029.md:15:16:15:17
-PARSE ERROR - fuzz_crash_029.md:15:17:15:18
-PARSE ERROR - fuzz_crash_029.md:16:1:16:3
-PARSE ERROR - fuzz_crash_029.md:16:3:16:4
-PARSE ERROR - fuzz_crash_029.md:17:3:17:4
+EXPECTED PROVIDES - fuzz_crash_029.md:12:3:12:4
+UNEXPECTED TYPE SYNTAX - fuzz_crash_029.md:13:6:13:7
+UNEXPECTED STATEMENT - fuzz_crash_029.md:13:7:13:10
+UNEXPECTED STATEMENT - fuzz_crash_029.md:13:10:13:11
+UNEXPECTED STATEMENT - fuzz_crash_029.md:13:11:13:12
+UNEXPECTED STATEMENT - fuzz_crash_029.md:13:13:13:17
+UNEXPECTED STATEMENT - fuzz_crash_029.md:13:19:13:20
+UNEXPECTED STATEMENT - fuzz_crash_029.md:14:2:14:10
+UNEXPECTED STATEMENT - fuzz_crash_029.md:15:3:15:4
+TYPE APPLICATION NEEDS PARENTHESES - fuzz_crash_029.md:15:14:15:15
+UNEXPECTED STATEMENT - fuzz_crash_029.md:15:16:15:17
+UNEXPECTED STATEMENT - fuzz_crash_029.md:15:17:15:18
+UNEXPECTED STATEMENT - fuzz_crash_029.md:16:1:16:3
+UNEXPECTED STATEMENT - fuzz_crash_029.md:16:3:16:4
+UNEXPECTED STATEMENT - fuzz_crash_029.md:17:3:17:4
 MALFORMED TYPE - fuzz_crash_029.md:13:6:13:7
 DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
 # PROBLEMS
 
 ┌────────────────────────┐
-│ EXPECTED OPENING BRACE ├─ Platform headers must have a packages section ────┐
-└┬───────────────────────┘  that lists package dependencies.                  │
+│ EXPECTED OPENING BRACE ├─ I was parsing a `packages` section, and I ────────┐
+└┬───────────────────────┘  expected an opening `{`.                          │
  │                                                                            │
  │  vides # Cd                                                                │
  │  ‾‾‾‾‾                                                                     │
  └──────────────────────────────────────────────────── fuzz_crash_029.md:11:3 ┘
 
-    For example:     packages { base: "../base/main.roc" }
+    Package dependencies are written as record fields inside braces.
+
+    For example:
+        packages { base: "../base/main.roc" }
+
+    I found `vides` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: expected_provides ─────────────────┐
-└┬────────────┘                                                               │
+┌───────────────────┐
+│ EXPECTED PROVIDES ├─ I was parsing a platform header, and I expected the ───┐
+└┬──────────────────┘  `provides` section.                                    │
  │                                                                            │
  │  { # pen                                                                   │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── fuzz_crash_029.md:12:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    A platform header must map host symbols to Roc functions in a `provides`
+    record.
+
+    For example:
+        provides { "roc_main": main }
+
+    I found `{` here.
 
 
-┌─────────────────────────────────────┐
-│ UNEXPECTED TOKEN IN TYPE ANNOTATION ├─ The token " is not expected in a ────┐
-└┬────────────────────────────────────┘  type annotation.                     │
+┌────────────────────────┐
+│ UNEXPECTED TYPE SYNTAX ├─ I was parsing a type annotation, and this token ──┐
+└┬───────────────────────┘  cannot start a type here.                         │
  │                                                                            │
  │  pkg: "..l", mmen  } # Cose                                                │
  │       ‾                                                                    │
  └──────────────────────────────────────────────────── fuzz_crash_029.md:13:6 ┘
 
-    Type annotations should contain types like Str, Num a, or List U64.
+    Types can be type variables, uppercase type names, function types, tuples,
+    records, or tag unions.
+
+    For example:
+        List(U64)
+
+    I found `"` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  pkg: "..l", mmen  } # Cose                                                │
  │        ‾‾‾                                                                 │
  └──────────────────────────────────────────────────── fuzz_crash_029.md:13:7 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `..l` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  pkg: "..l", mmen  } # Cose                                                │
  │           ‾                                                                │
  └─────────────────────────────────────────────────── fuzz_crash_029.md:13:10 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `"` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  pkg: "..l", mmen  } # Cose                                                │
  │            ‾                                                               │
  └─────────────────────────────────────────────────── fuzz_crash_029.md:13:11 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  pkg: "..l", mmen  } # Cose                                                │
  │              ‾‾‾‾                                                          │
  └─────────────────────────────────────────────────── fuzz_crash_029.md:13:13 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `mmen` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  pkg: "..l", mmen  } # Cose                                                │
  │                    ‾                                                       │
  └─────────────────────────────────────────────────── fuzz_crash_029.md:13:19 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `}` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  provides # Cd                                                             │
  │  ‾‾‾‾‾‾‾‾                                                                  │
  └──────────────────────────────────────────────────── fuzz_crash_029.md:14:2 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `provides` here.
+    That word is reserved by Roc, so it cannot be used as a name in this
+    position.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  [ Ok(world), (n # pen                                                     │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── fuzz_crash_029.md:15:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `[` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
-└┬────────────┘  arguments.                                                   │
+┌────────────────────────────────────┐
+│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
+└┬───────────────────────────────────┘  and I found a type argument without   │
+ │                                      parentheses.                          │
  │                                                                            │
  │  [ Ok(world), (n # pen                                                     │
  │             ‾                                                              │
  └─────────────────────────────────────────────────── fuzz_crash_029.md:15:14 ┘
 
-    I found a type followed by what looks like a type argument, but they need
-    to be connected with parentheses.
+    Roc type applications use parentheses around their arguments. Write
+    `List(U8)`, not `List U8`.
 
-    Instead of:
-        List U8
-
-    Use:
+    For example:
         List(U8)
 
-    Other valid examples:
-        Dict(Str, Num)
-        Try(a, Str)
-        Maybe(List(U64))
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  [ Ok(world), (n # pen                                                     │
  │               ‾                                                            │
  └─────────────────────────────────────────────────── fuzz_crash_029.md:15:16 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `(` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  [ Ok(world), (n # pen                                                     │
  │                ‾                                                           │
  └─────────────────────────────────────────────────── fuzz_crash_029.md:15:17 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `n` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  ar,                                                                       │
  │  ‾‾                                                                        │
  └──────────────────────────────────────────────────── fuzz_crash_029.md:16:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `ar` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  ar,                                                                       │
  │    ‾                                                                       │
  └──────────────────────────────────────────────────── fuzz_crash_029.md:16:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  ]                                                                         │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── fuzz_crash_029.md:17:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `]` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
 ┌────────────────┐
@@ -250,7 +351,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
  │  ‾‾‾‾‾‾                                                                    │
  └──────────────────────────────────────────────────── fuzz_crash_029.md:13:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 # TOKENS
@@ -298,7 +399,7 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 # pen
-pkg : 
+pkg :
 # Cose
 # Cd
 # pen

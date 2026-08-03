@@ -83,7 +83,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "MyType")
@@ -189,13 +189,7 @@ NO CHANGE
 			(ty-lookup (name "MyType") (local))))
 	(d-let
 		(p-assign (ident "result2"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 578)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "c"))))
-			(args
-				(e-lookup-local
-					(p-assign (ident "d")))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "MyType") (local))))
 	(s-nominal-decl
@@ -213,7 +207,7 @@ NO CHANGE
 		(patt (type "Error"))
 		(patt (type "MyType"))
 		(patt (type "MyType"))
-		(patt (type "Error")))
+		(patt (type "MyType")))
 	(type_decls
 		(nominal (type "MyType")
 			(ty-header (name "MyType"))))
@@ -223,5 +217,5 @@ NO CHANGE
 		(expr (type "Error"))
 		(expr (type "MyType"))
 		(expr (type "MyType"))
-		(expr (type "Error"))))
+		(expr (type "MyType"))))
 ~~~

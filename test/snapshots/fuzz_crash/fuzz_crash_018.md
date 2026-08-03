@@ -9,32 +9,46 @@ type=file
 .R
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_018.md:1:1:1:2
-PARSE ERROR - fuzz_crash_018.md:2:1:2:3
+UNEXPECTED STATEMENT - fuzz_crash_018.md:1:1:1:2
+UNEXPECTED STATEMENT - fuzz_crash_018.md:2:1:2:3
 UNDECLARED TYPE - fuzz_crash_018.md:1:5:1:6
 DECLARATION HAS NO VALUE - fuzz_crash_018.md:1:3:1:6
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  0 b:S                                                                     │
  │  ‾                                                                         │
  └───────────────────────────────────────────────────── fuzz_crash_018.md:1:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `0` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  .R                                                                        │
  │  ‾‾                                                                        │
  └───────────────────────────────────────────────────── fuzz_crash_018.md:2:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `.R` here.
+    Names that start with uppercase letters are used for tags, type names, and
+    mod names in Roc.
 
 
 ┌─────────────────┐
@@ -55,7 +69,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_018.md:1:3:1:6
  │    ‾‾‾                                                                     │
  └───────────────────────────────────────────────────── fuzz_crash_018.md:1:3 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 # TOKENS
@@ -67,7 +81,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-type-anno (name "b")

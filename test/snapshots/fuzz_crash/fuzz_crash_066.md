@@ -8,19 +8,25 @@ type=snippet
 C:[0]
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_066.md:1:4:1:5
+UNEXPECTED TYPE SYNTAX - fuzz_crash_066.md:1:4:1:5
 MALFORMED TYPE - fuzz_crash_066.md:1:4:1:5
 # PROBLEMS
 
-┌─────────────────────────────────────┐
-│ UNEXPECTED TOKEN IN TYPE ANNOTATION ├─ The token 0 is not expected in a ────┐
-└┬────────────────────────────────────┘  type annotation.                     │
+┌────────────────────────┐
+│ UNEXPECTED TYPE SYNTAX ├─ I was parsing a type annotation, and this token ──┐
+└┬───────────────────────┘  cannot start a type here.                         │
  │                                                                            │
  │  C:[0]                                                                     │
  │     ‾                                                                      │
  └───────────────────────────────────────────────────── fuzz_crash_066.md:1:4 ┘
 
-    Type annotations should contain types like Str, Num a, or List U64.
+    Types can be type variables, uppercase type names, function types, tuples,
+    records, or tag unions.
+
+    For example:
+        List(U64)
+
+    I found `0` here.
 
 
 ┌────────────────┐
@@ -40,7 +46,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "C")
@@ -66,7 +72,7 @@ C : []
 (inferred-types
 	(defs)
 	(type_decls
-		(alias (type "C")
+		(alias (type "Error")
 			(ty-header (name "C"))))
 	(expressions))
 ~~~

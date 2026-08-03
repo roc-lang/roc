@@ -5,6 +5,7 @@
 //! comparison mechanisms.
 
 const std = @import("std");
+const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 const sort = @import("sort.zig");
 
@@ -24,9 +25,9 @@ var allocator: std.mem.Allocator = undefined;
 /// TODO: Document fuzz_main.
 pub fn fuzz_main() Allocator.Error!void {
     // Setup an allocator that will detect leaks/use-after-free/etc
-    var gpa = std.heap.DebugAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
     // this will check for leaks and crash the program if it finds any
-    defer std.debug.assert(gpa.deinit() == .ok);
+    defer std.debug.assert(build_options.debugGpaOk(gpa.deinit()));
     allocator = gpa.allocator();
 
     // Read the data from stdin.

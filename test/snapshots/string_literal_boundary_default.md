@@ -19,7 +19,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "g"))
@@ -45,7 +45,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "concat") (constraint-fn-var 31)
+			(e-dispatch-call (method "concat") (constraint-fn-var 206)
 				(receiver
 					(e-string
 						(e-literal (string "a"))))

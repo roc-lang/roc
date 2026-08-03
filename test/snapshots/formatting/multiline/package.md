@@ -27,26 +27,26 @@ DECLARATION HAS NO VALUE - package.md:13:1:13:16
 # PROBLEMS
 
 ┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The module header says that `a!` is exposed, ────┐
-└┬────────────────────────┘  but it is not defined anywhere in this module.   │
+│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `a!` is exposed, ────┐
+└┬────────────────────────┘  but it is not defined anywhere in this mod.   │
  │                                                                            │
  │  a!,                                                                       │
  │  ‾‾                                                                        │
  └──────────────────────────────────────────────────────────── package.md:3:3 ┘
 
-    You can fix this by either defining `a!` in this module, or by removing it
+    You can fix this by either defining `a!` in this mod, or by removing it
     from the list of exposed values.
 
 
 ┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The module header says that `b!` is exposed, ────┐
-└┬────────────────────────┘  but it is not defined anywhere in this module.   │
+│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `b!` is exposed, ────┐
+└┬────────────────────────┘  but it is not defined anywhere in this mod.   │
  │                                                                            │
  │  b!,                                                                       │
  │  ‾‾                                                                        │
  └──────────────────────────────────────────────────────────── package.md:4:3 ┘
 
-    You can fix this by either defining `b!` in this module, or by removing it
+    You can fix this by either defining `b!` in this mod, or by removing it
     from the list of exposed values.
 
 
@@ -58,7 +58,7 @@ DECLARATION HAS NO VALUE - package.md:13:1:13:16
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
  └─────────────────────────────────────────────────────────── package.md:11:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -70,7 +70,7 @@ DECLARATION HAS NO VALUE - package.md:13:1:13:16
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
  └─────────────────────────────────────────────────────────── package.md:13:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 # TOKENS

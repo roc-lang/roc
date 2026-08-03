@@ -14,6 +14,7 @@ const RuntimeHostEnv = eval.RuntimeHostEnv;
 const Allocator = std.mem.Allocator;
 const LIR = lir.LIR;
 const LirStore = lir.LirStore;
+const GuardedList = LirStore.GuardedList;
 const LocalId = LIR.LocalId;
 const CFStmtId = LIR.CFStmtId;
 const LowLevel = lir.LowLevel;
@@ -55,11 +56,16 @@ const ProcBuilder = struct {
 };
 
 fn lowLevelStmt(store: *LirStore, target: LocalId, op: LowLevel, args: []const LocalId, next: CFStmtId) TrmcLirTestError!CFStmtId {
+    return try lowLevelStmtWithUnique(store, target, op, args, 0, next);
+}
+
+fn lowLevelStmtWithUnique(store: *LirStore, target: LocalId, op: LowLevel, args: []const LocalId, unique_args: u64, next: CFStmtId) TrmcLirTestError!CFStmtId {
     return try store.addCFStmt(.{ .assign_low_level = .{
         .target = target,
         .op = op,
         .rc_effect = op.rcEffect(),
         .args = try store.addLocalSpan(args),
+        .unique_args = unique_args,
         .next = next,
     } });
 }
@@ -74,7 +80,7 @@ fn freshJoinPointId(next: *u32) LIR.JoinPointId {
 }
 
 fn runProcU64(allocator: Allocator, store: *const LirStore, layouts: *const layout.Store, proc: LIR.LirProcSpecId, runtime_env: *RuntimeHostEnv) TrmcLirTestError!u64 {
-    var interp = try eval.Interpreter.init(allocator, store, layouts, runtime_env.get_ops());
+    var interp = try eval.Interpreter.init(allocator, store, layouts, runtime_env.get_ops(), .preserve);
     defer interp.deinit();
     const result = try interp.eval(.{ .proc_id = proc, .arg_layouts = &.{} });
     return result.value.read(u64);
@@ -162,6 +168,123 @@ test "box_alloc_zeroed cell is zeroed, writable through ptr_cast, and freed by d
 
     try std.testing.expectEqual(@as(u64, 7), try runProcU64(allocator, &store, &layouts, proc, &runtime_env));
     try std.testing.expectEqual(@as(u32, 1), runtime_env.allocationCallCount());
+    try runtime_env.checkForLeaks();
+}
+
+test "box_prepare_update reuses a statically unique box" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, base.target.TargetUsize.native);
+    defer layouts.deinit();
+    var runtime_env = RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+
+    const box_u64 = try layouts.insertBox(.u64);
+    const ptr_u64 = try layouts.insertPtr(.u64);
+
+    var b = ProcBuilder.init(&store);
+    defer b.deinit(allocator);
+    const initial = try b.addLocal(allocator, .u64);
+    const replacement = try b.addLocal(allocator, .u64);
+    const boxed = try b.addLocal(allocator, box_u64);
+    const prepared = try b.addLocal(allocator, box_u64);
+    const p = try b.addLocal(allocator, ptr_u64);
+    const st = try b.addLocal(allocator, .zst);
+    const loaded = try b.addLocal(allocator, .u64);
+
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = loaded } });
+    const drop_prepared = try store.addCFStmt(.{ .decref = .{
+        .value = prepared,
+        .rc = .{ .op = .decref, .layout_idx = box_u64 },
+        .next = ret,
+    } });
+    const load = try lowLevelStmt(&store, loaded, .ptr_load, &.{p}, drop_prepared);
+    const store_replacement = try lowLevelStmt(&store, st, .ptr_store, &.{ p, replacement }, load);
+    const replacement_lit = try store.addCFStmt(.{ .assign_literal = .{
+        .target = replacement,
+        .value = .{ .i64_literal = .{ .value = 7, .layout_idx = .u64 } },
+        .next = store_replacement,
+    } });
+    const cast = try lowLevelStmt(&store, p, .ptr_cast, &.{prepared}, replacement_lit);
+    const prepare = try lowLevelStmtWithUnique(&store, prepared, .box_prepare_update, &.{boxed}, 1, cast);
+    const box_initial = try lowLevelStmt(&store, boxed, .box_box, &.{initial}, prepare);
+    const initial_lit = try store.addCFStmt(.{ .assign_literal = .{
+        .target = initial,
+        .value = .{ .i64_literal = .{ .value = 5, .layout_idx = .u64 } },
+        .next = box_initial,
+    } });
+    const proc = try b.finishProc(&.{}, initial_lit, .u64);
+
+    try std.testing.expectEqual(@as(u64, 7), try runProcU64(allocator, &store, &layouts, proc, &runtime_env));
+    try std.testing.expectEqual(@as(u32, 1), runtime_env.allocationCallCount());
+    try runtime_env.checkForLeaks();
+}
+
+test "box_prepare_update copies a shared box and leaves the original unchanged" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, base.target.TargetUsize.native);
+    defer layouts.deinit();
+    var runtime_env = RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+
+    const box_u64 = try layouts.insertBox(.u64);
+    const ptr_u64 = try layouts.insertPtr(.u64);
+
+    var b = ProcBuilder.init(&store);
+    defer b.deinit(allocator);
+    const initial = try b.addLocal(allocator, .u64);
+    const replacement = try b.addLocal(allocator, .u64);
+    const boxed = try b.addLocal(allocator, box_u64);
+    const prepared = try b.addLocal(allocator, box_u64);
+    const old_p = try b.addLocal(allocator, ptr_u64);
+    const new_p = try b.addLocal(allocator, ptr_u64);
+    const st = try b.addLocal(allocator, .zst);
+    const old_value = try b.addLocal(allocator, .u64);
+    const new_value = try b.addLocal(allocator, .u64);
+    const sum = try b.addLocal(allocator, .u64);
+
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } });
+    const drop_boxed = try store.addCFStmt(.{ .decref = .{
+        .value = boxed,
+        .rc = .{ .op = .decref, .layout_idx = box_u64 },
+        .next = ret,
+    } });
+    const drop_prepared = try store.addCFStmt(.{ .decref = .{
+        .value = prepared,
+        .rc = .{ .op = .decref, .layout_idx = box_u64 },
+        .next = drop_boxed,
+    } });
+    const add = try lowLevelStmt(&store, sum, .num_plus, &.{ old_value, new_value }, drop_prepared);
+    const load_new = try lowLevelStmt(&store, new_value, .ptr_load, &.{new_p}, add);
+    const load_old = try lowLevelStmt(&store, old_value, .ptr_load, &.{old_p}, load_new);
+    const store_replacement = try lowLevelStmt(&store, st, .ptr_store, &.{ new_p, replacement }, load_old);
+    const replacement_lit = try store.addCFStmt(.{ .assign_literal = .{
+        .target = replacement,
+        .value = .{ .i64_literal = .{ .value = 7, .layout_idx = .u64 } },
+        .next = store_replacement,
+    } });
+    const cast_new = try lowLevelStmt(&store, new_p, .ptr_cast, &.{prepared}, replacement_lit);
+    const cast_old = try lowLevelStmt(&store, old_p, .ptr_cast, &.{boxed}, cast_new);
+    const prepare = try lowLevelStmt(&store, prepared, .box_prepare_update, &.{boxed}, cast_old);
+    const incref_boxed = try store.addCFStmt(.{ .incref = .{
+        .value = boxed,
+        .rc = .{ .op = .incref, .layout_idx = box_u64 },
+        .count = 1,
+        .next = prepare,
+    } });
+    const box_initial = try lowLevelStmt(&store, boxed, .box_box, &.{initial}, incref_boxed);
+    const initial_lit = try store.addCFStmt(.{ .assign_literal = .{
+        .target = initial,
+        .value = .{ .i64_literal = .{ .value = 5, .layout_idx = .u64 } },
+        .next = box_initial,
+    } });
+    const proc = try b.finishProc(&.{}, initial_lit, .u64);
+
+    try std.testing.expectEqual(@as(u64, 12), try runProcU64(allocator, &store, &layouts, proc, &runtime_env));
+    try std.testing.expectEqual(@as(u32, 2), runtime_env.allocationCallCount());
     try runtime_env.checkForLeaks();
 }
 
@@ -393,7 +516,11 @@ fn hasSelfCall(allocator: Allocator, store: *const LirStore, proc_id: LIR.LirPro
                 try work.append(allocator, s.remainder);
             },
             .switch_stmt => |s| {
-                for (store.getCFSwitchBranches(s.branches)) |branch| try work.append(allocator, branch.body);
+                const branches = store.getCFSwitchBranches(s.branches);
+                for (0..branches.len) |i| {
+                    const branch = GuardedList.at(branches, i);
+                    try work.append(allocator, branch.body);
+                }
                 try work.append(allocator, s.default_branch);
                 if (s.continuation) |continuation| try work.append(allocator, continuation);
             },
@@ -406,11 +533,15 @@ fn hasSelfCall(allocator: Allocator, store: *const LirStore, proc_id: LIR.LirPro
                 try work.append(allocator, s.on_miss);
             },
             .str_match_set => |s| {
-                for (store.getStrMatchArms(s.arms)) |arm| try work.append(allocator, arm.on_match);
+                const arms = store.getStrMatchArms(s.arms);
+                for (0..arms.len) |i| {
+                    const arm = GuardedList.at(arms, i);
+                    try work.append(allocator, arm.on_match);
+                }
                 try work.append(allocator, s.on_miss);
             },
             .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                 try work.append(allocator, s.next);
             },
         }
@@ -426,7 +557,7 @@ fn runProcU64Args(
     runtime_env: *RuntimeHostEnv,
     args: []const u64,
 ) TrmcLirTestError!u64 {
-    var interp = try eval.Interpreter.init(allocator, store, layouts, runtime_env.get_ops());
+    var interp = try eval.Interpreter.init(allocator, store, layouts, runtime_env.get_ops(), .preserve);
     defer interp.deinit();
     const arg_layouts = [_]layout.Idx{.u64} ** 4;
     var packed_args: [4]u64 = undefined;
@@ -460,7 +591,7 @@ test "trmc transforms the canonical repeat shape and builds correct structure" {
 
     try lir.Arc.insert(&store, &layouts, .{});
 
-    var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops());
+    var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops(), .preserve);
     defer interp.deinit();
     for ([_]u64{ 0, 1, 3 }) |n| {
         var arg = n;
@@ -476,9 +607,9 @@ test "trmc transforms the canonical repeat shape and builds correct structure" {
 test "trmc'd repeat escapes the interpreter call-depth cap" {
     const allocator = std.testing.allocator;
 
-    // Control: without the transform, depth 2000 exceeds the interpreter's
-    // 1024-frame cap and crashes.
-    {
+    // The interpreter's artificial call-depth cap is a Debug-only diagnostic.
+    // In Debug, verify the untransformed control case exceeds that cap.
+    if (comptime @import("builtin").mode == .Debug) {
         var store = LirStore.init(allocator);
         defer store.deinit();
         var layouts = try layout.Store.init(allocator, base.target.TargetUsize.native);
@@ -492,7 +623,7 @@ test "trmc'd repeat escapes the interpreter call-depth cap" {
         const repeat = try buildRepeatProc(allocator, &b, &store, peano);
         try lir.Arc.insert(&store, &layouts, .{});
 
-        var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops());
+        var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops(), .preserve);
         defer interp.deinit();
         var arg: u64 = 2000;
         try std.testing.expectError(error.Crash, interp.eval(.{
@@ -518,7 +649,7 @@ test "trmc'd repeat escapes the interpreter call-depth cap" {
         try lir.Trmc.run(&store, &layouts);
         try lir.Arc.insert(&store, &layouts, .{});
 
-        var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops());
+        var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops(), .preserve);
         defer interp.deinit();
         var arg: u64 = 2000;
         const result = try interp.eval(.{
@@ -862,7 +993,7 @@ test "mixed construct and plain-tail branches both become jumps" {
 
     // Depth 2000 makes 2000 recursive calls (1000 S nodes): both rewritten
     // branches must loop for this to survive the 1024-frame cap.
-    var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops());
+    var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops(), .preserve);
     defer interp.deinit();
     var arg: u64 = 2000;
     const result = try interp.eval(.{
@@ -895,23 +1026,23 @@ test "golden: repeat IR before and after the trmc transform" {
     const before = try dumpProcText(allocator, &store, &layouts, repeat);
     defer allocator.free(before);
     try std.testing.expectEqualStrings(
-        \\proc p0 args=[l0:u64] ret=tag_union#17
+        \\proc p0 args=[l0:u64] ret=tag_union#25
         \\  join j0 params=[l1]
         \\    remainder:
         \\      l2:u64 = literal 0
         \\      l3:bool = low_level num_is_eq(l0, l2)
         \\      switch l3 default_cold=false
         \\        case 1:
-        \\          l1:tag_union#17 = tag v0 d0
+        \\          l1:tag_union#25 = tag v0 d0
         \\          jump j0
         \\        default:
         \\          l4:u64 = literal 1
         \\          l5:u64 = low_level num_minus(l0, l4)
-        \\          l6:tag_union#17 = call p0(l5)
-        \\          l7:box#18 = low_level box_box(l6)
-        \\          l8:struct_#19 = struct(l7)
-        \\          l9:tag_union#17 = tag v1 d1 (l8)
-        \\          l1:tag_union#17 = ref.local l9
+        \\          l6:tag_union#25 = call p0(l5)
+        \\          l7:box#26 = low_level box_box(l6)
+        \\          l8:struct_#27 = struct(l7)
+        \\          l9:tag_union#25 = tag v1 d1 (l8)
+        \\          l1:tag_union#25 = ref.local l9
         \\          jump j0
         \\    body:
         \\      ret l1
@@ -923,10 +1054,10 @@ test "golden: repeat IR before and after the trmc transform" {
     const after = try dumpProcText(allocator, &store, &layouts, repeat);
     defer allocator.free(after);
     try std.testing.expectEqualStrings(
-        \\proc p0 args=[l17:u64] ret=tag_union#17 transform=trmc
+        \\proc p0 args=[l17:u64] ret=tag_union#25 transform=trmc
         \\  join j1 params=[l0, l10, l11]
         \\    remainder:
-        \\      l12:ptr#21 = low_level ptr_alloca()
+        \\      l12:ptr#29 = low_level ptr_alloca()
         \\      set l0 := l17 (initialize_join_param)
         \\      set l10 := l12 (initialize_join_param)
         \\      set l11 := l12 (initialize_join_param)
@@ -938,22 +1069,22 @@ test "golden: repeat IR before and after the trmc transform" {
         \\          l3:bool = low_level num_is_eq(l0, l2)
         \\          switch l3 default_cold=false
         \\            case 1:
-        \\              l1:tag_union#17 = tag v0 d0
+        \\              l1:tag_union#25 = tag v0 d0
         \\              jump j0
         \\            default:
         \\              l4:u64 = literal 1
         \\              l5:u64 = low_level num_minus(l0, l4)
-        \\              l7:box#18 = low_level box_alloc_zeroed()
-        \\              l15:ptr#21 = low_level ptr_cast(l7)
-        \\              l8:struct_#19 = struct(l7)
-        \\              l9:tag_union#17 = tag v1 d1 (l8)
+        \\              l7:box#26 = low_level box_alloc_zeroed()
+        \\              l15:ptr#29 = low_level ptr_cast(l7)
+        \\              l8:struct_#27 = struct(l7)
+        \\              l9:tag_union#25 = tag v1 d1 (l8)
         \\              l16:zst = low_level ptr_store(l10, l9)
         \\              set l0 := l5 (initialize_join_param)
         \\              set l10 := l15 (initialize_join_param)
         \\              jump j1
         \\        body:
         \\          l14:zst = low_level ptr_store(l10, l1)
-        \\          l13:tag_union#17 = low_level ptr_load(l11)
+        \\          l13:tag_union#25 = low_level ptr_load(l11)
         \\          ret l13
         \\
     , after);

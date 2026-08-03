@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=
+description=Static dispatch to builtin-provided methods
 type=file
 ~~~
 # SOURCE
@@ -28,7 +28,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "main!"))
@@ -56,11 +56,7 @@ NO CHANGE
 				(ty-record))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-lambda
-			(args
-				(p-underscore))
-			(e-call
-				(e-runtime-error (tag "qualified_ident_does_not_exist"))))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

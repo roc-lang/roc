@@ -7,8 +7,8 @@ type=file
 ~~~roc
 import Basics.Try
 import Color
-import ModuleA.ModuleB exposing [TypeC]
-import ExternalModule as ExtMod
+import ModA/ModB exposing [TypeC]
+import ExternalMod as ExtMod
 
 # Simple qualified type
 simpleQualified : Color.RGB
@@ -19,7 +19,7 @@ aliasedQualified : ExtMod.DataType
 aliasedQualified = ExtMod.DataType.Default
 
 # Multi-level qualified type
-multiLevelQualified : ModuleA.ModuleB.TypeC
+multiLevelQualified : ModA.ModB.TypeC
 multiLevelQualified = TypeC.new
 
 # Using qualified type with generics
@@ -36,7 +36,7 @@ processColor = |color|
     "Color processed"
 
 # Multiple qualified types in a function signature
-transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
+transform : Try.Try(Color.RGB, ExtMod.Error) -> ModA.ModB.TypeC
 transform = |result|
     match result {
         Try.Ok(rgb) => TypeC.fromColor(rgb)
@@ -45,25 +45,25 @@ transform = |result|
 ~~~
 # EXPECTED
 DUPLICATE DEFINITION - qualified_type_canonicalization.md:1:1:1:18
-MODULE NOT FOUND - qualified_type_canonicalization.md:1:1:1:18
-MODULE NOT FOUND - qualified_type_canonicalization.md:2:1:2:13
-MODULE NOT FOUND - qualified_type_canonicalization.md:3:1:3:40
-MODULE NOT FOUND - qualified_type_canonicalization.md:4:1:4:32
-MODULE NOT FOUND - qualified_type_canonicalization.md:7:24:7:28
-MODULE NOT FOUND - qualified_type_canonicalization.md:8:19:8:24
-MODULE NOT FOUND - qualified_type_canonicalization.md:11:26:11:35
-MODULE NOT FOUND - qualified_type_canonicalization.md:12:26:12:35
-MODULE NOT FOUND - qualified_type_canonicalization.md:15:38:15:44
+MOD NOT FOUND - qualified_type_canonicalization.md:1:1:1:18
+MOD NOT FOUND - qualified_type_canonicalization.md:2:1:2:13
+MOD NOT FOUND - qualified_type_canonicalization.md:3:1:3:34
+MOD NOT FOUND - qualified_type_canonicalization.md:4:1:4:29
+MOD NOT FOUND - qualified_type_canonicalization.md:7:24:7:28
+MOD NOT FOUND - qualified_type_canonicalization.md:8:19:8:24
+MOD NOT FOUND - qualified_type_canonicalization.md:11:26:11:35
+MOD NOT FOUND - qualified_type_canonicalization.md:12:26:12:35
+MOD NOT IMPORTED - qualified_type_canonicalization.md:15:23:15:38
 DOES NOT EXIST - qualified_type_canonicalization.md:16:23:16:32
 MISSING NESTED TYPE - qualified_type_canonicalization.md:19:14:19:21
-MODULE NOT FOUND - qualified_type_canonicalization.md:23:23:23:27
-MODULE NOT FOUND - qualified_type_canonicalization.md:24:16:24:21
-MODULE NOT FOUND - qualified_type_canonicalization.md:27:21:27:25
+MOD NOT FOUND - qualified_type_canonicalization.md:23:23:23:27
+MOD NOT FOUND - qualified_type_canonicalization.md:24:16:24:21
+MOD NOT FOUND - qualified_type_canonicalization.md:27:21:27:25
 UNUSED VARIABLE - qualified_type_canonicalization.md:28:17:28:22
 MISSING NESTED TYPE - qualified_type_canonicalization.md:32:13:32:20
-MODULE NOT FOUND - qualified_type_canonicalization.md:32:26:32:30
-MODULE NOT FOUND - qualified_type_canonicalization.md:32:38:32:44
-MODULE NOT FOUND - qualified_type_canonicalization.md:32:64:32:70
+MOD NOT FOUND - qualified_type_canonicalization.md:32:26:32:30
+MOD NOT FOUND - qualified_type_canonicalization.md:32:38:32:44
+MOD NOT IMPORTED - qualified_type_canonicalization.md:32:49:32:64
 DOES NOT EXIST - qualified_type_canonicalization.md:35:24:35:39
 DOES NOT EXIST - qualified_type_canonicalization.md:36:25:36:38
 UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
@@ -85,7 +85,7 @@ UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The module `Basics` was not found in this Roc project. ─┐
+│ MOD NOT FOUND ├─ The mod `Basics` was not found in this Roc project. ─┐
 └┬─────────────────┘                                                          │
  │                                                                            │
  │  import Basics.Try                                                         │
@@ -95,7 +95,7 @@ UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The module `Color` was not found in this Roc project. ──┐
+│ MOD NOT FOUND ├─ The mod `Color` was not found in this Roc project. ──┐
 └┬─────────────────┘                                                          │
  │                                                                            │
  │  import Color                                                              │
@@ -105,27 +105,27 @@ UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The module `ModuleA` was not found in this Roc ─────────┐
+│ MOD NOT FOUND ├─ The mod `ModA/ModB` was not found in this Roc ───────┐
 └┬─────────────────┘  project.                                                │
  │                                                                            │
- │  import ModuleA.ModuleB exposing [TypeC]                                   │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                   │
+ │  import ModA/ModB exposing [TypeC]                                         │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
  └──────────────────────────────────── qualified_type_canonicalization.md:3:1 ┘
 
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The module `ExternalModule` was not found in this Roc ──┐
+│ MOD NOT FOUND ├─ The mod `ExternalMod` was not found in this Roc ─────┐
 └┬─────────────────┘  project.                                                │
  │                                                                            │
- │  import ExternalModule as ExtMod                                           │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                           │
+ │  import ExternalMod as ExtMod                                              │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                              │
  └──────────────────────────────────── qualified_type_canonicalization.md:4:1 ┘
 
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `RGB` type is declared to be in `Color`, which ────┐
+│ MOD NOT FOUND ├─ This `RGB` type is declared to be in `Color`, which ────┐
 └┬─────────────────┘  does not exist.                                         │
  │                                                                            │
  │  simpleQualified : Color.RGB                                               │
@@ -135,7 +135,7 @@ UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `RGB` type is declared to be in `Color`, which ────┐
+│ MOD NOT FOUND ├─ This `RGB` type is declared to be in `Color`, which ────┐
 └┬─────────────────┘  does not exist.                                         │
  │                                                                            │
  │  simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })                       │
@@ -145,8 +145,8 @@ UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `DataType` type is declared to be in ──────────────┐
-└┬─────────────────┘  `ExternalModule`, which does not exist.                 │
+│ MOD NOT FOUND ├─ This `DataType` type is declared to be in ──────────────┐
+└┬─────────────────┘  `ExternalMod`, which does not exist.                    │
  │                                                                            │
  │  aliasedQualified : ExtMod.DataType                                        │
  │                           ‾‾‾‾‾‾‾‾‾                                        │
@@ -155,8 +155,8 @@ UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `DataType` type is declared to be in ──────────────┐
-└┬─────────────────┘  `ExternalModule`, which does not exist.                 │
+│ MOD NOT FOUND ├─ This `DataType` type is declared to be in ──────────────┐
+└┬─────────────────┘  `ExternalMod`, which does not exist.                    │
  │                                                                            │
  │  aliasedQualified = ExtMod.DataType.Default                                │
  │                           ‾‾‾‾‾‾‾‾‾                                        │
@@ -164,13 +164,13 @@ UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
 
 
 
-┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `ModuleB.TypeC` type is declared to be in ─────────┐
-└┬─────────────────┘  `ModuleA`, which does not exist.                        │
+┌─────────────────────┐
+│ MOD NOT IMPORTED ├─ There is no mod with the name `ModA.ModB` ────────┐
+└┬────────────────────┘  imported into this Roc file.                         │
  │                                                                            │
- │  multiLevelQualified : ModuleA.ModuleB.TypeC                               │
- │                                       ‾‾‾‾‾‾                               │
- └────────────────────────────────── qualified_type_canonicalization.md:15:38 ┘
+ │  multiLevelQualified : ModA.ModB.TypeC                                     │
+ │                        ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                     │
+ └────────────────────────────────── qualified_type_canonicalization.md:15:23 ┘
 
 
 
@@ -195,7 +195,7 @@ UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `RGB` type is declared to be in `Color`, which ────┐
+│ MOD NOT FOUND ├─ This `RGB` type is declared to be in `Color`, which ────┐
 └┬─────────────────┘  does not exist.                                         │
  │                                                                            │
  │  getColor : {} -> Color.RGB                                                │
@@ -205,7 +205,7 @@ UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `RGB` type is declared to be in `Color`, which ────┐
+│ MOD NOT FOUND ├─ This `RGB` type is declared to be in `Color`, which ────┐
 └┬─────────────────┘  does not exist.                                         │
  │                                                                            │
  │  getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })                          │
@@ -215,7 +215,7 @@ UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `RGB` type is declared to be in `Color`, which ────┐
+│ MOD NOT FOUND ├─ This `RGB` type is declared to be in `Color`, which ────┐
 └┬─────────────────┘  does not exist.                                         │
  │                                                                            │
  │  processColor : Color.RGB -> Str                                           │
@@ -240,39 +240,39 @@ UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
 │ MISSING NESTED TYPE ├─ `Try` is in scope, but it doesn't have a nested ─────┐
 └┬────────────────────┘  type that's also named `Try`.                        │
  │                                                                            │
- │  transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC     │
+ │  transform : Try.Try(Color.RGB, ExtMod.Error) -> ModA.ModB.TypeC           │
  │              ‾‾‾‾‾‾‾                                                       │
  └────────────────────────────────── qualified_type_canonicalization.md:32:13 ┘
 
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `RGB` type is declared to be in `Color`, which ────┐
+│ MOD NOT FOUND ├─ This `RGB` type is declared to be in `Color`, which ────┐
 └┬─────────────────┘  does not exist.                                         │
  │                                                                            │
- │  transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC     │
+ │  transform : Try.Try(Color.RGB, ExtMod.Error) -> ModA.ModB.TypeC           │
  │                           ‾‾‾‾                                             │
  └────────────────────────────────── qualified_type_canonicalization.md:32:26 ┘
 
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `Error` type is declared to be in ─────────────────┐
-└┬─────────────────┘  `ExternalModule`, which does not exist.                 │
+│ MOD NOT FOUND ├─ This `Error` type is declared to be in `ExternalMod`, ──┐
+└┬─────────────────┘  which does not exist.                                   │
  │                                                                            │
- │  transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC     │
+ │  transform : Try.Try(Color.RGB, ExtMod.Error) -> ModA.ModB.TypeC           │
  │                                       ‾‾‾‾‾‾                               │
  └────────────────────────────────── qualified_type_canonicalization.md:32:38 ┘
 
 
 
-┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `ModuleB.TypeC` type is declared to be in ─────────┐
-└┬─────────────────┘  `ModuleA`, which does not exist.                        │
+┌─────────────────────┐
+│ MOD NOT IMPORTED ├─ There is no mod with the name `ModA.ModB` ────────┐
+└┬────────────────────┘  imported into this Roc file.                         │
  │                                                                            │
- │  transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC     │
- │                                                                 ‾‾‾‾‾‾     │
- └────────────────────────────────── qualified_type_canonicalization.md:32:64 ┘
+ │  transform : Try.Try(Color.RGB, ExtMod.Error) -> ModA.ModB.TypeC           │
+ │                                                  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾           │
+ └────────────────────────────────── qualified_type_canonicalization.md:32:49 ┘
 
 
 
@@ -311,7 +311,7 @@ UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
 ~~~zig
 KwImport,UpperIdent,NoSpaceDotUpperIdent,
 KwImport,UpperIdent,
-KwImport,UpperIdent,NoSpaceDotUpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,
+KwImport,UpperIdent,OpSlash,UpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,
 KwImport,UpperIdent,KwAs,UpperIdent,
 LowerIdent,OpColon,UpperIdent,NoSpaceDotUpperIdent,
 LowerIdent,OpAssign,UpperIdent,NoSpaceDotUpperIdent,NoSpaceOpenRound,OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,CloseRound,
@@ -337,16 +337,14 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
-		(s-import (raw "Basics")
-			(exposing
-				(exposed-upper-ident (text "Try"))))
+		(s-import (raw "Basics.Try"))
 		(s-import (raw "Color"))
-		(s-import (raw "ModuleA.ModuleB")
+		(s-import (raw "ModA/ModB")
 			(exposing
 				(exposed-upper-ident (text "TypeC"))))
-		(s-import (raw "ExternalModule") (alias "ExtMod"))
+		(s-import (raw "ExternalMod") (alias "ExtMod"))
 		(s-type-anno (name "simpleQualified")
 			(ty (name "Color.RGB")))
 		(s-decl
@@ -366,7 +364,7 @@ EndOfFile,
 			(p-ident (raw "aliasedQualified"))
 			(e-tag (raw "ExtMod.DataType.Default")))
 		(s-type-anno (name "multiLevelQualified")
-			(ty (name "ModuleA.ModuleB.TypeC")))
+			(ty (name "ModA.ModB.TypeC")))
 		(s-decl
 			(p-ident (raw "multiLevelQualified"))
 			(e-ident (raw "TypeC.new")))
@@ -415,7 +413,7 @@ EndOfFile,
 					(ty (name "Try.Try"))
 					(ty (name "Color.RGB"))
 					(ty (name "ExtMod.Error")))
-				(ty (name "ModuleA.ModuleB.TypeC"))))
+				(ty (name "ModA.ModB.TypeC"))))
 		(s-decl
 			(p-ident (raw "transform"))
 			(e-lambda
@@ -437,10 +435,10 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-import Basics exposing [Try]
+import Basics.Try
 import Color
-import ModuleA.ModuleB exposing [TypeC]
-import ExternalModule as ExtMod
+import ModA/ModB exposing [TypeC]
+import ExternalMod as ExtMod
 
 # Simple qualified type
 simpleQualified : Color.RGB
@@ -451,7 +449,7 @@ aliasedQualified : ExtMod.DataType
 aliasedQualified = ExtMod.DataType.Default
 
 # Multi-level qualified type
-multiLevelQualified : ModuleA.ModuleB.TypeC
+multiLevelQualified : ModA.ModB.TypeC
 multiLevelQualified = TypeC.new
 
 # Using qualified type with generics
@@ -468,7 +466,7 @@ processColor = |color|
 	"Color processed"
 
 # Multiple qualified types in a function signature
-transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
+transform : Try.Try(Color.RGB, ExtMod.Error) -> ModA.ModB.TypeC
 transform = |result|
 	match result {
 		Try.Ok(rgb) => TypeC.fromColor(rgb)
@@ -480,12 +478,12 @@ transform = |result|
 (can-ir
 	(d-let
 		(p-assign (ident "simpleQualified"))
-		(e-runtime-error (tag "type_from_missing_module"))
+		(e-runtime-error (tag "type_from_missing_mod"))
 		(annotation
 			(ty-malformed)))
 	(d-let
 		(p-assign (ident "aliasedQualified"))
-		(e-runtime-error (tag "type_from_missing_module"))
+		(e-runtime-error (tag "type_from_missing_mod"))
 		(annotation
 			(ty-malformed)))
 	(d-let
@@ -507,7 +505,7 @@ transform = |result|
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-runtime-error (tag "type_from_missing_module")))
+			(e-runtime-error (tag "type_from_missing_mod")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-record)
@@ -528,42 +526,20 @@ transform = |result|
 		(e-lambda
 			(args
 				(p-assign (ident "result")))
-			(e-match
-				(match
-					(cond
-						(e-lookup-local
-							(p-assign (ident "result"))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-nominal-external (builtin)
-										(p-applied-tag))))
-							(value
-								(e-call
-									(e-runtime-error (tag "qualified_ident_does_not_exist"))
-									(e-lookup-local
-										(p-assign (ident "rgb"))))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-nominal-external (builtin)
-										(p-applied-tag))))
-							(value
-								(e-runtime-error (tag "qualified_ident_does_not_exist"))))))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
 				(ty-malformed))))
-	(s-import (module "Basics")
+	(s-import (mod "Basics")
 		(exposes
-			(exposed (name "Try") (wildcard false))))
-	(s-import (module "Color")
+			(exposed (name "Try") (alias "Try") (wildcard false))))
+	(s-import (mod "Color")
 		(exposes))
-	(s-import (module "ModuleA")
+	(s-import (mod "ModA/ModB")
 		(exposes
 			(exposed (name "TypeC") (wildcard false))))
-	(s-import (module "ExternalModule")
+	(s-import (mod "ExternalMod")
 		(exposes)))
 ~~~
 # TYPES

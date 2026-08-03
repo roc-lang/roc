@@ -8979,9 +8979,19 @@ pub fn deinit(self: *Builder) void {
     self.* = undefined;
 }
 
-/// Finalizes the module-level inline assembly, ensuring it ends with a newline.
+/// Adds module-level inline assembly, ensuring the accumulated text ends with a newline.
 pub fn finishModuleAsm(self: *Builder, aw: *Writer.Allocating) Allocator.Error!void {
-    self.module_asm = aw.toArrayList();
+    if (self.module_asm.items.len == 0) {
+        self.module_asm = aw.toArrayList();
+    } else {
+        if (self.module_asm.getLastOrNull()) |last| if (last != '\n')
+            try self.module_asm.append(self.gpa, '\n');
+
+        var next = aw.toArrayList();
+        defer next.deinit(self.gpa);
+        try self.module_asm.appendSlice(self.gpa, next.items);
+    }
+
     if (self.module_asm.getLastOrNull()) |last| if (last != '\n')
         try self.module_asm.append(self.gpa, '\n');
 }
@@ -9818,7 +9828,7 @@ pub fn dump(b: *Builder, io: Io) void {
 }
 
 /// Prints the LLVM IR to a file at the given path.
-pub fn printToFilePath(b: *Builder, io: Io, dir: Io.Dir, path: []const u8) Allocator.Error!void {
+pub fn printToFilePath(b: *Builder, io: Io, dir: Io.Dir, path: []const u8) !void {
     var buffer: [4000]u8 = undefined;
     const file = try dir.createFile(io, path, .{});
     defer file.close(io);
@@ -9826,7 +9836,7 @@ pub fn printToFilePath(b: *Builder, io: Io, dir: Io.Dir, path: []const u8) Alloc
 }
 
 /// Prints the LLVM IR to a file handle.
-pub fn printToFile(b: *Builder, io: Io, file: Io.File, buffer: []u8) Allocator.Error!void {
+pub fn printToFile(b: *Builder, io: Io, file: Io.File, buffer: []u8) !void {
     var fw = file.writer(io, buffer);
     try print(b, &fw.interface);
     try fw.interface.flush();

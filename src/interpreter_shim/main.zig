@@ -12,6 +12,7 @@ const eval = @import("eval");
 const ipc = @import("ipc");
 const layout = @import("layout");
 const lir = @import("lir");
+const GuardedList = lir.LirStore.GuardedList;
 const TargetUsize = @import("base").target.TargetUsize;
 const shim_host_abi = @import("shim_host_abi");
 const shim_io = @import("shim_io");
@@ -29,6 +30,7 @@ pub const std_options = shim_io.std_options_no_stack_tracing;
 
 const Allocator = std.mem.Allocator;
 const RocOps = builtins.host_abi.RocOps;
+const shim_symbols = builtins.shim_symbols;
 const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
 
 const RuntimeState = struct {
@@ -43,7 +45,7 @@ const ShimError = error{
 };
 
 const RuntimeStateError = ipc.CoordinationError || ipc.platform.SharedMemoryError || lir.LirImage.ImageError || error{
-    SysctlFailed,
+    PageSizeQueryFailed,
     UnsupportedPlatform,
 };
 
@@ -114,8 +116,9 @@ fn argLayoutsForProc(
     const arg_layouts = try gpa.alloc(layout.Idx, arg_ids.len);
     errdefer gpa.free(arg_layouts);
 
-    for (arg_ids, 0..) |local_id, i| {
-        arg_layouts[i] = store.locals.items[@intFromEnum(local_id)].layout_idx;
+    for (0..arg_ids.len) |i| {
+        const local_id = GuardedList.at(arg_ids, i);
+        arg_layouts[i] = store.getLocal(local_id).layout_idx;
     }
 
     return arg_layouts;
@@ -171,6 +174,7 @@ fn evaluateEntrypointInView(
         &view.store,
         &view.layouts,
         ops,
+        .preserve,
     ) catch {
         ops.crash("LIR shim could not initialize the LIR interpreter");
         return error.OutOfMemory;
@@ -208,11 +212,17 @@ fn viewEmbeddedLirImage(image_base: *anyopaque, image_len: usize, ops: *RocOps) 
     };
 }
 
-export fn roc_shim_get_ops() callconv(.c) *anyopaque {
+comptime {
+    @export(&shimGetOps, .{ .name = shim_symbols.roc_shim_get_ops });
+    @export(&shimEntrypoint, .{ .name = shim_symbols.roc_entrypoint });
+    @export(&shimEntrypointFromImage, .{ .name = shim_symbols.roc_entrypoint_from_image });
+}
+
+fn shimGetOps() callconv(.c) *anyopaque {
     return shim_host_abi.getOpsOpaque();
 }
 
-export fn roc_entrypoint(
+fn shimEntrypoint(
     entry_idx: u32,
     ops: *RocOps,
     ret_ptr: ?*anyopaque,
@@ -226,7 +236,7 @@ export fn roc_entrypoint(
     };
 }
 
-export fn roc_entrypoint_from_image(
+fn shimEntrypointFromImage(
     entry_idx: u32,
     ops: *RocOps,
     ret_ptr: ?*anyopaque,

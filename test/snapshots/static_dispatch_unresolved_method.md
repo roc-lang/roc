@@ -36,7 +36,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "poly"))
@@ -74,7 +74,7 @@ result = poly().to_i128()
 				(e-crash (msg "x")))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-dispatch-call (method "to_i128") (constraint-fn-var 20)
+		(e-dispatch-call (method "to_i128") (constraint-fn-var 203)
 			(receiver
 				(e-runtime-error (tag "erroneous_value_expr")))
 			(args))))

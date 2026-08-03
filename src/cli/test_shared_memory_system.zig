@@ -1,6 +1,7 @@
 //! Tests for CLI platform resolution that do not cross the post-check lowering boundary
 
 const std = @import("std");
+const build_options = @import("build_options");
 const testing = std.testing;
 const main = @import("main.zig");
 const base = @import("base");
@@ -30,8 +31,8 @@ fn sharedPrePublishedBuiltin() SharedMemorySystemTestError!test_helpers.PrePubli
 }
 
 test "platform resolution - basic cli platform" {
-    var gpa_impl = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa_impl.deinit();
+    var gpa_impl = std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
+    defer _ = build_options.debugGpaOk(gpa_impl.deinit());
     const gpa = gpa_impl.allocator();
     var arena_impl = base.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
@@ -69,8 +70,8 @@ test "platform resolution - basic cli platform" {
 }
 
 test "platform resolution - no platform in file" {
-    var gpa_impl = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa_impl.deinit();
+    var gpa_impl = std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
+    defer _ = build_options.debugGpaOk(gpa_impl.deinit());
     const gpa = gpa_impl.allocator();
     var arena_impl = base.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
@@ -103,8 +104,8 @@ test "platform resolution - no platform in file" {
 }
 
 test "platform resolution - file not found" {
-    var gpa_impl = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa_impl.deinit();
+    var gpa_impl = std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
+    defer _ = build_options.debugGpaOk(gpa_impl.deinit());
     const gpa = gpa_impl.allocator();
     var arena_impl = base.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
@@ -121,8 +122,8 @@ test "platform resolution - file not found" {
 }
 
 test "platform resolution - insecure HTTP URL rejected" {
-    var gpa_impl = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa_impl.deinit();
+    var gpa_impl = std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
+    defer _ = build_options.debugGpaOk(gpa_impl.deinit());
     const gpa = gpa_impl.allocator();
     var arena_impl = base.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
@@ -186,7 +187,7 @@ fn expectLirImageCanBeViewedFromMappedHeader(compiled: *const test_helpers.Compi
     const used = compiled.lowered.shm.getUsedSize();
     try testing.expect(used > @sizeOf(lir.LirImage.Header));
     try testing.expect(compiled.lowered.view.root_procs.len > 0);
-    try testing.expect(compiled.lowered.view.store.proc_specs.items.len > 0);
+    try testing.expect(compiled.lowered.view.store.getProcSpecs().len > 0);
     try testing.expect(compiled.lowered.view.layouts.layouts.items.items.len > 0);
 
     const header = compiled.lowered.image_header;
@@ -194,7 +195,7 @@ fn expectLirImageCanBeViewedFromMappedHeader(compiled: *const test_helpers.Compi
     try testing.expectEqual(lir.LirImage.MAGIC, header.magic);
     try testing.expectEqual(lir.LirImage.FORMAT_VERSION, header.format_version);
     try testing.expectEqual(compiled.lowered.view.root_procs.len, child_view.root_procs.len);
-    try testing.expectEqual(compiled.lowered.view.store.proc_specs.items.len, child_view.store.proc_specs.items.len);
+    try testing.expectEqual(compiled.lowered.view.store.getProcSpecs().len, child_view.store.getProcSpecs().len);
     try testing.expectEqual(compiled.lowered.view.layouts.layouts.items.items.len, child_view.layouts.layouts.items.items.len);
 }
 
@@ -278,8 +279,8 @@ test "integration - one LIR image resolves layouts for both pointer widths" {
 }
 
 test "integration - error handling for non-existent file" {
-    var gpa_impl = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa_impl.deinit();
+    var gpa_impl = std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
+    defer _ = build_options.debugGpaOk(gpa_impl.deinit());
     const gpa = gpa_impl.allocator();
     var arena_impl = base.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();

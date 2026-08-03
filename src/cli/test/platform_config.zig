@@ -77,6 +77,18 @@ const fx_open_tests = [_]SimpleTestSpec{
         .roc_file = "test/fx-open/method_on_platform_args.roc",
         .description = "Method call on platform-typed args (dispatch resolved via platform requirements)",
     },
+    .{
+        .roc_file = "test/fx-open/issue_9963_hosted_try_question_mark.roc",
+        .description = "Regression test: hosted Try unwrapped with ? widens the closed error row at the use site (issue 9963)",
+    },
+    .{
+        .roc_file = "test/fx-open/issue_10270_named_map_err_closure.roc",
+        .description = "Regression test: named closure using map_err compiles when its result is propagated with ? (issue 10270)",
+    },
+    .{
+        .roc_file = "test/fx-open/hosted_channels_declared.roc",
+        .description = "A hosted result flowing through an annotated binding, an argument, a record field, and a hand-written re-tag keeps the extern at its declared host ABI row",
+    },
 };
 
 /// Str platform test apps - test cross-module function calls
@@ -195,43 +207,6 @@ pub fn findTarget(platform: PlatformConfig, target_name: []const u8) ?TargetInfo
     return null;
 }
 
-/// Get list of all platform names
-pub fn getPlatformNames() []const []const u8 {
-    comptime {
-        var names: [platforms.len][]const u8 = undefined;
-        for (platforms, 0..) |platform, i| {
-            names[i] = platform.name;
-        }
-        return &names;
-    }
-}
-
-/// Get test app paths for a platform
-pub fn getTestApps(platform: PlatformConfig) []const []const u8 {
-    switch (platform.test_apps) {
-        inline .single => |app| {
-            const result = [_][]const u8{app};
-            return &result;
-        },
-        inline .spec_list => |specs| {
-            // Return just the roc_file paths
-            comptime var paths: [specs.len][]const u8 = undefined;
-            inline for (specs, 0..) |spec, i| {
-                paths[i] = spec.roc_file;
-            }
-            return &paths;
-        },
-        inline .simple_list => |specs| {
-            // Return just the roc_file paths
-            comptime var paths: [specs.len][]const u8 = undefined;
-            inline for (specs, 0..) |spec, i| {
-                paths[i] = spec.roc_file;
-            }
-            return &paths;
-        },
-    }
-}
-
 test "findPlatform works" {
     const int_platform = findPlatform("int");
     try std.testing.expect(int_platform != null);
@@ -268,7 +243,7 @@ test "fx platform has io specs" {
         .spec_list => |specs| {
             try std.testing.expect(specs.len > 0);
         },
-        .single => {
+        .single, .simple_list => {
             try std.testing.expect(false); // fx should have spec_list
         },
     }

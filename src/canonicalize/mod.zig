@@ -23,6 +23,8 @@ pub const BuiltinLowLevel = @import("BuiltinLowLevel.zig");
 pub const BuiltinStatic = @import("BuiltinStatic.zig");
 /// Roc code emitter - converts CIR to valid Roc source code
 pub const RocEmitter = @import("RocEmitter.zig");
+/// Shared syntactic refutability rules for Roc patterns.
+pub const PatternRefutability = @import("pattern_refutability.zig");
 /// Node storage for CIR nodes (used internally by ModuleEnv)
 pub const NodeStore = @import("NodeStore.zig");
 
@@ -89,6 +91,7 @@ test "compile tests" {
 
     std.testing.refAllDecls(@import("Can.zig"));
     std.testing.refAllDecls(@import("CIR.zig"));
+    std.testing.refAllDecls(@import("DependencyGraph.zig"));
     std.testing.refAllDecls(@import("Diagnostic.zig"));
     std.testing.refAllDecls(@import("Expression.zig"));
     std.testing.refAllDecls(@import("ExternalDecl.zig"));
@@ -100,10 +103,12 @@ test "compile tests" {
     std.testing.refAllDecls(@import("Statement.zig"));
     std.testing.refAllDecls(@import("TypeAnnotation.zig"));
 
-    std.testing.refAllDecls(@import("test/anno_only_test.zig"));
     std.testing.refAllDecls(@import("test/bool_test.zig"));
+    std.testing.refAllDecls(@import("test/diagnostic_publication_test.zig"));
     std.testing.refAllDecls(@import("test/frac_test.zig"));
     std.testing.refAllDecls(@import("test/if_statement_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_10151_test.zig"));
+    std.testing.refAllDecls(@import("test/roc_version_test.zig"));
     std.testing.refAllDecls(@import("test/import_validation_test.zig"));
     std.testing.refAllDecls(@import("test/int_test.zig"));
     std.testing.refAllDecls(@import("test/range_test.zig"));
@@ -117,6 +122,8 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/local_let_scoping_test.zig"));
     std.testing.refAllDecls(@import("test/uninitialized_var_test.zig"));
     std.testing.refAllDecls(@import("test/while_loop_test.zig"));
+    std.testing.refAllDecls(@import("test/where_clause_ownership_test.zig"));
+    std.testing.refAllDecls(@import("test/type_shadowing_test.zig"));
 
     // Backend tests (Roc emitter)
     std.testing.refAllDecls(@import("RocEmitter.zig"));

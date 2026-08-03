@@ -25,44 +25,18 @@ pub fn tokensToHtml(ast: *const AST, env: *const CommonEnv, writer: *std.Io.Writ
 
     for (token_tags, token_extras, 0..) |tag, _, i| {
         const region = ast.tokens.resolve(i);
-        const css_class: []const u8 = switch (tag) {
-            .KwApp,
-            .KwAs,
-            .KwCrash,
-            .KwDbg,
-            .KwElse,
-            .KwExpect,
-            .KwExposes,
-            .KwExposing,
-            .KwFor,
-            .KwGenerates,
-            .KwHas,
-            .KwHosted,
-            .KwIf,
-            .KwImplements,
-            .KwImport,
-            .KwImports,
-            .KwIn,
-            .KwInterface,
-            .KwMatch,
-            .KwModule,
-            .KwPackage,
-            .KwPackages,
-            .KwPlatform,
-            .KwProvides,
-            .KwRequires,
-            .KwReturn,
-            .KwVar,
-            .KwWhere,
-            .KwWith,
-            => "token-keyword",
-            .UpperIdent, .LowerIdent, .DotLowerIdent, .DotUpperIdent, .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent, .NamedUnderscore => "token-keyword",
-            .OpPlus, .OpStar, .OpPizza, .OpAssign, .OpBinaryMinus, .OpUnaryMinus, .OpNotEquals, .OpBang, .OpAnd, .OpAmpersand, .OpQuestion, .OpDoubleQuestion, .OpOr, .OpBar, .OpDoubleSlash, .OpSlash, .OpPercent, .OpCaret, .OpGreaterThanOrEq, .OpGreaterThan, .OpLessThanOrEq, .OpBackArrow, .OpLessThan, .OpEquals, .OpColonEqual, .NoSpaceOpQuestion => "token-punctuation",
-            .StringStart, .StringEnd, .MultilineStringStart, .StringPart => "token-string",
-            .Float, .Int => "token-number",
-            .OpenRound, .CloseRound, .OpenSquare, .CloseSquare, .OpenCurly, .CloseCurly, .OpenStringInterpolation, .CloseStringInterpolation, .NoSpaceOpenRound => "token-punctuation",
-            .EndOfFile => "token-default",
-            else => "token-default",
+        // Classification is driven by `Token.Tag.highlightCategory`, the single
+        // source of truth shared with the LSP semantic-token provider. The CSS
+        // class names here match the categories in `src/snapshot_tool/snapshot.css`.
+        const css_class: []const u8 = switch (tag.highlightCategory()) {
+            .keyword => "token-keyword",
+            .type, .variable, .field, .tag => "token-identifier",
+            .number => "token-number",
+            .string => "token-string",
+            .operator => "token-operator",
+            .bracket => "token-bracket",
+            .punctuation => "token-punctuation",
+            .default => "token-default",
         };
 
         try writer.print("<span class=\"token {s}\">", .{css_class});

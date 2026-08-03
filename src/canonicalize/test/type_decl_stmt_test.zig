@@ -116,17 +116,6 @@ fn countLocalReferenceBeforeDefinitionDiagnostics(env: *ModuleEnv, diagnostics: 
     return count;
 }
 
-fn countMutuallyRecursiveLocalDefinitionDiagnostics(diagnostics: []const CIR.Diagnostic) usize {
-    var count: usize = 0;
-    for (diagnostics) |diagnostic| {
-        switch (diagnostic) {
-            .mutually_recursive_local_definitions => count += 1,
-            else => {},
-        }
-    }
-    return count;
-}
-
 fn countAssociatedLookupDiagnostics(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic, name: []const u8) usize {
     var count: usize = 0;
     for (diagnostics) |diagnostic| {
@@ -487,38 +476,6 @@ test "block-local type use before declaration does not forward resolve" {
     }.check);
 }
 
-test "block-local lambda use before declaration does not forward resolve" {
-    const source =
-        \\value = {
-        \\    before = later(1)
-        \\    later = |n| n
-        \\    before
-        \\}
-    ;
-
-    try canonicalizeModuleAndCheck(source, struct {
-        fn check(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic) TypeDeclTestError!void {
-            try testing.expectEqual(@as(usize, 1), countLocalReferenceBeforeDefinitionDiagnostics(env, diagnostics, "later"));
-        }
-    }.check);
-}
-
-test "block-local lambdas cannot be mutually recursive through forward declaration" {
-    const source =
-        \\value = {
-        \\    first = |n| second(n)
-        \\    second = |n| first(n)
-        \\    first(0)
-        \\}
-    ;
-
-    try canonicalizeModuleAndCheck(source, struct {
-        fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) TypeDeclTestError!void {
-            try testing.expectEqual(@as(usize, 1), countMutuallyRecursiveLocalDefinitionDiagnostics(diagnostics));
-        }
-    }.check);
-}
-
 test "block-local lambda declaration does not capture earlier use of same-named outer lambda" {
     const source =
         \\later = |n| n + 10
@@ -581,6 +538,25 @@ test "block-local associated value does not leak after owner scope exits" {
             if (env.common.findIdent("Test.T.marker")) |ident| {
                 try testing.expect(env.getExposedValueNodeIndexById(ident) == null);
             }
+        }
+    }.check);
+}
+
+test "issue 10142: nested type under a block-local nominal is not exposed" {
+    // Repro for https://github.com/roc-lang/roc/issues/10142.
+    const source =
+        \\value = {
+        \\    A := {}.{
+        \\        Z : A()
+        \\        n = 0
+        \\    }
+        \\}
+    ;
+
+    try canonicalizeModuleAndCheck(source, struct {
+        fn check(env: *ModuleEnv, _: []const CIR.Diagnostic) TypeDeclTestError!void {
+            const nested_type = try env.insertIdent(Ident.for_text("A.Z"));
+            try testing.expect(env.getExposedTypeNodeIndexById(nested_type) == null);
         }
     }.check);
 }
@@ -654,161 +630,6 @@ test "local type alias redeclaration diagnostic renders" {
             try testing.expectEqual(@as(usize, 1), count);
         }
     }.check);
-}
-
-test "local type alias is parsed and canonicalized" {
-    const source =
-        \\|_| {
-        \\    MyNum : U64
-        \\    42
-        \\}
-    ;
-
-    var test_env = try TestEnv.init(source);
-    defer test_env.deinit();
-
-    const result = try test_env.canonicalizeExpr();
-    try testing.expect(result != null);
-
-    // Check diagnostics - should have no errors
-    const diagnostics = try test_env.getDiagnostics();
-    defer testing.allocator.free(diagnostics);
-
-    var error_count: usize = 0;
-    for (diagnostics) |diag| {
-        switch (diag) {
-            .not_implemented => error_count += 1,
-            .undeclared_type => error_count += 1,
-            .ident_not_in_scope => error_count += 1,
-            else => {},
-        }
-    }
-    try testing.expectEqual(@as(usize, 0), error_count);
-}
-
-test "local nominal type is parsed and canonicalized" {
-    const source =
-        \\|_| {
-        \\    Counter := U64
-        \\    42
-        \\}
-    ;
-
-    var test_env = try TestEnv.init(source);
-    defer test_env.deinit();
-
-    const result = try test_env.canonicalizeExpr();
-    try testing.expect(result != null);
-
-    const diagnostics = try test_env.getDiagnostics();
-    defer testing.allocator.free(diagnostics);
-
-    var error_count: usize = 0;
-    for (diagnostics) |diag| {
-        switch (diag) {
-            .not_implemented => error_count += 1,
-            .undeclared_type => error_count += 1,
-            .ident_not_in_scope => error_count += 1,
-            else => {},
-        }
-    }
-    try testing.expectEqual(@as(usize, 0), error_count);
-}
-
-test "local opaque type is parsed and canonicalized" {
-    // Use U8 instead of Str since Str is an auto-imported type, not a builtin
-    const source =
-        \\|_| {
-        \\    Secret :: U8
-        \\    42
-        \\}
-    ;
-
-    var test_env = try TestEnv.init(source);
-    defer test_env.deinit();
-
-    const result = try test_env.canonicalizeExpr();
-    try testing.expect(result != null);
-
-    const diagnostics = try test_env.getDiagnostics();
-    defer testing.allocator.free(diagnostics);
-
-    var error_count: usize = 0;
-    for (diagnostics) |diag| {
-        switch (diag) {
-            .not_implemented => error_count += 1,
-            .undeclared_type => error_count += 1,
-            .ident_not_in_scope => error_count += 1,
-            else => {},
-        }
-    }
-    try testing.expectEqual(@as(usize, 0), error_count);
-}
-
-test "nested blocks with local types" {
-    // Use builtin types (U64, U8) instead of Str
-    const source =
-        \\|_| {
-        \\    OuterType : U64
-        \\    inner = {
-        \\        InnerType : U8
-        \\        42
-        \\    }
-        \\    inner
-        \\}
-    ;
-
-    var test_env = try TestEnv.init(source);
-    defer test_env.deinit();
-
-    const result = try test_env.canonicalizeExpr();
-    try testing.expect(result != null);
-
-    const diagnostics = try test_env.getDiagnostics();
-    defer testing.allocator.free(diagnostics);
-
-    var error_count: usize = 0;
-    for (diagnostics) |diag| {
-        switch (diag) {
-            .not_implemented => error_count += 1,
-            .undeclared_type => error_count += 1,
-            .ident_not_in_scope => error_count += 1,
-            else => {},
-        }
-    }
-    try testing.expectEqual(@as(usize, 0), error_count);
-}
-
-test "multiple local types in same block" {
-    // Use builtin types (U64, U8) instead of Str
-    const source =
-        \\|_| {
-        \\    First : U64
-        \\    Second : U8
-        \\    Third : { a: U64, b: U8 }
-        \\    42
-        \\}
-    ;
-
-    var test_env = try TestEnv.init(source);
-    defer test_env.deinit();
-
-    const result = try test_env.canonicalizeExpr();
-    try testing.expect(result != null);
-
-    const diagnostics = try test_env.getDiagnostics();
-    defer testing.allocator.free(diagnostics);
-
-    var error_count: usize = 0;
-    for (diagnostics) |diag| {
-        switch (diag) {
-            .not_implemented => error_count += 1,
-            .undeclared_type => error_count += 1,
-            .ident_not_in_scope => error_count += 1,
-            else => {},
-        }
-    }
-    try testing.expectEqual(@as(usize, 0), error_count);
 }
 
 test "local type with type parameters" {

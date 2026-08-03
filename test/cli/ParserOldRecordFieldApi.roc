@@ -1,24 +1,24 @@
 ParserOldRecordFieldApi :: [].{}
 
 Format := [Default].{
-	parse_str : Format, State -> Try({ value : Str, rest : State }, [MissingRequired])
-	parse_str = |_| Err(MissingRequired)
+	parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError, ..])
+	parse_str = |_| Err(FormatError)
 
 	parse_record_field : State -> Try(
 		[
 			Field({ name : Str, value : State, rest : State }),
-			End({ rest : State, missing : [MissingRequired] }),
+			End({ rest : State, missing : [FormatError, ..] }),
 		],
-		[MissingRequired],
+		[FormatError, ..],
 	)
-	parse_record_field = |_| Err(MissingRequired)
+	parse_record_field = |_| Err(FormatError)
 }
 
 State := [Present(Str)]
 
-parse : Str -> Try(a, [MissingRequired])
+parse : Str -> Try(a, [FormatError, ..errs])
 	where [
-		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [MissingRequired])),
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError, ..errs])),
 	]
 parse = |input| {
 	Shape : a
@@ -27,5 +27,5 @@ parse = |input| {
 	Ok(parsed.value)
 }
 
-main : Try({ foo : Str }, [MissingRequired])
+main : Try({ foo : Str }, [FormatError, MissingRequiredField(Str)])
 main = parse("foo")

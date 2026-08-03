@@ -45,18 +45,14 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call (constraint-fn-var 15)
+(e-call (constraint-fn-var 199)
 	(e-lambda
 		(args
 			(p-assign (ident "x")))
-		(e-dispatch-call (method "not") (constraint-fn-var 12)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "x"))))
-			(args)))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(e-tag (name "True")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "[True, ..]"))
 ~~~

@@ -193,7 +193,7 @@ main! = |_| {
 	# This would fail if 'a' and 'b' from the first call were reused
 	result2 = swap((Bool.true, [1, 2, 3]))
 
-	# Third use: swap (Str, Str) 
+	# Third use: swap (Str, Str)
 	# This shows even when both types are the same, we still need fresh vars
 	result3 = swap(("foo", "bar"))
 
@@ -238,7 +238,7 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "result1"))
-					(e-call (constraint-fn-var 124)
+					(e-call (constraint-fn-var 279)
 						(e-lookup-local
 							(p-assign (ident "swap")))
 						(e-tuple
@@ -248,20 +248,10 @@ main! = |_| {
 									(e-literal (string "hello")))))))
 				(s-let
 					(p-assign (ident "result2"))
-					(e-call (constraint-fn-var 231)
-						(e-lookup-local
-							(p-assign (ident "swap")))
-						(e-tuple
-							(elems
-								(e-runtime-error (tag "nested_value_not_found"))
-								(e-list
-									(elems
-										(e-num (value "1"))
-										(e-num (value "2"))
-										(e-num (value "3"))))))))
+					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-let
 					(p-assign (ident "result3"))
-					(e-call (constraint-fn-var 269)
+					(e-call (constraint-fn-var 328)
 						(e-lookup-local
 							(p-assign (ident "swap")))
 						(e-tuple

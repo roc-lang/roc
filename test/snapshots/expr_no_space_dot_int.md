@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=
+description=dot-int tuple index access on a plain identifier
 type=snippet
 ~~~
 # SOURCE
@@ -29,7 +29,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "foo"))
@@ -46,8 +46,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "foo"))
-		(e-tuple-access (index "0")
-			(e-runtime-error (tag "ident_not_in_scope")))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

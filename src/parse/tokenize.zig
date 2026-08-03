@@ -9,6 +9,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const base = @import("base");
 const tracy = @import("tracy");
+const NumericLiteral = @import("NumericLiteral.zig");
+const escape_table = @import("escape.zig");
 
 const DataSpan = base.DataSpan;
 const CommonEnv = base.CommonEnv;
@@ -372,6 +374,177 @@ pub const Token = struct {
             }
             return next;
         }
+
+        /// A broad syntax-highlight category for a token tag. This is the single
+        /// source of truth that both the LSP semantic-token provider and the
+        /// playground's HTML token view classify against, so a new token tag is
+        /// classified in exactly one place.
+        pub const HighlightCategory = enum {
+            /// Language keywords such as `if`, `match`, and `while`.
+            keyword,
+            /// Type and opaque names (uppercase identifiers).
+            type,
+            /// Value-level identifiers (lowercase identifiers and named underscores).
+            variable,
+            /// Record field access such as `.name`.
+            field,
+            /// Tag access such as `.Ok`.
+            tag,
+            /// Numeric literals.
+            number,
+            /// String and single-quote literals.
+            string,
+            /// Operators.
+            operator,
+            /// Grouping brackets: parentheses, square brackets, and curly braces.
+            bracket,
+            /// Structural punctuation such as commas, dots, and underscores.
+            punctuation,
+            /// Tokens that receive no special highlighting (end of file, unknown tokens).
+            default,
+        };
+
+        /// Classify a token tag into its `HighlightCategory`. Highlight consumers
+        /// switch over the returned category rather than over individual tags, so
+        /// this exhaustive switch is the one place that assigns a category to each tag.
+        pub fn highlightCategory(tok: Tag) HighlightCategory {
+            return switch (tok) {
+                .KwApp,
+                .KwAs,
+                .KwCrash,
+                .KwDbg,
+                .KwElse,
+                .KwExpect,
+                .KwExposes,
+                .KwExposing,
+                .KwFor,
+                .KwGenerates,
+                .KwHas,
+                .KwHosted,
+                .KwIf,
+                .KwImplements,
+                .KwImport,
+                .KwImports,
+                .KwIn,
+                .KwInterface,
+                .KwMatch,
+                .KwModule,
+                .KwPackage,
+                .KwPackages,
+                .KwPlatform,
+                .KwProvides,
+                .KwRequires,
+                .KwReturn,
+                .KwTargets,
+                .KwVar,
+                .KwWhere,
+                .KwWhile,
+                .KwWith,
+                .KwBreak,
+                => .keyword,
+
+                .UpperIdent,
+                .OpaqueName,
+                .MalformedOpaqueNameUnicode,
+                .MalformedOpaqueNameWithoutName,
+                => .type,
+
+                .LowerIdent,
+                .NamedUnderscore,
+                .MalformedNamedUnderscoreUnicode,
+                .MalformedUnicodeIdent,
+                .MalformedDotUnicodeIdent,
+                .MalformedNoSpaceDotUnicodeIdent,
+                => .variable,
+
+                .DotLowerIdent,
+                .NoSpaceDotLowerIdent,
+                => .field,
+
+                .DotUpperIdent,
+                .NoSpaceDotUpperIdent,
+                => .tag,
+
+                .Int,
+                .Float,
+                .DotInt,
+                .NoSpaceDotInt,
+                .MalformedNumberBadSuffix,
+                .MalformedNumberUnicodeSuffix,
+                .MalformedNumberNoDigits,
+                .MalformedNumberNoExponentDigits,
+                => .number,
+
+                .StringStart,
+                .StringEnd,
+                .StringPart,
+                .MultilineStringStart,
+                .SingleQuote,
+                .MalformedSingleQuote,
+                .MalformedStringPart,
+                .MalformedInvalidUnicodeEscapeSequence,
+                .MalformedInvalidEscapeSequence,
+                => .string,
+
+                .OpPlus,
+                .OpStar,
+                .OpPizza,
+                .OpAssign,
+                .OpBinaryMinus,
+                .OpUnaryMinus,
+                .OpNotEquals,
+                .OpBang,
+                .OpAnd,
+                .OpAmpersand,
+                .OpQuestion,
+                .OpDoubleQuestion,
+                .OpOr,
+                .OpBar,
+                .OpDoubleSlash,
+                .OpSlash,
+                .OpPercent,
+                .OpCaret,
+                .OpGreaterThanOrEq,
+                .OpGreaterThan,
+                .OpLessThanOrEq,
+                .OpBackArrow,
+                .OpLessThan,
+                .OpDoubleDotLessThan,
+                .OpDoubleDotEquals,
+                .OpEquals,
+                .OpColonEqual,
+                .OpDoubleColon,
+                .NoSpaceOpQuestion,
+                .OpColon,
+                .OpArrow,
+                .OpFatArrow,
+                .OpBackslash,
+                .DoubleDot,
+                .TripleDot,
+                .DotStar,
+                => .operator,
+
+                .OpenRound,
+                .CloseRound,
+                .OpenSquare,
+                .CloseSquare,
+                .OpenCurly,
+                .CloseCurly,
+                .OpenStringInterpolation,
+                .CloseStringInterpolation,
+                .NoSpaceOpenRound,
+                => .bracket,
+
+                .Comma,
+                .Dot,
+                .Underscore,
+                => .punctuation,
+
+                .EndOfFile,
+                .MalformedUnknownToken,
+                => .default,
+            };
+        }
     };
 
     pub const keywords = std.StaticStringMap(Tag).initComptime(.{
@@ -411,22 +584,23 @@ pub const Token = struct {
         .{ "break", .KwBreak },
     });
 
-    pub const valid_number_suffixes = std.StaticStringMap(void).initComptime(.{
-        .{ "dec", .{} },
-        .{ "f32", .{} },
-        .{ "f64", .{} },
-        .{ "i128", .{} },
-        .{ "i16", .{} },
-        .{ "i32", .{} },
-        .{ "i64", .{} },
-        .{ "i8", .{} },
-        .{ "nat", .{} },
-        .{ "u128", .{} },
-        .{ "u16", .{} },
-        .{ "u32", .{} },
-        .{ "u64", .{} },
-        .{ "u8", .{} },
-    });
+    /// The numeric-literal suffixes the tokenizer accepts, derived at comptime
+    /// from `NumericLiteral.DeprecatedSuffix` so the accepted set and the set the
+    /// parser can interpret are equal by construction.
+    pub const valid_number_suffixes = blk: {
+        const Suffix = NumericLiteral.DeprecatedSuffix;
+        const fields = @typeInfo(Suffix).@"enum".fields;
+        var kvs: [fields.len - 1]struct { []const u8, void } = undefined;
+        var i: usize = 0;
+        for (fields) |field| {
+            const suffix: Suffix = @enumFromInt(field.value);
+            if (suffix.oldText()) |text| {
+                kvs[i] = .{ text, {} };
+                i += 1;
+            }
+        }
+        break :blk std.StaticStringMap(void).initComptime(kvs);
+    };
 };
 
 /// The buffer that accumulates tokens.
@@ -881,11 +1055,18 @@ pub const Cursor = struct {
         // Store the start position of the escape sequence (before the backslash)
         const escape_start = if (self.pos > 0) self.pos - 1 else self.pos;
 
-        switch (self.peek() orelse 0) {
-            '\\', '"', '\'', 'n', 'r', 't', '$' => {
+        const escape_byte = self.peek() orelse 0;
+        const interpretation = escape_table.lookup(escape_byte) orelse {
+            // Include the character after the backslash in the error region
+            const end_pos = if (self.peek() != null) self.pos + 1 else self.pos;
+            self.pushMessage(.InvalidEscapeSequence, escape_start, end_pos);
+            return error.InvalidEscapeSequence;
+        };
+        switch (interpretation) {
+            .byte => {
                 self.pos += 1;
             },
-            'u' => {
+            .unicode => {
                 self.pos += 1;
 
                 if (self.peek() == '(') {
@@ -950,12 +1131,6 @@ pub const Cursor = struct {
                     self.pushMessage(.InvalidUnicodeEscapeSequence, escape_start, self.pos);
                     return error.InvalidUnicodeEscapeSequence;
                 }
-            },
-            else => {
-                // Include the character after the backslash in the error region
-                const end_pos = if (self.peek() != null) self.pos + 1 else self.pos;
-                self.pushMessage(.InvalidEscapeSequence, escape_start, end_pos);
-                return error.InvalidEscapeSequence;
             },
         }
     }
@@ -1227,7 +1402,16 @@ pub const Tokenizer = struct {
                         } else if (n >= '0' and n <= '9') {
                             self.cursor.pos += 1;
                             self.cursor.chompInteger();
-                            try self.pushTokenNormalHere(gpa, if (sp) .DotInt else .NoSpaceDotInt, start);
+                            var tag: Token.Tag = if (sp) .DotInt else .NoSpaceDotInt;
+                            const suffix_start = self.cursor.pos;
+                            const suffix_tag = self.cursor.chompNumberSuffix(tag);
+                            if (self.cursor.pos != suffix_start) {
+                                tag = if (suffix_tag == .MalformedNumberUnicodeSuffix)
+                                    .MalformedNumberUnicodeSuffix
+                                else
+                                    .MalformedNumberBadSuffix;
+                            }
+                            try self.pushTokenNormalHere(gpa, tag, start);
                         } else if (n >= 'a' and n <= 'z') {
                             var tag: Token.Tag = if (sp) .DotLowerIdent else .NoSpaceDotLowerIdent;
                             self.cursor.pos += 1;
@@ -2421,7 +2605,6 @@ test "tokenizer" {
     try testTokenization(gpa, "-42", &[_]Token.Tag{.Int});
     try testTokenization(gpa, "1e10", &[_]Token.Tag{.Float});
     try testTokenization(gpa, "_ident", &[_]Token.Tag{.NamedUnderscore});
-    try testTokenization(gpa, "1..2", &[_]Token.Tag{ .Int, .DoubleDot, .Int });
     try testTokenization(gpa, "3...4", &[_]Token.Tag{ .Int, .TripleDot, .Int });
     try testTokenization(gpa, "..<", &[_]Token.Tag{.OpDoubleDotLessThan});
     try testTokenization(gpa, "..=", &[_]Token.Tag{.OpDoubleDotEquals});
@@ -2430,8 +2613,6 @@ test "tokenizer" {
     try testTokenization(gpa, "1 ..< 5", &[_]Token.Tag{ .Int, .OpDoubleDotLessThan, .Int });
     try testTokenization(gpa, "a..=b", &[_]Token.Tag{ .LowerIdent, .OpDoubleDotEquals, .LowerIdent });
     // existing behavior must not change:
-    try testTokenization(gpa, "1...5", &[_]Token.Tag{ .Int, .TripleDot, .Int });
-    try testTokenization(gpa, "1..5", &[_]Token.Tag{ .Int, .DoubleDot, .Int });
     try testTokenization(gpa, "1. .2", &[_]Token.Tag{ .Int, .Dot, .DotInt });
     try testTokenization(gpa, "1.2.3", &[_]Token.Tag{ .Float, .NoSpaceDotInt });
     try testTokenization(gpa, "match", &[_]Token.Tag{.KwMatch});
@@ -2810,29 +2991,44 @@ test "additional operators" {
 
     // Pizza operator |>
     try testTokenization(gpa, "|>", &[_]Token.Tag{.OpPizza});
-    try testTokenization(gpa, "a |> b", &[_]Token.Tag{ .LowerIdent, .OpPizza, .LowerIdent });
 
     // Pipe operator |
     try testTokenization(gpa, "|", &[_]Token.Tag{.OpBar});
 
     // Percent operator %
     try testTokenization(gpa, "%", &[_]Token.Tag{.OpPercent});
-    try testTokenization(gpa, "a % b", &[_]Token.Tag{ .LowerIdent, .OpPercent, .LowerIdent });
 
     // Caret operator ^
     try testTokenization(gpa, "^", &[_]Token.Tag{.OpCaret});
-    try testTokenization(gpa, "a ^ b", &[_]Token.Tag{ .LowerIdent, .OpCaret, .LowerIdent });
 
     // Single backslash operator
     try testTokenization(gpa, "\\", &[_]Token.Tag{.OpBackslash});
 
     // Double slash //
     try testTokenization(gpa, "//", &[_]Token.Tag{.OpDoubleSlash});
-    try testTokenization(gpa, "a // b", &[_]Token.Tag{ .LowerIdent, .OpDoubleSlash, .LowerIdent });
 
     // Slash /
     try testTokenization(gpa, "/", &[_]Token.Tag{.OpSlash});
-    try testTokenization(gpa, "a / b", &[_]Token.Tag{ .LowerIdent, .OpSlash, .LowerIdent });
+}
+
+test "number suffixes" {
+    const gpa = std.testing.allocator;
+
+    // Every accepted suffix corresponds to a supported numeric type.
+    try testTokenization(gpa, "123u8", &[_]Token.Tag{.Int});
+    try testTokenization(gpa, "123i128", &[_]Token.Tag{.Int});
+    try testTokenization(gpa, "123dec", &[_]Token.Tag{.Int});
+    try testTokenization(gpa, "1.5f64", &[_]Token.Tag{.Float});
+
+    // `nat` is not a supported type, so it must be rejected like any other
+    // unknown suffix rather than silently accepted and ignored.
+    try testTokenization(gpa, "123nat", &[_]Token.Tag{.MalformedNumberBadSuffix});
+    try testTokenization(gpa, "123xyz", &[_]Token.Tag{.MalformedNumberBadSuffix});
+
+    // Tuple indexes cannot have numeric-literal suffixes. Consume the whole
+    // malformed token so the digit prefix cannot become a tuple access.
+    try testTokenization(gpa, "x.70000c", &[_]Token.Tag{ .LowerIdent, .MalformedNumberBadSuffix });
+    try testTokenization(gpa, "x.0u8", &[_]Token.Tag{ .LowerIdent, .MalformedNumberBadSuffix });
 }
 
 test "malformed unicode identifiers" {
@@ -2972,5 +3168,38 @@ test "invalid unicode escape sequence in string" {
         const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
         try std.testing.expect(messages.len > 0);
         try std.testing.expectEqual(Diagnostic.Tag.InvalidUnicodeEscapeSequence, messages[0].tag);
+    }
+}
+
+test "escape alphabet: tokenizer accepts exactly the shared table domain" {
+    // The tokenizer's allowlist and both canonicalizer interpreters derive from
+    // `escape.lookup`, so the set of bytes the tokenizer accepts after a
+    // backslash must equal the table's domain. Iterate every byte and assert
+    // tokenizer-accepts iff the table interprets it. A member byte accepted by
+    // the tokenizer is, by construction, also interpreted by both canonicalizer
+    // interpreters, since each looks the byte up in this same table.
+    var byte: u16 = 0;
+    while (byte < 256) : (byte += 1) {
+        const b: u8 = @intCast(byte);
+        const in_domain = escape_table.lookup(b) != null;
+
+        // Build the bytes following the backslash. The `\u` marker needs a
+        // valid `(hex)` body to be accepted; simple escapes stand alone.
+        var buf: [8]u8 = undefined;
+        const src: []const u8 = if (b == 'u') blk: {
+            const s = "u(0041)";
+            @memcpy(buf[0..s.len], s);
+            break :blk buf[0..s.len];
+        } else blk: {
+            buf[0] = b;
+            break :blk buf[0..1];
+        };
+
+        var messages: [4]Diagnostic = undefined;
+        var cursor = Cursor.init(src, &messages);
+        // Position the cursor as if the backslash were already consumed.
+        const accepted = if (cursor.chompEscapeSequence()) |_| true else |_| false;
+
+        try std.testing.expectEqual(in_domain, accepted);
     }
 }

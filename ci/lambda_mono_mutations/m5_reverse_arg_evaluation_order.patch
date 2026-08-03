@@ -1,0 +1,15 @@
+diff --git a/src/postcheck/solved_lir_lower.zig b/src/postcheck/solved_lir_lower.zig
+index 269f5e573e..ff4f27222e 100644
+--- a/src/postcheck/solved_lir_lower.zig
++++ b/src/postcheck/solved_lir_lower.zig
+@@ -6215,9 +6215,7 @@ const Lowerer = struct {
+     ) Common.LowerError!LIR.CFStmtId {
+         if (lowered.ids.len != tys.len) Common.invariant("typed expression prepend arity differed from local arity");
+         var current = next;
+-        var i = lowered.ids.len;
+-        while (i > 0) {
+-            i -= 1;
++        for (0..lowered.ids.len) |i| {
+             current = try self.lowerExprIntoAtType(lowered.ids[i], lowered.exprs[i], tys[i], current);
+         }
+         return current;

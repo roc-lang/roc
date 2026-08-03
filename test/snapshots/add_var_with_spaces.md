@@ -29,7 +29,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "add2"))
@@ -46,11 +46,7 @@ add2 = x + 2
 (can-ir
 	(d-let
 		(p-assign (ident "add2"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 45)
-			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))
-			(args
-				(e-num (value "2"))))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

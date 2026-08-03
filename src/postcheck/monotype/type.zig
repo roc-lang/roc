@@ -5,11 +5,22 @@
 
 const std = @import("std");
 const check = @import("check");
+const collections = @import("collections");
 
 const Common = @import("../common.zig");
 const names = check.CheckedNames;
 const checked = check.CheckedModule;
 const static_dispatch = check.StaticDispatchRegistry;
+const GuardedList = collections.GuardedList;
+
+fn StoreList(comptime T: type, comptime field_name: []const u8) type {
+    return GuardedList.List(T, "monotype.Type.Store." ++ field_name);
+}
+
+/// Guarded immutable span borrow for a named Monotype type-store list.
+pub fn StoreSpanBorrow(comptime T: type, comptime field_name: []const u8) type {
+    return GuardedList.BorrowSpan(T, "monotype.Type.Store." ++ field_name);
+}
 
 /// Identifier for a monomorphic type in this store.
 pub const TypeId = enum(u32) { _ };
@@ -40,12 +51,127 @@ pub const OwnerHead = union(enum(u8)) {
     named_type: TypeDef,
 };
 
+/// Checker-authored identities for the public iterator representation.
+pub const IteratorTopology = struct {
+    len_field: names.RecordFieldNameId,
+    step_field: names.RecordFieldNameId,
+    known_tag: names.TagNameId,
+    unknown_tag: names.TagNameId,
+    done_tag: names.TagNameId,
+    one_tag: names.TagNameId,
+    skip_tag: names.TagNameId,
+    item_field: names.RecordFieldNameId,
+    rest_field: names.RecordFieldNameId,
+};
+
 /// Named type definition owner.
 pub const TypeDef = struct {
-    module_name: names.ModuleNameId,
+    /// Deep content identity of the declaring module (dense id in the owning
+    /// name store's module identity table).
+    module: names.ModuleIdentityId,
+    /// Declared (module-relative) type name.
     type_name: names.TypeNameId,
+    /// Declaring statement in the (content-identified) module: the
+    /// within-module discriminator for same-named block-local declarations.
     source_decl: ?u32 = null,
+    /// Compiler-generated specialization identity for internal nominals minted
+    /// from a public source nominal. Null means this is the source nominal.
+    generated: ?names.TypeDigest = null,
+    /// Representation decision produced when an internal iterator nominal is
+    /// created. Later stages consume the recorded tier and mint depth directly.
+    iterator_representation: IteratorRepresentation = .none,
+    /// Exact producer or adapter that minted this iterator representation.
+    /// Consumers use this evidence instead of reconstructing an operation from
+    /// the generated function body's shape.
+    iterator_kind: IteratorKind = .none,
+    /// Producer-computed minted-chain depth. Meaningful only for `.minted`.
+    iterator_depth: u8 = 0,
+    /// Checker-authored identities for the iterator representation.
+    /// Generated iterator types retain these as the exact representation roles
+    /// consumed by post-check stages.
+    iterator_topology: ?IteratorTopology = null,
 };
+
+/// Explicit representation tier assigned when an iterator nominal is created.
+pub const IteratorRepresentation = enum(u8) {
+    none,
+    minted,
+    forced_dynamic,
+};
+
+/// Producer-owned identity of an internal iterator representation.
+pub const IteratorKind = enum(u8) {
+    none,
+    custom,
+    list,
+    str,
+    single,
+    range_exclusive,
+    range_inclusive,
+    map,
+    keep_if,
+    drop_if,
+    take_first,
+    drop_first,
+    concat,
+    append,
+    forced_dynamic,
+};
+
+/// Exceptional relation between two named iterator types. Equal identities
+/// and unrelated named types use ordinary named-type unification.
+pub const IteratorRelation = enum(u8) {
+    ordinary,
+    public_minted,
+    forced_dynamic,
+    minted_join,
+};
+
+/// Classifies the representation-tier relation shared by Monotype
+/// instantiation and Lambda Solved unification.
+pub fn iteratorRelation(left: anytype, right: anytype) IteratorRelation {
+    if (left.kind != right.kind) return .ordinary;
+    if (left.def.module != right.def.module or
+        left.def.type_name != right.def.type_name or
+        left.def.source_decl != right.def.source_decl)
+    {
+        return .ordinary;
+    }
+    if (!iteratorOwnerPair(left.builtin_owner, right.builtin_owner)) return .ordinary;
+
+    const left_representation = left.def.iterator_representation;
+    const right_representation = right.def.iterator_representation;
+    if ((left_representation == .forced_dynamic) != (right_representation == .forced_dynamic)) {
+        return .forced_dynamic;
+    }
+    if ((left_representation == .minted and right_representation == .none) or
+        (left_representation == .none and right_representation == .minted))
+    {
+        return .public_minted;
+    }
+    if (left_representation == .minted and
+        right_representation == .minted and
+        !optionalDigestEql(left.def.generated, right.def.generated))
+    {
+        return .minted_join;
+    }
+    return .ordinary;
+}
+
+fn iteratorOwnerPair(
+    left: ?static_dispatch.BuiltinOwner,
+    right: ?static_dispatch.BuiltinOwner,
+) bool {
+    const owner = left orelse right orelse return false;
+    if (!static_dispatch.isIteratorOwner(owner)) return false;
+    if (left) |left_owner| {
+        if (left_owner != owner) return false;
+    }
+    if (right) |right_owner| {
+        if (right_owner != owner) return false;
+    }
+    return true;
+}
 
 /// Named checked type instance.
 pub const NamedType = struct {
@@ -59,10 +185,20 @@ pub const BackingUse = enum(u8) {
     runtime_layout_only,
 };
 
+/// Authority carried by a named backing. Checked-public backings describe the
+/// interface produced by checking. Generated-private backings carry explicit
+/// post-check specialization evidence and must never be merged into that
+/// public interface.
+pub const BackingAuthority = enum(u8) {
+    checked_public,
+    generated_private,
+};
+
 /// Backing type for a named type when checking output one.
 pub const NamedBacking = struct {
     ty: TypeId,
     use: BackingUse,
+    authority: BackingAuthority = .checked_public,
 };
 
 /// Kind of named type visible after checking.
@@ -141,13 +277,16 @@ pub const NamedContent = std.meta.fieldInfo(MonoTypeNode, .named).type;
 /// Store for monomorphic types and their shared spans.
 pub const Store = struct {
     allocator: std.mem.Allocator,
-    types: std.ArrayList(Content),
-    type_digests: std.ArrayList(?names.TypeDigest),
-    specialization_digests: std.ArrayList(?names.TypeDigest),
-    spans: std.ArrayList(TypeId),
-    fields: std.ArrayList(Field),
-    tags: std.ArrayList(Tag),
-    declared_fields: std.ArrayList(DeclaredField),
+    types: StoreList(Content, "types"),
+    type_digests: StoreList(?names.TypeDigest, "type_digests"),
+    specialization_digests: StoreList(?names.TypeDigest, "specialization_digests"),
+    type_digest_generations: StoreList(u64, "type_digest_generations"),
+    specialization_digest_generations: StoreList(u64, "specialization_digest_generations"),
+    digest_cache_generation: u64,
+    spans: StoreList(TypeId, "spans"),
+    fields: StoreList(Field, "fields"),
+    tags: StoreList(Tag, "tags"),
+    declared_fields: StoreList(DeclaredField, "declared_fields"),
     frozen: bool,
 
     pub fn init(allocator: std.mem.Allocator) Store {
@@ -156,6 +295,9 @@ pub const Store = struct {
             .types = .empty,
             .type_digests = .empty,
             .specialization_digests = .empty,
+            .type_digest_generations = .empty,
+            .specialization_digest_generations = .empty,
+            .digest_cache_generation = 1,
             .spans = .empty,
             .fields = .empty,
             .tags = .empty,
@@ -169,6 +311,8 @@ pub const Store = struct {
         self.tags.deinit(self.allocator);
         self.fields.deinit(self.allocator);
         self.spans.deinit(self.allocator);
+        self.specialization_digest_generations.deinit(self.allocator);
+        self.type_digest_generations.deinit(self.allocator);
         self.specialization_digests.deinit(self.allocator);
         self.type_digests.deinit(self.allocator);
         self.types.deinit(self.allocator);
@@ -185,7 +329,7 @@ pub const Store = struct {
     pub fn addSpan(self: *Store, values: []const TypeId) std.mem.Allocator.Error!Span {
         self.assertMutable();
         if (values.len == 0) return .empty();
-        const start: u32 = @intCast(self.spans.items.len);
+        const start: u32 = @intCast(self.spans.len());
         try self.spans.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
@@ -193,7 +337,7 @@ pub const Store = struct {
     pub fn addFields(self: *Store, values: []const Field) std.mem.Allocator.Error!Span {
         self.assertMutable();
         if (values.len == 0) return .empty();
-        const start: u32 = @intCast(self.fields.items.len);
+        const start: u32 = @intCast(self.fields.len());
         try self.fields.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
@@ -211,7 +355,7 @@ pub const Store = struct {
     pub fn addTags(self: *Store, values: []const Tag) std.mem.Allocator.Error!Span {
         self.assertMutable();
         if (values.len == 0) return .empty();
-        const start: u32 = @intCast(self.tags.items.len);
+        const start: u32 = @intCast(self.tags.len());
         try self.tags.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
@@ -228,12 +372,16 @@ pub const Store = struct {
 
     pub fn add(self: *Store, content: Content) std.mem.Allocator.Error!TypeId {
         self.assertMutable();
-        const index = self.types.items.len;
+        const index = self.types.len();
         try self.types.append(self.allocator, content);
         errdefer _ = self.types.pop();
         try self.type_digests.append(self.allocator, null);
         errdefer _ = self.type_digests.pop();
         try self.specialization_digests.append(self.allocator, null);
+        errdefer _ = self.specialization_digests.pop();
+        try self.type_digest_generations.append(self.allocator, 0);
+        errdefer _ = self.type_digest_generations.pop();
+        try self.specialization_digest_generations.append(self.allocator, 0);
         return @enumFromInt(@as(u32, @intCast(index)));
     }
 
@@ -254,55 +402,50 @@ pub const Store = struct {
         return reserved;
     }
 
-    /// Update an active instantiation graph's mutable Monotype view. This is a
-    /// graph-compatibility API only; completed program views must seal graph
-    /// nodes into fresh immutable ids before constructing `Ast.ProgramView`.
-    pub fn replaceGraphView(self: *Store, ty: TypeId, content: Content) void {
-        self.fillReservedSlot(ty, content);
-    }
-
     fn reserveSlot(self: *Store) std.mem.Allocator.Error!TypeId {
         return try self.add(.zst);
     }
 
     fn fillReservedSlot(self: *Store, ty: TypeId, content: Content) void {
         self.assertMutable();
-        self.types.items[@intFromEnum(ty)] = content;
+        self.types.set(@intFromEnum(ty), content);
         self.clearTypeDigestCache();
     }
 
     pub fn get(self: *const Store, ty: TypeId) Content {
-        return self.types.items[@intFromEnum(ty)];
+        return self.types.unsafeRawItemsForView()[@intFromEnum(ty)];
     }
 
-    pub fn span(self: *const Store, span_: Span) []const TypeId {
-        return self.spans.items[span_.start..][0..span_.len];
+    pub fn span(self: *const Store, span_: Span) StoreSpanBorrow(TypeId, "spans") {
+        return self.spans.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn fieldSpan(self: *const Store, span_: Span) []const Field {
-        return self.fields.items[span_.start..][0..span_.len];
+    pub fn fieldSpan(self: *const Store, span_: Span) StoreSpanBorrow(Field, "fields") {
+        return self.fields.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn tagSpan(self: *const Store, span_: Span) []const Tag {
-        return self.tags.items[span_.start..][0..span_.len];
+    pub fn tagSpan(self: *const Store, span_: Span) StoreSpanBorrow(Tag, "tags") {
+        return self.tags.borrowSpan(span_.start, span_.len);
     }
 
     pub fn addDeclaredFields(self: *Store, values: []const DeclaredField) std.mem.Allocator.Error!Span {
         self.assertMutable();
         if (values.len == 0) return .empty();
-        const start: u32 = @intCast(self.declared_fields.items.len);
+        const start: u32 = @intCast(self.declared_fields.len());
         try self.declared_fields.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
-    pub fn declaredFieldSpan(self: *const Store, span_: Span) []const DeclaredField {
-        return self.declared_fields.items[span_.start..][0..span_.len];
+    pub fn declaredFieldSpan(self: *const Store, span_: Span) StoreSpanBorrow(DeclaredField, "declared_fields") {
+        return self.declared_fields.borrowSpan(span_.start, span_.len);
     }
 
     const Mark = struct {
         types_len: usize,
         type_digests_len: usize,
         specialization_digests_len: usize,
+        type_digest_generations_len: usize,
+        specialization_digest_generations_len: usize,
         spans_len: usize,
         fields_len: usize,
         tags_len: usize,
@@ -311,25 +454,29 @@ pub const Store = struct {
 
     fn mark(self: *const Store) Mark {
         return .{
-            .types_len = self.types.items.len,
-            .type_digests_len = self.type_digests.items.len,
-            .specialization_digests_len = self.specialization_digests.items.len,
-            .spans_len = self.spans.items.len,
-            .fields_len = self.fields.items.len,
-            .tags_len = self.tags.items.len,
-            .declared_fields_len = self.declared_fields.items.len,
+            .types_len = self.types.len(),
+            .type_digests_len = self.type_digests.len(),
+            .specialization_digests_len = self.specialization_digests.len(),
+            .type_digest_generations_len = self.type_digest_generations.len(),
+            .specialization_digest_generations_len = self.specialization_digest_generations.len(),
+            .spans_len = self.spans.len(),
+            .fields_len = self.fields.len(),
+            .tags_len = self.tags.len(),
+            .declared_fields_len = self.declared_fields.len(),
         };
     }
 
     fn restore(self: *Store, mark_: Mark) void {
         self.assertMutable();
-        self.types.items.len = mark_.types_len;
-        self.type_digests.items.len = mark_.type_digests_len;
-        self.specialization_digests.items.len = mark_.specialization_digests_len;
-        self.spans.items.len = mark_.spans_len;
-        self.fields.items.len = mark_.fields_len;
-        self.tags.items.len = mark_.tags_len;
-        self.declared_fields.items.len = mark_.declared_fields_len;
+        self.types.restoreLen(mark_.types_len);
+        self.type_digests.restoreLen(mark_.type_digests_len);
+        self.specialization_digests.restoreLen(mark_.specialization_digests_len);
+        self.type_digest_generations.restoreLen(mark_.type_digest_generations_len);
+        self.specialization_digest_generations.restoreLen(mark_.specialization_digest_generations_len);
+        self.spans.restoreLen(mark_.spans_len);
+        self.fields.restoreLen(mark_.fields_len);
+        self.tags.restoreLen(mark_.tags_len);
+        self.declared_fields.restoreLen(mark_.declared_fields_len);
     }
 
     pub fn ownerHead(self: *const Store, ty: TypeId) OwnerHead {
@@ -423,7 +570,18 @@ pub const Store = struct {
             lhs: TypeId,
             rhs: TypeId,
         ) std.mem.Allocator.Error!bool {
-            return try typeViewEql(self, allocator, name_store, lhs, rhs);
+            return try typeViewEql(self, allocator, name_store, lhs, rhs, .exact);
+        }
+
+        pub fn typeMatches(
+            self: View,
+            allocator: std.mem.Allocator,
+            name_store: *const names.NameStore,
+            lhs: TypeId,
+            rhs: TypeId,
+            mode: TypeMatchMode,
+        ) std.mem.Allocator.Error!bool {
+            return try typeViewEql(self, allocator, name_store, lhs, rhs, mode);
         }
 
         pub fn verify(self: View, name_store: *const names.NameStore) ?VerifyError {
@@ -534,18 +692,22 @@ pub const Store = struct {
 
     pub fn view(self: *const Store) View {
         return .{
-            .types = self.types.items,
-            .type_digests = self.type_digests.items,
-            .spans = self.spans.items,
-            .fields = self.fields.items,
-            .tags = self.tags.items,
-            .declared_fields = self.declared_fields.items,
+            .types = self.types.unsafeRawItemsForView(),
+            .type_digests = self.type_digests.unsafeRawItemsForView(),
+            .spans = self.spans.unsafeRawItemsForView(),
+            .fields = self.fields.unsafeRawItemsForView(),
+            .tags = self.tags.unsafeRawItemsForView(),
+            .declared_fields = self.declared_fields.unsafeRawItemsForView(),
             .frozen = self.frozen,
         };
     }
 
     pub fn verify(self: *const Store, name_store: *const names.NameStore) ?VerifyError {
         return self.view().verify(name_store);
+    }
+
+    pub fn specializationDigestsView(self: *const Store) []const ?names.TypeDigest {
+        return self.specialization_digests.unsafeRawItemsForView();
     }
 
     pub fn typeDigestCached(
@@ -584,6 +746,17 @@ pub const Store = struct {
         return try self.view().typeEql(self.allocator, name_store, lhs, rhs);
     }
 
+    /// `typeEql` under an explicit match mode. See `TypeMatchMode`.
+    pub fn typeMatches(
+        self: *const Store,
+        name_store: *const names.NameStore,
+        lhs: TypeId,
+        rhs: TypeId,
+        mode: TypeMatchMode,
+    ) std.mem.Allocator.Error!bool {
+        return try self.view().typeMatches(self.allocator, name_store, lhs, rhs, mode);
+    }
+
     /// Stack of types currently being digested. Recursive types reference a
     /// type already on this stack; the digest encodes such a back reference by
     /// stack position so cyclic content digests deterministically.
@@ -597,7 +770,7 @@ pub const Store = struct {
     const CachedDigestContext = struct {
         items: [digest_visiting_max]TypeId = undefined,
         len: usize = 0,
-        saw_cycle: bool = false,
+        cycle_count: u32 = 0,
     };
 
     const NamedDigestMode = enum {
@@ -606,8 +779,8 @@ pub const Store = struct {
     };
 
     fn clearTypeDigestCache(self: *Store) void {
-        @memset(self.type_digests.items, null);
-        @memset(self.specialization_digests.items, null);
+        if (self.digest_cache_generation == std.math.maxInt(u64)) Common.invariant("Monotype digest cache generation exhausted");
+        self.digest_cache_generation += 1;
     }
 
     fn assertMutable(self: *const Store) void {
@@ -615,7 +788,7 @@ pub const Store = struct {
     }
 
     fn typeRefInBounds(self: *const Store, ty: TypeId) bool {
-        return @intFromEnum(ty) < self.types.items.len;
+        return @intFromEnum(ty) < self.types.len();
     }
 
     fn spanInBounds(_: *const Store, len: usize, span_: Span) bool {
@@ -625,7 +798,7 @@ pub const Store = struct {
     }
 
     fn verifyTypeSpan(self: *const Store, span_: Span) ?VerifyError {
-        if (!self.spanInBounds(self.spans.items.len, span_)) return .type_span_out_of_bounds;
+        if (!self.spanInBounds(self.spans.len(), span_)) return .type_span_out_of_bounds;
         for (self.span(span_)) |ty| {
             if (!self.typeRefInBounds(ty)) return .type_ref_out_of_bounds;
         }
@@ -633,7 +806,7 @@ pub const Store = struct {
     }
 
     fn verifyFieldSpan(self: *const Store, name_store: *const names.NameStore, span_: Span) ?VerifyError {
-        if (!self.spanInBounds(self.fields.items.len, span_)) return .field_span_out_of_bounds;
+        if (!self.spanInBounds(self.fields.len(), span_)) return .field_span_out_of_bounds;
         const fields_ = self.fieldSpan(span_);
         for (fields_) |field| {
             if (!self.typeRefInBounds(field.ty)) return .type_ref_out_of_bounds;
@@ -649,7 +822,7 @@ pub const Store = struct {
     }
 
     fn verifyTagSpan(self: *const Store, name_store: *const names.NameStore, span_: Span) ?VerifyError {
-        if (!self.spanInBounds(self.tags.items.len, span_)) return .tag_span_out_of_bounds;
+        if (!self.spanInBounds(self.tags.len(), span_)) return .tag_span_out_of_bounds;
         const tags_ = self.tagSpan(span_);
         for (tags_) |tag| {
             if (self.verifyTypeSpan(tag.payloads)) |err| return err;
@@ -665,7 +838,7 @@ pub const Store = struct {
     }
 
     fn verifyDeclaredFieldSpan(self: *const Store, span_: Span) ?VerifyError {
-        if (!self.spanInBounds(self.declared_fields.items.len, span_)) return .declared_field_span_out_of_bounds;
+        if (!self.spanInBounds(self.declared_fields.len(), span_)) return .declared_field_span_out_of_bounds;
         for (self.declaredFieldSpan(span_)) |field| {
             switch (field) {
                 .named => {},
@@ -685,18 +858,29 @@ pub const Store = struct {
     ) names.TypeDigest {
         for (ctx.items[0..ctx.len], 0..) |open_ty, position| {
             if (open_ty == ty) {
-                ctx.saw_cycle = true;
+                ctx.cycle_count += 1;
                 return cycleDigest(@intCast(position));
             }
         }
 
-        const cached = switch (named_mode) {
-            .full => self.type_digests.items[@intFromEnum(ty)],
-            .identity_only => self.specialization_digests.items[@intFromEnum(ty)],
-        };
-        if (cached) |digest| {
-            if (stats) |s| s.cache_hits += 1;
-            return digest;
+        const index = @intFromEnum(ty);
+        switch (named_mode) {
+            .full => {
+                if (self.type_digest_generations.unsafeRawItemsForView()[index] == self.digest_cache_generation) {
+                    if (self.type_digests.unsafeRawItemsForView()[index]) |digest| {
+                        if (stats) |s| s.cache_hits += 1;
+                        return digest;
+                    }
+                }
+            },
+            .identity_only => {
+                if (self.specialization_digest_generations.unsafeRawItemsForView()[index] == self.digest_cache_generation) {
+                    if (self.specialization_digests.unsafeRawItemsForView()[index]) |digest| {
+                        if (stats) |s| s.cache_hits += 1;
+                        return digest;
+                    }
+                }
+            },
         }
 
         if (stats) |s| {
@@ -705,22 +889,28 @@ pub const Store = struct {
         }
 
         if (ctx.len == digest_visiting_max) {
-            ctx.saw_cycle = true;
+            ctx.cycle_count += 1;
             return deepDigest(ty);
         }
 
         ctx.items[ctx.len] = ty;
         ctx.len += 1;
-        const saw_cycle_before = ctx.saw_cycle;
+        const cycle_count_before = ctx.cycle_count;
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
         self.writeCachedTypeDigest(name_store, &hasher, ty, named_mode, ctx, stats);
         ctx.len -= 1;
 
         const digest: names.TypeDigest = .{ .bytes = hasher.finalResult() };
-        if (ctx.saw_cycle == saw_cycle_before) {
+        if (ctx.cycle_count == cycle_count_before) {
             switch (named_mode) {
-                .full => self.type_digests.items[@intFromEnum(ty)] = digest,
-                .identity_only => self.specialization_digests.items[@intFromEnum(ty)] = digest,
+                .full => {
+                    self.type_digests.set(index, digest);
+                    self.type_digest_generations.set(index, self.digest_cache_generation);
+                },
+                .identity_only => {
+                    self.specialization_digests.set(index, digest);
+                    self.specialization_digest_generations.set(index, self.digest_cache_generation);
+                },
             }
         }
         return digest;
@@ -751,7 +941,8 @@ pub const Store = struct {
     ) void {
         const values = self.span(span_);
         writeU32(hasher, @intCast(values.len));
-        for (values) |child| {
+        for (0..values.len) |index| {
+            const child = GuardedList.at(values, index);
             self.writeCachedChildDigest(name_store, hasher, child, named_mode, ctx, stats);
         }
     }
@@ -781,11 +972,16 @@ pub const Store = struct {
                 }
                 writeBytes(hasher, "named");
                 hasher.update(&named.named_type.module.bytes);
-                writeBytes(hasher, name_store.moduleNameText(named.def.module_name));
+                writeBytes(hasher, name_store.moduleIdentityBytes(named.def.module));
                 writeOptionalU32(hasher, named.def.source_decl);
                 if (named.def.source_decl == null) {
                     writeBytes(hasher, name_store.typeNameText(named.def.type_name));
                 }
+                writeOptionalDigest(hasher, named.def.generated);
+                writeBytes(hasher, @tagName(named.def.iterator_representation));
+                writeBytes(hasher, @tagName(named.def.iterator_kind));
+                writeU32(hasher, named.def.iterator_depth);
+                writeIteratorTopology(hasher, name_store, named.def.iterator_topology);
                 writeBytes(hasher, @tagName(named.kind));
                 if (named.builtin_owner) |owner| {
                     writeBytes(hasher, "builtin");
@@ -797,13 +993,9 @@ pub const Store = struct {
                 if (named_mode == .full) {
                     self.writeCachedNamedBackingDigest(name_store, hasher, named.backing, ctx, stats);
                     self.writeCachedDeclaredOrderDigest(name_store, hasher, named.declared_order, ctx, stats);
-                } else if (named.builtin_owner) |owner| {
-                    if (generatedEvidenceOwnerUsesBacking(owner)) {
-                        writeBytes(hasher, "specialization-builtin-backing");
-                        self.writeCachedNamedBackingDigest(name_store, hasher, named.backing, ctx, stats);
-                    } else {
-                        writeBytes(hasher, "specialization-named-identity");
-                    }
+                } else if (specializationUsesBacking(named.backing)) {
+                    writeBytes(hasher, "specialization-generated-backing");
+                    self.writeCachedNamedBackingDigest(name_store, hasher, named.backing, ctx, stats);
                 } else {
                     writeBytes(hasher, "specialization-named-identity");
                 }
@@ -812,7 +1004,8 @@ pub const Store = struct {
                 writeBytes(hasher, "record");
                 const field_slice = self.fieldSpan(fields);
                 writeU32(hasher, @intCast(field_slice.len));
-                for (field_slice) |field| {
+                for (0..field_slice.len) |index| {
+                    const field = GuardedList.at(field_slice, index);
                     writeBytes(hasher, name_store.recordFieldLabelText(field.name));
                     self.writeCachedChildDigest(name_store, hasher, field.ty, named_mode, ctx, stats);
                 }
@@ -825,7 +1018,8 @@ pub const Store = struct {
                 writeBytes(hasher, "tag_union");
                 const tag_slice = self.tagSpan(tags);
                 writeU32(hasher, @intCast(tag_slice.len));
-                for (tag_slice) |tag| {
+                for (0..tag_slice.len) |index| {
+                    const tag = GuardedList.at(tag_slice, index);
                     writeBytes(hasher, name_store.tagLabelText(tag.name));
                     self.writeCachedTypeSpanDigest(name_store, hasher, tag.payloads, named_mode, ctx, stats);
                 }
@@ -862,6 +1056,7 @@ pub const Store = struct {
         writeBytes(hasher, "backing");
         if (backing) |named_backing| {
             writeBytes(hasher, @tagName(named_backing.use));
+            writeBytes(hasher, @tagName(named_backing.authority));
             self.writeCachedChildDigest(name_store, hasher, named_backing.ty, .full, ctx, stats);
         } else {
             writeBytes(hasher, "none");
@@ -879,7 +1074,8 @@ pub const Store = struct {
         writeBytes(hasher, "declared_order");
         const entries = self.declaredFieldSpan(declared_order);
         writeU32(hasher, @intCast(entries.len));
-        for (entries) |entry| {
+        for (0..entries.len) |index| {
+            const entry = GuardedList.at(entries, index);
             switch (entry) {
                 .named => |field_name| {
                     writeBytes(hasher, "named");
@@ -936,11 +1132,16 @@ pub const Store = struct {
                 }
                 writeBytes(hasher, "named");
                 hasher.update(&named.named_type.module.bytes);
-                writeBytes(hasher, name_store.moduleNameText(named.def.module_name));
+                writeBytes(hasher, name_store.moduleIdentityBytes(named.def.module));
                 writeOptionalU32(hasher, named.def.source_decl);
                 if (named.def.source_decl == null) {
                     writeBytes(hasher, name_store.typeNameText(named.def.type_name));
                 }
+                writeOptionalDigest(hasher, named.def.generated);
+                writeBytes(hasher, @tagName(named.def.iterator_representation));
+                writeBytes(hasher, @tagName(named.def.iterator_kind));
+                writeU32(hasher, named.def.iterator_depth);
+                writeIteratorTopology(hasher, name_store, named.def.iterator_topology);
                 writeBytes(hasher, @tagName(named.kind));
                 if (named.builtin_owner) |owner| {
                     writeBytes(hasher, "builtin");
@@ -952,13 +1153,9 @@ pub const Store = struct {
                 if (named_mode == .full) {
                     self.writeNamedBackingDigest(name_store, hasher, named.backing, visiting);
                     self.writeDeclaredOrderDigest(name_store, hasher, named.declared_order, visiting);
-                } else if (named.builtin_owner) |owner| {
-                    if (generatedEvidenceOwnerUsesBacking(owner)) {
-                        writeBytes(hasher, "specialization-builtin-backing");
-                        self.writeNamedBackingDigest(name_store, hasher, named.backing, visiting);
-                    } else {
-                        writeBytes(hasher, "specialization-named-identity");
-                    }
+                } else if (specializationUsesBacking(named.backing)) {
+                    writeBytes(hasher, "specialization-generated-backing");
+                    self.writeNamedBackingDigest(name_store, hasher, named.backing, visiting);
                 } else {
                     writeBytes(hasher, "specialization-named-identity");
                 }
@@ -967,7 +1164,8 @@ pub const Store = struct {
                 writeBytes(hasher, "record");
                 const field_slice = self.fieldSpan(fields);
                 writeU32(hasher, @intCast(field_slice.len));
-                for (field_slice) |field| {
+                for (0..field_slice.len) |index| {
+                    const field = GuardedList.at(field_slice, index);
                     writeBytes(hasher, name_store.recordFieldLabelText(field.name));
                     self.writeTypeDigest(name_store, hasher, field.ty, visiting, named_mode);
                 }
@@ -980,7 +1178,8 @@ pub const Store = struct {
                 writeBytes(hasher, "tag_union");
                 const tag_slice = self.tagSpan(tags);
                 writeU32(hasher, @intCast(tag_slice.len));
-                for (tag_slice) |tag| {
+                for (0..tag_slice.len) |index| {
+                    const tag = GuardedList.at(tag_slice, index);
                     writeBytes(hasher, name_store.tagLabelText(tag.name));
                     self.writeTypeSpanDigest(name_store, hasher, tag.payloads, visiting, named_mode);
                 }
@@ -1016,7 +1215,8 @@ pub const Store = struct {
     ) void {
         const values = self.span(span_);
         writeU32(hasher, @intCast(values.len));
-        for (values) |child| {
+        for (0..values.len) |index| {
+            const child = GuardedList.at(values, index);
             self.writeTypeDigest(name_store, hasher, child, visiting, named_mode);
         }
     }
@@ -1031,6 +1231,7 @@ pub const Store = struct {
         writeBytes(hasher, "backing");
         if (backing) |named_backing| {
             writeBytes(hasher, @tagName(named_backing.use));
+            writeBytes(hasher, @tagName(named_backing.authority));
             self.writeTypeDigest(name_store, hasher, named_backing.ty, visiting, .full);
         } else {
             writeBytes(hasher, "none");
@@ -1047,7 +1248,8 @@ pub const Store = struct {
         writeBytes(hasher, "declared_order");
         const entries = self.declaredFieldSpan(declared_order);
         writeU32(hasher, @intCast(entries.len));
-        for (entries) |entry| {
+        for (0..entries.len) |index| {
+            const entry = GuardedList.at(entries, index);
             switch (entry) {
                 .named => |field_name| {
                     writeBytes(hasher, "named");
@@ -1062,16 +1264,31 @@ pub const Store = struct {
     }
 };
 
+/// How `typeMatches` compares its two sides.
+pub const TypeMatchMode = enum {
+    /// Both sides must describe the same type everywhere.
+    exact,
+    /// As `exact`, except that an empty tag union on the left accepts any right
+    /// type. An unresolved checked type variable lowers to an empty tag union,
+    /// so this compares a generic declaration against one of its
+    /// instantiations: every position the declaration made concrete still has
+    /// to match, and only its variable slots are open. A left side that is
+    /// concretely uninhabited is indistinguishable from a variable slot here,
+    /// so callers use this mode only for a declaration known to be generic.
+    declared_variable_slots_match_any,
+};
+
 fn typeViewEql(
     type_view: anytype,
     allocator: std.mem.Allocator,
     name_store: *const names.NameStore,
     lhs: TypeId,
     rhs: TypeId,
+    mode: TypeMatchMode,
 ) std.mem.Allocator.Error!bool {
     var visited = std.AutoHashMap(u64, void).init(allocator);
     defer visited.deinit();
-    return try typeViewEqlInner(type_view, name_store, lhs, rhs, &visited);
+    return try typeViewEqlInner(type_view, name_store, lhs, rhs, &visited, mode);
 }
 
 fn typeViewEqlInner(
@@ -1080,24 +1297,37 @@ fn typeViewEqlInner(
     raw_lhs: TypeId,
     raw_rhs: TypeId,
     visited: *std.AutoHashMap(u64, void),
+    mode: TypeMatchMode,
 ) std.mem.Allocator.Error!bool {
     if (raw_lhs == raw_rhs) return true;
 
     const lhs_content = type_view.get(raw_lhs);
     if (lhs_content == .named and lhs_content.named.kind == .alias) {
         if (lhs_content.named.backing) |backing| {
-            return try typeViewEqlInner(type_view, name_store, backing.ty, raw_rhs, visited);
+            return try typeViewEqlInner(type_view, name_store, backing.ty, raw_rhs, visited, mode);
         }
     }
 
     const rhs_content = type_view.get(raw_rhs);
     if (rhs_content == .named and rhs_content.named.kind == .alias) {
         if (rhs_content.named.backing) |backing| {
-            return try typeViewEqlInner(type_view, name_store, raw_lhs, backing.ty, visited);
+            return try typeViewEqlInner(type_view, name_store, raw_lhs, backing.ty, visited, mode);
         }
     }
 
-    const pair = typePairKey(raw_lhs, raw_rhs);
+    if (mode == .declared_variable_slots_match_any and
+        lhs_content == .tag_union and
+        type_view.tagSpan(lhs_content.tag_union).len == 0)
+    {
+        return true;
+    }
+
+    // An asymmetric mode reaches the same pair from both directions with
+    // different meanings, so it keeps the two orderings apart.
+    const pair = switch (mode) {
+        .exact => typePairKey(raw_lhs, raw_rhs),
+        .declared_variable_slots_match_any => orderedTypePairKey(raw_lhs, raw_rhs),
+    };
     const gop = try visited.getOrPut(pair);
     if (gop.found_existing) return true;
 
@@ -1107,33 +1337,33 @@ fn typeViewEqlInner(
             else => false,
         },
         .named => |lhs| switch (rhs_content) {
-            .named => |rhs| try namedTypeViewEql(type_view, name_store, lhs, rhs, visited),
+            .named => |rhs| try namedTypeViewEql(type_view, name_store, lhs, rhs, visited, mode),
             else => false,
         },
         .record => |lhs| switch (rhs_content) {
-            .record => |rhs| try fieldSpanViewEql(type_view, name_store, lhs, rhs, visited),
+            .record => |rhs| try fieldSpanViewEql(type_view, name_store, lhs, rhs, visited, mode),
             else => false,
         },
         .tuple => |lhs| switch (rhs_content) {
-            .tuple => |rhs| try typeSpanViewEql(type_view, name_store, lhs, rhs, visited),
+            .tuple => |rhs| try typeSpanViewEql(type_view, name_store, lhs, rhs, visited, mode),
             else => false,
         },
         .tag_union => |lhs| switch (rhs_content) {
-            .tag_union => |rhs| try tagSpanViewEql(type_view, name_store, lhs, rhs, visited),
+            .tag_union => |rhs| try tagSpanViewEql(type_view, name_store, lhs, rhs, visited, mode),
             else => false,
         },
         .list => |lhs| switch (rhs_content) {
-            .list => |rhs| try typeViewEqlInner(type_view, name_store, lhs, rhs, visited),
+            .list => |rhs| try typeViewEqlInner(type_view, name_store, lhs, rhs, visited, mode),
             else => false,
         },
         .box => |lhs| switch (rhs_content) {
-            .box => |rhs| try typeViewEqlInner(type_view, name_store, lhs, rhs, visited),
+            .box => |rhs| try typeViewEqlInner(type_view, name_store, lhs, rhs, visited, mode),
             else => false,
         },
         .func => |lhs| switch (rhs_content) {
             .func => |rhs| blk: {
-                if (!try typeSpanViewEql(type_view, name_store, lhs.args, rhs.args, visited)) break :blk false;
-                break :blk try typeViewEqlInner(type_view, name_store, lhs.ret, rhs.ret, visited);
+                if (!try typeSpanViewEql(type_view, name_store, lhs.args, rhs.args, visited, mode)) break :blk false;
+                break :blk try typeViewEqlInner(type_view, name_store, lhs.ret, rhs.ret, visited, mode);
             },
             else => false,
         },
@@ -1151,31 +1381,36 @@ fn namedTypeViewEql(
     lhs: anytype,
     rhs: anytype,
     visited: *std.AutoHashMap(u64, void),
+    mode: TypeMatchMode,
 ) std.mem.Allocator.Error!bool {
     if (lhs.kind != rhs.kind) return false;
     if (!std.mem.eql(u8, lhs.named_type.module.bytes[0..], rhs.named_type.module.bytes[0..])) return false;
-    if (!std.mem.eql(u8, name_store.moduleNameText(lhs.def.module_name), name_store.moduleNameText(rhs.def.module_name))) return false;
+    if (!std.mem.eql(u8, name_store.moduleIdentityBytes(lhs.def.module), name_store.moduleIdentityBytes(rhs.def.module))) return false;
     if (lhs.def.source_decl != rhs.def.source_decl) return false;
     if (lhs.def.source_decl == null and
         !std.mem.eql(u8, name_store.typeNameText(lhs.def.type_name), name_store.typeNameText(rhs.def.type_name)))
     {
         return false;
     }
+    if (!optionalDigestEql(lhs.def.generated, rhs.def.generated)) return false;
+    if (lhs.def.iterator_representation != rhs.def.iterator_representation) return false;
+    if (lhs.def.iterator_kind != rhs.def.iterator_kind) return false;
+    if (lhs.def.iterator_depth != rhs.def.iterator_depth) return false;
+    if (!std.meta.eql(lhs.def.iterator_topology, rhs.def.iterator_topology)) return false;
     if (lhs.builtin_owner != rhs.builtin_owner) return false;
-    if (!try typeSpanViewEql(type_view, name_store, lhs.args, rhs.args, visited)) return false;
+    if (!try typeSpanViewEql(type_view, name_store, lhs.args, rhs.args, visited, mode)) return false;
 
     if (lhs.kind == .alias) {
         const lhs_backing = lhs.backing orelse return rhs.backing == null;
         const rhs_backing = rhs.backing orelse return false;
-        return try typeViewEqlInner(type_view, name_store, lhs_backing.ty, rhs_backing.ty, visited);
+        return try typeViewEqlInner(type_view, name_store, lhs_backing.ty, rhs_backing.ty, visited, mode);
     }
 
-    if (lhs.builtin_owner) |owner| {
-        if (generatedEvidenceOwnerUsesBacking(owner)) {
-            const lhs_backing = lhs.backing orelse return rhs.backing == null;
-            const rhs_backing = rhs.backing orelse return false;
-            return try typeViewEqlInner(type_view, name_store, lhs_backing.ty, rhs_backing.ty, visited);
-        }
+    if (specializationUsesBacking(lhs.backing) or specializationUsesBacking(rhs.backing)) {
+        const lhs_backing = lhs.backing orelse return false;
+        const rhs_backing = rhs.backing orelse return false;
+        if (lhs_backing.use != rhs_backing.use or lhs_backing.authority != rhs_backing.authority) return false;
+        return try typeViewEqlInner(type_view, name_store, lhs_backing.ty, rhs_backing.ty, visited, mode);
     }
 
     return true;
@@ -1187,12 +1422,13 @@ fn typeSpanViewEql(
     lhs_span: Span,
     rhs_span: Span,
     visited: *std.AutoHashMap(u64, void),
+    mode: TypeMatchMode,
 ) std.mem.Allocator.Error!bool {
     const lhs = type_view.span(lhs_span);
     const rhs = type_view.span(rhs_span);
     if (lhs.len != rhs.len) return false;
     for (lhs, rhs) |lhs_ty, rhs_ty| {
-        if (!try typeViewEqlInner(type_view, name_store, lhs_ty, rhs_ty, visited)) return false;
+        if (!try typeViewEqlInner(type_view, name_store, lhs_ty, rhs_ty, visited, mode)) return false;
     }
     return true;
 }
@@ -1203,13 +1439,14 @@ fn fieldSpanViewEql(
     lhs_span: Span,
     rhs_span: Span,
     visited: *std.AutoHashMap(u64, void),
+    mode: TypeMatchMode,
 ) std.mem.Allocator.Error!bool {
     const lhs = type_view.fieldSpan(lhs_span);
     const rhs = type_view.fieldSpan(rhs_span);
     if (lhs.len != rhs.len) return false;
     for (lhs, rhs) |lhs_field, rhs_field| {
         if (!std.mem.eql(u8, name_store.recordFieldLabelText(lhs_field.name), name_store.recordFieldLabelText(rhs_field.name))) return false;
-        if (!try typeViewEqlInner(type_view, name_store, lhs_field.ty, rhs_field.ty, visited)) return false;
+        if (!try typeViewEqlInner(type_view, name_store, lhs_field.ty, rhs_field.ty, visited, mode)) return false;
     }
     return true;
 }
@@ -1220,15 +1457,22 @@ fn tagSpanViewEql(
     lhs_span: Span,
     rhs_span: Span,
     visited: *std.AutoHashMap(u64, void),
+    mode: TypeMatchMode,
 ) std.mem.Allocator.Error!bool {
     const lhs = type_view.tagSpan(lhs_span);
     const rhs = type_view.tagSpan(rhs_span);
     if (lhs.len != rhs.len) return false;
     for (lhs, rhs) |lhs_tag, rhs_tag| {
         if (!std.mem.eql(u8, name_store.tagLabelText(lhs_tag.name), name_store.tagLabelText(rhs_tag.name))) return false;
-        if (!try typeSpanViewEql(type_view, name_store, lhs_tag.payloads, rhs_tag.payloads, visited)) return false;
+        if (!try typeSpanViewEql(type_view, name_store, lhs_tag.payloads, rhs_tag.payloads, visited, mode)) return false;
     }
     return true;
+}
+
+/// Order-preserving pair key, for a match mode whose two sides mean different
+/// things.
+fn orderedTypePairKey(lhs: TypeId, rhs: TypeId) u64 {
+    return (@as(u64, @intFromEnum(lhs)) << 32) | @as(u64, @intFromEnum(rhs));
 }
 
 fn typePairKey(lhs: TypeId, rhs: TypeId) u64 {
@@ -1470,13 +1714,18 @@ fn namedTypeEqlAcrossStores(
 ) std.mem.Allocator.Error!bool {
     if (lhs.kind != rhs.kind) return false;
     if (!std.mem.eql(u8, lhs.named_type.module.bytes[0..], rhs.named_type.module.bytes[0..])) return false;
-    if (!std.mem.eql(u8, name_store.moduleNameText(lhs.def.module_name), name_store.moduleNameText(rhs.def.module_name))) return false;
+    if (!std.mem.eql(u8, name_store.moduleIdentityBytes(lhs.def.module), name_store.moduleIdentityBytes(rhs.def.module))) return false;
     if (lhs.def.source_decl != rhs.def.source_decl) return false;
     if (lhs.def.source_decl == null and
         !std.mem.eql(u8, name_store.typeNameText(lhs.def.type_name), name_store.typeNameText(rhs.def.type_name)))
     {
         return false;
     }
+    if (!optionalDigestEql(lhs.def.generated, rhs.def.generated)) return false;
+    if (lhs.def.iterator_representation != rhs.def.iterator_representation) return false;
+    if (lhs.def.iterator_kind != rhs.def.iterator_kind) return false;
+    if (lhs.def.iterator_depth != rhs.def.iterator_depth) return false;
+    if (!std.meta.eql(lhs.def.iterator_topology, rhs.def.iterator_topology)) return false;
     if (lhs.builtin_owner != rhs.builtin_owner) return false;
     if (!try typeSpanEqlAcrossStores(name_store, lhs_view, lhs.args, rhs_view, rhs.args, visited)) return false;
 
@@ -1486,12 +1735,11 @@ fn namedTypeEqlAcrossStores(
         return try typeEqlAcrossStoresInner(name_store, lhs_view, lhs_backing.ty, rhs_view, rhs_backing.ty, visited);
     }
 
-    if (lhs.builtin_owner) |owner| {
-        if (generatedEvidenceOwnerUsesBacking(owner)) {
-            const lhs_backing = lhs.backing orelse return rhs.backing == null;
-            const rhs_backing = rhs.backing orelse return false;
-            return try typeEqlAcrossStoresInner(name_store, lhs_view, lhs_backing.ty, rhs_view, rhs_backing.ty, visited);
-        }
+    if (specializationUsesBacking(lhs.backing) or specializationUsesBacking(rhs.backing)) {
+        const lhs_backing = lhs.backing orelse return false;
+        const rhs_backing = rhs.backing orelse return false;
+        if (lhs_backing.use != rhs_backing.use or lhs_backing.authority != rhs_backing.authority) return false;
+        return try typeEqlAcrossStoresInner(name_store, lhs_view, lhs_backing.ty, rhs_view, rhs_backing.ty, visited);
     }
 
     return true;
@@ -1616,15 +1864,15 @@ pub const Interner = opaque {
         return self.constStore().get(ty);
     }
 
-    pub fn span(self: *const Interner, span_: Span) []const TypeId {
+    pub fn span(self: *const Interner, span_: Span) StoreSpanBorrow(TypeId, "spans") {
         return self.constStore().span(span_);
     }
 
-    pub fn fieldSpan(self: *const Interner, span_: Span) []const Field {
+    pub fn fieldSpan(self: *const Interner, span_: Span) StoreSpanBorrow(Field, "fields") {
         return self.constStore().fieldSpan(span_);
     }
 
-    pub fn tagSpan(self: *const Interner, span_: Span) []const Tag {
+    pub fn tagSpan(self: *const Interner, span_: Span) StoreSpanBorrow(Tag, "tags") {
         return self.constStore().tagSpan(span_);
     }
 
@@ -1784,6 +2032,7 @@ pub const Interner = opaque {
     pub const RecursiveNamedBacking = struct {
         ty: RecursiveLink,
         use: BackingUse,
+        authority: BackingAuthority = .checked_public,
     };
 
     pub const RecursiveNamed = struct {
@@ -1934,6 +2183,7 @@ pub const Interner = opaque {
             .backing = if (named.backing) |backing| .{
                 .ty = self.lowerRecursiveLink(ids, root, backing.ty),
                 .use = backing.use,
+                .authority = backing.authority,
             } else null,
             .declared_order = named.declared_order,
         };
@@ -2040,14 +2290,8 @@ fn writeBytes(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
     hasher.update(bytes);
 }
 
-fn generatedEvidenceOwnerUsesBacking(owner: static_dispatch.BuiltinOwner) bool {
-    return switch (owner) {
-        .fields,
-        .field,
-        .parse_tag_union_spec,
-        => true,
-        else => false,
-    };
+fn specializationUsesBacking(backing: ?NamedBacking) bool {
+    return if (backing) |present| present.authority == .generated_private else false;
 }
 
 fn writeU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
@@ -2059,6 +2303,44 @@ fn writeOptionalU32(hasher: *std.crypto.hash.sha2.Sha256, value: ?u32) void {
     const present: u8 = if (value == null) 0 else 1;
     hasher.update(std.mem.asBytes(&present));
     if (value) |v| writeU32(hasher, v);
+}
+
+fn writeOptionalDigest(hasher: *std.crypto.hash.sha2.Sha256, value: ?names.TypeDigest) void {
+    if (value) |digest| {
+        writeBytes(hasher, "digest");
+        hasher.update(&digest.bytes);
+    } else {
+        writeBytes(hasher, "no-digest");
+    }
+}
+
+fn writeIteratorTopology(
+    hasher: *std.crypto.hash.sha2.Sha256,
+    name_store: *const names.NameStore,
+    topology: ?IteratorTopology,
+) void {
+    const value = topology orelse {
+        writeBytes(hasher, "no-iterator-topology");
+        return;
+    };
+    writeBytes(hasher, "iterator-topology");
+    writeBytes(hasher, name_store.recordFieldLabelText(value.len_field));
+    writeBytes(hasher, name_store.recordFieldLabelText(value.step_field));
+    writeBytes(hasher, name_store.tagLabelText(value.known_tag));
+    writeBytes(hasher, name_store.tagLabelText(value.unknown_tag));
+    writeBytes(hasher, name_store.tagLabelText(value.done_tag));
+    writeBytes(hasher, name_store.tagLabelText(value.one_tag));
+    writeBytes(hasher, name_store.tagLabelText(value.skip_tag));
+    writeBytes(hasher, name_store.recordFieldLabelText(value.item_field));
+    writeBytes(hasher, name_store.recordFieldLabelText(value.rest_field));
+}
+
+fn optionalDigestEql(lhs: ?names.TypeDigest, rhs: ?names.TypeDigest) bool {
+    if (lhs) |lhs_digest| {
+        const rhs_digest = rhs orelse return false;
+        return std.mem.eql(u8, lhs_digest.bytes[0..], rhs_digest.bytes[0..]);
+    }
+    return rhs == null;
 }
 
 fn builtinOwner(primitive: Primitive) static_dispatch.BuiltinOwner {
@@ -2078,6 +2360,14 @@ fn builtinOwner(primitive: Primitive) static_dispatch.BuiltinOwner {
         .f32 => .f32,
         .f64 => .f64,
         .dec => .dec,
+        .u8x16 => .u8x16,
+        .i8x16 => .i8x16,
+        .u16x8 => .u16x8,
+        .i16x8 => .i16x8,
+        .u32x4 => .u32x4,
+        .i32x4 => .i32x4,
+        .u64x2 => .u64x2,
+        .i64x2 => .i64x2,
     };
 }
 
@@ -2134,11 +2424,11 @@ test "monotype type interner normalizes record and tag rows" {
     try std.testing.expectEqual(first_tags, second_tags);
 
     const record_fields = interner.fieldSpan(interner.get(first_record).record);
-    try std.testing.expectEqual(a_field, record_fields[0].name);
-    try std.testing.expectEqual(b_field, record_fields[1].name);
+    try std.testing.expectEqual(a_field, GuardedList.at(record_fields, 0).name);
+    try std.testing.expectEqual(b_field, GuardedList.at(record_fields, 1).name);
     const tag_fields = interner.tagSpan(interner.get(first_tags).tag_union);
-    try std.testing.expectEqual(a_tag, tag_fields[0].name);
-    try std.testing.expectEqual(b_tag, tag_fields[1].name);
+    try std.testing.expectEqual(a_tag, GuardedList.at(tag_fields, 0).name);
+    try std.testing.expectEqual(b_tag, GuardedList.at(tag_fields, 1).name);
 }
 
 test "monotype type interner preserves tag payload order" {
@@ -2157,16 +2447,16 @@ test "monotype type interner preserves tag payload order" {
     });
 
     const tags_ = interner.tagSpan(interner.get(tag_ty).tag_union);
-    const stored_payloads = interner.span(tags_[0].payloads);
-    try std.testing.expectEqual(first, stored_payloads[0]);
-    try std.testing.expectEqual(second, stored_payloads[1]);
+    const stored_payloads = interner.span(GuardedList.at(tags_, 0).payloads);
+    try std.testing.expectEqual(first, GuardedList.at(stored_payloads, 0));
+    try std.testing.expectEqual(second, GuardedList.at(stored_payloads, 1));
 }
 
 test "monotype type interner checks exact equality after digest match" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
-    const module_name = try name_store.internModuleName("Test");
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
     const first_name = try name_store.internTypeName("First");
     const second_name = try name_store.internTypeName("Second");
 
@@ -2175,13 +2465,13 @@ test "monotype type interner checks exact equality after digest match" {
 
     const first = try interner.internNamed(.{
         .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
-        .def = .{ .module_name = module_name, .type_name = first_name },
+        .def = .{ .module = module_identity, .type_name = first_name },
         .kind = .alias,
         .backing = null,
     });
     const second = try interner.internNamed(.{
         .named_type = .{ .module = .{}, .ty = @enumFromInt(2) },
-        .def = .{ .module_name = module_name, .type_name = second_name },
+        .def = .{ .module = module_identity, .type_name = second_name },
         .kind = .alias,
         .backing = null,
     });
@@ -2207,7 +2497,7 @@ test "monotype type interner seals recursive root before exposing type id" {
 
     const fields = interner.fieldSpan(interner.get(root).record);
     try std.testing.expectEqual(@as(usize, 1), fields.len);
-    try std.testing.expectEqual(root, fields[0].ty);
+    try std.testing.expectEqual(root, GuardedList.at(fields, 0).ty);
     try std.testing.expectEqual(@as(?Store.VerifyError, null), interner.verify());
 }
 
@@ -2264,7 +2554,8 @@ test "monotype type interner seals multi-node recursive group privately" {
     try std.testing.expectEqual(first, second);
     try std.testing.expectEqual(@as(usize, 2), interner.view().types.len);
 
-    const step_ty = interner.fieldSpan(interner.get(first).record)[0].ty;
+    const fields = interner.fieldSpan(interner.get(first).record);
+    const step_ty = GuardedList.at(fields, 0).ty;
     const step_fn = interner.get(step_ty).func;
     try std.testing.expectEqual(first, step_fn.ret);
 }
@@ -2296,7 +2587,7 @@ test "monotype named type digest includes generic arguments" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
-    const module_name = try name_store.internModuleName("Test");
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
     const type_name = try name_store.internTypeName("Box");
 
     var store = Store.init(std.testing.allocator);
@@ -2310,13 +2601,13 @@ test "monotype named type digest includes generic arguments" {
 
     const named_i64 = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = i64_args,
     } });
     const named_str = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = str_args,
     } });
@@ -2357,8 +2648,8 @@ test "monotype row entries retain checked label ids" {
     const payloads = try store.addSpan(&.{i64_ty});
     const tags = try store.addTags(&.{.{ .name = tag_name, .checked_name = tag_name, .payloads = payloads }});
 
-    try std.testing.expectEqual(field_name, store.fieldSpan(fields)[0].name);
-    try std.testing.expectEqual(tag_name, store.tagSpan(tags)[0].name);
+    try std.testing.expectEqual(field_name, GuardedList.at(store.fieldSpan(fields), 0).name);
+    try std.testing.expectEqual(tag_name, GuardedList.at(store.tagSpan(tags), 0).name);
 }
 
 test "monotype empty spans use shared empty descriptor" {
@@ -2505,6 +2796,33 @@ test "monotype cached digest reuses acyclic child digests and invalidates on res
     try std.testing.expectEqual(@as(u64, 1), after_refill_stats.nodes_visited);
 }
 
+test "monotype cached digest stays stable across multiple edges into one recursive group" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const first_field = try name_store.internRecordFieldLabel("first");
+    const second_field = try name_store.internRecordFieldLabel("second");
+    const recursive = try store.reserveSlot();
+    const first_fn = try store.add(.{ .func = .{ .args = Span.empty(), .ret = recursive } });
+    const second_fn = try store.add(.{ .func = .{ .args = Span.empty(), .ret = recursive } });
+    const fields = try store.addFields(&.{
+        .{ .name = first_field, .ty = first_fn },
+        .{ .name = second_field, .ty = second_fn },
+    });
+    store.fillReservedSlot(recursive, .{ .record = fields });
+
+    const first_full = store.typeDigestCached(&name_store, recursive, null);
+    const second_full = store.typeDigestCached(&name_store, recursive, null);
+    try std.testing.expect(std.mem.eql(u8, first_full.bytes[0..], second_full.bytes[0..]));
+
+    const first_specialization = store.specializationDigestCached(&name_store, recursive, null);
+    const second_specialization = store.specializationDigestCached(&name_store, recursive, null);
+    try std.testing.expect(std.mem.eql(u8, first_specialization.bytes[0..], second_specialization.bytes[0..]));
+}
+
 test "monotype type equality accepts isomorphic recursive structural types" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
@@ -2540,21 +2858,21 @@ test "monotype digest treats aliases as their backing" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_name = try name_store.internModuleName("Test");
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
     const type_name = try name_store.internTypeName("Pretty");
     const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
 
     const str = try store.add(.{ .primitive = .str });
     const aliased = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .alias,
         .args = Span.empty(),
         .backing = .{ .ty = str, .use = .inspectable },
     } });
     const nominal = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = Span.empty(),
         .backing = .{ .ty = str, .use = .inspectable },
@@ -2574,21 +2892,21 @@ test "monotype type equality treats aliases as their backing" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_name = try name_store.internModuleName("Test");
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
     const type_name = try name_store.internTypeName("Pretty");
     const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
 
     const str = try store.add(.{ .primitive = .str });
     const aliased = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .alias,
         .args = Span.empty(),
         .backing = .{ .ty = str, .use = .inspectable },
     } });
     const nominal = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = Span.empty(),
         .backing = .{ .ty = str, .use = .inspectable },
@@ -2610,7 +2928,7 @@ test "monotype type equality compares exact types across stores" {
     defer loaded.deinit();
 
     const field_name = try name_store.internRecordFieldLabel("value");
-    const module_name = try name_store.internModuleName("Test");
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
     const type_name = try name_store.internTypeName("Alias");
 
     const current_unit = try current.add(.zst);
@@ -2623,7 +2941,7 @@ test "monotype type equality compares exact types across stores" {
     } });
     const current_alias = try current.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .alias,
         .args = Span.empty(),
         .backing = .{ .ty = current_record, .use = .inspectable },
@@ -2666,20 +2984,20 @@ test "monotype type equality rejects digest-equal aliases without backing" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_name = try name_store.internModuleName("Test");
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
     const first_name = try name_store.internTypeName("First");
     const second_name = try name_store.internTypeName("Second");
 
     const first = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
-        .def = .{ .module_name = module_name, .type_name = first_name },
+        .def = .{ .module = module_identity, .type_name = first_name },
         .kind = .alias,
         .args = Span.empty(),
         .backing = null,
     } });
     const second = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = @enumFromInt(2) },
-        .def = .{ .module_name = module_name, .type_name = second_name },
+        .def = .{ .module = module_identity, .type_name = second_name },
         .kind = .alias,
         .args = Span.empty(),
         .backing = null,
@@ -2698,7 +3016,7 @@ test "monotype named type digest includes backing" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_name = try name_store.internModuleName("Test");
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
     const type_name = try name_store.internTypeName("Wrap");
     const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
     const i64_ty = try store.add(.{ .primitive = .i64 });
@@ -2706,14 +3024,14 @@ test "monotype named type digest includes backing" {
 
     const named_i64 = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = Span.empty(),
         .backing = .{ .ty = i64_ty, .use = .inspectable },
     } });
     const named_str = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = Span.empty(),
         .backing = .{ .ty = str_ty, .use = .inspectable },
@@ -2728,39 +3046,82 @@ test "monotype named type digest includes backing" {
     try std.testing.expect(std.mem.eql(u8, i64_spec_digest.bytes[0..], str_spec_digest.bytes[0..]));
 }
 
-test "monotype specialization digest includes builtin evidence backing" {
+test "monotype specialization identity includes generated backing without builtin owner" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_name = try name_store.internModuleName("Builtin.Str.FieldName");
-    const type_name = try name_store.internTypeName("FieldNames");
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const type_name = try name_store.internTypeName("GeneratedEvidence");
     const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
     const i64_ty = try store.add(.{ .primitive = .i64 });
     const str_ty = try store.add(.{ .primitive = .str });
 
-    const fields_i64 = try store.add(.{ .named = .{
+    const evidence_i64 = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .@"opaque",
-        .builtin_owner = .fields,
         .args = Span.empty(),
-        .backing = .{ .ty = i64_ty, .use = .runtime_layout_only },
+        .backing = .{ .ty = i64_ty, .use = .runtime_layout_only, .authority = .generated_private },
     } });
-    const fields_str = try store.add(.{ .named = .{
+    const evidence_str = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .@"opaque",
-        .builtin_owner = .fields,
         .args = Span.empty(),
-        .backing = .{ .ty = str_ty, .use = .runtime_layout_only },
+        .backing = .{ .ty = str_ty, .use = .runtime_layout_only, .authority = .generated_private },
     } });
 
-    const i64_spec_digest = store.specializationDigest(&name_store, fields_i64);
-    const str_spec_digest = store.specializationDigest(&name_store, fields_str);
+    const i64_spec_digest = store.specializationDigest(&name_store, evidence_i64);
+    const str_spec_digest = store.specializationDigest(&name_store, evidence_str);
     try std.testing.expect(!std.mem.eql(u8, i64_spec_digest.bytes[0..], str_spec_digest.bytes[0..]));
+    try std.testing.expect(!try store.typeEql(&name_store, evidence_i64, evidence_str));
+    try std.testing.expect(!try typeEqlAcrossStores(
+        std.testing.allocator,
+        &name_store,
+        store.view(),
+        evidence_i64,
+        store.view(),
+        evidence_str,
+    ));
+}
+
+test "monotype named backing authority participates in durable identity" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAC} ** 32));
+    const type_name = try name_store.internTypeName("UnownedEvidence");
+    const backing = try store.add(.{ .record = Span.empty() });
+    const base = NamedContent{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .@"opaque",
+        .args = Span.empty(),
+        .backing = .{ .ty = backing, .use = .runtime_layout_only },
+    };
+    const public = try store.add(.{ .named = base });
+    var private_content = base;
+    private_content.backing.?.authority = .generated_private;
+    const private = try store.add(.{ .named = private_content });
+
+    const public_digest = store.specializationDigest(&name_store, public);
+    const private_digest = store.specializationDigest(&name_store, private);
+    try std.testing.expect(!std.mem.eql(u8, public_digest.bytes[0..], private_digest.bytes[0..]));
+    try std.testing.expect(!try store.typeEql(&name_store, public, private));
+    try std.testing.expect(!try typeEqlAcrossStores(
+        std.testing.allocator,
+        &name_store,
+        store.view(),
+        public,
+        store.view(),
+        private,
+    ));
 }
 
 test "monotype named type digest includes nested named backing" {
@@ -2770,7 +3131,7 @@ test "monotype named type digest includes nested named backing" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_name = try name_store.internModuleName("Test");
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
     const outer_type_name = try name_store.internTypeName("Outer");
     const inner_type_name = try name_store.internTypeName("Inner");
     const outer_checked_ty: checked.CheckedTypeId = @enumFromInt(1);
@@ -2780,28 +3141,28 @@ test "monotype named type digest includes nested named backing" {
 
     const inner_i64 = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = inner_checked_ty },
-        .def = .{ .module_name = module_name, .type_name = inner_type_name },
+        .def = .{ .module = module_identity, .type_name = inner_type_name },
         .kind = .nominal,
         .args = Span.empty(),
         .backing = .{ .ty = i64_ty, .use = .inspectable },
     } });
     const inner_str = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = inner_checked_ty },
-        .def = .{ .module_name = module_name, .type_name = inner_type_name },
+        .def = .{ .module = module_identity, .type_name = inner_type_name },
         .kind = .nominal,
         .args = Span.empty(),
         .backing = .{ .ty = str_ty, .use = .inspectable },
     } });
     const outer_i64 = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = outer_checked_ty },
-        .def = .{ .module_name = module_name, .type_name = outer_type_name },
+        .def = .{ .module = module_identity, .type_name = outer_type_name },
         .kind = .nominal,
         .args = Span.empty(),
         .backing = .{ .ty = inner_i64, .use = .inspectable },
     } });
     const outer_str = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = outer_checked_ty },
-        .def = .{ .module_name = module_name, .type_name = outer_type_name },
+        .def = .{ .module = module_identity, .type_name = outer_type_name },
         .kind = .nominal,
         .args = Span.empty(),
         .backing = .{ .ty = inner_str, .use = .inspectable },
@@ -2819,7 +3180,7 @@ test "monotype named type digest includes declared field order" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_name = try name_store.internModuleName("Test");
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
     const type_name = try name_store.internTypeName("Pair");
     const field_a = try name_store.internRecordFieldLabel("a");
     const field_b = try name_store.internRecordFieldLabel("b");
@@ -2841,7 +3202,7 @@ test "monotype named type digest includes declared field order" {
 
     const named_ab = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = Span.empty(),
         .backing = .{ .ty = backing, .use = .inspectable },
@@ -2849,7 +3210,7 @@ test "monotype named type digest includes declared field order" {
     } });
     const named_ba = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = Span.empty(),
         .backing = .{ .ty = backing, .use = .inspectable },
@@ -2868,7 +3229,7 @@ test "monotype named type digest includes padding backing" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_name = try name_store.internModuleName("Test");
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
     const type_name = try name_store.internTypeName("Padded");
     const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
     const i64_ty = try store.add(.{ .primitive = .i64 });
@@ -2878,14 +3239,14 @@ test "monotype named type digest includes padding backing" {
 
     const named_i64 = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = Span.empty(),
         .declared_order = order_i64,
     } });
     const named_str = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
-        .def = .{ .module_name = module_name, .type_name = type_name },
+        .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = Span.empty(),
         .declared_order = order_str,
