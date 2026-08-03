@@ -18775,35 +18775,31 @@ const BodyContext = struct {
         return self.builder.typeIsProvenUninhabited(ty);
     }
 
-    /// Debug/probe-only: whether the directed type at a pattern position gives
-    /// this predicate the same answer the graph walk gives, restricted to
-    /// positions whose variables the active frame binds. The false direction is
-    /// load-bearing here — a position that reads uninhabited eliminates a live
-    /// branch — so a disagreement is dumped with both sides rendered.
-    fn measurePatternUninhabitedParity(
-        self: *BodyContext,
-        pattern_ty: checked.CheckedTypeId,
-        graph_answer: bool,
-    ) Allocator.Error!void {
-        const rehearsal = self.builder.rehearsal orelse return;
-        const address = self.typeAddress(pattern_ty);
-        if (!rehearsal.activeBindingCovers(.{
-            .module_bytes = address.module_bytes,
-            .type_id = address.type_id,
-        })) {
-            census.bump("pattern_uninhabited_uncovered");
-            return;
+    /// Whether one pattern position's own type is proven uninhabited. A
+    /// position the active frame binds every variable of reads its directed
+    /// type; a position it does not, and a position holding a residual nothing
+    /// answers, stay on the graph walk, which treats an unresolved variable as
+    /// unproven — the conservative direction this predicate requires, since a
+    /// false proof here eliminates a live branch (reunify.md 13.2d).
+    fn patternHeadIsProvenUninhabited(self: *BodyContext, pattern_ty: checked.CheckedTypeId) Allocator.Error!bool {
+        if (self.builder.rehearsal) |rehearsal| {
+            const address = self.typeAddress(pattern_ty);
+            if (rehearsal.activeBindingCovers(.{
+                .module_bytes = address.module_bytes,
+                .type_id = address.type_id,
+            })) {
+                if (try rehearsal.typeForCheckedAuthoritativeOrUnstated(
+                    .{ .module_bytes = address.module_bytes, .type_id = address.type_id },
+                    self.callee_context,
+                    rehearsal.innermostRequestEdge(),
+                )) |final| {
+                    census.bump("pattern_uninhabited_directed");
+                    return try self.typeIsProvenUninhabited(final);
+                }
+            }
         }
-        const directed = self.typeForChecked(pattern_ty) catch {
-            census.bump("pattern_uninhabited_read_error");
-            return;
-        };
-        const directed_answer = try self.typeIsProvenUninhabited(directed);
-        if (directed_answer == graph_answer) {
-            census.bump("pattern_uninhabited_agree");
-            return;
-        }
-        census.bump("pattern_uninhabited_diverge");
+        census.bump("pattern_uninhabited_graph");
+        return try self.nodeIsProvenUninhabited(try self.instNode(pattern_ty));
     }
 
     fn checkedPatternIsProvenUninhabited(self: *BodyContext, pattern_id: checked.CheckedPatternId) Allocator.Error!bool {
@@ -18816,9 +18812,7 @@ const BodyContext = struct {
         // pattern lowering reads its expected type from the scrutinee's final
         // type, where the binding is necessarily in scope (reunify.md 13.2d).
         const pattern = self.view.bodies.pattern(pattern_id);
-        const graph_answer = try self.nodeIsProvenUninhabited(try self.instNode(pattern.ty));
-        if (comptime census.enabled) try self.measurePatternUninhabitedParity(pattern.ty, graph_answer);
-        if (graph_answer) return true;
+        if (try self.patternHeadIsProvenUninhabited(pattern.ty)) return true;
         return switch (pattern.data) {
             .as => |as| self.checkedPatternIsProvenUninhabited(as.pattern),
             .applied_tag => |tag| blk: {
