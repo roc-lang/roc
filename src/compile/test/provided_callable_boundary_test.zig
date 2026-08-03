@@ -158,3 +158,91 @@ test "provided context may return an erased callable nested in an outcome" {
         expectContextOutcomeContainsErasedCallable,
     );
 }
+
+fn expectRecursiveBoxedCallableForwardsReuseThroughLet(
+    store: *const lir.LirStore,
+    layouts: *const layout.Store,
+) harness.LowerToLirHarnessError!void {
+    _ = layouts;
+    var specialized_count: usize = 0;
+    var matching_repack_count: usize = 0;
+
+    for (store.getProcSpecs(), 0..) |proc, index| {
+        if (proc.abi != .roc or proc.body == null or proc.erased_reuse_arg == null) continue;
+        const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const name = store.procDebugName(proc_id) orelse continue;
+        if (!std.mem.eql(u8, name, "from_state")) continue;
+
+        specialized_count += 1;
+        const reuse_arg = proc.erased_reuse_arg.?;
+        var work = std.ArrayList(lir.LIR.CFStmtId).empty;
+        defer work.deinit(store.allocator);
+        var visited = std.AutoHashMap(lir.LIR.CFStmtId, void).init(store.allocator);
+        defer visited.deinit();
+        try work.append(store.allocator, proc.body.?);
+        while (work.pop()) |stmt_id| {
+            const entry = try visited.getOrPut(stmt_id);
+            if (entry.found_existing) continue;
+            switch (store.getCFStmt(stmt_id)) {
+                .assign_packed_erased_fn => |pack| {
+                    if (pack.reuse == reuse_arg) matching_repack_count += 1;
+                },
+                else => {},
+            }
+            try lir.BodyClone.appendSuccessors(@constCast(store), &work, stmt_id);
+        }
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), specialized_count);
+    try std.testing.expectEqual(@as(usize, 1), matching_repack_count);
+}
+
+test "recursive boxed callable forwards reuse through Box, let, and alias boundaries" {
+    try harness.runAppPathLirInspection(
+        "test/postcheck/erased_callable_return_forwarding/app.roc",
+        .{ .inline_mode = .wrappers, .proc_debug_names = true },
+        expectRecursiveBoxedCallableForwardsReuseThroughLet,
+    );
+}
+
+test "alternative callable producers may share one runtime-selected reuse owner" {
+    try harness.runAppPathLirInspection(
+        "test/postcheck/erased_callable_return_forwarding/alternatives.roc",
+        .{ .inline_mode = .wrappers, .proc_debug_names = true },
+        expectRecursiveBoxedCallableForwardsReuseThroughLet,
+    );
+}
+
+fn expectNoDestinationSpecializedFromState(
+    store: *const lir.LirStore,
+    layouts: *const layout.Store,
+) harness.LowerToLirHarnessError!void {
+    _ = layouts;
+    var specialized_count: usize = 0;
+    for (store.getProcSpecs(), 0..) |proc, index| {
+        if (proc.abi != .roc or proc.erased_reuse_arg == null) continue;
+        const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const name = store.procDebugName(proc_id) orelse continue;
+        if (std.mem.eql(u8, name, "from_state")) specialized_count += 1;
+    }
+
+    // Both constructors execute before the runtime choice. Lowering must not
+    // specialize either producer with the call's one affine reuse owner.
+    try std.testing.expectEqual(@as(usize, 0), specialized_count);
+}
+
+test "competing eager callable producers cannot both consume one reuse owner" {
+    try harness.runAppPathLirInspection(
+        "test/postcheck/erased_callable_return_forwarding/competitors.roc",
+        .{ .inline_mode = .wrappers, .proc_debug_names = true },
+        expectNoDestinationSpecializedFromState,
+    );
+}
+
+test "repeatable callable producers cannot consume one reuse owner per iteration" {
+    try harness.runAppPathLirInspection(
+        "test/postcheck/erased_callable_return_forwarding/loop.roc",
+        .{ .inline_mode = .wrappers, .proc_debug_names = true },
+        expectNoDestinationSpecializedFromState,
+    );
+}

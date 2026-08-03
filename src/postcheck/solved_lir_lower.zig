@@ -451,6 +451,19 @@ const Lowerer = struct {
     current_proc: ?LIR.LirProcSpecId = null,
     current_erased_reuse: ?LIR.LocalId = null,
     current_return_target: ?LIR.LocalId = null,
+    /// Locals proven during backwards lowering to feed the procedure's one
+    /// selected erased-callable result slot. A later lexical producer uses
+    /// this explicit provenance to inherit the return destination.
+    return_forwarding_locals: std.AutoHashMap(LIR.LocalId, void),
+    /// Multiple distinct eager producers can feed one later runtime choice,
+    /// but the hidden reuse owner is affine and cannot be offered to all of
+    /// them. Keep that candidate group disqualified until every producer has
+    /// been crossed during backwards lowering.
+    return_forwarding_ambiguous: bool = false,
+    /// Loop and recursive-join bodies may execute more than once. The hidden
+    /// erased reuse owner is affine, so lexical return forwarding is disabled
+    /// anywhere inside a repeatable control region.
+    return_forwarding_repeatable_depth: usize = 0,
     erased_owner_states: std.ArrayList(ErasedOwnerState),
     erased_call_owner_uses: std.ArrayList(ErasedCallOwnerUse),
     erased_capture_ptr_ty: ?Type.TypeId = null,
@@ -546,6 +559,7 @@ const Lowerer = struct {
             .comptime_site_map = comptime_site_map,
             .loop_stack = .empty,
             .join_stack = .empty,
+            .return_forwarding_locals = std.AutoHashMap(LIR.LocalId, void).init(allocator),
             .erased_owner_states = .empty,
             .erased_call_owner_uses = .empty,
         };
@@ -553,6 +567,7 @@ const Lowerer = struct {
 
     fn deinit(self: *Lowerer) void {
         self.folded_map_matches.deinit(self.allocator);
+        self.return_forwarding_locals.deinit();
         self.erased_call_owner_uses.deinit(self.allocator);
         self.erased_owner_states.deinit(self.allocator);
         self.join_stack.deinit(self.allocator);
@@ -598,6 +613,7 @@ const Lowerer = struct {
             .runtime_schemas = self.runtime_schemas,
         };
         self.folded_map_matches.deinit(self.allocator);
+        self.return_forwarding_locals.deinit();
         self.erased_call_owner_uses.deinit(self.allocator);
         self.erased_owner_states.deinit(self.allocator);
         self.join_stack.deinit(self.allocator);
@@ -648,6 +664,9 @@ const Lowerer = struct {
         self.comptime_site_map = &.{};
         self.loop_stack = .empty;
         self.join_stack = .empty;
+        self.return_forwarding_locals = std.AutoHashMap(LIR.LocalId, void).init(self.allocator);
+        self.return_forwarding_ambiguous = false;
+        self.return_forwarding_repeatable_depth = 0;
         self.erased_owner_states = .empty;
         self.erased_call_owner_uses = .empty;
         self.folded_map_matches = .empty;
@@ -771,6 +790,9 @@ const Lowerer = struct {
         @memset(self.local_map, null);
         self.typed_local_map.clearRetainingCapacity();
         self.local_types.clearRetainingCapacity();
+        self.return_forwarding_locals.clearRetainingCapacity();
+        self.return_forwarding_ambiguous = false;
+        self.return_forwarding_repeatable_depth = 0;
 
         const saved_ret_ty = self.current_ret_ty;
         const saved_proc_locals = self.current_proc_locals;
@@ -806,6 +828,9 @@ const Lowerer = struct {
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
         const erased_owner_use_start = self.erased_call_owner_uses.items.len;
         const body = try self.lowerExprIntoAtType(ret_local, initializer.expr, initializer.ty, ret_stmt);
+        if (self.return_forwarding_repeatable_depth != 0) {
+            Common.invariant("static initializer lowering left a repeatable return-forwarding region active");
+        }
         self.resolveErasedCallOwnerUses(erased_owner_use_start);
         const frame_locals = try self.writeFrameLocals(&proc_locals);
         const proc = self.result.store.getProcSpecPtr(initializer.proc);
@@ -823,6 +848,9 @@ const Lowerer = struct {
         @memset(self.local_map, null);
         self.typed_local_map.clearRetainingCapacity();
         self.local_types.clearRetainingCapacity();
+        self.return_forwarding_locals.clearRetainingCapacity();
+        self.return_forwarding_ambiguous = false;
+        self.return_forwarding_repeatable_depth = 0;
 
         // Body lowering appends local spans, so keep proc arguments independent
         // of the guarded span store before any recursive lowering begins.
@@ -920,6 +948,9 @@ const Lowerer = struct {
 
                 const erased_owner_use_start = self.erased_call_owner_uses.items.len;
                 var body = try self.lowerExprReturn(body_expr, entry.ret);
+                if (self.return_forwarding_repeatable_depth != 0) {
+                    Common.invariant("function lowering left a repeatable return-forwarding region active");
+                }
                 if (capture_snapshot) |snapshot| {
                     body = try self.lowerAnchoredErasedCaptureLoadInto(
                         snapshot,
@@ -1224,11 +1255,14 @@ const Lowerer = struct {
     fn lowerLocalInto(self: *Lowerer, target: LIR.LocalId, local: Lifted.LocalId, ty: Type.TypeId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         if (self.typed_local_map.get(.{ .local = local, .ty = ty })) |source| {
             try self.noteLocal(source);
+            try self.noteReturnForwardingLocal(target, source);
             return try self.assignTypedBoundary(target, ty, source, ty, next);
         }
         if (self.local_map[@intFromEnum(local)]) |source| {
             try self.noteLocal(source);
-            return try self.assignTypedBoundary(target, ty, source, try self.lowerLocalTy(local), next);
+            const source_ty = try self.lowerLocalTy(local);
+            try self.noteReturnForwardingLocal(target, source);
+            return try self.assignTypedBoundary(target, ty, source, source_ty, next);
         }
         // A current lexical binding is authoritative over an enclosing capture.
         // Wrapper inlining installs the callee arguments in `local_map`; nested
@@ -1238,7 +1272,29 @@ const Lowerer = struct {
             return try self.lowerCaptureBindingInto(target, capture, next);
         }
         const source = try self.bindUnboundLocalForTarget(local, ty, target);
-        return try self.assignTypedBoundary(target, ty, source, try self.lowerLocalTy(local), next);
+        const source_ty = try self.lowerLocalTy(local);
+        try self.noteReturnForwardingLocal(target, source);
+        return try self.assignTypedBoundary(target, ty, source, source_ty, next);
+    }
+
+    fn noteReturnForwardingLocal(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+    ) Common.LowerError!void {
+        if (self.return_forwarding_repeatable_depth != 0) return;
+        if (self.current_return_target != target) return;
+        const target_layout = self.result.store.getLocal(target).layout_idx;
+        const source_layout = self.result.store.getLocal(source).layout_idx;
+        // Equal committed layouts make assignTypedBoundary emit one explicit
+        // local alias. Layout similarity alone is not allocation provenance.
+        if (target_layout != source_layout) return;
+        const existing_candidates = self.return_forwarding_locals.count();
+        const candidate = try self.return_forwarding_locals.getOrPut(source);
+        if (!candidate.found_existing) {
+            candidate.value_ptr.* = {};
+            if (existing_candidates != 0) self.return_forwarding_ambiguous = true;
+        }
     }
 
     fn captureBindingForLocal(self: *Lowerer, local: Lifted.LocalId) Common.LowerError!?CaptureBinding {
@@ -3604,6 +3660,19 @@ const Lowerer = struct {
     ) Common.LowerError!LIR.CFStmtId {
         const bind_ty = try self.lowerPatTy(pat_id);
         const value_local = self.existingLocalForTyped(local, bind_ty) orelse try self.addTemp(bind_ty);
+        const is_return_candidate = self.return_forwarding_locals.remove(value_local);
+        const forwards_return = is_return_candidate and
+            !self.return_forwarding_ambiguous and
+            self.return_forwarding_repeatable_depth == 0;
+        const finishes_ambiguous_group = is_return_candidate and
+            self.return_forwarding_ambiguous and
+            self.return_forwarding_locals.count() == 0;
+        const saved_return_target = self.current_return_target;
+        if (forwards_return) self.current_return_target = value_local;
+        defer {
+            self.current_return_target = saved_return_target;
+            if (finishes_ambiguous_group) self.return_forwarding_ambiguous = false;
+        }
         return try self.lowerExprIntoAtType(value_local, value, self.typeOfLocalOr(value_local, bind_ty), next);
     }
 
@@ -4470,6 +4539,11 @@ const Lowerer = struct {
         const arg = GuardedList.at(args, 0);
         const source = try self.addTemp(try self.lowerExprTy(arg));
         const source_layout = self.result.store.getLocal(source).layout_idx;
+        const saved_return_target = self.current_return_target;
+        if (saved_return_target == target and op == .box_box) {
+            self.current_return_target = source;
+        }
+        defer self.current_return_target = saved_return_target;
         const assign = switch (op) {
             .box_box,
             .box_unbox,
@@ -5032,6 +5106,13 @@ const Lowerer = struct {
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         self.noteErasedOwnerAmbiguous(target);
+        const saved_return_target = self.current_return_target;
+        self.current_return_target = null;
+        self.return_forwarding_repeatable_depth += 1;
+        defer {
+            self.return_forwarding_repeatable_depth -= 1;
+            self.current_return_target = saved_return_target;
+        }
         const params = self.solved.lifted.typedLocalSpan(loop.params);
         const initial_values = self.solved.lifted.exprSpan(loop.initial_values);
         if (params.len != initial_values.len) Common.invariant("Lambda Mono loop parameter count differs from initial value count");
@@ -5131,6 +5212,13 @@ const Lowerer = struct {
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         self.noteErasedOwnerAmbiguous(target);
+        const saved_return_target = self.current_return_target;
+        self.current_return_target = null;
+        self.return_forwarding_repeatable_depth += 1;
+        defer {
+            self.return_forwarding_repeatable_depth -= 1;
+            self.current_return_target = saved_return_target;
+        }
         const params = self.solved.lifted.typedLocalSpan(join_point.params);
         const param_locals = try self.allocator.alloc(LIR.LocalId, params.len);
         defer self.allocator.free(param_locals);
@@ -5182,7 +5270,7 @@ const Lowerer = struct {
         const ret_local = try self.addTemp(ret_ty);
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
         const saved_return_target = self.current_return_target;
-        self.current_return_target = ret_local;
+        self.current_return_target = if (self.return_forwarding_repeatable_depth == 0) ret_local else null;
         defer self.current_return_target = saved_return_target;
         return try self.lowerExprIntoAtType(ret_local, ret.value, ret_ty, ret_stmt);
     }
