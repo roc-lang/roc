@@ -669,13 +669,14 @@ const Formatter = struct {
                 }
                 try fmt.formatTypeAnnoDiscard(d.anno);
                 if (d.where) |w| {
-                    if (multiline) {
+                    const where_multiline = multiline or fmt.collectionWillBeMultiline(AST.WhereClause.Idx, w);
+                    if (where_multiline) {
                         try fmt.flushCommentsBeforeDiscard(anno_region.end);
                         try fmt.ensureNewline();
                         fmt.curr_indent += 1;
                         try fmt.pushIndent();
                     }
-                    try fmt.formatWhereConstraint(w, multiline);
+                    try fmt.formatWhereConstraint(w, where_multiline);
                 }
                 if (d.associated) |assoc| {
                     try fmt.pushAll(".");
@@ -720,13 +721,14 @@ const Formatter = struct {
                 }
                 try fmt.formatTypeAnnoDiscard(t.anno);
                 if (t.where) |w| {
-                    if (multiline) {
+                    const where_multiline = multiline or fmt.collectionWillBeMultiline(AST.WhereClause.Idx, w);
+                    if (where_multiline) {
                         try fmt.flushCommentsBeforeDiscard(anno_region.end);
                         try fmt.ensureNewline();
                         fmt.curr_indent += 1;
                         try fmt.pushIndent();
                     }
-                    try fmt.formatWhereConstraint(w, multiline);
+                    try fmt.formatWhereConstraint(w, where_multiline);
                 }
             },
             .expect => |e| {
@@ -2268,6 +2270,10 @@ const Formatter = struct {
         switch (item) {
             .lower_ident => |i| {
                 region = i.region;
+                for (fmt.ast.store.tokenSlice(i.qualifiers)) |qualifier| {
+                    try fmt.pushTokenText(qualifier);
+                    try fmt.push('.');
+                }
                 try fmt.pushTokenText(i.ident);
                 if (i.as) |a| {
                     try fmt.pushAll(" as ");
@@ -2276,6 +2282,10 @@ const Formatter = struct {
             },
             .upper_ident => |i| {
                 region = i.region;
+                for (fmt.ast.store.tokenSlice(i.qualifiers)) |qualifier| {
+                    try fmt.pushTokenText(qualifier);
+                    try fmt.push('.');
+                }
                 try fmt.pushTokenText(i.ident);
                 if (i.as) |a| {
                     try fmt.pushAll(" as ");
@@ -3997,6 +4007,14 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) FormatPar
     return try result.toOwnedSlice();
 }
 
+test "issue 10480: package qualifier preserved in exposed aliased imports" {
+    // Repro for https://github.com/roc-lang/roc/issues/10480
+    const result = try moduleFmtsStable(std.testing.allocator, "module[o as n,F.s as I]", false);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings("module [o as n, F.s as I]\n", result);
+}
+
 test "issue 10431: wrapped declaration has no trailing whitespace" {
     // Repro for https://github.com/roc-lang/roc/issues/10431
     const result = try moduleFmtsStable(std.testing.allocator,
@@ -4006,6 +4024,12 @@ test "issue 10431: wrapped declaration has no trailing whitespace" {
     defer std.testing.allocator.free(result);
 
     try std.testing.expectEqualStrings("x =\n\t1\n", result);
+}
+
+test "issue 10191: leading newline before function parameter formatting is stable" {
+    // Repro for https://github.com/roc-lang/roc/issues/10191
+    const result = try moduleFmtsStable(std.testing.allocator, "\nm : (S) -> r\n", false);
+    defer std.testing.allocator.free(result);
 }
 
 test "string token text preserves significant trailing spaces" {
@@ -4036,6 +4060,12 @@ test "function type expands when its return type is multiline" {
         "(() -> d) -> (\n" ++
         "\tc,\n" ++
         ")\n", result);
+}
+
+test "issue 10335: where clause formatting is idempotent" {
+    // Repro for https://github.com/roc-lang/roc/issues/10335
+    const result = try moduleFmtsStable(std.testing.allocator, "g:e->e where[e.B,]h=||{{([])}}", false);
+    defer std.testing.allocator.free(result);
 }
 
 test "issue 10140: nested record function type formatting is idempotent" {

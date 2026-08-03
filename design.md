@@ -3252,6 +3252,12 @@ Type-store ownership is explicit at each stage boundary:
   store.
 - LIR owns committed layouts, not post-check type ids.
 
+A mutable post-check type store exposes child spans as stable descriptors plus
+indexed item access, never as borrowed slices. Appending while lazily expanding
+a recursive type may relocate a packed side array, but its descriptors remain
+valid. Raw slice access belongs only to immutable stage views, where relocation
+is impossible and consumers retain packed-array iteration performance.
+
 A later stage must not reinterpret an earlier stage's type ids unless the stage
 contract says the type store is shared. When a stage changes type meaning, it
 consumes the earlier program and produces a new program whose ids are meaningful
@@ -6337,15 +6343,18 @@ how entrypoints are produced, not how tests are identified, ordered, cached, or
 reported.
 
 `ConstStore` uses node ids so stored constants can preserve sharing without
-duplicating large values. Multiple fields may reference the same `ConstNodeId`.
-Stored constant node edges are acyclic. Roc source cannot define recursive
-non-function values; checking reports those definitions as errors and records
-`Malformed` source nodes instead. A delayed recursive edge through a function
-capture is represented symbolically by its checked capture identity, not by a
-`ConstNodeId` edge back into the enclosing value. `Malformed` source nodes are
-never output as valid `ConstStore` values. A cycle in output `ConstStore` node
-edges is therefore a compiler bug, not a supported stored-constant
-representation.
+duplicating large values. Multiple fields and function captures may reference
+the same `ConstNodeId`. The store is an exact directed `ConstStore` graph: a recursive
+runtime value therefore keeps the same back-edge that exists in the evaluated
+value instead of replacing it with source-level identity.
+
+Roc source cannot define an eager recursive non-function value; checking
+reports those definitions as errors and records `Malformed` source nodes
+instead. Recursive values delayed through a function are valid. Accordingly,
+every cycle in a completed `ConstStore` graph must cross at least one
+`ConstFn -> ConstCapture.value` edge. A cycle made only from eager value edges
+is a compiler bug. `Malformed` source nodes are never output as valid
+`ConstStore` values.
 
 ```zig
 const ConstStore = struct {
@@ -6415,13 +6424,15 @@ roots continue finalizing. OOM remains OOM. A post-check invariant failure while
 lowering or interpreting a compile-time root is still a compiler bug, not a
 user-facing diagnostic.
 
-While storing an eval result, the builder may reserve a `ConstNodeId` before
-storing its children so repeated references to the same acyclic runtime value
-can reuse the same stored node. The builder verifies that every reserved node
-was filled exactly once and that stored value edges are acyclic. Restoring
-cached consts and dependency summarization must memoize by `ConstNodeId`, so
-sharing is preserved and traversal is linear in the stored node count. A
-consumer must not recover stored-const identity by comparing node contents.
+While storing an eval result, the `ConstStore` writer reserves a `ConstNodeId`
+and inserts the runtime-address-to-node memo before storing its children. Repeated
+references and back-edges therefore resolve to that exact node. The builder
+verifies that every reserved node was filled exactly once and that every cycle
+crosses a delayed function-capture edge. Const materialization and dependency
+summarization must use explicit graph traversal state keyed by `ConstNodeId`, so
+sharing is preserved, cycles terminate, and traversal is linear in the stored
+graph size. A consumer must not recover stored-const identity by comparing node
+contents or by reconstructing source-level recursive bindings.
 
 A stored function value keeps checked identity only:
 
@@ -6439,10 +6450,8 @@ const CaptureId = union(enum) {
 
 const ConstCapture = struct {
     id: CaptureId,
-    value: union(enum) {
-        node: ConstNodeId,
-        recursive_const,
-    },
+    ty: ConstTypeId,
+    value: ConstNodeId,
 };
 ```
 
@@ -6450,13 +6459,17 @@ const ConstCapture = struct {
 generated procedure template that the checked module owns or references
 explicitly.
 `captures` bind the exact capture identities required by that function to
-stored const nodes. A capture of an enclosing explicit recursive constant uses
-`recursive_const`; restoration resolves that identity to the already-reserved
-recursive local, so `ConstStore` never serializes a cyclic capture edge or
-traverses the recursive runtime capture. Source lambdas use checked pattern
-binders. Compiler-generated functions whose captures have no source pattern,
-such as structural parser runtime functions, use explicit generated capture ids
-assigned by the generator. A stored function does not store a lambda set,
+stored const nodes. `ty` is the exact target-independent runtime representation
+of the captured value. The temporary LIR function-result metadata separately
+provides each capture's explicit payload layout and storage mode; when a
+recursive slot uses box storage, the writer memoizes that box address before
+following it and stores the pointed-to value under the capture's ordinary value
+type. Source lambdas use
+checked pattern binders. Compiler-generated functions whose captures have no
+source pattern, such as structural parser runtime functions, use explicit
+generated capture ids assigned by the generator. Capture identity selects the
+checked template binder; it is not a substitute for value identity and is never
+used to infer a graph back-edge. A stored function does not store a lambda set,
 callable-set descriptor, call specialization id, erased ABI, capture layout,
 runtime tag, or LIR proc id.
 
@@ -6505,7 +6518,9 @@ const FnTemplate = struct {
 const CaptureSlot = struct {
     id: CaptureId,
     slot: u32,
-    recursive_const: bool,
+    ty: ConstTypeId,
+    plan: ConstPlanId,
+    storage: enum { value, recursive_box },
 };
 ```
 
@@ -6532,7 +6547,7 @@ discriminant, variant slot, byte pattern, display name, object symbol, or
 payload shape. The function result-store data is temporary and is not serialized
 as a checked module representation cache.
 
-When a later compilation restores a cached const, Monotype lowering turns
+When a later compilation materializes a cached const, Monotype lowering turns
 `ConstStore` nodes into ordinary Monotype expressions:
 
 - scalar and aggregate nodes become literal, record, tuple, list, tag, box, and
@@ -6541,15 +6556,23 @@ When a later compilation restores a cached const, Monotype lowering turns
 - capturing function values become compiler-generated Monotype lambda
   expressions by cloning the checked template body referenced by `function`,
   alpha-renaming its parameters, and binding each captured symbol to the
-  ordinary Monotype expression restored from the corresponding captured
+  ordinary Monotype expression materialized from the corresponding captured
   `ConstNodeId`
-- generated parser runtime functions restore through their explicit generated
+- generated parser runtime functions materialize through their explicit generated
   function kind: Monotype lowering recovers the checked static-dispatch plan,
-  restores generated captures such as transformed field-name strings by their
+  materializes generated captures such as transformed field-name strings by their
   generated capture ids, and regenerates the runtime parser lambda directly
-  around those restored constants
+  around those materialized constants
 
-Restoring a cached const does not synthesize a wrapper that calls an
+Materialization records an active `(module, ConstNodeId, representation)` before
+descending into that node. The first exact graph back-edge reserves and uses a
+local; once the node is complete, Monotype lowering emits the ordinary
+recursive binding that owns it. Acyclic nodes allocate no such local. Completed
+nodes are memoized in the materialization context. This is graph
+materialization, not recovery of a discarded source binding: the checked module
+data already contains every value edge needed by the operation.
+
+Materializing a cached const does not synthesize a wrapper that calls an
 already-packed runtime function value. It builds an ordinary Monotype callable
 from the explicit checked template and stored const captures, so the later
 lifting and lambda-set solving stages see the same kind of ordinary callable

@@ -413,27 +413,29 @@ import I2 exposing [
 ]
 
 # Where constraint
-A(a) : a where [
-	a.a1 : (
-		a,
-		a,
-	) -> Str,
-	a.a2 : (
-		a,
-		a,
-	) -> Str,
-]
+A(a) : a
+	where [
+		a.a1 : (
+			a,
+			a,
+		) -> Str,
+		a.a2 : (
+			a,
+			a,
+		) -> Str,
+	]
 
-B(b) : b where [
-	b.b1 : (
-		b,
-		b,
-	) -> Str,
-	b.b2 : (
-		b,
-		b,
-	) -> Str,
-]
+B(b) : b
+	where [
+		b.b1 : (
+			b,
+			b,
+		) -> Str,
+		b.b2 : (
+			b,
+			b,
+		) -> Str,
+	]
 
 C(
 	a,
@@ -461,10 +463,11 @@ F : [
 	B,
 ]
 
-g : e -> e where [
-	e.A,
-	e.B,
-]
+g : e -> e
+	where [
+		e.A,
+		e.B,
+	]
 
 h = |
 	x,

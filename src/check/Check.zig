@@ -204,6 +204,8 @@ builtin_types_copied: bool,
 ident_to_var_map: std.AutoHashMap(Ident.Idx, Var),
 /// Interpolation constraint function vars whose custom part checks have already run.
 checked_interpolation_part_constraints: std.AutoHashMap(Var, void),
+/// Vars that originated as single-quote (.int_unbound) literals.
+int_unbound_vars: std.AutoHashMap(Var, void),
 /// Dispatcher/method pairs already reported by `reportConstraintError`, so a
 /// constraint failing in multiple passes (or reachable through several aliased
 /// type variables) is reported once.
@@ -1570,6 +1572,7 @@ fn initAssumePrepared(
         .builtin_types_copied = false,
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
         .checked_interpolation_part_constraints = std.AutoHashMap(Var, void).init(gpa),
+        .int_unbound_vars = std.AutoHashMap(Var, void).init(gpa),
         .reported_constraint_errors = std.AutoHashMap(ReportedConstraintError, void).init(gpa),
         .rejected_static_dispatches = rejected_static_dispatches,
         .reported_effectful_expect = std.AutoHashMap(Var, void).init(gpa),
@@ -1715,6 +1718,7 @@ pub fn deinit(self: *Self) void {
     self.imported_method_scheme_by_source.deinit(self.gpa);
     self.ident_to_var_map.deinit();
     self.checked_interpolation_part_constraints.deinit();
+    self.int_unbound_vars.deinit();
     self.reported_constraint_errors.deinit();
     self.rejected_static_dispatches.deinit();
     self.reported_effectful_expect.deinit();
@@ -5099,8 +5103,24 @@ fn checkNumeralLiteral(
     const suffix_target = self.cir.numericSuffixTargetForNode(node_idx);
     const literal = self.recordedNumeralLiteralForNode(node_idx);
     var num_literal_info = try self.exactNumeralInfoForLiteral(literal, region);
+    const is_int_unbound = switch (occurrence) {
+        .expression => blk: {
+            const expr_idx: CIR.Expr.Idx = @enumFromInt(@intFromEnum(node_idx));
+            const expr = self.cir.store.getExpr(expr_idx);
+            break :blk expr == .e_num and expr.e_num.kind == .int_unbound;
+        },
+        .pattern => blk: {
+            const pat_idx: CIR.Pattern.Idx = @enumFromInt(@intFromEnum(node_idx));
+            const pat = self.cir.store.getPattern(pat_idx);
+            break :blk pat == .num_literal and pat.num_literal.kind == .int_unbound;
+        },
+    };
+
     num_literal_info.explicit_suffix = suffix_target != null;
     const flex_var = try self.mkFlexWithFromNumeralConstraint(node_idx, num_literal_info, env);
+    if (is_int_unbound) {
+        try self.int_unbound_vars.put(self.types.resolveVar(flex_var).var_, {});
+    }
 
     if (suffix_target) |target| {
         try self.unifyLiteralWithSuffixTarget(flex_var, target, region, env);
@@ -10316,7 +10336,7 @@ fn generateRemainingWhereConstraintOwners(
 ) std.mem.Allocator.Error!bool {
     var invalid_receiver = false;
     for (self.cir.store.sliceWhereClauseOwners(where_span)) |owner| {
-        if (owner.introduced_in_scope) {
+        if (owner.owned_by_annotation) {
             try self.generateAnnoTypeInPlace(@enumFromInt(owner.rigid_var), env, ctx);
             continue;
         }
@@ -10400,7 +10420,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 .annotation => |mb_where| blk: {
                     const where_span = mb_where orelse break :blk &.{};
                     for (self.cir.store.sliceWhereClauseOwners(where_span)) |owner| {
-                        if (owner.rigid_var == @intFromEnum(anno_idx) and owner.introduced_in_scope) {
+                        if (owner.rigid_var == @intFromEnum(anno_idx) and owner.owned_by_annotation) {
                             break :blk self.cir.store.sliceWhereClausesForOwner(owner);
                         }
                     }
@@ -18483,8 +18503,16 @@ const PendingBoundaryWarning = struct {
 /// still flex, with `boundary_reachable_vars` populated for the current
 /// boundary.
 fn boundaryWarningBeforeCommit(self: *Self, literal_root: Var) std.mem.Allocator.Error!PendingBoundaryWarning {
+    const root_var = self.types.resolveVar(literal_root).var_;
+    const is_int_unbound = blk: {
+        var iter = self.int_unbound_vars.keyIterator();
+        while (iter.next()) |var_ptr| {
+            if (self.types.resolveVar(var_ptr.*).var_ == root_var) break :blk true;
+        }
+        break :blk false;
+    };
     return .{
-        .leaks_into_signature = try self.boundaryDefaultLeaksIntoSignature(literal_root),
+        .leaks_into_signature = if (is_int_unbound) false else try self.boundaryDefaultLeaksIntoSignature(literal_root),
         .region = self.literalSourceRegion(literal_root) orelse self.getRegionAt(literal_root),
         // Every commit path only reaches here for a var with literal-conversion
         // provenance, and the var is still flex pre-commit, so the kind is
@@ -21341,6 +21369,20 @@ fn tagExtIsClosedAndUnit(self: *Self, ext_var: Var) std.mem.Allocator.Error!bool
 fn builtinNumKindFromNominalType(self: *const Self, nominal_type: types_mod.NominalType) ?CIR.NumKind {
     if (!nominal_type.originIsBuiltin()) return null;
     return self.builtinNumKindFromBuiltinSourceDecl(nominal_type.sourceDeclOptional());
+}
+
+fn varResolvesToBuiltinScalarNominal(self: *const Self, var_: Var) bool {
+    const resolved = self.types.resolveVar(var_);
+    return switch (resolved.desc.content) {
+        .structure => |structure| switch (structure) {
+            .nominal_type => |nominal| self.nominalIsBuiltinBoolType(nominal) or
+                self.nominalIsBuiltinStrType(nominal) or
+                (self.builtinNumKindFromNominalType(nominal) != null),
+            else => false,
+        },
+        .alias => |alias| self.varResolvesToBuiltinScalarNominal(self.types.getAliasBackingVar(alias)),
+        else => false,
+    };
 }
 
 fn nominalIsBuiltinStrType(self: *const Self, nominal_type: types_mod.NominalType) bool {
@@ -24610,6 +24652,17 @@ fn validateDerivedEncodeNominal(
     }
     if (self.builtinNumKindFromNominalType(nominal)) |num_kind| {
         return try self.validateEncodeFormatMethod(encoding_var, state_var, nominal_var, encodeSpecDeclForNumKind(num_kind), err_var, constraint, env, region);
+    }
+    // A user opaque over a builtin scalar (`Money := F64`, `Username := Str`) validates its derived
+    // encoder through the backing scalar, threading the same err_var: error-row unification then
+    // rejects a fallible backing (F32/F64) exactly as a bare scalar is, and passes an infallible one
+    // (Str/Bool/int/Dec), instead of slipping through to a lowering panic.
+    // `varResolvesToBuiltinScalarNominal` admits only ground scalars, so the declaration's backing
+    // template equals the instance here and is safe to unify directly.
+    if (self.nominalDeclBackingTemplate(nominal)) |backing_var| {
+        if (self.varResolvesToBuiltinScalarNominal(backing_var)) {
+            return try self.validateDerivedEncodeVar(backing_var, encoding_var, state_var, err_var, constraint, env, region, visited);
+        }
     }
     if (self.nominalListPayloadVar(nominal)) |payload_var| {
         switch (try self.validateDerivedEncodeListMethods(encoding_var, state_var, err_var, constraint, env, region)) {
