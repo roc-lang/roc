@@ -3012,7 +3012,7 @@ const hot_reload_host_c_source =
     \\#error "ROC_TARGET_NAME must be defined"
     \\#endif
     \\
-    \\typedef void (*RocCallable)(void *, void *, const void *, unsigned char *);
+    \\typedef void (*RocCallable)(void *, void *, const void *, unsigned char *, unsigned char *);
     \\struct RocErasedCallablePayload {
     \\    RocCallable callable;
     \\    void (*on_drop)(unsigned char *, void *);
@@ -3071,7 +3071,7 @@ const hot_reload_host_c_source =
     \\    struct RocErasedCallablePayload *payload = (struct RocErasedCallablePayload *)boxed;
     \\    struct I64Args args = { .arg0 = value };
     \\    int64_t result = 0;
-++ "\n    payload->callable(" ++ shim_symbols.roc_shim_get_ops ++ "(), &result, &args, boxed + 16);\n" ++
+++ "\n    payload->callable(" ++ shim_symbols.roc_shim_get_ops ++ "(), &result, &args, boxed + 16, NULL);\n" ++
     \\    return result;
     \\}
     \\

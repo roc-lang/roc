@@ -161,9 +161,8 @@ test "provided context may return an erased callable nested in an outcome" {
 
 fn expectRecursiveBoxedCallableForwardsReuseThroughLet(
     store: *const lir.LirStore,
-    layouts: *const layout.Store,
+    _: *const layout.Store,
 ) harness.LowerToLirHarnessError!void {
-    _ = layouts;
     var specialized_count: usize = 0;
     var matching_repack_count: usize = 0;
 
@@ -215,9 +214,8 @@ test "alternative callable producers may share one runtime-selected reuse owner"
 
 fn expectNoDestinationSpecializedFromState(
     store: *const lir.LirStore,
-    layouts: *const layout.Store,
+    _: *const layout.Store,
 ) harness.LowerToLirHarnessError!void {
-    _ = layouts;
     var specialized_count: usize = 0;
     for (store.getProcSpecs(), 0..) |proc, index| {
         if (proc.abi != .roc or proc.erased_reuse_arg == null) continue;
