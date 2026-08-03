@@ -6099,11 +6099,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // first. Ops whose opcode lives outside the `0F` map are above
                 // the baseline entirely and are routed to the SIMD builtin
                 // before reaching here.
-                std.debug.assert(map == .map_0f);
+                if (map != .map_0f) {
+                    // Reaching here means an op that needs an instruction
+                    // outside the `0F` map was not routed to the SIMD builtin,
+                    // and emitting it in the legacy encoding would produce a
+                    // binary that still requires SSSE3 or later. Fail rather
+                    // than encode it.
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "baseline codegen invariant violated: SIMD op needs an opcode above the x86-64 baseline",
+                            .{},
+                        );
+                    }
+                    unreachable;
+                }
                 if (dst == rhs and dst != lhs) {
                     // Writing `lhs` into `dst` would destroy the right operand,
                     // so stage the right operand somewhere else first.
-                    const protect = vectorRegMask(&.{ dst, lhs, rhs });
+                    const protect = floatRegMask(dst) | floatRegMask(lhs) | floatRegMask(rhs);
                     const staged = try self.allocTempVector(protect);
                     defer self.codegen.freeFloat(staged);
                     try self.codegen.emit.movdqaRegReg(staged, rhs);
@@ -6118,12 +6131,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.codegen.emit.vexRegRegReg(map, .p66, false, opcode, dst, lhs, rhs);
         }
 
-        /// Bit mask of the given vector registers, for spill protection.
-        fn vectorRegMask(regs: []const FloatReg) u32 {
-            var mask: u32 = 0;
-            for (regs) |reg| mask |= @as(u32, 1) << @intFromEnum(reg);
-            return mask;
-        }
 
         fn emitBasicSimdVector(
             self: *Self,
