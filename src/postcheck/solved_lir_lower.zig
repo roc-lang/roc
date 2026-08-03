@@ -5327,6 +5327,7 @@ const Lowerer = struct {
         for (branches, mt_branches, 0..) |branch, *out, i| {
             out.* = .{
                 .pat = branch.pat,
+                .bindings = branch.bindings,
                 .guard = branch.guard,
                 .body = branch.body,
                 .branch_index = @intCast(i),
@@ -5352,6 +5353,7 @@ const Lowerer = struct {
         pub const TypeId = Type.TypeId;
         pub const ExprId = Lifted.ExprId;
         pub const LocalId = Lifted.LocalId;
+        pub const BindingSpan = Lifted.Span(Lifted.StmtId);
         pub const LirLocal = LIR.LocalId;
         pub const CFStmtId = LIR.CFStmtId;
         pub const JoinPointId = LIR.JoinPointId;
@@ -5817,6 +5819,17 @@ const Lowerer = struct {
 
         pub fn bindPatternLocal(self: MatchTreeCtx, local: Lifted.LocalId, ty: Type.TypeId, source: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
             return try self.l.bindLocalFromTyped(local, ty, source, next);
+        }
+
+        pub fn lowerBindings(self: MatchTreeCtx, bindings: BindingSpan, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+            const stmts = self.l.solved.lifted.stmtSpan(bindings);
+            var current = next;
+            var i = stmts.len;
+            while (i > 0) {
+                i -= 1;
+                current = try self.l.lowerStmt(GuardedList.at(stmts, i), current);
+            }
+            return current;
         }
 
         pub fn lowerBody(self: MatchTreeCtx, body: Lifted.ExprId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {

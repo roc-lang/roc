@@ -580,6 +580,7 @@ const Lifter = struct {
         const branches = self.output.branchSpan(span);
         for (0..branches.len) |index| {
             const branch = GuardedList.at(branches, index);
+            try self.rewriteStmtSpan(branch.bindings);
             if (branch.guard) |guard| try self.rewriteExpr(guard);
             try self.rewriteExpr(branch.body);
         }
@@ -1436,6 +1437,10 @@ const CaptureSet = struct {
                     var added = std.ArrayList(Mono.LocalId).empty;
                     defer added.deinit(self.allocator);
                     try bindPat(self.allocator, input, branch.pat, bound, &added);
+                    const bindings = input.stmtSpan(branch.bindings);
+                    for (0..bindings.len) |binding_index| {
+                        try self.collectStmt(input, GuardedList.at(bindings, binding_index), bound, &added);
+                    }
                     if (branch.guard) |guard| try self.collectExpr(guard, bound);
                     try self.collectExpr(branch.body, bound);
                     removeBound(input, bound, added.items);
@@ -2346,6 +2351,10 @@ const CaptureGraphBuilder = struct {
                     var added: std.ArrayList(Ast.LocalId) = .empty;
                     defer added.deinit(self.graph.allocator);
                     try self.bindPat(branch.pat, &added);
+                    const bindings = input.stmtSpan(branch.bindings);
+                    for (0..bindings.len) |binding_index| {
+                        try self.collectStmt(GuardedList.at(bindings, binding_index), node, &added);
+                    }
                     if (branch.guard) |guard| try self.collectExpr(guard, node);
                     try self.collectExpr(branch.body, node);
                     self.removeLocals(added.items);

@@ -7133,6 +7133,9 @@ const Builder = struct {
                     defer added.deinit(self.allocator);
                     try self.bindPatLocals(branch.pat, bound, &added);
                     defer removeBoundLocals(bound, added.items);
+                    for (self.program.stmtSpan(branch.bindings)) |stmt| {
+                        if (try self.stmtDependsOnFreeLocal(stmt, target, bound, active_fns, &added)) return true;
+                    }
                     if (branch.guard) |guard| {
                         if (try self.exprDependsOnFreeLocalInner(guard, target, bound, active_fns)) return true;
                     }
@@ -9336,6 +9339,7 @@ const DraftListRestPattern = struct {
 
 const DraftBranch = struct {
     pat: DraftPatId,
+    bindings: DraftSpan(DraftStmtId) = DraftSpan(DraftStmtId).empty(),
     guard: ?DraftExprId = null,
     body: DraftExprId,
 };
@@ -11104,6 +11108,7 @@ const BodyDraftStore = struct {
             if (!ids.retained(.branches, index)) continue;
             program.branches.appendAssumeCapacity(.{
                 .pat = ids.pat(branch.pat),
+                .bindings = ids.stmtSpan(branch.bindings),
                 .guard = if (branch.guard) |guard| ids.expr(guard) else null,
                 .body = ids.expr(branch.body),
             });
@@ -12497,6 +12502,26 @@ const BodyContext = struct {
         cell: DraftTypeCell,
     };
 
+    const PendingMatchRecordRestBinding = struct {
+        source_local: DraftLocalId,
+        source_node: NodeId,
+        rest_local: DraftLocalId,
+        rest_node: NodeId,
+        rest_cell: DraftTypeCell,
+        before_guard: bool,
+    };
+
+    const MatchPatternLowering = struct {
+        guard: ?DraftExprId,
+        body: DraftExprId,
+        record_rests: *std.ArrayList(PendingMatchRecordRestBinding),
+    };
+
+    const LoweredMatchRecordRestBindings = struct {
+        guard_bindings: DraftSpan(DraftStmtId),
+        body: DraftExprId,
+    };
+
     const PatternSuccessGuard = struct {
         root_pattern: checked.CheckedPatternId,
         root_node: NodeId,
@@ -13007,6 +13032,7 @@ const BodyContext = struct {
                 for (self.branchSpan(match_.branches)) |branch| {
                     try alternatives.append(self.allocator, try self.anyImpossibilityProof(&.{
                         self.patternSuccessImpossibilityProof(branch.pat),
+                        try self.anyStmtSpanImpossibilityProof(self.stmtSpan(branch.bindings)),
                         if (branch.guard) |guard| self.exprImpossibilityProof(guard) else null,
                         self.exprImpossibilityProof(branch.body),
                     }));
@@ -14499,6 +14525,9 @@ const BodyContext = struct {
                     defer added.deinit(self.allocator);
                     try self.bindPatLocals(branch.pat, bound, &added);
                     defer removeBoundLocals(bound, added.items);
+                    for (self.stmtSpan(branch.bindings)) |stmt| {
+                        if (try self.stmtDependsOnFreeLocal(stmt, target, bound, &added)) return true;
+                    }
                     if (branch.guard) |guard| {
                         if (try self.exprDependsOnFreeLocalInner(guard, target, bound)) return true;
                     }
@@ -40348,66 +40377,6 @@ const BodyContext = struct {
         }
     }
 
-    fn preRegisterPatternBindersFromCheckedTypes(
-        self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
-    ) Allocator.Error!void {
-        const pattern = self.view.bodies.pattern(pattern_id);
-        switch (pattern.data) {
-            .assign => |binder| {
-                if (self.currentOwnerPatternBinderLocal(binder) == null) {
-                    const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), try self.lowerTypeCell(pattern.ty), binder);
-                    try self.bindLocalName(local, binder);
-                    try self.binders.put(binder, local);
-                }
-            },
-            .as => |as| {
-                if (self.currentOwnerPatternBinderLocal(as.binder) == null) {
-                    const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), try self.lowerTypeCell(pattern.ty), as.binder);
-                    try self.bindLocalName(local, as.binder);
-                    try self.binders.put(as.binder, local);
-                }
-                try self.preRegisterPatternBindersFromCheckedTypes(as.pattern);
-            },
-            .applied_tag => |tag| {
-                for (tag.args) |arg| try self.preRegisterPatternBindersFromCheckedTypes(arg);
-            },
-            .nominal => |nominal| try self.preRegisterPatternBindersFromCheckedTypes(nominal.backing_pattern),
-            .record_destructure => |destructs| {
-                for (destructs) |destruct| {
-                    switch (destruct.kind) {
-                        .required, .sub_pattern => |child| try self.preRegisterPatternBindersFromCheckedTypes(child),
-                        .rest => |rest_pattern| {
-                            if (!self.patternIsIgnored(rest_pattern)) {
-                                Common.invariant("record rest pattern must be lowered to explicit rest-record construction before Monotype output");
-                            }
-                        },
-                    }
-                }
-            },
-            .list => |list| {
-                for (list.patterns) |child| try self.preRegisterPatternBindersFromCheckedTypes(child);
-                if (list.rest) |rest| {
-                    if (rest.pattern) |rest_pattern| try self.preRegisterPatternBindersFromCheckedTypes(rest_pattern);
-                }
-            },
-            .tuple => |items| {
-                for (items) |item| try self.preRegisterPatternBindersFromCheckedTypes(item);
-            },
-            .str_interpolation => |str| {
-                for (str.steps) |step| {
-                    if (step.capture) |capture| try self.preRegisterPatternBindersFromCheckedTypes(capture);
-                }
-            },
-            .pending,
-            .numeral_literal,
-            .str_literal,
-            .underscore,
-            .runtime_error,
-            => {},
-        }
-    }
-
     fn lowerPatternAtTypeCollectingLists(
         self: *BodyContext,
         pattern_id: checked.CheckedPatternId,
@@ -41241,8 +41210,6 @@ const BodyContext = struct {
                 if (try self.checkedPatternIsProvenUninhabited(pattern.pattern)) continue;
                 var branch_ctx = try self.childContext(self.current_fn_key);
                 errdefer branch_ctx.deinit();
-                try branch_ctx.preRegisterPatternBindersFromCheckedTypes(pattern.pattern);
-                try branch_ctx.applyAlternativeBinderRemaps(pattern.binderRemapsSlice(self.view.bodies));
                 try relateRequestComponent(
                     self.graph,
                     scrutinee_node,
@@ -41258,13 +41225,20 @@ const BodyContext = struct {
             }
         }
 
+        // Every pattern relation must settle before binder cells are projected.
+        // This gives derived binders such as record rest their exact graph node
+        // without allocating a checked-type approximation and rebinding it later.
+        for (pending.items) |*entry| {
+            try entry.ctx.preRegisterPatternBindersAtNode(entry.pattern.pattern, scrutinee_node);
+            try entry.ctx.applyAlternativeBinderRemaps(entry.pattern.binderRemapsSlice(self.view.bodies));
+        }
+
         // Select the shared result representation from every inhabited branch
-        // before any branch body is emitted. Match patterns already supplied
-        // their exact binder cells above, so branch-local lookups participate
-        // in this relation-production pass as ordinary producer evidence.
+        // before any branch body is emitted. Match patterns supplied their
+        // exact binder cells above, so branch-local lookups participate in this
+        // relation-production pass as ordinary producer evidence.
         if (value_selection) |selection| {
             for (pending.items) |*entry| {
-                try entry.ctx.rebindPreRegisteredPatternBindersAtNode(entry.pattern.pattern, scrutinee_node);
                 try entry.ctx.prepareControlFlowResultSelection(selection, entry.checked_body);
             }
         }
@@ -41276,17 +41250,12 @@ const BodyContext = struct {
                 entry.pattern.pattern,
                 scrutinee_node,
             );
-            try entry.ctx.rebindPreRegisteredPatternBindersAtNode(entry.pattern.pattern, scrutinee_node);
             entry.user_guard = if (entry.checked_guard) |guard_expr| try entry.ctx.lowerExpr(guard_expr) else null;
             const branch_output: MatchOutput = if (value_selection) |selection|
                 .{ .value = selection.selected }
             else
                 output;
-            entry.body = try entry.ctx.wrapComptimeBranch(
-                comptime_site,
-                entry.source_index,
-                try entry.ctx.lowerMatchBranchBody(entry.checked_body, branch_output),
-            );
+            entry.body = try entry.ctx.lowerMatchBranchBody(entry.checked_body, branch_output);
             if (value_selection) |selection| {
                 try self.includeControlFlowResult(selection, entry.body);
             }
@@ -41300,13 +41269,27 @@ const BodyContext = struct {
         for (pending.items) |*entry| {
             entry.ctx.reuse_pre_registered_pattern_binders = true;
             entry.ctx.allow_recursive_pattern_lowering_for_match = true;
-            const pat = try entry.ctx.lowerPatternAtNode(entry.pattern.pattern, scrutinee_node);
+            var record_rests = std.ArrayList(PendingMatchRecordRestBinding).empty;
+            defer record_rests.deinit(self.allocator);
+            const pat = try entry.ctx.lowerMatchPatternAtNode(
+                entry.pattern.pattern,
+                scrutinee_node,
+                entry.user_guard,
+                entry.body,
+                &record_rests,
+            );
             if (try entry.ctx.checkedPatternIsProvenUninhabited(entry.pattern.pattern)) continue;
             const guard = try entry.ctx.conjoinPatternLiteralGuards(entry.user_guard);
+            const materialized = try entry.ctx.lowerMatchRecordRestBindings(record_rests.items, entry.body);
             branches[index] = .{
                 .pat = pat,
+                .bindings = materialized.guard_bindings,
                 .guard = guard,
-                .body = entry.body,
+                .body = try entry.ctx.wrapComptimeBranch(
+                    comptime_site,
+                    entry.source_index,
+                    materialized.body,
+                ),
             };
             index += 1;
         }
@@ -45024,6 +45007,31 @@ const BodyContext = struct {
         pattern_id: checked.CheckedPatternId,
         node: NodeId,
     ) Allocator.Error!DraftPatId {
+        return try self.lowerPatternAtNodeInner(pattern_id, node, null);
+    }
+
+    fn lowerMatchPatternAtNode(
+        self: *BodyContext,
+        pattern_id: checked.CheckedPatternId,
+        node: NodeId,
+        guard: ?DraftExprId,
+        body: DraftExprId,
+        record_rests: *std.ArrayList(PendingMatchRecordRestBinding),
+    ) Allocator.Error!DraftPatId {
+        var match_lowering = MatchPatternLowering{
+            .guard = guard,
+            .body = body,
+            .record_rests = record_rests,
+        };
+        return try self.lowerPatternAtNodeInner(pattern_id, node, &match_lowering);
+    }
+
+    fn lowerPatternAtNodeInner(
+        self: *BodyContext,
+        pattern_id: checked.CheckedPatternId,
+        node: NodeId,
+        match_lowering: ?*MatchPatternLowering,
+    ) Allocator.Error!DraftPatId {
         if (self.patternNeedsExplicitBinding(pattern_id) and
             !self.allow_recursive_pattern_lowering_for_match)
         {
@@ -45039,7 +45047,7 @@ const BodyContext = struct {
             .as => |as| blk: {
                 const local = try self.materializePatternBinderAtCell(as.binder, cell);
                 break :blk .{ .as = .{
-                    .pattern = try self.lowerPatternAtNode(as.pattern, node),
+                    .pattern = try self.lowerPatternAtNodeInner(as.pattern, node, match_lowering),
                     .local = local,
                 } };
             },
@@ -45047,15 +45055,16 @@ const BodyContext = struct {
                 if (self.graph.content(node) == .named) {
                     const backing = self.graph.namedNodes(node).backing orelse
                         Common.invariant("nominal tag pattern had no runtime backing");
-                    break :blk .{ .nominal = try self.lowerConstructorPatternAtNode(pattern_id, backing.node) };
+                    break :blk .{ .nominal = try self.lowerPatternAtNodeInner(pattern_id, backing.node, match_lowering) };
                 }
                 const name = try self.builder.tagName(self.view, tag.name);
                 const payloads = try self.allocator.alloc(DraftPatId, tag.args.len);
                 defer self.allocator.free(payloads);
                 for (tag.args, 0..) |arg, payload_index| {
-                    payloads[payload_index] = try self.lowerPatternAtNode(
+                    payloads[payload_index] = try self.lowerPatternAtNodeInner(
                         arg,
                         try self.graph.tagPayloadNode(node, name, payload_index),
+                        match_lowering,
                     );
                 }
                 break :blk .{ .tag = .{
@@ -45066,42 +45075,24 @@ const BodyContext = struct {
             .nominal => |nominal| blk: {
                 const backing = self.graph.namedNodes(node).backing orelse
                     Common.invariant("nominal pattern had no runtime backing");
-                break :blk .{ .nominal = try self.lowerPatternAtNode(nominal.backing_pattern, backing.node) };
+                break :blk .{ .nominal = try self.lowerPatternAtNodeInner(nominal.backing_pattern, backing.node, match_lowering) };
             },
-            .record_destructure => |destructs| blk: {
-                if (self.graph.content(node) == .named) {
-                    const backing = self.graph.namedNodes(node).backing orelse
-                        Common.invariant("nominal record pattern had no runtime backing");
-                    break :blk .{ .nominal = try self.lowerConstructorPatternAtNode(pattern_id, backing.node) };
-                }
-                var lowered = std.ArrayList(DraftRecordDestruct).empty;
-                defer lowered.deinit(self.allocator);
-                for (destructs) |destruct| {
-                    const child = switch (destruct.kind) {
-                        .required, .sub_pattern => |child| child,
-                        .rest => |rest| {
-                            if (self.patternIsIgnored(rest)) continue;
-                            Common.invariant("record rest pattern must be lowered to explicit rest-record construction before Monotype output");
-                        },
-                    };
-                    const name = try self.builder.recordFieldName(self.view, destruct.label);
-                    try lowered.append(self.allocator, .{
-                        .name = name,
-                        .pattern = try self.lowerPatternAtNode(child, try self.graph.recordFieldNode(node, name)),
-                    });
-                }
-                break :blk .{ .record = try self.addRecordDestructSpan(lowered.items) };
-            },
+            .record_destructure => |destructs| return try self.lowerRecordPatternAtNodeInner(
+                pattern_id,
+                node,
+                destructs,
+                match_lowering,
+            ),
             .list => |list| blk: {
                 const elem_node = try self.graph.listElementNode(node);
                 const lowered = try self.allocator.alloc(DraftPatId, list.patterns.len);
                 defer self.allocator.free(lowered);
                 for (list.patterns, 0..) |child, child_index| {
-                    lowered[child_index] = try self.lowerPatternAtNode(child, elem_node);
+                    lowered[child_index] = try self.lowerPatternAtNodeInner(child, elem_node, match_lowering);
                 }
                 const rest: ?DraftListRestPattern = if (list.rest) |rest| .{
                     .index = rest.index,
-                    .pattern = if (rest.pattern) |rest_pattern| try self.lowerPatternAtNode(rest_pattern, node) else null,
+                    .pattern = if (rest.pattern) |rest_pattern| try self.lowerPatternAtNodeInner(rest_pattern, node, match_lowering) else null,
                 } else null;
                 break :blk .{ .list = .{
                     .patterns = try self.addPatSpan(lowered),
@@ -45112,14 +45103,14 @@ const BodyContext = struct {
                 if (self.graph.content(node) == .named) {
                     const backing = self.graph.namedNodes(node).backing orelse
                         Common.invariant("nominal tuple pattern had no runtime backing");
-                    break :blk .{ .nominal = try self.lowerConstructorPatternAtNode(pattern_id, backing.node) };
+                    break :blk .{ .nominal = try self.lowerPatternAtNodeInner(pattern_id, backing.node, match_lowering) };
                 }
                 const item_nodes = try self.graph.tupleItemNodes(node);
                 if (items.len != item_nodes.len) Common.invariant("tuple pattern arity differed from graph tuple arity");
                 const lowered = try self.allocator.alloc(DraftPatId, items.len);
                 defer self.allocator.free(lowered);
                 for (items, item_nodes, 0..) |item, item_node, item_index| {
-                    lowered[item_index] = try self.lowerPatternAtNode(item, item_node);
+                    lowered[item_index] = try self.lowerPatternAtNodeInner(item, item_node, match_lowering);
                 }
                 break :blk .{ .tuple = try self.addPatSpan(lowered) };
             },
@@ -45135,6 +45126,130 @@ const BodyContext = struct {
             .underscore => .wildcard,
         };
         return try self.addPatWithTypeCell(cell, data);
+    }
+
+    fn lowerRecordPatternAtNodeInner(
+        self: *BodyContext,
+        pattern_id: checked.CheckedPatternId,
+        node: NodeId,
+        destructs: []const checked.CheckedRecordDestruct,
+        match_lowering: ?*MatchPatternLowering,
+    ) Allocator.Error!DraftPatId {
+        const cell = DraftTypeCell.fromGraphNode(node);
+        if (self.graph.content(node) == .named) {
+            const backing = self.graph.namedNodes(node).backing orelse
+                Common.invariant("nominal record pattern had no runtime backing");
+            if (backing.node == node) Common.invariant("nominal record pattern backing did not advance");
+            return try self.addPatWithTypeCell(cell, .{ .nominal = try self.lowerRecordPatternAtNodeInner(
+                pattern_id,
+                backing.node,
+                destructs,
+                match_lowering,
+            ) });
+        }
+
+        var lowered = std.ArrayList(DraftRecordDestruct).empty;
+        defer lowered.deinit(self.allocator);
+        var source_local: ?DraftLocalId = null;
+        for (destructs) |destruct| {
+            switch (destruct.kind) {
+                .required, .sub_pattern => |child| {
+                    const name = try self.builder.recordFieldName(self.view, destruct.label);
+                    try lowered.append(self.allocator, .{
+                        .name = name,
+                        .pattern = try self.lowerPatternAtNodeInner(
+                            child,
+                            try self.graph.recordFieldNode(node, name),
+                            match_lowering,
+                        ),
+                    });
+                },
+                .rest => |rest| {
+                    if (self.patternIsIgnored(rest)) continue;
+                    const lowering = match_lowering orelse
+                        Common.invariant("record rest pattern must be lowered to explicit rest-record construction before Monotype output");
+                    const rest_binder = switch (self.view.bodies.pattern(rest).data) {
+                        .assign => |binder| binder,
+                        else => Common.invariant("named record rest was not an assignment pattern"),
+                    };
+                    const rest_local = self.currentOwnerPatternBinderLocal(rest_binder) orelse
+                        Common.invariant("record rest binder was not pre-registered at its exact graph node");
+                    const needed_by_guard = if (lowering.guard) |guard|
+                        try self.exprDependsOnFreeLocal(guard, rest_local)
+                    else
+                        false;
+                    const needed_by_body = try self.exprDependsOnFreeLocal(lowering.body, rest_local);
+                    if (!needed_by_guard and !needed_by_body) continue;
+
+                    const captured = source_local orelse blk: {
+                        const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), cell, null);
+                        source_local = local;
+                        break :blk local;
+                    };
+                    const rest_cell = self.localTypeCell(rest_local);
+                    try lowering.record_rests.append(self.allocator, .{
+                        .source_local = captured,
+                        .source_node = node,
+                        .rest_local = rest_local,
+                        .rest_node = try rest_cell.toGraphNode(self.graph),
+                        .rest_cell = rest_cell,
+                        .before_guard = needed_by_guard,
+                    });
+                },
+            }
+        }
+
+        const record_pattern = try self.addPatWithTypeCell(cell, .{
+            .record = try self.addRecordDestructSpan(lowered.items),
+        });
+        const captured = source_local orelse return record_pattern;
+        return try self.addPatWithTypeCell(cell, .{ .as = .{
+            .pattern = record_pattern,
+            .local = captured,
+        } });
+    }
+
+    fn lowerMatchRecordRestBindings(
+        self: *BodyContext,
+        pending: []const PendingMatchRecordRestBinding,
+        original_body: DraftExprId,
+    ) Allocator.Error!LoweredMatchRecordRestBindings {
+        var guard_bindings = std.ArrayList(DraftStmtId).empty;
+        defer guard_bindings.deinit(self.allocator);
+        var body_bindings = std.ArrayList(DraftStmtId).empty;
+        defer body_bindings.deinit(self.allocator);
+
+        for (pending) |binding| {
+            const source_cell = DraftTypeCell.fromGraphNode(binding.source_node);
+            const source = try self.addExprWithTypeCell(source_cell, .{ .local = binding.source_local });
+            const value = try self.lowerRecordRestValueWithTypeCell(
+                source,
+                binding.source_node,
+                binding.rest_cell,
+                binding.rest_node,
+            );
+            const stmt = try self.addStmt(.{ .let_ = .{
+                .pat = try self.addPatWithTypeCell(binding.rest_cell, .{ .bind = binding.rest_local }),
+                .value = value,
+            } });
+            if (binding.before_guard) {
+                try guard_bindings.append(self.allocator, stmt);
+            } else {
+                try body_bindings.append(self.allocator, stmt);
+            }
+        }
+
+        const body = if (body_bindings.items.len == 0)
+            original_body
+        else
+            try self.addExprWithTypeCell(self.exprTypeCell(original_body), .{ .block = .{
+                .statements = try self.addStmtSpan(body_bindings.items),
+                .final_expr = original_body,
+            } });
+        return .{
+            .guard_bindings = try self.addStmtSpan(guard_bindings.items),
+            .body = body,
+        };
     }
 
     fn lowerConstructorPatternAtNode(
