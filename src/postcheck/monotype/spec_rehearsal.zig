@@ -1993,6 +1993,40 @@ pub const Rehearsal = struct {
         return self.component_pool.items[start..];
     }
 
+    /// Declare a producer representation a specialization record carries for
+    /// its return position, unpacking the record's component tuple into the
+    /// pooled slice a declaration needs. Returns the floor to retract at with
+    /// `retractConsumerInputs`, or null when the declaration could not be
+    /// stated.
+    pub fn declareRecordedProducerInput(
+        self: *Rehearsal,
+        address: CheckedAddress,
+        representation: direct_translate.ProducerRepresentation,
+        components_tuple: ?Type.TypeId,
+    ) ?usize {
+        var stated = representation;
+        if (components_tuple) |tuple| {
+            const span = switch (self.types.get(tuple)) {
+                .tuple => |items| self.types.span(items),
+                else => return null,
+            };
+            const len = GuardedList.borrowLen(span);
+            const start = self.component_pool.items.len;
+            var index: usize = 0;
+            while (index < len) : (index += 1) {
+                self.component_pool.append(self.allocator, GuardedList.at(span, index)) catch return null;
+            }
+            stated.components = self.component_pool.items[start..];
+        }
+        const floor = self.translator.representationInputCount();
+        self.translator.declareRepresentationInput(.{
+            .position = .{ .module_bytes = address.module_bytes, .type_id = address.type_id },
+            .representation = stated,
+        }) catch return null;
+        census.bump("spec_record_producer_declared");
+        return floor;
+    }
+
     /// The longest minted-iterator chain a producer builds before running the
     /// tail forced-dynamic, matching the generator's own cap.
     const max_minted_chain_depth: u8 = 16;
