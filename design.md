@@ -3405,10 +3405,10 @@ that constrained graph.
 The long-term invariant is:
 
 ```text
-one connected open specialization solve group
-  -> one Monotype instantiation graph
-  -> one cloned/constrained checked type graph
-  -> one or more independently identified closed Monotype bodies
+one procedure specialization request
+  -> one complete checked interface-relation closure
+  -> one exact closed specialization key
+  -> one independently owned Monotype body on cache miss
 ```
 
 This is deliberately different from treating a checked expression id as a
@@ -3418,22 +3418,33 @@ that checked module. The same checked function template may therefore produce
 many Monotype bodies, and the same checked nested lambda site may produce many
 nested Monotype functions, each with a different monomorphic function type.
 
-Each connected solve group owns an instantiation graph: union-find nodes with
-explicit row-extension links, created by instantiating checked types on first
-touch. A group begins with one specialization. A procedure request whose
-complete interface is already resolved remains a separate specialization and
-receives its own graph after the caller seals. A request whose interface is
-still open joins the requester's live group, because the callee body can own
-checked constraints needed to finish that interface. This grouping is the
-explicit dependency relation between specializations, not a structural guess;
-it also keeps recursive open dependencies in one fixed-point solve.
+Each specialization owns an instantiation graph: union-find nodes with explicit
+row-extension links, created by instantiating checked types on first touch. A
+context-free callee body never joins the caller's graph. Instead CheckedModule
+stores a complete specialization-interface relation table for every procedure
+template. Its records explicitly name checked equalities,
+procedure/result relations, ordinary call interfaces and direct targets, and
+generalized local-procedure uses. A generalized scope also records its exact
+checked scheme root, so evidence paths are replayed against the same callable
+shape that authored them. Static-dispatch relation records remain the separate
+explicit authority for dispatch constraints.
+The `CheckedBodyStore.contains_diagnostic_error` column excludes rejected
+expression sites from this relation table; an error-containing checked type is
+not a valid specialization constraint and never reaches Monotype instantiation.
+Monotype consumes both relation sources before applying defaults or sealing a
+specialization request. It does not scan a checked body to rediscover them.
+Interface replay materializes local-method evidence from the checked method
+declaration and callable type only. Draft-local capture contexts are Monotype
+BodyDraft data, are intentionally absent from durable specialization evidence, and
+must be attached when the real dispatch call lowers; declaration-only replay
+evidence can never be consumed by body emission.
 
-Within the group, each body instantiation context caches nodes by `(checked
+Within the specialization, each body instantiation context caches nodes by `(checked
 module id, checked type id)`. The address is the checked identity of the type
 variable/content in that body specialization. It is not a structural digest,
 source name, runtime layout, object symbol, or generated procedure id. Nodes
-begin unresolved. As the group is lowered, explicit evidence from checked data
-unifies those nodes:
+begin unresolved. As relations are produced, explicit evidence from checked
+data unifies those nodes:
 
 - the requested root function/value type constrains the checked root type;
 - lambda and closure expected function types constrain the nested function
@@ -3448,6 +3459,29 @@ unifies those nodes:
   arguments;
 - pattern lowering constrains checked pattern types to the monomorphic value
   being matched.
+
+Direct calls in the interface program are dependency edges to the callee's
+interface program, not requests to lower that callee's body. Replay first
+applies all relations owned by the current scope, then traverses those explicit
+dependencies. This ordering makes the caller's complete requested interface
+available before any dependency identity is chosen. Transitive replay reaches
+a fixed point across arbitrary wrapper depth and recursive call graphs without
+making source syntax or body-lowering order part of type meaning.
+
+Repeated open dependency requests are memoized by the complete procedure
+family (template, method scope, and checked source-function key), exact evidence
+topology, and an immutable provisional Monotype view of the function request
+after the caller-owned relations have been applied. Digests select an expected
+O(1) bucket only; exact evidence equality and exact structural type equality are
+the collision authorities. The first request computes the transitive relation
+closure. Equivalent requests retain independent graph cells while relations
+are still being produced, then independently consume the representative's
+final interface after the whole closure is known. An active exact memo entry is
+a recursive edge and joins the active representative. Requests with different
+concrete interfaces, checked source identities, method scopes, or evidence can
+never share an entry. Work is therefore proportional to relation sites plus
+unique exact provisional requests, rather than to the number of duplicate call
+paths through the same interface problem.
 
 Those constraints are not a fallback mechanism and are not best-effort
 inference after checking. They are the Monotype-stage representation of checked
@@ -3559,18 +3593,24 @@ During active Monotype specialization, unresolved checked variables and row
 extensions remain instantiation graph nodes. They are not represented by
 durable Monotype `TypeId`s.
 
-Type-shaped inspection during relation production is allowed only for a fully
-resolved graph node. It materializes an immutable active snapshot: later graph
-relations invalidate the snapshot cache and a subsequent inspection allocates
-a fresh snapshot rather than refilling an observed `TypeId`. The draft retains
-the graph node, not the snapshot id, and final sealing allocates fresh durable
-ids. Consequently neither an unresolved variable nor an open row can ever be
-observed as `tag_union []`, and no `TypeId` can change from that shape to a
-different type after a consumer has seen it.
+Type-shaped inspection that can escape relation production or become durable
+specialization identity is allowed only for a fully resolved graph node. It
+materializes an immutable active snapshot: later graph relations invalidate the
+snapshot cache and a subsequent inspection allocates a fresh snapshot rather
+than refilling an observed `TypeId`. The draft retains the graph node, not the
+snapshot id, and final sealing allocates fresh durable ids. Consequently no
+durable `TypeId` can change shape after a consumer has seen it.
+
+Interface-replay memo lookup has one narrower inspection operation. It may
+materialize an unresolved request as an immutable provisional scratch view,
+applying defaults in that view only. The digest is only a bucket index; exact
+structural equality is collision authority, the scratch type is never emitted,
+and subsequent relations still act on the original graph node.
 
 The only time an unresolved checked variable with an empty-tag-union row
 default may become durable `tag_union []` is final graph sealing, after every
-checked relation and specialization demand for that body has been applied.
+checked interface relation and specialization demand for that body has been
+applied.
 After sealing, `tag_union []` is closed and uninhabited. Values such as `[]` can
 still be represented as `List(tag_union [])` because they contain no items,
 and code that would need an actual item value must have constrained the
@@ -3611,37 +3651,32 @@ no type id that is visible in Monotype IR is later refilled or changed. This is
 ordinary type solving inside one stage. Once Monotype IR is output, no
 unresolved node remains reachable and no later stage may change a type.
 
-A Monotype imported into another solve group's graph is a finished snapshot,
+A Monotype imported into another specialization graph is a finished snapshot,
 never a refreshable view: a specialization that needs more than its requested
 type is a unification conflict, not a silent rewrite of another group's final
-type. A procedure-template request with a fully resolved interface therefore
-defers until the requesting group is final, when its specialization key is
-stable. A request with an unresolved interface cannot be deferred across that
-seal: the callee body may own constraints required to close the request. That
-callee joins the current live solve group and lowers at the request site, as do
-nested functions whose bodies pin signature variables used by the remaining
-group.
+type. Every context-free procedure-template request defers until the requesting
+graph is final, when its specialization key is stable. Constraints formerly
+owned only by an unresolved callee body are present in the checked interface
+program and have already participated in the request's relation closure.
+Lexically context-dependent local procedures still lower in their owning graph
+because that lexical context is an explicit input rather than a context-free
+specialization key.
 
 A deferred procedure-template request has two distinct sources of type
 evidence. Caller value flow owns the request's function arguments and return;
 the requested checked template owns explicit type-constructor arguments that
-may have no value-level occurrence, including phantom nominal arguments. Before
-the requester seals, Monotype traverses matching request and checked structure
-without relating ordinary value positions, and constrains only named type
-arguments and the explicit item arguments of builtin container types.
-Unifying the two complete function roots here is forbidden: two sibling
-requests can legitimately carry different concrete value arguments, and a
-callee checked root must not make those caller-owned cells aliases. The callee
-later creates its own fresh instantiation graph and constrains its complete
-checked root against the sealed request in that graph.
+may have no value-level occurrence, including phantom nominal arguments. The
+caller first relates its complete request to one fresh checked root instance,
+then replays the template's interface program through that instance. Each
+sibling request receives a fresh instance, so different concrete value
+arguments never become aliases merely because they call the same checked
+procedure. Exact replay memo hits copy the final interface back into each
+request independently; they do not union sibling request cells.
 
-A resolved deferred request stores only the caller-owned interface and a draft
-call target. Once the solve-group graph is frozen, the interface is sealed
-exactly once and the target maps directly to an existing specialization or to a
-body lowered in a fresh graph. An unresolved request instead adds the callee's
-body and definition to the current group draft; all bodies in that group seal
-together, but each procedure retains its own specialization identity, function,
-definition, and cache record. Generated structural work may retain explicit
+A deferred request stores only the caller-owned interface and a draft call
+target. Once the caller graph is frozen, the interface is sealed exactly once
+and the target maps directly to an existing exact specialization or to a body
+lowered in a fresh graph on miss. Generated structural work may retain explicit
 lexical context when that context is one of its inputs, but it follows the same
 procedure-body ownership rule; encoding and decoding do not define a separate
 specialization path.
@@ -3878,18 +3913,22 @@ Creating a specialization performs root instantiation before body lowering:
 ```text
 create fresh instantiation context
 constrain checked source function type to requested Monotype function type
+replay the complete checked specialization-interface relation closure
+seal and look up the exact specialization identity
 lower arguments and body through that context
 emit a closed Monotype definition
 ```
 
 Calls do not mutate the callee's checked module. A closed call creates or reuses
 a callee specialization by constraining a fresh callee instantiation from the
-caller's instantiated argument and result types. An open call joins the live
-solve group described above, and its caller and callee contexts communicate
-through their shared explicit graph relations. This is why generic functions
-specialize predictably across module boundaries: the checked body remains
-immutable, and every monomorphic specialization records its own closed
-instantiation even when several bodies solve in one open group.
+caller's instantiated argument and result types. An open call remains a
+caller-owned request while the checked interface programs communicate all
+callee-owned constraints through explicit graph relations. The request seals
+before any context-free callee body lowers. This is why generic functions
+specialize predictably across module boundaries: checked bodies remain
+immutable, every monomorphic specialization records its own closed
+instantiation, and interface solving never depends on lowering a body into its
+caller.
 
 The specialization store must make this lookup direct. It must not scan all
 specializations for a callable family and recompute recursive type digests while
@@ -3993,8 +4032,9 @@ const MonoTypeNode = extern struct {
 ```
 
 The mutable instantiation graph may use union-find, row-extension links, and
-work queues while solving one open specialization group. Its final output is
-an immutable `TypeId` in `MonoTypeStore`. After that point, the type node is never refilled.
+work queues while solving one specialization's interface and body relations.
+Its final output is an immutable `TypeId` in `MonoTypeStore`. After that point,
+the type node is never refilled.
 Rows are normalized once, with field and tag names in explicit sorted order,
 and the type digest is stored beside the node when the node is interned. Parent
 digests are computed from child digests, so structurally growing records and
@@ -4023,8 +4063,8 @@ after the first request, and growing structural accumulator types add only the
 new record/function nodes instead of redigesting every previous layer.
 
 Open instantiation graphs do not write directly into final Monotype body
-sections. While a solve group is active, lowering writes to a `BodyDraft` owned
-by that graph. A draft mirrors the final
+sections. While a specialization graph is active, lowering writes to a
+`BodyDraft` owned by that graph. A draft mirrors the final
 Monotype sections enough for lowering to refer to expressions, patterns, locals,
 definitions, nested definitions, side-pool spans, and function signatures, but
 all type-bearing fields use a draft type cell:
