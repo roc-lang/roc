@@ -26101,7 +26101,18 @@ pub const DispatchEvidenceFailure = struct {
         template_relation_plan_refs_out_of_bounds,
         template_dispatch_partition_mismatch,
         template_relation_metadata_length_mismatch,
+        template_specialization_relations_out_of_bounds,
         template_evidence_params_out_of_bounds,
+        specialization_scope_parent_invalid,
+        specialization_scope_scheme_root_out_of_bounds,
+        specialization_scope_expr_out_of_bounds,
+        specialization_scope_evidence_params_out_of_bounds,
+        specialization_relation_scope_out_of_bounds,
+        specialization_relation_type_out_of_bounds,
+        specialization_relation_call_args_out_of_bounds,
+        specialization_relation_value_ref_out_of_bounds,
+        specialization_relation_direct_target_invalid,
+        specialization_relation_local_proc_use_invalid,
         evidence_param_path_out_of_bounds,
         evidence_param_path_invalid_kind,
         evidence_param_path_invalid_shape,
@@ -27042,6 +27053,9 @@ pub const CheckedModuleArtifact = struct {
             if (@as(u64, template.dispatch_relations.start) + template.dispatch_relations.len > table.dispatch_relation_refs.len) {
                 return .{ .kind = .template_relation_plan_refs_out_of_bounds, .index = @intCast(i) };
             }
+            if (@as(u64, template.specialization_interface_relations.start) + template.specialization_interface_relations.len > templates.specialization_interface_relations.len) {
+                return .{ .kind = .template_specialization_relations_out_of_bounds, .index = @intCast(i) };
+            }
             if (template.direct_dispatch_plans.len + template.dispatch_relations.len != template.static_dispatch_plans.len) {
                 return .{ .kind = .template_dispatch_partition_mismatch, .index = @intCast(i) };
             }
@@ -27070,6 +27084,105 @@ pub const CheckedModuleArtifact = struct {
             }
             if (@as(u64, template.evidence_params.start) + template.evidence_params.len > templates.evidence_params_pool.len) {
                 return .{ .kind = .template_evidence_params_out_of_bounds, .index = @intCast(i) };
+            }
+        }
+        for (templates.dispatch_scopes, 0..) |scope, i| {
+            if (scope.parent) |parent| {
+                if (@intFromEnum(parent) >= i) {
+                    return .{ .kind = .specialization_scope_parent_invalid, .index = @intCast(i) };
+                }
+            }
+            if (@intFromEnum(scope.scheme_root) >= self.checked_types.payloadCount()) {
+                return .{ .kind = .specialization_scope_scheme_root_out_of_bounds, .index = @intCast(i) };
+            }
+            if (@intFromEnum(scope.checked_expr) >= self.checked_bodies.exprCount()) {
+                return .{ .kind = .specialization_scope_expr_out_of_bounds, .index = @intCast(i) };
+            }
+            if (@as(u64, scope.evidence_params.start) + scope.evidence_params.len > templates.evidence_params_pool.len) {
+                return .{ .kind = .specialization_scope_evidence_params_out_of_bounds, .index = @intCast(i) };
+            }
+        }
+        for (templates.specialization_interface_relations, 0..) |relation, i| {
+            switch (relation.scope) {
+                .root => {},
+                .generalized => |scope| if (@intFromEnum(scope) >= templates.dispatch_scopes.len) {
+                    return .{ .kind = .specialization_relation_scope_out_of_bounds, .index = @intCast(i) };
+                },
+            }
+            switch (relation.data) {
+                .type_equality => |equality| {
+                    if (@intFromEnum(equality.left) >= self.checked_types.payloadCount() or
+                        @intFromEnum(equality.right) >= self.checked_types.payloadCount())
+                    {
+                        return .{ .kind = .specialization_relation_type_out_of_bounds, .index = @intCast(i) };
+                    }
+                },
+                .procedure => |procedure| {
+                    if (@intFromEnum(procedure.fn_ty) >= self.checked_types.payloadCount() or
+                        @intFromEnum(procedure.body_ret_ty) >= self.checked_types.payloadCount())
+                    {
+                        return .{ .kind = .specialization_relation_type_out_of_bounds, .index = @intCast(i) };
+                    }
+                },
+                .call => |call| {
+                    if (@intFromEnum(call.callable_ty) >= self.checked_types.payloadCount() or
+                        @intFromEnum(call.callee_ty) >= self.checked_types.payloadCount() or
+                        @intFromEnum(call.ret_ty) >= self.checked_types.payloadCount())
+                    {
+                        return .{ .kind = .specialization_relation_type_out_of_bounds, .index = @intCast(i) };
+                    }
+                    if (@as(u64, call.args.start) + call.args.len > templates.specialization_interface_types.len) {
+                        return .{ .kind = .specialization_relation_call_args_out_of_bounds, .index = @intCast(i) };
+                    }
+                    for (templates.specializationRelationTypes(call.args)) |arg_ty| {
+                        if (@intFromEnum(arg_ty) >= self.checked_types.payloadCount()) {
+                            return .{ .kind = .specialization_relation_type_out_of_bounds, .index = @intCast(i) };
+                        }
+                    }
+                    if (call.direct_target) |target| {
+                        const raw_target = @intFromEnum(target);
+                        if (raw_target >= self.resolved_value_refs.records.len) {
+                            return .{ .kind = .specialization_relation_value_ref_out_of_bounds, .index = @intCast(i) };
+                        }
+                        switch (self.resolved_value_refs.records[raw_target].ref) {
+                            .top_level_proc,
+                            .imported_proc,
+                            .hosted_proc,
+                            .promoted_top_level_proc,
+                            .local_proc,
+                            => {},
+                            .platform_required_proc => |required| {
+                                const source_fn_ty = required.procedure.source_fn_ty_payload orelse {
+                                    return .{ .kind = .specialization_relation_direct_target_invalid, .index = @intCast(i) };
+                                };
+                                if (@intFromEnum(source_fn_ty) >= self.checked_types.payloadCount()) {
+                                    return .{ .kind = .specialization_relation_type_out_of_bounds, .index = @intCast(i) };
+                                }
+                            },
+                            else => return .{ .kind = .specialization_relation_direct_target_invalid, .index = @intCast(i) },
+                        }
+                    }
+                },
+                .local_proc_use => |ref_id| {
+                    const raw_ref = @intFromEnum(ref_id);
+                    if (raw_ref >= self.resolved_value_refs.records.len) {
+                        return .{ .kind = .specialization_relation_value_ref_out_of_bounds, .index = @intCast(i) };
+                    }
+                    const record = self.resolved_value_refs.records[raw_ref];
+                    if (@intFromEnum(record.checked_ty) >= self.checked_types.payloadCount()) {
+                        return .{ .kind = .specialization_relation_type_out_of_bounds, .index = @intCast(i) };
+                    }
+                    const local = switch (record.ref) {
+                        .local_proc => |local| local,
+                        else => return .{ .kind = .specialization_relation_local_proc_use_invalid, .index = @intCast(i) },
+                    };
+                    const local_scope = local.dispatch_scope orelse {
+                        return .{ .kind = .specialization_relation_local_proc_use_invalid, .index = @intCast(i) };
+                    };
+                    if (@intFromEnum(local_scope) >= templates.dispatch_scopes.len) {
+                        return .{ .kind = .specialization_relation_local_proc_use_invalid, .index = @intCast(i) };
+                    }
+                },
             }
         }
         for (templates.evidence_params_pool, 0..) |param, i| {
