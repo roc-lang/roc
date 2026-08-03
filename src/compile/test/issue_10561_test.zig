@@ -11,7 +11,7 @@ const harness = @import("lower_to_lir_harness.zig");
 /// rebuilds it so the receiver is a known constructor at every link, each link
 /// carries its own closure, and the result depends on the hosted argument so the
 /// chain cannot be folded away at compile time.
-fn liftedExprCountForChain(allocator: std.mem.Allocator, links: usize) !usize {
+fn liftedExprCountForChain(allocator: std.mem.Allocator, links: usize) harness.LowerToLirHarnessError!usize {
     var body: std.ArrayList(u8) = .empty;
     defer body.deinit(allocator);
 
