@@ -35,7 +35,10 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app [main!] {
+	pf: platform "../main.roc",
+	roc: "nightly-2026-July-31-123c5d7",
+}
 ~~~
 # CANONICALIZE
 ~~~clojure

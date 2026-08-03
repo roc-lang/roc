@@ -63,7 +63,10 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app [a1!, a2!] {
+	pf: platform "../basic-cli/main.roc",
+	a: "a",
+}
 ~~~
 # CANONICALIZE
 ~~~clojure

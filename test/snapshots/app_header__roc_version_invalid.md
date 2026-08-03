@@ -49,7 +49,10 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app [main!] {
+	pf: platform "../main.roc",
+	roc: "yesterday's build",
+}
 ~~~
 # CANONICALIZE
 ~~~clojure

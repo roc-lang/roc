@@ -100,7 +100,16 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+package
+	[a!, b!]
+	{
+		a: "a",
+		b: "b",
+	}
+
+a! : Str => Str
+
+b! : Str => Str
 ~~~
 # CANONICALIZE
 ~~~clojure

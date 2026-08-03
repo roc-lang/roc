@@ -46,7 +46,10 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-app [] { f: platform "", r: "" }
+app [] {
+	f: platform "",
+	r: "",
+}
 ~~~
 # CANONICALIZE
 ~~~clojure

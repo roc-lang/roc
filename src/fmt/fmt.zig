@@ -2584,7 +2584,7 @@ const Formatter = struct {
                     try fmt.push(' ');
                 }
                 const packages = fmt.ast.store.getCollection(a.packages);
-                const packages_multiline = fmt.collectionWillBeMultiline(AST.RecordField.Idx, a.packages);
+                const packages_multiline = fmt.headerPackagesWillBeMultiline(a.packages);
                 try fmt.push('{');
                 if (packages_multiline) {
                     fmt.curr_indent += 1;
@@ -2723,7 +2723,7 @@ const Formatter = struct {
                 const packagesItems = fmt.ast.store.recordFieldSlice(.{ .span = packages.span });
                 try fmt.formatCollection(
                     packages.region,
-                    packages.layout,
+                    if (fmt.headerPackagesWillBeMultiline(p.packages)) .expanded else packages.layout,
                     .curly,
                     AST.RecordField.Idx,
                     packagesItems,
@@ -2826,7 +2826,7 @@ const Formatter = struct {
                 }
                 try fmt.formatCollection(
                     packages.region,
-                    packages.layout,
+                    if (fmt.headerPackagesWillBeMultiline(p.packages)) .expanded else packages.layout,
                     .curly,
                     AST.RecordField.Idx,
                     fmt.ast.store.recordFieldSlice(.{ .span = packages.span }),
@@ -3847,7 +3847,7 @@ const Formatter = struct {
                 if (fmt.regionHasInteriorComment(header.to_tokenized_region())) return true;
                 switch (header) {
                     .app => |a| return fmt.collectionWillBeMultiline(AST.ExposedItem.Idx, a.provides) or
-                        fmt.collectionWillBeMultiline(AST.RecordField.Idx, a.packages),
+                        fmt.headerPackagesWillBeMultiline(a.packages),
                     .module => |m| return fmt.collectionWillBeMultiline(AST.ExposedItem.Idx, m.exposes),
                     .hosted => |h| return fmt.collectionWillBeMultiline(AST.ExposedItem.Idx, h.exposes),
                     .package => |p| {
@@ -3855,7 +3855,7 @@ const Formatter = struct {
                             return true;
                         }
 
-                        return fmt.collectionWillBeMultiline(AST.RecordField.Idx, p.packages);
+                        return fmt.headerPackagesWillBeMultiline(p.packages);
                     },
                     .platform => return true,
                     else => return false,
@@ -3922,6 +3922,15 @@ const Formatter = struct {
         }
 
         return false;
+    }
+
+    /// Whether a header's dependency record (the `{ ... }` of an `app`, `package`, or
+    /// `platform` header) is laid out multiline. Beyond the usual reasons a collection
+    /// goes multiline, more than one entry always forces it: those entries are long
+    /// package URLs, so a single line of them is unreadable.
+    fn headerPackagesWillBeMultiline(fmt: *Formatter, idx: AST.Collection.Idx) bool {
+        if (fmt.ast.store.getCollection(idx).span.len > 1) return true;
+        return fmt.collectionWillBeMultiline(AST.RecordField.Idx, idx);
     }
 
     fn collectionWillBeMultiline(fmt: *Formatter, comptime T: type, idx: AST.Collection.Idx) bool {
@@ -4013,6 +4022,56 @@ test "issue 10480: package qualifier preserved in exposed aliased imports" {
     defer std.testing.allocator.free(result);
 
     try std.testing.expectEqualStrings("module [o as n, F.s as I]\n", result);
+}
+
+test "app header dependency record expands once it has more than one entry" {
+    const single = try moduleFmtsStable(
+        std.testing.allocator,
+        "app [main!] { pf: platform \"../platform/main.roc\" }",
+        false,
+    );
+    defer std.testing.allocator.free(single);
+    try std.testing.expectEqualStrings("app [main!] { pf: platform \"../platform/main.roc\" }\n", single);
+
+    const multiple = try moduleFmtsStable(
+        std.testing.allocator,
+        "app [main!] { pf: platform \"../platform/main.roc\", json: \"../json/main.roc\" }",
+        false,
+    );
+    defer std.testing.allocator.free(multiple);
+    try std.testing.expectEqualStrings(
+        "app [main!] {\n" ++
+            "\tpf: platform \"../platform/main.roc\",\n" ++
+            "\tjson: \"../json/main.roc\",\n" ++
+            "}\n",
+        multiple,
+    );
+}
+
+test "package header dependency record expands once it has more than one entry" {
+    const single = try moduleFmtsStable(
+        std.testing.allocator,
+        "package [Foo] { json: \"../json/main.roc\" }",
+        false,
+    );
+    defer std.testing.allocator.free(single);
+    try std.testing.expectEqualStrings("package [Foo] { json: \"../json/main.roc\" }\n", single);
+
+    const multiple = try moduleFmtsStable(
+        std.testing.allocator,
+        "package [Foo] { json: \"../json/main.roc\", csv: \"../csv/main.roc\" }",
+        false,
+    );
+    defer std.testing.allocator.free(multiple);
+    try std.testing.expectEqualStrings(
+        "package\n" ++
+            "\t[Foo]\n" ++
+            "\t{\n" ++
+            "\t\tjson: \"../json/main.roc\",\n" ++
+            "\t\tcsv: \"../csv/main.roc\",\n" ++
+            "\t}\n",
+        multiple,
+    );
 }
 
 test "issue 10431: wrapped declaration has no trailing whitespace" {
@@ -4933,11 +4992,14 @@ test "fmt upgrades an app's roc version pin to a newer nightly" {
     defer std.testing.allocator.free(result);
 
     try std.testing.expectEqualStrings(
-        \\app [main!] { pf: platform "../platform/main.roc", roc: "nightly-2026-August-1-bbbbbbb" }
-        \\
-        \\main! = |_| {}
-        \\
-    , result);
+        "app [main!] {\n" ++
+            "\tpf: platform \"../platform/main.roc\",\n" ++
+            "\troc: \"nightly-2026-August-1-bbbbbbb\",\n" ++
+            "}\n" ++
+            "\n" ++
+            "main! = |_| {}\n",
+        result,
+    );
 }
 
 test "fmt upgrades a package's roc version pin" {
