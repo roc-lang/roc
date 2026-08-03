@@ -15553,6 +15553,15 @@ fn tryConditionIsDirectHostedCall(self: *Self, cond_idx: CIR.Expr.Idx) bool {
 /// other callee, a closed error row meeting an open annotated row stays a
 /// type error (issue #9798's program is rejected by design); the caller gates
 /// on `tryConditionIsDirectHostedCall`.
+///
+/// This is a typing mechanism, not the host ABI's protection. What a hosted
+/// extern is emitted at is decided at the producer: Monotype lowering admits
+/// only the hosted declaration's own type at an extern boundary and stops the
+/// build otherwise (`requireHostedExternAtDeclaredAbi`,
+/// src/postcheck/monotype/lower.zig, and design.md "Host Symbol ABI"). Widening
+/// the condition here therefore changes which programs typecheck and which
+/// caller-side adapter lowering generates; it cannot change the boundary. Judge
+/// changes to this rewrite as type-semantics choices on that basis.
 fn widenTryConditionForExpectedReturn(
     self: *Self,
     cond_var: Var,

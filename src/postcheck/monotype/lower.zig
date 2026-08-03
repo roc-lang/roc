@@ -1069,6 +1069,33 @@ fn relateHostedFunctionRequestInterface(
     try relateFunctionRequestInterface(graph, public_fn, request_fn);
 }
 
+/// Rendered length `hostedExternAbiViolationMessage` never exceeds.
+const hosted_extern_abi_message_max = 512;
+
+/// Longest hosted symbol string the violation message reproduces in full.
+const hosted_extern_abi_message_symbol_max = 128;
+
+/// Render the report `requireHostedExternAtDeclaredAbi` aborts with. The symbol
+/// string is the identity of the extern the host linked against, so it leads;
+/// the two type digests then say which of the two types the boundary took.
+fn hostedExternAbiViolationMessage(
+    buf: []u8,
+    symbol_text: []const u8,
+    declared_digest: names.TypeDigest,
+    emitted_digest: names.TypeDigest,
+) []const u8 {
+    const symbol = symbol_text[0..@min(symbol_text.len, hosted_extern_abi_message_symbol_max)];
+    return std.fmt.bufPrint(
+        buf,
+        "hosted extern \"{s}\" was specialized at type {s} instead of the type {s} its host ABI declares",
+        .{
+            symbol,
+            std.fmt.bytesToHex(emitted_digest.bytes[0..8].*, .lower),
+            std.fmt.bytesToHex(declared_digest.bytes[0..8].*, .lower),
+        },
+    ) catch "a hosted extern was specialized at a type other than the one its host ABI declares";
+}
+
 fn relateCheckedNodeToMono(graph: *InstGraph, checked_node: NodeId, mono_node: NodeId) Allocator.Error!void {
     _ = try checkedMonoRequestNode(graph, checked_node, mono_node);
 }
@@ -2249,6 +2276,145 @@ const Builder = struct {
         Common.invariant("hosted procedure template was not output in the hosted catalog");
     }
 
+    /// Whether an extern boundary may be emitted at `emitted_fn_ty`: the host
+    /// ABI (design.md "Host Symbol ABI") admits the hosted declaration's own
+    /// checked type, lowered here as `declared_fn_ty`, and nothing else.
+    ///
+    /// The comparison is the authoritative structural one, not a type digest. A
+    /// digest encodes a cycle by the position it closes at, so a recursive
+    /// nominal reached through differently shared nodes digests differently
+    /// while describing one runtime type — and a hosted argument is exactly
+    /// where that happens, since the declared lowering and the request build
+    /// their graphs separately. test/fx/host_boxed_fn_boundary.roc passes a
+    /// recursive nominal to a hosted function and covers that case.
+    ///
+    /// A hosted declaration written with type variables is a scheme rather than
+    /// one type, and the host's single C signature covers every instantiation
+    /// because each variable position is a pointer at runtime. For those, the
+    /// declaration's variable slots accept whatever the request instantiated
+    /// them to, while every position the declaration made concrete is still
+    /// compared exactly.
+    fn hostedExternMatchesDeclaredAbi(
+        self: *Builder,
+        declared_fn_ty: Type.TypeId,
+        emitted_fn_ty: Type.TypeId,
+        mode: Type.TypeMatchMode,
+    ) Allocator.Error!bool {
+        return try self.program.types.typeMatches(&self.program.names, declared_fn_ty, emitted_fn_ty, mode);
+    }
+
+    /// The match mode a hosted declaration's own checked type calls for.
+    fn hostedDeclaredAbiMatchMode(
+        self: *Builder,
+        view: ModuleView,
+        declared_checked_fn_ty: checked.CheckedTypeId,
+    ) Allocator.Error!Type.TypeMatchMode {
+        return if (try self.hostedDeclarationIsGeneric(view, declared_checked_fn_ty))
+            .declared_variable_slots_match_any
+        else
+            .exact;
+    }
+
+    /// Whether a hosted declaration's checked type still contains type
+    /// variables. A variable that carries a numeric or row default is not one:
+    /// it lowers to the same concrete type for every use, so the declaration is
+    /// concrete there.
+    fn hostedDeclarationIsGeneric(
+        self: *Builder,
+        view: ModuleView,
+        checked_ty: checked.CheckedTypeId,
+    ) Allocator.Error!bool {
+        var seen = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
+        defer seen.deinit();
+        return try self.checkedTypeHasVariable(view, checked_ty, &seen);
+    }
+
+    fn checkedTypeHasVariable(
+        self: *Builder,
+        view: ModuleView,
+        checked_ty: checked.CheckedTypeId,
+        seen: *std.AutoHashMap(checked.CheckedTypeId, void),
+    ) Allocator.Error!bool {
+        if ((try seen.getOrPut(checked_ty)).found_existing) return false;
+        switch (checkedPayload(view, checked_ty)) {
+            .flex, .rigid => |variable| {
+                return variable.numeric_default_phase == null and variable.row_default == null;
+            },
+            .pending, .err, .empty_record, .empty_tag_union => return false,
+            .alias => |alias| {
+                if (try self.checkedTypeSliceHasVariable(view, alias.args, seen)) return true;
+                return try self.checkedTypeHasVariable(view, alias.backing, seen);
+            },
+            // A nominal's runtime shape follows from its declaration and its
+            // arguments, so the arguments carry every variable a use can fill.
+            .nominal => |nominal| return try self.checkedTypeSliceHasVariable(view, nominal.args, seen),
+            .record => |record| {
+                for (record.fields) |field| {
+                    if (try self.checkedTypeHasVariable(view, field.ty, seen)) return true;
+                }
+                return try self.checkedTypeHasVariable(view, record.ext, seen);
+            },
+            .record_unbound => |fields| {
+                for (fields) |field| {
+                    if (try self.checkedTypeHasVariable(view, field.ty, seen)) return true;
+                }
+                return false;
+            },
+            .tuple => |items| return try self.checkedTypeSliceHasVariable(view, items, seen),
+            .tag_union => |tag_union| {
+                for (tag_union.tags) |tag| {
+                    if (try self.checkedTypeSliceHasVariable(view, tag.argsSlice(view.types), seen)) return true;
+                }
+                return try self.checkedTypeHasVariable(view, tag_union.ext, seen);
+            },
+            .function => |fn_ty| {
+                if (try self.checkedTypeSliceHasVariable(view, fn_ty.args, seen)) return true;
+                return try self.checkedTypeHasVariable(view, fn_ty.ret, seen);
+            },
+        }
+    }
+
+    fn checkedTypeSliceHasVariable(
+        self: *Builder,
+        view: ModuleView,
+        types: []const checked.CheckedTypeId,
+        seen: *std.AutoHashMap(checked.CheckedTypeId, void),
+    ) Allocator.Error!bool {
+        for (types) |ty| {
+            if (try self.checkedTypeHasVariable(view, ty, seen)) return true;
+        }
+        return false;
+    }
+
+    /// Stop the build unless this hosted specialization emits its extern at
+    /// the declared host ABI type.
+    ///
+    /// The host was compiled against the declared signature. An extern emitted
+    /// at any other type reads the host's return value at a layout the host
+    /// never wrote — the app sees `Err` where the host returned `Ok` — and
+    /// nothing downstream can tell that apart from a genuine `Err`. So this is
+    /// a producer-side stop, in release builds as well as debug ones: whatever
+    /// upstream stage widened, narrowed, or re-represented the request, its
+    /// output never reaches codegen.
+    fn requireHostedExternAtDeclaredAbi(
+        self: *Builder,
+        view: ModuleView,
+        template: names.ProcTemplate,
+        declared_checked_fn_ty: checked.CheckedTypeId,
+        declared_fn_ty: Type.TypeId,
+        emitted_fn_ty: Type.TypeId,
+    ) Allocator.Error!void {
+        const mode = try self.hostedDeclaredAbiMatchMode(view, declared_checked_fn_ty);
+        if (try self.hostedExternMatchesDeclaredAbi(declared_fn_ty, emitted_fn_ty, mode)) return;
+        var message_buf: [hosted_extern_abi_message_max]u8 = undefined;
+        Common.compilerBug(hostedExternAbiViolationMessage(
+            &message_buf,
+            self.program.names.externalSymbolNameText(self.hostedFn(template).external_symbol_name),
+            self.program.types.typeDigest(&self.program.names, declared_fn_ty),
+            self.program.types.typeDigest(&self.program.names, emitted_fn_ty),
+        ));
+    }
+
     fn typeName(self: *Builder, view: ModuleView, id: names.TypeNameId) Allocator.Error!names.TypeNameId {
         return self.program.names.internTypeName(view.names.typeNameText(id));
     }
@@ -3044,6 +3210,8 @@ const Builder = struct {
                 // requests get a generated Roc adapter that calls the
                 // declared-type boundary and re-tags the result, instead of a
                 // hosted spec whose layout would not match the host ABI.
+                // `requireHostedExternAtDeclaredAbi` below holds the boundary
+                // for every other request shape.
                 const declared_source_fn_ty = template.checked_fn_root;
                 const declared_source_fn_key = view.types.rootKey(declared_source_fn_ty);
                 const declared_mono_fn_ty = try self.lowerType(view, declared_source_fn_ty);
@@ -3103,6 +3271,13 @@ const Builder = struct {
                     try self.markTemplateReady(reservation.fn_id, lower_fn_ty);
                     return reservation.def;
                 }
+                try self.requireHostedExternAtDeclaredAbi(
+                    view,
+                    template_ref,
+                    declared_source_fn_ty,
+                    declared_mono_fn_ty,
+                    lower_fn_ty,
+                );
                 self.program.setDef(reservation.def, .{
                     .symbol = reservation.symbol,
                     .fn_def = hosted_fn_template,
@@ -46853,6 +47028,150 @@ test "hosted Try adapter narrows requested private representations by declared l
         @as(?Type.TypeId, null),
         try builder.hostedTryAdapterSourceType(capability, impostor_declared_fn, impostor_requested_fn),
     );
+}
+
+test "hosted extern boundary admits only the declared host ABI type" {
+    const allocator = std.testing.allocator;
+    var program = Ast.Program.init(allocator);
+    defer program.deinit();
+
+    var builder: Builder = undefined;
+    builder.allocator = allocator;
+    builder.program = &program;
+
+    const module_identity = try program.names.internModuleIdentity(&([_]u8{0xC3} ** 32));
+    const try_def = Type.TypeDef{
+        .module = module_identity,
+        .type_name = try program.names.internTypeName("Try"),
+    };
+    const try_named = Type.NamedType{ .module = .{}, .ty = @enumFromInt(4) };
+    const str_ty = try program.types.add(.{ .primitive = .str });
+    const i32_ty = try program.types.add(.{ .primitive = .i32 });
+
+    const ok_name = try program.names.internTagLabel("Ok");
+    const err_name = try program.names.internTagLabel("Err");
+    const host_err = try program.names.internTagLabel("HostErr");
+    const exit_err = try program.names.internTagLabel("Exit");
+    const capability = HostedTryAdapterCapability{
+        .def = try_def,
+        .ok_tag = ok_name,
+        .err_tag = err_name,
+        .ok_type_arg_index = 0,
+        .err_type_arg_index = 1,
+    };
+
+    const declared_err = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{.{
+        .name = host_err,
+        .checked_name = host_err,
+        .payloads = try program.types.addSpan(&.{str_ty}),
+    }}) });
+    const widened_err = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{
+        .{
+            .name = host_err,
+            .checked_name = host_err,
+            .payloads = try program.types.addSpan(&.{str_ty}),
+        },
+        .{
+            .name = exit_err,
+            .checked_name = exit_err,
+            .payloads = try program.types.addSpan(&.{i32_ty}),
+        },
+    }) });
+
+    const template_backing = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{
+        .{
+            .name = ok_name,
+            .checked_name = ok_name,
+            .payloads = try program.types.addSpan(&.{str_ty}),
+        },
+        .{
+            .name = err_name,
+            .checked_name = err_name,
+            .payloads = try program.types.addSpan(&.{declared_err}),
+        },
+    }) });
+    const try_template = try program.types.add(.{ .named = .{
+        .named_type = try_named,
+        .def = try_def,
+        .kind = .nominal,
+        .args = try program.types.addSpan(&.{ str_ty, declared_err }),
+        .backing = .{ .ty = template_backing, .use = .inspectable },
+    } });
+
+    const declared_try = try builder.hostedTryTypeLike(capability, try_template, str_ty, declared_err);
+    const widened_try = try builder.hostedTryTypeLike(capability, try_template, str_ty, widened_err);
+    const declared_fn = try builder.closedFunctionType(&.{str_ty}, declared_try);
+
+    // An extern emitted at a separately built copy of the declared type is the
+    // same boundary; only its shape decides, not the `TypeId` it was built as.
+    const declared_twin_fn = try builder.closedFunctionType(&.{str_ty}, declared_try);
+    try std.testing.expect(try builder.hostedExternMatchesDeclaredAbi(declared_fn, declared_twin_fn, .exact));
+
+    // A widened error row, a narrowed one, and a changed argument each mean the
+    // host's value would be read at a layout the host never wrote.
+    const widened_fn = try builder.closedFunctionType(&.{str_ty}, widened_try);
+    try std.testing.expect(!try builder.hostedExternMatchesDeclaredAbi(declared_fn, widened_fn, .exact));
+
+    const empty_err = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{}) });
+    const narrowed_try = try builder.hostedTryTypeLike(capability, try_template, str_ty, empty_err);
+    const narrowed_fn = try builder.closedFunctionType(&.{str_ty}, narrowed_try);
+    try std.testing.expect(!try builder.hostedExternMatchesDeclaredAbi(declared_fn, narrowed_fn, .exact));
+
+    const wrong_arg_fn = try builder.closedFunctionType(&.{i32_ty}, declared_try);
+    try std.testing.expect(!try builder.hostedExternMatchesDeclaredAbi(declared_fn, wrong_arg_fn, .exact));
+
+    // A generic hosted declaration lowers its variable slots to empty tag
+    // unions, and a use instantiates them. The slots accept the instantiation;
+    // the positions the declaration made concrete do not move.
+    const slot_ty = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{}) });
+    const generic_declared_fn = try builder.closedFunctionType(&.{str_ty}, try program.types.add(.{ .box = slot_ty }));
+    const instantiated_fn = try builder.closedFunctionType(&.{str_ty}, try program.types.add(.{ .box = i32_ty }));
+    try std.testing.expect(try builder.hostedExternMatchesDeclaredAbi(
+        generic_declared_fn,
+        instantiated_fn,
+        .declared_variable_slots_match_any,
+    ));
+    try std.testing.expect(!try builder.hostedExternMatchesDeclaredAbi(
+        generic_declared_fn,
+        instantiated_fn,
+        .exact,
+    ));
+
+    const instantiated_wrong_arg_fn = try builder.closedFunctionType(&.{i32_ty}, try program.types.add(.{ .box = i32_ty }));
+    try std.testing.expect(!try builder.hostedExternMatchesDeclaredAbi(
+        generic_declared_fn,
+        instantiated_wrong_arg_fn,
+        .declared_variable_slots_match_any,
+    ));
+
+    // The instantiation direction is the declaration's alone: an emitted type
+    // with a slot where the declaration is concrete is still a violation.
+    try std.testing.expect(!try builder.hostedExternMatchesDeclaredAbi(
+        instantiated_fn,
+        generic_declared_fn,
+        .declared_variable_slots_match_any,
+    ));
+
+    var message_buf: [hosted_extern_abi_message_max]u8 = undefined;
+    const message = hostedExternAbiViolationMessage(
+        &message_buf,
+        "roc_fallible_str_ok",
+        program.types.typeDigest(&program.names, declared_fn),
+        program.types.typeDigest(&program.names, widened_fn),
+    );
+    try std.testing.expect(std.mem.find(u8, message, "roc_fallible_str_ok") != null);
+    try std.testing.expect(std.mem.find(u8, message, "host ABI") != null);
+
+    // An over-long symbol still reports; the message stays inside its buffer.
+    const long_symbol = "roc_" ++ ("x" ** 400);
+    const long_message = hostedExternAbiViolationMessage(
+        &message_buf,
+        long_symbol,
+        program.types.typeDigest(&program.names, declared_fn),
+        program.types.typeDigest(&program.names, widened_fn),
+    );
+    try std.testing.expect(long_message.len <= message_buf.len);
+    try std.testing.expect(std.mem.find(u8, long_message, "roc_xxxx") != null);
 }
 
 test "request component relation follows root authority before nested private evidence" {
