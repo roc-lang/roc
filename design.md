@@ -4323,7 +4323,7 @@ producers. The marker is metadata about the class, not content, so `Store.union_
 carries it across a merge and `Store.poisonOnMismatch` preserves it when it
 replaces content with `err`. A merge rejects the result if either side was
 rejected: two constraint callables only unify when they are the same function
-type carrying the same obligation, so an obligation checking rejected for one of
+type carrying the same dispatch edge, so an edge checking rejected for one of
 them is rejected for every site that shares it.
 Instantiation and cross-module copies mint fresh, unrejected classes: a fresh
 edge is checked on its own terms.
@@ -4336,9 +4336,9 @@ other member of the same class. `Check.markStaticDispatchFnRejected` sets the
 class bit and appends one durable `ModuleEnv.rejected_static_dispatches` record
 per newly rejected class; `Check.init` rehydrates those records onto their
 classes so re-checking an env already carrying them behaves like a fresh check.
-Every static-dispatch plan lookup — in the checker and in
-`EvidencePass.resolveObligation` — asks the class before resolving its receiver,
-and must not infer rejection by inspecting a callable result type.
+Every static-dispatch plan lookup — in the checker and in `EvidencePass` —
+asks the class before resolving its receiver, and must not infer rejection by
+inspecting a callable result type.
 
 An independently reported checking error may make a plan's receiver itself
 erroneous even when checking accepted that plan's dispatch (for example, a
