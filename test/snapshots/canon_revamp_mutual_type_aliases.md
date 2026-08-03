@@ -93,9 +93,9 @@ B : A
 (inferred-types
 	(defs)
 	(type_decls
-		(alias (type "A")
+		(alias (type "Error")
 			(ty-header (name "A")))
-		(alias (type "B")
+		(alias (type "Error")
 			(ty-header (name "B"))))
 	(expressions))
 ~~~
