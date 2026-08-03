@@ -7706,7 +7706,7 @@ fn rejectRequiredExecutableOutput(ctx: *CliCtx, selected: target_selection.Selec
             try stderr.print("the archive.\n", .{});
         },
         .shared => {
-            if (selected.target == .wasm32) {
+            if (selected.target.toCpuArch() == .wasm32) {
                 try stderr.print("Error: This platform cannot be run directly.\n\n", .{});
                 try stderr.print("This platform targets wasm32 and produces a .wasm module. Use 'roc build'\n", .{});
                 try stderr.print("to produce the wasm artifact, then load it with the host application.\n", .{});
@@ -8853,7 +8853,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         return error.UnsupportedCrossCompilation;
     }
 
-    if (target != .wasm32 and target.ptrBitWidth() != 64) {
+    if (target.toCpuArch() != .wasm32 and target.ptrBitWidth() != 64) {
         try ctx.io.stderr().print(
             "Error: roc build --opt={s} requires a 64-bit native host target, but {s} has {d}-bit pointers.\n",
             .{ @tagName(args.opt), @tagName(target), target.ptrBitWidth() },
@@ -8955,7 +8955,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         unreachable;
     }
 
-    if (target == .wasm32) {
+    if (target.toCpuArch() == .wasm32) {
         reporter.begin("LLVM IR Generation");
         try rocBuildWasmLlvm(
             ctx,
