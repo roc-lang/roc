@@ -798,16 +798,6 @@ pub const Translator = struct {
         self.emission.inputs.clearRetainingCapacity();
     }
 
-    /// Debug/probe-only: whether an input is declared at one position right
-    /// now, for measuring whether a read path consults declarations at all.
-    pub fn hasRepresentationInputAt(self: *const Translator, address: PositionAddress) bool {
-        const stated = self.emission.active_inputs orelse self.emission.inputs.items;
-        for (stated) |input| {
-            if (input.position.eql(address)) return true;
-        }
-        return false;
-    }
-
     /// How many representation inputs are declared right now. A caller opening
     /// a scoped declaration reads this before declaring and hands the value to
     /// `truncateRepresentationInputs` when its scope closes, so declarations

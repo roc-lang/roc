@@ -5433,15 +5433,6 @@ pub const Rehearsal = struct {
         self.translator.truncateRepresentationInputs(floor);
     }
 
-    /// Debug/probe-only: whether the translator currently holds a declared
-    /// representation input at one position.
-    pub fn hasDeclaredInputAt(self: *const Rehearsal, address: CheckedAddress) bool {
-        return self.translator.hasRepresentationInputAt(.{
-            .module_bytes = address.module_bytes,
-            .type_id = address.type_id,
-        });
-    }
-
     /// The Monotype this lowering gives one checked position, as production
     /// authority: directed instantiation of the position under the innermost
     /// binding recorded for it, with no logical solving. Total or fatal - a
@@ -5489,15 +5480,6 @@ pub const Rehearsal = struct {
             },
             else => |other| other,
         };
-    }
-
-    pub fn typeForCheckedPosition(
-        self: *Rehearsal,
-        address: CheckedAddress,
-        under_callee: bool,
-        binding: *PositionBinding,
-    ) Allocator.Error!?Type.TypeId {
-        return self.typeForCheckedPositionWithEdge(address, under_callee, binding, null);
     }
 
     /// The same, first trying a level for the definition the position's unbound
