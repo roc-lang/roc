@@ -15935,7 +15935,9 @@ const BodyContext = struct {
         census.bump("spec_root_parity_diverge");
         if (types.typeEql(name_store, directed, request_fn_ty) catch false) {
             census.bump("spec_root_parity_eql_not_digest");
+            return;
         }
+
     }
 
     /// Debug/probe-only: measure one read at a graph exit against directed
