@@ -655,7 +655,7 @@ pub const LowLevel = enum(u16) {
     /// - `may_runtime_uniqueness_check_args`: the op reads those arguments'
     ///   counts to choose between mutating in place and copying. ARC may prove
     ///   the check redundant and pass `unique_args`, which lets the builtin
-    ///   take the in-place path unconditionally — so a named position must be
+    ///   take the in-place path unconditionally—so a named position must be
     ///   one the op consumes, and the in-place path must be sound whenever the
     ///   argument really is unique.
     /// - `consume_args`: the op takes one ownership unit of those arguments.
@@ -663,7 +663,7 @@ pub const LowLevel = enum(u16) {
     ///   release each one (or move it into the result) on every path.
     /// - `result_aliases_consumed_args`: the unit taken from those consumed
     ///   arguments lives on in the result. Only consumed positions may appear.
-    /// - `retain_args`: the op adds one count to those arguments — typically
+    /// - `retain_args`: the op adds one count to those arguments—typically
     ///   because it stores a handle to them inside the result. ARC emits no
     ///   retain of its own, so an op that declares this and does not retain
     ///   leaves the stored handle undercounted.

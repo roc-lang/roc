@@ -136,7 +136,7 @@ fn formatSource(allocator: std.mem.Allocator, source: []const u8) FormatSourceEr
     var result: std.Io.Writer.Allocating = .init(allocator);
     defer result.deinit();
 
-    // Format the AST, keeping formatting here identical to `roc fmt` — which
+    // Format the AST, keeping formatting here identical to `roc fmt`—which
     // includes bringing a stale `roc` version pin up to date.
     try fmt.formatAstWithOptions(ast.*, &result.writer, .{ .compiler_version = build_options.compiler_version });
 

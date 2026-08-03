@@ -68,7 +68,7 @@ pub const ModuleInitContext = struct {
     ///
     /// Real builds pass `build_options.compiler_version`. It is a parameter
     /// rather than something canonicalization reads for itself so that tools
-    /// which canonicalize for inspection — the snapshot tool above all —
+    /// which canonicalize for inspection—the snapshot tool above all—
     /// produce output that does not change with whichever compiler built them.
     compiler_version: ?[]const u8 = null,
 };

@@ -3048,7 +3048,7 @@ producer-side check in Monotype lowering (see Host Symbol ABI), which admits
 only the declared type no matter what a use site's type turned out to be. So
 the rule can be tightened, loosened, or replaced on typing grounds alone.
 
-Both sides are pinned by tests: accepted —
+Both sides are pinned by tests: accepted—
 test/fx-open/issue_9963_hosted_try_question_mark.roc (a direct hosted `?`
 inside an open-row platform function builds and the host's Ok is observed as
 Ok); rejected—test/fx-open/hosted_try_question_not_included.roc (a direct
@@ -3074,10 +3074,10 @@ structural shape is selected. Parser eligibility recognizes a flexible
 variable only in the explicit tag-extension position; a bare flexible shape or
 payload remains unsupported until earlier constraints resolve it.
 
-Both sides are pinned by tests: accepted —
+Both sides are pinned by tests: accepted—
 test/cli/JsonTagUnionProtocol.roc (issue #10418's unannotated
 `Ok(Friendly) == Json.parse(...)` comparison closes the inferred parser row);
-rejected — test/cli/ParserOpenTagUnion.roc (a parser whose result annotation
+rejected—test/cli/ParserOpenTagUnion.roc (a parser whose result annotation
 has a named rigid extension remains a missing-method error).
 
 ### Derived Parser Required-Field Error Composition
@@ -3144,9 +3144,9 @@ dispatch method-acceptance rule. Rejecting a constrained part retires its copied
 static-dispatch constraints together with the erroneous interpolation so no
 unresolved static-dispatch constraint can cross the checked boundary.
 
-Both sides are pinned by tests: accepted —
+Both sides are pinned by tests: accepted—
 test/cli/issue_10204_imported_interpolation_metadata/Main.roc (an imported
-interpolation instantiated with `Str` checks successfully); rejected —
+interpolation instantiated with `Str` checks successfully); rejected—
 test/cli/issue_10474_record_field_interpolation.roc (a generalized numeral
 record field cannot be instantiated as `Str` by interpolation and reports a
 type mismatch without `CheckedModule` construction panicking).
@@ -3177,9 +3177,9 @@ Other solved-graph mutations:
 - `resetAnnotationNodes` (`resetVarToUnbound`)—mechanism: recycles
   annotation node vars after the scheme was copied off as a disjoint orphan.
 - `finalizeTypeDeclarationValidity` and occurs-check poisoning
-  (`setVarContent(.err)`) — policy: Type Declaration Template Validity (above)
+  (`setVarContent(.err)`)—policy: Type Declaration Template Validity (above)
   and diagnostic recovery after an already reported problem.
-- `finalizeFunctionEffectsAtBoundary` — policy: directed-effect
+- `finalizeFunctionEffectsAtBoundary`—policy: directed-effect
   materialization at generalization boundaries, the rule declared in
   Checking Effects And Const Roots.
 - `closeAbsentConstructedPayloadVars` / `closePayloadVarToEmpty`—policy:
@@ -3199,11 +3199,11 @@ Other solved-graph mutations:
   Required-Field Error Composition (above). A custom parser method's
   instantiated error extension is closed, then its concrete tags gate ordinary
   unification constraints requiring the parent parser row to include them.
-- `constrainInterpolationPartToStr` — policy: Builtin Str Interpolation Part
+- `constrainInterpolationPartToStr`—policy: Builtin Str Interpolation Part
   Compatibility (above). One commit-probe unifies the part with `Str` and
   validates every attached dispatch constraint; only full success is committed.
 - Literal defaulting (`commitLiteralDefault`, `commitLiteralGroupDefault`)
-  — policy: literal defaulting as declared in Static Dispatch At The
+—policy: literal defaulting as declared in Static Dispatch At The
   Checked Boundary (the `LITERAL DEFAULTED` warning) and the numeric
   default candidate order (`Dec` first); mutation happens only through
   committed probes of ordinary unification.
@@ -4293,14 +4293,14 @@ Static dispatch is DECIDED during checking and CONSUMED during Monotype
 lowering. Every dispatch site leaves checking with an explicit resolution on
 its plan:
 
-- `direct_closed(direct_call)` — checking proved the concrete target, projected
+- `direct_closed(direct_call)`—checking proved the concrete target, projected
   its exact target-instantiated callable, proved that callable and its nested
   evidence independent of the enclosing specialization, and recorded the
   target's explicit runtime category.
-- `direct_parametric(direct_call)` — checking proved the same exact target, but
+- `direct_parametric(direct_call)`—checking proved the same exact target, but
   the callable or its nested evidence still consumes an explicit enclosing
   specialization identity.
-- `evidence_dependent(depth, k)` — the dispatcher is the k-th evidence param of the
+- `evidence_dependent(depth, k)`—the dispatcher is the k-th evidence param of the
   d-th enclosing generalized callable. Each specialization edge supplies the
   answer: dictionary passing resolved entirely at compile time.
 - `structural(derivation)`—the checker chose the compiler-derived structural
@@ -4310,7 +4310,7 @@ its plan:
   direct payload index.
 - `checked_error`—checking rejected the site; executing it anyway (running a
   program with reported errors) lowers to an explicit crash.
-- `unreachable` — the dispatcher is a constrained variable no
+- `unreachable`—the dispatcher is a constrained variable no
   specialization edge can ever supply and no default applies: the dispatch is
   statically unreachable and lowers to an explicit crash.
 
@@ -6816,7 +6816,7 @@ that state so the contract is enforced by signatures rather than remembered.
 The declared type is part of that contract, not just the symbol string. A
 hosted function's extern boundary is emitted at the hosted declaration's own
 checked type, as substituted by the platform/app relation's recorded
-requirement solutions (see Platform/App Relation) — the one sanctioned
+requirement solutions (see Platform/App Relation)—the one sanctioned
 transformation. The compiler never emits a hosted extern at any other type: not
 at a caller's widened error row, not at a narrowed one, and not at a
 producer-selected representation that differs from the declared one. A use site
@@ -6834,9 +6834,9 @@ is fixed for all uses exactly as above.
 Monotype lowering holds that boundary where extern specializations are
 produced: emitting a hosted procedure at any other type stops the build with a
 compiler-bug report naming the symbol (`requireHostedExternAtDeclaredAbi`,
-src/postcheck/monotype/lower.zig). The comparison is structural type equality —
+src/postcheck/monotype/lower.zig). The comparison is structural type equality—
 the declared lowering and the request build their graphs separately, so a
-recursive nominal is the same type through either graph — with the declaration's
+recursive nominal is the same type through either graph—with the declaration's
 variable slots open when it has any. The check runs in release builds too,
 because what it prevents is silent: the host returns `Ok`, the app reads those
 bytes as `Err`, and no diagnostic or crash marks the difference. No checker

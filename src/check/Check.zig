@@ -17761,7 +17761,7 @@ fn beginProbe(self: *Self) std.mem.Allocator.Error!Probe {
 /// A speculative scope whose SUCCESS is committed in place instead of being
 /// rolled back and redone. Unlike a plain `Probe` (whose unifications run against
 /// throwaway problem/snapshot stores precisely because they never survive), a
-/// commit-probe runs its unifications through the REAL `runUnify` wrapper — full
+/// commit-probe runs its unifications through the REAL `runUnify` wrapper—full
 /// bookkeeping: fresh vars ranked into the caller env's var pool, regions
 /// stamped, and deferred dispatch constraints copied out. A caller that owns its
 /// mismatch diagnostic uses `.write_no_report`, because occurrence-directed

@@ -3122,7 +3122,7 @@ fn computeUniquenessFromFacts(
 /// at the local's definition with nothing later adding a holder: born unique
 /// by a fresh allocation or a direct call to a unique-returning callee,
 /// destroyed by any occurrence in the analyzed procedure set that can create another handle to the
-/// allocation — an incref, an aggregate or capture operand, a `set_local`
+/// allocation—an incref, an aggregate or capture operand, a `set_local`
 /// value or target, or a second consuming use. Consuming uses (a consumed
 /// low-level argument, an owned-position direct-call argument, a return)
 /// take the value's single unit with them, so the first one preserves
@@ -3254,13 +3254,6 @@ fn computeUniquenessDetailed(
     defer param_write_edges.deinit(allocator);
     var proc_arg_set = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
     defer proc_arg_set.deinit(allocator);
-    for (0..store.procSpecCount()) |proc_index| {
-        const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
-        const proc_args = store.getLocalSpan(proc.args);
-        for (0..GuardedList.borrowLen(proc_args)) |position| {
-            proc_arg_set.set(@intFromEnum(GuardedList.at(proc_args, position)));
-        }
-    }
 
     // Single pure-alias source per target (`no_local` when the local is not
     // an alias target), plus the list of distinct alias targets to settle.
@@ -3325,6 +3318,15 @@ fn computeUniquenessDetailed(
         }
     };
     const marks = Marks{ .rc = rc_local, .domain = proc_domain };
+
+    for (0..store.procSpecCount()) |proc_index| {
+        const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+        const proc_args = store.getLocalSpan(proc.args);
+        for (0..GuardedList.borrowLen(proc_args)) |position| {
+            const arg_index = marks.indexOf(GuardedList.at(proc_args, position)) orelse continue;
+            proc_arg_set.set(arg_index);
+        }
+    }
 
     const Alias = struct {
         /// Records a pure same-value alias definition. The definition is the
@@ -3563,7 +3565,13 @@ fn computeUniquenessDetailed(
                     // The write moves the value into the parameter; the
                     // parameter's own uniqueness is settled by the join
                     // parameter fixpoint below.
-                    try param_write_edges.append(allocator, .{ @intFromEnum(assign.target), @intFromEnum(assign.value) });
+                    if (marks.indexOf(assign.target)) |param_index| {
+                        if (marks.indexOf(assign.value)) |value_index| {
+                            try param_write_edges.append(allocator, .{ param_index, value_index });
+                        } else {
+                            foreign_def.set(param_index);
+                        }
+                    }
                     marks.consume(&consumed_once, &destroyed, assign.value);
                 } else {
                     marks.trackDef(&has_def, &multi_def, assign.target);
@@ -3575,16 +3583,18 @@ fn computeUniquenessDetailed(
             .incref => |rc| marks.destroy(&destroyed, rc.value),
             .join => |join_stmt| {
                 const params = store.getLocalSpan(join_stmt.params);
-                for (0..GuardedList.borrowLen(params)) |param_index| {
-                    const param = GuardedList.at(params, param_index);
-                    join_param_set.set(@intFromEnum(param));
+                for (0..GuardedList.borrowLen(params)) |position| {
+                    const param = GuardedList.at(params, position);
+                    const param_index = marks.indexOf(param) orelse continue;
+                    join_param_set.set(param_index);
                 }
                 // Conditionally initialized parameters never settle unique,
                 // matching the typed-lift fact emission.
                 const maybe_uninitialized_params = store.getLocalSpan(join_stmt.maybe_uninitialized_params);
-                for (0..GuardedList.borrowLen(maybe_uninitialized_params)) |param_index| {
-                    const param = GuardedList.at(maybe_uninitialized_params, param_index);
-                    foreign_def.set(@intFromEnum(param));
+                for (0..GuardedList.borrowLen(maybe_uninitialized_params)) |position| {
+                    const param = GuardedList.at(maybe_uninitialized_params, position);
+                    const param_index = marks.indexOf(param) orelse continue;
+                    foreign_def.set(param_index);
                 }
             },
             // Returning is the value's consuming use: the unit moves to the

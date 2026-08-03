@@ -661,7 +661,7 @@ pub const Diagnostic = struct {
         invalid_type_arg,
         expr_arrow_expects_ident,
         expr_pipe_expects_ident,
-        /// `a..b` is not range syntax — ranges are `a..<b` (exclusive) or `a..=b` (inclusive)
+        /// `a..b` is not range syntax—ranges are `a..<b` (exclusive) or `a..=b` (inclusive)
         expr_double_dot_is_not_range,
         var_only_allowed_in_a_body,
         var_must_have_ident,
@@ -755,7 +755,7 @@ pub fn resolve(self: *const AST, token: Token.Idx) []const u8 {
 /// The compiler version a header pins, exactly as written in the source.
 ///
 /// `field_idx` is a header's `roc_version` field. Returns null when its value
-/// is not a plain string literal — the parser has already reported that as
+/// is not a plain string literal—the parser has already reported that as
 /// `invalid_roc_version`, and every later phase treats an unreadable pin as no
 /// pin at all rather than guessing at what was meant.
 pub fn rocVersionText(self: *const AST, field_idx: RecordField.Idx) ?[]const u8 {

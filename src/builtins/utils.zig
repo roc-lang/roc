@@ -1067,7 +1067,7 @@ pub const DebugRefcountTracker = struct {
     /// The shadow model follows an allocation from the address it was born
     /// with, through the increfs and decrefs that pass through this module. It
     /// does not see a count that is written directly, and reallocation moves a
-    /// count to an address whose history starts empty — so a shadow count can
+    /// count to an address whose history starts empty—so a shadow count can
     /// read low even when the program is balanced. Consumers that read only
     /// the operation log (which records the events themselves, not a derived
     /// count) turn these reports off rather than print anomalies they know are

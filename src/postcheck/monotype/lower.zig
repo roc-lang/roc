@@ -2283,7 +2283,7 @@ const Builder = struct {
     /// The comparison is the authoritative structural one, not a type digest. A
     /// digest encodes a cycle by the position it closes at, so a recursive
     /// nominal reached through differently shared nodes digests differently
-    /// while describing one runtime type — and a hosted argument is exactly
+    /// while describing one runtime type—and a hosted argument is exactly
     /// where that happens, since the declared lowering and the request build
     /// their graphs separately. test/fx/host_boxed_fn_boundary.roc passes a
     /// recursive nominal to a hosted function and covers that case.
@@ -2391,7 +2391,7 @@ const Builder = struct {
     ///
     /// The host was compiled against the declared signature. An extern emitted
     /// at any other type reads the host's return value at a layout the host
-    /// never wrote — the app sees `Err` where the host returned `Ok` — and
+    /// never wrote—the app sees `Err` where the host returned `Ok`—and
     /// nothing downstream can tell that apart from a genuine `Err`. So this is
     /// a producer-side stop, in release builds as well as debug ones: whatever
     /// upstream stage widened, narrowed, or re-represented the request, its

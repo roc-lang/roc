@@ -912,7 +912,10 @@ pub fn listAppendSublist(
         roc_ops,
     );
     const base = output.bytes.?;
-    const src_ptr = src.bytes.?;
+    // When the source aliases the destination, the reserve above may have
+    // moved (and freed) the destination's old allocation. The old contents
+    // survive as the output's prefix, so read the range from there.
+    const src_ptr = if (src.bytes == list.bytes) base else src.bytes.?;
     @memcpy(
         (base + original_len * element_width)[0 .. count * element_width],
         (src_ptr + start * element_width)[0 .. count * element_width],

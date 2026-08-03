@@ -622,7 +622,6 @@ const Pass = struct {
             try self.scanProc(self.store.getProcSpec(proc_id).body.?, &scan);
             if (scan.edges.items.len == 0) break;
             try self.markLoops(&scan);
-
             var max_join_id = scan.max_join_id;
             outer: for (scan.joins.items) |info| {
                 if (!info.has_back_edge) continue;
@@ -1118,10 +1117,10 @@ const Pass = struct {
         const slop_elements: u64 = (40 + elem_size - 1) / elem_size;
 
         const slop = try self.freshLocal(.u64, new_locals);
-        const enough_for_slop = try self.freshLocal(.bool, new_locals);
+        const enough_for_slop = try self.freshLocal(.u8, new_locals);
         const adjusted = try self.freshLocal(.u64, new_locals);
-        const enough_for_count = try self.freshLocal(.bool, new_locals);
-        const fits = try self.freshLocal(.bool, new_locals);
+        const enough_for_count = try self.freshLocal(.u8, new_locals);
+        const fits = try self.freshLocal(.u8, new_locals);
 
         const join_id: LIR.JoinPointId = @enumFromInt(max_join_id.*);
         max_join_id.* += 1;

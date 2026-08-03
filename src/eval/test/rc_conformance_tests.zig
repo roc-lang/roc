@@ -4,7 +4,7 @@
 //! refcounts that nothing else checks. This sweep runs Roc programs through the
 //! interpreter with the observer in `eval/rc_conformance.zig` watching, so each
 //! executed op is judged against its row, and then fails for any op with a
-//! nontrivial row that no case drove — a new builtin cannot ship an unverified
+//! nontrivial row that no case drove—a new builtin cannot ship an unverified
 //! row.
 //!
 //! Cases drive the copy-on-write ops in both uniqueness regimes. A value that
@@ -530,6 +530,68 @@ const cases = [_]Case{
         \\
         \\    label = Str.concat("a model label long enough ", "to allocate on the heap")
         \\    step(Box.box({ tick: 0, label }))
+        \\}
+        ,
+    },
+    .{
+        .name = "list bulk appends, unique and shared inputs",
+        .source =
+        \\{
+        \\    shared = List.concat(
+        \\        ["a list element long enough to allocate", "another list element long enough"],
+        \\        ["a third list element long enough to allocate"],
+        \\    )
+        \\    holder = [shared, shared]
+        \\    unique = List.concat(
+        \\        ["a list element long enough to allocate", "another list element long enough"],
+        \\        ["a fourth list element long enough to allocate"],
+        \\    )
+        \\    unique_range = unique.append_range_within(0, 2).ok_or([])
+        \\    shared_range = shared.append_range_within(1, 2).ok_or([])
+        \\    source = List.concat(
+        \\        ["a source element long enough to allocate", "another source element long enough"],
+        \\        ["a third source element long enough to allocate"],
+        \\    )
+        \\    unique_sub = unique.append_sublist(source, { start: 1, len: 2 })
+        \\    shared_sub = shared.append_sublist(source, { start: 0, len: 1 })
+        \\    shared_bytes : List(U8)
+        \\    shared_bytes = List.concat([1, 2], [3])
+        \\    byte_holder = [shared_bytes, shared_bytes]
+        \\    unique_bytes : List(U8)
+        \\    unique_bytes = List.concat([4, 5], [6])
+        \\    unique_le = 0x1234.U64.append_le_bytes_to(unique_bytes, 2).ok_or([])
+        \\    shared_le = 0xFF.U64.append_le_bytes_to(shared_bytes, 1).ok_or([])
+        \\    List.len(unique_range)
+        \\        + List.len(shared_range)
+        \\        + List.len(unique_sub)
+        \\        + List.len(shared_sub)
+        \\        + List.len(unique_le)
+        \\        + List.len(shared_le)
+        \\        + List.len(holder)
+        \\        + List.len(byte_holder)
+        \\}
+        ,
+    },
+    .{
+        // A self-append inside a promoted loop is rewritten by
+        // `lir/loop_append_promote.zig` into a slack-guarded diamond whose hot
+        // side is `list_append_range_within_unsafe`.
+        .name = "loop self-appends promote to the unchecked range append",
+        .source_kind = .module,
+        .inline_wrappers = true,
+        .source =
+        \\main = || {
+        \\    start : List(U8)
+        \\    start = List.concat([1, 2], [3])
+        \\    var $acc = List.reserve(start, 64)
+        \\    for _step in 0..<6 {
+        \\        appended = $acc.append(7)
+        \\        $acc = match appended.append_range_within(0, 2) {
+        \\            Ok(next) => next
+        \\            Err(_) => appended
+        \\        }
+        \\    }
+        \\    List.len($acc)
         \\}
         ,
     },

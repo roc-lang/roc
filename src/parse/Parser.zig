@@ -1380,8 +1380,8 @@ const roc_version_key = "roc";
 
 /// Find the optional `roc: "<version>"` entry in a header's dependency record.
 ///
-/// The entry stays in the record alongside the real dependencies — the same way
-/// an app's platform entry does — so that comment attachment and formatting of
+/// The entry stays in the record alongside the real dependencies—the same way
+/// an app's platform entry does—so that comment attachment and formatting of
 /// the record need no special cases. What this returns is which of those fields
 /// pins the compiler version, so that later phases can tell it apart from a
 /// dependency without re-deriving the rule from field names.
