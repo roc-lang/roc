@@ -57,6 +57,13 @@ const TypeDeclGenerationState = enum {
     generated,
 };
 
+const TypeDeclDependency = struct {
+    dependent: u32,
+    dependency: u32,
+};
+
+const no_type_decl_dense_index = std.math.maxInt(u32);
+
 const no_def_group = std.math.maxInt(u32);
 
 const FunctionEffectState = enum {
@@ -158,6 +165,14 @@ type_decl_rigid_vars: std.AutoHashMapUnmanaged(Ident.Idx, Var),
 /// Type declaration bodies are generated on demand so forward references
 /// instantiate fully generated declarations instead of predeclared shells.
 type_decl_generation_states: std.ArrayListUnmanaged(TypeDeclGenerationState) = .empty,
+/// Dense declaration index for each CIR node, or `no_type_decl_dense_index`.
+type_decl_dense_indices: std.ArrayListUnmanaged(u32) = .empty,
+/// CIR statement for each dense declaration index.
+type_decl_statements: std.ArrayListUnmanaged(CIR.Statement.Idx) = .empty,
+/// Local annotation-generation failure, closed transitively during finalization.
+type_decl_invalid: std.ArrayListUnmanaged(bool) = .empty,
+/// Directed references from one local type declaration to another.
+type_decl_dependencies: std.ArrayListUnmanaged(TypeDeclDependency) = .empty,
 /// scratch vars used to build up intermediate lists, used for various things
 scratch_vars: base.Scratch(Var),
 /// scratch tags used to build up intermediate lists, used for various things
@@ -612,6 +627,42 @@ fn typeDeclGenerationState(self: *const Self, decl_idx: CIR.Statement.Idx) TypeD
 
 fn setTypeDeclGenerationState(self: *Self, decl_idx: CIR.Statement.Idx, state: TypeDeclGenerationState) void {
     self.type_decl_generation_states.items[nodeSlot(decl_idx)] = state;
+}
+
+fn registerTypeDecl(self: *Self, decl_idx: CIR.Statement.Idx) std.mem.Allocator.Error!u32 {
+    const slot = nodeSlot(decl_idx);
+    const existing = self.type_decl_dense_indices.items[slot];
+    if (existing != no_type_decl_dense_index) return existing;
+
+    try self.type_decl_statements.ensureUnusedCapacity(self.gpa, 1);
+    try self.type_decl_invalid.ensureUnusedCapacity(self.gpa, 1);
+
+    const dense_idx: u32 = @intCast(self.type_decl_statements.items.len);
+    self.type_decl_statements.appendAssumeCapacity(decl_idx);
+    self.type_decl_invalid.appendAssumeCapacity(false);
+    self.type_decl_dense_indices.items[slot] = dense_idx;
+    return dense_idx;
+}
+
+fn markTypeDeclInvalid(self: *Self, decl_idx: CIR.Statement.Idx) void {
+    const dense_idx = self.type_decl_dense_indices.items[nodeSlot(decl_idx)];
+    std.debug.assert(dense_idx != no_type_decl_dense_index);
+    self.type_decl_invalid.items[dense_idx] = true;
+}
+
+fn recordTypeDeclDependency(
+    self: *Self,
+    dependent_idx: CIR.Statement.Idx,
+    dependency_idx: CIR.Statement.Idx,
+) std.mem.Allocator.Error!void {
+    if (dependent_idx == dependency_idx) return;
+
+    const dependent = try self.registerTypeDecl(dependent_idx);
+    const dependency = try self.registerTypeDecl(dependency_idx);
+    try self.type_decl_dependencies.append(self.gpa, .{
+        .dependent = dependent,
+        .dependency = dependency,
+    });
 }
 
 fn typeAnnoSeen(self: *const Self, anno_idx: CIR.TypeAnno.Idx) bool {
@@ -1498,6 +1549,10 @@ fn initAssumePrepared(
         .rigid_var_substitutions = std.AutoHashMapUnmanaged(Ident.Idx, Var){},
         .type_decl_rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, Var){},
         .type_decl_generation_states = try initNodeSlots(TypeDeclGenerationState, gpa, node_count, .not_generated),
+        .type_decl_dense_indices = try initNodeSlots(u32, gpa, node_count, no_type_decl_dense_index),
+        .type_decl_statements = .empty,
+        .type_decl_invalid = .empty,
+        .type_decl_dependencies = .empty,
         .scratch_vars = try base.Scratch(types_mod.Var).init(gpa),
         .scratch_tags = try base.Scratch(types_mod.Tag).init(gpa),
         .scratch_record_fields = try base.Scratch(types_mod.RecordField).init(gpa),
@@ -1641,6 +1696,10 @@ pub fn deinit(self: *Self) void {
     self.rigid_var_substitutions.deinit(self.gpa);
     self.type_decl_rigid_vars.deinit(self.gpa);
     self.type_decl_generation_states.deinit(self.gpa);
+    self.type_decl_dense_indices.deinit(self.gpa);
+    self.type_decl_statements.deinit(self.gpa);
+    self.type_decl_invalid.deinit(self.gpa);
+    self.type_decl_dependencies.deinit(self.gpa);
     self.scratch_vars.deinit();
     self.scratch_tags.deinit();
     self.scratch_record_fields.deinit();
@@ -3570,6 +3629,104 @@ fn bindingRootName(self: *const Self, comptime Idx: anytype, idx: Idx) ?Ident.Id
     return null;
 }
 
+fn propagateTypeDeclarationInvalidity(
+    self: *Self,
+    dependent_offsets: []const usize,
+    dependents: []const u32,
+    propagated: []bool,
+    worklist: *std.ArrayListUnmanaged(u32),
+) void {
+    worklist.clearRetainingCapacity();
+    for (self.type_decl_invalid.items, propagated, 0..) |invalid, *was_propagated, dense_idx| {
+        if (!invalid or was_propagated.*) continue;
+        was_propagated.* = true;
+        worklist.appendAssumeCapacity(@intCast(dense_idx));
+    }
+
+    var next: usize = 0;
+    while (next < worklist.items.len) : (next += 1) {
+        const dependency = worklist.items[next];
+        for (dependents[dependent_offsets[dependency]..dependent_offsets[dependency + 1]]) |dependent| {
+            if (self.type_decl_invalid.items[dependent]) continue;
+            self.type_decl_invalid.items[dependent] = true;
+            propagated[dependent] = true;
+            worklist.appendAssumeCapacity(dependent);
+        }
+    }
+}
+
+fn poisonInvalidNominalDeclarations(self: *Self) std.mem.Allocator.Error!void {
+    const self_origin = self.cir.selfModuleIdentity();
+    const nominal_count = self.types.nominalDeclCount();
+    var nominal_int: u32 = 0;
+    while (nominal_int < nominal_count) : (nominal_int += 1) {
+        const nominal_idx: types_mod.NominalDecl.Idx = @enumFromInt(nominal_int);
+        const nominal = self.types.getNominalDecl(nominal_idx);
+        if (nominal.origin_module != self_origin) continue;
+
+        const decl_idx: CIR.Statement.Idx = @enumFromInt(nominal.statement());
+        const dense_idx = self.type_decl_dense_indices.items[nodeSlot(decl_idx)];
+        std.debug.assert(dense_idx != no_type_decl_dense_index);
+        if (!self.type_decl_invalid.items[dense_idx]) continue;
+
+        self.types.markNominalDeclInvalid(nominal_idx);
+        try self.types.setVarContent(ModuleEnv.varFrom(decl_idx), .err);
+        try self.types.setVarContent(nominal.backing, .err);
+    }
+}
+
+/// Close declaration-template invalidity over local declaration references,
+/// validate nominal recursion, and poison every transitively invalid nominal.
+fn finalizeTypeDeclarationValidity(self: *Self) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const decl_count = self.type_decl_statements.items.len;
+    if (decl_count == 0) return;
+
+    var dependent_counts = try self.gpa.alloc(usize, decl_count);
+    defer self.gpa.free(dependent_counts);
+    @memset(dependent_counts, 0);
+
+    for (self.type_decl_dependencies.items) |edge| {
+        dependent_counts[edge.dependency] += 1;
+    }
+
+    var dependent_offsets = try self.gpa.alloc(usize, decl_count + 1);
+    defer self.gpa.free(dependent_offsets);
+    dependent_offsets[0] = 0;
+    for (dependent_counts, 0..) |count, dense_idx| {
+        dependent_offsets[dense_idx + 1] = dependent_offsets[dense_idx] + count;
+    }
+
+    var fill_offsets = try self.gpa.dupe(usize, dependent_offsets[0..decl_count]);
+    defer self.gpa.free(fill_offsets);
+    const dependents = try self.gpa.alloc(u32, self.type_decl_dependencies.items.len);
+    defer self.gpa.free(dependents);
+
+    for (self.type_decl_dependencies.items) |edge| {
+        const offset = fill_offsets[edge.dependency];
+        dependents[offset] = edge.dependent;
+        fill_offsets[edge.dependency] += 1;
+    }
+
+    var worklist: std.ArrayListUnmanaged(u32) = .empty;
+    defer worklist.deinit(self.gpa);
+    try worklist.ensureTotalCapacity(self.gpa, decl_count);
+
+    const propagated = try self.gpa.alloc(bool, decl_count);
+    defer self.gpa.free(propagated);
+    @memset(propagated, false);
+
+    self.propagateTypeDeclarationInvalidity(dependent_offsets, dependents, propagated, &worklist);
+    try self.poisonInvalidNominalDeclarations();
+
+    try self.validateNominalDeclRecursion();
+
+    self.propagateTypeDeclarationInvalidity(dependent_offsets, dependents, propagated, &worklist);
+    try self.poisonInvalidNominalDeclarations();
+}
+
 /// Validate every local nominal type declaration's backing recursion, after
 /// all type declarations have been generated and before any value checking.
 ///
@@ -3628,6 +3785,7 @@ fn validateNominalDeclRecursion(self: *Self) std.mem.Allocator.Error!void {
 
         // Poison the declaration: uses instantiate `.err` and are suppressed,
         // and no later stage can walk the cyclic template graph.
+        self.markTypeDeclInvalid(@enumFromInt(decl.statement()));
         self.types.markNominalDeclInvalid(decl_idx);
         try self.types.setVarContent(decl_var, .err);
         try self.types.setVarContent(decl.backing, .err);
@@ -5357,7 +5515,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     // With every declaration generated, validate nominal declaration
     // recursion before any value checking consumes the declarations.
-    try self.validateNominalDeclRecursion();
+    try self.finalizeTypeDeclarationValidity();
 
     // Next, capture all top level defs
     // This is used to support out-of-order defs
@@ -8916,7 +9074,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     }
 
     // Validate nominal declaration recursion before checking values.
-    try self.validateNominalDeclRecursion();
+    try self.finalizeTypeDeclarationValidity();
 
     // Set the rank to be outermost
     try env.var_pool.pushRank();
@@ -8959,7 +9117,7 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
     }
 
     // Validate nominal declaration recursion before checking values.
-    try self.validateNominalDeclRecursion();
+    try self.finalizeTypeDeclarationValidity();
 
     // Initialize top_level_ptrns with any defs from local type declarations
     for (0..self.cir.all_defs.span.len) |def_offset| {
@@ -9636,6 +9794,11 @@ fn generateStmtTypeDeclType(
     const decl_var = ModuleEnv.varFrom(decl_idx);
 
     switch (decl) {
+        .s_alias_decl, .s_nominal_decl => _ = try self.registerTypeDecl(decl_idx),
+        else => {},
+    }
+
+    switch (decl) {
         .s_alias_decl => |alias| {
             try self.generateAliasDecl(decl_idx, decl_var, alias, env);
         },
@@ -9804,6 +9967,11 @@ fn generateAliasDecl(
     // Next, generate the provided arg types and build the map of rigid variables in the header
     const predeclared_header_vars = self.predeclaredAliasArgs(decl_var);
     const header_vars = if (predeclared_header_vars) |vars| vars else try self.generateHeaderVars(header_args, env);
+    for (header_vars) |header_var| {
+        if (self.types.resolveVar(header_var).desc.content == .err) {
+            self.markTypeDeclInvalid(decl_idx);
+        }
+    }
     if (predeclared_header_vars == null) {
         try self.unifyWithTargetRank(
             decl_var,
@@ -9842,6 +10010,7 @@ fn generateAliasDecl(
     } });
 
     if (!try self.validateAliasRows(backing_var, env, self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(alias.anno)))) {
+        self.markTypeDeclInvalid(decl_idx);
         try self.unifyWithTargetRank(decl_var, .err, env);
         return;
     }
@@ -9865,6 +10034,11 @@ fn generateNominalDecl(
     // Next, generate the provided arg types and build the map of rigid variables in the header
     const predeclared_header_vars = self.predeclaredNominalArgs(decl_var);
     const header_vars = if (predeclared_header_vars) |vars| vars else try self.generateHeaderVars(header_args, env);
+    for (header_vars) |header_var| {
+        if (self.types.resolveVar(header_var).desc.content == .err) {
+            self.markTypeDeclInvalid(decl_idx);
+        }
+    }
     if (predeclared_header_vars == null) {
         try self.unifyWithTargetRank(
             decl_var,
@@ -9909,18 +10083,6 @@ fn generateNominalDecl(
         .is_opaque = nominal.is_opaque,
         .num_args = @intCast(header_args.len),
     } });
-
-    // A malformed backing (its error was already reported while generating
-    // the annotation) invalidates the declaration: mark it in the table and
-    // poison the decl var so every use instantiates `.err` and is suppressed
-    // (declaration validity replaced the unifier's err-backed-nominal
-    // short-circuit).
-    if (self.types.resolveVar(backing_var).desc.content == .err) {
-        if (self.types.lookupNominalDeclByKey(self.cir.selfModuleIdentity(), @intFromEnum(decl_idx))) |table_idx| {
-            self.types.markNominalDeclInvalid(table_idx);
-        }
-        try self.unifyWithTargetRank(decl_var, .err, env);
-    }
 }
 
 /// Generate types for a standalone type annotation (one without a corresponding definition).
@@ -10017,6 +10179,28 @@ const GenTypeAnnoCtx = union(enum) {
         num_args: u32,
     },
 };
+
+fn recordTypeDeclDependencyFromContext(
+    self: *Self,
+    ctx: GenTypeAnnoCtx,
+    dependency_idx: CIR.Statement.Idx,
+) std.mem.Allocator.Error!void {
+    switch (ctx) {
+        .annotation => {},
+        .type_decl => |decl| try self.recordTypeDeclDependency(decl.idx, dependency_idx),
+    }
+}
+
+fn recordTypeDeclAnnoResult(self: *Self, ctx: GenTypeAnnoCtx, anno_var: Var) void {
+    switch (ctx) {
+        .annotation => {},
+        .type_decl => |decl| {
+            if (self.types.resolveVar(anno_var).desc.content == .err) {
+                self.markTypeDeclInvalid(decl.idx);
+            }
+        },
+    }
+}
 
 fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: *Env) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
@@ -10185,6 +10369,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
     const anno_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(anno_idx));
     const anno_var = ModuleEnv.varFrom(anno_idx);
     try self.setVarRank(anno_var, env);
+    defer self.recordTypeDeclAnnoResult(ctx, anno_var);
 
     // Put this anno in the "seen" map immediately, to support recursive references
     self.markTypeAnnoSeen(anno_idx);
@@ -10272,6 +10457,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                     try self.setBuiltinTypeContent(anno_var, lookup.name, builtin_type, &.{}, anno_region, env);
                 },
                 .local => |local| {
+                    try self.recordTypeDeclDependencyFromContext(ctx, local.decl_idx);
 
                     // Check if we're in a declaration or an annotation
                     switch (ctx) {
@@ -10382,6 +10568,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                     try self.setBuiltinTypeContent(anno_var, a.name, builtin_type, anno_arg_vars, anno_region, env);
                 },
                 .local => |local| {
+                    try self.recordTypeDeclDependencyFromContext(ctx, local.decl_idx);
                     const decl_var = ModuleEnv.varFrom(local.decl_idx);
                     if (self.isForClauseAliasStatement(local.decl_idx)) {
                         try self.generateForClauseAliasApplication(anno_var, decl_var, anno_arg_vars, env);

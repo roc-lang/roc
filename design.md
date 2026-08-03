@@ -436,6 +436,29 @@ constructs must not be independently selected, because that would change source
 behavior by running compile-time observables that the program would not
 evaluate.
 
+### Type Declaration Template Validity
+
+Checking records type-declaration template validity while generating annotation
+nodes. A declaration is locally invalid when any annotation node generated for
+its header or backing resolves to the solver's error type. Every local named-type
+reference generated in a declaration also records a directed dependency from the
+referencing declaration to the referenced declaration. This evidence comes from
+the normal annotation-generation traversal; validity must not be reconstructed
+later by rescanning source syntax or solved type structure.
+
+After all local type declarations have been generated, checking computes the
+transitive closure of invalidity over those recorded dependency edges. This
+finalization is linear in the number of declarations plus recorded references,
+handles forward and mutually recursive declarations independent of source order,
+and first runs before nominal-recursion validation. Nominal-recursion errors add
+invalid declarations to the same worklist, which is then propagated incrementally
+before value checking without rebuilding the dependency graph. Every invalid
+nominal declaration is marked invalid in the declaration table and its declaration
+root and backing template are poisoned to the error type. CheckedModule
+construction enforces this invariant: a nominal declaration marked valid always
+has an error-free checked template, and encountering malformed template data for
+one is an invariant violation.
+
 ### Compile-Time Evaluation And Static Storage
 
 Compile-time evaluation must evaluate every checked top-level expression and
@@ -3144,9 +3167,9 @@ Other solved-graph mutations:
   content would produce.
 - `resetAnnotationNodes` (`resetVarToUnbound`) — mechanism: recycles
   annotation node vars after the scheme was copied off as a disjoint orphan.
-- Occurs-check and invalid-nominal-declaration poisoning
-  (`setVarContent(.err)`) — mechanism: diagnostic recovery after a reported
-  problem.
+- `finalizeTypeDeclarationValidity` and occurs-check poisoning
+  (`setVarContent(.err)`) — policy: Type Declaration Template Validity (above)
+  and diagnostic recovery after an already reported problem.
 - `finalizeFunctionEffectsAtBoundary` — policy: directed-effect
   materialization at generalization boundaries, the rule declared in
   Checking Effects And Const Roots.
