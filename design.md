@@ -4320,8 +4320,11 @@ metadata bit `Descriptor.static_dispatch_rejected`. Rejection is not encoded by
 changing the constraint callable, its return, the dispatcher, or any operand to
 an erroneous type: those solver variables can be shared with independently valid
 producers. The marker is metadata about the class, not content, so `Store.union_`
-carries it across a merge (a class is rejected if either side was) and
-`Store.poisonOnMismatch` preserves it when it replaces content with `err`.
+carries it across a merge and `Store.poisonOnMismatch` preserves it when it
+replaces content with `err`. A merge rejects the result if either side was
+rejected: two constraint callables only unify when they are the same function
+type carrying the same obligation, so an obligation checking rejected for one of
+them is rejected for every site that shares it.
 Instantiation and cross-module copies mint fresh, unrejected classes: a fresh
 edge is checked on its own terms.
 

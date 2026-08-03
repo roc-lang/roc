@@ -1520,7 +1520,7 @@ fn initAssumePrepared(
     // equivalence classes, so a re-check of an env that already carries them
     // sees the same rejections a fresh check would.
     for (cir.rejectedStaticDispatches()) |rejected| {
-        try types.markVarStaticDispatchRejected(rejected.fnVar());
+        _ = try types.markVarStaticDispatchRejected(rejected.fnVar());
     }
 
     const self: Self = .{
@@ -25148,8 +25148,7 @@ fn markStaticDispatchRejected(self: *Self, constraint: StaticDispatchConstraint)
 /// callable unified into an already-rejected class is rejected too and needs no
 /// second durable record.
 fn markStaticDispatchFnRejected(self: *Self, fn_var: Var) Allocator.Error!void {
-    if (self.types.varStaticDispatchRejected(fn_var)) return;
-    try self.types.markVarStaticDispatchRejected(fn_var);
+    if (!try self.types.markVarStaticDispatchRejected(fn_var)) return;
     try self.cir.recordRejectedStaticDispatch(fn_var);
 }
 

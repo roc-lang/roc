@@ -11,10 +11,10 @@ const CoreCtx = @import("ctx").CoreCtx;
 
 test "issue 10571: repeated failed dispatch on the same receiver reports type mismatches" {
     // Repro for https://github.com/roc-lang/roc/issues/10571.
-    // Two `len` calls on the same dispatch-produced receiver, each forced to a
-    // type `List.len` cannot have, must both report TYPE MISMATCH. Publishing
-    // the checked artifact has to tolerate a dispatch plan whose callable
-    // failed to resolve instead of asserting it is a function.
+    // Both `plus` sites share one constraint callable, so rejecting the
+    // obligation once must reject it for every site sharing it. Otherwise the
+    // second site's plan reaches publication classified as resolved while its
+    // callable is the error type, and publication panics instead of reporting.
     const gpa = std.testing.allocator;
     const io = std.testing.io;
 

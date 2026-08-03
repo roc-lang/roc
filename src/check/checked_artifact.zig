@@ -6873,7 +6873,7 @@ const SourceTypeGraphFactsContext = struct {
         const resolved = types_store.resolveVar(root);
         std.debug.assert(resolved.var_ == root);
 
-        if (resolved.desc.empty_tag_union_is_default) {
+        if (resolved.desc.flags.empty_tag_union_is_default) {
             return .{ .contains_identity_variables = true };
         }
 
@@ -7012,7 +7012,7 @@ fn appendCheckedTypeRootWithRowDefault(
     // The checker explicitly marks an otherwise-unresolved identity when it
     // closes that identity to `[]`. Preserve the surviving root as a checked
     // variable and carry `[]` only as its row default.
-    if (resolved.desc.empty_tag_union_is_default) {
+    if (resolved.desc.flags.empty_tag_union_is_default) {
         if (active.get(resolved_var)) |id| {
             applyCheckedTypeRowDefault(store, id, row_default);
             return id;
@@ -7868,7 +7868,7 @@ test "checker marks exhaustiveness-defaulted empty payload provenance" {
     try std.testing.expectEqual(@as(usize, 2), args.len);
     const err_desc = test_env.module_env.types.resolveVar(args[1]).desc;
     try std.testing.expectEqual(types.Content{ .structure = .empty_tag_union }, err_desc.content);
-    try std.testing.expect(err_desc.empty_tag_union_is_default);
+    try std.testing.expect(err_desc.flags.empty_tag_union_is_default);
 }
 
 test "checked output retains defaulted identity inside parent function digest" {

@@ -123,10 +123,10 @@ pub const TypeScope = struct {
     }
 };
 
-/// A type descriptor
-pub const Descriptor = struct {
-    content: Content,
-    rank: Rank,
+/// Checker decisions a descriptor carries alongside its content. Descriptors
+/// live in a struct-of-arrays keyed by every union-find resolve, so these share
+/// one byte-wide column instead of one column each.
+pub const DescriptorFlags = packed struct(u8) {
     /// The checker closed this otherwise-unresolved variable to `[]` after
     /// proving that no runtime constructor can inhabit it. The checked output
     /// preserves the variable identity and carries `[]` only as its row default.
@@ -137,6 +137,14 @@ pub const Descriptor = struct {
     /// the same class reports the same rejection. See design.md's "Static
     /// Dispatch In Monotype" section.
     static_dispatch_rejected: bool = false,
+    _unused: u6 = 0,
+};
+
+/// A type descriptor
+pub const Descriptor = struct {
+    content: Content,
+    rank: Rank,
+    flags: DescriptorFlags = .{},
 };
 
 /// In general, the rank tracks the number of let-bindings a variable is "under".
