@@ -1278,9 +1278,11 @@ pub const Rehearsal = struct {
     /// cannot fill the census file.
     unbound_no_frame_dumped: usize = 0,
     /// Backing storage for component slices this rehearsal declares as
-    /// representation inputs. Slices stay valid while declared; the pool
-    /// resets only when every declaration has been retracted.
-    component_pool: std.ArrayList(Type.TypeId) = .empty,
+    /// representation inputs. An arena keeps every slice at a stable address
+    /// for as long as it stays declared — appending for a later declaration
+    /// must not move an earlier one — and resets only when every declaration
+    /// has been retracted.
+    component_arena: std.heap.ArenaAllocator,
     /// How many failed edge-to-site joins have been dumped in detail.
     nested_leaf_dumped: usize = 0,
     /// Positions the seam reported a divergence at, so whether each is a
@@ -1348,6 +1350,7 @@ pub const Rehearsal = struct {
         const self = try allocator.create(Rehearsal);
         self.* = .{
             .allocator = allocator,
+            .component_arena = std.heap.ArenaAllocator.init(allocator),
             .types = types,
             .program_names = program_names,
             .translator = undefined,
@@ -1382,7 +1385,7 @@ pub const Rehearsal = struct {
         self.dumpDetails();
         for (self.frames.items) |*frame| self.releaseFrame(frame);
         self.frames.deinit(self.allocator);
-        self.component_pool.deinit(self.allocator);
+        self.component_arena.deinit();
         self.diverged_addresses.deinit(self.allocator);
         self.details.deinit(self.allocator);
         self.unresolved_details.deinit(self.allocator);
@@ -1985,12 +1988,12 @@ pub const Rehearsal = struct {
         const args = self.types.span(named.args);
         const len = GuardedList.borrowLen(args);
         if (len <= 1 or len - 1 > 16) return &.{};
-        const start = self.component_pool.items.len;
+        const pooled = self.component_arena.allocator().alloc(Type.TypeId, len - 1) catch return &.{};
         var index: usize = 1;
         while (index < len) : (index += 1) {
-            self.component_pool.append(self.allocator, GuardedList.at(args, index)) catch return &.{};
+            pooled[index - 1] = GuardedList.at(args, index);
         }
-        return self.component_pool.items[start..];
+        return pooled;
     }
 
     /// Declare a producer representation a specialization record carries for
@@ -2011,12 +2014,12 @@ pub const Rehearsal = struct {
                 else => return null,
             };
             const len = GuardedList.borrowLen(span);
-            const start = self.component_pool.items.len;
+            const pooled = self.component_arena.allocator().alloc(Type.TypeId, len) catch return null;
             var index: usize = 0;
             while (index < len) : (index += 1) {
-                self.component_pool.append(self.allocator, GuardedList.at(span, index)) catch return null;
+                pooled[index] = GuardedList.at(span, index);
             }
-            stated.components = self.component_pool.items[start..];
+            stated.components = pooled;
         }
         const floor = self.translator.representationInputCount();
         self.translator.declareRepresentationInput(.{
@@ -3536,7 +3539,7 @@ pub const Rehearsal = struct {
         if (self.requests.items.len == 0 and self.callees.items.len == 0 and
             self.translator.representationInputCount() == 0)
         {
-            self.component_pool.clearRetainingCapacity();
+            _ = self.component_arena.reset(.retain_capacity);
         }
         graph.trace = null;
         graph.seal_probe = null;
