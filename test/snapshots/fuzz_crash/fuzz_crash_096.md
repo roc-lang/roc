@@ -66,7 +66,7 @@ NO CHANGE
 	(type_decls
 		(nominal (type "T")
 			(ty-header (name "T")))
-		(alias (type "T.A")
+		(alias (type "Error")
 			(ty-header (name "fuzz_crash_096.T.A"))))
 	(expressions))
 ~~~

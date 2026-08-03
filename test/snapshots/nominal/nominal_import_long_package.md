@@ -11,12 +11,12 @@ red : CE
 red = ... # not implemented
 ~~~
 # EXPECTED
-UNDECLARED TYPE - nominal_import_long_package.md:3:7:3:9
+MOD NOT FOUND - nominal_import_long_package.md:3:7:3:9
 # PROBLEMS
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `CE` is not declared in this scope. ────────────┐
-└┬────────────────┘                                                           │
+┌──────────────────┐
+│ MOD NOT FOUND ├─ This `CE` type is declared to be in `design.Styles`, ───┐
+└┬─────────────────┘  which does not exist.                                   │
  │                                                                            │
  │  red : CE                                                                  │
  │        ‾‾                                                                  │
@@ -58,7 +58,8 @@ NO CHANGE
 			(ty-malformed)))
 	(s-import (mod "design.Styles")
 		(exposes
-			(exposed (name "Encoder") (alias "CE") (wildcard false)))))
+			(exposed (name "Color") (alias "Color") (wildcard false))
+			(exposed (name "Color.Encoder") (alias "CE") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure

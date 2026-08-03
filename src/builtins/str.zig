@@ -1276,21 +1276,37 @@ pub fn repeatC(
     count_u64: u64,
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
-    const count: usize = @intCast(count_u64);
     const bytes_len = string.len();
-    if (count == 0 or bytes_len == 0) {
+    if (count_u64 == 0 or bytes_len == 0) {
         return RocStr.empty();
     }
 
+    const count = std.math.cast(usize, count_u64) orelse {
+        roc_ops.crash("Str.repeat count exceeds the platform address space");
+        unreachable;
+    };
+    const repeated_len = std.math.mul(usize, count, bytes_len) catch {
+        roc_ops.crash("Str.repeat result length overflowed");
+        unreachable;
+    };
     const bytes_ptr = string.asU8ptr();
+    var ret_string = RocStr.allocate(repeated_len, roc_ops);
+    const ret_bytes = ret_string.asU8ptrMut()[0..repeated_len];
 
-    var ret_string = RocStr.allocate(count * bytes_len, roc_ops);
-    var ret_string_ptr = ret_string.asU8ptrMut();
+    if (bytes_len == 1) {
+        @memset(ret_bytes, bytes_ptr[0]);
+        return ret_string;
+    }
 
-    var i: usize = 0;
-    while (i < count) : (i += 1) {
-        @memcpy(ret_string_ptr[0..bytes_len], bytes_ptr[0..bytes_len]);
-        ret_string_ptr += bytes_len;
+    @memcpy(ret_bytes[0..bytes_len], bytes_ptr[0..bytes_len]);
+    var initialized = bytes_len;
+    while (initialized < repeated_len) {
+        const copy_len = @min(initialized, repeated_len - initialized);
+        @memcpy(
+            ret_bytes[initialized..][0..copy_len],
+            ret_bytes[0..copy_len],
+        );
+        initialized += copy_len;
     }
 
     return ret_string;
@@ -1304,6 +1320,29 @@ test "repeatC: empty string short-circuits" {
     defer repeated.decref(test_env.getOps());
 
     try std.testing.expect(repeated.eql(RocStr.empty()));
+}
+
+test "repeatC: fills single-byte repetitions in bulk" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const repeated = repeatC(RocStr.fromSliceSmall("x"), 65536, test_env.getOps());
+    defer repeated.decref(test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 65536), repeated.len());
+    for (repeated.asSlice()) |byte| {
+        try std.testing.expectEqual(@as(u8, 'x'), byte);
+    }
+}
+
+test "repeatC: doubles multi-byte patterns without overlap" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const repeated = repeatC(RocStr.fromSliceSmall("abc"), 7, test_env.getOps());
+    defer repeated.decref(test_env.getOps());
+
+    try std.testing.expect(repeated.eqlSlice("abcabcabcabcabcabcabc"));
 }
 
 /// Str.endsWith
@@ -1360,8 +1399,12 @@ pub fn strConcat(
 ) RocStr {
     // NOTE: we don't special-case the first argument being empty. That is because it is owned and
     // may have sufficient capacity to store the rest of the list.
-    if (arg2.isEmpty()) {
-        // the first argument is owned, so we can return it without cloning
+    if (arg2.isEmpty() and arg1.isExclusive(update_mode)) {
+        // The first argument is owned and nobody else holds its allocation, so
+        // the result can be that value itself. Handing back a *shared* value
+        // here would break the op's `result_unique` claim (`base/LowLevel.zig`)
+        // and let ARC treat a shared allocation as freshly owned; a shared
+        // first argument falls through to the copying path below.
         return arg1;
     } else {
         const combined_length = arg1.len() + arg2.len();

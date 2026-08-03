@@ -951,6 +951,7 @@ const Pass = struct {
                 },
                 .assign_call_erased => |assign| {
                     try self.noteUse(assign.closure);
+                    if (assign.reuse_source) |reuse_source| try self.noteUse(reuse_source);
                     const args = self.store.getLocalSpan(assign.args);
                     for (0..args.len) |index| try self.noteUse(GuardedList.at(args, index));
                     try self.noteWrite(assign.target);

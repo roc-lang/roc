@@ -686,6 +686,7 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             try args.append("/defaultlib:kernel32");
             try args.append("/defaultlib:ntdll");
             try args.append("/defaultlib:msvcrt");
+            try args.append("/defaultlib:shell32");
 
             // Suppress warnings using Windows style
             try args.append("/ignore:4217"); // Ignore locally defined symbol imported warnings
@@ -711,6 +712,42 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
                 }) catch return LinkError.OutOfMemory;
                 @import("backend").writeFileWindowsAvSafe(ctx.io.std_io, stack_probe_path, stack_probe_obj) catch return LinkError.OutOfMemory;
                 try args.append(stack_probe_path);
+            }
+        },
+        .freebsd, .openbsd, .netbsd => {
+            try args.append("ld.lld");
+
+            try args.append("-o");
+            try args.append(config.output_path);
+
+            // Prevent hidden linker behaviour -- only explicit platform dependencies
+            try args.append("-nostdlib");
+            // Remove unused sections to reduce binary size
+            try args.append("--gc-sections");
+            // Stamp a build id so stripped copies of the binary can be
+            // matched back to their debug info.
+            try args.append("--build-id");
+            // Match what each BSD's own toolchain produces: relocations
+            // resolved eagerly at load and their section mapped read-only
+            // afterwards.
+            try args.append("-z");
+            try args.append("relro");
+            try args.append("-z");
+            try args.append("now");
+            // Suppress linker warnings
+            if (suppress_linker_warnings) {
+                try args.append("-w");
+            }
+
+            if (is_shared_lib) {
+                // Shared libraries have no program interpreter; the loading
+                // process's dynamic linker resolves them.
+                try args.append("-shared");
+            } else {
+                const interpreter = roc_target.bsdProgramInterpreter(target_os) orelse
+                    return LinkError.LinkFailed;
+                try args.append("-dynamic-linker");
+                try args.append(interpreter);
             }
         },
         .freestanding => {
@@ -1115,6 +1152,16 @@ fn findArg(args: []const []const u8, needle: []const u8) ?usize {
     return null;
 }
 
+/// Whether `args` contains `flag` immediately followed by `value`, for the
+/// linker options that are spelled as two separate arguments.
+fn hasArgPair(args: []const []const u8, flag: []const u8, value: []const u8) bool {
+    if (args.len == 0) return false;
+    for (args[0 .. args.len - 1], 0..) |arg, i| {
+        if (std.mem.eql(u8, arg, flag) and std.mem.eql(u8, args[i + 1], value)) return true;
+    }
+    return false;
+}
+
 /// Convenience function to link two object files into an executable
 pub fn linkTwoObjects(ctx: *CliCtx, obj1: []const u8, obj2: []const u8, output: []const u8) LinkError!void {
     if (comptime !llvm_available) {
@@ -1291,6 +1338,66 @@ test "macOS non-archive platform files are passed directly" {
     try std.testing.expectEqual(@as(?usize, null), findArg(args.items, "-all_load"));
     try std.testing.expectEqual(@as(?usize, null), findArg(args.items, "-force_load"));
     _ = findArg(args.items, object_path) orelse return error.MissingObjectFile;
+}
+
+test "BSD executables name their OS program interpreter" {
+    const cases = [_]struct { os: std.Target.Os.Tag, interpreter: []const u8 }{
+        .{ .os = .freebsd, .interpreter = "/libexec/ld-elf.so.1" },
+        .{ .os = .openbsd, .interpreter = "/usr/libexec/ld.so" },
+        .{ .os = .netbsd, .interpreter = "/usr/libexec/ld.elf_so" },
+    };
+
+    for (cases) |case| {
+        var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
+        defer arena_instance.deinit();
+
+        var io = Io.create(std.testing.io);
+        var ctx = CliCtx.init(std.testing.allocator, arena_instance.allocator(), &io, .build);
+        ctx.initIo();
+        defer ctx.deinit();
+
+        const config = LinkConfig{
+            .target_format = .elf,
+            .target_os = case.os,
+            .target_arch = .x86_64,
+            .output_path = "test_output",
+            .object_files = &.{"libroc_interpreter_shim.a"},
+        };
+
+        const args = try buildLinkArgs(&ctx, config);
+
+        try std.testing.expectEqualStrings("ld.lld", args.items[0]);
+        const linker_idx = findArg(args.items, "-dynamic-linker") orelse return error.MissingDynamicLinker;
+        try std.testing.expect(linker_idx + 1 < args.items.len);
+        try std.testing.expectEqualStrings(case.interpreter, args.items[linker_idx + 1]);
+
+        try std.testing.expect(hasArgPair(args.items, "-z", "relro"));
+        try std.testing.expect(hasArgPair(args.items, "-z", "now"));
+    }
+}
+
+test "BSD shared libraries have no program interpreter" {
+    var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena_instance.deinit();
+
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(std.testing.allocator, arena_instance.allocator(), &io, .build);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    const config = LinkConfig{
+        .target_format = .elf,
+        .target_os = .openbsd,
+        .target_arch = .x86_64,
+        .output_path = "test_output",
+        .output_kind = .shared_lib,
+        .object_files = &.{"libroc_interpreter_shim.a"},
+    };
+
+    const args = try buildLinkArgs(&ctx, config);
+
+    _ = findArg(args.items, "-shared") orelse return error.MissingSharedFlag;
+    try std.testing.expectEqual(@as(?usize, null), findArg(args.items, "-dynamic-linker"));
 }
 
 test "link error when LLVM not available" {

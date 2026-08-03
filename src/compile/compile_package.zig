@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const base = @import("base");
 const parse = @import("parse");
 const can = @import("can");
@@ -324,14 +325,14 @@ pub fn canonicalizeAndTypeCheckModule(
 /// returns the type declaration statement index so Can.zig uses qualified lookup.
 /// For regular modules (where members are stored under plain names like "to_str"),
 /// returns null so Can.zig uses bare-name lookup.
-fn computeSiblingStatementIdx(sibling_env: *const ModuleEnv, sibling_name: []const u8) ?can.CIR.Statement.Idx {
+fn computeSiblingStatementIdx(sibling_env: *const ModuleEnv) ?can.CIR.Statement.Idx {
     // Only type modules store associated functions under qualified names.
     // Regular modules (deprecated_module, etc.) store them under plain names.
     switch (sibling_env.module_kind) {
         .type_module => {},
         else => return null,
     }
-    const type_ident_in_module = sibling_env.common.findIdent(sibling_name) orelse return null;
+    const type_ident_in_module = sibling_env.common.findIdent(sibling_env.module_name) orelse return null;
     const type_node_idx = sibling_env.getExposedTypeNodeIndexById(type_ident_in_module) orelse return null;
     return @enumFromInt(type_node_idx);
 }
@@ -382,34 +383,26 @@ pub fn canonicalizeModuleWithSiblings(
     // Canonicalization consumes concrete exposed-node data from dependencies.
     const sibling_imports = try module_discovery.extractImportsFromDeclIndex(parse_ast, gpa);
     defer {
-        for (sibling_imports) |imp| gpa.free(imp);
+        for (sibling_imports) |imp| gpa.free(imp.import_name);
         gpa.free(sibling_imports);
     }
 
-    for (sibling_imports) |sibling_name| {
+    for (sibling_imports) |sibling_import| {
+        const sibling_name = sibling_import.import_name;
         // Skip self
         if (std.mem.eql(u8, sibling_name, env.module_name)) continue;
 
         const sibling_ident = try env.insertIdent(base.Ident.for_text(sibling_name));
-        const qualified_ident = try env.insertIdent(base.Ident.for_text(sibling_name));
-
-        // Check if sibling file exists (via Io abstraction)
-        const file_name = try std.fmt.allocPrint(gpa, "{s}.roc", .{sibling_name});
-        defer gpa.free(file_name);
-        const file_path = try std.fs.path.join(gpa, &.{ root_dir, file_name });
-        defer gpa.free(file_path);
-        const exists = roc_ctx.fileExists(file_path);
-        if (!exists) continue;
-
         // Check pre-resolved imports first (e.g., from coordinator's built dependency list)
         const pre_resolved_env = resolved_import_envs.get(sibling_name);
 
         if (pre_resolved_env) |sibling_env| {
-            const statement_idx = computeSiblingStatementIdx(sibling_env, sibling_name);
+            const type_ident = try env.insertIdent(base.Ident.for_text(sibling_env.module_name));
+            const statement_idx = computeSiblingStatementIdx(sibling_env);
             try module_envs_map.put(sibling_ident, .{
                 .env = sibling_env,
                 .statement_idx = statement_idx,
-                .qualified_type_ident = qualified_ident,
+                .qualified_type_ident = type_ident,
                 .import_identity = .{ .module = sibling_ident },
             });
             continue;
@@ -466,6 +459,7 @@ pub fn canonicalizeModuleWithSiblings(
             .builtin_indices = builtin_indices,
         },
         .imported_modules = &module_envs_map,
+        .compiler_version = build_options.compiler_version,
     });
     czer.source_dir = root_dir;
     try czer.canonicalizeFile();

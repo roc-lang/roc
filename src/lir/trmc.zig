@@ -699,7 +699,7 @@ const Detection = struct {
             .assign_literal, .assign_packed_erased_fn => false,
             .init_uninitialized => |s| c.chainContains(s.target),
             .assign_call => |s| self.spanTouchesChain(s.args, c),
-            .assign_call_erased => |s| c.chainContains(s.closure) or self.spanTouchesChain(s.args, c),
+            .assign_call_erased => |s| c.chainContains(s.closure) or (s.reuse_source != null and c.chainContains(s.reuse_source.?)) or self.spanTouchesChain(s.args, c),
             .assign_low_level => |s| self.spanTouchesChain(s.args, c),
             .assign_list => |s| self.spanTouchesChain(s.elems, c),
             .assign_struct => |s| self.spanTouchesChain(s.fields, c),

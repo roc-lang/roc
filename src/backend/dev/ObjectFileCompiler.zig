@@ -68,7 +68,6 @@ pub const CompilationError = error{
 /// Supports compilation to any RocTarget via runtime-to-comptime dispatch.
 pub const ObjectFileCompiler = struct {
     allocator: Allocator,
-    enable_default_platform_runtime: bool = false,
     timing: ?*Timing = null,
 
     pub const TimingSnapshot = struct {
@@ -145,7 +144,7 @@ pub const ObjectFileCompiler = struct {
         proc_specs: []const LirProcSpec,
         target: RocTarget,
     ) CompilationError!CompilationResult {
-        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, target, self.enable_default_platform_runtime, self.timing);
+        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, target, self.timing);
     }
 
     /// Compile to an object file and write it to a path.
@@ -242,7 +241,6 @@ fn compileWithCodeGen(
     static_data_exports: []const StaticDataExport,
     proc_specs: []const LirProcSpec,
     target: RocTarget,
-    enable_default_platform_runtime: bool,
     timing: ?*ObjectFileCompiler.Timing,
 ) CompilationError!CompilationResult {
     if (entrypoints.len == 0 and static_data_exports.len == 0) {
@@ -262,12 +260,12 @@ fn compileWithCodeGen(
         layout_store,
         static_strings.entries,
         .preserve,
+        target.cpuLevel(),
     ) catch return CompilationError.OutOfMemory;
     defer codegen.deinit();
 
     // Set object file mode to generate relocatable symbol references instead of direct pointers
     codegen.generation_mode = .object_file;
-    codegen.enable_default_platform_runtime = enable_default_platform_runtime;
 
     const static_rc_helpers = static_data_export.collectRequiredRcHelpers(allocator, static_data_exports) catch {
         return CompilationError.OutOfMemory;
@@ -693,6 +691,11 @@ fn compileStaticDataObjectBytes(
 
 /// Runtime-to-comptime dispatch for compilation.
 /// Uses inline for over RocTarget enum fields to select the correct LirCodeGen instantiation.
+///
+/// Only default-CPU targets are instantiated. A `v1` target compiles through
+/// its default twin's instantiation and carries its CPU level as a runtime
+/// field, so the baseline targets cost no extra monomorphizations: they select
+/// different instruction sequences, not a different code generator.
 fn crossCompileDispatch(
     allocator: Allocator,
     lir_store: *const LirStore,
@@ -701,13 +704,14 @@ fn crossCompileDispatch(
     static_data_exports: []const StaticDataExport,
     proc_specs: []const LirProcSpec,
     target: RocTarget,
-    enable_default_platform_runtime: bool,
     timing: ?*ObjectFileCompiler.Timing,
 ) CompilationError!CompilationResult {
     const enum_info = @typeInfo(RocTarget).@"enum";
+    const default_target = target.defaultCpuTarget();
     inline for (enum_info.fields) |field| {
         const comptime_target: RocTarget = @enumFromInt(field.value);
-        if (target == comptime_target) {
+        if (comptime comptime_target.defaultCpuTarget() != comptime_target) continue;
+        if (default_target == comptime_target) {
             const arch = comptime comptime_target.toCpuArch();
             if (comptime (arch == .x86_64 or arch == .aarch64 or arch == .aarch64_be)) {
                 return compileWithCodeGen(
@@ -718,8 +722,7 @@ fn crossCompileDispatch(
                     entrypoints,
                     static_data_exports,
                     proc_specs,
-                    comptime_target,
-                    enable_default_platform_runtime,
+                    target,
                     timing,
                 );
             } else {

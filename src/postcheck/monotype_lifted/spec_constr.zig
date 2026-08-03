@@ -420,6 +420,7 @@ const CallableValue = struct {
     ty: Type.TypeId,
     fn_id: Ast.FnId,
     captures: []const CaptureValue,
+    iterator_step: bool = false,
 };
 
 const CallPattern = struct {
@@ -432,8 +433,21 @@ const Spec = struct {
     written: bool = false,
 };
 
+const BodySize = union(enum) {
+    exact: usize,
+    over_limit,
+
+    fn admits(self: BodySize) bool {
+        return switch (self) {
+            .exact => true,
+            .over_limit => false,
+        };
+    }
+};
+
 const FnPlan = struct {
     used_args: []bool,
+    body_size: BodySize,
     specs: std.ArrayList(Spec),
 
     fn deinit(self: *FnPlan, allocator: Allocator) void {
@@ -653,6 +667,49 @@ const CodeGrowthBudget = struct {
     }
 };
 
+const SpecAdmission = enum {
+    admitted,
+    denied_body_size,
+    denied_spec_count,
+};
+
+const InlineCallMode = enum {
+    all,
+    iterator_fusion,
+    none,
+
+    fn admitsDirect(
+        self: InlineCallMode,
+        procedure: ?check.StaticDispatchRegistry.IteratorProcedureId,
+        inside_iterator: bool,
+    ) bool {
+        return switch (self) {
+            .all => true,
+            .iterator_fusion => inside_iterator or isIteratorProducer(procedure),
+            .none => false,
+        };
+    }
+
+    fn admitsCallable(self: InlineCallMode, callable: CallableValue, inside_iterator: bool) bool {
+        return switch (self) {
+            .all => true,
+            .iterator_fusion => inside_iterator or callable.iterator_step,
+            .none => false,
+        };
+    }
+};
+
+/// GHC-style body-size admission for SpecConstr work. A large source body is
+/// left shared instead of being cloned into a worker or inlined into callers.
+/// Small iterator and stream step functions stay well below this threshold, so
+/// long fusion chains can still inline transitively through many small bodies.
+const spec_constr_body_expr_threshold: usize = 200;
+
+/// Maximum number of constructor-call-pattern workers for one source function.
+/// Additional patterns keep the ordinary shared call, bounding generated worker
+/// count without changing any shape proof.
+const spec_constr_specialization_count: usize = 3;
+
 const ActiveJoinClone = struct {
     source: Ast.JoinPointId,
     target: Ast.JoinPointId,
@@ -746,6 +803,7 @@ const Pass = struct {
             @memset(used_args, false);
             plan.* = .{
                 .used_args = used_args,
+                .body_size = fnBodySizeWithin(program, fn_.body, spec_constr_body_expr_threshold),
                 .specs = .empty,
             };
         }
@@ -910,7 +968,7 @@ const Pass = struct {
 
         var cloner = Cloner.initForRewrite(self);
         defer cloner.deinit();
-        cloner.inline_direct_calls = false;
+        cloner.inline_calls = .none;
         cloner.rewrite_call_patterns = false;
         cloner.emit_callable_workers = false;
 
@@ -1170,7 +1228,17 @@ const Pass = struct {
                 .body = .{ .roc = specialized },
                 .ret = fn_.ret,
             });
+            self.refreshPreCloneBodySize(index);
         }
+    }
+
+    fn refreshPreCloneBodySize(self: *Pass, index: usize) void {
+        if (index >= self.plans.len) Common.invariant("SpecConstr body-size refresh received a generated function");
+        self.plans[index].body_size = fnBodySizeWithin(
+            self.program,
+            self.program.getFnAt(index).body,
+            spec_constr_body_expr_threshold,
+        );
     }
 
     fn copyProcDebugName(self: *Pass, source_symbol: Common.Symbol, target_symbol: Common.Symbol) Allocator.Error!void {
@@ -1226,8 +1294,12 @@ const Pass = struct {
             var cloner = Cloner.initForRewrite(self);
             cloner.rewrite_call_patterns = false;
             cloner.emit_callable_workers = false;
-            // Generic analysis follows only existing constructor evidence.
-            // A used argument below requests result shape explicitly instead.
+            // Checker-stamped iterator producers enter an explicit fusion
+            // context. Their helper calls and generated-private step callables
+            // remain visible transitively so the complete iterator pipeline can
+            // seed fusion workers. Generic calls outside that context remain
+            // opaque until a production clone enforces emitted-code admission.
+            cloner.inline_calls = .iterator_fusion;
             cloner.inline_direct_requires_known_arg = true;
             defer cloner.deinit();
             try cloner.collectCallPatternsInExpr(fn_id, body);
@@ -1624,8 +1696,24 @@ const Pass = struct {
         }
     }
 
+    fn newSpecAdmission(self: *const Pass, raw: usize) SpecAdmission {
+        if (!self.plans[raw].body_size.admits()) return .denied_body_size;
+        if (self.plans[raw].specs.items.len >= spec_constr_specialization_count) return .denied_spec_count;
+        return .admitted;
+    }
+
+    fn inlineBodyAdmission(self: *const Pass, fn_id: Ast.FnId, body: Ast.ExprId) SpecAdmission {
+        const raw = @intFromEnum(fn_id);
+        const body_size = if (raw < self.plans.len)
+            self.plans[raw].body_size
+        else
+            exprBodySizeWithin(self.program, body, spec_constr_body_expr_threshold);
+        return if (body_size.admits()) .admitted else .denied_body_size;
+    }
+
     fn recordCallPattern(self: *Pass, fn_id: Ast.FnId, args_span: Ast.Span(Ast.ExprId)) Allocator.Error!void {
         const raw = @intFromEnum(fn_id);
+        if (self.newSpecAdmission(raw) != .admitted) return;
         const args = try GuardedList.dupe(self.allocator, Ast.ExprId, self.program.exprSpan(args_span));
         defer self.allocator.free(args);
         const fn_args = self.program.typedLocalSpan(self.program.getFnAt(raw).args);
@@ -1658,8 +1746,11 @@ const Pass = struct {
     }
 
     fn recordCallPatternForValues(self: *Pass, fn_id: Ast.FnId, values: []const Value) Common.LowerError!void {
-        const pattern = (try self.callPatternForValues(fn_id, values)) orelse return;
         const raw = @intFromEnum(fn_id);
+        if (raw >= self.plans.len) return;
+        if (self.newSpecAdmission(raw) != .admitted) return;
+
+        const pattern = (try self.callPatternForValues(fn_id, values)) orelse return;
         for (self.plans[raw].specs.items) |spec| {
             if (patternEql(self.program, spec.pattern, pattern)) return;
         }
@@ -1670,11 +1761,15 @@ const Pass = struct {
     }
 
     fn ensureCallPatternForValues(self: *Pass, fn_id: Ast.FnId, values: []const Value) Common.LowerError!void {
-        const pattern = (try self.callPatternForValues(fn_id, values)) orelse return;
         const raw = @intFromEnum(fn_id);
+        if (raw >= self.plans.len) return;
+        if (!self.plans[raw].body_size.admits()) return;
+
+        const pattern = (try self.callPatternForValues(fn_id, values)) orelse return;
         for (self.plans[raw].specs.items) |spec| {
             if (patternEql(self.program, spec.pattern, pattern)) return;
         }
+        if (self.newSpecAdmission(raw) != .admitted) return;
 
         const source_fn = self.program.getFnAt(raw);
         const symbol = self.symbols.fresh();
@@ -3350,7 +3445,7 @@ const Pass = struct {
 
             var cloner = Cloner.initForRewrite(self);
             defer cloner.deinit();
-            cloner.inline_direct_calls = false;
+            cloner.inline_calls = .none;
             cloner.rewrite_call_patterns = false;
             cloner.emit_callable_workers = false;
             const cloned = try cloner.cloneExpr(body);
@@ -4133,9 +4228,6 @@ const Cloner = struct {
     /// budget runs out the rewrite retains the plain shared join, which never
     /// re-clones arm bodies.
     let_case_shape_growth: CodeGrowthBudget,
-    /// Expression count of the program when this clone operation began;
-    /// inlining stops once `inline_expr_budget` expressions have been added.
-    start_expr_count: usize,
     /// Active let-of-case join rewrites, innermost last. Cloning a jump whose
     /// target belongs to one of these frames records the jump site's symbolic
     /// argument values for later parameter decomposition instead of cloning
@@ -4161,7 +4253,8 @@ const Cloner = struct {
     /// a cyclic value is rebound through a plain source clone before it can
     /// reach here—so reaching `value_wrapper_strip_cap` is a compiler bug.
     materialize_strip_depth: usize,
-    inline_direct_calls: bool,
+    inline_calls: InlineCallMode,
+    iterator_inline_depth: usize,
     inline_direct_requires_known_arg: bool,
     rewrite_call_patterns: bool,
     /// Pattern discovery and detect-only walks do not own output functions.
@@ -4178,14 +4271,6 @@ const Cloner = struct {
 
     const case_of_case_work_budget: u32 = 256;
 
-    /// Total expressions one top-level clone operation may append through
-    /// call inlining. Inlining is demand-driven and transitively re-enters
-    /// callee bodies, so one specialization over deeply composed known-shape
-    /// values can otherwise multiply the whole reachable call graph into its
-    /// body. Once the budget is spent, remaining calls clone as plain calls,
-    /// which every shape matcher already treats as opaque.
-    const inline_expr_budget: usize = 50_000;
-
     fn init(pass: *Pass, source_fn: Ast.FnId, pattern: CallPattern) Cloner {
         return .{
             .pass = pass,
@@ -4198,7 +4283,6 @@ const Cloner = struct {
             .loop_exit_stack = .empty,
             .selected_loop_exit_tys = std.AutoHashMap(Ast.ExprId, Type.TypeId).init(pass.allocator),
             .join_stack = .empty,
-            .start_expr_count = pass.program.exprCount(),
             .let_case_shape_growth = .init(let_case_shape_arm_budget),
             .let_case_builds = .empty,
             .active_recursive_value_locals = std.AutoHashMap(Ast.LocalId, void).init(pass.allocator),
@@ -4206,7 +4290,8 @@ const Cloner = struct {
             .inline_scope_origins = std.AutoHashMap(Ast.InlineScopeId, Ast.InlineScopeId).init(pass.allocator),
             .wrapper_strip_depth = 0,
             .materialize_strip_depth = 0,
-            .inline_direct_calls = true,
+            .inline_calls = .all,
+            .iterator_inline_depth = 0,
             .inline_direct_requires_known_arg = true,
             .rewrite_call_patterns = true,
             .emit_callable_workers = true,
@@ -4229,7 +4314,6 @@ const Cloner = struct {
             .loop_exit_stack = .empty,
             .selected_loop_exit_tys = std.AutoHashMap(Ast.ExprId, Type.TypeId).init(pass.allocator),
             .join_stack = .empty,
-            .start_expr_count = pass.program.exprCount(),
             .let_case_shape_growth = .init(let_case_shape_arm_budget),
             .let_case_builds = .empty,
             .active_recursive_value_locals = std.AutoHashMap(Ast.LocalId, void).init(pass.allocator),
@@ -4237,7 +4321,8 @@ const Cloner = struct {
             .inline_scope_origins = std.AutoHashMap(Ast.InlineScopeId, Ast.InlineScopeId).init(pass.allocator),
             .wrapper_strip_depth = 0,
             .materialize_strip_depth = 0,
-            .inline_direct_calls = true,
+            .inline_calls = .all,
+            .iterator_inline_depth = 0,
             .inline_direct_requires_known_arg = false,
             .rewrite_call_patterns = true,
             .emit_callable_workers = true,
@@ -4307,13 +4392,16 @@ const Cloner = struct {
                 try self.collectCallPatternsInCaptureOperandSpan(owner, call.captures);
 
                 const callee = Ast.localDirectCallee(call) orelse return;
+                const callee_raw = @intFromEnum(callee);
+                if (callee_raw >= self.pass.plans.len) return;
+                if (self.pass.newSpecAdmission(callee_raw) != .admitted) return;
+
                 const args = try GuardedList.dupe(self.pass.allocator, Ast.ExprId, self.pass.program.exprSpan(call.args));
                 defer self.pass.allocator.free(args);
 
                 const values = try self.pass.allocator.alloc(Value, args.len);
                 defer self.pass.allocator.free(values);
                 for (args, 0..) |arg, index| {
-                    const callee_raw = @intFromEnum(callee);
                     const demand_shape = callee_raw < self.pass.plans.len and
                         index < self.pass.plans[callee_raw].used_args.len and
                         self.pass.plans[callee_raw].used_args[index];
@@ -4757,7 +4845,12 @@ const Cloner = struct {
             },
             .call_value => |call| {
                 const callee = try self.cloneExprValueDemandingShapeInto(call.callee, bindings);
-                if (callee == .callable) {
+                if (callee == .callable and self.inline_calls.admitsCallable(callee.callable, self.iterator_inline_depth != 0)) {
+                    const enters_iterator = self.inline_calls == .iterator_fusion;
+                    if (enters_iterator) self.iterator_inline_depth += 1;
+                    defer {
+                        if (enters_iterator) self.iterator_inline_depth -= 1;
+                    }
                     return try self.inlineCallableCallValue(expr.ty, callee.callable, call.args, expr_id, false, bindings);
                 }
                 return .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .call_value = .{
@@ -4767,7 +4860,9 @@ const Cloner = struct {
             },
             .call_proc => |call| {
                 if (call.is_cold) return .{ .expr = try self.cloneExprPlain(expr_id) };
-                if (!self.inline_direct_calls) return .{ .expr = try self.cloneExprPlain(expr_id) };
+                if (!self.inline_calls.admitsDirect(call.iterator_procedure, self.iterator_inline_depth != 0)) {
+                    return .{ .expr = try self.cloneExprPlain(expr_id) };
+                }
                 const callee = Ast.localDirectCallee(call) orelse return .{ .expr = try self.cloneExprPlain(expr_id) };
                 const has_known_shape_arg = try self.directCallHasKnownShapeArg(call.args);
                 // A direct call carries its callee's captures by the callee's
@@ -4783,6 +4878,11 @@ const Cloner = struct {
                     !captures_foreign)
                 {
                     return .{ .expr = try self.cloneExprPlain(expr_id) };
+                }
+                const enters_iterator = self.inline_calls == .iterator_fusion;
+                if (enters_iterator) self.iterator_inline_depth += 1;
+                defer {
+                    if (enters_iterator) self.iterator_inline_depth -= 1;
                 }
                 return try self.inlineDirectCallValue(
                     callee,
@@ -4807,14 +4907,25 @@ const Cloner = struct {
         const expr = self.pass.program.getExpr(expr_id);
         return switch (expr.data) {
             .call_proc => |call| blk: {
-                if (call.is_cold or !self.inline_direct_calls) break :blk try self.cloneExprValueInto(expr_id, bindings);
+                if (call.is_cold or !self.inline_calls.admitsDirect(call.iterator_procedure, self.iterator_inline_depth != 0)) {
+                    break :blk try self.cloneExprValueInto(expr_id, bindings);
+                }
                 const callee = Ast.localDirectCallee(call) orelse break :blk try self.cloneExprValueInto(expr_id, bindings);
+                const enters_iterator = self.inline_calls == .iterator_fusion;
+                if (enters_iterator) self.iterator_inline_depth += 1;
+                defer {
+                    if (enters_iterator) self.iterator_inline_depth -= 1;
+                }
                 break :blk try self.inlineDirectCallValue(callee, call.args, call.captures, expr_id, true, bindings);
             },
             .call_value => |call| blk: {
-                if (!self.inline_direct_calls) break :blk try self.cloneExprValueInto(expr_id, bindings);
                 const callee = try self.cloneExprValueDemandingShapeInto(call.callee, bindings);
-                if (callee == .callable) {
+                if (callee == .callable and self.inline_calls.admitsCallable(callee.callable, self.iterator_inline_depth != 0)) {
+                    const enters_iterator = self.inline_calls == .iterator_fusion;
+                    if (enters_iterator) self.iterator_inline_depth += 1;
+                    defer {
+                        if (enters_iterator) self.iterator_inline_depth -= 1;
+                    }
                     break :blk try self.inlineCallableCallValue(expr.ty, callee.callable, call.args, expr_id, true, bindings);
                 }
                 break :blk .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .call_value = .{
@@ -5002,6 +5113,16 @@ const Cloner = struct {
         fn_ref: @import("../monotype/ast.zig").LiftedFunctionValue,
         bindings: *BindingChain,
     ) Common.LowerError!Value {
+        const source_fn = self.pass.program.getFn(fn_ref.fn_id);
+        if (source_fn.body == .roc and
+            self.pass.inlineBodyAdmission(fn_ref.fn_id, source_fn.body.roc) != .admitted)
+        {
+            return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .fn_ref = .{
+                .fn_id = fn_ref.fn_id,
+                .captures = try self.cloneCaptureOperandSpan(fn_ref.captures),
+            } } }) };
+        }
+
         const capture_count: usize = @intCast(fn_ref.captures.len);
         const captures = try self.arena.allocator().alloc(CaptureValue, capture_count);
         for (0..capture_count) |index| {
@@ -6314,6 +6435,7 @@ const Cloner = struct {
                     return .{ .nominal = .{ .ty = first.ty, .backing = backing } };
                 },
                 .callable => |first| {
+                    var iterator_step = first.iterator_step;
                     for (values[1..]) |other| {
                         const other_callable = switch (other) {
                             .callable => |callable| callable,
@@ -6322,6 +6444,7 @@ const Cloner = struct {
                         if (other_callable.ty != first.ty) break :structured;
                         if (other_callable.fn_id != first.fn_id) break :structured;
                         if (other_callable.captures.len != first.captures.len) break :structured;
+                        iterator_step = iterator_step and other_callable.iterator_step;
                         for (other_callable.captures, first.captures) |other_capture, first_capture| {
                             if (other_capture.id != first_capture.id) break :structured;
                         }
@@ -6336,7 +6459,12 @@ const Cloner = struct {
                             .value = try self.rebuildLetCaseJoinValue(children, arena, params, site_args, budget),
                         };
                     }
-                    return .{ .callable = .{ .ty = first.ty, .fn_id = first.fn_id, .captures = captures } };
+                    return .{ .callable = .{
+                        .ty = first.ty,
+                        .fn_id = first.fn_id,
+                        .captures = captures,
+                        .iterator_step = iterator_step,
+                    } };
                 },
             }
         }
@@ -7679,6 +7807,7 @@ const Cloner = struct {
                     .ty = callable.ty,
                     .fn_id = callable.fn_id,
                     .captures = captures,
+                    .iterator_step = callable.iterator_step,
                 } };
             },
         };
@@ -7869,10 +7998,6 @@ const Cloner = struct {
         };
     }
 
-    fn inlineGrowthExhausted(self: *const Cloner) bool {
-        return self.pass.program.exprCount() - self.start_expr_count > inline_expr_budget;
-    }
-
     fn inlineCallableCallValue(
         self: *Cloner,
         ty: Type.TypeId,
@@ -7882,7 +8007,32 @@ const Cloner = struct {
         result_shape_demanded: bool,
         bindings: *BindingChain,
     ) Common.LowerError!Value {
-        if (self.inlineGrowthExhausted()) {
+        const source_fn = self.pass.program.getFn(callable.fn_id);
+        // Replacing the call with its body transfers the body's result value
+        // directly into the caller. Independently specialized Monotype graphs
+        // can make those types related but representation-distinct; only exact
+        // closed-type identity proves that no representation boundary would be
+        // erased by the inline.
+        if (!sameType(self.pass.program, ty, source_fn.ret)) {
+            return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
+                .callee = try self.materialize(.{ .callable = callable }),
+                .args = try self.cloneExprSpan(args_span),
+            } } }) };
+        }
+        const body = switch (source_fn.body) {
+            .roc => |body| body,
+            .hosted => return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
+                .callee = try self.materialize(.{ .callable = callable }),
+                .args = try self.cloneExprSpan(args_span),
+            } } }) },
+        };
+        if (self.pass.inlineBodyAdmission(callable.fn_id, body) != .admitted) {
+            return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
+                .callee = try self.materialize(.{ .callable = callable }),
+                .args = try self.cloneExprSpan(args_span),
+            } } }) };
+        }
+        if (exprContainsReturn(self.pass.program, body)) {
             return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
                 .callee = try self.materialize(.{ .callable = callable }),
                 .args = try self.cloneExprSpan(args_span),
@@ -7905,32 +8055,6 @@ const Cloner = struct {
                     .args = try self.cloneExprSpan(args_span),
                 } } }) };
             }
-        }
-
-        const source_fn = self.pass.program.getFn(callable.fn_id);
-        // Replacing the call with its body transfers the body's result value
-        // directly into the caller. Independently specialized Monotype graphs
-        // can make those types related but representation-distinct; only exact
-        // closed-type identity proves that no representation boundary would be
-        // erased by the inline.
-        if (!sameType(self.pass.program, ty, source_fn.ret)) {
-            return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
-                .callee = try self.materialize(.{ .callable = callable }),
-                .args = try self.cloneExprSpan(args_span),
-            } } }) };
-        }
-        const body = switch (source_fn.body) {
-            .roc => |body| body,
-            .hosted => return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
-                .callee = try self.materialize(.{ .callable = callable }),
-                .args = try self.cloneExprSpan(args_span),
-            } } }) },
-        };
-        if (exprContainsReturn(self.pass.program, body)) {
-            return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
-                .callee = try self.materialize(.{ .callable = callable }),
-                .args = try self.cloneExprSpan(args_span),
-            } } }) };
         }
 
         const source_args = try GuardedList.dupe(self.pass.allocator, Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.args));
@@ -7999,18 +8123,6 @@ const Cloner = struct {
         result_shape_demanded: bool,
         bindings: *BindingChain,
     ) Common.LowerError!Value {
-        if (self.inlineGrowthExhausted()) {
-            return .{ .expr = try self.cloneExprPlain(original_expr) };
-        }
-        const direct_call_size = self.argsKnownConstructorSize(args_span).plus(self.captureOperandsKnownConstructorSize(captures_span));
-        const exact_call_size = direct_call_size.exactValue() orelse return .{ .expr = try self.cloneExprPlain(original_expr) };
-        for (self.inline_stack.items) |active| {
-            if (active.fn_id != callee) continue;
-            if (exact_call_size == 0 or exact_call_size >= active.known_size) {
-                return .{ .expr = try self.cloneExprPlain(original_expr) };
-            }
-        }
-
         const source_fn = self.pass.program.getFn(callee);
         const result_ty = self.pass.program.getExpr(original_expr).ty;
         // A call and its independently specialized callee can be related
@@ -8023,8 +8135,19 @@ const Cloner = struct {
             .roc => |body| body,
             .hosted => return .{ .expr = try self.cloneExprPlain(original_expr) },
         };
+        if (self.pass.inlineBodyAdmission(callee, body) != .admitted) {
+            return .{ .expr = try self.cloneExprPlain(original_expr) };
+        }
         if (exprContainsReturn(self.pass.program, body)) {
             return .{ .expr = try self.cloneExprPlain(original_expr) };
+        }
+        const direct_call_size = self.argsKnownConstructorSize(args_span).plus(self.captureOperandsKnownConstructorSize(captures_span));
+        const exact_call_size = direct_call_size.exactValue() orelse return .{ .expr = try self.cloneExprPlain(original_expr) };
+        for (self.inline_stack.items) |active| {
+            if (active.fn_id != callee) continue;
+            if (exact_call_size == 0 or exact_call_size >= active.known_size) {
+                return .{ .expr = try self.cloneExprPlain(original_expr) };
+            }
         }
         const source_args = try GuardedList.dupe(self.pass.allocator, Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.args));
         defer self.pass.allocator.free(source_args);
@@ -9509,6 +9632,171 @@ fn localExpr(program: *const Ast.Program, expr_id: Ast.ExprId) ?Ast.LocalId {
     };
 }
 
+fn fnBodySizeWithin(program: *const Ast.Program, body: Ast.FnBody, limit: usize) BodySize {
+    return switch (body) {
+        .roc => |expr| exprBodySizeWithin(program, expr, limit),
+        .hosted => .{ .exact = 0 },
+    };
+}
+
+fn exprBodySizeWithin(program: *const Ast.Program, expr_id: Ast.ExprId, limit: usize) BodySize {
+    var counter = BodySizeCounter{
+        .program = program,
+        .remaining = limit,
+    };
+    counter.countExpr(expr_id);
+    return if (counter.over_limit) .over_limit else .{ .exact = limit - counter.remaining };
+}
+
+const BodySizeCounter = struct {
+    program: *const Ast.Program,
+    remaining: usize,
+    over_limit: bool = false,
+
+    fn spend(self: *BodySizeCounter) bool {
+        if (self.over_limit) return false;
+        if (self.remaining == 0) {
+            self.over_limit = true;
+            return false;
+        }
+        self.remaining -= 1;
+        return true;
+    }
+
+    fn countExprSpan(self: *BodySizeCounter, span: Ast.Span(Ast.ExprId)) void {
+        const exprs = self.program.exprSpan(span);
+        for (0..exprs.len) |index| self.countExpr(GuardedList.at(exprs, index));
+    }
+
+    fn countCaptureOperandSpan(self: *BodySizeCounter, span: Ast.Span(Ast.CaptureOperand)) void {
+        const operands = self.program.captureOperandSpan(span);
+        for (0..operands.len) |index| self.countExpr(GuardedList.at(operands, index).value);
+    }
+
+    fn countStmt(self: *BodySizeCounter, stmt_id: Ast.StmtId) void {
+        switch (self.program.getStmt(stmt_id)) {
+            .let_ => |let_| self.countExpr(let_.value),
+            .expr,
+            .expect,
+            .dbg,
+            => |expr| self.countExpr(expr),
+            .return_ => |ret| self.countExpr(ret.value),
+            .uninitialized, .crash => {},
+        }
+    }
+
+    fn countExpr(self: *BodySizeCounter, expr_id: Ast.ExprId) void {
+        if (!self.spend()) return;
+        switch (self.program.getExpr(expr_id).data) {
+            .local,
+            .unit,
+            .@"unreachable",
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .bytes_lit,
+            .crash,
+            .comptime_exhaustiveness_failed,
+            .uninitialized,
+            .uninitialized_payload,
+            => {},
+            .fn_ref => |fn_ref| self.countCaptureOperandSpan(fn_ref.captures),
+            .list,
+            .tuple,
+            => |items| self.countExprSpan(items),
+            .record => |fields| {
+                const field_exprs = self.program.fieldExprSpan(fields);
+                for (0..field_exprs.len) |index| self.countExpr(GuardedList.at(field_exprs, index).value);
+            },
+            .tag => |tag| self.countExprSpan(tag.payloads),
+            .static_data_candidate => |candidate| self.countExpr(candidate.runtime_expr),
+            .nominal,
+            .dbg,
+            .expect,
+            => |child| self.countExpr(child),
+            .return_ => |ret| self.countExpr(ret.value),
+            .expect_err => |expect_err| self.countExpr(expect_err.msg),
+            .comptime_branch_taken => |taken| self.countExpr(taken.body),
+            .let_ => |let_| {
+                self.countExpr(let_.value);
+                self.countExpr(let_.rest);
+            },
+            .lambda,
+            .def_ref,
+            .fn_def,
+            => Common.invariant("pre-lift function expression reached SpecConstr body-size counting"),
+            .call_value => |call| {
+                self.countExpr(call.callee);
+                self.countExprSpan(call.args);
+            },
+            .call_proc => |call| {
+                self.countExprSpan(call.args);
+                self.countCaptureOperandSpan(call.captures);
+            },
+            .low_level => |call| self.countExprSpan(call.args),
+            .field_access => |field| self.countExpr(field.receiver),
+            .tuple_access => |access| self.countExpr(access.tuple),
+            .structural_eq => |eq| {
+                self.countExpr(eq.lhs);
+                self.countExpr(eq.rhs);
+            },
+            .structural_hash => |hash| {
+                self.countExpr(hash.value);
+                self.countExpr(hash.hasher);
+            },
+            .match_ => |match| {
+                self.countExpr(match.scrutinee);
+                const branches = self.program.branchSpan(match.branches);
+                for (0..branches.len) |index| {
+                    const branch = GuardedList.at(branches, index);
+                    if (branch.guard) |guard| self.countExpr(guard);
+                    self.countExpr(branch.body);
+                }
+            },
+            .if_ => |if_| {
+                const branches = self.program.ifBranchSpan(if_.branches);
+                for (0..branches.len) |index| {
+                    const branch = GuardedList.at(branches, index);
+                    self.countExpr(branch.cond);
+                    self.countExpr(branch.body);
+                }
+                self.countExpr(if_.final_else);
+            },
+            .if_initialized_payload => |payload_switch| {
+                self.countExpr(payload_switch.cond);
+                self.countExpr(payload_switch.initialized);
+                self.countExpr(payload_switch.uninitialized);
+            },
+            .try_sequence => |sequence| {
+                self.countExpr(sequence.try_expr);
+                self.countExpr(sequence.ok_body);
+            },
+            .try_record_sequence => |sequence| {
+                self.countExpr(sequence.try_expr);
+                self.countExpr(sequence.ok_body);
+            },
+            .block => |block| {
+                const statements = self.program.stmtSpan(block.statements);
+                for (0..statements.len) |index| self.countStmt(GuardedList.at(statements, index));
+                self.countExpr(block.final_expr);
+            },
+            .loop_ => |loop| {
+                self.countExprSpan(loop.initial_values);
+                self.countExpr(loop.body);
+            },
+            .break_ => |maybe| if (maybe) |value| self.countExpr(value),
+            .continue_ => |continue_| self.countExprSpan(continue_.values),
+            .join_point => |join_point| {
+                self.countExpr(join_point.body);
+                self.countExpr(join_point.remainder);
+            },
+            .jump => |jump| self.countExprSpan(jump.args),
+        }
+    }
+};
+
 const FnUseSummary = struct {
     external_calls: usize = 0,
     external_call_expr: ?Ast.ExprId = null,
@@ -10705,7 +10993,31 @@ fn callableTargetMatches(program: *const Ast.Program, expected: Ast.FnId, actual
 // so each reader counts the edges it follows and treats reaching
 // `value_wrapper_strip_cap` as a compiler bug.
 fn fieldFromValue(program: *const Ast.Program, value: Value, name: names.RecordFieldNameId) ?Value {
-    return fieldFromValueStripping(program, value, name, 0);
+    const field = fieldFromValueStripping(program, value, name, 0) orelse return null;
+    if (!isGeneratedIteratorStepField(program, valueType(program, value), name)) return field;
+    return switch (field) {
+        .callable => |callable| blk: {
+            var step = callable;
+            step.iterator_step = true;
+            break :blk .{ .callable = step };
+        },
+        else => field,
+    };
+}
+
+fn isGeneratedIteratorStepField(
+    program: *const Ast.Program,
+    receiver_ty: Type.TypeId,
+    field: names.RecordFieldNameId,
+) bool {
+    const named = switch (program.types.get(receiver_ty)) {
+        .named => |named| named,
+        else => return false,
+    };
+    const topology = named.def.iterator_topology orelse return false;
+    const backing = named.backing orelse return false;
+    return backing.authority == .generated_private and
+        field == topology.step_field;
 }
 
 fn fieldFromValueStripping(program: *const Ast.Program, value: Value, name: names.RecordFieldNameId, strip_depth: usize) ?Value {
@@ -10914,6 +11226,170 @@ test "issue 10313 value-aware call-pattern collection does not append lifted IR"
     try std.testing.expectEqual(symbol_before_collect, pass.symbols.next);
     try std.testing.expectEqual(join_before_collect, pass.next_join_point);
     try std.testing.expectEqual(@as(usize, 0), pass.arena.queryCapacity());
+}
+
+test "SpecConstr admission uses body size and worker count before cloning" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const unit_ty = try program.types.add(.zst);
+    const unit_expr = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+    const one_let_pat = try program.addPat(.{ .ty = unit_ty, .data = .wildcard });
+    const one_let = try program.addExpr(.{ .ty = unit_ty, .data = .{ .let_ = .{
+        .bind = one_let_pat,
+        .value = unit_expr,
+        .rest = unit_expr,
+    } } });
+
+    switch (exprBodySizeWithin(&program, one_let, 3)) {
+        .exact => |count| try std.testing.expectEqual(@as(usize, 3), count),
+        .over_limit => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqual(BodySize.over_limit, exprBodySizeWithin(&program, one_let, 2));
+
+    var large_body = unit_expr;
+    for (0..(spec_constr_body_expr_threshold / 2 + 1)) |_| {
+        const pat = try program.addPat(.{ .ty = unit_ty, .data = .wildcard });
+        large_body = try program.addExpr(.{ .ty = unit_ty, .data = .{ .let_ = .{
+            .bind = pat,
+            .value = unit_expr,
+            .rest = large_body,
+        } } });
+    }
+
+    _ = try program.addFn(.{
+        .symbol = @enumFromInt(1),
+        .args = Ast.Span(Ast.TypedLocal).empty(),
+        .captures = Ast.Span(Ast.TypedLocal).empty(),
+        .body = .{ .roc = unit_expr },
+        .ret = unit_ty,
+    });
+    const large_fn_id = try program.addFn(.{
+        .symbol = @enumFromInt(2),
+        .args = Ast.Span(Ast.TypedLocal).empty(),
+        .captures = Ast.Span(Ast.TypedLocal).empty(),
+        .body = .{ .roc = large_body },
+        .ret = unit_ty,
+    });
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+
+    try std.testing.expectEqual(SpecAdmission.admitted, pass.newSpecAdmission(0));
+    for (0..spec_constr_specialization_count) |_| {
+        try pass.plans[0].specs.append(allocator, .{ .pattern = .{ .args = &.{} } });
+    }
+    try std.testing.expectEqual(SpecAdmission.denied_spec_count, pass.newSpecAdmission(0));
+    try std.testing.expectEqual(SpecAdmission.denied_body_size, pass.newSpecAdmission(1));
+    try std.testing.expectEqual(SpecAdmission.denied_body_size, pass.inlineBodyAdmission(@enumFromInt(1), large_body));
+
+    const fn_ty = try program.types.add(.{ .func = .{
+        .args = Type.Span.empty(),
+        .ret = unit_ty,
+    } });
+    const large_fn_ref = try program.addExpr(.{ .ty = fn_ty, .data = .{ .fn_ref = .{
+        .fn_id = large_fn_id,
+        .captures = Ast.Span(Ast.CaptureOperand).empty(),
+    } } });
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+    const cloned_large_fn_ref = try cloner.cloneExprValue(large_fn_ref);
+    const residual_large_fn_ref = switch (cloned_large_fn_ref.value) {
+        .expr => |expr| expr,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expect(program.getExpr(residual_large_fn_ref).data == .fn_ref);
+
+    const large_fn = program.getFnAt(1);
+    program.setFnAt(1, .{
+        .symbol = large_fn.symbol,
+        .source = large_fn.source,
+        .signature = large_fn.signature,
+        .args = large_fn.args,
+        .captures = large_fn.captures,
+        .body = .{ .roc = unit_expr },
+        .ret = large_fn.ret,
+    });
+    pass.refreshPreCloneBodySize(1);
+    try std.testing.expectEqual(SpecAdmission.admitted, pass.newSpecAdmission(1));
+}
+
+test "value-aware call-pattern collection keeps generic producer calls opaque" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const unit_ty = try program.types.add(.zst);
+    const tuple_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ unit_ty, unit_ty }) });
+    const unit_expr = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+    const tuple_expr = try program.addExpr(.{
+        .ty = tuple_ty,
+        .data = .{ .tuple = try program.addExprSpan(&.{ unit_expr, unit_expr }) },
+    });
+
+    const producer = try program.addFn(.{
+        .symbol = @enumFromInt(1),
+        .args = Ast.Span(Ast.TypedLocal).empty(),
+        .captures = Ast.Span(Ast.TypedLocal).empty(),
+        .body = .{ .roc = tuple_expr },
+        .ret = tuple_ty,
+    });
+
+    const consumer_arg = try program.addLocal(@enumFromInt(2), tuple_ty);
+    const consumer = try program.addFn(.{
+        .symbol = @enumFromInt(3),
+        .args = try program.addTypedLocalSpan(&.{.{ .local = consumer_arg, .ty = tuple_ty }}),
+        .captures = Ast.Span(Ast.TypedLocal).empty(),
+        .body = .{ .roc = unit_expr },
+        .ret = unit_ty,
+    });
+
+    const producer_call = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .call_proc = .{
+        .callee = .{ .lifted = producer },
+        .args = Ast.Span(Ast.ExprId).empty(),
+    } } });
+    const inline_arg_consumer_call = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+        .callee = .{ .lifted = consumer },
+        .args = try program.addExprSpan(&.{producer_call}),
+    } } });
+    _ = try program.addFn(.{
+        .symbol = @enumFromInt(4),
+        .args = Ast.Span(Ast.TypedLocal).empty(),
+        .captures = Ast.Span(Ast.TypedLocal).empty(),
+        .body = .{ .roc = inline_arg_consumer_call },
+        .ret = unit_ty,
+    });
+
+    const bound_tuple_local = try program.addLocal(@enumFromInt(5), tuple_ty);
+    const bound_tuple_ref = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .local = bound_tuple_local } });
+    const let_arg_consumer_call = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+        .callee = .{ .lifted = consumer },
+        .args = try program.addExprSpan(&.{bound_tuple_ref}),
+    } } });
+    const bind_tuple = try program.addPat(.{ .ty = tuple_ty, .data = .{ .bind = bound_tuple_local } });
+    const let_body = try program.addExpr(.{ .ty = unit_ty, .data = .{ .let_ = .{
+        .bind = bind_tuple,
+        .value = tuple_expr,
+        .rest = let_arg_consumer_call,
+    } } });
+    _ = try program.addFn(.{
+        .symbol = @enumFromInt(6),
+        .args = Ast.Span(Ast.TypedLocal).empty(),
+        .captures = Ast.Span(Ast.TypedLocal).empty(),
+        .body = .{ .roc = let_body },
+        .ret = unit_ty,
+    });
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    pass.plans[@intFromEnum(consumer)].used_args[0] = true;
+
+    try pass.collectValueAwareCallPatterns(3);
+    try std.testing.expectEqual(@as(usize, 0), pass.plans[@intFromEnum(consumer)].specs.items.len);
+
+    try pass.collectValueAwareCallPatterns(4);
+    try std.testing.expectEqual(@as(usize, 1), pass.plans[@intFromEnum(consumer)].specs.items.len);
 }
 
 test "generic value cloning preserves a call until its result shape is demanded" {

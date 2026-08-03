@@ -585,6 +585,26 @@ pub fn getLastExprType(self: *TestEnv) TestEnvError!types.Descriptor {
     return self.module_env.types.resolveVar(ModuleEnv.varFrom(last_def_idx)).desc;
 }
 
+/// Assert the checker-owned validity bit for a local nominal declaration.
+pub fn assertNominalDeclValidity(self: *TestEnv, name: []const u8, expected: bool) TestEnvError!void {
+    for (self.module_env.store.sliceStatements(self.module_env.all_statements)) |stmt_idx| {
+        const nominal = switch (self.module_env.store.getStatement(stmt_idx)) {
+            .s_nominal_decl => |nominal| nominal,
+            else => continue,
+        };
+        const header = self.module_env.store.getTypeHeader(nominal.header);
+        if (!std.mem.eql(u8, self.module_env.getIdent(header.relative_name), name)) continue;
+
+        const decl_idx = self.module_env.types.lookupNominalDeclByKey(
+            self.module_env.selfModuleIdentity(),
+            @intFromEnum(stmt_idx),
+        ) orelse return error.TestUnexpectedResult;
+        try testing.expectEqual(expected, self.module_env.types.getNominalDecl(decl_idx).isValid());
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
 /// Assert that there were no parse, canonicalization, or type checking errors.
 pub fn assertNoErrors(self: *TestEnv) TestEnvError!void {
     try self.assertNoParseProblems();

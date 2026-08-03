@@ -1007,8 +1007,8 @@ pub const DocType = union(enum) {
     pub const TypeRef = struct {
         /// Module path where this type is defined, as provided by the compiler.
         /// Currently basenames like "Builtin", "Counter", "Num".
-        /// Will include dot-separated paths as the compiler evolves
-        /// (e.g., "Json.Decode", "pkg.Data.Person").
+        /// Directory segments use slashes; package identity remains a prefix
+        /// (e.g., "Json/Decode", "pkg.Data/Person").
         module_path: []const u8,
         /// Type name within the module (e.g., "Str", "Counter", "U64").
         /// May contain dots for nested types (e.g., "Num.U8").

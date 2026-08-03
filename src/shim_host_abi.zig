@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const builtins = @import("builtins");
+const roc_args = @import("roc_args");
 
 const Allocator = std.mem.Allocator;
 const RocOps = builtins.host_abi.RocOps;
@@ -110,39 +111,5 @@ pub fn buildDefaultRunCliArgs(app_args: []const [*:0]const u8, gpa: Allocator) A
 }
 
 fn sanitizeUtf8(input: []const u8, gpa: Allocator) Allocator.Error![]const u8 {
-    if (std.unicode.utf8ValidateSlice(input)) return input;
-
-    const buf = try gpa.alloc(u8, input.len * 3);
-    var out_i: usize = 0;
-    var in_i: usize = 0;
-    while (in_i < input.len) {
-        const seq_len = std.unicode.utf8ByteSequenceLength(input[in_i]) catch {
-            buf[out_i] = 0xEF;
-            buf[out_i + 1] = 0xBF;
-            buf[out_i + 2] = 0xBD;
-            out_i += 3;
-            in_i += 1;
-            continue;
-        };
-        if (in_i + seq_len > input.len) {
-            buf[out_i] = 0xEF;
-            buf[out_i + 1] = 0xBF;
-            buf[out_i + 2] = 0xBD;
-            out_i += 3;
-            in_i += 1;
-            continue;
-        }
-        if (std.unicode.utf8Decode(input[in_i..][0..seq_len])) |_| {
-            @memcpy(buf[out_i..][0..seq_len], input[in_i..][0..seq_len]);
-            out_i += seq_len;
-            in_i += seq_len;
-        } else |_| {
-            buf[out_i] = 0xEF;
-            buf[out_i + 1] = 0xBF;
-            buf[out_i + 2] = 0xBD;
-            out_i += 3;
-            in_i += 1;
-        }
-    }
-    return try gpa.realloc(buf, out_i);
+    return roc_args.sanitizeUtf8(input, gpa);
 }

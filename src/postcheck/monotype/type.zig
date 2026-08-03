@@ -570,7 +570,18 @@ pub const Store = struct {
             lhs: TypeId,
             rhs: TypeId,
         ) std.mem.Allocator.Error!bool {
-            return try typeViewEql(self, allocator, name_store, lhs, rhs);
+            return try typeViewEql(self, allocator, name_store, lhs, rhs, .exact);
+        }
+
+        pub fn typeMatches(
+            self: View,
+            allocator: std.mem.Allocator,
+            name_store: *const names.NameStore,
+            lhs: TypeId,
+            rhs: TypeId,
+            mode: TypeMatchMode,
+        ) std.mem.Allocator.Error!bool {
+            return try typeViewEql(self, allocator, name_store, lhs, rhs, mode);
         }
 
         pub fn verify(self: View, name_store: *const names.NameStore) ?VerifyError {
@@ -733,6 +744,17 @@ pub const Store = struct {
         rhs: TypeId,
     ) std.mem.Allocator.Error!bool {
         return try self.view().typeEql(self.allocator, name_store, lhs, rhs);
+    }
+
+    /// `typeEql` under an explicit match mode. See `TypeMatchMode`.
+    pub fn typeMatches(
+        self: *const Store,
+        name_store: *const names.NameStore,
+        lhs: TypeId,
+        rhs: TypeId,
+        mode: TypeMatchMode,
+    ) std.mem.Allocator.Error!bool {
+        return try self.view().typeMatches(self.allocator, name_store, lhs, rhs, mode);
     }
 
     /// Stack of types currently being digested. Recursive types reference a
@@ -1242,16 +1264,31 @@ pub const Store = struct {
     }
 };
 
+/// How `typeMatches` compares its two sides.
+pub const TypeMatchMode = enum {
+    /// Both sides must describe the same type everywhere.
+    exact,
+    /// As `exact`, except that an empty tag union on the left accepts any right
+    /// type. An unresolved checked type variable lowers to an empty tag union,
+    /// so this compares a generic declaration against one of its
+    /// instantiations: every position the declaration made concrete still has
+    /// to match, and only its variable slots are open. A left side that is
+    /// concretely uninhabited is indistinguishable from a variable slot here,
+    /// so callers use this mode only for a declaration known to be generic.
+    declared_variable_slots_match_any,
+};
+
 fn typeViewEql(
     type_view: anytype,
     allocator: std.mem.Allocator,
     name_store: *const names.NameStore,
     lhs: TypeId,
     rhs: TypeId,
+    mode: TypeMatchMode,
 ) std.mem.Allocator.Error!bool {
     var visited = std.AutoHashMap(u64, void).init(allocator);
     defer visited.deinit();
-    return try typeViewEqlInner(type_view, name_store, lhs, rhs, &visited);
+    return try typeViewEqlInner(type_view, name_store, lhs, rhs, &visited, mode);
 }
 
 fn typeViewEqlInner(
@@ -1260,24 +1297,37 @@ fn typeViewEqlInner(
     raw_lhs: TypeId,
     raw_rhs: TypeId,
     visited: *std.AutoHashMap(u64, void),
+    mode: TypeMatchMode,
 ) std.mem.Allocator.Error!bool {
     if (raw_lhs == raw_rhs) return true;
 
     const lhs_content = type_view.get(raw_lhs);
     if (lhs_content == .named and lhs_content.named.kind == .alias) {
         if (lhs_content.named.backing) |backing| {
-            return try typeViewEqlInner(type_view, name_store, backing.ty, raw_rhs, visited);
+            return try typeViewEqlInner(type_view, name_store, backing.ty, raw_rhs, visited, mode);
         }
     }
 
     const rhs_content = type_view.get(raw_rhs);
     if (rhs_content == .named and rhs_content.named.kind == .alias) {
         if (rhs_content.named.backing) |backing| {
-            return try typeViewEqlInner(type_view, name_store, raw_lhs, backing.ty, visited);
+            return try typeViewEqlInner(type_view, name_store, raw_lhs, backing.ty, visited, mode);
         }
     }
 
-    const pair = typePairKey(raw_lhs, raw_rhs);
+    if (mode == .declared_variable_slots_match_any and
+        lhs_content == .tag_union and
+        type_view.tagSpan(lhs_content.tag_union).len == 0)
+    {
+        return true;
+    }
+
+    // An asymmetric mode reaches the same pair from both directions with
+    // different meanings, so it keeps the two orderings apart.
+    const pair = switch (mode) {
+        .exact => typePairKey(raw_lhs, raw_rhs),
+        .declared_variable_slots_match_any => orderedTypePairKey(raw_lhs, raw_rhs),
+    };
     const gop = try visited.getOrPut(pair);
     if (gop.found_existing) return true;
 
@@ -1287,33 +1337,33 @@ fn typeViewEqlInner(
             else => false,
         },
         .named => |lhs| switch (rhs_content) {
-            .named => |rhs| try namedTypeViewEql(type_view, name_store, lhs, rhs, visited),
+            .named => |rhs| try namedTypeViewEql(type_view, name_store, lhs, rhs, visited, mode),
             else => false,
         },
         .record => |lhs| switch (rhs_content) {
-            .record => |rhs| try fieldSpanViewEql(type_view, name_store, lhs, rhs, visited),
+            .record => |rhs| try fieldSpanViewEql(type_view, name_store, lhs, rhs, visited, mode),
             else => false,
         },
         .tuple => |lhs| switch (rhs_content) {
-            .tuple => |rhs| try typeSpanViewEql(type_view, name_store, lhs, rhs, visited),
+            .tuple => |rhs| try typeSpanViewEql(type_view, name_store, lhs, rhs, visited, mode),
             else => false,
         },
         .tag_union => |lhs| switch (rhs_content) {
-            .tag_union => |rhs| try tagSpanViewEql(type_view, name_store, lhs, rhs, visited),
+            .tag_union => |rhs| try tagSpanViewEql(type_view, name_store, lhs, rhs, visited, mode),
             else => false,
         },
         .list => |lhs| switch (rhs_content) {
-            .list => |rhs| try typeViewEqlInner(type_view, name_store, lhs, rhs, visited),
+            .list => |rhs| try typeViewEqlInner(type_view, name_store, lhs, rhs, visited, mode),
             else => false,
         },
         .box => |lhs| switch (rhs_content) {
-            .box => |rhs| try typeViewEqlInner(type_view, name_store, lhs, rhs, visited),
+            .box => |rhs| try typeViewEqlInner(type_view, name_store, lhs, rhs, visited, mode),
             else => false,
         },
         .func => |lhs| switch (rhs_content) {
             .func => |rhs| blk: {
-                if (!try typeSpanViewEql(type_view, name_store, lhs.args, rhs.args, visited)) break :blk false;
-                break :blk try typeViewEqlInner(type_view, name_store, lhs.ret, rhs.ret, visited);
+                if (!try typeSpanViewEql(type_view, name_store, lhs.args, rhs.args, visited, mode)) break :blk false;
+                break :blk try typeViewEqlInner(type_view, name_store, lhs.ret, rhs.ret, visited, mode);
             },
             else => false,
         },
@@ -1331,6 +1381,7 @@ fn namedTypeViewEql(
     lhs: anytype,
     rhs: anytype,
     visited: *std.AutoHashMap(u64, void),
+    mode: TypeMatchMode,
 ) std.mem.Allocator.Error!bool {
     if (lhs.kind != rhs.kind) return false;
     if (!std.mem.eql(u8, lhs.named_type.module.bytes[0..], rhs.named_type.module.bytes[0..])) return false;
@@ -1347,19 +1398,19 @@ fn namedTypeViewEql(
     if (lhs.def.iterator_depth != rhs.def.iterator_depth) return false;
     if (!std.meta.eql(lhs.def.iterator_topology, rhs.def.iterator_topology)) return false;
     if (lhs.builtin_owner != rhs.builtin_owner) return false;
-    if (!try typeSpanViewEql(type_view, name_store, lhs.args, rhs.args, visited)) return false;
+    if (!try typeSpanViewEql(type_view, name_store, lhs.args, rhs.args, visited, mode)) return false;
 
     if (lhs.kind == .alias) {
         const lhs_backing = lhs.backing orelse return rhs.backing == null;
         const rhs_backing = rhs.backing orelse return false;
-        return try typeViewEqlInner(type_view, name_store, lhs_backing.ty, rhs_backing.ty, visited);
+        return try typeViewEqlInner(type_view, name_store, lhs_backing.ty, rhs_backing.ty, visited, mode);
     }
 
     if (specializationUsesBacking(lhs.backing) or specializationUsesBacking(rhs.backing)) {
         const lhs_backing = lhs.backing orelse return false;
         const rhs_backing = rhs.backing orelse return false;
         if (lhs_backing.use != rhs_backing.use or lhs_backing.authority != rhs_backing.authority) return false;
-        return try typeViewEqlInner(type_view, name_store, lhs_backing.ty, rhs_backing.ty, visited);
+        return try typeViewEqlInner(type_view, name_store, lhs_backing.ty, rhs_backing.ty, visited, mode);
     }
 
     return true;
@@ -1371,12 +1422,13 @@ fn typeSpanViewEql(
     lhs_span: Span,
     rhs_span: Span,
     visited: *std.AutoHashMap(u64, void),
+    mode: TypeMatchMode,
 ) std.mem.Allocator.Error!bool {
     const lhs = type_view.span(lhs_span);
     const rhs = type_view.span(rhs_span);
     if (lhs.len != rhs.len) return false;
     for (lhs, rhs) |lhs_ty, rhs_ty| {
-        if (!try typeViewEqlInner(type_view, name_store, lhs_ty, rhs_ty, visited)) return false;
+        if (!try typeViewEqlInner(type_view, name_store, lhs_ty, rhs_ty, visited, mode)) return false;
     }
     return true;
 }
@@ -1387,13 +1439,14 @@ fn fieldSpanViewEql(
     lhs_span: Span,
     rhs_span: Span,
     visited: *std.AutoHashMap(u64, void),
+    mode: TypeMatchMode,
 ) std.mem.Allocator.Error!bool {
     const lhs = type_view.fieldSpan(lhs_span);
     const rhs = type_view.fieldSpan(rhs_span);
     if (lhs.len != rhs.len) return false;
     for (lhs, rhs) |lhs_field, rhs_field| {
         if (!std.mem.eql(u8, name_store.recordFieldLabelText(lhs_field.name), name_store.recordFieldLabelText(rhs_field.name))) return false;
-        if (!try typeViewEqlInner(type_view, name_store, lhs_field.ty, rhs_field.ty, visited)) return false;
+        if (!try typeViewEqlInner(type_view, name_store, lhs_field.ty, rhs_field.ty, visited, mode)) return false;
     }
     return true;
 }
@@ -1404,15 +1457,22 @@ fn tagSpanViewEql(
     lhs_span: Span,
     rhs_span: Span,
     visited: *std.AutoHashMap(u64, void),
+    mode: TypeMatchMode,
 ) std.mem.Allocator.Error!bool {
     const lhs = type_view.tagSpan(lhs_span);
     const rhs = type_view.tagSpan(rhs_span);
     if (lhs.len != rhs.len) return false;
     for (lhs, rhs) |lhs_tag, rhs_tag| {
         if (!std.mem.eql(u8, name_store.tagLabelText(lhs_tag.name), name_store.tagLabelText(rhs_tag.name))) return false;
-        if (!try typeSpanViewEql(type_view, name_store, lhs_tag.payloads, rhs_tag.payloads, visited)) return false;
+        if (!try typeSpanViewEql(type_view, name_store, lhs_tag.payloads, rhs_tag.payloads, visited, mode)) return false;
     }
     return true;
+}
+
+/// Order-preserving pair key, for a match mode whose two sides mean different
+/// things.
+fn orderedTypePairKey(lhs: TypeId, rhs: TypeId) u64 {
+    return (@as(u64, @intFromEnum(lhs)) << 32) | @as(u64, @intFromEnum(rhs));
 }
 
 fn typePairKey(lhs: TypeId, rhs: TypeId) u64 {

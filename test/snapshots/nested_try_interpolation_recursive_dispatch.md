@@ -216,13 +216,7 @@ main = {
 						(p-assign (ident "#interp_0"))
 						(e-lookup-local
 							(p-assign (ident "domain"))))
-					(e-interpolation (constraint-fn-var 378) (dispatcher-var 361)
-						(first
-							(e-literal (string "https://")))
-						(parts
-							(e-lookup-local
-								(p-assign (ident "#interp_0")))
-							(e-literal (string ".com"))))))
+					(e-runtime-error (tag "erroneous_value_expr"))))
 			(e-lookup-local
 				(p-assign (ident "url")))))
 	(s-nominal-decl

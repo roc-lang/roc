@@ -365,6 +365,7 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendE
             &lowered.view.layouts,
             static_strings.entries,
             .preserve,
+            .default,
         );
         defer codegen.deinit();
         try codegen.compileAllProcSpecs(lowered.view.store.getProcSpecs());

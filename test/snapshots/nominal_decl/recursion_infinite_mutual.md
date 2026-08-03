@@ -91,7 +91,7 @@ main = 0
 	(type_decls
 		(nominal (type "Error")
 			(ty-header (name "T")))
-		(nominal (type "U")
+		(nominal (type "Error")
 			(ty-header (name "U"))))
 	(expressions
 		(expr (type "Dec"))))

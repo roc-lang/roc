@@ -4469,7 +4469,7 @@ fn snapshotReplDefinitionIdentity(allocator: Allocator, line: []const u8) Alloca
         },
         .import => |import| .{
             .kind = .import,
-            .name = ast.resolveImportModulePath(import.module_name_tok, import.qualifier_tok, import.exposes),
+            .name = ast.resolveImportTarget(import.target),
         },
         .file_import => |file_import| .{ .kind = .file_import, .name = ast.resolve(file_import.name_tok) },
         else => null,

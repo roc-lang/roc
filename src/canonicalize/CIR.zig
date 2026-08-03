@@ -433,7 +433,7 @@ pub const WhereClause = union(enum) {
     pub const Owner = extern struct {
         rigid_var: TypeAnno.Idx,
         clauses: IdxSpan,
-        introduced_in_scope: bool,
+        owned_by_annotation: bool,
         _padding: [3]u8 = .{ 0, 0, 0 },
 
         pub const Span = extern struct { span: base.DataSpan };

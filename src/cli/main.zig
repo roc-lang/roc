@@ -48,6 +48,7 @@ const ctx_mod = @import("ctx");
 const compile = @import("compile");
 const can = @import("can");
 const check = @import("check");
+const canonical = check.CanonicalNames;
 const bundle = @import("bundle");
 const unbundle = @import("unbundle");
 
@@ -500,7 +501,13 @@ const BuiltinsObjects = struct {
     const arm64mac_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/roc_builtins_extern.o");
 
     /// Get the appropriate builtins object bytes for the given target
-    pub fn forTarget(target: RocTarget) []const u8 {
+    ///
+    /// A `v1` target uses its default twin's object. The cross-compile target
+    /// queries in `build.zig` name no CPU model, so Zig resolves them to the
+    /// architecture baseline and these objects already contain no instruction
+    /// above it. `assertCrossTargetsAreBaseline` in `build.zig` keeps that true.
+    pub fn forTarget(requested: RocTarget) []const u8 {
+        const target = requested.defaultCpuTarget();
         return switch (target) {
             .x64musl => x64musl,
             .arm64musl => arm64musl,
@@ -516,8 +523,10 @@ const BuiltinsObjects = struct {
         };
     }
 
-    /// Get the extern-symbol-mode builtins object bytes for the given target
-    pub fn forTargetExtern(target: RocTarget) []const u8 {
+    /// Get the extern-symbol-mode builtins object bytes for the given target.
+    /// See `forTarget` for why a `v1` target shares its twin's object.
+    pub fn forTargetExtern(requested: RocTarget) []const u8 {
+        const target = requested.defaultCpuTarget();
         return switch (target) {
             .x64musl => x64musl_extern,
             .arm64musl => arm64musl_extern,
@@ -550,34 +559,40 @@ const BuiltinsObjects = struct {
     }
 };
 
-const DefaultPlatformRuntimeObjects = struct {
-    const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/roc_default_platform.o");
-    const arm64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64musl/roc_default_platform.o");
-    const x64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64glibc/roc_default_platform.o");
-    const arm64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64glibc/roc_default_platform.o");
-    const x64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/roc_default_platform.o");
-    const arm64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/roc_default_platform.o");
-    const x64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/roc_default_platform.obj");
-    const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/roc_default_platform.obj");
+fn DefaultPlatformObjects(comptime base_name: []const u8) type {
+    return struct {
+        const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/" ++ base_name ++ ".o");
+        const arm64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64musl/" ++ base_name ++ ".o");
+        const x64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64glibc/" ++ base_name ++ ".o");
+        const arm64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64glibc/" ++ base_name ++ ".o");
+        const x64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/" ++ base_name ++ ".o");
+        const arm64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/" ++ base_name ++ ".o");
+        const x64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/" ++ base_name ++ ".obj");
+        const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/" ++ base_name ++ ".obj");
 
-    pub fn forTarget(target: RocTarget) ?[]const u8 {
-        return switch (target) {
-            .x64musl => x64musl,
-            .arm64musl => arm64musl,
-            .x64glibc, .x64linux => x64glibc,
-            .arm64glibc, .arm64linux => arm64glibc,
-            .x64mac => x64mac,
-            .arm64mac => arm64mac,
-            .x64win => x64win,
-            .arm64win => arm64win,
-            else => null,
-        };
-    }
+        pub fn forTarget(requested: RocTarget) ?[]const u8 {
+            const target = requested.defaultCpuTarget();
+            return switch (target) {
+                .x64musl => x64musl,
+                .arm64musl => arm64musl,
+                .x64glibc, .x64linux => x64glibc,
+                .arm64glibc, .arm64linux => arm64glibc,
+                .x64mac => x64mac,
+                .arm64mac => arm64mac,
+                .x64win => x64win,
+                .arm64win => arm64win,
+                else => null,
+            };
+        }
 
-    pub fn filename(target: RocTarget) []const u8 {
-        return if (target.isWindows()) "roc_default_platform.obj" else "roc_default_platform.o";
-    }
-};
+        pub fn filename(target: RocTarget) []const u8 {
+            return if (target.isWindows()) base_name ++ ".obj" else base_name ++ ".o";
+        }
+    };
+}
+
+const DefaultPlatformRuntimeObjects = DefaultPlatformObjects("roc_default_runtime");
+const DefaultPlatformExecutableObjects = DefaultPlatformObjects("roc_default_platform");
 
 // Workaround for Zig standard library compilation issue on macOS ARM64.
 //
@@ -1602,6 +1617,16 @@ const CheckedHostedTable = struct {
     symbols: []const []const u8,
 };
 
+const HostedTargetKey = struct {
+    module_key: [32]u8,
+    def_idx: u32,
+};
+
+const HostedBindingView = struct {
+    table: *const check.CheckedArtifact.HostedBindingTable,
+    names: *const canonical.CanonicalNameStore,
+};
+
 fn checkedModuleKeySeen(seen_keys: []const [32]u8, key: [32]u8) bool {
     for (seen_keys) |seen_key| {
         if (std.mem.eql(u8, &seen_key, &key)) return true;
@@ -1629,78 +1654,62 @@ fn appendHostedCacheEntriesFromView(
     }
 }
 
-const HostedSectionMap = struct {
-    keys: []const []const u8,
-    symbols: []const []const u8,
-};
-
-fn hostedSectionMapFromEnv(allocator: Allocator, env: *const ModuleEnv) Allocator.Error!HostedSectionMap {
-    const section = env.hosted_entries.items.items;
-    const keys = try allocator.alloc([]const u8, section.len);
-    errdefer {
-        for (keys) |key| allocator.free(key);
-        allocator.free(keys);
-    }
-    const symbols = try allocator.alloc([]const u8, section.len);
-    errdefer allocator.free(symbols);
-
-    for (section, 0..) |entry, index| {
-        var func_text = env.getIdentText(entry.func_ident);
-        if (func_text.len > 0 and func_text[func_text.len - 1] == '!') {
-            func_text = func_text[0 .. func_text.len - 1];
-        }
-        keys[index] = if (entry.module_ident) |module_ident|
-            try std.fmt.allocPrint(allocator, "{s}.{s}", .{ env.getIdentText(module_ident), func_text })
-        else
-            try allocator.dupe(u8, func_text);
-        symbols[index] = env.getString(entry.symbol);
-    }
-
-    return .{ .keys = keys, .symbols = symbols };
-}
-
-fn deinitHostedSectionMap(allocator: Allocator, map: HostedSectionMap) void {
-    for (map.keys) |key| allocator.free(key);
-    allocator.free(map.keys);
-    allocator.free(map.symbols);
-}
-
-fn findHostedSectionEnv(
+fn findHostedBindingView(
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     imported_artifacts: []const check.CheckedArtifact.ImportedModuleView,
     relation_artifacts: []const check.CheckedArtifact.ImportedModuleView,
-) ?*const ModuleEnv {
-    const root_env = root_artifact.moduleEnvConst();
-    if (root_env.hosted_entries.items.items.len != 0) return root_env;
+) ?HostedBindingView {
+    if (root_artifact.module_identity.kind == .platform) {
+        return .{ .table = &root_artifact.hosted_bindings, .names = &root_artifact.canonical_names };
+    }
     for (imported_artifacts) |view| {
-        if (view.module_env.hosted_entries.items.items.len != 0) return view.module_env;
+        if (view.module_identity.kind == .platform) {
+            return .{ .table = view.hosted_bindings, .names = view.canonical_names };
+        }
     }
     for (relation_artifacts) |view| {
-        if (view.module_env.hosted_entries.items.items.len != 0) return view.module_env;
+        if (view.module_identity.kind == .platform) {
+            return .{ .table = view.hosted_bindings, .names = view.canonical_names };
+        }
     }
     return null;
 }
 
-fn applyHostedSectionMap(entries: []HostedCacheEntry, map: HostedSectionMap) void {
-    if (entries.len != map.keys.len) {
+fn applyHostedBindings(
+    allocator: Allocator,
+    entries: []HostedCacheEntry,
+    binding_view: HostedBindingView,
+) Allocator.Error!void {
+    const bindings = binding_view.table.bindings;
+    if (entries.len != bindings.len) {
         if (builtin.mode == .Debug) {
-            std.debug.panic("default roc command invariant violated: hosted section size {d} differs from checked hosted catalog size {d}", .{ map.keys.len, entries.len });
+            std.debug.panic("default roc command invariant violated: hosted binding count {d} differs from checked hosted catalog size {d}", .{ bindings.len, entries.len });
         }
         unreachable;
     }
 
-    for (entries) |*entry| {
-        const dispatch_index = blk: {
-            for (map.keys, 0..) |key, index| {
-                if (std.mem.eql(u8, key, entry.order_key)) break :blk index;
-            }
+    var entries_by_target = std.AutoHashMap(HostedTargetKey, usize).init(allocator);
+    defer entries_by_target.deinit();
+    try entries_by_target.ensureTotalCapacity(@intCast(entries.len));
+    for (entries, 0..) |entry, index| {
+        entries_by_target.putAssumeCapacityNoClobber(.{
+            .module_key = entry.module_key,
+            .def_idx = entry.def_idx,
+        }, index);
+    }
+
+    for (bindings, 0..) |binding, dispatch_index| {
+        const entry_index = entries_by_target.get(.{
+            .module_key = binding.target_checked_module.bytes,
+            .def_idx = @intFromEnum(binding.target_def),
+        }) orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("default roc command invariant violated: hosted function '{s}' is missing from the platform hosted section", .{entry.order_key});
+                std.debug.panic("default roc command invariant violated: a checked hosted binding has no matching hosted procedure", .{});
             }
             unreachable;
         };
-        entry.dispatch_index = @intCast(dispatch_index);
-        entry.external_symbol_name = map.symbols[dispatch_index];
+        entries[entry_index].dispatch_index = @intCast(dispatch_index);
+        entries[entry_index].external_symbol_name = binding_view.names.externalSymbolNameText(binding.external_symbol_name);
     }
 
     const DispatchSort = struct {
@@ -1735,28 +1744,25 @@ fn checkedHostedTable(
         try appendHostedCacheEntriesFromView(allocator, &hosted_entries, &seen_keys, view);
     }
 
-    const SortContext = struct {
-        pub fn lessThan(_: void, a: HostedCacheEntry, b: HostedCacheEntry) bool {
-            return switch (std.mem.order(u8, a.order_key, b.order_key)) {
-                .lt => true,
-                .gt => false,
-                .eq => if (a.def_idx != b.def_idx)
-                    a.def_idx < b.def_idx
-                else
-                    std.mem.order(u8, &a.module_key, &b.module_key) == .lt,
-            };
+    if (findHostedBindingView(root_artifact, imported_artifacts, relation_artifacts)) |binding_view| {
+        try applyHostedBindings(allocator, hosted_entries.items, binding_view);
+    } else {
+        const SortContext = struct {
+            pub fn lessThan(_: void, a: HostedCacheEntry, b: HostedCacheEntry) bool {
+                return switch (std.mem.order(u8, a.order_key, b.order_key)) {
+                    .lt => true,
+                    .gt => false,
+                    .eq => if (a.def_idx != b.def_idx)
+                        a.def_idx < b.def_idx
+                    else
+                        std.mem.order(u8, &a.module_key, &b.module_key) == .lt,
+                };
+            }
+        };
+        std.mem.sort(HostedCacheEntry, hosted_entries.items, {}, SortContext.lessThan);
+        for (hosted_entries.items, 0..) |*entry, index| {
+            entry.dispatch_index = @intCast(index);
         }
-    };
-    std.mem.sort(HostedCacheEntry, hosted_entries.items, {}, SortContext.lessThan);
-
-    for (hosted_entries.items, 0..) |*entry, index| {
-        entry.dispatch_index = @intCast(index);
-    }
-
-    if (findHostedSectionEnv(root_artifact, imported_artifacts, relation_artifacts)) |env| {
-        const map = try hostedSectionMapFromEnv(allocator, env);
-        defer deinitHostedSectionMap(allocator, map);
-        applyHostedSectionMap(hosted_entries.items, map);
     }
 
     const entries = try hosted_entries.toOwnedSlice(allocator);
@@ -5620,6 +5626,7 @@ fn writeDevRunImageToSharedMemory(
             layouts,
             static_strings.entries,
             .preserve,
+            .default,
         );
         defer codegen.deinit();
         codegen.generation_mode = .shim_execution;
@@ -6004,8 +6011,9 @@ fn lowerLirWithBuildEnv(
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(relation_artifacts);
 
-    if (reporter) |r| r.begin("Specialization");
+    if (reporter) |r| r.begin(post_check_lowering_phase_name);
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
+    if (reporter != null and reporter.?.always) spec_timing.enableDetailedMonotypeBody();
     var lowered = try lowerCheckedSourceToLir(
         lir_allocator,
         ctx.gpa,
@@ -6019,7 +6027,7 @@ fn lowerLirWithBuildEnv(
         &spec_timing,
     );
     errdefer lowered.deinit();
-    if (reporter) |r| r.endWithBreakdownSequential(&specializationBreakdown(spec_timing.snapshot()));
+    if (reporter) |r| finishPostCheckLowering(r, &spec_timing);
 
     const internal_static_data: ?[]backend.StaticDataExport = switch (artifact) {
         .lir_image => null,
@@ -7316,7 +7324,16 @@ fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, original_source: [
     const temp_dir = createUniqueTempDir(ctx) catch |err| {
         return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
     };
-    defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, temp_dir) catch {};
+
+    if (args.keep_temp) {
+        const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+        const config = reporting.ReportingConfig.initColorTerminal();
+        const headline = try std.fmt.allocPrint(ctx.arena, "Kept temporary directory: {s}.", .{temp_dir});
+        var report = try reporting.Report.init(ctx.arena, "Kept Temporary Directory", headline, .warning);
+        defer report.deinit();
+        reporting.renderReportToTerminal(&report, ctx.io.stderr(), palette, config) catch {};
+    }
+    defer if (!args.keep_temp) std.Io.Dir.cwd().deleteTree(ctx.io.std_io, temp_dir) catch {};
 
     const platform_dir = try std.fs.path.join(ctx.arena, &.{ temp_dir, ".roc_echo_platform" });
     try std.Io.Dir.cwd().createDirPath(ctx.io.std_io, platform_dir);
@@ -7358,8 +7375,10 @@ fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, original_source: [
 
 fn defaultBuildPlatformSource(args: cli_args.BuildArgs) []const u8 {
     if (args.target) |target_str| {
-        if (RocTarget.fromString(target_str)) |target| {
-            return switch (target) {
+        if (RocTarget.fromString(target_str)) |requested| {
+            // Which default platform a target gets follows from its OS and
+            // architecture, which a `v1` target shares with its default twin.
+            return switch (requested.defaultCpuTarget()) {
                 .x64mac, .arm64mac, .x64win, .arm64win => echo_platform.build_c_platform_main_source,
                 .wasm32 => echo_platform.build_wasm_archive_platform_main_source,
                 else => echo_platform.build_platform_main_source,
@@ -7615,6 +7634,16 @@ fn writeDefaultPlatformRuntimeObject(ctx: *CliCtx, artifact_dir: []const u8, tar
     return runtime_path;
 }
 
+fn writeDefaultPlatformExecutableObject(ctx: *CliCtx, artifact_dir: []const u8, target: RocTarget) CliMainError!?[]const u8 {
+    const bytes = DefaultPlatformExecutableObjects.forTarget(target) orelse return null;
+    const runtime_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, DefaultPlatformExecutableObjects.filename(target) });
+    backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, bytes) catch |err| {
+        std.log.err("Failed to write default platform executable object {s}: {}", .{ runtime_path, err });
+        return err;
+    };
+    return runtime_path;
+}
+
 /// The host inputs of a link, in link order.
 fn hostInputPaths(ctx: *CliCtx, link_inputs: PlatformLinkInputs) std.mem.Allocator.Error![]const []const u8 {
     var paths = try std.array_list.Managed([]const u8).initCapacity(
@@ -7677,7 +7706,7 @@ fn rejectRequiredExecutableOutput(ctx: *CliCtx, selected: target_selection.Selec
             try stderr.print("the archive.\n", .{});
         },
         .shared => {
-            if (selected.target == .wasm32) {
+            if (selected.target.toCpuArch() == .wasm32) {
                 try stderr.print("Error: This platform cannot be run directly.\n\n", .{});
                 try stderr.print("This platform targets wasm32 and produces a .wasm module. Use 'roc build'\n", .{});
                 try stderr.print("to produce the wasm artifact, then load it with the host application.\n", .{});
@@ -7997,6 +8026,7 @@ fn writeDevWasmObject(
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
     static_data_exports: []const backend.StaticDataExport,
+    cpu_level: roc_target.CpuLevel,
 ) CliMainError![]const u8 {
     if (entrypoints.len == 0) {
         if (builtin.mode == .Debug) {
@@ -8019,6 +8049,7 @@ fn writeDevWasmObject(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
         &wasm_module,
+        cpu_level,
     );
     wasm_module_owned_here = false;
     defer codegen.deinit();
@@ -8110,7 +8141,7 @@ fn rocBuildWasmSurgical(
     if (link_type == .archive) {
         // Archives package whatever inputs the platform declared (possibly
         // just the app); no platform wasm file is required.
-        const obj_path = try writeDevWasmObject(ctx, build_cache_dir, lowered, entrypoints, static_data_exports);
+        const obj_path = try writeDevWasmObject(ctx, build_cache_dir, lowered, entrypoints, static_data_exports, target.cpuLevel());
         try writeArchiveOutput(ctx, .wasm32, final_output_path, link_inputs, &.{obj_path});
         return;
     }
@@ -8124,7 +8155,7 @@ fn rocBuildWasmSurgical(
     defer freeOwnedWasmInputs(ctx, &owned_inputs);
 
     if (link_inputs.wasm != null) {
-        const obj_path = try writeDevWasmObject(ctx, build_cache_dir, lowered, entrypoints, static_data_exports);
+        const obj_path = try writeDevWasmObject(ctx, build_cache_dir, lowered, entrypoints, static_data_exports, target.cpuLevel());
         const object_files = try ctx.arena.alloc([]const u8, 1);
         object_files[0] = obj_path;
         const wasm_exports = try collectWasmPlatformExports(ctx, link_inputs, &owned_inputs);
@@ -8200,6 +8231,7 @@ fn rocBuildWasmSurgical(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
         &wasm_module,
+        target.cpuLevel(),
     );
     defer codegen.deinit();
     loaded_module = false;
@@ -8821,7 +8853,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         return error.UnsupportedCrossCompilation;
     }
 
-    if (target != .wasm32 and target.ptrBitWidth() != 64) {
+    if (target.toCpuArch() != .wasm32 and target.ptrBitWidth() != 64) {
         try ctx.io.stderr().print(
             "Error: roc build --opt={s} requires a 64-bit native host target, but {s} has {d}-bit pointers.\n",
             .{ @tagName(args.opt), @tagName(target), target.ptrBitWidth() },
@@ -8881,8 +8913,9 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
 
     const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
 
-    reporter.begin("Specialization");
+    reporter.begin(post_check_lowering_phase_name);
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
+    if (args.timings) spec_timing.enableDetailedMonotypeBody();
     var lowered = try lowerCheckedSourceToLir(
         ctx.gpa,
         ctx.gpa,
@@ -8896,7 +8929,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         &spec_timing,
     );
     defer lowered.deinit();
-    reporter.endWithBreakdownSequential(&specializationBreakdown(spec_timing.snapshot()));
+    finishPostCheckLowering(&reporter, &spec_timing);
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
@@ -8922,7 +8955,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         unreachable;
     }
 
-    if (target == .wasm32) {
+    if (target.toCpuArch() == .wasm32) {
         reporter.begin("LLVM IR Generation");
         try rocBuildWasmLlvm(
             ctx,
@@ -8940,7 +8973,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     } else {
         reporter.begin("LLVM IR Generation");
         const hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
-        const enable_default_platform_runtime = args.synthetic_default_platform and DefaultPlatformRuntimeObjects.forTarget(target) != null;
+        const enable_default_platform_runtime = args.synthetic_default_platform and DefaultPlatformExecutableObjects.forTarget(target) != null;
 
         const app_object = try compileLlvmAppObject(
             ctx,
@@ -8954,7 +8987,16 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
             args.synthetic_default_platform,
             &reporter,
         );
-        defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, app_object.artifact_dir) catch {};
+
+        if (args.keep_temp) {
+            const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+            const config = reporting.ReportingConfig.initColorTerminal();
+            const headline = try std.fmt.allocPrint(ctx.arena, "Kept temporary directory: {s}.", .{app_object.artifact_dir});
+            var report = try reporting.Report.init(ctx.arena, "Kept Temporary Directory", headline, .warning);
+            defer report.deinit();
+            reporting.renderReportToTerminal(&report, ctx.io.stderr(), palette, config) catch {};
+        }
+        defer if (!args.keep_temp) std.Io.Dir.cwd().deleteTree(ctx.io.std_io, app_object.artifact_dir) catch {};
 
         var static_data_obj_path: ?[]const u8 = null;
         if (static_data_exports.len > 0) {
@@ -8978,7 +9020,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
             try object_files.append(path);
         }
         if (enable_default_platform_runtime) {
-            if (try writeDefaultPlatformRuntimeObject(ctx, app_object.artifact_dir, target)) |runtime_path| {
+            if (try writeDefaultPlatformExecutableObject(ctx, app_object.artifact_dir, target)) |runtime_path| {
                 try object_files.append(runtime_path);
             } else {
                 return error.UnsupportedTarget;
@@ -9195,8 +9237,9 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
 
     const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
 
-    reporter.begin("Specialization");
+    reporter.begin(post_check_lowering_phase_name);
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
+    if (args.timings) spec_timing.enableDetailedMonotypeBody();
     var lowered = try lowerCheckedSourceToLir(
         ctx.gpa,
         ctx.gpa,
@@ -9210,7 +9253,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         &spec_timing,
     );
     defer lowered.deinit();
-    reporter.endWithBreakdownSequential(&specializationBreakdown(spec_timing.snapshot()));
+    finishPostCheckLowering(&reporter, &spec_timing);
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
@@ -9269,7 +9312,6 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     }
 
     var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
-    object_compiler.enable_default_platform_runtime = args.synthetic_default_platform;
     var backend_timing = backend.ObjectFileCompiler.Timing.init(ctx.io.std_io);
     object_compiler.timing = &backend_timing;
 
@@ -9311,7 +9353,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     try object_files.append(obj_path);
     try object_files.append(builtins_path);
     if (args.synthetic_default_platform) {
-        if (try writeDefaultPlatformRuntimeObject(ctx, build_scratch_dir, target)) |runtime_path| {
+        if (try writeDefaultPlatformExecutableObject(ctx, build_scratch_dir, target)) |runtime_path| {
             try object_files.append(runtime_path);
         } else {
             return error.UnsupportedTarget;
@@ -9518,8 +9560,9 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     const shm_allocator = shm.allocator();
     const image_header = try shm_allocator.create(lir.LirImage.Header);
 
-    reporter.begin("Specialization");
+    reporter.begin(post_check_lowering_phase_name);
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
+    if (args.timings) spec_timing.enableDetailedMonotypeBody();
     var lowered = try lowerCheckedSourceToLir(
         ctx.gpa,
         ctx.gpa,
@@ -9533,7 +9576,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         &spec_timing,
     );
     defer lowered.deinit();
-    reporter.endWithBreakdownSequential(&specializationBreakdown(spec_timing.snapshot()));
+    finishPostCheckLowering(&reporter, &spec_timing);
 
     reporter.begin("LIR Image Generation");
     const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
@@ -13708,6 +13751,13 @@ fn processReplInput(
                     try stderr.print("{s}\n", .{diagnostic});
                 }
             },
+            .runtime_crash => |message| {
+                had_diagnostics.* = true;
+                try stderr.print(
+                    "This Roc code crashed with: \"{f}\"\n",
+                    .{std.zig.fmtString(message)},
+                );
+            },
             .none => {},
             .exit => return true,
         }
@@ -13789,8 +13839,11 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
 
     const stdout = ctx.io.stdout();
     const stderr = ctx.io.stderr();
+    // Formatting a file brings its `roc` version pin up to date when this
+    // compiler is a newer nightly than the one it names.
+    const format_options: fmt.Options = .{ .compiler_version = build_options.compiler_version };
     if (args.stdin) {
-        fmt.formatStdin(ctx.gpa, ctx.io.std_io, std.Io.File.stdin(), std.Io.File.stdout(), stderr) catch |err| return err;
+        fmt.formatStdin(ctx.gpa, format_options, ctx.io.std_io, std.Io.File.stdin(), std.Io.File.stdout(), stderr) catch |err| return err;
         return;
     }
 
@@ -13804,7 +13857,7 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
         defer unformatted_files.deinit(ctx.gpa);
 
         for (args.paths) |path| {
-            var result = try fmt.formatPath(ctx.gpa, ctx.arena, std.Io.Dir.cwd(), path, true, ctx.io.std_io, stderr);
+            var result = try fmt.formatPath(ctx.gpa, ctx.arena, std.Io.Dir.cwd(), path, true, format_options, ctx.io.std_io, stderr);
             defer result.deinit();
             if (result.unformatted_files) |files| {
                 try unformatted_files.appendSlice(ctx.gpa, files.items);
@@ -13830,7 +13883,7 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
     } else {
         var success_count: usize = 0;
         for (args.paths) |path| {
-            const result = try fmt.formatPath(ctx.gpa, ctx.arena, std.Io.Dir.cwd(), path, false, ctx.io.std_io, stderr);
+            const result = try fmt.formatPath(ctx.gpa, ctx.arena, std.Io.Dir.cwd(), path, false, format_options, ctx.io.std_io, stderr);
             success_count += result.success;
             failure_count += result.failure;
         }
@@ -13880,7 +13933,7 @@ fn frontEndBreakdown(timing: anytype) [3]progress.SubTiming {
 
 fn compileTimeEvaluationBreakdown(timing: anytype) [8]progress.SubTiming {
     return .{
-        .{ .name = "Specialization", .ns = timing.monotype_ns },
+        .{ .name = "Monotype Lowering", .ns = timing.monotype_ns },
         .{ .name = "LIR Generation", .ns = timing.postcheck_to_lir_ns },
         .{ .name = "LIR Passes", .ns = timing.lir_passes_ns },
         .{ .name = "ARC", .ns = timing.arc_ns },
@@ -13891,16 +13944,196 @@ fn compileTimeEvaluationBreakdown(timing: anytype) [8]progress.SubTiming {
     };
 }
 
-fn specializationBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [7]progress.SubTiming {
+const post_check_lowering_phase_name = "Post-Check Lowering";
+
+fn postCheckLoweringBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [24]progress.SubTiming {
+    const classified_body_ns = timing.monotype_procedure_body_type_graph_ns +|
+        timing.monotype_procedure_body_call_dispatch_ns +|
+        timing.monotype_procedure_body_draft_ir_ns +|
+        timing.monotype_procedure_body_reachability_ns +|
+        timing.monotype_procedure_body_source_mapping_ns +|
+        timing.monotype_procedure_body_local_proc_context_ns;
     return .{
-        .{ .name = "Specialization", .ns = timing.monotype_ns },
-        .{ .name = "Lifting", .ns = timing.lift_ns },
+        .{ .name = "Monotype Setup", .ns = timing.monotype_setup_ns },
+        .{ .name = "Root + Wrapper Setup", .ns = timing.monotype_procedure_root_wrapper_ns },
+        .{ .name = "Specialization Lookup + Reservation", .ns = timing.monotype_procedure_lookup_reservation_ns },
+        .{ .name = "Dispatch Evidence", .ns = timing.monotype_procedure_dispatch_evidence_ns },
+        .{ .name = "Body Graph Setup", .ns = timing.monotype_procedure_body_graph_setup_ns },
+        .{ .name = "Body Traversal + Binding", .ns = timing.monotype_procedure_body_lowering_ns -| classified_body_ns },
+        .{ .name = "Body Type Graph", .ns = timing.monotype_procedure_body_type_graph_ns },
+        .{ .name = "Body Call Dispatch", .ns = timing.monotype_procedure_body_call_dispatch_ns },
+        .{ .name = "Body Draft IR Construction", .ns = timing.monotype_procedure_body_draft_ir_ns },
+        .{ .name = "Body Reachability + Proofs", .ns = timing.monotype_procedure_body_reachability_ns },
+        .{ .name = "Body Source Mapping", .ns = timing.monotype_procedure_body_source_mapping_ns },
+        .{ .name = "Body Local Procedure Context", .ns = timing.monotype_procedure_body_local_proc_context_ns },
+        .{ .name = "Body Sealing + Commit", .ns = timing.monotype_procedure_body_finalization_ns },
+        .{ .name = "Procedure Completion", .ns = timing.monotype_procedure_completion_ns },
+        .{ .name = "Layout Requests", .ns = timing.monotype_layout_requests_ns },
+        .{ .name = "Static Data Requests", .ns = timing.monotype_static_data_requests_ns },
+        .{ .name = "Monotype Finalization", .ns = timing.monotype_finalization_ns },
+        .{ .name = "Closure Lifting", .ns = timing.lift_ns },
         .{ .name = "SpecConstr", .ns = timing.spec_constr_ns },
-        .{ .name = "Lambda Sets", .ns = timing.lambda_solve_ns },
+        .{ .name = "Lambda-Set Solving", .ns = timing.lambda_solve_ns },
+        .{ .name = "Inline Planning", .ns = timing.inline_plan_ns },
         .{ .name = "LIR Generation", .ns = timing.lir_gen_ns },
         .{ .name = "LIR Passes", .ns = timing.lir_passes_ns },
         .{ .name = "ARC", .ns = timing.arc_ns },
     };
+}
+
+fn finishPostCheckLowering(reporter: *progress.Reporter, timing: *const lir.CheckedPipeline.Timing) void {
+    const snapshot = timing.snapshot();
+    reporter.endWithBreakdownSequential(&postCheckLoweringBreakdown(snapshot));
+    reporter.recordCounters("Monotype specialization", &monotypeSpecializationCounters(snapshot.monotype_diagnostics));
+    reporter.recordCounters("Monotype type graph", &monotypeGraphCounters(snapshot.monotype_diagnostics));
+    reporter.recordCounters("Monotype body + dispatch", &monotypeBodyCounters(snapshot.monotype_diagnostics));
+}
+
+fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [17]progress.Counter {
+    const counters = diagnostics.specialization;
+    return .{
+        .{ .name = "Template requests", .count = counters.template_requests },
+        .{ .name = "Template hits", .count = counters.template_hits },
+        .{ .name = "Template misses", .count = counters.template_misses },
+        .{ .name = "Nested requests", .count = counters.nested_requests },
+        .{ .name = "Nested hits", .count = counters.nested_hits },
+        .{ .name = "Nested misses", .count = counters.nested_misses },
+        .{ .name = "Template lookup candidates", .count = counters.template_lookup_candidates },
+        .{ .name = "Nested lookup candidates", .count = counters.nested_lookup_candidates },
+        .{ .name = "Type digest root requests", .count = counters.specialization_type_digest_requests },
+        .{ .name = "Type digest node cache hits", .count = counters.specialization_type_digest_cache_hits },
+        .{ .name = "Type digest node cache misses", .count = counters.specialization_type_digest_cache_misses },
+        .{ .name = "Type digest nodes visited", .count = counters.specialization_type_digest_nodes_visited },
+        .{ .name = "Exact type checks", .count = counters.exact_type_checks },
+        .{ .name = "Nominal backing reuses", .count = counters.nominal_backing_reuses },
+        .{ .name = "Nominal backing instantiations", .count = counters.nominal_backing_instantiations },
+        .{ .name = "Missing evidence", .count = counters.evidence_missing },
+        .{ .name = "Total specialization misses", .count = counters.template_misses +| counters.nested_misses },
+    };
+}
+
+fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [18]progress.Counter {
+    const graph = diagnostics.graph;
+    return .{
+        .{ .name = "Graphs created", .count = diagnostics.body.graphs_created },
+        .{ .name = "Nodes created", .count = graph.nodes_created },
+        .{ .name = "Unification requests", .count = graph.unify_requests },
+        .{ .name = "Union classes joined", .count = graph.class_unions },
+        .{ .name = "Active type requests", .count = graph.active_type_requests },
+        .{ .name = "Imported active type hits", .count = graph.active_type_imported_hits },
+        .{ .name = "Active snapshot hits", .count = graph.active_snapshot_cache_hits },
+        .{ .name = "Active snapshot misses", .count = graph.active_snapshot_cache_misses },
+        .{ .name = "Snapshot nodes materialized", .count = graph.active_snapshot_nodes_materialized },
+        .{ .name = "Snapshot invalidation requests", .count = graph.active_snapshot_invalidations },
+        .{ .name = "Snapshot entries invalidated", .count = graph.active_snapshot_entries_invalidated },
+        .{ .name = "Monotype import requests", .count = graph.mono_import_requests },
+        .{ .name = "Monotype import hits", .count = graph.mono_import_hits },
+        .{ .name = "Monotype import misses", .count = graph.mono_import_misses },
+        .{ .name = "Generated-private scans", .count = graph.generated_private_scans },
+        .{ .name = "Generated-private nodes visited", .count = graph.generated_private_nodes_visited },
+        .{ .name = "Finished-Monotype scans", .count = graph.finished_mono_scans },
+        .{ .name = "Finished-Monotype nodes visited", .count = graph.finished_mono_nodes_visited },
+    };
+}
+
+fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [13]progress.Counter {
+    const body = diagnostics.body;
+    return .{
+        .{ .name = "Body contexts created", .count = body.body_contexts_created },
+        .{ .name = "Checked node requests", .count = body.checked_node_requests },
+        .{ .name = "Checked node cache hits", .count = body.checked_node_cache_hits },
+        .{ .name = "Checked node cache misses", .count = body.checked_node_cache_misses },
+        .{ .name = "Fresh checked node requests", .count = body.fresh_checked_node_requests },
+        .{ .name = "Call expressions", .count = body.call_expressions },
+        .{ .name = "Dispatch expressions", .count = body.dispatch_expressions },
+        .{ .name = "Expression relations", .count = body.expr_relation_requests },
+        .{ .name = "Argument spans prepared", .count = body.argument_spans_prepared },
+        .{ .name = "Arguments prepared", .count = body.arguments_prepared },
+        .{ .name = "Nested callable checks", .count = body.nested_callable_checks },
+        .{ .name = "Nested lambdas prepared", .count = body.nested_lambdas_prepared },
+        .{ .name = "Nested closures prepared", .count = body.nested_closures_prepared },
+    };
+}
+
+test "post-check timing names distinct work and keep inlining separate from SpecConstr" {
+    const rows = postCheckLoweringBreakdown(.{
+        .monotype_setup_ns = 1,
+        .monotype_procedure_specialization_ns = 35,
+        .monotype_procedure_root_wrapper_ns = 2,
+        .monotype_procedure_lookup_reservation_ns = 3,
+        .monotype_procedure_dispatch_evidence_ns = 4,
+        .monotype_procedure_body_graph_setup_ns = 5,
+        .monotype_procedure_body_lowering_ns = 27,
+        .monotype_procedure_body_type_graph_ns = 1,
+        .monotype_procedure_body_call_dispatch_ns = 2,
+        .monotype_procedure_body_draft_ir_ns = 3,
+        .monotype_procedure_body_reachability_ns = 4,
+        .monotype_procedure_body_source_mapping_ns = 5,
+        .monotype_procedure_body_local_proc_context_ns = 6,
+        .monotype_procedure_body_finalization_ns = 7,
+        .monotype_procedure_completion_ns = 8,
+        .monotype_layout_requests_ns = 9,
+        .monotype_static_data_requests_ns = 10,
+        .monotype_finalization_ns = 11,
+        .lift_ns = 12,
+        .spec_constr_ns = 13,
+        .lambda_solve_ns = 14,
+        .inline_plan_ns = 15,
+        .lir_gen_ns = 16,
+        .lir_passes_ns = 17,
+        .arc_ns = 18,
+    });
+
+    try std.testing.expectEqualStrings("Root + Wrapper Setup", rows[1].name);
+    try std.testing.expectEqualStrings("Specialization Lookup + Reservation", rows[2].name);
+    try std.testing.expectEqualStrings("Dispatch Evidence", rows[3].name);
+    try std.testing.expectEqualStrings("Body Graph Setup", rows[4].name);
+    try std.testing.expectEqualStrings("Body Traversal + Binding", rows[5].name);
+    try std.testing.expectEqualStrings("Body Type Graph", rows[6].name);
+    try std.testing.expectEqualStrings("Body Call Dispatch", rows[7].name);
+    try std.testing.expectEqualStrings("Body Draft IR Construction", rows[8].name);
+    try std.testing.expectEqualStrings("Body Reachability + Proofs", rows[9].name);
+    try std.testing.expectEqualStrings("Body Source Mapping", rows[10].name);
+    try std.testing.expectEqualStrings("Body Local Procedure Context", rows[11].name);
+    try std.testing.expectEqualStrings("Body Sealing + Commit", rows[12].name);
+    try std.testing.expectEqualStrings("Procedure Completion", rows[13].name);
+    const expected_body_ns = [_]u64{ 6, 1, 2, 3, 4, 5, 6 };
+    for (rows[5..12], expected_body_ns) |row, expected_ns| try std.testing.expectEqual(expected_ns, row.ns);
+    try std.testing.expectEqualStrings("SpecConstr", rows[18].name);
+    try std.testing.expectEqualStrings("Inline Planning", rows[20].name);
+    try std.testing.expectEqual(@as(u64, 13), rows[18].ns);
+    try std.testing.expectEqual(@as(u64, 15), rows[20].ns);
+    for (rows) |row| {
+        try std.testing.expect(!std.mem.eql(u8, post_check_lowering_phase_name, row.name));
+    }
+}
+
+test "post-check diagnostics preserve labeled Monotype counts" {
+    var diagnostics: postcheck.Monotype.Lower.Diagnostics = .{};
+    diagnostics.specialization.template_requests = 101;
+    diagnostics.specialization.nested_misses = 102;
+    diagnostics.graph.nodes_created = 201;
+    diagnostics.graph.generated_private_nodes_visited = 202;
+    diagnostics.body.checked_node_cache_hits = 301;
+    diagnostics.body.nested_closures_prepared = 302;
+
+    const specialization = monotypeSpecializationCounters(diagnostics);
+    try std.testing.expectEqualStrings("Template requests", specialization[0].name);
+    try std.testing.expectEqual(@as(u64, 101), specialization[0].count);
+    try std.testing.expectEqualStrings("Nested misses", specialization[5].name);
+    try std.testing.expectEqual(@as(u64, 102), specialization[5].count);
+
+    const graph = monotypeGraphCounters(diagnostics);
+    try std.testing.expectEqualStrings("Nodes created", graph[1].name);
+    try std.testing.expectEqual(@as(u64, 201), graph[1].count);
+    try std.testing.expectEqualStrings("Generated-private nodes visited", graph[15].name);
+    try std.testing.expectEqual(@as(u64, 202), graph[15].count);
+
+    const body = monotypeBodyCounters(diagnostics);
+    try std.testing.expectEqualStrings("Checked node cache hits", body[2].name);
+    try std.testing.expectEqual(@as(u64, 301), body[2].count);
+    try std.testing.expectEqualStrings("Nested closures prepared", body[12].name);
+    try std.testing.expectEqual(@as(u64, 302), body[12].count);
 }
 
 fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {

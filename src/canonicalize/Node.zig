@@ -229,6 +229,7 @@ pub const Tag = enum {
     diag_execution_requires_app_or_default_app,
     diag_type_name_case_mismatch,
     diag_module_header_deprecated,
+    diag_roc_version_mismatch,
     diag_redundant_expose_main_type,
     diag_invalid_main_type_rename_in_exposing,
     diag_var_across_function_boundary,

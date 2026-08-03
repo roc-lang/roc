@@ -264,6 +264,27 @@ test "check type - numeral defaulting candidate order - integer-only method comm
     } }, "I64 -> I64");
 }
 
+test "issue 10296: single quote literals do not emit defaulted warning" {
+    const source =
+        \\x = || 'M' == 'M'
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> Bool");
+}
+
+test "issue 10296: single quote literal compared to number literal without warning" {
+    const source =
+        \\y = || 'M' == 1
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> Bool");
+}
+
+test "issue 10296: single quote literal compared to fractional number without warning" {
+    const source =
+        \\z = || 'M' == 1.5
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> Bool");
+}
+
 test "check type - is_eq operands must have same type - I64 eq I32 should fail" {
     const source =
         \\a : I64

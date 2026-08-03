@@ -37,7 +37,9 @@ const x86_64 = @import("x86_64/mod.zig");
 const aarch64 = @import("aarch64/mod.zig");
 const CallingConventionMod = @import("CallingConvention.zig");
 const CallingConvention = CallingConventionMod.CallingConvention;
-const RocTarget = @import("roc_target").RocTarget;
+const roc_target_mod = @import("roc_target");
+const RocTarget = roc_target_mod.RocTarget;
+const CpuLevel = roc_target_mod.CpuLevel;
 
 // Num builtin functions for 128-bit integer operations
 
@@ -523,6 +525,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Calling convention for the target platform (derived from comptime target)
         cc: CallingConvention,
 
+        /// How old a CPU the emitted instructions must run on.
+        ///
+        /// This is a runtime field rather than part of the comptime `target`
+        /// so that a `v1` target compiles through its default twin's
+        /// instantiation. The OS, architecture, ABI, and calling convention are
+        /// identical between the two; only instruction selection differs.
+        cpu_level: CpuLevel,
+
         /// Architecture-specific code generator with register allocation
         codegen: CodeGen,
 
@@ -674,10 +684,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Whether shim-executed host-callable functions and boxed callbacks
         /// participate in the hot-reload code reference protocol.
         enable_hot_reload: bool = false,
-
-        /// Whether object-file entrypoints should use the synthetic default
-        /// platform runtime contract.
-        enable_default_platform_runtime: bool = false,
 
         /// Compiler-internal hooks enabled only for native compile-time
         /// evaluation. Normal dev backend output leaves these null.
@@ -952,10 +958,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             layout_store_opt: *const LayoutStore,
             static_strings: []const StaticStringData.Entry,
             float_nan_mode: builtins.float_bits.NanMode,
+            cpu_level: CpuLevel,
         ) Allocator.Error!Self {
             return .{
                 .allocator = allocator,
                 .cc = CallingConvention.forTarget(target),
+                .cpu_level = cpu_level,
                 .codegen = CodeGen.init(allocator),
                 .store = store,
                 .layout_store = layout_store_opt,
@@ -1451,6 +1459,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate code for low-level operations
         fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!ValueLocation {
             const args = self.store.getLocalSpan(ll.args);
+
+            // A baseline target computes the SIMD ops whose native instructions
+            // are above its architecture's oldest revision by calling the
+            // target-independent implementation instead of emitting them.
+            if (self.simdOpUsesBaselineBuiltin(ll.op)) {
+                return self.generateSimdViaBuiltin(ll, args);
+            }
 
             switch (ll.op) {
                 .num_plus_wrap, .num_minus_wrap, .num_times_wrap => unreachable,
@@ -3643,7 +3658,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     const index_off = try self.ensureOnStack(index_loc, 8);
                     const elem_off = try self.ensureOnStack(elem_loc, list_abi.elem_size_align.size);
-                    // We need a scratch slot for the old element (out_element param)
+                    // listReplace moves the old element here; list_set releases that
+                    // unreturned ownership unit after the call.
                     const old_elem_slot = self.codegen.allocStackSlot(@intCast(list_abi.elem_size_align.size));
                     const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
                     defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
@@ -3671,6 +3687,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addRegArg(roc_ops_reg);
 
                         try self.callBuiltin(&builder, LowLevelBuiltins.listOp(.list_set));
+                    }
+
+                    if (list_abi.elem_layout_idx) |elem_layout_idx| {
+                        const helper = RcHelperVariant{
+                            .key = .{ .op = .decref, .layout_idx = elem_layout_idx },
+                            .atomicity = .atomic,
+                        };
+                        if (self.layout_store.rcHelperPlan(helper.key) != .noop) {
+                            try self.emitRcHelperCallAtStackOffset(helper, old_elem_slot, 1);
+                        }
                     }
 
                     return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
@@ -4916,6 +4942,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.codegen.emitLoadImm(low_reg, @bitCast(low));
             try self.codegen.emitLoadImm(high_reg, @bitCast(high));
             if (comptime target.toCpuArch() == .x86_64) {
+                if (self.cpu_level == .v1) {
+                    // PINSRQ is SSE4.1. Assembling the constant in a stack slot
+                    // and loading it back uses only baseline instructions.
+                    const slot = self.codegen.allocStackSlot(16);
+                    try self.codegen.emitStoreStack(.w64, slot, low_reg);
+                    try self.codegen.emitStoreStack(.w64, slot + 8, high_reg);
+                    try self.codegen.emitLoadStackV128(result, slot);
+                    return .{ .reg = result, .temporary = true };
+                }
                 try self.codegen.emit.movVectorFromGeneral(result, low_reg, true);
                 try self.codegen.emit.insertQword(result, high_reg, 1);
             } else {
@@ -5004,6 +5039,30 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!void {
             if (comptime target.toCpuArch() == .x86_64) {
                 try self.codegen.emit.movVectorFromGeneral(dst, src, kind.laneBits() == 64);
+                if (self.cpu_level == .v1) {
+                    // VPBROADCAST is AVX2. SSE2 widens the scalar to the full
+                    // register by repeatedly interleaving it with itself, then
+                    // copying the resulting dword across all four lanes.
+                    switch (kind.laneBits()) {
+                        // punpcklbw, punpcklwd, pshufd
+                        8 => {
+                            try self.codegen.emit.sseRegReg(.map_0f, .p66, 0x60, dst, dst);
+                            try self.codegen.emit.sseRegReg(.map_0f, .p66, 0x61, dst, dst);
+                            try self.codegen.emit.sseRegRegImm8(.map_0f, .p66, 0x70, dst, dst, 0x00);
+                        },
+                        // punpcklwd, pshufd
+                        16 => {
+                            try self.codegen.emit.sseRegReg(.map_0f, .p66, 0x61, dst, dst);
+                            try self.codegen.emit.sseRegRegImm8(.map_0f, .p66, 0x70, dst, dst, 0x00);
+                        },
+                        // pshufd
+                        32 => try self.codegen.emit.sseRegRegImm8(.map_0f, .p66, 0x70, dst, dst, 0x00),
+                        // punpcklqdq
+                        64 => try self.codegen.emit.sseRegReg(.map_0f, .p66, 0x6C, dst, dst),
+                        else => unreachable,
+                    }
+                    return;
+                }
                 try self.codegen.emit.vexRegReg(
                     .map_0f38,
                     .p66,
@@ -6018,6 +6077,143 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .general_reg = result };
         }
 
+        /// How many leading vector locals and trailing scalar locals a SIMD op
+        /// passes to `builtins.simd.eval`, in `a`, `b`, `c` order.
+        const SimdBuiltinArity = struct { vectors: u8, scalars: u8 };
+
+        /// Whether a SIMD op reaches its native instructions only above the
+        /// architecture's oldest revision, and so is computed by calling the
+        /// target-independent builtin when compiling for a baseline target.
+        ///
+        /// The x86 list is broad because legacy SSE stops at SSE2: variable
+        /// byte shuffles, 64-bit lane compares, the SSE4.1 min/max forms, the
+        /// SSSE3 multiply-accumulate forms, and carryless multiply all sit
+        /// above it. Converting these to baseline vector sequences one at a
+        /// time is tracked in roc-lang/roc#10552.
+        fn simdOpUsesBaselineBuiltin(self: *Self, op: lir.LowLevel) bool {
+            if (self.cpu_level != .v1) return false;
+            if (comptime target.toCpuArch() != .x86_64) {
+                // NEON is mandatory in Armv8.0-A, so every other op already has
+                // a baseline instruction. Carryless multiply is PMULL64, which
+                // the AES extension supplies rather than base NEON.
+                return op == .simd_clmul_lo or op == .simd_clmul_hi;
+            }
+            return simdBuiltinArity(op) != null;
+        }
+
+        fn simdBuiltinArity(op: lir.LowLevel) ?SimdBuiltinArity {
+            return switch (op) {
+                .simd_abs_wrap,
+                .simd_reverse_lanes,
+                .simd_widen_lo,
+                .simd_widen_hi,
+                .simd_pairwise_add_widen,
+                .simd_sum_lanes,
+                .simd_sum_lanes_wrap,
+                .simd_bitmask,
+                => .{ .vectors = 1, .scalars = 0 },
+
+                .simd_min,
+                .simd_max,
+                .simd_eq_lanes,
+                .simd_gt_lanes,
+                .simd_gte_lanes,
+                .simd_even_lanes,
+                .simd_odd_lanes,
+                .simd_table_lookup,
+                .simd_narrow_wrap,
+                .simd_narrow_sat,
+                .simd_dot_pairs_sat,
+                .simd_mul_q15_sat,
+                .simd_mul_wide_lo,
+                .simd_mul_wide_hi,
+                .simd_clmul_lo,
+                .simd_clmul_hi,
+                // SSE2 multiplies 16-bit lanes but not 32-bit ones, and the
+                // widening forms it does have are unsigned only.
+                .simd_mul_wrap,
+                .simd_mul_high,
+                => .{ .vectors = 2, .scalars = 0 },
+
+                .simd_shl_wrap,
+                .simd_shr_wrap,
+                .simd_shr_zf_wrap,
+                .simd_shr_rounded,
+                // Extracting a runtime-indexed lane goes through PSHUFB, which
+                // is SSSE3. This one returns an integer rather than a vector.
+                .simd_get_lane_unchecked,
+                => .{ .vectors = 1, .scalars = 1 },
+
+                .simd_concat_shift_bytes => .{ .vectors = 2, .scalars = 1 },
+
+                else => null,
+            };
+        }
+
+        /// Compute a SIMD op by calling the target-independent implementation
+        /// in `builtins/simd.zig`.
+        ///
+        /// That implementation defines each op's bit-exact meaning without
+        /// reference to any architecture and is the oracle the interpreter,
+        /// compile-time evaluator, and differential corpus already agree with,
+        /// so its answer is the same one a native sequence produces. Operands
+        /// travel through a stack buffer because three `u128` arguments and a
+        /// `u128` result do not fit the integer argument registers.
+        fn generateSimdViaBuiltin(self: *Self, ll: anytype, args: anytype) Allocator.Error!ValueLocation {
+            const arity = simdBuiltinArity(ll.op) orelse unreachable;
+            const op_index = ll.op.simdOpIndex() orelse unreachable;
+
+            const first_local = GuardedList.at(args, 0);
+            const arg_kind = self.simdKindForLayout(self.localLayout(first_local)) orelse unreachable;
+            const ret_vector = self.simdKindForLayout(ll.ret_layout);
+            const ret_kind = ret_vector orelse arg_kind;
+
+            const args_offset = self.codegen.allocStackSlot(3 * 16);
+            const zero = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(zero);
+            try self.codegen.emitLoadImm(zero, 0);
+            for (0..3) |slot_index| {
+                const slot_offset = args_offset + @as(i32, @intCast(slot_index)) * 16;
+                try self.codegen.emitStoreStack(.w64, slot_offset, zero);
+                try self.codegen.emitStoreStack(.w64, slot_offset + 8, zero);
+            }
+
+            var slot: u8 = 0;
+            while (slot < arity.vectors) : (slot += 1) {
+                const local = GuardedList.at(args, slot);
+                const vector = try self.acquireVectorLocal(local, arg_kind, 0);
+                defer self.releaseAcquiredVector(vector);
+                try self.codegen.emitStoreStackV128(args_offset + @as(i32, slot) * 16, vector.reg);
+            }
+            while (slot < arity.vectors + arity.scalars) : (slot += 1) {
+                const scalar_loc = try self.emitValueLocal(GuardedList.at(args, slot));
+                const scalar = try self.ensureInGeneralReg(scalar_loc);
+                defer self.codegen.freeGeneral(scalar);
+                try self.codegen.emitStoreStack(.w64, args_offset + @as(i32, slot) * 16, scalar);
+            }
+
+            const result_offset = self.codegen.allocStackSlot(16);
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(frame_ptr, result_offset);
+            try builder.addImmArg(op_index);
+            try builder.addImmArg(@intFromEnum(arg_kind));
+            try builder.addImmArg(@intFromEnum(ret_kind));
+            try builder.addLeaArg(frame_ptr, args_offset);
+            try self.callBuiltin(&builder, .simd_eval);
+
+            if (ret_vector) |kind| {
+                const result = try self.allocTempVector(0);
+                try self.codegen.emitLoadStackV128(result, result_offset);
+                return .{ .vector_reg = .{ .reg = result, .kind = kind } };
+            }
+
+            // `simd_bitmask` is the one routed op whose result is an integer;
+            // it lands in the low bits of the returned value.
+            const result = try self.allocTempGeneral();
+            try self.codegen.emitLoadStack(.w64, result, result_offset);
+            return .{ .general_reg = result };
+        }
+
         fn generateSimdClmul(self: *Self, ll: anytype, args: anytype) Allocator.Error!ValueLocation {
             const lhs = try self.acquireVectorLocal(GuardedList.at(args, 0), .u64x2, 0);
             defer self.releaseAcquiredVector(lhs);
@@ -6094,6 +6290,42 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             lhs: FloatReg,
             rhs: FloatReg,
         ) Allocator.Error!void {
+            if (self.cpu_level == .v1) {
+                // VEX is an AVX encoding, so the baseline reaches these same
+                // opcodes through legacy SSE. Legacy SSE reads and writes one
+                // register for the left operand, so materialize `lhs` in `dst`
+                // first. Ops whose opcode lives outside the `0F` map are above
+                // the baseline entirely and are routed to the SIMD builtin
+                // before reaching here.
+                if (map != .map_0f) {
+                    // Reaching here means an op that needs an instruction
+                    // outside the `0F` map was not routed to the SIMD builtin,
+                    // and emitting it in the legacy encoding would produce a
+                    // binary that still requires SSSE3 or later. Fail rather
+                    // than encode it.
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "baseline codegen invariant violated: SIMD op needs an opcode above the x86-64 baseline",
+                            .{},
+                        );
+                    }
+                    unreachable;
+                }
+                if (dst == rhs and dst != lhs) {
+                    // Writing `lhs` into `dst` would destroy the right operand,
+                    // so stage the right operand somewhere else first.
+                    const protect = floatRegMask(dst) | floatRegMask(lhs) | floatRegMask(rhs);
+                    const staged = try self.allocTempVector(protect);
+                    defer self.codegen.freeFloat(staged);
+                    try self.codegen.emit.movdqaRegReg(staged, rhs);
+                    try self.codegen.emit.movdqaRegReg(dst, lhs);
+                    try self.codegen.emit.sseRegReg(map, .p66, opcode, dst, staged);
+                    return;
+                }
+                if (dst != lhs) try self.codegen.emit.movdqaRegReg(dst, lhs);
+                try self.codegen.emit.sseRegReg(map, .p66, opcode, dst, rhs);
+                return;
+            }
             try self.codegen.emit.vexRegRegReg(map, .p66, false, opcode, dst, lhs, rhs);
         }
 
@@ -8016,6 +8248,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     },
                     .assign_call_erased => |assign| {
                         try locals.put(localKey(assign.closure), assign.closure);
+                        if (assign.reuse_source) |reuse_source| try locals.put(localKey(reuse_source), reuse_source);
                         const args = self.store.getLocalSpan(assign.args);
                         for (0..args.len) |arg_index| {
                             const arg = GuardedList.at(args, arg_index);
@@ -8193,6 +8426,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .assign_call_erased => |assign| {
                         try locals.put(localKey(assign.target), assign.target);
                         try locals.put(localKey(assign.closure), assign.closure);
+                        if (assign.reuse_source) |reuse_source| try locals.put(localKey(reuse_source), reuse_source);
                         const args = self.store.getLocalSpan(assign.args);
                         for (0..args.len) |arg_index| {
                             const arg = GuardedList.at(args, arg_index);
@@ -10094,7 +10328,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// dst = number of set bits in the full 64-bit value `src`.
         fn emitPopcount64(self: *Self, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
-            if (comptime target.toCpuArch() == .aarch64) {
+            // POPCNT is an SSE4.2-era instruction, so an x86 target at the
+            // baseline CPU level counts bits the same way aarch64 does.
+            const use_swar = comptime target.toCpuArch() == .aarch64;
+            if (use_swar or self.cpu_level == .v1) {
                 // aarch64 has no scalar population-count instruction; use the
                 // classic SWAR sequence on general registers.
                 const t = try self.allocTempGeneral();
@@ -10133,9 +10370,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn emitClz64(self: *Self, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
             if (comptime target.toCpuArch() == .aarch64) {
                 try self.codegen.emit.clzRegReg(.w64, dst, src);
-            } else {
-                try self.codegen.emit.lzcntRegReg(.w64, dst, src);
+                return;
             }
+            if (self.cpu_level == .v1) {
+                // BSR reports the index of the highest set bit, so the leading
+                // zero count is `63 - index`. Selecting -1 for a zero operand
+                // carries that arithmetic to the 64 LZCNT reports.
+                const t = try self.allocTempGeneral();
+                try self.codegen.emitLoadImm(t, -1);
+                try self.codegen.emit.bsrRegReg(.w64, dst, src);
+                try self.codegen.emit.cmovcc(.equal, .w64, dst, t);
+                try self.codegen.emitLoadImm(t, 63);
+                // Subtract into the temp: `dst` is the right-hand operand here,
+                // so making it the destination would overwrite it first.
+                try self.codegen.emitSub(.w64, t, t, dst);
+                try self.emitMovRegReg(dst, t);
+                self.codegen.freeGeneral(t);
+                return;
+            }
+            try self.codegen.emit.lzcntRegReg(.w64, dst, src);
         }
 
         /// dst = number of trailing zero bits of the full 64-bit value `src`
@@ -10145,9 +10398,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // No native ctz: reverse the bits, then count leading zeros.
                 try self.codegen.emit.rbitRegReg(.w64, dst, src);
                 try self.codegen.emit.clzRegReg(.w64, dst, dst);
-            } else {
-                try self.codegen.emit.tzcntRegReg(.w64, dst, src);
+                return;
             }
+            if (self.cpu_level == .v1) {
+                // BSF already reports the index of the lowest set bit, which is
+                // the trailing zero count. Only the zero operand differs, and
+                // TZCNT reports 64 there.
+                const t = try self.allocTempGeneral();
+                try self.codegen.emitLoadImm(t, 64);
+                try self.codegen.emit.bsfRegReg(.w64, dst, src);
+                try self.codegen.emit.cmovcc(.equal, .w64, dst, t);
+                self.codegen.freeGeneral(t);
+                return;
+            }
+            try self.codegen.emit.tzcntRegReg(.w64, dst, src);
         }
 
         /// Lower a bit-count op on a scalar integer (width 8..64). The operand is
@@ -13614,6 +13878,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             closure_local: LocalId,
             call_args: LocalSpan,
             ret_layout: layout.Idx,
+            reuse_closure: bool,
         ) Allocator.Error!ValueLocation {
             try self.spillAllVectorLocals();
             const closure_layout = self.localLayout(closure_local);
@@ -13698,6 +13963,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addLeaArg(frame_ptr, args_slot);
             }
             try builder.addMemArg(frame_ptr, capture_stack_offset);
+            if (reuse_closure) {
+                try builder.addMemArg(frame_ptr, closure_ptr_slot);
+            } else {
+                try builder.addImmArg(0);
+            }
 
             const comptime_call_entered = if (self.comptime_hooks) |hooks|
                 try self.emitComptimeCallEnter(hooks)
@@ -17444,11 +17714,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        /// Save one pointer from the internal ABI into a stable local stack slot.
+        /// Pointer arguments beyond the target's register bank are read from the
+        /// caller's outgoing stack-argument area.
+        fn saveIncomingPointerArg(self: *Self, local_offset: i32, arg_index: u8) Allocator.Error!void {
+            if (arg_index < max_arg_regs) {
+                try self.codegen.emitStoreStack(.w64, local_offset, self.getArgumentRegister(arg_index));
+            } else {
+                const stack_offset = incoming_stack_arg_base_offset + @as(i32, arg_index - max_arg_regs) * 8;
+                try self.copyFromCallerStack(self.callerStackArgBaseReg(), stack_offset, local_offset, 1);
+            }
+        }
+
         fn bindErasedCallableAdapterParams(self: *Self, params: LocalSpan) Allocator.Error!void {
             const locals = self.store.getLocalSpan(params);
-            if (locals.len == 0) {
+            if (locals.len < 2) {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("Dev/codegen invariant violated: erased callable adapter has no hidden capture arg", .{});
+                    std.debug.panic("Dev/codegen invariant violated: erased callable adapter requires hidden capture and reuse args", .{});
                 }
                 unreachable;
             }
@@ -17465,11 +17747,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const args_ptr_slot = self.codegen.allocStackSlot(8);
             const capture_ptr_slot = self.codegen.allocStackSlot(8);
-            try self.codegen.emitStoreStack(.w64, args_ptr_slot, self.getArgumentRegister(2));
-            try self.codegen.emitStoreStack(.w64, capture_ptr_slot, self.getArgumentRegister(3));
+            const reuse_ptr_slot = self.codegen.allocStackSlot(8);
+            try self.saveIncomingPointerArg(args_ptr_slot, 2);
+            try self.saveIncomingPointerArg(capture_ptr_slot, 3);
+            try self.saveIncomingPointerArg(reuse_ptr_slot, 4);
 
             var arg_offset: u32 = 0;
-            const explicit_count = locals.len - 1;
+            const explicit_count = locals.len - 2;
             for (0..explicit_count) |local_index| {
                 const local = GuardedList.at(locals, local_index);
                 const local_layout = self.localLayout(local);
@@ -17509,6 +17793,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitStore(.w64, frame_ptr, capture_stack, capture_arg_reg);
             self.codegen.freeGeneral(capture_arg_reg);
             try self.local_locations.put(localKey(capture_local), self.stackLocationForLayout(.opaque_ptr, capture_stack));
+
+            const reuse_local = GuardedList.at(locals, explicit_count + 1);
+            try self.local_locations.put(localKey(reuse_local), self.stackLocationForLayout(self.localLayout(reuse_local), reuse_ptr_slot));
         }
 
         fn bindProcParams(self: *Self, params: LocalSpan, initial_reg_idx: u8) Allocator.Error!void {
@@ -18149,6 +18436,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 assign.closure,
                                 assign.args,
                                 self.localLayout(assign.target),
+                                assign.reuse_closure,
                             );
                             try self.bindAssignedLocal(assign.target, value_loc);
                             try work.append(wa, .{ .node = assign.next });
@@ -19473,7 +19761,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// 6. Returns `void`
         pub fn generateEntrypointWrapper(
             self: *Self,
-            symbol_name: []const u8,
+            _: []const u8,
             entry_proc: lir.LIR.LirProcSpecId,
             arg_layouts: []const layout.Idx,
             ret_layout: layout.Idx,
@@ -19526,11 +19814,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // ABI. The incoming sret pointer (if any) is captured into
                     // X20 inside generateEntrypointBodyCAbi before X19 is
                     // written.
-                    if (self.useDefaultPlatformLinuxStart(symbol_name)) {
-                        try self.generateDefaultPlatformLinuxStartBody(entry_proc, arg_layouts, ret_layout);
-                    } else {
-                        try self.generateEntrypointBodyCAbi(entry_proc, arg_layouts, ret_layout, .X20, &incoming_stack_copies);
-                    }
+                    try self.generateEntrypointBodyCAbi(entry_proc, arg_layouts, ret_layout, .X20, &incoming_stack_copies);
                 }
 
                 const body_epilogue_offset = self.codegen.currentOffset();
@@ -19624,11 +19908,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // ABI. The incoming sret pointer (if any) is captured into
                     // RBX inside generateEntrypointBodyCAbi before R12 is
                     // written.
-                    if (self.useDefaultPlatformLinuxStart(symbol_name)) {
-                        try self.generateDefaultPlatformLinuxStartBody(entry_proc, arg_layouts, ret_layout);
-                    } else {
-                        try self.generateEntrypointBodyCAbi(entry_proc, arg_layouts, ret_layout, .RBX, &incoming_stack_copies);
-                    }
+                    try self.generateEntrypointBodyCAbi(entry_proc, arg_layouts, ret_layout, .RBX, &incoming_stack_copies);
                 }
 
                 const body_epilogue_offset = self.codegen.currentOffset();
@@ -19882,74 +20162,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             size: u32,
             ptr_off: i32,
         };
-
-        fn useDefaultPlatformLinuxStart(self: *const Self, symbol_name: []const u8) bool {
-            if (!self.enable_default_platform_runtime) return false;
-            if (self.generation_mode != .object_file) return false;
-            if (comptime target.toOsTag() != .linux) return false;
-            return std.mem.eql(u8, symbol_name, "_start");
-        }
-
-        fn generateDefaultPlatformLinuxStartBody(
-            self: *Self,
-            entry_proc: lir.LIR.LirProcSpecId,
-            arg_layouts: []const layout.Idx,
-            ret_layout: layout.Idx,
-        ) Allocator.Error!void {
-            const compiled = try self.compiledProcForId(entry_proc);
-            if (compiled.code_start == unresolved_proc_code_start) {
-                if (std.debug.runtime_safety) {
-                    std.debug.panic(
-                        "default platform entrypoint proc {d} was not compiled before wrapper generation",
-                        .{@intFromEnum(entry_proc)},
-                    );
-                }
-                unreachable;
-            }
-
-            for (arg_layouts) |arg_layout| {
-                if (self.getLayoutSize(arg_layout) != 0) {
-                    if (builtin.mode == .Debug) {
-                        std.debug.panic(
-                            "default platform _start invariant violated: expected only zero-sized args, got layout {d}",
-                            .{@intFromEnum(arg_layout)},
-                        );
-                    }
-                    unreachable;
-                }
-            }
-
-            const null_ops_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X19 else .R12;
-            try self.codegen.emitLoadImm(null_ops_reg, 0);
-            self.roc_ops_reg = null_ops_reg;
-
-            {
-                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                try builder.callRelocatable(builtins.shim_symbols.roc_default_runtime_init, self.allocator, &self.codegen.relocations);
-            }
-
-            const arg_infos_start = self.scratch_arg_infos.top();
-            defer self.scratch_arg_infos.clearFrom(arg_infos_start);
-            for (arg_layouts) |arg_layout| {
-                try self.scratch_arg_infos.append(.{
-                    .loc = .{ .immediate_i64 = 0 },
-                    .layout_idx = arg_layout,
-                    .num_regs = 0,
-                });
-            }
-
-            const arg_infos = self.scratch_arg_infos.sliceFromStart(arg_infos_start);
-            const result_loc = try self.callCompiledOffsetWithArgInfos(compiled.code_start, arg_infos, ret_layout);
-
-            const exit_code_reg = self.getArgumentRegister(0);
-            try self.moveToReg(result_loc, exit_code_reg);
-            {
-                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                try builder.addRegArg(exit_code_reg);
-                try builder.callRelocatable(builtins.shim_symbols.roc_default_exit, self.allocator, &self.codegen.relocations);
-            }
-            try self.emitTrap();
-        }
 
         /// Generate the body of a natural C-ABI entrypoint wrapper: capture
         /// the incoming C-ABI arguments into stack slots, call the compiled
@@ -20625,7 +20837,7 @@ fn compileRootWithFloatNanMode(
     float_nan_mode: builtins.float_bits.NanMode,
 ) Allocator.Error!CompiledTestRoot {
     const allocator = std.testing.allocator;
-    var codegen = try HostLirCodeGen.init(allocator, store, layout_store, &.{}, float_nan_mode);
+    var codegen = try HostLirCodeGen.init(allocator, store, layout_store, &.{}, float_nan_mode, .default);
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
 
@@ -20776,7 +20988,7 @@ test "code generator initialization" {
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
     defer codegen.deinit();
 }
 
@@ -20791,7 +21003,7 @@ test "vector spill residency is independent of scalar local count" {
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     const vector_local = try addLocal(&store, .u8x16);
@@ -20856,7 +21068,7 @@ test "proc params and mutable list cells use distinct stack slots" {
     } });
     const args = try store.addLocalSpan(&.{ start, end });
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     const HostCodeGen = @TypeOf(codegen.codegen);
@@ -20898,7 +21110,7 @@ test "Windows internal proc ABI reads stack arguments after shadow space" {
     const list = try addLocal(&store, list_layout);
     const args = try store.addLocalSpan(&.{ a, b, c, d, list });
 
-    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve);
+    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     const InnerCodeGen = @TypeOf(codegen.codegen);
@@ -20907,6 +21119,31 @@ test "Windows internal proc ABI reads stack arguments after shadow space" {
     try codegen.bindProcParams(args, 0);
 
     _ = codegen.local_locations.get(@intFromEnum(list)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(codegen.codegen.getCode().len > 0);
+}
+
+test "Windows erased callable ABI reads reuse pointer from caller stack" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const WinCodeGen = LirCodeGen(.x64win);
+    const explicit_arg = try addLocal(&store, .u64);
+    const capture_arg = try addLocal(&store, .opaque_ptr);
+    const reuse_arg = try addLocal(&store, .opaque_ptr);
+    const args = try store.addLocalSpan(&.{ explicit_arg, capture_arg, reuse_arg });
+
+    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
+    defer codegen.deinit();
+
+    const InnerCodeGen = @TypeOf(codegen.codegen);
+    codegen.codegen.stack_offset = -InnerCodeGen.CALLEE_SAVED_AREA_SIZE;
+
+    try codegen.bindErasedCallableAdapterParams(args);
+
+    _ = codegen.local_locations.get(@intFromEnum(reuse_arg)) orelse return error.TestUnexpectedResult;
     try std.testing.expect(codegen.codegen.getCode().len > 0);
 }
 
@@ -20931,7 +21168,7 @@ test "AArch64 internal proc ABI uses caller stack arg base for stack arguments" 
     const stack_arg = try addLocal(&store, .u64);
     const args = try store.addLocalSpan(&.{ a0, a1, a2, a3, a4, a5, a6, a7, stack_arg });
 
-    var codegen = try ArmCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve);
+    var codegen = try ArmCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     const InnerCodeGen = @TypeOf(codegen.codegen);
@@ -20955,7 +21192,7 @@ test "AArch64 compare immediate accepts large bit masks" {
     defer test_state.deinit();
 
     const ArmCodeGen = LirCodeGen(.arm64mac);
-    var codegen = try ArmCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve);
+    var codegen = try ArmCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     try codegen.emitCmpImm(aarch64.GeneralReg.X0, @bitCast(@as(u64, 1) << 63));
@@ -21784,7 +22021,7 @@ test "entrypoint arg offsets preserve Roc alignment order" {
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     var offsets: [2]u32 = undefined;
@@ -21811,7 +22048,7 @@ test "entrypoint param slots round aggregates to ABI word width" {
         test_state.layout_store.getLayout(.f32),
     });
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     try std.testing.expectEqual(@as(u32, 16), codegen.entrypointParamSlotSize(aggregate_layout));

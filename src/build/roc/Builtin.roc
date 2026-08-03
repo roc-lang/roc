@@ -3826,6 +3826,45 @@ Builtin :: [].{
 			$joined
 		}
 
+		## Map each item to a list and concatenate the results, preserving order.
+		##
+		## You may know a similar function named `flat_map` or `concat_map` in other languages.
+		## ```roc
+		## expect [1.I64, 2, 3].join_map(|n| [n, n * 10]) == [1, 10, 2, 20, 3, 30]
+		##
+		## expect ["a", "b"].join_map(|s| [s, s]) == ["a", "a", "b", "b"]
+		## ```
+		join_map : List(a), (a -> List(b)) -> List(b)
+		join_map = |list, transform| List.join(List.map(list, transform))
+
+		## Insert a separator between every pair of items in a list.
+		## ```roc
+		## expect [1.I64, 2, 3].intersperse(0) == [1, 0, 2, 0, 3]
+		##
+		## expect [1.I64].intersperse(0) == [1]
+		## ```
+		intersperse : List(a), a -> List(a)
+		intersperse = |list, separator| {
+			len = List.len(list)
+
+			if len < 2 {
+				list
+			} else {
+				# `2 * len - 1` counts exactly the items appended below, so every
+				# unchecked append stays in bounds.
+				var $new_list = List.with_capacity(2 * len - 1)
+				var $index = 0
+				for item in list {
+					if $index > 0 {
+						$new_list = list_append_unsafe($new_list, separator)
+					}
+					$new_list = list_append_unsafe($new_list, item)
+					$index = $index + 1
+				}
+				$new_list
+			}
+		}
+
 		## Create a list with space for at least capacity items
 		with_capacity : U64 -> List(item)
 
@@ -4755,6 +4794,34 @@ Builtin :: [].{
 		## ```
 		sublist : List(a), { start : U64, len : U64 } -> List(a)
 
+		## Split a list into chunks of at most `chunk_size` items, in order. The
+		## final chunk is shorter when the length is not a multiple of `chunk_size`,
+		## and a `chunk_size` of 0 produces an empty list.
+		## ```roc
+		## expect [1.I64, 2, 3, 4, 5].chunks_of(2) == [[1, 2], [3, 4], [5]]
+		##
+		## expect [1.I64, 2, 3].chunks_of(10) == [[1, 2, 3]]
+		## ```
+		chunks_of : List(a), U64 -> List(List(a))
+		chunks_of = |list, chunk_size| {
+			len = List.len(list)
+
+			if chunk_size == 0 or len == 0 {
+				[]
+			} else {
+				# `(len - 1) / chunk_size + 1` is an overflow-safe ceil of `len / chunk_size`,
+				# counting exactly the chunks appended below so every unchecked append stays
+				# in bounds.
+				var $chunks = List.with_capacity((len - 1) / chunk_size + 1)
+				var $start = 0
+				while ($start < len) {
+					$chunks = list_append_unsafe($chunks, List.sublist(list, { start: $start, len: chunk_size }))
+					$start = $start + chunk_size
+				}
+				$chunks
+			}
+		}
+
 		## Return the first `n` items of the list. If the list has fewer than `n`
 		## items, the entire list is returned.
 		## ```roc
@@ -4906,7 +4973,7 @@ Builtin :: [].{
 		## expect [1, 1, 2].split_on(1) == [[], [], [2]]
 		## ```
 		split_on : List(a), a -> List(List(a)) where [a.is_eq : a, a -> Bool]
-		split_on = |list, delim| list->split_if(|x| x == delim)
+		split_on = |list, delim| list |> split_if(|x| x == delim)
 
 		## Split a list into sublists using a predicate function to identify delimiters.
 		##
@@ -4973,7 +5040,7 @@ Builtin :: [].{
 		split_first : List(a), a -> Try({ before : List(a), after : List(a) }, [NotFound])
 			where [a.is_eq : a, a -> Bool]
 		split_first = |list, delim|
-			match list->find_first_index(|x| x == delim) {
+			match list |> find_first_index(|x| x == delim) {
 				Ok(index) => Ok({
 					before: list.sublist({ start: 0, len: index }),
 					after: list.drop_first(index + 1),
@@ -4988,7 +5055,7 @@ Builtin :: [].{
 		split_last : List(a), a -> Try({ before : List(a), after : List(a) }, [NotFound])
 			where [a.is_eq : a, a -> Bool]
 		split_last = |list, delim|
-			match list->find_last_index(|x| x == delim) {
+			match list |> find_last_index(|x| x == delim) {
 				Ok(index) => Ok({
 					before: list.sublist({ start: 0, len: index }),
 					after: list.drop_first(index + 1),

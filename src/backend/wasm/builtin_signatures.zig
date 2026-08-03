@@ -105,6 +105,7 @@ pub const BuiltinKind = enum {
     simd_store_16,
     simd_append_16,
     allocate_with_refcount,
+    erased_callable_repack,
     i8_mod_by,
     u8_mod_by,
     i16_mod_by,

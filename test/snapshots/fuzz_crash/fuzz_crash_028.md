@@ -309,7 +309,7 @@ Numbers cannot have leading zeros.
     Imports must name a mod, optionally with a qualifier and exposing list.
 
     For example:
-        import Json.Decode exposing [decode]
+        import Json/Decode exposing [decode]
 
     I found `import` here.
     That word is reserved by Roc, so it cannot be used as a name in this
@@ -2592,7 +2592,7 @@ match_time = |
 		3.14 | 6.28 => 314
 		(1, 2, 3) => 123
 		(1, 2 | 5, 3) => 123
-		{ foo: 1, bar: 2, ..rest } => 12->add(34)
+		{ foo: 1, bar: 2, ..rest } => 12 |> add(34)
 		{ # Afpen
 			oo #
 				: # ue
@@ -2810,7 +2810,7 @@ expect {
 	(defs
 		(patt (type "(Error, Error)"))
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "Error -> U64"))
+		(patt (type "U64 -> U64"))
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "[Blue, Red, ..], _arg -> Error"))
 		(patt (type "Error -> Error"))
@@ -2819,26 +2819,26 @@ expect {
 		(patt (type "{}"))
 		(patt (type "Error")))
 	(type_decls
-		(alias (type "Some(a)")
+		(alias (type "Error")
 			(ty-header (name "Some")
 				(ty-args
 					(ty-rigid-var (name "a")))))
-		(alias (type "Ml(a)")
+		(alias (type "Error")
 			(ty-header (name "Ml")
 				(ty-args
 					(ty-rigid-var (name "a")))))
-		(alias (type "Soine(a)")
+		(alias (type "Error")
 			(ty-header (name "Soine")
 				(ty-args
 					(ty-rigid-var (name "a")))))
-		(alias (type "Func(a)")
+		(alias (type "Error")
 			(ty-header (name "Func")
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "(Error, Error)"))
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "Error -> U64"))
+		(expr (type "U64 -> U64"))
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "[Blue, Red, ..], _arg -> Error"))
 		(expr (type "Error -> Error"))

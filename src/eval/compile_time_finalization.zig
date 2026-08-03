@@ -76,7 +76,7 @@ pub const Timing = struct {
         return .{
             .total_ns = self.total_ns.load(),
             .monotype_ns = lowering.monotype_ns,
-            .postcheck_to_lir_ns = lowering.lift_ns + lowering.spec_constr_ns + lowering.lambda_solve_ns + lowering.lir_gen_ns,
+            .postcheck_to_lir_ns = lowering.lift_ns + lowering.spec_constr_ns + lowering.lambda_solve_ns + lowering.inline_plan_ns + lowering.lir_gen_ns,
             .lir_passes_ns = lowering.lir_passes_ns,
             .arc_ns = lowering.arc_ns,
             .static_data_ns = self.static_data_ns.load(),
@@ -1191,6 +1191,7 @@ fn lowerDevEvalAndFinishRoots(
         &lowered.lir_result.layouts,
         static_strings.entries,
         .normalize,
+        .default,
     );
     defer codegen.deinit();
     codegen.setNativeStaticData(native_static_data);

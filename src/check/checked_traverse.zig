@@ -154,6 +154,42 @@ pub fn DigestTraversal(comptime Key: type, comptime Context: type) type {
     };
 }
 
+/// Borrowed memoized fact traversal. The caller owns both maps so one analysis
+/// can reuse completed facts across many roots without reallocating. `Context`
+/// returns the fact for one node and must combine facts returned by recursive
+/// `visit` calls; `backEdgeFact` supplies the fact for a cycle edge.
+pub fn MemoizedFactTraversal(comptime Key: type, comptime Fact: type, comptime Context: type) type {
+    return struct {
+        const Self = @This();
+
+        active: *std.AutoHashMap(Key, u32),
+        completed: *std.AutoHashMap(Key, Fact),
+        context: *Context,
+
+        pub fn init(
+            active: *std.AutoHashMap(Key, u32),
+            completed: *std.AutoHashMap(Key, Fact),
+            context: *Context,
+        ) Self {
+            std.debug.assert(active.count() == 0);
+            return .{ .active = active, .completed = completed, .context = context };
+        }
+
+        pub fn visit(self: *Self, key: Key) Allocator.Error!Fact {
+            if (self.completed.get(key)) |fact| return fact;
+            if (self.active.get(key)) |depth| {
+                return self.context.backEdgeFact(depth);
+            }
+
+            try self.active.put(key, self.context.activeDepth());
+            defer _ = self.active.remove(key);
+            const fact = try self.context.visit(self, key);
+            try self.completed.put(key, fact);
+            return fact;
+        }
+    };
+}
+
 /// Return whether a checked-type root contains any identity variables.
 pub fn checkedTypeContainsIdentityVariables(
     comptime Key: type,

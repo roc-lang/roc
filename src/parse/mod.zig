@@ -175,6 +175,44 @@ test "deeply nested parentheses parse stack-safely" {
     try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 }
 
+test "pipe question suffix precedence distinguishes empty call" {
+    // Repro for https://github.com/roc-lang/roc/issues/10510
+    const gpa = std.testing.allocator;
+    const source = "(a |> f()?, a |> f?, a |> f(x)?)";
+
+    var env = try CommonEnv.init(gpa, source);
+    defer env.deinit(gpa);
+
+    const ast = try expr(gpa, &env);
+    defer ast.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+
+    const root = ast.store.getExpr(@enumFromInt(ast.root_node_idx));
+    try std.testing.expectEqual(.tuple, std.meta.activeTag(root));
+    const items = ast.store.exprSlice(root.tuple.items);
+    try std.testing.expectEqual(@as(usize, 3), items.len);
+
+    // `a |> f()?` is `(a |> f)?`: the question suffix owns the pipe.
+    const called_target = ast.store.getExpr(items[0]);
+    try std.testing.expectEqual(.suffix_single_question, std.meta.activeTag(called_target));
+    const called_target_pipe = ast.store.getExpr(called_target.suffix_single_question.expr);
+    try std.testing.expectEqual(.arrow_call, std.meta.activeTag(called_target_pipe));
+
+    // `a |> f?` is `a |> (f?)`: the pipe owns the question-suffixed target.
+    const suffixed_target = ast.store.getExpr(items[1]);
+    try std.testing.expectEqual(.arrow_call, std.meta.activeTag(suffixed_target));
+    const target = ast.store.getExpr(suffixed_target.arrow_call.right);
+    try std.testing.expectEqual(.suffix_single_question, std.meta.activeTag(target));
+
+    // Explicit target arguments are also inside the pipe result being unwrapped.
+    const target_with_arg = ast.store.getExpr(items[2]);
+    try std.testing.expectEqual(.suffix_single_question, std.meta.activeTag(target_with_arg));
+    const target_with_arg_pipe = ast.store.getExpr(target_with_arg.suffix_single_question.expr);
+    try std.testing.expectEqual(.arrow_call, std.meta.activeTag(target_with_arg_pipe));
+}
+
 test "dollar-prefixed record field names are rejected with a single diagnostic" {
     const gpa = std.testing.allocator;
 

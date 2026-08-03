@@ -1615,6 +1615,7 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .type_var_marked_unused,
         .underscore_in_type_declaration,
         .module_header_deprecated,
+        .roc_version_mismatch,
         .deprecated_number_suffix,
         => false,
         else => true,

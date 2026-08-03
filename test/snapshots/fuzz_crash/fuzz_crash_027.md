@@ -1732,7 +1732,7 @@ match_time = |
 		3.14 | 6.28 => 314
 		(1, 2, 3) => 123
 		(1, 2 | 5, 3) => 123
-		{ foo: 1, bar: 2, ..rest } => 12->add(34)
+		{ foo: 1, bar: 2, ..rest } => 12 |> add(34)
 		{ # Afrd open
 			foo #
 				: # ue
@@ -1870,7 +1870,7 @@ main! = |_| { # Yeah Ie
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 1407) (dispatcher-var 315)
+						(e-interpolation (constraint-fn-var 1094) (dispatcher-var 315)
 							(first
 								(e-literal (string "Hello, ")))
 							(parts
@@ -1987,26 +1987,26 @@ main! = |_| { # Yeah Ie
 				(ty-args
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "b")))))
-		(alias (type "MapML(a, b)")
+		(alias (type "Error")
 			(ty-header (name "MapML")
 				(ty-args
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "b")))))
-		(alias (type "Foo")
+		(alias (type "Error")
 			(ty-header (name "Foo")))
-		(alias (type "Some(a)")
+		(alias (type "Error")
 			(ty-header (name "Some")
 				(ty-args
 					(ty-rigid-var (name "a")))))
-		(alias (type "Ml(a)")
+		(alias (type "Error")
 			(ty-header (name "Ml")
 				(ty-args
 					(ty-rigid-var (name "a")))))
-		(alias (type "Soine(a)")
+		(alias (type "Error")
 			(ty-header (name "Soine")
 				(ty-args
 					(ty-rigid-var (name "a")))))
-		(alias (type "Func(a)")
+		(alias (type "Error")
 			(ty-header (name "Func")
 				(ty-args
 					(ty-rigid-var (name "a"))))))

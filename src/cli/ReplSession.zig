@@ -53,12 +53,13 @@ module_root: []const u8 = ".",
 pub const StepResult = union(enum) {
     output: []u8,
     diagnostic: []u8,
+    runtime_crash: []u8,
     none,
     exit,
 
     pub fn deinit(self: StepResult, allocator: Allocator) void {
         switch (self) {
-            .output, .diagnostic => |bytes| allocator.free(bytes),
+            .output, .diagnostic, .runtime_crash => |bytes| allocator.free(bytes),
             .none, .exit => {},
         }
     }
@@ -120,6 +121,14 @@ pub fn step(self: *ReplSession, input: []const u8) ReplStepError![]u8 {
     return switch (result) {
         .output => |bytes| bytes,
         .diagnostic => |bytes| bytes,
+        .runtime_crash => |message| {
+            defer self.allocator.free(message);
+            return std.fmt.allocPrint(
+                self.allocator,
+                "This Roc code crashed with: \"{f}\"",
+                .{std.zig.fmtString(message)},
+            );
+        },
         .none => self.allocator.dupe(u8, ""),
         .exit => self.allocator.dupe(u8, "Goodbye!"),
     };
@@ -351,16 +360,29 @@ fn resolveImports(self: *ReplSession) Allocator.Error!ImportResolution {
     const import_source = try self.importDefinitionsSource();
     defer self.allocator.free(import_source);
 
-    const seed_names = try self.importNamesOf(import_source);
+    const seed_imports = try self.importsOf(import_source);
     defer {
-        for (seed_names) |name| self.allocator.free(name);
-        self.allocator.free(seed_names);
+        for (seed_imports) |seed_import| self.allocator.free(seed_import.import_name);
+        self.allocator.free(seed_imports);
     }
 
     var failure: ?[]u8 = null;
     errdefer if (failure) |msg| self.allocator.free(msg);
 
-    for (seed_names) |name| {
+    for (seed_imports) |seed_import| {
+        const name = (try compile.module_discovery.resolveLocalImportLogicalPath(
+            self.allocator,
+            "Repl",
+            seed_import,
+        )) orelse {
+            failure = try std.fmt.allocPrint(
+                self.allocator,
+                "The import `{s}` traverses above the REPL module root.",
+                .{seed_import.import_name},
+            );
+            break;
+        };
+        defer self.allocator.free(name);
         try self.addModuleRecursive(name, &sources, &visited, &failure);
         if (failure != null) break;
     }
@@ -443,12 +465,26 @@ fn addModuleRecursive(
 
     // Resolve this module's own imports first so dependencies are appended
     // before it.
-    const child_names = try self.importNamesOf(source);
+    const child_imports = try self.importsOf(source);
     defer {
-        for (child_names) |name| self.allocator.free(name);
-        self.allocator.free(child_names);
+        for (child_imports) |child_import| self.allocator.free(child_import.import_name);
+        self.allocator.free(child_imports);
     }
-    for (child_names) |child| {
+    for (child_imports) |child_import| {
+        const child = (try compile.module_discovery.resolveLocalImportLogicalPath(
+            self.allocator,
+            module_name,
+            child_import,
+        )) orelse {
+            failure.* = try std.fmt.allocPrint(
+                self.allocator,
+                "The import `{s}` traverses above the REPL module root.",
+                .{child_import.import_name},
+            );
+            self.allocator.free(source);
+            return;
+        };
+        defer self.allocator.free(child);
         try self.addModuleRecursive(child, sources, visited, failure);
         if (failure.* != null) {
             self.allocator.free(source);
@@ -467,7 +503,7 @@ fn addModuleRecursive(
 
 /// Parse `source` as a module and return the unqualified sibling module names it
 /// imports (caller owns the slice and each name).
-fn importNamesOf(self: *ReplSession, source: []const u8) Allocator.Error![][]const u8 {
+fn importsOf(self: *ReplSession, source: []const u8) Allocator.Error![]compile.module_discovery.LocalImport {
     var env = try ModuleEnv.init(self.allocator, source);
     defer env.deinit();
     env.common.source = source;
@@ -480,12 +516,12 @@ fn importNamesOf(self: *ReplSession, source: []const u8) Allocator.Error![][]con
 }
 
 /// Map a module name to its source path: `Util` -> `Util.roc`,
-/// `Foo.Bar` -> `Foo/Bar.roc`.
+/// `Foo/Bar` -> `Foo/Bar.roc`.
 fn modulePathFromName(allocator: Allocator, module_name: []const u8) Allocator.Error![]u8 {
     var buffer = std.ArrayList(u8).empty;
     errdefer buffer.deinit(allocator);
 
-    var it = std.mem.splitScalar(u8, module_name, '.');
+    var it = std.mem.splitScalar(u8, module_name, '/');
     var first = true;
     while (it.next()) |part| {
         if (!first) try buffer.appendSlice(allocator, std.fs.path.sep_str) else first = false;
@@ -706,11 +742,21 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
         return .{ .diagnostic = try self.renderModuleProblems(source, import_sources, report_config) };
     }
 
-    return switch (self.backend_kind) {
-        .interpreter => .{ .output = try eval.test_helpers.lirInterpreterInspectedStr(self.allocator, &compiled.lowered) },
-        .dev => .{ .output = try eval.test_helpers.devEvaluatorInspectedStr(self.allocator, &compiled.lowered) },
-        .llvm => .{ .output = try eval.test_helpers.llvmEvaluatorInspectedStr(self.allocator, &compiled.lowered) },
-        .wasm => .{ .output = try eval.test_helpers.wasmEvaluatorInspectedStr(self.allocator, &compiled.lowered) },
+    const lowered = &compiled.lowered;
+    const program: eval.InspectedRun.Program = .{
+        .store = &lowered.view.store,
+        .layouts = &lowered.view.layouts,
+        .main_proc = lowered.mainProc(),
+    };
+    const result = switch (self.backend_kind) {
+        .interpreter => try eval.InspectedRun.run(self.allocator, .interpreter, program),
+        .dev => try eval.InspectedRun.run(self.allocator, .dev, program),
+        .wasm => try eval.InspectedRun.run(self.allocator, .wasm, program),
+        .llvm => try eval.InspectedRun.run(self.allocator, .llvm, program),
+    };
+    return switch (result.outcome) {
+        .returned => |output| .{ .output = output },
+        .crashed => |message| .{ .runtime_crash = message },
     };
 }
 
@@ -908,7 +954,12 @@ pub fn inputStatusWithAllocator(allocator: Allocator, line: []const u8) Allocato
         .import => |import| .{
             .kind = .definition,
             .definition_kind = .import,
-            .name = if (import.alias_tok) |tok| ast.resolve(tok) else ast.resolve(import.module_name_tok),
+            .name = if (import.alias_tok) |tok|
+                ast.resolve(tok)
+            else if (import.target.nested_start_tok) |nested_start|
+                ast.resolve(nested_start + import.target.nested_len - 1)
+            else
+                ast.resolve(import.target.module_name_tok),
         },
         .file_import => |file_import| .{
             .kind = .definition,
@@ -1703,6 +1754,22 @@ test "Repl - invalid syntax preserves definitions" {
     const result = try repl.step("x");
     defer testing.allocator.free(result);
     try testing.expectEqualStrings("42.0", result);
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/10491: a runtime crash is
+// reported without terminating the REPL session.
+test "Repl - issue 10491 integer overflow reports crash and continues" {
+    const steps = &[_][2][]const u8{
+        .{
+            "U64.highest + U64.highest",
+            "This Roc code crashed with: \"Integer addition overflowed\"",
+        },
+        .{ "1 + 1", "2.0" },
+    };
+
+    try expectStateful(.interpreter, steps);
+    try expectStateful(.dev, steps);
+    try expectStateful(.wasm, steps);
 }
 
 // Repro for https://github.com/roc-lang/roc/issues/10063: the annotated

@@ -206,6 +206,22 @@ pub fn crashState(self: *const RuntimeHostEnv) CrashState {
     return .did_not_crash;
 }
 
+/// Transfer ownership of the most recently recorded crash message to the
+/// caller. The message must be freed with this environment's allocator.
+pub fn takeCrashMessage(self: *RuntimeHostEnv) ?[]u8 {
+    for (0..self.events.items.len) |i| {
+        const idx = self.events.items.len - 1 - i;
+        switch (self.events.items[idx]) {
+            .crashed => |msg| {
+                _ = self.events.orderedRemove(idx);
+                return msg;
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
 /// Public function `snapshot`.
 pub fn snapshot(self: *const RuntimeHostEnv, allocator: std.mem.Allocator) Allocator.Error!RecordedRun {
     return RecordedRun.dupe(.{

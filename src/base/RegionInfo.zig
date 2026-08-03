@@ -21,12 +21,22 @@ const RegionInfo = @This();
 
 /// Finds the line index for a given position in the source
 pub fn lineIdx(line_starts: []const u32, pos: u32) u32 {
-    for (line_starts[1..], 0..) |n, i| {
-        if (pos < n) {
-            return @intCast(i);
+    std.debug.assert(line_starts.len > 0);
+
+    // Find the first line start strictly greater than `pos`. The containing
+    // line is the one immediately before that insertion point.
+    var low: usize = 1;
+    var high: usize = line_starts.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        if (pos < line_starts[mid]) {
+            high = mid;
+        } else {
+            low = mid + 1;
         }
     }
-    return @intCast(line_starts.len - 1);
+
+    return @intCast(low - 1);
 }
 
 /// Gets the column index for a position on a given line
@@ -182,6 +192,19 @@ test "lineIdx" {
     try std.testing.expectEqual(2, RegionInfo.lineIdx(line_starts.items.items, 29));
     try std.testing.expectEqual(3, RegionInfo.lineIdx(line_starts.items.items, 30));
     try std.testing.expectEqual(3, RegionInfo.lineIdx(line_starts.items.items, 35));
+}
+
+test "lineIdx finds exact boundaries in a large source" {
+    var line_starts: [4096]u32 = undefined;
+    for (&line_starts, 0..) |*start, index| start.* = @intCast(index * 7);
+
+    for (line_starts, 0..) |start, index| {
+        try std.testing.expectEqual(@as(u32, @intCast(index)), RegionInfo.lineIdx(&line_starts, start));
+        if (index + 1 < line_starts.len) {
+            try std.testing.expectEqual(@as(u32, @intCast(index)), RegionInfo.lineIdx(&line_starts, start + 6));
+        }
+    }
+    try std.testing.expectEqual(@as(u32, line_starts.len - 1), RegionInfo.lineIdx(&line_starts, std.math.maxInt(u32)));
 }
 
 test "columnIdx" {

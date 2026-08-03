@@ -93,6 +93,8 @@ pub const PlatformHostedSection = struct {
         function_not_in_section,
         /// A section entry names a function that is not a hosted function
         unknown_function,
+        /// A section entry names a function with a Roc implementation
+        function_has_implementation,
         /// Two section entries name the same hosted function
         duplicate_function,
         /// Two hosted/provides entries use the same linker symbol

@@ -573,6 +573,18 @@ pub const MethodBinding = extern struct {
 /// associated methods to be published through the module exposure table.
 pub const MethodDefs = SortedArrayBuilder(MethodKey, MethodBinding);
 
+/// A definition whose implementation was authored by the compiler as one
+/// exact low-level operation. Canonicalization publishes this alongside CIR so
+/// every later stage can consume the producer-owned runtime identity without
+/// inspecting the generated lambda body.
+pub const ProvidedLowLevelDef = extern struct {
+    def_idx: u32,
+    op: base.LowLevel,
+    _padding: u16 = 0,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 /// Exact checker-owned shape of an iterator step result.
 pub const IteratorStepTopology = extern struct {
     done_tag_ident: u32,
@@ -761,6 +773,8 @@ all_defs: CIR.Def.Span,
 /// Module-global value definitions: top-level values, associated items, and
 /// compiler-created hosted globals. Local block definitions are not included.
 global_value_defs: CIR.Def.Span,
+/// Exact definitions rewritten from annotation-only declarations to hosted lambdas.
+hosted_defs: CIR.Def.Span,
 /// All the top-level statements in the module (populated by canonicalization)
 all_statements: CIR.Statement.Span,
 /// All canonical type-declaration statements in the module.
@@ -850,6 +864,8 @@ import_mapping: types_mod.import_mapping.ImportMapping,
 method_idents: MethodIdents,
 /// Mapping from (owner declaration, method_ident) pairs to defining def indices.
 method_defs: MethodDefs,
+/// Compiler-authored low-level implementations, ordered by definition index.
+provided_low_level_defs: ProvidedLowLevelDef.SafeList,
 
 /// Dispatch plans attached by checking to source `for` loop nodes.
 for_loop_dispatch_plans: ForLoopDispatchPlan.SafeList,
@@ -904,12 +920,23 @@ pub const ProvidesEntry = struct {
 /// entry with module_ident="Stdout", func_ident="line!", and symbol pointing to
 /// the interned string "roc_stdout_line".
 pub const HostedEntry = struct {
+    pub const TargetStatus = enum(u8) {
+        unresolved,
+        resolved,
+        missing_module,
+        missing_value,
+    };
+
     /// The type module name (e.g., "Stdout"); null for unqualified functions
     module_ident: ?Ident.Idx,
     /// The hosted function name (e.g., "line!")
     func_ident: Ident.Idx,
     /// The literal linker symbol (e.g., "roc_stdout_line")
     symbol: StringLiteral.Idx,
+    /// Exact imported definition selected by this entry after canonicalization.
+    target_import: ?CIR.Import.Idx,
+    target_def: ?CIR.Def.Idx,
+    target_status: TargetStatus,
 
     pub const SafeList = collections.SafeList(@This());
 };
@@ -972,6 +999,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.top_level_demand_dependencies.relocate(offset);
     self.method_idents.relocate(offset);
     self.method_defs.relocate(offset);
+    self.provided_low_level_defs.relocate(offset);
     self.for_loop_dispatch_plans.relocate(offset);
     self.rejected_static_dispatches.relocate(offset);
 
@@ -989,6 +1017,7 @@ pub fn initCIRFields(self: *Self, module_name: []const u8) Allocator.Error!void 
     self.module_role = .user;
     self.all_defs = .{ .span = .{ .start = 0, .len = 0 } };
     self.global_value_defs = .{ .span = .{ .start = 0, .len = 0 } };
+    self.hosted_defs = .{ .span = .{ .start = 0, .len = 0 } };
     self.all_statements = .{ .span = .{ .start = 0, .len = 0 } };
     self.type_decls = .{ .span = .{ .start = 0, .len = 0 } };
     self.forward_type_decls = .{ .span = .{ .start = 0, .len = 0 } };
@@ -1031,6 +1060,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .module_role = .user,
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .global_value_defs = .{ .span = .{ .start = 0, .len = 0 } },
+        .hosted_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .type_decls = .{ .span = .{ .start = 0, .len = 0 } },
         .forward_type_decls = .{ .span = .{ .start = 0, .len = 0 } },
@@ -1059,6 +1089,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
         .method_idents = MethodIdents.init(),
         .method_defs = MethodDefs.init(),
+        .provided_low_level_defs = try ProvidedLowLevelDef.SafeList.initCapacity(gpa, 4),
         .for_loop_dispatch_plans = try ForLoopDispatchPlan.SafeList.initCapacity(gpa, 4),
         .numeral_digit_bytes = try collections.SafeList(u8).initCapacity(gpa, 32),
         .numeral_literals = try NumeralLiteral.SafeList.initCapacity(gpa, 8),
@@ -1085,6 +1116,7 @@ pub fn deinit(self: *Self) void {
     self.import_mapping.deinit();
     self.method_idents.deinit(self.gpa);
     self.method_defs.deinit(self.gpa);
+    self.provided_low_level_defs.deinit(self.gpa);
     self.for_loop_dispatch_plans.deinit(self.gpa);
     self.numeral_digit_bytes.deinit(self.gpa);
     self.numeral_literals.deinit(self.gpa);
@@ -1111,6 +1143,26 @@ pub fn setTopLevelDemandDependencies(
     self.top_level_demand_dependencies.deinit(self.gpa);
     self.top_level_demand_dependencies = dependencies;
     self.top_level_demand_dependencies_ready = true;
+}
+
+/// Return the producer-authored low-level implementation for `def_idx`.
+pub fn providedLowLevelForDef(self: *const Self, def_idx: CIR.Def.Idx) ?base.LowLevel {
+    const entries = self.provided_low_level_defs.items.items;
+    const wanted: u32 = @intFromEnum(def_idx);
+    var low: usize = 0;
+    var high: usize = entries.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        const candidate = entries[mid];
+        if (candidate.def_idx < wanted) {
+            low = mid + 1;
+        } else if (candidate.def_idx > wanted) {
+            high = mid;
+        } else {
+            return candidate.op;
+        }
+    }
+    return null;
 }
 
 /// Return the exact strict-demand relation produced by canonicalization.
@@ -1163,6 +1215,7 @@ pub fn deinitCachedModule(self: *Self) void {
     // import_mapping is initialized empty during deserialization and may have
     // items added later, so we need to free it
     self.import_mapping.deinit();
+    self.provided_low_level_defs.deinit(self.gpa);
     self.for_loop_dispatch_plans.deinit(self.gpa);
     self.numeral_digit_bytes.deinit(self.gpa);
     self.numeral_literals.deinit(self.gpa);
@@ -3030,6 +3083,37 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .roc_version_mismatch => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            const pinned_bytes = self.getIdent(data.pinned);
+            const running_bytes = self.getIdent(data.running);
+
+            var report = try Report.init(allocator, "Roc Version Mismatch", "", .warning);
+            const pinned = try report.addOwnedString(pinned_bytes);
+            const running = try report.addOwnedString(running_bytes);
+            try report.headline.addReflowingText("This header pins Roc version ");
+            try report.headline.addInlineCode(pinned);
+            try report.headline.addReflowingText(", but you are running ");
+            try report.headline.addInlineCode(running);
+            try report.headline.addReflowingText(".");
+
+            try report.document.addReflowingText("Run ");
+            try report.document.addInlineCode("roc fmt");
+            try report.document.addReflowingText(" to update the pin, or switch to the pinned version of the compiler.");
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .warning_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         .redundant_expose_main_type => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
@@ -3374,6 +3458,7 @@ pub const Serialized = extern struct {
     module_role: ModuleRole,
     all_defs: CIR.Def.Span,
     global_value_defs: CIR.Def.Span,
+    hosted_defs: CIR.Def.Span,
     all_statements: CIR.Statement.Span,
     type_decls: CIR.Statement.Span,
     forward_type_decls: CIR.Statement.Span,
@@ -3405,6 +3490,7 @@ pub const Serialized = extern struct {
     import_mapping_reserved: [6]u64, // Reserved space for import_mapping (AutoHashMap is ~40 bytes), initialized at runtime
     method_idents: MethodIdents.Serialized,
     method_defs: MethodDefs.Serialized,
+    provided_low_level_defs: ProvidedLowLevelDef.SafeList.Serialized,
     for_loop_dispatch_plans: ForLoopDispatchPlan.SafeList.Serialized,
     numeral_digit_bytes: collections.SafeList(u8).Serialized,
     numeral_literals: NumeralLiteral.SafeList.Serialized,
@@ -3460,6 +3546,7 @@ pub const Serialized = extern struct {
         self.module_role = env.module_role;
         self.all_defs = env.all_defs;
         self.global_value_defs = env.global_value_defs;
+        self.hosted_defs = env.hosted_defs;
         self.all_statements = env.all_statements;
         self.type_decls = env.type_decls;
         self.forward_type_decls = env.forward_type_decls;
@@ -3512,6 +3599,7 @@ pub const Serialized = extern struct {
         }
         try self.method_idents.serialize(&env.method_idents, allocator, writer);
         try self.method_defs.serialize(&env.method_defs, allocator, writer);
+        try self.provided_low_level_defs.serialize(&env.provided_low_level_defs, allocator, writer);
         try self.for_loop_dispatch_plans.serialize(&env.for_loop_dispatch_plans, allocator, writer);
         try self.numeral_digit_bytes.serialize(&env.numeral_digit_bytes, allocator, writer);
         try self.numeral_literals.serialize(&env.numeral_literals, allocator, writer);
@@ -3546,6 +3634,7 @@ pub const Serialized = extern struct {
             .module_role = self.module_role,
             .all_defs = self.all_defs,
             .global_value_defs = self.global_value_defs,
+            .hosted_defs = self.hosted_defs,
             .all_statements = self.all_statements,
             .type_decls = self.type_decls,
             .forward_type_decls = self.forward_type_decls,
@@ -3574,6 +3663,7 @@ pub const Serialized = extern struct {
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
             .method_defs = self.method_defs.deserializeInto(base_addr),
+            .provided_low_level_defs = self.provided_low_level_defs.deserializeInto(base_addr),
             .for_loop_dispatch_plans = self.for_loop_dispatch_plans.deserializeInto(base_addr),
             .numeral_digit_bytes = self.numeral_digit_bytes.deserializeInto(base_addr),
             .numeral_literals = self.numeral_literals.deserializeInto(base_addr),
@@ -3608,6 +3698,7 @@ pub const Serialized = extern struct {
             .module_role = self.module_role,
             .all_defs = self.all_defs,
             .global_value_defs = self.global_value_defs,
+            .hosted_defs = self.hosted_defs,
             .all_statements = self.all_statements,
             .type_decls = self.type_decls,
             .forward_type_decls = self.forward_type_decls,
@@ -3636,6 +3727,7 @@ pub const Serialized = extern struct {
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
             .method_defs = self.method_defs.deserializeInto(base_addr),
+            .provided_low_level_defs = self.provided_low_level_defs.deserializeInto(base_addr),
             .for_loop_dispatch_plans = self.for_loop_dispatch_plans.deserializeInto(base_addr),
             .numeral_digit_bytes = self.numeral_digit_bytes.deserializeInto(base_addr),
             .numeral_literals = self.numeral_literals.deserializeInto(base_addr),
@@ -3670,6 +3762,7 @@ pub const Serialized = extern struct {
             .module_role = self.module_role,
             .all_defs = self.all_defs,
             .global_value_defs = self.global_value_defs,
+            .hosted_defs = self.hosted_defs,
             .all_statements = self.all_statements,
             .type_decls = self.type_decls,
             .forward_type_decls = self.forward_type_decls,
@@ -3700,6 +3793,7 @@ pub const Serialized = extern struct {
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
             .method_defs = self.method_defs.deserializeInto(base_addr),
+            .provided_low_level_defs = try self.provided_low_level_defs.deserializeWithCopy(base_addr, gpa),
             .for_loop_dispatch_plans = try self.for_loop_dispatch_plans.deserializeWithCopy(base_addr, gpa),
             .numeral_digit_bytes = try self.numeral_digit_bytes.deserializeWithCopy(base_addr, gpa),
             .numeral_literals = try self.numeral_literals.deserializeWithCopy(base_addr, gpa),
@@ -3892,6 +3986,15 @@ pub fn recordNumeralDispatchPlan(
 pub fn numeralDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?NodeStore.LiteralDispatchPlan {
     const plan = self.store.literalDispatchPlanForNode(node_idx) orelse return null;
     return if (plan.dispatchKind() == .numeral) plan else null;
+}
+
+/// Commit checking's exact resolution for a live numeral or quote literal.
+pub fn finalizeLiteralDispatchResolution(
+    self: *Self,
+    node_idx: Node.Idx,
+    resolution: NodeStore.LiteralDispatchPlan.Resolution,
+) void {
+    self.store.finalizeLiteralDispatchResolution(node_idx, resolution);
 }
 
 /// Record the checked `from_quote` function for a string literal node.

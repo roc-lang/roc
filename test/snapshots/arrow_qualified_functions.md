@@ -94,23 +94,23 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 # Test qualified function calls with arrow syntax
-test1 = "hello"->Str.is_empty()
+test1 = "hello" |> Str.is_empty
 
-test2 = "hello"->Str.is_empty()
+test2 = "hello" |> Str.is_empty
 
-test3 = "hello"->Str.concat("bar")
+test3 = "hello" |> Str.concat("bar")
 
 # Test unqualified function calls
 fn0 = |a| a
 
-test4 = 10->fn0()
+test4 = 10 |> fn0
 
-test5 = 10->fn0()
+test5 = 10 |> fn0
 
 # Test tag syntax
-test6 = 42->Ok
+test6 = 42 |> Ok
 
-test7 = 42->Ok()
+test7 = 42 |> Ok
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -124,14 +124,14 @@ test7 = 42->Ok()
 				(e-literal (string "hello")))))
 	(d-let
 		(p-assign (ident "test2"))
-		(e-call (constraint-fn-var 271)
+		(e-call (constraint-fn-var 259)
 			(e-lookup-external
 				(builtin))
 			(e-string
 				(e-literal (string "hello")))))
 	(d-let
 		(p-assign (ident "test3"))
-		(e-call (constraint-fn-var 304)
+		(e-call (constraint-fn-var 280)
 			(e-lookup-external
 				(builtin))
 			(e-string
@@ -147,13 +147,13 @@ test7 = 42->Ok()
 				(p-assign (ident "a")))))
 	(d-let
 		(p-assign (ident "test4"))
-		(e-call (constraint-fn-var 338)
+		(e-call (constraint-fn-var 290)
 			(e-lookup-local
 				(p-assign (ident "fn0")))
 			(e-num (value "10"))))
 	(d-let
 		(p-assign (ident "test5"))
-		(e-call (constraint-fn-var 348)
+		(e-call (constraint-fn-var 300)
 			(e-lookup-local
 				(p-assign (ident "fn0")))
 			(e-num (value "10"))))

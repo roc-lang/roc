@@ -695,7 +695,7 @@ pub fn solve(
         if (dense_uniqueness.destroyed.isSet(arc_index)) unique_destroyed.set(local);
     }
     if (builtin.mode == .Debug) {
-        var independently_unique = try computeUniquenessDetailed(allocator, store, rc_local, .{ .sigs = solver.sigs }, null, solver.proc_stmts);
+        var independently_unique = try computeUniquenessDetailed(allocator, store, rc_local, .{ .sigs = solver.sigs }, null, solver.proc_stmts, null, null, null);
         defer independently_unique.deinit(allocator);
         if (!unique.eql(independently_unique.unique) or !unique_destroyed.eql(independently_unique.destroyed)) {
             solveInvariant("typed uniqueness facts disagreed with independent LIR analysis");
@@ -1483,15 +1483,23 @@ fn appendStructuralSuccessors(
 
 /// Exact reachable statement set used by independent ARC certifier mirrors.
 /// The main solver retains the stronger per-proc inventory from its one lift.
-fn reachableStatementSet(allocator: Allocator, store: *const LirStore) SolveError!std.bit_set.DynamicBitSetUnmanaged {
+fn reachableStatementSet(
+    allocator: Allocator,
+    store: *const LirStore,
+    only_proc: ?LIR.LirProcSpecId,
+) SolveError!std.bit_set.DynamicBitSetUnmanaged {
     var reachable = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, store.cfStmtCount());
     errdefer reachable.deinit(allocator);
     var stack = std.ArrayList(LIR.CFStmtId).empty;
     defer stack.deinit(allocator);
 
-    for (0..store.procSpecCount()) |proc_index| {
-        const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
-        if (proc.body) |body| try stack.append(allocator, body);
+    if (only_proc) |proc_id| {
+        if (store.getProcSpec(proc_id).body) |body| try stack.append(allocator, body);
+    } else {
+        for (0..store.procSpecCount()) |proc_index| {
+            const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+            if (proc.body) |body| try stack.append(allocator, body);
+        }
     }
     while (stack.pop()) |current| {
         const stmt_index = @intFromEnum(current);
@@ -1500,6 +1508,30 @@ fn reachableStatementSet(allocator: Allocator, store: *const LirStore) SolveErro
         try appendStructuralSuccessors(allocator, store, &stack, store.getCFStmt(current));
     }
     return reachable;
+}
+
+/// Collect one procedure's exact reachable statement inventory without a
+/// store-wide statement bitset. Final-LIR certifiers reuse this inventory for
+/// proc-local analyses whose sibling variants share source LocalIds.
+pub fn collectProcStatements(
+    allocator: Allocator,
+    store: *const LirStore,
+    body: LIR.CFStmtId,
+    stmts: *std.ArrayList(LIR.CFStmtId),
+) SolveError!void {
+    stmts.clearRetainingCapacity();
+    var visited = std.AutoHashMap(LIR.CFStmtId, void).init(allocator);
+    defer visited.deinit();
+    var stack = std.ArrayList(LIR.CFStmtId).empty;
+    defer stack.deinit(allocator);
+    try stack.append(allocator, body);
+
+    while (stack.pop()) |current| {
+        const entry = try visited.getOrPut(current);
+        if (entry.found_existing) continue;
+        try stmts.append(allocator, current);
+        try appendStructuralSuccessors(allocator, store, &stack, store.getCFStmt(current));
+    }
 }
 
 fn collectAll(solver: *Solver) SolveError!void {
@@ -1909,8 +1941,15 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             }
         },
         .assign_call_erased => |assign| {
+            if (!LIR.erasedCallReuseFieldsMatch(assign)) {
+                solveInvariant("erased call reuse flag and ownership source disagreed");
+            }
             try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
-            try solver.binding_facts.append(allocator, .{ .demand = assign.closure });
+            if (assign.reuse_source) |reuse_source| {
+                try solver.binding_facts.append(allocator, .{ .demand = reuse_source });
+            } else {
+                try solver.binding_facts.append(allocator, .{ .demand = assign.closure });
+            }
             const args = store.getLocalSpan(assign.args);
             for (0..GuardedList.borrowLen(args)) |index| {
                 const arg = GuardedList.at(args, index);
@@ -1920,7 +1959,11 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             try liftVisibilitySeed(solver, assign.closure);
             try liftVisibilitySeed(solver, assign.target);
             try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
-            try solver.unique_facts.append(allocator, .{ .destroy = assign.closure });
+            if (assign.reuse_source) |reuse_source| {
+                try solver.unique_facts.append(allocator, .{ .consume = reuse_source });
+            } else {
+                try solver.unique_facts.append(allocator, .{ .destroy = assign.closure });
+            }
             for (0..GuardedList.borrowLen(args)) |index| {
                 try solver.unique_facts.append(allocator, .{ .destroy = GuardedList.at(args, index) });
             }
@@ -2202,7 +2245,7 @@ pub fn computePinnedProcs(
     var pinned = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, store.procSpecCount());
     errdefer pinned.deinit(allocator);
     fillPinnedProcContracts(store, roots, &pinned);
-    var reachable = try reachableStatementSet(allocator, store);
+    var reachable = try reachableStatementSet(allocator, store, null);
     defer reachable.deinit(allocator);
     var iter = reachable.iterator(.{});
     while (iter.next()) |stmt_index| switch (store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))))) {
@@ -2600,6 +2643,7 @@ fn computeVisibilityFromLift(
                 // The callee is unknown; the boundary is treated like a
                 // pinned signature.
                 seedLocal(&visible, rc_local, @intFromEnum(assign.closure));
+                if (assign.reuse_source) |reuse_source| seedLocal(&visible, rc_local, @intFromEnum(reuse_source));
                 const args = store.getLocalSpan(assign.args);
                 for (0..GuardedList.borrowLen(args)) |arg_index| {
                     const arg = GuardedList.at(args, arg_index);
@@ -3077,8 +3121,8 @@ fn computeUniquenessFromFacts(
 /// Marks every local whose value's outermost allocation provably has count 1
 /// at the local's definition with nothing later adding a holder: born unique
 /// by a fresh allocation or a direct call to a unique-returning callee,
-/// destroyed by any occurrence that can create another handle to the
-/// allocation—an incref, an aggregate or capture operand, a `set_local`
+/// destroyed by any occurrence in the analyzed procedure set that can create another handle to the
+/// allocation — an incref, an aggregate or capture operand, a `set_local`
 /// value or target, or a second consuming use. Consuming uses (a consumed
 /// low-level argument, an owned-position direct-call argument, a return)
 /// take the value's single unit with them, so the first one preserves
@@ -3093,18 +3137,57 @@ fn computeUniquenessFromFacts(
 /// flow-insensitive—destroys the target's uniqueness (a read elsewhere
 /// forces emission to give the alias its own unit, holding the count above
 /// 1). A multi-bound alias target never inherits. Variant parameter seeds
-/// are not applied here: variants share parameter locals with their source
-/// proc, so emission and the certifier overlay `RcSig.unique_params` per
-/// proc. Only reachable statements contribute; the solver consumes its
-/// shared per-proc lift and the independent certifier mirror derives the
-/// same reachable set from the completed store.
+/// are not applied here: emission and the certifier overlay
+/// `RcSig.unique_params` per proc. Only reachable statements contribute;
+/// the solver consumes its shared per-proc lift, while final-LIR
+/// certification analyzes one emitted proc at a time because base and
+/// specialized bodies deliberately share every source LocalId.
 pub fn computeUniqueness(
     allocator: Allocator,
     store: *const LirStore,
     rc_local: []const bool,
     sigs: arc_sig.SigTable,
 ) SolveError!Uniqueness {
-    return computeUniquenessDetailed(allocator, store, rc_local, sigs, null, null);
+    return computeUniquenessDetailed(allocator, store, rc_local, sigs, null, null, null, null, null);
+}
+
+const ProcUniquenessDomain = struct {
+    local_to_dense: []const u32,
+    count: usize,
+
+    fn indexOf(self: ProcUniquenessDomain, local: LIR.LocalId) ?u32 {
+        const raw = @intFromEnum(local);
+        if (raw >= self.local_to_dense.len) return null;
+        const dense = self.local_to_dense[raw];
+        return if (dense == no_local) null else dense;
+    }
+};
+
+/// Re-derives uniqueness from exactly one emitted procedure's explicit
+/// statement and reference-counted-local inventories. ARC variants deliberately
+/// share source LocalIds, so sibling definitions cannot affect this proof; the
+/// dense proc domain also avoids store-wide allocation or clearing per proc.
+pub fn computeProcUniqueness(
+    allocator: Allocator,
+    store: *const LirStore,
+    rc_local: []const bool,
+    sigs: arc_sig.SigTable,
+    proc: LIR.LirProcSpecId,
+    stmts: []const LIR.CFStmtId,
+    local_to_dense: []const u32,
+    dense_local_count: usize,
+) SolveError!Uniqueness {
+    return computeUniquenessDetailed(
+        allocator,
+        store,
+        rc_local,
+        sigs,
+        null,
+        null,
+        proc,
+        stmts,
+        .{ .local_to_dense = local_to_dense, .count = dense_local_count },
+    );
 }
 
 fn computeUniquenessDetailed(
@@ -3114,16 +3197,26 @@ fn computeUniquenessDetailed(
     sigs: arc_sig.SigTable,
     origin_facts: ?*UniqueOriginFacts,
     proc_stmts: ?[]const std.ArrayList(LIR.CFStmtId),
+    only_proc: ?LIR.LirProcSpecId,
+    exact_stmts: ?[]const LIR.CFStmtId,
+    proc_domain: ?ProcUniquenessDomain,
 ) SolveError!Uniqueness {
-    const local_count = store.localCount();
+    const local_count = if (proc_domain) |domain| domain.count else store.localCount();
 
-    var reachable = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, store.cfStmtCount());
+    var reachable: std.bit_set.DynamicBitSetUnmanaged = .{};
     defer reachable.deinit(allocator);
-    if (proc_stmts) |by_proc| {
-        for (by_proc) |stmts| for (stmts.items) |stmt| reachable.set(@intFromEnum(stmt));
-    } else {
-        reachable.deinit(allocator);
-        reachable = try reachableStatementSet(allocator, store);
+    if (exact_stmts == null) {
+        reachable = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, store.cfStmtCount());
+        if (proc_stmts) |by_proc| {
+            if (only_proc) |proc_id| {
+                for (by_proc[@intFromEnum(proc_id)].items) |stmt| reachable.set(@intFromEnum(stmt));
+            } else {
+                for (by_proc) |stmts| for (stmts.items) |stmt| reachable.set(@intFromEnum(stmt));
+            }
+        } else {
+            reachable.deinit(allocator);
+            reachable = try reachableStatementSet(allocator, store, only_proc);
+        }
     }
 
     var born = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
@@ -3179,22 +3272,27 @@ fn computeUniquenessDetailed(
 
     const Marks = struct {
         rc: []const bool,
+        domain: ?ProcUniquenessDomain,
+
+        fn indexOf(self: @This(), local: LIR.LocalId) ?u32 {
+            if (self.domain) |domain| return domain.indexOf(local);
+            const index = @intFromEnum(local);
+            if (index >= self.rc.len or !self.rc[index]) return null;
+            return @intCast(index);
+        }
 
         fn noteBirth(self: @This(), set: *std.bit_set.DynamicBitSetUnmanaged, local: LIR.LocalId) void {
-            const index = @intFromEnum(local);
-            if (index >= self.rc.len or !self.rc[index]) return;
+            const index = self.indexOf(local) orelse return;
             set.set(index);
         }
 
         fn destroy(self: @This(), set: *std.bit_set.DynamicBitSetUnmanaged, local: LIR.LocalId) void {
-            const index = @intFromEnum(local);
-            if (index >= self.rc.len or !self.rc[index]) return;
+            const index = self.indexOf(local) orelse return;
             set.set(index);
         }
 
         fn noteUse(self: @This(), set: *std.bit_set.DynamicBitSetUnmanaged, local: LIR.LocalId) void {
-            const index = @intFromEnum(local);
-            if (index >= self.rc.len or !self.rc[index]) return;
+            const index = self.indexOf(local) orelse return;
             set.set(index);
         }
 
@@ -3204,8 +3302,7 @@ fn computeUniquenessDetailed(
             multi: *std.bit_set.DynamicBitSetUnmanaged,
             local: LIR.LocalId,
         ) void {
-            const index = @intFromEnum(local);
-            if (index >= self.rc.len or !self.rc[index]) return;
+            const index = self.indexOf(local) orelse return;
             if (seen.isSet(index)) {
                 multi.set(index);
             } else {
@@ -3219,8 +3316,7 @@ fn computeUniquenessDetailed(
             dead: *std.bit_set.DynamicBitSetUnmanaged,
             local: LIR.LocalId,
         ) void {
-            const index = @intFromEnum(local);
-            if (index >= self.rc.len or !self.rc[index]) return;
+            const index = self.indexOf(local) orelse return;
             if (once.isSet(index)) {
                 dead.set(index);
             } else {
@@ -3228,7 +3324,7 @@ fn computeUniquenessDetailed(
             }
         }
     };
-    const marks = Marks{ .rc = rc_local };
+    const marks = Marks{ .rc = rc_local, .domain = proc_domain };
 
     const Alias = struct {
         /// Records a pure same-value alias definition. The definition is the
@@ -3246,10 +3342,12 @@ fn computeUniquenessDetailed(
             target: LIR.LocalId,
             source: LIR.LocalId,
         ) SolveError!void {
-            const target_index = @intFromEnum(target);
-            if (target_index >= m.rc.len or !m.rc[target_index]) return;
-            const source_index = @intFromEnum(source);
-            if (source_index >= m.rc.len or !m.rc[source_index] or source_index == target_index) {
+            const target_index = m.indexOf(target) orelse return;
+            const source_index = m.indexOf(source) orelse {
+                foreign.set(target_index);
+                return;
+            };
+            if (source_index == target_index) {
                 foreign.set(target_index);
                 return;
             }
@@ -3264,6 +3362,9 @@ fn computeUniquenessDetailed(
     };
 
     for (0..store.procSpecCount()) |proc_index| {
+        if (only_proc) |proc_id| {
+            if (proc_index != @intFromEnum(proc_id)) continue;
+        }
         const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
         const params = store.getLocalSpan(proc.args);
         for (0..GuardedList.borrowLen(params)) |param_index| {
@@ -3274,8 +3375,14 @@ fn computeUniquenessDetailed(
         }
     }
 
-    for (0..store.cfStmtCount()) |stmt_index| {
-        if (!reachable.isSet(stmt_index)) continue;
+    var reachable_iter = reachable.iterator(.{});
+    var exact_stmt_index: usize = 0;
+    stmt_loop: while (true) {
+        const stmt_index = if (exact_stmts) |stmts| blk: {
+            if (exact_stmt_index == stmts.len) break :stmt_loop;
+            defer exact_stmt_index += 1;
+            break :blk @intFromEnum(stmts[exact_stmt_index]);
+        } else reachable_iter.next() orelse break;
         const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
         if (origin_facts) |facts| try collectUniqueOriginStmt(facts, store, stmt);
         switch (stmt) {
@@ -3340,7 +3447,11 @@ fn computeUniquenessDetailed(
             .assign_call_erased => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 marks.destroy(&foreign_def, assign.target);
-                marks.destroy(&destroyed, assign.closure);
+                if (assign.reuse_source) |reuse_source| {
+                    marks.consume(&consumed_once, &destroyed, reuse_source);
+                } else {
+                    marks.destroy(&destroyed, assign.closure);
+                }
                 const args = store.getLocalSpan(assign.args);
                 for (0..GuardedList.borrowLen(args)) |index| {
                     const arg = GuardedList.at(args, index);

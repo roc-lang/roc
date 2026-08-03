@@ -391,6 +391,7 @@ pub const ModuleType = enum {
     symbol,
     roc_target,
     sljmp,
+    roc_args,
     echo_platform,
     docs,
     bump,
@@ -433,7 +434,8 @@ pub const ModuleType = enum {
             .symbol => &.{.base},
             .roc_target => &.{.base},
             .sljmp => &.{},
-            .echo_platform => &.{.builtins},
+            .roc_args => &.{},
+            .echo_platform => &.{ .builtins, .roc_args },
             .docs => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .check, .reporting },
             .bump => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .check, .reporting },
             .glue => &.{ .base, .parse, .compile, .can, .check, .reporting, .echo_platform, .builtins, .roc_target, .types, .layout, .backend, .eval, .lir, .build_options },
@@ -477,6 +479,7 @@ pub const RocModules = struct {
     symbol: *Module,
     roc_target: *Module,
     sljmp: *Module,
+    roc_args: *Module,
     echo_platform: *Module,
     docs: *Module,
     bump: *Module,
@@ -555,6 +558,7 @@ pub const RocModules = struct {
             .symbol = b.addModule("symbol", .{ .root_source_file = b.path("src/symbol/mod.zig") }),
             .roc_target = b.addModule("roc_target", .{ .root_source_file = b.path("src/target/mod.zig") }),
             .sljmp = b.addModule("sljmp", .{ .root_source_file = b.path("src/sljmp/mod.zig") }),
+            .roc_args = b.addModule("roc_args", .{ .root_source_file = b.path("src/default_platform/roc_args.zig") }),
             .echo_platform = b.addModule("echo_platform", .{ .root_source_file = b.path("src/echo_platform/mod.zig") }),
             .docs = b.addModule("docs", .{ .root_source_file = b.path("src/docs/mod.zig") }),
             .bump = b.addModule("bump", .{ .root_source_file = b.path("src/bump/mod.zig") }),
@@ -640,6 +644,7 @@ pub const RocModules = struct {
             .symbol,
             .roc_target,
             .sljmp,
+            .roc_args,
             .echo_platform,
             .docs,
             .bump,
@@ -672,6 +677,9 @@ pub const RocModules = struct {
                 module.addImport("vendor_ryu", self.vendor_ryu);
                 // Lets a `builtins` test assert the default-platform `RocStr` view
                 // matches the canonical `RocStr` (see `roc_str_view` above).
+                module.addImport("roc_str_view", self.roc_str_view);
+            },
+            .roc_args => {
                 module.addImport("roc_str_view", self.roc_str_view);
             },
             .eval => {
@@ -711,6 +719,7 @@ pub const RocModules = struct {
         step.root_module.addImport("lir", self.lir);
         step.root_module.addImport("symbol", self.symbol);
         step.root_module.addImport("sljmp", self.sljmp);
+        step.root_module.addImport("roc_args", self.roc_args);
         step.root_module.addImport("echo_platform", self.echo_platform);
         step.root_module.addImport("docs", self.docs);
         step.root_module.addImport("bump", self.bump);
@@ -772,6 +781,7 @@ pub const RocModules = struct {
             .symbol => self.symbol,
             .roc_target => self.roc_target,
             .sljmp => self.sljmp,
+            .roc_args => self.roc_args,
             .echo_platform => self.echo_platform,
             .docs => self.docs,
             .bump => self.bump,
@@ -828,6 +838,7 @@ pub const RocModules = struct {
             .lir,
             .symbol,
             .sljmp,
+            .roc_args,
             .echo_platform,
             .docs,
             .bump,

@@ -34,7 +34,8 @@ NO CHANGE
 (can-ir
 	(s-import (mod "a.B")
 		(exposes
-			(exposed (name "E") (wildcard false)))))
+			(exposed (name "C") (alias "D") (wildcard false))
+			(exposed (name "C.E") (alias "E") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure

@@ -138,16 +138,17 @@ fn run_contract() {
     if structural.nested.byte != 7 || !structural.nested.flag {
         fail("structural nested mismatch");
     }
-    let result_a = unsafe { abi::roc_result_a() };
+    let mut result_a = unsafe { abi::roc_result_a() };
     if result_a.tag != abi::AResultTag::Ok {
         fail("A.Result tag mismatch");
     }
-    expect_str(&result_a.payload_ok(), b"alpha", "A.Result payload mismatch");
-    let result_b = unsafe { abi::roc_result_b() };
+    let ok = unsafe { result_a.take_payload_ok_unchecked() };
+    expect_str(&ok, b"alpha", "A.Result payload mismatch");
+    let mut result_b = unsafe { abi::roc_result_b() };
     if result_b.tag != abi::BResultTag::Err {
         fail("B.Result tag mismatch");
     }
-    let err = result_b.payload_err();
+    let err = unsafe { result_b.take_payload_err_unchecked() };
     if err.code != 5 {
         fail("B.Result code mismatch");
     }

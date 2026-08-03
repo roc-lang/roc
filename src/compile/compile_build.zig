@@ -51,6 +51,7 @@ const compiler_platforms = @import("compiler_platforms.zig");
 const package_resolution = @import("package_resolution.zig");
 const package_identity = @import("package_identity.zig");
 const watch_inputs = @import("watch_inputs.zig");
+const module_discovery = @import("module_discovery.zig");
 
 // Actor model components
 const coordinator_mod = @import("coordinator.zig");
@@ -843,6 +844,10 @@ pub const BuildEnv = struct {
             else
                 try coord.ensurePackage(entry.key_ptr.*, pkg.root_dir);
             try coord_pkg.setRootInput(self.gpa, pkg.root_file, pkg.root_file_state);
+            for (pkg.public_modules.items) |public_module| {
+                try coord_pkg.addPublicModule(self.gpa, public_module.name, public_module.target);
+            }
+            coord_pkg.finishPublicModules();
 
             // The coordinator gates the hosted transform (and app-root artifact
             // lookups) on knowing which package is the app; app modules must
@@ -1041,6 +1046,8 @@ pub const BuildEnv = struct {
         ffi_symbol: []const u8,
     };
 
+    const PublicModule = module_discovery.PublicModule;
+
     const PackageRef = struct {
         name: []const u8, // Package name (alias in workspace)
         root_file: []const u8, // Absolute path to root module of the package
@@ -1055,15 +1062,16 @@ pub const BuildEnv = struct {
         url: ?package_source.UrlSource = null,
         shorthands: std.StringHashMapUnmanaged(PackageRef) = .{},
         /// Modules in the public API declared by a package or platform header.
-        public_modules: std.ArrayListUnmanaged([]const u8) = .empty,
+        public_modules: std.ArrayListUnmanaged(PublicModule) = .empty,
         provides_entries: std.ArrayListUnmanaged(ProvidesEntry) = .empty,
         targets_config: ?targets_config_mod.TargetsConfig = null,
 
         fn deinit(self: *Package, gpa: Allocator) void {
             if (self.url) |*url| url.deinit(gpa);
             if (self.targets_config) |tc| tc.deinit(gpa);
-            for (self.public_modules.items) |module_name| {
-                freeConstSlice(gpa, module_name);
+            for (self.public_modules.items) |module| {
+                freeConstSlice(gpa, module.name);
+                freeConstSlice(gpa, module.target);
             }
             self.public_modules.deinit(gpa);
             for (self.provides_entries.items) |entry| {
@@ -1088,7 +1096,7 @@ pub const BuildEnv = struct {
         kind: PackageKind,
         source_file_state: ?watch_inputs.State,
         /// Modules in the public API declared by a package or platform header.
-        public_modules: std.ArrayListUnmanaged([]const u8) = .empty,
+        public_modules: std.ArrayListUnmanaged(PublicModule) = .empty,
         resolver_root: package_resolution.FetchedPackage,
         /// Platform provides entries (roc_ident -> ffi_symbol mapping)
         provides_entries: std.ArrayListUnmanaged(ProvidesEntry) = .empty,
@@ -1098,8 +1106,9 @@ pub const BuildEnv = struct {
         fn deinit(self: *HeaderInfo, gpa: Allocator) void {
             if (self.targets_config) |tc| tc.deinit(gpa);
             self.resolver_root.deinit(gpa);
-            for (self.public_modules.items) |module_name| {
-                freeConstSlice(gpa, module_name);
+            for (self.public_modules.items) |module| {
+                freeConstSlice(gpa, module.name);
+                freeConstSlice(gpa, module.target);
             }
             self.public_modules.deinit(gpa);
             for (self.provides_entries.items) |entry| {
@@ -1111,8 +1120,9 @@ pub const BuildEnv = struct {
     };
 
     fn clearPackagePublicModules(self: *BuildEnv, pkg: *Package) void {
-        for (pkg.public_modules.items) |module_name| {
-            freeConstSlice(self.gpa, module_name);
+        for (pkg.public_modules.items) |module| {
+            freeConstSlice(self.gpa, module.name);
+            freeConstSlice(self.gpa, module.target);
         }
         pkg.public_modules.deinit(self.gpa);
         pkg.public_modules = .empty;
@@ -1129,19 +1139,15 @@ pub const BuildEnv = struct {
         info: *HeaderInfo,
         ast: *const parse.AST,
         exposes: parse.AST.Collection.Idx,
-    ) Allocator.Error!void {
-        const collection = ast.store.getCollection(exposes);
-        for (ast.store.exposedItemSlice(.{ .span = collection.span })) |item_idx| {
-            const item = ast.store.getExposedItem(item_idx);
-            const token_idx = switch (item) {
-                .upper_ident => |upper| upper.ident,
-                .upper_ident_star => |upper| upper.ident,
-                .lower_ident, .malformed => continue,
-            };
-            const module_name = try self.gpa.dupe(u8, ast.resolve(token_idx));
-            errdefer self.gpa.free(module_name);
-            try info.public_modules.append(self.gpa, module_name);
-        }
+    ) (Allocator.Error || error{PathOutsideWorkspace})!void {
+        const modules = module_discovery.extractPublicModules(ast, exposes, self.gpa) catch |err| switch (err) {
+            error.ImportEscapesPackageRoot => return error.PathOutsideWorkspace,
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+        errdefer module_discovery.freePublicModules(self.gpa, modules);
+        try info.public_modules.ensureUnusedCapacity(self.gpa, modules.len);
+        info.public_modules.appendSliceAssumeCapacity(modules);
+        self.gpa.free(modules);
     }
 
     fn parseHeaderDeps(self: *BuildEnv, file_path: []const u8) BuildError!HeaderInfo {
@@ -1374,8 +1380,8 @@ pub const BuildEnv = struct {
         return error.NoCacheDir;
     }
 
-    fn dottedToPath(self: *BuildEnv, root_dir: []const u8, dotted: []const u8) (Allocator.Error || error{PathOutsideWorkspace})![]const u8 {
-        var parts = std.mem.splitScalar(u8, dotted, '.');
+    fn logicalModuleToPath(self: *BuildEnv, root_dir: []const u8, logical_name: []const u8) (Allocator.Error || error{PathOutsideWorkspace})![]const u8 {
+        var parts = std.mem.splitScalar(u8, logical_name, '/');
         var segs = std.ArrayList([]const u8).empty;
         defer segs.deinit(self.gpa);
 
@@ -1568,37 +1574,38 @@ pub const BuildEnv = struct {
             }
         }
 
-        // Transfer provides entries and targets config from platform headers,
-        // and register the root app platform's exposed modules.
+        // Transfer each dependency package's public-name-to-source-target map.
+        // Platform headers additionally provide target metadata and expose
+        // modules directly to their root application.
         for (resolved_packages, 0..) |package, i| {
             if (i == package_resolution.Resolved.root_index) continue;
-            if (package.kind != .platform) continue;
+            if (package.kind != .package and package.kind != .platform) continue;
 
             var child_info = try self.parseHeaderDeps(package.root_file);
             defer child_info.deinit(self.gpa);
 
-            if (self.packages.getPtr(package_keys.identity(i))) |plat_pkg| {
-                if (plat_pkg.provides_entries.items.len == 0) {
-                    plat_pkg.provides_entries = child_info.provides_entries;
+            if (self.packages.getPtr(package_keys.identity(i))) |child_pkg| {
+                if (package.kind == .platform and child_pkg.provides_entries.items.len == 0) {
+                    child_pkg.provides_entries = child_info.provides_entries;
                     child_info.provides_entries = .empty; // Prevent double-free in deinit
                 }
-                if (plat_pkg.targets_config == null) {
-                    plat_pkg.targets_config = child_info.targets_config;
+                if (package.kind == .platform and child_pkg.targets_config == null) {
+                    child_pkg.targets_config = child_info.targets_config;
                     child_info.targets_config = null; // Prevent double-free in deinit
                 }
             }
 
-            // Find the root's platform alias for this package (if any).
-            for (resolved_packages[package_resolution.Resolved.root_index].deps) |root_dep| {
-                if (!root_dep.is_platform) continue;
-                if (root_dep.target != i) continue;
-                try self.registerPlatformExposes(root_pkg_name, root_dep.alias, package.root_dir, &child_info);
+            if (package.kind == .platform) {
+                // Find the root's platform alias for this package (if any).
+                for (resolved_packages[package_resolution.Resolved.root_index].deps) |root_dep| {
+                    if (!root_dep.is_platform) continue;
+                    if (root_dep.target != i) continue;
+                    try self.registerPlatformExposes(root_pkg_name, root_dep.alias, package.root_dir, &child_info);
+                }
             }
 
-            if (self.packages.getPtr(package_keys.identity(i))) |plat_pkg| {
-                if (plat_pkg.public_modules.items.len == 0) {
-                    self.moveHeaderPublicModulesToPackage(plat_pkg, &child_info);
-                }
+            if (self.packages.getPtr(package_keys.identity(i))) |child_pkg| {
+                self.moveHeaderPublicModulesToPackage(child_pkg, &child_info);
             }
         }
 
@@ -1628,12 +1635,9 @@ pub const BuildEnv = struct {
         platform_dir: []const u8,
         child_info: *const HeaderInfo,
     ) BuildError!void {
-        for (child_info.public_modules.items) |module_name| {
-            // Create path to the module file (e.g., Stdout.roc)
-            const module_filename = try std.fmt.allocPrint(self.gpa, "{s}.roc", .{module_name});
-            defer self.gpa.free(module_filename);
-
-            const module_path = try std.fs.path.join(self.gpa, &.{ platform_dir, module_filename });
+        for (child_info.public_modules.items) |public_module| {
+            const module_name = public_module.name;
+            const module_path = try self.logicalModuleToPath(platform_dir, public_module.target);
             defer self.gpa.free(module_path);
 
             // Register this module as a package
@@ -1855,7 +1859,7 @@ pub const BuildEnv = struct {
 
     fn moduleToPath(self: *BuildEnv, pkg_name: []const u8, module_name: []const u8) (Allocator.Error || error{ InvalidPackageName, PathOutsideWorkspace })![]const u8 {
         if (self.packages.get(pkg_name)) |pkg| {
-            return try self.dottedToPath(pkg.root_dir, module_name);
+            return try self.logicalModuleToPath(pkg.root_dir, module_name);
         }
         return error.InvalidPackageName;
     }
@@ -2464,8 +2468,9 @@ pub const BuildEnv = struct {
         var public_modules = std.ArrayList(CompiledModuleInfo).empty;
         errdefer public_modules.deinit(allocator);
 
-        for (root_pkg.public_modules.items) |module_name| {
-            const module_id = root_coord_pkg.getModuleId(module_name) orelse {
+        for (root_pkg.public_modules.items) |public_module| {
+            const module_name = public_module.name;
+            const module_id = root_coord_pkg.getPublicModuleId(module_name) orelse {
                 std.debug.panic(
                     "build env invariant violated: public module '{s}' was not compiled",
                     .{module_name},
@@ -3639,10 +3644,10 @@ pub const OrderedSink = struct {
     }
 };
 
-test "issue 9737: dottedToPath frees its scratch path exactly once on the PathOutsideWorkspace error path" {
+test "issue 9737: logicalModuleToPath frees its scratch path exactly once on the PathOutsideWorkspace error path" {
     const gpa = std.testing.allocator;
 
-    // dottedToPath only reads `gpa` and `workspace_roots`, so a minimal BuildEnv
+    // logicalModuleToPath only reads `gpa` and `workspace_roots`, so a minimal BuildEnv
     // with just those fields set is enough to exercise it.
     var env: BuildEnv = undefined;
     env.gpa = gpa;
@@ -3650,8 +3655,8 @@ test "issue 9737: dottedToPath frees its scratch path exactly once on the PathOu
     defer env.workspace_roots.deinit();
 
     // No workspace roots are registered, so the resolved "<root>/Mod.roc" is
-    // outside the workspace and dottedToPath takes its error path. On that path
+    // outside the workspace and logicalModuleToPath takes its error path. On that path
     // it must free its `with_ext` scratch allocation exactly once; freeing it a
     // second time is a double free that the testing allocator detects.
-    try std.testing.expectError(error.PathOutsideWorkspace, env.dottedToPath("/tmp/roc-issue-9737", "Mod"));
+    try std.testing.expectError(error.PathOutsideWorkspace, env.logicalModuleToPath("/tmp/roc-issue-9737", "Mod"));
 }
