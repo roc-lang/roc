@@ -4409,6 +4409,27 @@ literals default to `Str`, and every requirement on such a var resolves against
 the default owner during checking. Structural-capable requirements on other
 unpinnable vars resolve structurally; the rest are statically unreachable.
 
+Generalized rank is not evidence that an edge can pin a constrained var. A
+body-required `where` constraint may remain unresolved only while its receiver
+is in an explicit pinning frontier: reachable from a callable's exported
+arguments or result, from a lambda parameter whose call is still outside the
+checked body, or from an open literal whose deterministic defaulting pass will
+select the owner. Result-position pinning applies to generalized schemes whose
+body is evaluated per specialization; an already-evaluated, non-generalized
+value cannot gain an owner from a later use. A receiver that occurs only in a
+body-local result discarded directly or through local aliases is not in that
+frontier and is therefore statically unreachable during checking.
+
+A generalized constrained function instantiation is also an explicit pinning
+frontier for receivers reachable from that function's argument positions. This
+rule follows the instantiated function type recorded at the use; it does not
+infer reachability from generalized rank. It preserves nested generalized
+helpers whose temporary scheme copy is absent from an enclosing root, while a
+result-only receiver must still escape through the enclosing scheme interface.
+This frontier applies only when every receiver constraint is a copied `where`
+contract; any concrete-use constraint on the same receiver requires resolution
+at the current call.
+
 **Compiler-generated edges.** Structural derivations and builtin helpers call
 methods on component types with no checked instantiation record. For these,
 each checked evidence param also carries the label-addressed PATH from its scheme's
