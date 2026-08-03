@@ -20948,7 +20948,7 @@ test "Windows erased callable ABI reads reuse pointer from caller stack" {
     const reuse_arg = try addLocal(&store, .opaque_ptr);
     const args = try store.addLocalSpan(&.{ explicit_arg, capture_arg, reuse_arg });
 
-    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve);
+    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     const InnerCodeGen = @TypeOf(codegen.codegen);
