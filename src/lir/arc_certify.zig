@@ -97,9 +97,11 @@
 //! entry point panics in debug builds; release builds never run the certifier.
 
 const std = @import("std");
+const base = @import("base");
 const collections = @import("collections");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
+const rc_effect_rules = base.rc_effect_rules;
 const arc_sig = @import("arc_sig.zig");
 const arc_solve = @import("arc_solve.zig");
 
@@ -3488,6 +3490,18 @@ const Certifier = struct {
 
     fn applyLowLevel(self: *Certifier, state: *State, assign: anytype) CertifyError!void {
         const arg_locals = self.store.getLocalSpan(assign.args);
+
+        // The masks in an `RcEffect` row name argument positions, but the row
+        // is written next to the op's name, not its signature. A bit above the
+        // real argument count names nothing: the ownership it describes is
+        // dropped instead of applied. This is the one place where a row and the
+        // arguments it talks about are both in hand.
+        if (rc_effect_rules.maskExceedsArgCount(assign.rc_effect, GuardedList.borrowLen(arg_locals))) |position| {
+            return self.fail(
+                "low-level op {s} has an RcEffect mask naming argument {d}, but it takes {d} arguments",
+                .{ @tagName(assign.op), position, GuardedList.borrowLen(arg_locals) },
+            );
+        }
 
         var arg_values_buffer: [64]ValueId = undefined;
         for (0..GuardedList.borrowLen(arg_locals)) |index| {

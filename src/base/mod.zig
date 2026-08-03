@@ -8,6 +8,14 @@ pub const Region = @import("Region.zig");
 pub const StringLiteral = @import("StringLiteral.zig");
 pub const LowLevel = @import("LowLevel.zig").LowLevel;
 pub const LowLevelBuiltins = @import("LowLevelBuiltins.zig");
+/// Structural rules for `LowLevel.rcEffect()` rows, enforced over the whole
+/// table by the comptime block below.
+pub const rc_effect_rules = @import("rc_effect_rules.zig");
+
+comptime {
+    rc_effect_rules.assertTableConforms();
+}
+
 pub const RegionInfo = @import("RegionInfo.zig");
 pub const SourceLoc = @import("source_loc.zig").SourceLoc;
 pub const Scratch = @import("Scratch.zig").Scratch;
@@ -143,6 +151,7 @@ test "base tests" {
     std.testing.refAllDecls(@import("parallel.zig"));
     std.testing.refAllDecls(@import("Region.zig"));
     std.testing.refAllDecls(@import("RegionInfo.zig"));
+    std.testing.refAllDecls(@import("rc_effect_rules.zig"));
     std.testing.refAllDecls(@import("safe_memory.zig"));
     std.testing.refAllDecls(@import("signal_handler.zig"));
     std.testing.refAllDecls(@import("Scratch.zig"));
