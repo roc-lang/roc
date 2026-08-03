@@ -14795,18 +14795,6 @@ const BodyContext = struct {
         } });
     }
 
-    fn graphFunctionNodeFromMono(
-        self: *BodyContext,
-        arg_tys: []const Type.TypeId,
-        ret_ty: Type.TypeId,
-    ) Allocator.Error!NodeId {
-        const args = try self.graph.arena().alloc(NodeId, arg_tys.len);
-        for (arg_tys, 0..) |arg_ty, index| {
-            args[index] = try self.graph.importMono(arg_ty);
-        }
-        return try self.graphFunctionNode(args, try self.graph.importMono(ret_ty));
-    }
-
     fn graphFunctionTypeCellFromMono(
         self: *BodyContext,
         arg_tys: []const Type.TypeId,

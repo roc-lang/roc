@@ -877,23 +877,6 @@ pub const Store = struct {
         return null;
     }
 
-    /// Whether `ty` is currently a dedup bucket entry — an id the constructors
-    /// can hand back to a later structurally equal request. Such an id names
-    /// shared content across unrelated occurrences, so graph provenance must not
-    /// bind it to one live node. Point-in-time reads and excluded ids never
-    /// enter a bucket, so they answer false and stay bindable. A no-op false
-    /// while dedup is off.
-    pub fn isBucketEntry(self: *Store, name_store: *const names.NameStore, ty: TypeId) bool {
-        if (self.intern_buckets == null) return false;
-        const key = self.lookupKey(name_store, ty);
-        if (self.intern_buckets.?.getPtr(key)) |bucket| {
-            for (bucket.items) |existing| {
-                if (existing == ty) return true;
-            }
-        }
-        return false;
-    }
-
     /// Register `member` under its rooted digest so a future equivalent graph
     /// entered at this node deduplicates to it.
     fn registerRoot(self: *Store, name_store: *const names.NameStore, member: TypeId) std.mem.Allocator.Error!void {

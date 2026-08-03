@@ -167,7 +167,7 @@ my @categories = (
         exempt  => [],
         patterns => [
             { label => 'importMono', re => qr/\bimportMono\b/,
-              counts => { $SOLVE => 15, $LOWER => 22 } },
+              counts => { $SOLVE => 15, $LOWER => 20 } },
         ],
     },
     {
