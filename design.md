@@ -3368,7 +3368,7 @@ The kind rules:
   kind-FLEXIBLE field (a fresh presence var, recorded for the finalize
   kind-defaulting sweep exactly like a literal's), so the base's kind
   decides — optional pins optional and the value checks against the payload
-  type (lowering wraps it in `Present`, exactly as construction does),
+  type (lowering wraps it in `#Present`, exactly as construction does),
   required/defaulted pin as before, and a still-flex base kind stays flex
   and finalize-defaults to `required`. This realizes the SET side of the
   typing frame in "Deferred: Unsetting an Optional Field" below.
@@ -3410,9 +3410,10 @@ deferred at lowering anymore; the CheckedModule output and lowering are both
 complete):
 
 - Slot encoding: PER-FIELD TAG. Every optional field's Monotype slot is the
-  closed STRUCTURAL tag union `[Missing, Present(τ)]` (tag variants
-  normalize to sorted label order, so `Missing` is variant 0 with no
-  payload and `Present` is variant 1 carrying the value — the discriminant
+  closed STRUCTURAL tag union `[#Missing, #Present(τ)]` (the labels are
+  compiler-reserved — `#` starts a comment in source, so no user tag can
+  spell them; tag variants normalize to sorted label order, so `#Missing`
+  is variant 0 with no payload and `#Present` is variant 1 carrying the value — the discriminant
   contract every consumer shares, hosts included). One uniform
   representation per field regardless of how many optional siblings the
   record has; a per-record presence BITMASK remains a possible later
@@ -3436,17 +3437,17 @@ complete):
   compilation, interpreter, backends) the slot is an ORDINARY structural
   tag union — no new concepts anywhere below Monotype lowering.
 - Construction (`lowerRecordExpr`): a SUPPLIED optional field lowers its
-  checked value at the Present payload type and wraps it in the `Present`
+  checked value at the Present payload type and wraps it in the `#Present`
   tag; an OMITTED optional field (admitted by width absorption — including
   every field of `{}` against an all-optional row) constructs the
-  `Missing` tag, exactly where an omitted DEFAULTED field materializes its
+  `#Missing` tag, exactly where an omitted DEFAULTED field materializes its
   default. Record update copies unmentioned optional slots verbatim
   (presence state included); a MENTIONED optional field takes the same
   supplied-field arm as construction — the value lowers at the Present
-  payload type and wraps in the `Present` tag. DESTRUCTURING an optional
+  payload type and wraps in the `#Present` tag. DESTRUCTURING an optional
   field lowers as exactly a one-segment `.?` chain result per field: the
-  bound value is the slot read materialized as Try — `Present(v)` yields
-  `Ok(v)`, `Missing` yields `Err(MissingField)`
+  bound value is the slot read materialized as Try — `#Present(v)` yields
+  `Ok(v)`, `#Missing` yields `Err(MissingField)`
   (`optionalDestructTryExprAtNode`, sharing the slot-test shape of
   `lowerOptionalFieldAccessChain`) — constructed at the binder's own
   checked Try node, with the row's `CheckedRecordField.kind` directing
@@ -3457,8 +3458,8 @@ complete):
   `appendRecordRestPatternStatements`: field slot read, Try
   materialization, sub-pattern matched against it); a MATCH branch keeps a
   flat pattern by TRANSLATING the Try-space sub-pattern into slot space
-  (`lowerOptionalDestructChildAtSlotNode`: `Ok(p)` ↦ `Present(p)` — the
-  payload types are identical — `Err(p)` ↦ `Missing`, and a plain binder
+  (`lowerOptionalDestructChildAtSlotNode`: `Ok(p)` ↦ `#Present(p)` — the
+  payload types are identical — `Err(p)` ↦ `#Missing`, and a plain binder
   becomes a compiler-local slot bind whose Try value is a `let` prelude
   around the branch body and guard, `OptionalDestructBind`), preserving
   fall-through refutability natively.
@@ -3468,8 +3469,8 @@ complete):
   required-only invariant is gone. A
   chain containing any optional segment lowers per-CHAIN
   (`lowerOptionalFieldAccessChain`): each `.?` segment is a runtime test
-  (a match) on the field's tagged slot — the first `Missing` slot
-  short-circuits to `Err(MissingField)`, a `Present` payload continues the
+  (a match) on the field's tagged slot — the first `#Missing` slot
+  short-circuits to `Err(MissingField)`, a `#Present` payload continues the
   chain, required segments after an optional one ride that Ok path as
   plain field reads — and the final value wraps in `Ok` exactly once. The
   chain yields the flat `Try(τ_final, [MissingField])` the checker
@@ -3478,27 +3479,27 @@ complete):
 - Glue / Host Symbol ABI: the glue layout resolver over checked module
   data (`buildFieldSlotRef`, in src/glue)
   builds the identical two-variant union layout (variant 0 = zero-sized
-  Missing, variant 1 = the value) directly from the checked field kind,
+  `#Missing`, variant 1 = the value) directly from the checked field kind,
   so the host's view of a `?:` field agrees byte-for-byte with the
   compiler's — layout stays a function of the annotation alone, which is
   what keeps `?:` legal across the Host Symbol ABI.
-- Inspect rendering back-decodes the slot SHAPE (documented deviation):
-  Monotype `Type.Field` deliberately carries no kind axis — the kind is
-  consumed once, into the slot encoding, by `lowerFieldSlotType`. Record
-  `Str.inspect` expansion runs over the memoized Monotype alone (no
-  checked row in hand), so `Builder.optionalFieldSlot` recognizes an
-  optional slot by its exact encoding: a closed two-variant
-  `[Missing, Present(τ)]` union renders as the payload or `<missing>`.
-  This is the one consumer below checking that infers the kind from the
-  monotype shape instead of reading explicit kind data. Accepted
-  consequence: a required field ANNOTATED as exactly
-  `[Missing, Present(τ)]` is byte- and digest-identical to an optional
-  field, so inspect renders it identically (`Present(5)` → `5`,
-  `Missing` → `<missing>`). Every other consumer (`.?` chains,
-  construction, update, destructure, glue) reads the explicit checked
-  kind and is NOT subject to this collapse. Threading a kind axis through
-  `Type.Field` solely for inspect fidelity of that one adversarial
-  annotation was judged not worth widening every Monotype record.
+- Inspect rendering reads the reserved slot labels: Monotype `Type.Field`
+  deliberately carries no kind axis — the kind is consumed once, into the
+  slot encoding, by `lowerFieldSlotType`. The slot union's labels are the
+  COMPILER-RESERVED names `#Missing`/`#Present`: `#` starts a comment in
+  Roc source (the same reserved namespace as compiler-minted `#interp_0`
+  idents), so no user-written tag can ever spell them and the slot union
+  is a distinct type from any user-annotated `[Missing, Present(τ)]`.
+  Record `Str.inspect` expansion runs over the memoized Monotype alone
+  (no checked row in hand); `Builder.optionalFieldSlot` recognizes an
+  optional slot by an EXACT match on the reserved labels — a lossless
+  read-back of the encoding, not a shape heuristic — and renders the
+  payload or `<missing>`. A user-annotated `[Missing, Present(τ)]` field
+  is an ordinary tag union everywhere (inspect renders `Present(5)` as
+  `Present(5)`); the reserved-label union shares its LAYOUT (two
+  variants, variant 0 zero-sized) but not its identity. Every other
+  consumer (`.?` chains, construction, update, destructure, glue) reads
+  the explicit checked kind and never inspects labels at all.
 
 Kind defaulting as a checker pass (IMPLEMENTED): a literal-minted kind var
 still undetermined at module finalize (a literal field never used at either
@@ -3652,7 +3653,7 @@ resolvable); it is an explicit lowering invariant until then. Evaluating
 archived defaults once into `ConstStore` (instead of inlining per site)
 is an optimization for the same machinery. Optional-field lowering is
 COMPLETE (see Field Kinds above): an omitted optional field constructs
-the `Missing` tag in the same `lowerRecordExpr` slot-fill where an
+the `#Missing` tag in the same `lowerRecordExpr` slot-fill where an
 omitted defaulted field materializes its default.
 
 ### Deferred: Unsetting an Optional Field (`{ ..r, x: _ }`)
@@ -3661,7 +3662,7 @@ Not yet implemented — this is the design sketch for when it is. `{ ..r,
 x: _ }` UNSETS a field in a record update: the result carries `x` as an
 optional slot in the Missing state. Unsetting does NOT remove the field
 from the row — the `absent` presence state is gone (Field Kinds above), rows
-never shrink, and the slot union `[Missing, Present(τ)]` already has a
+never shrink, and the slot union `[#Missing, #Present(τ)]` already has a
 representation for "not there". That one observation dissolves the
 asymmetry the old record-update TODO feared: input and output presence no
 longer differ, because presence is a static KIND and unsetting only changes

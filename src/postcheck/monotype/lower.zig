@@ -4603,7 +4603,7 @@ const Builder = struct {
     /// Kinds (All-Dynamic Optional Fields)"): `required` and `defaulted`
     /// kinds are plain inline slots (the field's value type), while an
     /// `optional` kind erases into the closed structural tagged slot
-    /// `[Missing, Present(value)]`. Monotype `Type.Field` has no kind axis —
+    /// `[#Missing, #Present(value)]`. Monotype `Type.Field` has no kind axis —
     /// the kind is consumed here, once, from the explicit checked row.
     fn lowerFieldSlotType(self: *Builder, view: ModuleView, field: checked.CheckedRecordField) Allocator.Error!Type.TypeId {
         const value_ty = try self.lowerType(view, field.ty);
@@ -4614,8 +4614,8 @@ const Builder = struct {
     }
 
     /// The closed structural tagged slot of an optional field:
-    /// `[Missing, Present(payload)]`. Tag variants normalize to sorted label
-    /// order, so `Missing` is variant 0 (no payload) and `Present` is
+    /// `[#Missing, #Present(payload)]`. Tag variants normalize to sorted label
+    /// order, so `#Missing` is variant 0 (no payload) and `#Present` is
     /// variant 1 — the discriminant contract every consumer (construction,
     /// `.?` runtime tests, layout, glue) shares.
     fn optionalSlotType(self: *Builder, payload_ty: Type.TypeId) Allocator.Error!Type.TypeId {
@@ -4653,25 +4653,25 @@ const Builder = struct {
     /// The slot info of an optional field's tagged slot, or null for an
     /// inline (required/defaulted) slot. Monotype `Type.Field` carries no
     /// kind axis: `lowerFieldSlotType` consumed the checked row's kind, once,
-    /// into exactly the raw closed two-variant structural union
-    /// `[Missing, Present(payload)]`. This reads the encoding back from the
-    /// SHAPE rather than testing explicit kind data — the one such consumer
-    /// below checking, documented as a deviation in design.md "Field Kinds
-    /// (All-Dynamic Optional Fields)" ("Inspect rendering back-decodes the
-    /// slot SHAPE"): inspect expansion runs over the memoized monotype with
-    /// no checked row in hand. Consumers that still have the checked row
-    /// (`.?` chains, record construction) learn the kind from checked data
-    /// and go straight to `optionalSlotInfo`. Accepted consequence, per the
-    /// same design.md bullet: a required field annotated with that exact
-    /// structural union is byte- and digest-identical to an optional field
-    /// here and renders identically.
+    /// into exactly the closed two-variant union
+    /// `[#Missing, #Present(payload)]`. Because those labels live in the
+    /// compiler-reserved `#` namespace (see `optional_slot_missing_tag`),
+    /// matching on them here is EXACT — no user-written type can produce
+    /// this union, so recognizing it recovers precisely the kind that
+    /// `lowerFieldSlotType` encoded (design.md "Field Kinds (All-Dynamic
+    /// Optional Fields)", "Inspect rendering reads the reserved slot
+    /// labels"). Inspect expansion runs over the memoized monotype with no
+    /// checked row in hand and consumes the slot through this; consumers
+    /// that still have the checked row (`.?` chains, record construction)
+    /// learn the kind from checked data and go straight to
+    /// `optionalSlotInfo`.
     fn optionalFieldSlot(self: *Builder, slot_ty: Type.TypeId) ?OptionalSlotInfo {
         const tags = switch (self.program.types.get(slot_ty)) {
             .tag_union => |span_| self.program.types.tagSpan(span_),
             .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => return null,
         };
         if (tags.len != 2) return null;
-        // Variants normalize to sorted label order: Missing is variant 0,
+        // Variants normalize to sorted label order: #Missing is variant 0,
         // Present is variant 1 (`optionalSlotType`).
         const missing_tag = GuardedList.at(tags, 0);
         const present_tag = GuardedList.at(tags, 1);
@@ -8563,7 +8563,7 @@ const Builder = struct {
 
     /// Render one record field's slot. An inline (required/defaulted) slot
     /// renders as the value itself. An optional field's tagged slot never
-    /// leaks its Missing/Present encoding: a present slot renders its
+    /// leaks its #Missing/#Present encoding: a present slot renders its
     /// payload exactly as a required field's value would, and a missing
     /// slot renders the literal `<missing>` marker.
     fn inspectFieldSlot(self: *Builder, slot_value: Ast.ExprId, slot_ty: Type.TypeId, str_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
@@ -8909,14 +8909,20 @@ const Builder = struct {
 
     /// Tag labels of an optional field's tagged slot (design.md "Field Kinds
     /// (All-Dynamic Optional Fields)"): the slot type is the closed
-    /// structural union `[Missing, Present(value)]`.
-    const optional_slot_missing_tag = "Missing";
-    const optional_slot_present_tag = "Present";
+    /// structural union `[#Missing, #Present(value)]`. The `#` prefix is a
+    /// COMPILER-RESERVED namespace — `#` starts a comment in Roc source, so
+    /// no user-written tag can ever spell these labels (same convention as
+    /// `#interp_0` idents) — which makes `optionalFieldSlot`'s label match
+    /// an exact, lossless read-back of this encoding. Sorted variant order matches the
+    /// unprefixed names (`#Missing` < `#Present`), so the ABI discriminant
+    /// contract (variant 0 = missing, variant 1 = payload) is unchanged.
+    const optional_slot_missing_tag = "#Missing";
+    const optional_slot_present_tag = "#Present";
 
     /// What `Str.inspect` renders in the value position of an optional
     /// record field whose slot is missing (same non-value marker family as
     /// `<opaque>` and `<function>`). A present slot renders as the plain
-    /// payload value; the Missing/Present slot encoding never leaks.
+    /// payload value; the #Missing/#Present slot encoding never leaks.
     const optional_field_missing_render = "<missing>";
 
     const OptionalSlotInfo = struct {
@@ -15913,7 +15919,7 @@ const BodyContext = struct {
     }
 
     /// The instantiation-graph node of an optional field's tagged slot: the
-    /// closed structural union `[Missing, Present(value)]`, matching
+    /// closed structural union `[#Missing, #Present(value)]`, matching
     /// `Builder.optionalSlotType` exactly so graph-solved and directly-lowered
     /// occurrences of one checked row seal to the same Monotype.
     fn optionalSlotNode(self: *BodyContext, value_node: NodeId) Allocator.Error!NodeId {
@@ -32098,7 +32104,7 @@ const BodyContext = struct {
     }
 
     /// Construct an optional field's tagged Present slot at its graph node
-    /// (the closed `[Missing, Present(value)]` union). The supplied value's
+    /// (the closed `[#Missing, #Present(value)]` union). The supplied value's
     /// node was already unified into the slot union's Present payload by the
     /// caller, so no active Monotype view is demanded here.
     fn optionalSlotPresentExprAtNode(
@@ -42793,7 +42799,7 @@ const BodyContext = struct {
                     });
                     if ((try self.recordDestructFieldKind(record_checked_ty, destruct)) == .optional) {
                         // The field's slot holds the tagged
-                        // `[Missing, Present(v)]` union; the bound value is
+                        // `[#Missing, #Present(v)]` union; the bound value is
                         // that slot materialized as the binder's checked
                         // `Try(v, [MissingField])` (design.md "Field
                         // Kinds"), against which the sub-pattern matches.

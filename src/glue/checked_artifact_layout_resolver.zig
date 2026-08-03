@@ -494,9 +494,11 @@ pub const Resolver = struct {
     /// (All-Dynamic Optional Fields)"): `required` and `defaulted` kinds are
     /// the field's own layout inline, while an `optional` kind is the tagged
     /// slot — a two-variant union laid out exactly like the Monotype slot
-    /// union `[Missing, Present(value)]` (variants in sorted tag-name order:
-    /// 0 = Missing with no payload, 1 = Present carrying the value), so the
-    /// glue/host view of a `?:` field agrees byte-for-byte with the
+    /// union `[#Missing, #Present(value)]` (variants in sorted tag-name
+    /// order: 0 = `#Missing` with no payload, 1 = `#Present` carrying the
+    /// value; the labels are compiler-reserved and never surface in glue
+    /// output — layout is built here by variant index, from the kind), so
+    /// the glue/host view of a `?:` field agrees byte-for-byte with the
     /// compiler's.
     fn buildFieldSlotRef(
         self: *Resolver,

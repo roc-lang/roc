@@ -2642,7 +2642,7 @@ pub const CheckedFieldDefault = extern struct {
 /// fields are plain inline slots — `defaulted` additionally carries the
 /// default identity in `default` — while `optional` is the tagged slot,
 /// lowered by every layout/monotype consumer as the closed two-variant
-/// union `[Missing, Present(value)]`. The encoding is canonical:
+/// union `[#Missing, #Present(value)]`. The encoding is canonical:
 /// `default` carries an identity exactly when `tag == .defaulted`, so one
 /// kind has one bit pattern and structural comparisons stay byte compares.
 pub const CheckedFieldKind = extern struct {
@@ -2677,7 +2677,7 @@ pub const CheckedFieldKind = extern struct {
 /// (All-Dynamic Optional Fields)"): `required` and `defaulted` inline slots
 /// and `optional` tagged slots. Consumers that demand a concrete slot for an
 /// `optional` field (monotype lowering, layout resolution) lower it as the
-/// closed two-variant union `[Missing, Present(value)]`.
+/// closed two-variant union `[#Missing, #Present(value)]`.
 pub const CheckedRecordField = struct {
     name: canonical.RecordFieldLabelId,
     ty: CheckedTypeId,
