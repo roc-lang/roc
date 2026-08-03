@@ -629,7 +629,7 @@ test "a v1 target's name is its default target's name with v1 after the arch" {
 
         const name = target.toName();
         const default_name = target.defaultCpuTarget().toName();
-        const split = std.mem.indexOf(u8, name, "v1").?;
+        const split = std.mem.find(u8, name, "v1").?;
 
         try std.testing.expectEqualStrings(default_name[0..split], name[0..split]);
         try std.testing.expectEqualStrings(default_name[split..], name[split + "v1".len ..]);
