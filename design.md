@@ -3016,6 +3016,12 @@ specialization request a generated Roc adapter at the requested type that
 calls the declared-type boundary and re-tags the error into the wider row,
 so the extern boundary itself is always emitted at the declared row.
 
+This rule decides which programs typecheck, and that is all it decides. It is
+not what keeps the host ABI intact: the extern boundary is pinned by the
+producer-side check in Monotype lowering (see Host Symbol ABI), which admits
+only the declared type no matter what a use site's type turned out to be. So
+the rule can be tightened, loosened, or replaced on typing grounds alone.
+
 Both sides are pinned by tests: accepted —
 test/fx-open/issue_9963_hosted_try_question_mark.roc (a direct hosted `?`
 inside an open-row platform function builds and the host's Ok is observed as
@@ -6683,6 +6689,37 @@ need per-call context (for example an arena) own its delivery out of band
 executes Roc code — including threads that invoke stored boxed Roc closures.
 Generated glue exposes closure invocation through helpers that set and restore
 that state so the contract is enforced by signatures rather than remembered.
+
+The declared type is part of that contract, not just the symbol string. A
+hosted function's extern boundary is emitted at the hosted declaration's own
+checked type, as substituted by the platform/app relation's recorded
+requirement solutions (see Platform/App Relation) — the one sanctioned
+transformation. The compiler never emits a hosted extern at any other type: not
+at a caller's widened error row, not at a narrowed one, and not at a
+producer-selected representation that differs from the declared one. A use site
+whose own type legitimately differs gets a generated Roc adapter at the
+requested type that calls the declared-type boundary and converts around it, so
+the boundary itself stays declared-typed; the Hosted Try Question Widening
+rule's adapter is one such generated caller.
+
+A hosted declaration written with type variables is a scheme rather than one
+type, and a use instantiates it. The host's single C signature covers every
+instantiation because a variable position is a pointer at runtime, so those
+slots are the declaration's own; every position the declaration made concrete
+is fixed for all uses exactly as above.
+
+Monotype lowering holds that boundary where extern specializations are
+produced: emitting a hosted procedure at any other type stops the build with a
+compiler-bug report naming the symbol (`requireHostedExternAtDeclaredAbi`,
+src/postcheck/monotype/lower.zig). The comparison is structural type equality —
+the declared lowering and the request build their graphs separately, so a
+recursive nominal is the same type through either graph — with the declaration's
+variable slots open when it has any. The check runs in release builds too,
+because what it prevents is silent: the host returns `Ok`, the app reads those
+bytes as `Err`, and no diagnostic or crash marks the difference. No checker
+behavior can therefore produce a wrongly typed extern. A checker rule that
+adjusts a hosted call's type at a use site is judged purely as a typing decision
+(see Solver-Mutating Rewrites); it is not what keeps the ABI intact.
 
 Weak linkage exists to break the app/host reference cycle without imposing
 link order; COFF has no equivalent weak external, and needs none: the app
