@@ -370,14 +370,17 @@ pub fn extractModuleDocs(
                     r.deinit(gpa);
                     gpa.destroy(r);
                 };
-                const type_sig = if (receiver) |r|
-                    try wrapInWhereClause(gpa, module_env, local_module_path, r, decl.where)
-                else
-                    null;
-                if (type_sig != null) receiver_moved = true;
-                errdefer if (type_sig) |s| {
-                    s.deinit(gpa);
-                    gpa.destroy(s);
+                const type_sig: ?*const DocType = if (receiver) |r| wrap: {
+                    // A where alias with no renderable constraints still has a
+                    // receiver to show, and `wrapInWhereClause` leaves it owned
+                    // by this caller.
+                    const wrapped = try wrapInWhereClause(gpa, module_env, local_module_path, r, decl.where);
+                    receiver_moved = true;
+                    break :wrap wrapped orelse r;
+                } else null;
+                errdefer if (type_sig) |sig| {
+                    sig.deinit(gpa);
+                    gpa.destroy(sig);
                 };
 
                 const duped_name = try gpa.dupe(u8, entry_name);

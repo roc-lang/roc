@@ -965,17 +965,12 @@ fn whereAliasDeclFollows(self: *Parser) bool {
 
     var pos = self.pos + 2;
     if (self.peekAt(pos) == .NoSpaceOpenRound or self.peekAt(pos) == .OpenRound) {
-        var depth: u32 = 0;
-        while (true) : (pos += 1) {
+        var depth: u32 = 1;
+        pos += 1;
+        while (depth > 0) : (pos += 1) {
             switch (self.peekAt(pos)) {
                 .OpenRound, .NoSpaceOpenRound => depth += 1,
-                .CloseRound => {
-                    depth -= 1;
-                    if (depth == 0) {
-                        pos += 1;
-                        break;
-                    }
-                },
+                .CloseRound => depth -= 1,
                 .EndOfFile => return false,
                 else => {},
             }

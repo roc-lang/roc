@@ -969,7 +969,7 @@ pub const DocEntryKind = enum {
             .alias => "alias",
             .nominal => "nominal",
             .@"opaque" => "opaque",
-            .where_alias => "where alias",
+            .where_alias => "where_alias",
         };
     }
 };

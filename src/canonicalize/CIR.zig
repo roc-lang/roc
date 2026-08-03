@@ -442,6 +442,12 @@ pub const WhereClause = union(enum) {
     pub const Span = extern struct {
         span: base.DataSpan,
         owners: Owner.Span,
+
+        /// A declaration with no constraints at all.
+        pub const empty = Span{
+            .span = base.DataSpan.empty(),
+            .owners = .{ .span = base.DataSpan.empty() },
+        };
     };
 
     w_method: struct {

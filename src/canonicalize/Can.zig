@@ -2125,7 +2125,7 @@ fn placeholderTypeDeclStatement(
         .where_alias => Statement{ .s_where_alias_decl = .{
             .header = header_idx,
             .receiver = .placeholder,
-            .where = CIR.WhereClause.Span{ .span = DataSpan.empty(), .owners = .{ .span = DataSpan.empty() } },
+            .where = CIR.WhereClause.Span.empty,
         } },
     };
 }
@@ -2300,10 +2300,7 @@ fn registerTypeDecl(
         null;
     // Set while canonicalizing a where alias body, which needs the receiver and
     // the header's parameters in scope.
-    var where_alias_clauses = CIR.WhereClause.Span{
-        .span = DataSpan.empty(),
-        .owners = .{ .span = DataSpan.empty() },
-    };
+    var where_alias_clauses = CIR.WhereClause.Span.empty;
     const anno_idx = maybe_cycle_anno orelse blk: {
         // Enter a new scope for type parameters
         const type_var_scope = self.scopeEnterTypeVar();
@@ -2864,7 +2861,7 @@ fn ensureParserTypeDeclBinding(
             .where_alias => Statement{ .s_where_alias_decl = .{
                 .header = header_idx,
                 .receiver = .placeholder,
-                .where = CIR.WhereClause.Span{ .span = DataSpan.empty(), .owners = .{ .span = DataSpan.empty() } },
+                .where = CIR.WhereClause.Span.empty,
             } },
         };
         const new_stmt_idx = try self.env.addStatement(placeholder_stmt, region);
@@ -9118,10 +9115,7 @@ fn canonicalizeBlockTypeDeclStatement(
         break :blk_predeclare stmt_idx;
     };
 
-    var where_alias_clauses = CIR.WhereClause.Span{
-        .span = DataSpan.empty(),
-        .owners = .{ .span = DataSpan.empty() },
-    };
+    var where_alias_clauses = CIR.WhereClause.Span.empty;
     const anno_idx = blk: {
         const type_var_scope = self.scopeEnterTypeVar();
         defer self.scopeExitTypeVar(type_var_scope);
@@ -20566,8 +20560,10 @@ fn canonicalizeWhereAliasClauses(
     // declaration introduces, so a constraint may be written against any of
     // them.
     const header_args = self.env.store.sliceTypeAnnos(self.env.store.getTypeHeader(header_idx).args);
-    const roots = try self.env.gpa.alloc(TypeAnno.Idx, header_args.len + 1);
-    defer self.env.gpa.free(roots);
+    var roots_sfa = std.heap.stackFallback(8 * @sizeOf(TypeAnno.Idx), self.env.gpa);
+    const roots_alloc = roots_sfa.get();
+    const roots = try roots_alloc.alloc(TypeAnno.Idx, header_args.len + 1);
+    defer roots_alloc.free(roots);
     roots[0] = receiver;
     @memcpy(roots[1..], header_args);
 

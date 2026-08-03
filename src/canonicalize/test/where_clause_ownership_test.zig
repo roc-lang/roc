@@ -110,7 +110,9 @@ test "detached where receiver does not introduce itself" {
     defer test_env.deinit();
 
     const root = try test_env.canonicalizeExpr() orelse unreachable;
-    const statement = try firstStatement(&test_env, root.get_idx());
+    const block = test_env.getCanonicalExpr(root.get_idx());
+    const statements = test_env.module_env.store.sliceStatements(block.e_block.stmts);
+    const statement = test_env.module_env.store.getStatement(statements[1]);
     try testing.expectEqual(.s_decl, std.meta.activeTag(statement));
     const annotation = test_env.module_env.store.getAnnotation(statement.s_decl.anno.?);
     const owners = test_env.module_env.store.sliceWhereClauseOwners(annotation.where.?);
@@ -130,7 +132,9 @@ test "detached where receiver cycle does not introduce itself" {
     defer test_env.deinit();
 
     const root = try test_env.canonicalizeExpr() orelse unreachable;
-    const statement = try firstStatement(&test_env, root.get_idx());
+    const block = test_env.getCanonicalExpr(root.get_idx());
+    const statements = test_env.module_env.store.sliceStatements(block.e_block.stmts);
+    const statement = test_env.module_env.store.getStatement(statements[1]);
     try testing.expectEqual(.s_decl, std.meta.activeTag(statement));
     const annotation = test_env.module_env.store.getAnnotation(statement.s_decl.anno.?);
     const owners = test_env.module_env.store.sliceWhereClauseOwners(annotation.where.?);
@@ -167,4 +171,32 @@ test "type dispatch aliases do not become lambda captures" {
     const statement = try firstStatement(&test_env, root.get_idx());
     try testing.expectEqual(.s_decl, std.meta.activeTag(statement));
     try testing.expectEqual(.e_lambda, std.meta.activeTag(test_env.getCanonicalExpr(statement.s_decl.expr)));
+}
+
+test "canonical where ownership reaches a rigid a where alias reference introduces" {
+    const source =
+        \\{
+        \\    a.Encodable(fmt) : where [a.encode : a, fmt -> fmt]
+        \\    render : a -> Str where [a.Encodable(fmt), fmt.finish : fmt -> Str]
+        \\    render = |value| value
+        \\    render
+        \\}
+    ;
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
+
+    const root = try test_env.canonicalizeExpr() orelse unreachable;
+    const block = test_env.getCanonicalExpr(root.get_idx());
+    const statements = test_env.module_env.store.sliceStatements(block.e_block.stmts);
+    const statement = test_env.module_env.store.getStatement(statements[1]);
+    try testing.expectEqual(.s_decl, std.meta.activeTag(statement));
+    const annotation = test_env.module_env.store.getAnnotation(statement.s_decl.anno.?);
+    const owners = test_env.module_env.store.sliceWhereClauseOwners(annotation.where.?);
+
+    // Both the receiver of the where alias reference and the type variable its
+    // argument introduces own their own clauses.
+    try testing.expectEqual(@as(usize, 2), owners.len);
+    for (owners) |owner| {
+        try testing.expect(owner.owned_by_annotation);
+    }
 }
