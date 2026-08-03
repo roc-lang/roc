@@ -9,6 +9,15 @@
 # broken baseline check reports success forever.
 set -euo pipefail
 
+# The check builds Linux targets, runs the results to compare their answers,
+# and reads them with objdump, so it needs a Linux x86-64 host. The property it
+# verifies is a property of the emitted code, not of the machine that emitted
+# it, so one host covers every target.
+if [[ "$(uname -s)" != "Linux" || "$(uname -m)" != "x86_64" ]]; then
+    echo "baseline codegen check is specific to Linux x86-64"
+    exit 0
+fi
+
 roc_bin="$1"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 tmp_dir="$(mktemp -d)"

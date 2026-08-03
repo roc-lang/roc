@@ -6131,7 +6131,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.codegen.emit.vexRegRegReg(map, .p66, false, opcode, dst, lhs, rhs);
         }
 
-
         fn emitBasicSimdVector(
             self: *Self,
             op: lir.LowLevel,
