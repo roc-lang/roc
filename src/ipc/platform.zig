@@ -155,7 +155,7 @@ pub const SharedMemoryError = error{
 };
 
 /// Get the system's page size at runtime
-pub fn getSystemPageSize() error{ SysctlFailed, UnsupportedPlatform }!usize {
+pub fn getSystemPageSize() error{ PageSizeQueryFailed, UnsupportedPlatform }!usize {
     const page_size: usize = switch (builtin.os.tag) {
         .windows => blk: {
             var system_info: windows.SYSTEM_INFO = undefined;
@@ -171,12 +171,13 @@ pub fn getSystemPageSize() error{ SysctlFailed, UnsupportedPlatform }!usize {
             var size: usize = @sizeOf(usize);
             const rc = std.c.sysctlbyname("hw.pagesize", &page_size_c, &size, null, 0);
             if (rc != 0) {
-                return error.SysctlFailed;
+                return error.PageSizeQueryFailed;
             }
             break :blk page_size_c;
         },
         .freebsd, .netbsd, .openbsd, .dragonfly => blk: {
-            const result = std.c.getpagesize();
+            const result = std.c.sysconf(@intFromEnum(std.c._SC.PAGESIZE));
+            if (result <= 0) return error.PageSizeQueryFailed;
             break :blk @intCast(result);
         },
         else => return error.UnsupportedPlatform,

@@ -3452,7 +3452,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     const index_off = try self.ensureOnStack(index_loc, 8);
                     const elem_off = try self.ensureOnStack(elem_loc, list_abi.elem_size_align.size);
-                    // We need a scratch slot for the old element (out_element param)
+                    // listReplace moves the old element here; list_set releases that
+                    // unreturned ownership unit after the call.
                     const old_elem_slot = self.codegen.allocStackSlot(@intCast(list_abi.elem_size_align.size));
                     const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
                     defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
@@ -3480,6 +3481,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addRegArg(roc_ops_reg);
 
                         try self.callBuiltin(&builder, LowLevelBuiltins.listOp(.list_set));
+                    }
+
+                    if (list_abi.elem_layout_idx) |elem_layout_idx| {
+                        const helper = RcHelperVariant{
+                            .key = .{ .op = .decref, .layout_idx = elem_layout_idx },
+                            .atomicity = .atomic,
+                        };
+                        if (self.layout_store.rcHelperPlan(helper.key) != .noop) {
+                            try self.emitRcHelperCallAtStackOffset(helper, old_elem_slot, 1);
+                        }
                     }
 
                     return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };

@@ -524,7 +524,14 @@ pub fn addExposedItem(store: *NodeStore, item: AST.ExposedItem) std.mem.Allocato
         .lower_ident => |i| {
             node.tag = .exposed_item_lower;
             node.main_token = i.ident;
-            if (i.as) |a| {
+            if (i.qualifiers.span.len > 0) {
+                const extra_start = @as(u32, @intCast(store.extra_data.items.len));
+                try store.extra_data.append(store.gpa, i.qualifiers.span.start);
+                try store.extra_data.append(store.gpa, i.qualifiers.span.len);
+                try store.extra_data.append(store.gpa, if (i.as) |a| a else 0);
+                node.data.lhs = extra_start;
+                node.data.rhs = 2;
+            } else if (i.as) |a| {
                 std.debug.assert(a > 0);
                 node.data.lhs = a;
                 node.data.rhs = 1;
@@ -534,7 +541,14 @@ pub fn addExposedItem(store: *NodeStore, item: AST.ExposedItem) std.mem.Allocato
         .upper_ident => |i| {
             node.tag = .exposed_item_upper;
             node.main_token = i.ident;
-            if (i.as) |a| {
+            if (i.qualifiers.span.len > 0) {
+                const extra_start = @as(u32, @intCast(store.extra_data.items.len));
+                try store.extra_data.append(store.gpa, i.qualifiers.span.start);
+                try store.extra_data.append(store.gpa, i.qualifiers.span.len);
+                try store.extra_data.append(store.gpa, if (i.as) |a| a else 0);
+                node.data.lhs = extra_start;
+                node.data.rhs = 2;
+            } else if (i.as) |a| {
                 std.debug.assert(a > 0);
                 node.data.lhs = a;
                 node.data.rhs = 1;
@@ -1566,30 +1580,56 @@ pub fn getExposedItem(store: *const NodeStore, exposed_item_idx: AST.ExposedItem
     const node = store.nodes.get(@enumFromInt(@intFromEnum(exposed_item_idx)));
     switch (node.tag) {
         .exposed_item_lower => {
-            if (node.data.rhs == 1) {
+            if (node.data.rhs == 2) {
+                const extra_start = node.data.lhs;
+                const q_start = store.extra_data.items[extra_start];
+                const q_len = store.extra_data.items[extra_start + 1];
+                const as_tok = store.extra_data.items[extra_start + 2];
                 return .{ .lower_ident = .{
                     .region = node.region,
                     .ident = node.main_token,
+                    .qualifiers = .{ .span = .{ .start = q_start, .len = q_len } },
+                    .as = if (as_tok != 0) as_tok else null,
+                } };
+            } else if (node.data.rhs == 1) {
+                return .{ .lower_ident = .{
+                    .region = node.region,
+                    .ident = node.main_token,
+                    .qualifiers = .{ .span = base.DataSpan.empty() },
                     .as = node.data.lhs,
                 } };
             }
             return .{ .lower_ident = .{
                 .region = node.region,
                 .ident = node.main_token,
+                .qualifiers = .{ .span = base.DataSpan.empty() },
                 .as = null,
             } };
         },
         .exposed_item_upper => {
-            if (node.data.rhs == 1) {
+            if (node.data.rhs == 2) {
+                const extra_start = node.data.lhs;
+                const q_start = store.extra_data.items[extra_start];
+                const q_len = store.extra_data.items[extra_start + 1];
+                const as_tok = store.extra_data.items[extra_start + 2];
                 return .{ .upper_ident = .{
                     .region = node.region,
                     .ident = node.main_token,
+                    .qualifiers = .{ .span = .{ .start = q_start, .len = q_len } },
+                    .as = if (as_tok != 0) as_tok else null,
+                } };
+            } else if (node.data.rhs == 1) {
+                return .{ .upper_ident = .{
+                    .region = node.region,
+                    .ident = node.main_token,
+                    .qualifiers = .{ .span = base.DataSpan.empty() },
                     .as = node.data.lhs,
                 } };
             }
             return .{ .upper_ident = .{
                 .region = node.region,
                 .ident = node.main_token,
+                .qualifiers = .{ .span = base.DataSpan.empty() },
                 .as = null,
             } };
         },

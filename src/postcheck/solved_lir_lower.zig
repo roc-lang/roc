@@ -398,6 +398,7 @@ const TypedLiftedLocal = struct {
 const Lowerer = struct {
     allocator: std.mem.Allocator,
     solved: *const Solved.Program,
+    solved_types: SolvedType.Store.View,
     types: Type.Store,
     result: LirProgram.Result,
     runtime_schemas: RuntimeSchemaStore,
@@ -514,6 +515,7 @@ const Lowerer = struct {
         return .{
             .allocator = allocator,
             .solved = solved,
+            .solved_types = solved.types.view(),
             .types = Type.Store.init(allocator),
             .result = try LirProgram.Result.init(allocator, target_usize),
             .runtime_schemas = RuntimeSchemaStore.init(allocator),
@@ -865,7 +867,7 @@ const Lowerer = struct {
             .func => |func| func,
             else => Common.invariant("direct Lambda Mono function table contains a non-function type"),
         };
-        const solved_args = self.solved.types.span(func.args);
+        const solved_args = self.solved_types.span(func.args);
         const lifted_args = self.solved.lifted.typedLocalSpan(source_fn.args);
         if (solved_args.len != lifted_args.len) Common.invariant("direct Lambda Mono function arity changed after Lambda Solved");
         if (proc_args.len < lifted_args.len) Common.invariant("direct Lambda Mono proc placeholder had too few arguments");
@@ -1058,7 +1060,7 @@ const Lowerer = struct {
             .func => |func| func,
             else => Common.invariant("direct Lambda Mono function table contains a non-function type"),
         };
-        const solved_args = self.solved.types.span(func.args);
+        const solved_args = self.solved_types.span(func.args);
         const lifted_args = self.solved.lifted.typedLocalSpan(source_fn.args);
         if (solved_args.len != lifted_args.len) Common.invariant("direct Lambda Mono function arity changed after Lambda Solved");
 
@@ -1188,7 +1190,7 @@ const Lowerer = struct {
 
     fn captureSpan(self: *const Lowerer, span: CaptureSpanId) []const SolvedType.Capture {
         return switch (span.source) {
-            .solved => self.solved.types.captureSpan(.{ .start = span.start, .len = span.len }),
+            .solved => self.solved_types.captureSpan(.{ .start = span.start, .len = span.len }),
             .own => self.own_captures.items[span.start..][0..span.len],
         };
     }
@@ -1403,7 +1405,7 @@ const Lowerer = struct {
             .erased => |erased| erased.members,
             else => Common.invariant("function reference callable slot was unresolved before direct Lambda Mono"),
         };
-        for (self.solved.types.memberSpan(members)) |member| {
+        for (self.solved_types.memberSpan(members)) |member| {
             if (member.lambda == fn_symbol) return CaptureSpanId.fromSolved(member.captures);
         }
         Common.invariant("function reference callable slot did not contain referenced function");
@@ -1429,6 +1431,9 @@ const Lowerer = struct {
     fn captureUsesRecursiveSlotStorage(self: *Lowerer, capture: SolvedType.Capture) bool {
         if (self.recursive_value_locals.contains(capture.local)) return true;
         if (capture.capture_id) |capture_id| {
+            if (self.recursive_value_capture_ids.contains(capture_id)) return true;
+        }
+        if (capture.checked_capture_id) |capture_id| {
             if (self.recursive_value_capture_ids.contains(capture_id)) return true;
         }
         return false;
@@ -1527,14 +1532,14 @@ const Lowerer = struct {
             .list => |elem| .{ .list = try self.lowerType(elem) },
             .box => |elem| .{ .box = try self.lowerType(elem) },
             .tuple => |items| blk: {
-                const lowered = try self.lowerTypeSpan(self.solved.types.span(items));
+                const lowered = try self.lowerTypeSpan(self.solved_types.span(items));
                 defer self.allocator.free(lowered);
                 break :blk .{ .tuple = try self.types.addSpan(lowered) };
             },
             .record => |fields| blk: {
                 const lowered = try self.allocator.alloc(Type.Field, fields.len);
                 defer self.allocator.free(lowered);
-                for (self.solved.types.fieldSpan(fields), 0..) |field, i| {
+                for (self.solved_types.fieldSpan(fields), 0..) |field, i| {
                     lowered[i] = .{ .name = field.name, .ty = try self.lowerType(field.ty) };
                 }
                 break :blk .{ .record = try self.types.addFields(lowered) };
@@ -1542,8 +1547,8 @@ const Lowerer = struct {
             .tag_union => |tags| blk: {
                 const lowered = try self.allocator.alloc(Type.Tag, tags.len);
                 defer self.allocator.free(lowered);
-                for (self.solved.types.tagSpan(tags), 0..) |tag, i| {
-                    const payloads = try self.lowerTypeSpan(self.solved.types.span(tag.payloads));
+                for (self.solved_types.tagSpan(tags), 0..) |tag, i| {
+                    const payloads = try self.lowerTypeSpan(self.solved_types.span(tag.payloads));
                     defer self.allocator.free(payloads);
                     lowered[i] = .{
                         .name = tag.name,
@@ -1554,7 +1559,7 @@ const Lowerer = struct {
                 break :blk .{ .tag_union = try self.types.addTags(lowered) };
             },
             .named => |named| blk: {
-                const args = try self.lowerTypeSpan(self.solved.types.span(named.args));
+                const args = try self.lowerTypeSpan(self.solved_types.span(named.args));
                 defer self.allocator.free(args);
                 break :blk .{ .named = .{
                     .named_type = named.named_type,
@@ -1593,7 +1598,7 @@ const Lowerer = struct {
     /// Solved store into this lowerer's Lambda Mono store. Named entries copy the
     /// shared field-name id; padding entries re-lower their reserved type.
     fn lowerDeclaredOrder(self: *Lowerer, span: SolvedType.Span) Common.LowerError!Type.Span {
-        const source = self.solved.types.declaredFieldSpan(span);
+        const source = self.solved_types.declaredFieldSpan(span);
         if (source.len == 0) return Type.Span.empty();
         const lowered = try self.allocator.alloc(Type.DeclaredField, source.len);
         defer self.allocator.free(lowered);
@@ -1612,7 +1617,7 @@ const Lowerer = struct {
         abi: CaptureAbi,
         solved_fn_ty: SolvedType.TypeVarId,
     ) Common.LowerError!Type.Span {
-        const solved_members = self.solved.types.memberSpan(members);
+        const solved_members = self.solved_types.memberSpan(members);
         const variants = try self.allocator.alloc(Type.FnVariant, solved_members.len);
         defer self.allocator.free(variants);
         const root_fn_ty = self.solved.types.root(solved_fn_ty);
@@ -1636,7 +1641,7 @@ const Lowerer = struct {
     }
 
     fn lowerFnMembersFromOwnTypes(self: *Lowerer, members: SolvedType.Span, abi: CaptureAbi) Common.LowerError!Type.Span {
-        const solved_members = self.solved.types.memberSpan(members);
+        const solved_members = self.solved_types.memberSpan(members);
         const variants = try self.allocator.alloc(Type.FnVariant, solved_members.len);
         defer self.allocator.free(variants);
         for (solved_members, 0..) |member, i| {
@@ -2076,7 +2081,7 @@ const Lowerer = struct {
             else => Common.invariant("callable source type was not a function"),
         };
 
-        const source_args = self.solved.types.span(func.args);
+        const source_args = self.solved_types.span(func.args);
         const stored_args = try self.allocator.alloc(const_store.ConstTypeId, source_args.len);
         defer self.allocator.free(stored_args);
         for (source_args, 0..) |arg, i| {
@@ -2326,8 +2331,7 @@ const Lowerer = struct {
                 .slot = @intCast(index),
                 .ty = try self.constTypeOfType(field.ty),
                 .plan = try self.constPlanOfType(field.ty),
-                .recursive_const = self.recursive_value_capture_ids.contains(checked_capture_id) or
-                    if (field.capture_id) |capture_id| self.recursive_value_capture_ids.contains(capture_id) else false,
+                .storage = if (field.storage_ty == field.ty) .value else .recursive_box,
             };
         }
         return slots;
@@ -4141,7 +4145,7 @@ const Lowerer = struct {
             .func => |func| func,
             else => Common.invariant("call argument lowering saw a non-function source type"),
         };
-        return try self.lowerTypeSpan(self.solved.types.span(func.args));
+        return try self.lowerTypeSpan(self.solved_types.span(func.args));
     }
 
     fn inlineBodyForKnownCall(self: *Lowerer, callee: Type.FnId) Common.LowerError!?Lifted.ExprId {
@@ -4171,7 +4175,7 @@ const Lowerer = struct {
             .func => |func| func,
             else => Common.invariant("direct Lambda Mono function table contains a non-function type"),
         };
-        const solved_args = self.solved.types.span(func.args);
+        const solved_args = self.solved_types.span(func.args);
         const lifted_args = self.solved.lifted.typedLocalSpan(source_fn.args);
         if (solved_args.len != lifted_args.len) Common.invariant("direct Lambda Mono function arity changed after Lambda Solved");
         if (arg_locals.len != lifted_args.len) Common.invariant("inline call argument count differed from function arity");
@@ -8549,7 +8553,7 @@ const Lowerer = struct {
             .box => |elem| try self.solvedTypeContainsCallableInner(elem, visited),
             .tuple => |items| try self.solvedTypeSpanContainsCallable(items, visited),
             .record => |fields| blk: {
-                const field_span = self.solved.types.fieldSpan(fields);
+                const field_span = self.solved_types.fieldSpan(fields);
                 for (0..field_span.len) |index| {
                     const field = GuardedList.at(field_span, index);
                     if (try self.solvedTypeContainsCallableInner(field.ty, visited)) break :blk true;
@@ -8557,7 +8561,7 @@ const Lowerer = struct {
                 break :blk false;
             },
             .tag_union => |tags| blk: {
-                const tag_span = self.solved.types.tagSpan(tags);
+                const tag_span = self.solved_types.tagSpan(tags);
                 for (0..tag_span.len) |index| {
                     const tag = GuardedList.at(tag_span, index);
                     if (try self.solvedTypeSpanContainsCallable(tag.payloads, visited)) break :blk true;
@@ -8576,7 +8580,7 @@ const Lowerer = struct {
         span: SolvedType.Span,
         visited: *std.AutoHashMap(SolvedType.TypeVarId, void),
     ) Common.LowerError!bool {
-        const values = self.solved.types.span(span);
+        const values = self.solved_types.span(span);
         for (0..values.len) |index| {
             const ty = GuardedList.at(values, index);
             if (try self.solvedTypeContainsCallableInner(ty, visited)) return true;

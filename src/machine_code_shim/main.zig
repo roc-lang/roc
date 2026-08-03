@@ -78,7 +78,7 @@ const LoadDevProgramError = Allocator.Error || RunImage.ImageError || error{
 };
 
 const RuntimeStateError = ipc.CoordinationError || ipc.platform.SharedMemoryError || LoadDevProgramError || error{
-    SysctlFailed,
+    PageSizeQueryFailed,
 };
 
 var runtime_state_initialized: std.atomic.Value(bool) = .init(false);

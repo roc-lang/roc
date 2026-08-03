@@ -28,6 +28,7 @@ MALFORMED WHERE CLAUSE - where_clauses_error_cases.md:3:10:3:21
 MALFORMED WHERE CLAUSE - where_clauses_error_cases.md:7:3:7:10
 DECLARATION HAS NO VALUE - where_clauses_error_cases.md:2:1:3:21
 DECLARATION HAS NO VALUE - where_clauses_error_cases.md:6:1:7:10
+UNBOUND WHERE RECEIVER - where_clauses_error_cases.md:11:10:11:27
 DECLARATION HAS NO VALUE - where_clauses_error_cases.md:10:1:11:28
 # PROBLEMS
 
@@ -190,6 +191,21 @@ DECLARATION HAS NO VALUE - where_clauses_error_cases.md:10:1:11:28
     they are published through the host boundary.
 
 
+┌────────────────────────┐
+│ UNBOUND WHERE RECEIVER ├─ The type variable `c` is not introduced by this ──┐
+└┬───────────────────────┘  annotation's type or a connected method           │
+ │                          constraint, so this where clause cannot add the   │
+ │                          `method` method to it.                            │
+ │                                                                            │
+ │  where [c.method : c -> d]                                                 │
+ │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
+ └──────────────────────────────────────── where_clauses_error_cases.md:11:10 ┘
+
+    A where clause receiver must be introduced by the annotation's type, or by
+    the method type of a receiver that is already connected to the annotation.
+    Connect `c` to the annotation, or remove this constraint.
+
+
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
 └┬─────────────────────────┘  implementation.                                 │
@@ -298,9 +314,9 @@ broken_fn3 : a -> b
 	(defs
 		(patt (type "a -> b"))
 		(patt (type "a -> b"))
-		(patt (type "a -> b")))
+		(patt (type "Error")))
 	(expressions
 		(expr (type "a -> b"))
 		(expr (type "a -> b"))
-		(expr (type "a -> b"))))
+		(expr (type "Error"))))
 ~~~
