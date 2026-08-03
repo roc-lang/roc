@@ -18,6 +18,7 @@ const LirStore = lir.LirStore;
 const GuardedList = LirStore.GuardedList;
 const CheckedArithmetic = lir.CheckedArithmetic;
 const lir_value = @import("value.zig");
+const rc_conformance = @import("rc_conformance.zig");
 const backend = @import("backend");
 const host_trampoline = @import("host_trampoline.zig");
 const builtins = @import("builtins");
@@ -1701,7 +1702,8 @@ pub const Interpreter = struct {
             const arg = args[i];
             const arg_layout = arg_layouts[i];
             const param_layout = self.store.getLocal(param).layout_idx;
-            if (proc_spec.abi == .erased_callable and i + 1 == params.len) {
+            const is_erased_reuse_arg = proc_spec.erased_reuse_arg == param;
+            if (proc_spec.abi == .erased_callable and i + 2 == params.len) {
                 if (param_layout != .opaque_ptr or arg_layout != .opaque_ptr) {
                     return self.invariantFailedError(
                         "LIR/interpreter invariant violated: erased callable proc {d} hidden capture parameter was not opaque_ptr",
@@ -1745,13 +1747,20 @@ pub const Interpreter = struct {
                 arg_layout,
                 param_layout,
             );
-            try self.setLocalChecked(
-                &frame,
-                null,
-                param,
-                try self.materializeLocalValue(coerced, param_layout),
-                false,
-            );
+            const materialized = try self.materializeLocalValue(coerced, param_layout);
+            if (is_erased_reuse_arg and self.readBoxedDataPointer(materialized) == null) {
+                // Null is valid only for this explicitly marked ABI ownership
+                // input: it means the caller declined destination reuse.
+                if (self.layout_store.getLayout(param_layout).tag != .erased_callable) {
+                    return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: erased reuse parameter in proc {d} did not have erased_callable layout",
+                        .{@intFromEnum(proc_id)},
+                    );
+                }
+                frame.setLocal(param, materialized);
+            } else {
+                try self.setLocalChecked(&frame, null, param, materialized, false);
+            }
         }
         const body = self.requireProcBody(proc_id, proc_spec);
         if (trace.enabled) self.debugPrintStmtChain(body, 32);
@@ -1885,6 +1894,7 @@ pub const Interpreter = struct {
                         arg_values,
                         try self.localLayouts(arg_locals),
                         self.store.getLocal(assign.target).layout_idx,
+                        assign.reuse_closure,
                     ) catch |err| {
                         self.recordCallerFailureLocForCalleeError(call_loc, call_region, call_inline_scope, err);
                         return err;
@@ -1916,15 +1926,22 @@ pub const Interpreter = struct {
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
                     const arg_layouts = try self.localLayouts(arg_locals);
+                    const ret_layout = self.store.getLocal(assign.target).layout_idx;
+                    const observation = rc_conformance.beginStatement(assign.op, arg_values.len);
+                    if (observation) |obs| self.conformanceSnapshotArgs(obs, arg_values, arg_layouts);
                     const value = try self.evalLowLevel(.{
                         .op = assign.op,
                         .args = arg_values,
                         .arg_layouts = arg_layouts,
-                        .ret_layout = self.store.getLocal(assign.target).layout_idx,
+                        .ret_layout = ret_layout,
                         .callable_proc = null,
                         .unique_args = assign.unique_args,
                         .interchangeable = assign.interchangeable,
                     });
+                    if (observation) |obs| {
+                        self.conformanceSnapshotResult(obs, value, ret_layout);
+                        rc_conformance.endStatement(obs);
+                    }
                     try self.setLocalChecked(frame, current, assign.target, value, assign.op == .box_alloc_zeroed);
                     current = assign.next;
                 },
@@ -2901,11 +2918,12 @@ pub const Interpreter = struct {
         ret: ?[*]u8,
         args: ?[*]const u8,
         capture: ?[*]u8,
+        reuse: ?[*]u8,
     ) callconv(.c) void {
         const resolved = resolveTrampolineCallable(ops, capture);
         const self = resolved.interpreter;
         const callable = resolved.callable;
-        self.callInterpreterErasedCallable(callable.proc_id, callable.capture_value_ptr, ret, args) catch |err| switch (err) {
+        self.callInterpreterErasedCallable(callable.proc_id, callable.capture_value_ptr, reuse, ret, args) catch |err| switch (err) {
             error.OutOfMemory => ops.crash("LIR/interpreter erased callable trampoline ran out of memory"),
             error.RuntimeError => ops.crash("LIR/interpreter erased callable trampoline hit runtime error"),
             error.ComptimeExhaustiveness => ops.crash("LIR/interpreter erased callable trampoline hit compile-time exhaustiveness marker"),
@@ -3003,19 +3021,20 @@ pub const Interpreter = struct {
         self: *LirInterpreter,
         proc_id: LIR.LirProcSpecId,
         capture_value_ptr: [*]u8,
+        reuse_ptr: ?[*]u8,
         ret: ?[*]u8,
         args: ?[*]const u8,
     ) Error!void {
         const proc_spec = self.store.getProcSpec(proc_id);
         const proc_arg_locals = self.store.getLocalSpan(proc_spec.args);
-        if (proc_arg_locals.len == 0) {
+        if (proc_arg_locals.len < 2) {
             return self.invariantFailedError(
-                "LIR/interpreter invariant violated: erased callable proc {d} has no hidden capture argument",
+                "LIR/interpreter invariant violated: erased callable proc {d} lacks hidden capture/reuse arguments",
                 .{@intFromEnum(proc_id)},
             );
         }
 
-        const explicit_arg_count = proc_arg_locals.len - 1;
+        const explicit_arg_count = proc_arg_locals.len - 2;
         var proc_args = try self.arena.allocator().alloc(Value, proc_arg_locals.len);
         var proc_arg_layouts = try self.arena.allocator().alloc(layout_mod.Idx, proc_arg_locals.len);
 
@@ -3039,6 +3058,9 @@ pub const Interpreter = struct {
 
         proc_args[explicit_arg_count] = try self.allocPointerIntValue(@intFromPtr(capture_value_ptr));
         proc_arg_layouts[explicit_arg_count] = .opaque_ptr;
+        const reuse_index = explicit_arg_count + 1;
+        proc_args[reuse_index] = try self.allocPointerIntValue(if (reuse_ptr) |ptr| @intFromPtr(ptr) else 0);
+        proc_arg_layouts[reuse_index] = self.store.getLocal(GuardedList.at(proc_arg_locals, reuse_index)).layout_idx;
 
         const result = try self.evalProcById(proc_id, proc_args, proc_arg_layouts);
         const ret_size = self.helper.sizeOf(proc_spec.ret_layout);
@@ -3060,6 +3082,7 @@ pub const Interpreter = struct {
         args: []const Value,
         arg_layouts: []const layout_mod.Idx,
         ret_layout: layout_mod.Idx,
+        reuse_closure: bool,
     ) Error!ErasedCallResult {
         const closure_layout = self.store.getLocal(closure_local).layout_idx;
         const closure_value = try self.getLocalChecked(frame, closure_local);
@@ -3117,6 +3140,7 @@ pub const Interpreter = struct {
             ret_ptr,
             if (arg_bytes) |bytes| @ptrCast(bytes.ptr) else null,
             builtins.erased_callable.capturePtr(closure_ptr),
+            if (reuse_closure) closure_ptr else null,
         );
 
         return .{
@@ -3155,24 +3179,26 @@ pub const Interpreter = struct {
         const capture_size = erased_callable_context_capture_offset + capture_value_size;
         const data_ptr = if (assign.reuse) |reuse_local| blk: {
             const reuse_value = try self.getLocalChecked(frame, reuse_local);
-            const reuse_ptr = self.readBoxedDataPointer(reuse_value) orelse {
-                return self.invariantFailedError(
-                    "LIR/interpreter invariant violated: erased callable repack reuse had null payload",
-                    .{},
+            if (self.readBoxedDataPointer(reuse_value)) |reuse_ptr| {
+                if (assign.reuse_unique or builtins.utils.isUnique(reuse_ptr, &self.roc_ops)) {
+                    self.performErasedCallableFinalDrop(reuse_ptr, .decref, 1);
+                    break :blk reuse_ptr;
+                }
+
+                const fresh = try self.allocRocDataWithRc(
+                    builtins.erased_callable.payloadSize(capture_size),
+                    builtins.erased_callable.payload_alignment,
+                    builtins.erased_callable.allocation_has_refcounted_children,
                 );
-            };
-            if (assign.reuse_unique or builtins.utils.isUnique(reuse_ptr, &self.roc_ops)) {
-                self.performErasedCallableFinalDrop(reuse_ptr, .decref, 1);
-                break :blk reuse_ptr;
+                builtins.erased_callable.decref(reuse_ptr, &self.roc_ops);
+                break :blk fresh;
             }
 
-            const fresh = try self.allocRocDataWithRc(
+            break :blk try self.allocRocDataWithRc(
                 builtins.erased_callable.payloadSize(capture_size),
                 builtins.erased_callable.payload_alignment,
                 builtins.erased_callable.allocation_has_refcounted_children,
             );
-            builtins.erased_callable.decref(reuse_ptr, &self.roc_ops);
-            break :blk fresh;
         } else try self.allocRocDataWithRc(
             builtins.erased_callable.payloadSize(capture_size),
             builtins.erased_callable.payload_alignment,
@@ -4364,6 +4390,166 @@ pub const Interpreter = struct {
         rl.decrefElements(list_plan.elem_width, &ctx, decrefListElementCallback, &self.roc_ops);
     }
 
+    // ── RcEffect conformance observation (debug builds only) ──
+    //
+    // These read the same layout-driven RC plans the retain/release handlers
+    // execute, but only to look: they name the allocations a value owns or
+    // reaches, so `rc_conformance` can compare what a low-level op did to what
+    // its `RcEffect` row says it does. Nothing here adjusts a count.
+
+    /// How deep the reachability walk descends before giving up. Depth only
+    /// limits what the alias rules can see; they fire on allocations found,
+    /// never on ones missed.
+    const rc_conformance_max_depth = 8;
+
+    /// The allocation a value owns directly, if its layout has one.
+    fn conformanceOuterAllocation(
+        self: *LirInterpreter,
+        val: Value,
+        layout_idx: layout_mod.Idx,
+    ) ?rc_conformance.Allocation {
+        return switch (self.conformanceRcPlan(layout_idx)) {
+            .str_decref => blk: {
+                const rs = valueToRocStr(val);
+                if (rs.isSmallStr()) break :blk null;
+                break :blk rc_conformance.allocationAt(rs.getAllocationPtr());
+            },
+            .list_decref => rc_conformance.allocationAt(valueToRocList(val).getAllocationDataPtr(&self.roc_ops)),
+            .box_decref, .erased_callable_decref => rc_conformance.allocationAt(val.read(?[*]u8)),
+            else => null,
+        };
+    }
+
+    fn conformanceRcPlan(self: *LirInterpreter, layout_idx: layout_mod.Idx) layout_mod.RcHelperPlan {
+        return self.cachedRcPlan(.{ .op = .decref, .layout_idx = layout_idx });
+    }
+
+    /// Collect every refcounted allocation reachable from a value.
+    fn conformanceCollectAllocations(
+        self: *LirInterpreter,
+        val: Value,
+        layout_idx: layout_mod.Idx,
+        sink: *rc_conformance.AllocationSet,
+    ) void {
+        self.conformanceCollectPlan(self.conformanceRcPlan(layout_idx), val, sink, 0);
+    }
+
+    fn conformanceCollectPlan(
+        self: *LirInterpreter,
+        plan: layout_mod.RcHelperPlan,
+        val: Value,
+        sink: *rc_conformance.AllocationSet,
+        depth: u32,
+    ) void {
+        if (depth > rc_conformance_max_depth) return;
+        switch (plan) {
+            // The walk always asks for decref plans, so the incref and free
+            // shapes of each plan never reach here.
+            .noop, .str_incref, .list_incref, .box_incref, .erased_callable_incref, .str_free, .list_free, .box_free, .erased_callable_free => {},
+            .str_decref => {
+                const rs = valueToRocStr(val);
+                if (rs.isSmallStr()) return;
+                if (rc_conformance.allocationAt(rs.getAllocationPtr())) |found| sink.add(found.rc_addr);
+            },
+            .list_decref => |list_plan| {
+                const rl = valueToRocList(val);
+                if (rc_conformance.allocationAt(rl.getAllocationDataPtr(&self.roc_ops))) |found| sink.add(found.rc_addr);
+                const child_key = list_plan.child orelse return;
+                const bytes = rl.bytes orelse return;
+                const child_plan = self.cachedRcPlan(child_key);
+                for (0..rl.len()) |index| {
+                    const elem = Value{ .ptr = bytes + index * list_plan.elem_width };
+                    self.conformanceCollectPlan(child_plan, elem, sink, depth + 1);
+                }
+            },
+            .box_decref => |box_plan| {
+                const alloc_ptr = val.read(?[*]u8);
+                if (rc_conformance.allocationAt(alloc_ptr)) |found| sink.add(found.rc_addr);
+                const child_key = box_plan.child orelse return;
+                const data_ptr = self.readBoxedDataPointer(val) orelse return;
+                self.conformanceCollectPlan(self.cachedRcPlan(child_key), .{ .ptr = data_ptr }, sink, depth + 1);
+            },
+            .erased_callable_decref => {
+                if (rc_conformance.allocationAt(val.read(?[*]u8))) |found| sink.add(found.rc_addr);
+            },
+            .struct_ => |struct_plan| {
+                const field_count = self.layout_store.rcHelperStructFieldCount(struct_plan);
+                var index: u32 = 0;
+                while (index < field_count) : (index += 1) {
+                    const field_plan = self.cachedStructFieldPlan(struct_plan, index) orelse continue;
+                    const field_val = Value{ .ptr = val.ptr + field_plan.offset };
+                    self.conformanceCollectPlan(self.cachedRcPlan(field_plan.child), field_val, sink, depth + 1);
+                }
+            },
+            .tag_union => |tag_plan| {
+                const variant_count = self.layout_store.rcHelperTagUnionVariantCount(tag_plan);
+                if (variant_count == 0) return;
+                const tu_data = self.layout_store.getTagUnionData(tag_plan.tag_union_idx);
+                const disc_offset = tu_data.discriminant_offset.get(self.layout_store.targetUsize());
+                const disc: u32 = switch (tu_data.discriminant_size) {
+                    0 => 0,
+                    1 => val.offset(disc_offset).read(u8),
+                    2 => val.offset(disc_offset).read(u16),
+                    else => return,
+                };
+                if (disc >= variant_count) return;
+                const child_key = self.cachedTagVariantPlan(tag_plan, disc) orelse return;
+                self.conformanceCollectPlan(self.cachedRcPlan(child_key), val, sink, depth + 1);
+            },
+            .closure => |child_key| {
+                self.conformanceCollectPlan(self.cachedRcPlan(child_key), val, sink, depth + 1);
+            },
+        }
+    }
+
+    /// Snapshot the arguments a low-level op is about to receive.
+    fn conformanceSnapshotArgs(
+        self: *LirInterpreter,
+        observation: *rc_conformance.Observation,
+        args: []const Value,
+        arg_layouts: []const layout_mod.Idx,
+    ) void {
+        const positions = @min(@min(args.len, arg_layouts.len), rc_conformance.max_observed_args);
+        for (0..positions) |index| {
+            observation.args[index] = .{
+                .outer = self.conformanceOuterAllocation(args[index], arg_layouts[index]),
+            };
+        }
+    }
+
+    /// Snapshot what the op left behind, then judge it against its row.
+    fn conformanceSnapshotResult(
+        self: *LirInterpreter,
+        observation: *rc_conformance.Observation,
+        result: Value,
+        ret_layout: layout_mod.Idx,
+    ) void {
+        const window = rc_conformance.endEventWindow();
+        observation.allocated = window.allocated;
+        observation.adjusted_counts = window.adjusted_counts;
+        observation.events_incomplete = window.incomplete;
+
+        const positions = @min(observation.arg_count, rc_conformance.max_observed_args);
+        for (observation.args[0..positions]) |*arg| {
+            const outer = arg.outer orelse continue;
+            if (window.incomplete) {
+                // Without a complete event log there is no way to know whether
+                // reading this count would touch freed memory.
+                arg.count_after = outer.count;
+                continue;
+            }
+            if (rc_conformance.wasFreedInWindow(outer.rc_addr)) {
+                arg.count_after = null;
+                continue;
+            }
+            const rc_ptr: *const isize = @ptrFromInt(outer.rc_addr);
+            arg.count_after = rc_ptr.*;
+        }
+
+        observation.result_outer = self.conformanceOuterAllocation(result, ret_layout);
+        self.conformanceCollectAllocations(result, ret_layout, &observation.result_reachable);
+    }
+
     fn performErasedCallableFinalDropIfUnique(
         self: *LirInterpreter,
         data_ptr: ?[*]u8,
@@ -5430,8 +5616,8 @@ pub const Interpreter = struct {
                     .interp = self,
                     .elem_layout = self.listElemLayout(arg_layout),
                 };
-                // listReplace requires a scratch slot for the old element; we discard it here
-                // because list_set returns only the new list (replace semantics return a pair).
+                // listReplace moves the old element into a scratch slot. list_set does not
+                // return that ownership unit, so release it after the replacement.
                 const old_elem = try self.allocAlignedBytes(info.width, layout_mod.RocAlignment.fromByteUnits(@intCast(info.alignment)));
                 const result = if (updateModeForArg0(ll.unique_args) == .InPlace)
                     builtins.list.listReplaceInPlace(
@@ -5458,6 +5644,9 @@ pub const Interpreter = struct {
                         &builtins.list.copy_fallback,
                         &self.roc_ops,
                     );
+                if (elems_rc) {
+                    listElementDecref(@ptrCast(&elem_rc_ctx), @ptrCast(old_elem.ptr));
+                }
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
             .list_with_capacity => blk: {

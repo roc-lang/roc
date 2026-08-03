@@ -860,6 +860,7 @@ fn parseExposedItemTokens(self: *Parser) std.mem.Allocator.Error!AST.ExposedItem
             return try self.store.addExposedItem(.{ .lower_ident = .{
                 .region = .{ .start = start, .end = self.pos },
                 .ident = start,
+                .qualifiers = .{ .span = base.DataSpan.empty() },
                 .as = as,
             } });
         },
@@ -868,12 +869,21 @@ fn parseExposedItemTokens(self: *Parser) std.mem.Allocator.Error!AST.ExposedItem
             const qual_result = try self.readQualificationChain(.all_segments);
             self.pos = qual_result.final_token + 1;
             const ident = qual_result.final_token;
+            const is_lower = self.tok_buf.tokens.items(.tag)[ident] == .LowerIdent;
             if (self.peek() == .KwAs) {
                 self.advance();
                 as = self.pos;
-                self.expect(.UpperIdent) catch {
-                    return try self.pushMalformed(AST.ExposedItem.Idx, .expected_upper_name_after_exposed_item_as, start);
-                };
+                if (is_lower) {
+                    if (self.peek() == .LowerIdent or self.peek() == .UpperIdent) {
+                        self.advance();
+                    } else {
+                        return try self.pushMalformed(AST.ExposedItem.Idx, .expected_lower_name_after_exposed_item_as, start);
+                    }
+                } else {
+                    self.expect(.UpperIdent) catch {
+                        return try self.pushMalformed(AST.ExposedItem.Idx, .expected_upper_name_after_exposed_item_as, start);
+                    };
+                }
             } else if (self.peek() == .DotStar) {
                 self.advance();
                 return try self.store.addExposedItem(.{ .upper_ident_star = .{
@@ -882,11 +892,21 @@ fn parseExposedItemTokens(self: *Parser) std.mem.Allocator.Error!AST.ExposedItem
                     .qualifiers = qual_result.qualifiers,
                 } });
             }
-            return try self.store.addExposedItem(.{ .upper_ident = .{
-                .region = .{ .start = start, .end = self.pos },
-                .ident = ident,
-                .as = as,
-            } });
+            if (is_lower) {
+                return try self.store.addExposedItem(.{ .lower_ident = .{
+                    .region = .{ .start = start, .end = self.pos },
+                    .ident = ident,
+                    .qualifiers = qual_result.qualifiers,
+                    .as = as,
+                } });
+            } else {
+                return try self.store.addExposedItem(.{ .upper_ident = .{
+                    .region = .{ .start = start, .end = self.pos },
+                    .ident = ident,
+                    .qualifiers = qual_result.qualifiers,
+                    .as = as,
+                } });
+            }
         },
         else => return try self.pushMalformed(AST.ExposedItem.Idx, .exposed_item_unexpected_token, start),
     }

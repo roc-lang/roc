@@ -105,6 +105,8 @@ pub const wasm_runner = if (builtin.target.os.tag == .freestanding) struct {
 } else @import("wasm_runner.zig");
 /// Shared eval test helpers routed through checked artifacts.
 pub const test_helpers = @import("test_helpers.zig");
+/// Debug-only conformance check between `RcEffect` rows and builtin behavior.
+pub const rc_conformance = @import("rc_conformance.zig");
 
 test "eval tests" {
     std.testing.refAllDecls(@This());
@@ -119,6 +121,7 @@ test "eval tests" {
     std.testing.refAllDecls(@import("compile_time_host.zig"));
     std.testing.refAllDecls(@import("const_store_writer.zig"));
     std.testing.refAllDecls(@import("inspected_run.zig"));
+    std.testing.refAllDecls(@import("rc_conformance.zig"));
     std.testing.refAllDecls(@import("stack.zig"));
     std.testing.refAllDecls(@import("test_helpers.zig"));
     std.testing.refAllDecls(@import("test/host_trampoline_assembly_test.zig"));

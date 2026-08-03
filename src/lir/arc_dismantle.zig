@@ -520,6 +520,7 @@ pub fn compute(
             },
             .assign_call_erased => |stmt| {
                 analysis.useWhole(stmt.closure);
+                if (stmt.reuse_source) |reuse_source| analysis.useWhole(reuse_source);
                 const args = store.getLocalSpan(stmt.args);
                 for (0..GuardedList.borrowLen(args)) |i| analysis.useWhole(GuardedList.at(args, i));
                 try analysis.noteDef(stmt.target, current);

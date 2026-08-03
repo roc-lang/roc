@@ -1987,26 +1987,26 @@ main! = |_| { # Yeah Ie
 				(ty-args
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "b")))))
-		(alias (type "MapML(a, b)")
+		(alias (type "Error")
 			(ty-header (name "MapML")
 				(ty-args
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "b")))))
-		(alias (type "Foo")
+		(alias (type "Error")
 			(ty-header (name "Foo")))
-		(alias (type "Some(a)")
+		(alias (type "Error")
 			(ty-header (name "Some")
 				(ty-args
 					(ty-rigid-var (name "a")))))
-		(alias (type "Ml(a)")
+		(alias (type "Error")
 			(ty-header (name "Ml")
 				(ty-args
 					(ty-rigid-var (name "a")))))
-		(alias (type "Soine(a)")
+		(alias (type "Error")
 			(ty-header (name "Soine")
 				(ty-args
 					(ty-rigid-var (name "a")))))
-		(alias (type "Func(a)")
+		(alias (type "Error")
 			(ty-header (name "Func")
 				(ty-args
 					(ty-rigid-var (name "a"))))))

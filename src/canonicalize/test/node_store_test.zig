@@ -1522,9 +1522,11 @@ test "where clause span records canonical rigid ownership by annotation scope" {
     const method_name: base.Ident.Idx = @bitCast(@as(u32, 2));
     const outer = try store.addTypeAnno(.{ .rigid_var = .{ .name = name } }, base.Region.zero());
     const item = try store.addTypeAnno(.{ .rigid_var = .{ .name = name } }, base.Region.zero());
+    const detached = try store.addTypeAnno(.{ .rigid_var = .{ .name = name } }, base.Region.zero());
     const enclosing = try store.addTypeAnno(.{ .rigid_var = .{ .name = name } }, base.Region.zero());
     const outer_ref = try store.addTypeAnno(.{ .rigid_var_lookup = .{ .ref = outer } }, base.Region.zero());
     const item_ref = try store.addTypeAnno(.{ .rigid_var_lookup = .{ .ref = item } }, base.Region.zero());
+    const detached_ref = try store.addTypeAnno(.{ .rigid_var_lookup = .{ .ref = detached } }, base.Region.zero());
     const enclosing_ref = try store.addTypeAnno(.{ .rigid_var_lookup = .{ .ref = enclosing } }, base.Region.zero());
     const no_args = CIR.TypeAnno.Span{ .span = base.DataSpan.empty() };
 
@@ -1544,6 +1546,14 @@ test "where clause span records canonical rigid ownership by annotation scope" {
         .effectful = false,
     } }, base.Region.zero());
     try store.addScratchWhereClause(item_method);
+    const detached_method = try store.addWhereClause(.{ .w_method = .{
+        .var_ = detached,
+        .method_name = method_name,
+        .args = no_args,
+        .ret = detached_ref,
+        .effectful = false,
+    } }, base.Region.zero());
+    try store.addScratchWhereClause(detached_method);
     const enclosing_method = try store.addWhereClause(.{ .w_method = .{
         .var_ = enclosing_ref,
         .method_name = method_name,
@@ -1555,19 +1565,23 @@ test "where clause span records canonical rigid ownership by annotation scope" {
 
     const where = try store.whereClauseSpanFrom(0, &.{outer});
     const owners = store.sliceWhereClauseOwners(where);
-    try testing.expectEqual(@as(usize, 3), owners.len);
+    try testing.expectEqual(@as(usize, 4), owners.len);
 
     try testing.expectEqual(@intFromEnum(outer), owners[0].rigid_var);
-    try testing.expect(owners[0].introduced_in_scope);
+    try testing.expect(owners[0].owned_by_annotation);
     try testing.expectEqualSlices(CIR.WhereClause.Idx, &.{outer_method}, store.sliceWhereClausesForOwner(owners[0]));
 
     try testing.expectEqual(@intFromEnum(item), owners[1].rigid_var);
-    try testing.expect(owners[1].introduced_in_scope);
+    try testing.expect(owners[1].owned_by_annotation);
     try testing.expectEqualSlices(CIR.WhereClause.Idx, &.{item_method}, store.sliceWhereClausesForOwner(owners[1]));
 
-    try testing.expectEqual(@intFromEnum(enclosing), owners[2].rigid_var);
-    try testing.expect(!owners[2].introduced_in_scope);
-    try testing.expectEqualSlices(CIR.WhereClause.Idx, &.{enclosing_method}, store.sliceWhereClausesForOwner(owners[2]));
+    try testing.expectEqual(@intFromEnum(detached), owners[2].rigid_var);
+    try testing.expect(!owners[2].owned_by_annotation);
+    try testing.expectEqualSlices(CIR.WhereClause.Idx, &.{detached_method}, store.sliceWhereClausesForOwner(owners[2]));
+
+    try testing.expectEqual(@intFromEnum(enclosing), owners[3].rigid_var);
+    try testing.expect(!owners[3].owned_by_annotation);
+    try testing.expectEqualSlices(CIR.WhereClause.Idx, &.{enclosing_method}, store.sliceWhereClausesForOwner(owners[3]));
 
     var cloned = try store.clone(gpa);
     defer cloned.deinit();

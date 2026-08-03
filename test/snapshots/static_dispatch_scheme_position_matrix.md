@@ -39,9 +39,42 @@ parse_show = |s| {
 roundtrip = parse_show("hi")
 ~~~
 # EXPECTED
+UNBOUND WHERE RECEIVER - static_dispatch_scheme_position_matrix.md:24:32:24:50
+UNBOUND WHERE RECEIVER - static_dispatch_scheme_position_matrix.md:24:52:24:69
 POLYMORPHIC VALUE - static_dispatch_scheme_position_matrix.md:22:1:22:13
 MISSING METHOD - static_dispatch_scheme_position_matrix.md:19:5:19:14
+MISSING METHOD - static_dispatch_scheme_position_matrix.md:28:9:28:19
 # PROBLEMS
+
+┌────────────────────────┐
+│ UNBOUND WHERE RECEIVER ├─ The type variable `a` is not introduced by this ──┐
+└┬───────────────────────┘  annotation's type or a connected method           │
+ │                          constraint, so this where clause cannot add the   │
+ │                          `parse` method to it.                             │
+ │                                                                            │
+ │  parse_show : Str -> Str where [a.parse : Str -> a, a.show : a -> Str]     │
+ │                                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                         │
+ └─────────────────────────── static_dispatch_scheme_position_matrix.md:24:32 ┘
+
+    A where clause receiver must be introduced by the annotation's type, or by
+    the method type of a receiver that is already connected to the annotation.
+    Connect `a` to the annotation, or remove this constraint.
+
+
+┌────────────────────────┐
+│ UNBOUND WHERE RECEIVER ├─ The type variable `a` is not introduced by this ──┐
+└┬───────────────────────┘  annotation's type or a connected method           │
+ │                          constraint, so this where clause cannot add the   │
+ │                          `show` method to it.                              │
+ │                                                                            │
+ │  parse_show : Str -> Str where [a.parse : Str -> a, a.show : a -> Str]     │
+ │                                                     ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾      │
+ └─────────────────────────── static_dispatch_scheme_position_matrix.md:24:52 ┘
+
+    A where clause receiver must be introduced by the annotation's type, or by
+    the method type of a receiver that is already connected to the annotation.
+    Connect `a` to the annotation, or remove this constraint.
+
 
 ┌───────────────────┐
 │ POLYMORPHIC VALUE ├─ This top-level value still has an unresolved ──────────┐
@@ -64,6 +97,21 @@ MISSING METHOD - static_dispatch_scheme_position_matrix.md:19:5:19:14
  │  A.gen({})                                                                 │
  │  ‾‾‾‾‾‾‾‾‾                                                                 │
  └──────────────────────────── static_dispatch_scheme_position_matrix.md:19:5 ┘
+
+    Hint: You can replace this static dispatch call with an ordinary function
+    call, or force the type variable to become more concrete—for example, by
+    adding a type annotation that narrows its type to something that actually
+    has methods.
+
+
+┌────────────────┐
+│ MISSING METHOD ├─ This is trying to dispatch a method named `show` on an ───┐
+└┬───────────────┘  unresolved type variable, but unresolved type variables   │
+ │                  have no methods.                                          │
+ │                                                                            │
+ │  v = A.parse(s)                                                            │
+ │      ‾‾‾‾‾‾‾‾‾‾                                                            │
+ └──────────────────────────── static_dispatch_scheme_position_matrix.md:28:9 ┘
 
     Hint: You can replace this static dispatch call with an ordinary function
     call, or force the type variable to become more concrete—for example, by
@@ -278,7 +326,7 @@ roundtrip = parse_show("hi")
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "to_i128") (constraint-fn-var 335)
+			(e-dispatch-call (method "to_i128") (constraint-fn-var 330)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -294,7 +342,7 @@ roundtrip = parse_show("hi")
 					(ty-lookup (name "I128") (builtin))))))
 	(d-let
 		(p-assign (ident "ok_arg"))
-		(e-call (constraint-fn-var 347)
+		(e-call (constraint-fn-var 342)
 			(e-lookup-local
 				(p-assign (ident "via_arg")))
 			(e-typed-int (value "5") (type "U8"))))
@@ -318,7 +366,7 @@ roundtrip = parse_show("hi")
 												(p-assign (ident "x")))
 											(rest-at (index 1)))))
 								(value
-									(e-dispatch-call (method "to_i128") (constraint-fn-var 363)
+									(e-dispatch-call (method "to_i128") (constraint-fn-var 358)
 										(receiver
 											(e-lookup-local
 												(p-assign (ident "x"))))
@@ -342,7 +390,7 @@ roundtrip = parse_show("hi")
 					(ty-lookup (name "I128") (builtin))))))
 	(d-let
 		(p-assign (ident "ok_data"))
-		(e-call (constraint-fn-var 384)
+		(e-call (constraint-fn-var 379)
 			(e-lookup-local
 				(p-assign (ident "via_data")))
 			(e-list
@@ -368,7 +416,7 @@ roundtrip = parse_show("hi")
 					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
 	(d-let
 		(p-assign (ident "unpinned_ret"))
-		(e-call (constraint-fn-var 404)
+		(e-call (constraint-fn-var 399)
 			(e-lookup-local
 				(p-assign (ident "gen")))
 			(e-empty_record)))
@@ -382,11 +430,8 @@ roundtrip = parse_show("hi")
 					(ty-rigid-var (name "a")))
 				(s-let
 					(p-assign (ident "v"))
-					(e-type-dispatch-call (method "parse") (type-dispatch-stmt 88) (constraint-fn-var 421)
-						(args
-							(e-lookup-local
-								(p-assign (ident "s"))))))
-				(e-dispatch-call (method "show") (constraint-fn-var 423)
+					(e-runtime-error (tag "erroneous_value_expr")))
+				(e-dispatch-call (method "show") (constraint-fn-var 409)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "v"))))
@@ -406,11 +451,7 @@ roundtrip = parse_show("hi")
 					(ty-lookup (name "Str") (builtin))))))
 	(d-let
 		(p-assign (ident "roundtrip"))
-		(e-call (constraint-fn-var 433)
-			(e-lookup-local
-				(p-assign (ident "parse_show")))
-			(e-string
-				(e-literal (string "hi"))))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure
@@ -422,8 +463,8 @@ roundtrip = parse_show("hi")
 		(patt (type "I128"))
 		(patt (type "{} -> a where [a.gen : {} -> a]"))
 		(patt (type "a where [a.gen : {} -> a]"))
-		(patt (type "Str -> Str"))
-		(patt (type "Str")))
+		(patt (type "Error"))
+		(patt (type "Error")))
 	(expressions
 		(expr (type "a -> I128 where [a.to_i128 : a -> I128]"))
 		(expr (type "I128"))
@@ -431,6 +472,6 @@ roundtrip = parse_show("hi")
 		(expr (type "I128"))
 		(expr (type "{} -> a where [a.gen : {} -> a]"))
 		(expr (type "a where [a.gen : {} -> a]"))
-		(expr (type "Str -> Str"))
-		(expr (type "Str"))))
+		(expr (type "Error"))
+		(expr (type "Error"))))
 ~~~

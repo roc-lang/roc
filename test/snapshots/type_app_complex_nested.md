@@ -307,7 +307,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 		(patt (type "Error -> _ret"))
 		(patt (type "_arg -> List(_c)")))
 	(type_decls
-		(alias (type "ComplexType(a, b)")
+		(alias (type "Error")
 			(ty-header (name "ComplexType")
 				(ty-args
 					(ty-rigid-var (name "a"))

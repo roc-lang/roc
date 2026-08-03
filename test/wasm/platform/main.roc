@@ -1,9 +1,10 @@
 platform ""
     requires {} { main! : () => Str }
-    exposes [Stdout]
+    exposes [Stdout, FallibleHost]
     packages {}
     provides { "roc_main": main_for_host! }
     hosted {
+        "roc_fallible_str_ok": FallibleHost.str_ok!,
         "roc_stdout_line": Stdout.line!,
         "roc_stdout_unused_niche_feature": Stdout.unused_niche_feature!,
     }
@@ -13,6 +14,7 @@ platform ""
     }
 
 import Stdout
+import FallibleHost
 
 main_for_host! : () => Str
 main_for_host! = main!

@@ -171,11 +171,11 @@ h = {
 	(defs
 		(patt (type "Error")))
 	(type_decls
-		(alias (type "A")
+		(alias (type "Error")
 			(ty-header (name "A")))
-		(alias (type "B")
+		(alias (type "Error")
 			(ty-header (name "B")))
-		(alias (type "C")
+		(alias (type "Error")
 			(ty-header (name "C"))))
 	(expressions
 		(expr (type "Error"))))

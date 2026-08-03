@@ -224,7 +224,7 @@ pub const WhereClauseOwnerData = extern struct {
     rigid_var: u32,
     clauses_start: u32,
     clauses_len: u32,
-    introduced_in_scope: bool,
+    owned_by_annotation: bool,
     _padding: [3]u8 = .{ 0, 0, 0 },
 };
 
@@ -4081,28 +4081,6 @@ pub fn recordFieldSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Re
 pub fn whereClauseSpanFrom(store: *NodeStore, start: u32, root_annos: []const CIR.TypeAnno.Idx) Allocator.Error!CIR.WhereClause.Span {
     const clauses = try store.spanFrom("where_clauses", CIR.WhereClause.IdxSpan, start);
 
-    var introduced = std.AutoHashMapUnmanaged(CIR.TypeAnno.Idx, void){};
-    defer introduced.deinit(store.gpa);
-    for (root_annos) |root_anno| {
-        try store.collectIntroducedRigidVars(root_anno, &introduced);
-    }
-    for (store.sliceWhereClauseIndices(clauses)) |where_idx| {
-        switch (store.getWhereClause(where_idx)) {
-            .w_method => |method| {
-                try store.collectIntroducedRigidVars(method.var_, &introduced);
-                for (store.sliceTypeAnnos(method.args)) |arg| {
-                    try store.collectIntroducedRigidVars(arg, &introduced);
-                }
-                try store.collectIntroducedRigidVars(method.ret, &introduced);
-            },
-            .w_alias => |alias| {
-                try store.collectIntroducedRigidVars(alias.var_, &introduced);
-                try store.collectIntroducedRigidVars(alias.alias, &introduced);
-            },
-            .w_malformed => {},
-        }
-    }
-
     const ClauseList = std.ArrayListUnmanaged(CIR.WhereClause.Idx);
     var grouped = std.AutoArrayHashMapUnmanaged(CIR.TypeAnno.Idx, ClauseList){};
     defer {
@@ -4126,6 +4104,77 @@ pub fn whereClauseSpanFrom(store: *NodeStore, start: u32, root_annos: []const CI
         try gop.value_ptr.append(store.gpa, where_idx);
     }
 
+    var locally_declared = std.AutoHashMapUnmanaged(CIR.TypeAnno.Idx, void){};
+    defer locally_declared.deinit(store.gpa);
+    for (root_annos) |root_anno| {
+        try store.collectIntroducedRigidVars(root_anno, &locally_declared);
+    }
+    for (store.sliceWhereClauseIndices(clauses)) |where_idx| {
+        switch (store.getWhereClause(where_idx)) {
+            .w_method => |method| {
+                try store.collectIntroducedRigidVars(method.var_, &locally_declared);
+                for (store.sliceTypeAnnos(method.args)) |arg| {
+                    try store.collectIntroducedRigidVars(arg, &locally_declared);
+                }
+                try store.collectIntroducedRigidVars(method.ret, &locally_declared);
+            },
+            .w_alias => |alias| {
+                try store.collectIntroducedRigidVars(alias.var_, &locally_declared);
+                try store.collectIntroducedRigidVars(alias.alias, &locally_declared);
+            },
+            .w_malformed => {},
+        }
+    }
+
+    // A constraint-only rigid is owned by this annotation only when a chain of
+    // method signatures connects it to a rigid in the ordinary annotation.
+    var reachable = std.AutoHashMapUnmanaged(CIR.TypeAnno.Idx, void){};
+    defer reachable.deinit(store.gpa);
+    for (root_annos) |root_anno| {
+        try store.collectIntroducedRigidVars(root_anno, &reachable);
+    }
+
+    var owner_queue = std.ArrayListUnmanaged(CIR.TypeAnno.Idx).empty;
+    defer owner_queue.deinit(store.gpa);
+    for (grouped.keys()) |owner| {
+        if (reachable.contains(owner)) {
+            try owner_queue.append(store.gpa, owner);
+        }
+    }
+
+    var dependencies = std.AutoHashMapUnmanaged(CIR.TypeAnno.Idx, void){};
+    defer dependencies.deinit(store.gpa);
+    var queue_index: usize = 0;
+    while (queue_index < owner_queue.items.len) : (queue_index += 1) {
+        const owner = owner_queue.items[queue_index];
+        dependencies.clearRetainingCapacity();
+
+        for (grouped.get(owner).?.items) |where_idx| {
+            switch (store.getWhereClause(where_idx)) {
+                .w_method => |method| {
+                    for (store.sliceTypeAnnos(method.args)) |arg| {
+                        try store.collectReferencedRigidVars(arg, &dependencies);
+                    }
+                    try store.collectReferencedRigidVars(method.ret, &dependencies);
+                },
+                // A where alias reaches the type variables its arguments name.
+                .w_alias => |alias| try store.collectReferencedRigidVars(alias.alias, &dependencies),
+                .w_malformed => {},
+            }
+        }
+
+        var dependency_it = dependencies.keyIterator();
+        while (dependency_it.next()) |dependency_ptr| {
+            const dependency = dependency_ptr.*;
+            if (!locally_declared.contains(dependency) or reachable.contains(dependency)) continue;
+
+            try reachable.put(store.gpa, dependency, {});
+            if (grouped.contains(dependency)) {
+                try owner_queue.append(store.gpa, dependency);
+            }
+        }
+    }
+
     const owners_start: u32 = @intCast(store.where_clause_owners.len());
     for (grouped.keys(), grouped.values()) |owner, owned_clauses| {
         const clauses_start: u32 = @intCast(store.index_data.len());
@@ -4136,7 +4185,7 @@ pub fn whereClauseSpanFrom(store: *NodeStore, start: u32, root_annos: []const CI
             .rigid_var = @intFromEnum(owner),
             .clauses_start = clauses_start,
             .clauses_len = @intCast(owned_clauses.items.len),
-            .introduced_in_scope = introduced.contains(owner),
+            .owned_by_annotation = reachable.contains(owner),
         });
     }
 
@@ -4185,6 +4234,46 @@ fn collectIntroducedRigidVars(
             try store.collectIntroducedRigidVars(func.ret, introduced);
         },
         .parens => |parens| try store.collectIntroducedRigidVars(parens.anno, introduced),
+    }
+}
+
+fn collectReferencedRigidVars(
+    store: *const NodeStore,
+    anno_idx: CIR.TypeAnno.Idx,
+    referenced: *std.AutoHashMapUnmanaged(CIR.TypeAnno.Idx, void),
+) Allocator.Error!void {
+    switch (store.getTypeAnno(anno_idx)) {
+        .rigid_var => try referenced.put(store.gpa, anno_idx, {}),
+        .rigid_var_lookup => |lookup| try referenced.put(store.gpa, lookup.ref, {}),
+        .underscore, .lookup, .malformed => {},
+        .apply => |apply| for (store.sliceTypeAnnos(apply.args)) |arg| {
+            try store.collectReferencedRigidVars(arg, referenced);
+        },
+        .tag_union => |tag_union| {
+            for (store.sliceTypeAnnos(tag_union.tags)) |tag| {
+                try store.collectReferencedRigidVars(tag, referenced);
+            }
+            if (tag_union.ext) |ext| try store.collectReferencedRigidVars(ext, referenced);
+        },
+        .tag => |tag| for (store.sliceTypeAnnos(tag.args)) |arg| {
+            try store.collectReferencedRigidVars(arg, referenced);
+        },
+        .tuple => |tuple| for (store.sliceTypeAnnos(tuple.elems)) |elem| {
+            try store.collectReferencedRigidVars(elem, referenced);
+        },
+        .record => |record| {
+            for (store.sliceAnnoRecordFields(record.fields)) |field_idx| {
+                try store.collectReferencedRigidVars(store.getAnnoRecordField(field_idx).ty, referenced);
+            }
+            if (record.ext) |ext| try store.collectReferencedRigidVars(ext, referenced);
+        },
+        .@"fn" => |func| {
+            for (store.sliceTypeAnnos(func.args)) |arg| {
+                try store.collectReferencedRigidVars(arg, referenced);
+            }
+            try store.collectReferencedRigidVars(func.ret, referenced);
+        },
+        .parens => |parens| try store.collectReferencedRigidVars(parens.anno, referenced),
     }
 }
 

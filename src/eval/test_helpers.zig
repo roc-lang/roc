@@ -59,7 +59,7 @@ pub const TestHelperError = Allocator.Error || std.Thread.SpawnError || std.DynL
     UnsupportedTarget,
     UnsupportedPlatform,
     UnwindRegistrationFailed,
-    SysctlFailed,
+    PageSizeQueryFailed,
     CreateFileMappingFailed,
     OpenFileMappingFailed,
     MapViewOfFileFailed,
@@ -1005,6 +1005,10 @@ fn compileInspectedProgramForTargetImpl(
         roc_ctx,
     );
     errdefer cleanupParseAndCanonical(allocator, resources);
+
+    if (try parsedResourcesHaveErrorDiagnostics(allocator, &resources)) {
+        return error.TypeCheckError;
+    }
 
     const lowered = try lowerParsedProgramToLir(allocator, io, &resources, target_usize);
     errdefer {
@@ -2326,7 +2330,7 @@ pub fn devEvalBoolRoots(
         );
         defer static_strings.deinit();
 
-        var codegen = try HostLirCodeGen.init(allocator, store, layouts, static_strings.entries, .preserve);
+        var codegen = try HostLirCodeGen.init(allocator, store, layouts, static_strings.entries, .preserve, .default);
         defer codegen.deinit();
         try codegen.compileAllProcSpecs(store.getProcSpecs());
 

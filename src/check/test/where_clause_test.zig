@@ -186,7 +186,25 @@ test "where clause - cannot constrain rigid introduced by enclosing annotation" 
     var test_env = try TestEnv.init("EnclosingWhereReceiver", source);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("Constraint in Wrong Annotation");
+    try test_env.assertOneTypeError("Unbound Where Receiver");
+    try std.testing.expectEqual(
+        .where_clause_receiver_not_introduced,
+        std.meta.activeTag(test_env.checker.problems.problems.items[0]),
+    );
+}
+
+test "where clause - detached receiver cannot introduce itself" {
+    const source =
+        \\foo : {} -> {} where [a.decode : {} -> {}]
+        \\foo = |_| {
+        \\    A : a
+        \\    A.decode({})
+        \\}
+    ;
+    var test_env = try TestEnv.init("DetachedWhereReceiver", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Unbound Where Receiver");
     try std.testing.expectEqual(
         .where_clause_receiver_not_introduced,
         std.meta.activeTag(test_env.checker.problems.problems.items[0]),

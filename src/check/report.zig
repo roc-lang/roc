@@ -2127,17 +2127,17 @@ pub const ReportBuilder = struct {
         return report;
     }
 
-    /// Build a report for a where constraint on a rigid introduced by a different annotation.
+    /// Build a report for a where constraint whose receiver is not owned by this annotation.
     fn buildWhereClauseReceiverNotIntroducedReport(
         self: *Self,
         data: WhereClauseReceiverNotIntroduced,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Constraint in Wrong Annotation", "", .runtime_error);
+        var report = try Report.init(self.gpa, "Unbound Where Receiver", "", .runtime_error);
         errdefer report.deinit();
         try D.renderSliceInto(&.{
             D.bytes("The type variable"),
             D.ident(data.type_var_name).withAnnotation(.inline_code),
-            D.bytes("was introduced by a different annotation, so this where clause cannot add the"),
+            D.bytes("is not introduced by this annotation's type or a connected method constraint, so this where clause cannot add the"),
             D.ident(data.method_name).withAnnotation(.symbol),
             D.bytes("method to it."),
         }, self, &report, &report.headline);
@@ -2153,10 +2153,9 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
-            D.bytes("A where clause can only add methods to type variables introduced by the same annotation. Add this method to the annotation that introduced"),
+            D.bytes("A where clause receiver must be introduced by the annotation's type, or by the method type of a receiver that is already connected to the annotation. Connect"),
             D.ident(data.type_var_name).withAnnotation(.inline_code),
-            D.bytes(",").withNoPrecedingSpace(),
-            D.bytes("or use a new type variable here."),
+            D.bytes("to the annotation, or remove this constraint."),
         }, self, &report);
 
         return report;

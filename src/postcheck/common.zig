@@ -123,6 +123,19 @@ pub fn invariantFmt(comptime fmt: []const u8, args: anytype) noreturn {
     unreachable;
 }
 
+/// Stop the build with a compiler-bug message in every build mode.
+///
+/// `invariant` compiles to `unreachable` outside debug builds, which is the
+/// right cost for a consistency check whose violation cannot change the code
+/// a release build emits. A violated host ABI contract is the other kind: the
+/// extern would be emitted at a layout the host was never compiled against and
+/// the host's return value would be misread at runtime, with no diagnostic and
+/// no crash. That check has to hold in release builds too, so this one reports
+/// and aborts instead of becoming undefined behavior.
+pub fn compilerBug(message: []const u8) noreturn {
+    std.debug.panic("compiler bug: {s}", .{message});
+}
+
 /// Monotonic symbol id generator for post-check stages.
 pub const SymbolGen = struct {
     next: u32 = 0,

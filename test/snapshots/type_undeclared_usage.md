@@ -138,9 +138,9 @@ AnotherType : SomeMod.MissingType
 	(defs
 		(patt (type "Error -> Str")))
 	(type_decls
-		(alias (type "MyType")
+		(alias (type "Error")
 			(ty-header (name "MyType")))
-		(alias (type "AnotherType")
+		(alias (type "Error")
 			(ty-header (name "AnotherType"))))
 	(expressions
 		(expr (type "Error -> Str"))))
