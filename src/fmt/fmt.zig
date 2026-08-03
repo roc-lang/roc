@@ -669,13 +669,14 @@ const Formatter = struct {
                 }
                 try fmt.formatTypeAnnoDiscard(d.anno);
                 if (d.where) |w| {
-                    if (multiline) {
+                    const where_multiline = multiline or fmt.collectionWillBeMultiline(AST.WhereClause.Idx, w);
+                    if (where_multiline) {
                         try fmt.flushCommentsBeforeDiscard(anno_region.end);
                         try fmt.ensureNewline();
                         fmt.curr_indent += 1;
                         try fmt.pushIndent();
                     }
-                    try fmt.formatWhereConstraint(w, multiline);
+                    try fmt.formatWhereConstraint(w, where_multiline);
                 }
                 if (d.associated) |assoc| {
                     try fmt.pushAll(".");
@@ -720,13 +721,14 @@ const Formatter = struct {
                 }
                 try fmt.formatTypeAnnoDiscard(t.anno);
                 if (t.where) |w| {
-                    if (multiline) {
+                    const where_multiline = multiline or fmt.collectionWillBeMultiline(AST.WhereClause.Idx, w);
+                    if (where_multiline) {
                         try fmt.flushCommentsBeforeDiscard(anno_region.end);
                         try fmt.ensureNewline();
                         fmt.curr_indent += 1;
                         try fmt.pushIndent();
                     }
-                    try fmt.formatWhereConstraint(w, multiline);
+                    try fmt.formatWhereConstraint(w, where_multiline);
                 }
             },
             .expect => |e| {
@@ -4042,6 +4044,12 @@ test "function type expands when its return type is multiline" {
         "(() -> d) -> (\n" ++
         "\tc,\n" ++
         ")\n", result);
+}
+
+test "issue 10335: where clause formatting is idempotent" {
+    // Repro for https://github.com/roc-lang/roc/issues/10335
+    const result = try moduleFmtsStable(std.testing.allocator, "g:e->e where[e.B,]h=||{{([])}}", false);
+    defer std.testing.allocator.free(result);
 }
 
 test "issue 10140: nested record function type formatting is idempotent" {
