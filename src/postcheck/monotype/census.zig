@@ -1438,6 +1438,9 @@ pub fn dumpText(allocator: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
 /// write, so the id and the counters it labels cannot be separated.
 pub fn appendDumpToEnvPath(allocator: std.mem.Allocator) void {
     if (comptime !enabled) return;
+    // The dump channel appends through libc with O_APPEND; that interface is
+    // not present here, and the census is a local measurement tool.
+    if (comptime @import("builtin").os.tag == .windows) return;
     const raw_path = std.c.getenv("ROC_REUNIFY_CENSUS") orelse return;
     const path = raw_path[0..std.mem.len(raw_path)];
     if (path.len == 0) return;
@@ -1454,6 +1457,7 @@ pub fn appendDumpToEnvPath(allocator: std.mem.Allocator) void {
 /// clobbering each other's offsets.
 pub fn appendToFile(path: [*:0]const u8, bytes: []const u8) void {
     if (comptime !enabled) return;
+    if (comptime @import("builtin").os.tag == .windows) return;
     const fd = std.c.open(path, .{ .ACCMODE = .WRONLY, .CREAT = true, .APPEND = true }, @as(std.c.mode_t, 0o644));
     if (fd < 0) return;
     defer _ = std.c.close(fd);
