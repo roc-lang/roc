@@ -61,6 +61,7 @@ pub const CaptureSlot = struct {
     storage: CaptureSlotStorage,
 };
 
+/// Physical storage used by a callable capture slot while storing its value.
 pub const CaptureSlotStorage = enum(u8) {
     value,
     recursive_box,
