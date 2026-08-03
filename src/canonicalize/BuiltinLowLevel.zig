@@ -1502,11 +1502,8 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("dec_to_i64_try_unsafe")) |ident| {
         try low_level_map.put(ident, .dec_to_i64_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.Dec.to_i128_wrap")) |ident| {
+    if (env.common.findIdent("Builtin.Num.Dec.to_i128")) |ident| {
         try low_level_map.put(ident, .dec_to_i128_trunc);
-    }
-    if (env.common.findIdent("dec_to_i128_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .dec_to_i128_try_unsafe);
     }
     if (env.common.findIdent("Builtin.Num.Dec.to_u8_wrap")) |ident| {
         try low_level_map.put(ident, .dec_to_u8_trunc);
