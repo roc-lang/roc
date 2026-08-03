@@ -726,6 +726,26 @@ pub const Store = struct {
         try self.setDesc(resolved.desc_idx, desc);
     }
 
+    /// Record that checking rejected a static-dispatch obligation whose
+    /// constraint function type is `target_var`'s equivalence class. This is
+    /// evidence metadata: the class's content is left exactly as the unifier
+    /// left it.
+    pub fn markVarStaticDispatchRejected(self: *Self, target_var: Var) Allocator.Error!void {
+        std.debug.assert(@intFromEnum(target_var) < self.len());
+        const resolved = self.resolveVar(target_var);
+        if (resolved.desc.static_dispatch_rejected) return;
+        var desc = resolved.desc;
+        desc.static_dispatch_rejected = true;
+        try self.setDesc(resolved.desc_idx, desc);
+    }
+
+    /// Whether checking rejected a static-dispatch obligation on `target_var`'s
+    /// equivalence class.
+    pub fn varStaticDispatchRejected(self: *const Self, target_var: Var) bool {
+        std.debug.assert(@intFromEnum(target_var) < self.len());
+        return self.resolveVar(target_var).desc.static_dispatch_rejected;
+    }
+
     /// The declared rule a `dangerousSetVarRedirect` call site bends the solved
     /// graph under. A redirect outside ordinary unification is indistinguishable
     /// at review time from a change to the language's typing rules, so every call
@@ -1461,6 +1481,11 @@ pub const Store = struct {
         } else {
             merged_desc.empty_tag_union_is_default = false;
         }
+        // A rejected dispatch edge is a fact about the constraint callable's
+        // equivalence class, so merging two classes rejects the result if
+        // either side was rejected.
+        merged_desc.static_dispatch_rejected = a_data.desc.static_dispatch_rejected or
+            b_data.desc.static_dispatch_rejected;
 
         if (a_data.storage_var == b_data.storage_var) {
             try self.setDesc(a_data.desc_idx, merged_desc);
@@ -1488,7 +1513,13 @@ pub const Store = struct {
     pub fn poisonOnMismatch(self: *Self, a_var: Var, b_var: Var) Allocator.Error!void {
         var a = self.resolveStorageRoot(a_var);
         const b = self.resolveStorageRoot(b_var);
-        const err_desc = Desc{ .content = .err, .rank = Rank.generalized };
+        // Poisoning replaces the content, not the rejection history: a class
+        // whose dispatch check was already rejected stays rejected.
+        const err_desc = Desc{
+            .content = .err,
+            .rank = Rank.generalized,
+            .static_dispatch_rejected = a.desc.static_dispatch_rejected or b.desc.static_dispatch_rejected,
+        };
 
         if (a.storage_var == b.storage_var) {
             try self.setDesc(a.desc_idx, err_desc);

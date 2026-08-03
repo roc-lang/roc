@@ -131,6 +131,12 @@ pub const Descriptor = struct {
     /// proving that no runtime constructor can inhabit it. The checked output
     /// preserves the variable identity and carries `[]` only as its row default.
     empty_tag_union_is_default: bool = false,
+    /// Checking rejected a static-dispatch obligation whose constraint function
+    /// type is this equivalence class. The marker rides the class rather than a
+    /// raw variable index, so every site whose constraint callable unified into
+    /// the same class reports the same rejection. See design.md's "Static
+    /// Dispatch In Monotype" section.
+    static_dispatch_rejected: bool = false,
 };
 
 /// In general, the rank tracks the number of let-bindings a variable is "under".

@@ -67,7 +67,8 @@ pub const Constants = struct {
     /// 42: Checked modules store explicitly rejected static-dispatch obligations.
     /// 43: Checked type stores persist representatives and structural union ranks.
     /// 45: Where-clause owners persist rooted annotation ownership semantics.
-    pub const CACHE_VERSION = 45;
+    /// 46: Type descriptors carry the static-dispatch rejection marker.
+    pub const CACHE_VERSION = 46;
 };
 
 /// Configuration for the Roc cache system.

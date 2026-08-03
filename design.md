@@ -4314,13 +4314,28 @@ its plan:
   specialization edge can ever supply and no default applies: the dispatch is
   statically unreachable and lowers to an explicit crash.
 
-Checking records `checked_error` by the raw static-dispatch constraint function
-variable that owns the rejected edge. Rejection is not encoded by changing the
-constraint callable, its return, the dispatcher, or any operand to an erroneous
-type: those solver variables can be shared with independently valid producers.
-`EvidencePass.buildIndexes` loads `ModuleEnv.rejected_static_dispatches`; each
-static-dispatch plan lookup checks this map before resolving its receiver and
-must not infer rejection by inspecting a callable result type.
+Checking records `checked_error` on the equivalence class of the static-dispatch
+constraint function variable that owns the rejected edge, as the descriptor
+metadata bit `Descriptor.static_dispatch_rejected`. Rejection is not encoded by
+changing the constraint callable, its return, the dispatcher, or any operand to
+an erroneous type: those solver variables can be shared with independently valid
+producers. The marker is metadata about the class, not content, so `Store.union_`
+carries it across a merge (a class is rejected if either side was) and
+`Store.poisonOnMismatch` preserves it when it replaces content with `err`.
+Instantiation and cross-module copies mint fresh, unrejected classes: a fresh
+edge is checked on its own terms.
+
+A raw variable index cannot carry this. Two dispatch sites record different raw
+variables for what unification later proves is one constraint callable, and a
+union-find root is not stable across later merges, so a raw-keyed set answers
+"rejected" for whichever occurrence happened to be recorded and misses every
+other member of the same class. `Check.markStaticDispatchFnRejected` sets the
+class bit and appends one durable `ModuleEnv.rejected_static_dispatches` record
+per newly rejected class; `Check.init` rehydrates those records onto their
+classes so re-checking an env already carrying them behaves like a fresh check.
+Every static-dispatch plan lookup — in the checker and in
+`EvidencePass.resolveObligation` — asks the class before resolving its receiver,
+and must not infer rejection by inspecting a callable result type.
 
 An independently reported checking error may make a plan's receiver itself
 erroneous even when checking accepted that plan's dispatch (for example, a
