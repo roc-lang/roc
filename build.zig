@@ -4365,6 +4365,20 @@ pub fn build(b: *std.Build) void {
         build_wasm_single_variant_hosted_app.step.dependOn(build_test_hosts_step);
         build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_single_variant_hosted_app.step);
 
+        // Host ABI gate on wasm32: a hosted Try unwrapped with `?` into a wider
+        // error row must still reach the host through its declared boundary,
+        // which the cart shows by returning the host's own "ok".
+        const build_wasm_hosted_try_widen_app = b.addRunArtifact(roc_exe);
+        build_wasm_hosted_try_widen_app.addArgs(&.{
+            "build",
+            "test/wasm/hosted_try_widen_static_lib_app.roc",
+            "--opt=dev",
+            "--target=wasm32",
+            "--output=test/wasm/hosted_try_widen_static_lib_app.wasm",
+        });
+        build_wasm_hosted_try_widen_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_hosted_try_widen_app.step);
+
         const build_wasm_str_concat_join_app = b.addRunArtifact(roc_exe);
         build_wasm_str_concat_join_app.addArgs(&.{
             "build",
@@ -4538,6 +4552,16 @@ pub fn build(b: *std.Build) void {
             });
             run_wasm_single_variant_hosted_test.step.dependOn(build_test_wasm_static_lib_runner_step);
             run_test_wasm_static_lib_step.dependOn(&run_wasm_single_variant_hosted_test.step);
+
+            const run_wasm_hosted_try_widen_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_hosted_try_widen_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/hosted_try_widen_static_lib_app.wasm",
+                "--expected",
+                "ok",
+            });
+            run_wasm_hosted_try_widen_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_hosted_try_widen_test.step);
 
             const run_wasm_str_concat_join_test = b.addRunArtifact(wasm_test_exe);
             run_wasm_str_concat_join_test.addArgs(&.{
@@ -4881,6 +4905,30 @@ pub fn build(b: *std.Build) void {
     guarded_list_violation_exe.root_module.addImport("layout", roc_modules.layout);
     guarded_list_violation_exe.root_module.addImport("lir", roc_modules.lir);
     guarded_list_violation_exe.root_module.addImport("postcheck", roc_modules.postcheck);
+
+    // The RcEffect structural validator promises that a row whose fields
+    // contradict each other is a compile error. This probe is a file that
+    // makes such a row; the build requires compiling it to fail, and to fail
+    // with the rule the row breaks.
+    const rc_effect_rejected_row_probe = b.addObject(.{
+        .name = "rc_effect_rejected_row_probe",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/base/rc_effect_rejected_row_probe.zig"),
+            .target = target,
+            .optimize = .Debug,
+        }),
+    });
+    rc_effect_rejected_row_probe.root_module.addImport("base", roc_modules.base);
+    rc_effect_rejected_row_probe.expect_errors = .{
+        .contains = "[rule: unique_result_without_source]",
+    };
+
+    const run_rc_effect_rejected_row_step = b.step(
+        "run-test-rc-effect-rejected-row",
+        "Check that a structurally invalid RcEffect row fails to compile",
+    );
+    run_rc_effect_rejected_row_step.dependOn(&rc_effect_rejected_row_probe.step);
+    run_test_zig_step.dependOn(run_rc_effect_rejected_row_step);
 
     const run_guarded_list_violations_step = b.step(
         "run-test-guarded-list-violations",
@@ -5289,6 +5337,43 @@ pub fn build(b: *std.Build) void {
         .step_suffix = "lir-inline",
         .description = "Run LIR inline Zig tests",
         .compile = lir_inline_test,
+    });
+
+    const rc_conformance_test = b.addTest(.{
+        .name = "rc_conformance_test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/eval/test/rc_conformance_tests.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+        .filters = test_filters,
+    });
+    roc_modules.addAll(rc_conformance_test);
+    rc_conformance_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    rc_conformance_test.step.dependOn(&write_compiled_builtins.step);
+    try addLlvmSupportToStep(
+        b,
+        rc_conformance_test,
+        target,
+        use_system_llvm,
+        user_llvm_path,
+        roc_modules,
+        llvm_codegen_module,
+        llvm_embedded_module,
+        zstd,
+    );
+    if (rc_conformance_test.root_module.resolved_target.?.result.os.tag != .windows or
+        rc_conformance_test.root_module.resolved_target.?.result.abi != .msvc)
+    {
+        rc_conformance_test.root_module.link_libcpp = true;
+    }
+    add_tracy(b, roc_modules.build_options, rc_conformance_test, target, true, flag_enable_tracy);
+
+    test_suites.register(.{
+        .step_suffix = "rc-conformance",
+        .description = "Run RcEffect conformance sweep Zig tests",
+        .compile = rc_conformance_test,
     });
 
     const trmc_lir_test = b.addTest(.{

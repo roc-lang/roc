@@ -144,11 +144,11 @@ D(a, b) : C(a, b)
 			(ty-header (name "A")
 				(ty-args
 					(ty-rigid-var (name "a")))))
-		(alias (type "C(b)")
+		(alias (type "Error")
 			(ty-header (name "C")
 				(ty-args
 					(ty-rigid-var (name "b")))))
-		(alias (type "D(a, b)")
+		(alias (type "Error")
 			(ty-header (name "D")
 				(ty-args
 					(ty-rigid-var (name "a"))

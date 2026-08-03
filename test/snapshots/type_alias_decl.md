@@ -405,7 +405,7 @@ main! = |_| {
 					(ty-rigid-var (name "data")))))
 		(alias (type "Color")
 			(ty-header (name "Color")))
-		(alias (type "Letters")
+		(alias (type "Error")
 			(ty-header (name "Letters")))
 		(alias (type "Container(item)")
 			(ty-header (name "Container")

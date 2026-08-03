@@ -107,7 +107,7 @@ NO CHANGE
 			(ty-header (name "Foo")))
 		(alias (type "Foo")
 			(ty-header (name "Foo")))
-		(alias (type "Bar")
+		(alias (type "Error")
 			(ty-header (name "Bar")))
 		(alias (type "Baz")
 			(ty-header (name "Baz"))))

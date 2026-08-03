@@ -811,7 +811,7 @@ combineTrys = |jsonTry, httpStatus|
 		(patt (type "Error -> Str"))
 		(patt (type "Try(Error, Error), Error -> Try(Error, Error)")))
 	(type_decls
-		(alias (type "ServerConfig")
+		(alias (type "Error")
 			(ty-header (name "ServerConfig"))))
 	(expressions
 		(expr (type "Str -> Try(Error, Error)"))

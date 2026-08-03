@@ -1843,6 +1843,72 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
     });
 }
 
+test "issue 10529 open Try chain with named local callback stays bounded" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\take0 = |b| {
+        \\    to_end = |_| End
+        \\    Ok({ val: b.get(0).map_err(to_end)?, rest: b.drop_first(1) })
+        \\}
+        \\take1 = |b| Ok({ val: take0(b)?.val, rest: take0(b)?.rest })
+        \\take2 = |b| Ok({ val: take1(b)?.val, rest: take1(b)?.rest })
+        \\take3 = |b| Ok({ val: take2(b)?.val, rest: take2(b)?.rest })
+        \\take4 = |b| Ok({ val: take3(b)?.val, rest: take3(b)?.rest })
+        \\take5 = |b| Ok({ val: take4(b)?.val, rest: take4(b)?.rest })
+        \\take6 = |b| Ok({ val: take5(b)?.val, rest: take5(b)?.rest })
+        \\
+        \\main : {} -> Try({ val : U8, rest : List(U8) }, [End, ..])
+        \\main = |_| take6([1, 2, 3])
+    ;
+
+    const counters = try monotypeCountersForModule(allocator, source);
+    try std.testing.expect(counters.template_misses <= 20);
+    try std.testing.expect(counters.nominal_backing_instantiations <= 300);
+}
+
+test "specialization interface replay follows returned local functions through wrappers" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\mk = |f| {
+        \\    show = || f({}).map_err(|_| ShowFailed)
+        \\    show
+        \\}
+        \\
+        \\wrap = |f| mk(f)
+        \\
+        \\main : {} -> Try({}, [ShowFailed])
+        \\main = |_| {
+        \\    f : {} -> Try({}, [Empty])
+        \\    f = |_| Ok({})
+        \\    wrap(f)()
+        \\}
+    ;
+
+    _ = try monotypeCountersForModule(allocator, source);
+}
+
+test "specialization interface replay keeps unequal generic requests through local dependencies distinct" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\id = |value| value
+        \\
+        \\make = |value| {
+        \\    get = || id(value)
+        \\    get
+        \\}
+        \\
+        \\pair = |left, right| {
+        \\    left: make(left)(),
+        \\    right: make(right)(),
+        \\}
+        \\
+        \\main : {} -> { left : U64, right : Str }
+        \\main = |_| pair(1, "one")
+    ;
+
+    _ = try monotypeCountersForModule(allocator, source);
+}
+
 test "issue 9802 growing-structural map2 specialization counters are bounded" {
     const allocator = std.testing.allocator;
     const source =
@@ -6002,6 +6068,162 @@ test "dispatch evidence boundary validator accepts a published artifact" {
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     try std.testing.expect(resources.checked_artifact.validateDispatchEvidence() == null);
+}
+
+test "dispatch evidence boundary validator rejects malformed specialization interface metadata" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\mk = |f| {
+        \\    show = || f({}).map_err(|_| ShowFailed)
+        \\    show
+        \\}
+        \\
+        \\wrap = |f| mk(f)
+        \\
+        \\main : {} -> Try({}, [ShowFailed])
+        \\main = |_| {
+        \\    f : {} -> Try({}, [Empty])
+        \\    f = |_| Ok({})
+        \\    wrap(f)()
+        \\}
+    ;
+    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    const artifact = &resources.checked_artifact;
+    const templates = &artifact.checked_procedure_templates;
+    try std.testing.expect(artifact.validateDispatchEvidence() == null);
+    try std.testing.expect(templates.dispatch_scopes.len > 0);
+    try std.testing.expect(templates.specialization_interface_relations.len > 0);
+
+    var template_index: ?usize = null;
+    for (templates.templates, 0..) |template, i| {
+        if (template.specialization_interface_relations.len > 0) {
+            template_index = i;
+            break;
+        }
+    }
+    const raw_template = template_index orelse return error.TestUnexpectedResult;
+    const saved_template_span = templates.templates[raw_template].specialization_interface_relations;
+    templates.templates[raw_template].specialization_interface_relations.start = @intCast(templates.specialization_interface_relations.len);
+    templates.templates[raw_template].specialization_interface_relations.len = 1;
+    var failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.template_specialization_relations_out_of_bounds, failure.kind);
+    templates.templates[raw_template].specialization_interface_relations = saved_template_span;
+
+    const saved_parent = templates.dispatch_scopes[0].parent;
+    templates.dispatch_scopes[0].parent = @enumFromInt(templates.dispatch_scopes.len);
+    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_scope_parent_invalid, failure.kind);
+    templates.dispatch_scopes[0].parent = saved_parent;
+
+    const saved_scheme_root = templates.dispatch_scopes[0].scheme_root;
+    templates.dispatch_scopes[0].scheme_root = @enumFromInt(artifact.checked_types.payloadCount());
+    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_scope_scheme_root_out_of_bounds, failure.kind);
+    templates.dispatch_scopes[0].scheme_root = saved_scheme_root;
+
+    const saved_scope = templates.specialization_interface_relations[0].scope;
+    templates.specialization_interface_relations[0].scope = .{ .generalized = @enumFromInt(templates.dispatch_scopes.len) };
+    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_scope_out_of_bounds, failure.kind);
+    templates.specialization_interface_relations[0].scope = saved_scope;
+
+    const saved_relation_data = templates.specialization_interface_relations[0].data;
+    templates.specialization_interface_relations[0].data = .{ .type_equality = .{
+        .left = @enumFromInt(artifact.checked_types.payloadCount()),
+        .right = templates.dispatch_scopes[0].scheme_root,
+    } };
+    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_type_out_of_bounds, failure.kind);
+    templates.specialization_interface_relations[0].data = saved_relation_data;
+
+    var call_index: ?usize = null;
+    var direct_call_index: ?usize = null;
+    var local_use_index: ?usize = null;
+    for (templates.specialization_interface_relations, 0..) |relation, i| switch (relation.data) {
+        .call => |call| {
+            if (call_index == null) call_index = i;
+            if (call.direct_target != null and direct_call_index == null) direct_call_index = i;
+        },
+        .local_proc_use => if (local_use_index == null) {
+            local_use_index = i;
+        },
+        .type_equality, .procedure => {},
+    };
+
+    const raw_call = call_index orelse return error.TestUnexpectedResult;
+    const saved_args = templates.specialization_interface_relations[raw_call].data.call.args;
+    templates.specialization_interface_relations[raw_call].data.call.args = .{
+        .start = @intCast(templates.specialization_interface_types.len),
+        .len = 1,
+    };
+    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_call_args_out_of_bounds, failure.kind);
+    templates.specialization_interface_relations[raw_call].data.call.args = saved_args;
+
+    const raw_direct_call = direct_call_index orelse return error.TestUnexpectedResult;
+    const saved_direct_target = templates.specialization_interface_relations[raw_direct_call].data.call.direct_target;
+    templates.specialization_interface_relations[raw_direct_call].data.call.direct_target = @enumFromInt(artifact.resolved_value_refs.records.len);
+    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_value_ref_out_of_bounds, failure.kind);
+    templates.specialization_interface_relations[raw_direct_call].data.call.direct_target = saved_direct_target;
+
+    var non_procedure_ref: ?check.CheckedArtifact.ResolvedValueRefId = null;
+    for (artifact.resolved_value_refs.records, 0..) |record, i| switch (record.ref) {
+        .local_proc,
+        .top_level_proc,
+        .imported_proc,
+        .hosted_proc,
+        .platform_required_proc,
+        .promoted_top_level_proc,
+        => {},
+        else => {
+            non_procedure_ref = @enumFromInt(i);
+            break;
+        },
+    };
+    const invalid_procedure_ref = non_procedure_ref orelse return error.TestUnexpectedResult;
+    templates.specialization_interface_relations[raw_direct_call].data.call.direct_target = invalid_procedure_ref;
+    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_direct_target_invalid, failure.kind);
+    templates.specialization_interface_relations[raw_direct_call].data.call.direct_target = saved_direct_target;
+
+    const raw_local_use = local_use_index orelse return error.TestUnexpectedResult;
+    const saved_local_ref = templates.specialization_interface_relations[raw_local_use].data.local_proc_use;
+    templates.specialization_interface_relations[raw_local_use].data.local_proc_use = invalid_procedure_ref;
+    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_local_proc_use_invalid, failure.kind);
+    templates.specialization_interface_relations[raw_local_use].data.local_proc_use = saved_local_ref;
+
+    const local_record = artifact.resolved_value_refs.records[@intFromEnum(saved_local_ref)].ref.local_proc;
+    const local_scope = local_record.dispatch_scope orelse return error.TestUnexpectedResult;
+    const raw_local_scope = @intFromEnum(local_scope);
+    const saved_scope_expr = templates.dispatch_scopes[raw_local_scope].checked_expr;
+    const next_expr = (@intFromEnum(saved_scope_expr) + 1) % artifact.checked_bodies.exprCount();
+    templates.dispatch_scopes[raw_local_scope].checked_expr = @enumFromInt(next_expr);
+    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_local_proc_use_invalid, failure.kind);
+    templates.dispatch_scopes[raw_local_scope].checked_expr = saved_scope_expr;
+
+    var path_param_span: ?@TypeOf(templates.templates[0].evidence_params) = null;
+    for (templates.templates) |template| {
+        const params = templates.evidenceParams(&template);
+        for (params) |param| {
+            if (param.path.len > 0) {
+                path_param_span = template.evidence_params;
+                break;
+            }
+        }
+        if (path_param_span != null) break;
+    }
+    const saved_scope_params = templates.dispatch_scopes[raw_local_scope].evidence_params;
+    templates.dispatch_scopes[raw_local_scope].evidence_params = path_param_span orelse return error.TestUnexpectedResult;
+    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.evidence_param_path_diverges_from_checked_type, failure.kind);
+    templates.dispatch_scopes[raw_local_scope].evidence_params = saved_scope_params;
+
+    try std.testing.expect(artifact.validateDispatchEvidence() == null);
 }
 
 test "dispatch evidence boundary validator rejects non-normalized and malformed paths" {

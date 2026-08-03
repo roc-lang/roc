@@ -1015,12 +1015,12 @@ pub const InstGraph = struct {
                 if (named.args.len != 1) {
                     Common.invariant("forced-dynamic iterator identity did not have exactly one item argument");
                 }
-                const item = try self.finalTypeViewForNode(named.args[0]);
+                const item = try self.provisionalTypeViewForNode(named.args[0]);
                 const item_digest = self.types.typeDigest(self.name_store, item);
                 hasher.update("roc.generated_iterator.forced_dynamic_identity");
                 hasher.update(&item_digest.bytes);
             } else {
-                const final = try self.finalTypeViewForNode(node);
+                const final = try self.provisionalTypeViewForNode(node);
                 const shape = self.types.typeDigest(self.name_store, final);
                 hasher.update("roc.generated_iterator.final_identity");
                 hasher.update(&shape.bytes);
@@ -3641,12 +3641,12 @@ pub const InstGraph = struct {
         return out;
     }
 
-    /// Materialize a read-only Monotype-shaped view of a node's FINAL shape,
-    /// applying recorded defaults to any still-unresolved leaves. Valid only
-    /// inside final graph sealing, after every relation has been applied and
-    /// only defaults remain; the returned TypeId is graph-owned scratch state
-    /// and must not be written to completed Monotype output.
-    fn finalTypeViewForNode(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
+    /// Materialize an immutable Monotype-shaped view of a node under the
+    /// relations produced so far, applying defaults to unresolved leaves in
+    /// the view only. The live graph is unchanged. This is collision authority
+    /// for provisional relation-replay memos and finalization probes; the
+    /// returned graph-owned scratch TypeId must not be emitted as output.
+    pub fn provisionalTypeViewForNode(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
         self.requireRelationProduction();
         if (self.imported_monos.get(node)) |imported| return imported;
         if (try self.typeIsResolved(node)) return try self.monoFor(node);

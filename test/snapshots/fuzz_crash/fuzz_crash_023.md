@@ -2531,19 +2531,19 @@ expect {
 				(ty-args
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "b")))))
-		(alias (type "Foo")
+		(alias (type "Error")
 			(ty-header (name "Foo")))
-		(alias (type "FooMultiline")
+		(alias (type "Error")
 			(ty-header (name "FooMultiline")))
-		(alias (type "Some(a)")
+		(alias (type "Error")
 			(ty-header (name "Some")
 				(ty-args
 					(ty-rigid-var (name "a")))))
-		(alias (type "SomeMl(a)")
+		(alias (type "Error")
 			(ty-header (name "SomeMl")
 				(ty-args
 					(ty-rigid-var (name "a")))))
-		(alias (type "SomeMultiline(a)")
+		(alias (type "Error")
 			(ty-header (name "SomeMultiline")
 				(ty-args
 					(ty-rigid-var (name "a")))))
