@@ -5947,26 +5947,39 @@ const Cloner = struct {
         return true;
     }
 
-    /// Clone one arm of the rewritten case. The arm keeps its own statements
-    /// and effects; its result value must be a known structure, which the
-    /// cloned dispatch consumes. Returns null when the arm's value is opaque,
+    /// Rewrite one arm of the case. The arm keeps its own statements and
+    /// effects; its result value must be a known structure, which the cloned
+    /// dispatch consumes. Returns null when the arm's value is opaque,
     /// declining the whole rewrite.
+    ///
+    /// `branch_body` is already-cloned output of the value clone, with fresh
+    /// ids referenced nowhere else, so a block arm's statements are reused
+    /// as they stand and only the tail expression is re-derived for its
+    /// symbolic value. Re-cloning whole arm bodies here re-ran every nested
+    /// rewrite inside them a second time, which compounded across nesting
+    /// levels and drained the pass-wide growth budgets on copies that were
+    /// then discarded.
     fn cloneLetOfCaseArmBody(self: *Cloner, probe: Ast.LocalId, dispatch: Ast.ExprId, branch_body: Ast.ExprId) Common.LowerError!?Ast.ExprId {
         const dispatch_ty = self.pass.program.getExpr(dispatch).ty;
         const branch_expr = self.pass.program.getExpr(branch_body);
         switch (branch_expr.data) {
             .block => |block| {
-                const change_start = self.subst.watermark();
+                // A branch-built or looping tail always derives an opaque
+                // value and is never divergent: decline without re-deriving,
+                // so the nested rewrites inside it do not rerun just to be
+                // thrown away.
+                switch (self.pass.program.getExpr(block.final_expr).data) {
+                    .match_, .if_, .loop_ => return null,
+                    else => {},
+                }
 
-                const source = try GuardedList.dupe(self.pass.allocator, Ast.StmtId, self.pass.program.stmtSpan(block.statements));
-                defer self.pass.allocator.free(source);
+                const change_start = self.subst.watermark();
 
                 var statements = std.ArrayList(Ast.StmtId).empty;
                 defer statements.deinit(self.pass.allocator);
-                for (source) |stmt| {
-                    const cloned = try self.cloneStmt(stmt);
-                    try self.appendBindingStmts(cloned.bindings, &statements);
-                    if (cloned.stmt) |cloned_stmt| try statements.append(self.pass.allocator, cloned_stmt);
+                const source = self.pass.program.stmtSpan(block.statements);
+                for (0..GuardedList.borrowLen(source)) |index| {
+                    try statements.append(self.pass.allocator, GuardedList.at(source, index));
                 }
 
                 const final = try self.cloneExprValue(block.final_expr);
@@ -5993,6 +6006,7 @@ const Cloner = struct {
                     .final_expr = rest,
                 } } });
             },
+            .match_, .if_, .loop_ => return null,
             else => {
                 const branch = try self.cloneExprValue(branch_body);
                 const change_start = self.subst.watermark();
@@ -7739,18 +7753,16 @@ const Cloner = struct {
                 defer self.pass.allocator.free(rewritten);
 
                 for (inner_branches, 0..) |inner_branch, index| {
-                    var branch_bindings: BindingChain = .{};
                     const change_start = self.subst.watermark();
                     try self.shadowPatLocals(inner_branch.pat);
-                    const inner_value = try self.cloneExprValueInto(inner_branch.body, &branch_bindings);
-                    const outer_value = (try self.distributeMatchOverValue(ty, inner_value, outer_branches_span, &branch_bindings)) orelse {
+                    const body = (try self.distributeMatchOverArmBody(ty, inner_branch.body, outer_branches_span)) orelse {
                         self.subst.restore(change_start);
                         return null;
                     };
                     rewritten[index] = .{
                         .pat = inner_branch.pat,
                         .guard = inner_branch.guard,
-                        .body = try self.wrapBindings(branch_bindings, try self.materialize(outer_value)),
+                        .body = body,
                     };
                     self.subst.restore(change_start);
                 }
@@ -7769,19 +7781,14 @@ const Cloner = struct {
                 defer self.pass.allocator.free(rewritten);
 
                 for (inner_branches, 0..) |inner_branch, index| {
-                    var branch_bindings: BindingChain = .{};
-                    const inner_value = try self.cloneExprValueInto(inner_branch.body, &branch_bindings);
-                    const outer_value = (try self.distributeMatchOverValue(ty, inner_value, outer_branches_span, &branch_bindings)) orelse return null;
+                    const body = (try self.distributeMatchOverArmBody(ty, inner_branch.body, outer_branches_span)) orelse return null;
                     rewritten[index] = .{
                         .cond = inner_branch.cond,
-                        .body = try self.wrapBindings(branch_bindings, try self.materialize(outer_value)),
+                        .body = body,
                     };
                 }
 
-                var else_bindings: BindingChain = .{};
-                const else_value = try self.cloneExprValueInto(inner_if.final_else, &else_bindings);
-                const outer_else = (try self.distributeMatchOverValue(ty, else_value, outer_branches_span, &else_bindings)) orelse return null;
-                const final_else = try self.wrapBindings(else_bindings, try self.materialize(outer_else));
+                const final_else = (try self.distributeMatchOverArmBody(ty, inner_if.final_else, outer_branches_span)) orelse return null;
 
                 return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .if_ = .{
                     .branches = try self.pass.program.addIfBranchSpan(rewritten),
@@ -7789,6 +7796,58 @@ const Cloner = struct {
                 } } }) };
             },
             else => unreachable,
+        }
+    }
+
+    /// Distribute the outer match over one inner arm. The arm is
+    /// already-cloned output with fresh ids referenced nowhere else, so a
+    /// block arm keeps its statements as they stand and only the tail
+    /// expression is re-derived for its symbolic value; a tail that is
+    /// itself branch-built recurses structurally without any re-clone.
+    /// Re-cloning whole arm bodies here compounded across nested
+    /// case-of-case levels.
+    fn distributeMatchOverArmBody(
+        self: *Cloner,
+        ty: Type.TypeId,
+        arm_body: Ast.ExprId,
+        outer_branches_span: Ast.Span(Ast.Branch),
+    ) Common.LowerError!?Ast.ExprId {
+        const arm_expr = self.pass.program.getExpr(arm_body);
+        switch (arm_expr.data) {
+            .block => |block| {
+                const tail = block.final_expr;
+                var branch_bindings: BindingChain = .{};
+                const inner_value: Value = switch (self.pass.program.getExpr(tail).data) {
+                    // Branch-built and looping tails recurse (or decline)
+                    // through the distribution itself, without re-deriving
+                    // the expression.
+                    .match_, .if_, .loop_ => .{ .expr = tail },
+                    else => try self.cloneExprValueInto(tail, &branch_bindings),
+                };
+                const outer_value = (try self.distributeMatchOverValue(ty, inner_value, outer_branches_span, &branch_bindings)) orelse return null;
+
+                var statements = std.ArrayList(Ast.StmtId).empty;
+                defer statements.deinit(self.pass.allocator);
+                const source = self.pass.program.stmtSpan(block.statements);
+                for (0..GuardedList.borrowLen(source)) |index| {
+                    try statements.append(self.pass.allocator, GuardedList.at(source, index));
+                }
+                return try self.addExpr(.{ .ty = ty, .data = .{ .block = .{
+                    .statements = try self.pass.program.addStmtSpan(statements.items),
+                    .final_expr = try self.wrapBindings(branch_bindings, try self.materialize(outer_value)),
+                } } });
+            },
+            .match_, .if_, .loop_ => {
+                var branch_bindings: BindingChain = .{};
+                const outer_value = (try self.distributeMatchOverValue(ty, .{ .expr = arm_body }, outer_branches_span, &branch_bindings)) orelse return null;
+                return try self.wrapBindings(branch_bindings, try self.materialize(outer_value));
+            },
+            else => {
+                var branch_bindings: BindingChain = .{};
+                const inner_value = try self.cloneExprValueInto(arm_body, &branch_bindings);
+                const outer_value = (try self.distributeMatchOverValue(ty, inner_value, outer_branches_span, &branch_bindings)) orelse return null;
+                return try self.wrapBindings(branch_bindings, try self.materialize(outer_value));
+            },
         }
     }
 
