@@ -1996,38 +1996,164 @@ pub const Rehearsal = struct {
         return pooled;
     }
 
-    /// Declare a producer representation a specialization record carries for
-    /// its return position, unpacking the record's component tuple into the
-    /// pooled slice a declaration needs. Returns the floor to retract at with
-    /// `retractConsumerInputs`, or null when the declaration could not be
-    /// stated.
-    pub fn declareRecordedProducerInput(
+    /// Declare the producer representation a sealed Monotype carries at one
+    /// specialization interface position, so the deferred body's directed
+    /// reads state the sealed form — tier, kind, depth, generated identity,
+    /// topology, and components — at the callee's own checked position.
+    /// Returns the floor to retract at with `retractConsumerInputs`, or null
+    /// when the sealed type carries no producer representation.
+    pub fn declareSealedProducerInput(
         self: *Rehearsal,
         address: CheckedAddress,
-        representation: direct_translate.ProducerRepresentation,
-        components_tuple: ?Type.TypeId,
+        sealed: Type.TypeId,
     ) ?usize {
-        var stated = representation;
-        if (components_tuple) |tuple| {
-            const span = switch (self.types.get(tuple)) {
-                .tuple => |items| self.types.span(items),
-                else => return null,
-            };
-            const len = GuardedList.borrowLen(span);
-            const pooled = self.component_arena.allocator().alloc(Type.TypeId, len) catch return null;
-            var index: usize = 0;
-            while (index < len) : (index += 1) {
-                pooled[index] = GuardedList.at(span, index);
-            }
-            stated.components = pooled;
+        const named = switch (self.types.get(sealed)) {
+            .named => |named| named,
+            else => return null,
+        };
+        if (named.def.iterator_representation == .none) return null;
+        const args = self.types.span(named.args);
+        const len = GuardedList.borrowLen(args);
+        if (len == 0 or len - 1 > 16) return null;
+        const pooled = self.component_arena.allocator().alloc(Type.TypeId, len - 1) catch return null;
+        var index: usize = 1;
+        while (index < len) : (index += 1) {
+            pooled[index - 1] = GuardedList.at(args, index);
         }
         const floor = self.translator.representationInputCount();
         self.translator.declareRepresentationInput(.{
             .position = .{ .module_bytes = address.module_bytes, .type_id = address.type_id },
-            .representation = stated,
+            .representation = .{
+                .iterator_representation = named.def.iterator_representation,
+                .iterator_kind = named.def.iterator_kind,
+                .iterator_depth = named.def.iterator_depth,
+                .generated = named.def.generated,
+                .topology = named.def.iterator_topology,
+                .minting = null,
+                .components = pooled,
+            },
         }) catch return null;
         census.bump("spec_record_producer_declared");
         return floor;
+    }
+
+    /// Declare every producer representation a sealed Monotype carries under
+    /// one specialization interface position, walking the checked type and the
+    /// sealed type together and declaring at each nominal position the sealed
+    /// side represents — a step function's iterator-typed fields as much as
+    /// the position itself. The walk pairs rows by label text and stops where
+    /// the two sides' structure does not correspond. Returns the first floor
+    /// to retract at with `retractConsumerInputs`.
+    pub fn declareSealedProducerInputsDeep(
+        self: *Rehearsal,
+        module_bytes: [32]u8,
+        checked_ty: checked.CheckedTypeId,
+        sealed: Type.TypeId,
+    ) ?usize {
+        const cursor = self.lookup.cursor(module_bytes) orelse return null;
+        var visited = std.AutoHashMap(u64, void).init(self.allocator);
+        defer visited.deinit();
+        var first: ?usize = null;
+        self.declareSealedDeepInner(cursor, checked_ty, sealed, &visited, &first) catch {};
+        return first;
+    }
+
+    fn declareSealedDeepInner(
+        self: *Rehearsal,
+        cursor: direct_translate.ModuleCursor,
+        checked_ty: checked.CheckedTypeId,
+        sealed: Type.TypeId,
+        visited: *std.AutoHashMap(u64, void),
+        first: *?usize,
+    ) Allocator.Error!void {
+        const pair = (@as(u64, @intFromEnum(checked_ty)) << 32) | @intFromEnum(sealed);
+        const entry = try visited.getOrPut(pair);
+        if (entry.found_existing) return;
+
+        switch (cursor.view.payload(checked_ty)) {
+            .nominal => |nominal| {
+                const named = switch (self.types.get(sealed)) {
+                    .named => |named| named,
+                    else => return,
+                };
+                if (self.declareSealedProducerInput(
+                    .{ .module_bytes = cursor.module_bytes, .type_id = @intFromEnum(checked_ty) },
+                    sealed,
+                )) |floor| {
+                    if (first.* == null) first.* = floor;
+                }
+                const sealed_args = self.types.span(named.args);
+                if (nominal.args.len > GuardedList.borrowLen(sealed_args)) return;
+                for (nominal.args, 0..) |checked_arg, index| {
+                    try self.declareSealedDeepInner(cursor, checked_arg, GuardedList.at(sealed_args, index), visited, first);
+                }
+            },
+            .alias => |alias| try self.declareSealedDeepInner(cursor, alias.backing, sealed, visited, first),
+            .function => |function| {
+                const sealed_fn = switch (self.types.get(sealed)) {
+                    .func => |func| func,
+                    else => return,
+                };
+                const sealed_args = self.types.span(sealed_fn.args);
+                if (function.args.len != GuardedList.borrowLen(sealed_args)) return;
+                for (function.args, 0..) |checked_arg, index| {
+                    try self.declareSealedDeepInner(cursor, checked_arg, GuardedList.at(sealed_args, index), visited, first);
+                }
+                try self.declareSealedDeepInner(cursor, function.ret, sealed_fn.ret, visited, first);
+            },
+            .tuple => |items| {
+                const sealed_items = switch (self.types.get(sealed)) {
+                    .tuple => |span| self.types.span(span),
+                    else => return,
+                };
+                if (items.len != GuardedList.borrowLen(sealed_items)) return;
+                for (items, 0..) |checked_item, index| {
+                    try self.declareSealedDeepInner(cursor, checked_item, GuardedList.at(sealed_items, index), visited, first);
+                }
+            },
+            .record => |record| {
+                const sealed_fields = switch (self.types.get(sealed)) {
+                    .record => |span| self.types.fieldSpan(span),
+                    else => return,
+                };
+                for (record.fields) |checked_field| {
+                    const field_text = cursor.source_names.recordFieldLabelText(checked_field.name);
+                    const len = GuardedList.borrowLen(sealed_fields);
+                    var index: usize = 0;
+                    while (index < len) : (index += 1) {
+                        const sealed_field = GuardedList.at(sealed_fields, index);
+                        if (std.mem.eql(u8, field_text, self.program_names.recordFieldLabelText(sealed_field.name))) {
+                            try self.declareSealedDeepInner(cursor, checked_field.ty, sealed_field.ty, visited, first);
+                            break;
+                        }
+                    }
+                }
+            },
+            .tag_union => |tag_union| {
+                const sealed_tags = switch (self.types.get(sealed)) {
+                    .tag_union => |span| self.types.tagSpan(span),
+                    else => return,
+                };
+                for (tag_union.tags) |checked_tag| {
+                    const tag_text = cursor.source_names.tagLabelText(checked_tag.name);
+                    const len = GuardedList.borrowLen(sealed_tags);
+                    var index: usize = 0;
+                    while (index < len) : (index += 1) {
+                        const sealed_tag = GuardedList.at(sealed_tags, index);
+                        if (!std.mem.eql(u8, tag_text, self.program_names.tagLabelText(sealed_tag.name))) continue;
+                        const checked_args = checked_tag.argsSlice(cursor.view);
+                        const sealed_payloads = self.types.span(sealed_tag.payloads);
+                        if (checked_args.len == GuardedList.borrowLen(sealed_payloads)) {
+                            for (checked_args, 0..) |checked_arg, payload_index| {
+                                try self.declareSealedDeepInner(cursor, checked_arg, GuardedList.at(sealed_payloads, payload_index), visited, first);
+                            }
+                        }
+                        break;
+                    }
+                }
+            },
+            else => {},
+        }
     }
 
     /// The longest minted-iterator chain a producer builds before running the

@@ -3403,6 +3403,46 @@ const Builder = struct {
             Common.invariant("procedure specialization lost its evidence record before body lowering");
         lowered_template.evidence = body_ctx.evidence.vector;
         defer body_ctx.deinit();
+        // The producer representations the requested Monotype carries at this
+        // specialization's interface positions, stated for the whole body so
+        // its directed reads answer at the callee's own checked positions —
+        // a step function's iterator-typed fields as much as the positions
+        // themselves — with the requested form: tier, generated identity, and
+        // components included (reunify.md 10.2, 13.2e).
+        const producer_floor: ?usize = floor: {
+            const rehearsal = self.rehearsal orelse break :floor null;
+            const requested_fn = switch (self.program.types.get(lower_fn_ty)) {
+                .func => |func| func,
+                else => break :floor null,
+            };
+            const checked_fn = switch (view.types.payload(template.checked_fn_root)) {
+                .function => |function| function,
+                else => break :floor null,
+            };
+            const requested_args = self.program.types.span(requested_fn.args);
+            if (checked_fn.args.len != GuardedList.borrowLen(requested_args)) break :floor null;
+            var first: ?usize = null;
+            if (rehearsal.declareSealedProducerInputsDeep(
+                view.key.bytes,
+                checked_fn.ret,
+                requested_fn.ret,
+            )) |declared| {
+                if (first == null) first = declared;
+            }
+            for (checked_fn.args, 0..) |checked_arg, index| {
+                if (rehearsal.declareSealedProducerInputsDeep(
+                    view.key.bytes,
+                    checked_arg,
+                    GuardedList.at(requested_args, index),
+                )) |declared| {
+                    if (first == null) first = declared;
+                }
+            }
+            break :floor first;
+        };
+        defer if (producer_floor) |floor| {
+            if (self.rehearsal) |rehearsal| rehearsal.retractConsumerInputs(floor);
+        };
         const root_node = try body_ctx.relateCheckedFunctionToMono(template.checked_fn_root, lower_fn_ty);
         body_ctx.measureSpecRootParity(template.checked_fn_root, lower_fn_ty);
         // reunify.md section 11.1, Slice 7 Stage B: reserve argument/result
@@ -3494,82 +3534,6 @@ const Builder = struct {
         });
         try self.markTemplateReady(reservation.fn_id, final_fn_ty);
         return reservation.def;
-    }
-
-    /// One interface position's recorded producer representation, read off its
-    /// request node while the requesting body still holds it, and addressed at
-    /// the callee template's own checked position — where the deferred body's
-    /// directed reads ask (reunify.md 10.2, 13.2e). Null when the position
-    /// carries no generated representation or is not resolved enough to state
-    /// one.
-    fn recordedProducerAt(
-        self: *Builder,
-        source_ctx: *BodyContext,
-        view: ModuleView,
-        checked_position: checked.CheckedTypeId,
-        node: NodeId,
-    ) Allocator.Error!?DraftRecordedProducer {
-        const named = switch (source_ctx.graph.content(source_ctx.graph.rootNode(node))) {
-            .named => |named| named,
-            else => return null,
-        };
-        if (named.generated_iterator == null) return null;
-        if (named.args.len == 0) return null;
-        var components: [16]Type.TypeId = undefined;
-        const component_count = named.args.len - 1;
-        if (component_count > components.len) return null;
-        for (named.args[1..], 0..) |component_node, index| {
-            if (!try source_ctx.graph.typeIsResolved(component_node)) return null;
-            components[index] = try source_ctx.activeTypeFromNode(component_node);
-        }
-        const components_tuple: ?Type.TypeId = if (component_count == 0)
-            null
-        else
-            try self.program.types.internTuple(&self.program.names, components[0..component_count]);
-        census.bump("spec_record_producer_recorded");
-        return .{
-            .module_bytes = view.key.bytes,
-            .type_id = @intFromEnum(checked_position),
-            .representation = .{
-                .iterator_representation = named.def.iterator_representation,
-                .iterator_kind = named.def.iterator_kind,
-                .iterator_depth = named.def.iterator_depth,
-                .generated = named.def.generated,
-                .topology = named.def.iterator_topology,
-                .minting = null,
-            },
-            .components_tuple = components_tuple,
-        };
-    }
-
-    /// Every interface position of a deferred specialization request whose node
-    /// carries generated representation, recorded against the callee template's
-    /// checked positions. Arena-owned by the requesting graph.
-    fn recordedProducersForRequest(
-        self: *Builder,
-        source_ctx: *BodyContext,
-        view: ModuleView,
-        template: checked.CheckedProcedureTemplate,
-        request_fn_node: NodeId,
-    ) Allocator.Error![]const DraftRecordedProducer {
-        const request_fn = source_ctx.graph.functionNodes(request_fn_node) catch return &.{};
-        const checked_fn = switch (view.types.payload(template.checked_fn_root)) {
-            .function => |function| function,
-            else => return &.{},
-        };
-        if (checked_fn.args.len != request_fn.args.len) return &.{};
-        var recorded = std.ArrayList(DraftRecordedProducer).empty;
-        defer recorded.deinit(self.allocator);
-        if (try self.recordedProducerAt(source_ctx, view, checked_fn.ret, request_fn.ret)) |entry| {
-            try recorded.append(self.allocator, entry);
-        }
-        for (checked_fn.args, request_fn.args) |checked_arg, arg_node| {
-            if (try self.recordedProducerAt(source_ctx, view, checked_arg, arg_node)) |entry| {
-                try recorded.append(self.allocator, entry);
-            }
-        }
-        if (recorded.items.len == 0) return &.{};
-        return try source_ctx.graph.arena().dupe(DraftRecordedProducer, recorded.items);
     }
 
     fn lowerDraftTemplateFromContext(
@@ -3890,7 +3854,6 @@ const Builder = struct {
             .lexical_context_key = lexical_context_key,
             .fn_id = fn_id,
             .request_hold = request_hold,
-            .recorded_producers = try self.recordedProducersForRequest(source_ctx, view, template, request_fn_node),
         });
         try source_ctx.draft.template_spec_by_fn.put(fn_id, @intCast(spec_index));
         lexical_needs_cleanup = false;
@@ -7215,29 +7178,6 @@ const Builder = struct {
             // scope closes unclaimed exactly like any other that bound none.
             if (self.rehearsal) |rehearsal| rehearsal.reopenHeldRequest(spec.request_hold);
             defer if (self.rehearsal) |rehearsal| rehearsal.closeRequest();
-
-            // The producer representation the requesting call placed at this
-            // specialization's return, stated for the deferred body so its
-            // directed reads answer at the callee's own return position with
-            // the minted form rather than the declared public one
-            // (reunify.md 10.2, 13.2e).
-            const producer_floor: ?usize = floor: {
-                if (spec.recorded_producers.len == 0) break :floor null;
-                const rehearsal = self.rehearsal orelse break :floor null;
-                var first: ?usize = null;
-                for (spec.recorded_producers) |recorded| {
-                    const declared = rehearsal.declareRecordedProducerInput(
-                        .{ .module_bytes = recorded.module_bytes, .type_id = recorded.type_id },
-                        recorded.representation,
-                        recorded.components_tuple,
-                    );
-                    if (first == null) first = declared;
-                }
-                break :floor first;
-            };
-            defer if (producer_floor) |floor| {
-                if (self.rehearsal) |rehearsal| rehearsal.retractConsumerInputs(floor);
-            };
 
             spec.resolved_slot = loaded_slot orelse blk: {
                 const def = try self.lowerTemplateWithMono(
@@ -10622,23 +10562,6 @@ const DraftTemplateSpec = struct {
     /// put back around the deferred reservation below so the reservation ties to
     /// the edge the requesting body made it at (reunify.md sections 7.2, 11.3).
     request_hold: spec_rehearsal.HeldRequest = spec_rehearsal.HeldRequest.none,
-    /// The producer representations the requesting call placed at this
-    /// specialization's interface positions, recorded so the deferred body's
-    /// directed reads state them at the callee's own checked positions
-    /// (reunify.md 10.2, 13.2e). Empty when no position carries generated
-    /// representation. Arena-owned by the requesting graph, which outlives
-    /// deferred resolution exactly as the argument-class snapshot does.
-    recorded_producers: []const DraftRecordedProducer = &.{},
-};
-
-/// One recorded producer representation for a deferred specialization
-/// interface position. Components ride as one interned tuple, so the record
-/// owns no slice; the declaration unpacks it.
-const DraftRecordedProducer = struct {
-    module_bytes: [32]u8,
-    type_id: u32,
-    representation: direct_translate.ProducerRepresentation,
-    components_tuple: ?Type.TypeId,
 };
 
 const DraftConstUseProvenance = union(enum) {
