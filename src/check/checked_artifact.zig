@@ -30349,6 +30349,25 @@ test "checked type store reuses closed equivalent payload roots" {
     try std.testing.expectEqual(CheckedTypePayload.empty_record, store.payload(first));
 }
 
+test "hosted Try adapter capability requires a closed tag-row error" {
+    const allocator = std.testing.allocator;
+
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+
+    const closed_error = try appendExplicitCheckedTypePayload(allocator, &names, &store, .empty_tag_union);
+    const record_error = try appendExplicitCheckedTypePayload(allocator, &names, &store, .empty_record);
+    const unresolved_error = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(67), true);
+    try store.fillSyntheticTypeRoot(allocator, unresolved_error, .{ .flex = .{} });
+
+    try std.testing.expect(checkedTypeIsClosedTagRow(&store, closed_error));
+    try std.testing.expect(!checkedTypeIsClosedTagRow(&store, record_error));
+    try std.testing.expect(!checkedTypeIsClosedTagRow(&store, unresolved_error));
+}
+
 test "checked type substitution reuses a closed source root without cloning" {
     const allocator = std.testing.allocator;
 

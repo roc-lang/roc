@@ -89,6 +89,10 @@
 //! exactly once, nothing is used after its value dies, and no borrowed
 //! value is released.
 //!
+//! Certification also checks the structural contract of erased-callable proc
+//! arguments. This keeps the hidden capture/reuse ABI and its ownership marker
+//! synchronized across every transform that clones or rewrites proc specs.
+//!
 //! A certification failure is a compiler bug in ARC insertion. The production
 //! entry point panics in debug builds; release builds never run the certifier.
 
@@ -176,6 +180,8 @@ fn certifyStoreWithWorkStats(
     diag: *Diagnostic,
     work_stats: ?*CertifierWorkStats,
 ) CertifyError!void {
+    try certifyProcAbiMetadata(store, layouts, diag);
+
     var rc_local = try allocator.alloc(bool, store.localCount());
     defer allocator.free(rc_local);
     for (0..store.localCount()) |index| {
@@ -198,6 +204,7 @@ fn certifyStoreWithWorkStats(
         .repr_scratch = std.AutoHashMap(ValueId, u32).init(allocator),
         .join_bodies = std.AutoHashMap(LIR.JoinPointId, LIR.CFStmtId).init(allocator),
         .reads_before_rebind_cache = std.AutoHashMap(LIR.CFStmtId, std.bit_set.DynamicBitSetUnmanaged).init(allocator),
+        .erased_owner_states = std.AutoHashMap(LIR.LocalId, ErasedOwnerState).init(allocator),
         .diag = diag,
         .work_stats = work_stats,
     };
@@ -208,6 +215,63 @@ fn certifyStoreWithWorkStats(
         const proc = store.getProcSpec(proc_id);
         const body = proc.body orelse continue;
         try certifier.certifyProc(proc_id, proc, body);
+    }
+}
+
+/// Verifies the structural ownership contract of procedure arguments.
+///
+/// Every erased-callable entry has two hidden trailing arguments: an opaque
+/// borrowed capture pointer followed by the nullable reuse pointer. The reuse
+/// pointer is always an ARC-visible ownership input: its exact final-argument
+/// local is recorded in `erased_reuse_arg` and has erased-callable layout, even
+/// when the result has no reusable callable slot and a non-null input must be
+/// decrefed. Internal Roc-ABI destination variants may also carry the marker,
+/// so every non-null marker names a final erased-callable argument.
+fn certifyProcAbiMetadata(
+    store: *const LirStore,
+    layouts: *const layout_mod.Store,
+    diag: *Diagnostic,
+) CertifyError!void {
+    for (0..store.procSpecCount()) |proc_index| {
+        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+        const proc = store.getProcSpec(proc_id);
+        const args = store.getLocalSpan(proc.args);
+
+        if (proc.erased_reuse_arg) |marker| {
+            if (GuardedList.borrowLen(args) == 0 or
+                GuardedList.at(args, GuardedList.borrowLen(args) - 1) != marker)
+            {
+                diag.context_proc = proc_id;
+                diag.set("proc={d}: erased reuse marker must name the final argument", .{proc_index});
+                return error.Certification;
+            }
+            const marker_layout = store.getLocal(marker).layout_idx;
+            if (layouts.getLayout(marker_layout).tag != .erased_callable) {
+                diag.context_proc = proc_id;
+                diag.set("proc={d}: marked erased reuse argument must have erased-callable layout", .{proc_index});
+                return error.Certification;
+            }
+        }
+
+        if (proc.abi != .erased_callable) continue;
+        if (GuardedList.borrowLen(args) < 2) {
+            diag.context_proc = proc_id;
+            diag.set("proc={d}: erased-callable ABI requires trailing capture and reuse arguments", .{proc_index});
+            return error.Certification;
+        }
+
+        const capture_arg = GuardedList.at(args, GuardedList.borrowLen(args) - 2);
+        if (store.getLocal(capture_arg).layout_idx != .opaque_ptr) {
+            diag.context_proc = proc_id;
+            diag.set("proc={d}: erased-callable capture argument must have opaque-pointer layout", .{proc_index});
+            return error.Certification;
+        }
+
+        if (proc.erased_reuse_arg == null) {
+            diag.context_proc = proc_id;
+            diag.set("proc={d}: erased-callable reuse argument must carry its ownership marker", .{proc_index});
+            return error.Certification;
+        }
     }
 }
 
@@ -252,9 +316,9 @@ fn certifyRcAtomicity(
 /// pure same-value alias whose source is born unique, or a parameter the
 /// containing proc's signature seeds born-unique. The balance and borrow
 /// conditions behind the claim are enforced by the per-value certification;
-/// this rule covers the unique-origin claim. Variants share parameter
-/// locals with their source proc, so claims are checked per proc body
-/// against that proc's signature.
+/// this rule covers the unique-origin claim. Variants share all source
+/// LocalIds while cloning the body statements, so origins are re-derived
+/// per proc body and parameter seeds use that proc's signature.
 fn certifyUniqueArgs(
     allocator: Allocator,
     store: *const LirStore,
@@ -262,82 +326,86 @@ fn certifyUniqueArgs(
     sigs: arc_sig.SigTable,
     diag: *Diagnostic,
 ) CertifyError!void {
-    var uniqueness = try arc_solve.computeUniqueness(allocator, store, rc_local, sigs);
-    defer uniqueness.deinit(allocator);
+    const local_to_dense = try allocator.alloc(u32, store.localCount());
+    defer allocator.free(local_to_dense);
+    @memset(local_to_dense, no_dense);
+    var dense_locals = std.ArrayList(LIR.LocalId).empty;
+    defer dense_locals.deinit(allocator);
+    var proc_stmts = std.ArrayList(LIR.CFStmtId).empty;
+    defer proc_stmts.deinit(allocator);
 
-    var visited = std.AutoHashMap(LIR.CFStmtId, void).init(allocator);
-    defer visited.deinit();
-    var stack = std.ArrayList(LIR.CFStmtId).empty;
-    defer stack.deinit(allocator);
+    const addLocal = struct {
+        fn go(
+            alloc: Allocator,
+            rc: []const bool,
+            mapping: []u32,
+            locals: *std.ArrayList(LIR.LocalId),
+            local: LIR.LocalId,
+        ) Allocator.Error!void {
+            const raw = @intFromEnum(local);
+            if (raw >= rc.len or !rc[raw] or mapping[raw] != no_dense) return;
+            mapping[raw] = @intCast(locals.items.len);
+            try locals.append(alloc, local);
+        }
+    }.go;
 
     for (0..store.procSpecCount()) |proc_index| {
-        const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+        const proc = store.getProcSpec(proc_id);
         const body = proc.body orelse continue;
-        const sig = sigs.get(@enumFromInt(@as(u32, @intCast(proc_index))));
+        const sig = sigs.get(proc_id);
+
+        for (dense_locals.items) |local| local_to_dense[@intFromEnum(local)] = no_dense;
+        dense_locals.clearRetainingCapacity();
         const params = store.getLocalSpan(proc.args);
-        visited.clearRetainingCapacity();
-        stack.clearRetainingCapacity();
-        try stack.append(allocator, body);
-        while (stack.pop()) |current| {
-            if (visited.contains(current)) continue;
-            try visited.put(current, {});
-            switch (store.getCFStmt(current)) {
-                .assign_low_level => |assign| {
-                    try stack.append(allocator, assign.next);
-                    if (assign.unique_args == 0) continue;
-                    const stmt_index = @intFromEnum(current);
-                    if ((assign.unique_args & ~assign.rc_effect.may_runtime_uniqueness_check_args) != 0) {
-                        diag.set("stmt={d}: unique_args bit outside the op's runtime-checked argument mask", .{stmt_index});
-                        return error.Certification;
-                    }
-                    const args = store.getLocalSpan(assign.args);
-                    for (0..GuardedList.borrowLen(args)) |position| {
-                        const arg = GuardedList.at(args, position);
-                        if (position >= 64) break;
-                        const bit = @as(u64, 1) << @as(u6, @intCast(position));
-                        if ((assign.unique_args & bit) == 0) continue;
-                        const index = @intFromEnum(arg);
-                        if (index < uniqueness.born_unique.capacity() and uniqueness.born_unique.isSet(index)) continue;
-                        if (paramSeededUnique(sig, params, arg)) continue;
-                        diag.set("stmt={d}: check-free uniqueness claim on argument {d} (local {d}) without a unique birth", .{ stmt_index, position, index });
-                        return error.Certification;
-                    }
-                },
-                .switch_stmt => |s| {
-                    const branches = store.getCFSwitchBranches(s.branches);
-                    for (0..GuardedList.borrowLen(branches)) |branch_index| {
-                        const branch = GuardedList.at(branches, branch_index);
-                        try stack.append(allocator, branch.body);
-                    }
-                    try stack.append(allocator, s.default_branch);
-                    if (s.continuation) |continuation| {
-                        try stack.append(allocator, continuation);
-                    }
-                },
-                .switch_initialized_payload => |s| {
-                    try stack.append(allocator, s.initialized_branch);
-                    try stack.append(allocator, s.uninitialized_branch);
-                },
-                .str_match => |s| {
-                    try stack.append(allocator, s.on_match);
-                    try stack.append(allocator, s.on_miss);
-                },
-                .str_match_set => |s| {
-                    const arms = store.getStrMatchArms(s.arms);
-                    for (0..GuardedList.borrowLen(arms)) |arm_index| {
-                        const arm = GuardedList.at(arms, arm_index);
-                        try stack.append(allocator, arm.on_match);
-                    }
-                    try stack.append(allocator, s.on_miss);
-                },
-                .join => |j| {
-                    try stack.append(allocator, j.body);
-                    try stack.append(allocator, j.remainder);
-                },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
-                    try stack.append(allocator, s.next);
-                },
-                .ret, .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+        for (0..GuardedList.borrowLen(params)) |index| {
+            try addLocal(allocator, rc_local, local_to_dense, &dense_locals, GuardedList.at(params, index));
+        }
+        const frame_locals = store.getLocalSpan(proc.frame_locals);
+        for (0..GuardedList.borrowLen(frame_locals)) |index| {
+            try addLocal(allocator, rc_local, local_to_dense, &dense_locals, GuardedList.at(frame_locals, index));
+        }
+
+        try arc_solve.collectProcStatements(allocator, store, body, &proc_stmts);
+        var uniqueness = try arc_solve.computeProcUniqueness(
+            allocator,
+            store,
+            rc_local,
+            sigs,
+            proc_id,
+            proc_stmts.items,
+            local_to_dense,
+            dense_locals.items.len,
+        );
+        defer uniqueness.deinit(allocator);
+
+        for (proc_stmts.items) |current| {
+            const assign = switch (store.getCFStmt(current)) {
+                .assign_low_level => |assign| assign,
+                else => continue,
+            };
+            if (assign.unique_args == 0) continue;
+            const stmt_index = @intFromEnum(current);
+            if ((assign.unique_args & ~assign.rc_effect.may_runtime_uniqueness_check_args) != 0) {
+                diag.context_proc = proc_id;
+                diag.context_stmt = current;
+                diag.set("stmt={d}: unique_args bit outside the op's runtime-checked argument mask", .{stmt_index});
+                return error.Certification;
+            }
+            const args = store.getLocalSpan(assign.args);
+            for (0..GuardedList.borrowLen(args)) |position| {
+                const arg = GuardedList.at(args, position);
+                if (position >= 64) break;
+                const bit = @as(u64, 1) << @as(u6, @intCast(position));
+                if ((assign.unique_args & bit) == 0) continue;
+                const raw = @intFromEnum(arg);
+                const dense = if (raw < local_to_dense.len) local_to_dense[raw] else no_dense;
+                if (dense != no_dense and uniqueness.born_unique.isSet(dense)) continue;
+                if (paramSeededUnique(sig, params, arg)) continue;
+                diag.context_proc = proc_id;
+                diag.context_stmt = current;
+                diag.set("stmt={d}: check-free uniqueness claim on argument {d} (local {d}) without a unique birth", .{ stmt_index, position, raw });
+                return error.Certification;
             }
         }
     }
@@ -637,7 +705,7 @@ fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.Local
         .assign_ref => |a| a.target == needle or refOpReadsLocal(a.op, needle),
         .assign_literal => |a| a.target == needle,
         .assign_call => |a| a.target == needle or spanHasLocal(store, a.args, needle),
-        .assign_call_erased => |a| a.target == needle or a.closure == needle or spanHasLocal(store, a.args, needle),
+        .assign_call_erased => |a| a.target == needle or a.closure == needle or (a.reuse_source != null and a.reuse_source.? == needle) or spanHasLocal(store, a.args, needle),
         .assign_packed_erased_fn => |a| a.target == needle or (a.capture != null and a.capture.? == needle) or (a.reuse != null and a.reuse.? == needle),
         .assign_low_level => |a| a.target == needle or spanHasLocal(store, a.args, needle),
         .assign_list => |a| a.target == needle or spanHasLocal(store, a.elems, needle),
@@ -1006,6 +1074,22 @@ const Segment = struct {
     origin_join: ?LIR.JoinPointId = null,
 };
 
+/// Flow-insensitive producer identity for an erased-callable local. Only exact
+/// representation-transparent `assign_ref` operations create an alias edge;
+/// every other definition starts a new allocation identity, and multiple
+/// definitions make the identity unavailable for reuse certification.
+const ErasedOwnerState = union(enum) {
+    root,
+    alias: LIR.LocalId,
+    ambiguous,
+};
+
+const ErasedCallOwnerCheck = struct {
+    stmt: LIR.CFStmtId,
+    closure: LIR.LocalId,
+    reuse_source: LIR.LocalId,
+};
+
 const Certifier = struct {
     allocator: Allocator,
     store: *const LirStore,
@@ -1032,6 +1116,10 @@ const Certifier = struct {
     /// Per-proc cache for join-body read-before-rebind sets. These bitsets use
     /// dense proc-local positions, so the cache is cleared at each proc boundary.
     reads_before_rebind_cache: std.AutoHashMap(LIR.CFStmtId, std.bit_set.DynamicBitSetUnmanaged),
+    /// Exact erased-allocation producer relation for the current proc, plus
+    /// calls checked after every reachable definition has been collected.
+    erased_owner_states: std.AutoHashMap(LIR.LocalId, ErasedOwnerState),
+    erased_call_owner_checks: std.ArrayList(ErasedCallOwnerCheck) = .empty,
     /// Scratch bitset over dense proc-local positions, reused by
     /// join-relevance extension.
     relevant_scratch: std.bit_set.DynamicBitSetUnmanaged = .{},
@@ -1065,6 +1153,8 @@ const Certifier = struct {
         self.join_bodies.deinit();
         self.clearReadsBeforeRebindCache();
         self.reads_before_rebind_cache.deinit();
+        self.erased_owner_states.deinit();
+        self.erased_call_owner_checks.deinit(self.allocator);
         self.relevant_scratch.deinit(self.allocator);
         self.value_walk_scratch.deinit(self.allocator);
     }
@@ -1884,17 +1974,83 @@ const Certifier = struct {
         return if (changed) .refined else .unchanged;
     }
 
-    fn collectProcLocals(self: *Certifier, proc: LIR.LirProcSpec, body: LIR.CFStmtId) Allocator.Error!void {
+    fn noteErasedOwnerDefinition(self: *Certifier, target: LIR.LocalId, source: ?LIR.LocalId) Allocator.Error!void {
+        const entry = try self.erased_owner_states.getOrPut(target);
+        if (entry.found_existing) {
+            entry.value_ptr.* = .ambiguous;
+        } else {
+            entry.value_ptr.* = if (source) |owner| .{ .alias = owner } else .root;
+        }
+    }
+
+    fn transparentErasedOwnershipSource(self: *const Certifier, op: LIR.RefOp, target: LIR.LocalId) ?LIR.LocalId {
+        const source = switch (op) {
+            .local => |local| local,
+            .nominal => |nominal| nominal.backing_ref,
+            inline .tag_payload, .tag_payload_struct => |payload| blk: {
+                if (payload.variant_index != 0) break :blk null;
+                const source_layout = self.layouts.getLayout(self.store.getLocal(payload.source).layout_idx);
+                if (source_layout.tag != .tag_union) break :blk null;
+                const data = self.layouts.getTagUnionData(source_layout.getTagUnion().idx);
+                if (data.discriminant_size != 0) break :blk null;
+                break :blk payload.source;
+            },
+            else => null,
+        } orelse return null;
+
+        const source_layout = self.store.getLocal(source).layout_idx;
+        const target_layout = self.store.getLocal(target).layout_idx;
+        const source_size = self.layouts.layoutSizeAlign(self.layouts.getLayout(source_layout)).size;
+        const target_size = self.layouts.layoutSizeAlign(self.layouts.getLayout(target_layout)).size;
+        return if (source_size == self.layouts.targetUsize().size() and source_size == target_size) source else null;
+    }
+
+    fn resolvedErasedOwner(self: *const Certifier, initial: LIR.LocalId) ?LIR.LocalId {
+        var current = initial;
+        for (0..self.erased_owner_states.count() + 1) |_| {
+            const state = self.erased_owner_states.get(current) orelse return self.refcountedErasedOwner(current);
+            switch (state) {
+                .root => return self.refcountedErasedOwner(current),
+                .alias => |source| current = source,
+                .ambiguous => return null,
+            }
+        }
+        return null;
+    }
+
+    fn refcountedErasedOwner(self: *const Certifier, local: LIR.LocalId) ?LIR.LocalId {
+        const local_layout = self.layouts.getLayout(self.store.getLocal(local).layout_idx);
+        return if (self.layouts.layoutContainsRefcounted(local_layout)) local else null;
+    }
+
+    fn certifyErasedCallOwnerUses(self: *Certifier) CertifyError!void {
+        for (self.erased_call_owner_checks.items) |check| {
+            const expected = self.resolvedErasedOwner(check.closure) orelse check.closure;
+            if (check.reuse_source == expected) continue;
+            self.current_stmt = check.stmt;
+            return self.fail(
+                "erased call closure local {d} and reuse source local {d} do not denote the same allocation",
+                .{ @intFromEnum(check.closure), @intFromEnum(check.reuse_source) },
+            );
+        }
+    }
+
+    fn collectProcLocals(self: *Certifier, proc: LIR.LirProcSpec, body: LIR.CFStmtId) CertifyError!void {
+        for (self.proc_locals.items) |local| self.local_dense.items[@intFromEnum(local)] = no_dense;
         self.proc_locals.clearRetainingCapacity();
-        self.local_dense.clearRetainingCapacity();
-        try self.local_dense.ensureTotalCapacity(self.allocator, self.store.localCount());
-        self.local_dense.items.len = self.store.localCount();
-        @memset(self.local_dense.items, no_dense);
+        self.erased_owner_states.clearRetainingCapacity();
+        self.erased_call_owner_checks.clearRetainingCapacity();
+        if (self.local_dense.items.len < self.store.localCount()) {
+            const old_len = self.local_dense.items.len;
+            try self.local_dense.resize(self.allocator, self.store.localCount());
+            @memset(self.local_dense.items[old_len..], no_dense);
+        }
 
         const proc_args = self.store.getLocalSpan(proc.args);
         for (0..GuardedList.borrowLen(proc_args)) |param_index| {
             const param = GuardedList.at(proc_args, param_index);
             try self.noteProcLocal(param);
+            try self.noteErasedOwnerDefinition(param, null);
         }
 
         var visited = std.AutoHashMap(LIR.CFStmtId, void).init(self.allocator);
@@ -1910,6 +2066,7 @@ const Certifier = struct {
             switch (self.store.getCFStmt(current)) {
                 .assign_ref => |assign| {
                     try self.noteProcLocal(assign.target);
+                    try self.noteErasedOwnerDefinition(assign.target, self.transparentErasedOwnershipSource(assign.op, assign.target));
                     switch (assign.op) {
                         .local => |source| try self.noteProcLocal(source),
                         .discriminant => |op| try self.noteProcLocal(op.source),
@@ -1923,46 +2080,63 @@ const Certifier = struct {
                 },
                 .assign_literal => |assign| {
                     try self.noteProcLocal(assign.target);
+                    try self.noteErasedOwnerDefinition(assign.target, null);
                     try stack.append(self.allocator, assign.next);
                 },
                 .init_uninitialized => |init| {
                     try self.noteProcLocal(init.target);
+                    try self.noteErasedOwnerDefinition(init.target, null);
                     try stack.append(self.allocator, init.next);
                 },
                 .assign_call => |assign| {
                     try self.noteProcLocal(assign.target);
+                    try self.noteErasedOwnerDefinition(assign.target, null);
                     try self.noteProcLocalSpan(assign.args);
                     try stack.append(self.allocator, assign.next);
                 },
                 .assign_call_erased => |assign| {
                     try self.noteProcLocal(assign.target);
+                    try self.noteErasedOwnerDefinition(assign.target, null);
                     try self.noteProcLocal(assign.closure);
+                    if (assign.reuse_source) |reuse_source| {
+                        try self.noteProcLocal(reuse_source);
+                        try self.erased_call_owner_checks.append(self.allocator, .{
+                            .stmt = current,
+                            .closure = assign.closure,
+                            .reuse_source = reuse_source,
+                        });
+                    }
                     try self.noteProcLocalSpan(assign.args);
                     try stack.append(self.allocator, assign.next);
                 },
                 .assign_packed_erased_fn => |assign| {
                     try self.noteProcLocal(assign.target);
+                    try self.noteErasedOwnerDefinition(assign.target, null);
                     if (assign.capture) |capture| try self.noteProcLocal(capture);
                     if (assign.reuse) |reuse| try self.noteProcLocal(reuse);
                     try stack.append(self.allocator, assign.next);
                 },
                 .assign_low_level => |assign| {
                     try self.noteProcLocal(assign.target);
+                    try self.noteErasedOwnerDefinition(assign.target, null);
                     try self.noteProcLocalSpan(assign.args);
                     try stack.append(self.allocator, assign.next);
                 },
                 .assign_list => |assign| {
                     try self.noteProcLocal(assign.target);
+                    try self.noteErasedOwnerDefinition(assign.target, null);
                     try self.noteProcLocalSpan(assign.elems);
                     try stack.append(self.allocator, assign.next);
                 },
                 .assign_struct => |assign| {
                     try self.noteProcLocal(assign.target);
+                    try self.noteErasedOwnerDefinition(assign.target, null);
                     try self.noteProcLocalSpan(assign.fields);
                     try stack.append(self.allocator, assign.next);
                 },
                 .assign_tag => |assign| {
                     try self.noteProcLocal(assign.target);
+                    try self.noteErasedOwnerDefinition(assign.target, null);
                     if (assign.payload) |payload| try self.noteProcLocal(payload);
                     try stack.append(self.allocator, assign.next);
                 },
@@ -1978,6 +2152,7 @@ const Certifier = struct {
                 },
                 .set_local => |assign| {
                     try self.noteProcLocal(assign.target);
+                    try self.noteErasedOwnerDefinition(assign.target, null);
                     try self.noteProcLocal(assign.value);
                     try stack.append(self.allocator, assign.next);
                 },
@@ -2032,7 +2207,10 @@ const Certifier = struct {
                         const step = GuardedList.at(steps, step_index);
                         switch (step.capture) {
                             .discard => {},
-                            .view => |local| try self.noteProcLocal(local),
+                            .view => |local| {
+                                try self.noteProcLocal(local);
+                                try self.noteErasedOwnerDefinition(local, null);
+                            },
                         }
                     }
                     try stack.append(self.allocator, str_match.on_match);
@@ -2048,7 +2226,10 @@ const Certifier = struct {
                             const step = GuardedList.at(steps, step_index);
                             switch (step.capture) {
                                 .discard => {},
-                                .view => |local| try self.noteProcLocal(local),
+                                .view => |local| {
+                                    try self.noteProcLocal(local);
+                                    try self.noteErasedOwnerDefinition(local, null);
+                                },
                             }
                         }
                         try stack.append(self.allocator, arm.on_match);
@@ -2057,6 +2238,10 @@ const Certifier = struct {
                 },
                 .join => |join_stmt| {
                     try self.noteProcLocalSpan(join_stmt.params);
+                    const params = self.store.getLocalSpan(join_stmt.params);
+                    for (0..GuardedList.borrowLen(params)) |param_index| {
+                        try self.noteErasedOwnerDefinition(GuardedList.at(params, param_index), null);
+                    }
                     try self.join_bodies.put(join_stmt.id, join_stmt.body);
                     try stack.append(self.allocator, join_stmt.body);
                     try stack.append(self.allocator, join_stmt.remainder);
@@ -2066,6 +2251,8 @@ const Certifier = struct {
                 .comptime_branch_taken => |marker| try stack.append(self.allocator, marker.next),
             }
         }
+
+        try self.certifyErasedCallOwnerUses();
     }
 
     /// Marks the control-flow convergence points that can be reached more
@@ -2345,6 +2532,7 @@ const Certifier = struct {
                 },
                 .assign_call_erased => |assign| {
                     self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, assign.closure);
+                    if (assign.reuse_source) |reuse_source| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, reuse_source);
                     self.noteExposedReadSpan(&graph.nodes.items[node_index].reads, assign.args);
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
@@ -2887,8 +3075,16 @@ const Certifier = struct {
                     cursor = assign.next;
                 },
                 .assign_call_erased => |assign| {
+                    if (!LIR.erasedCallReuseFieldsMatch(assign)) {
+                        return self.fail("erased call reuse flag and ownership source disagreed", .{});
+                    }
                     _ = try self.requireLive(&state, assign.closure);
+                    const reuse_value = if (assign.reuse_source) |reuse_source|
+                        try self.requireLive(&state, reuse_source)
+                    else
+                        no_value;
                     try self.applyCall(&state, assign.target, arc_sig.RcSig.all_owned, assign.args);
+                    if (assign.reuse_source) |reuse_source| try self.consumeUnit(&state, reuse_value, reuse_source);
                     cursor = assign.next;
                 },
                 .assign_packed_erased_fn => |assign| {
@@ -3532,9 +3728,15 @@ const CertifyTest = struct {
     }
 
     fn addProc(self: *CertifyTest, args: []const LIR.LocalId, body: LIR.CFStmtId, ret_layout: layout_mod.Idx) Allocator.Error!LIR.LirProcSpecId {
+        var frame_locals = try std.ArrayList(LIR.LocalId).initCapacity(self.allocator, self.store.localCount());
+        defer frame_locals.deinit(self.allocator);
+        for (0..self.store.localCount()) |index| {
+            frame_locals.appendAssumeCapacity(@enumFromInt(@as(u32, @intCast(index))));
+        }
         return try self.store.addProcSpec(.{
             .name = self.store.freshSyntheticSymbol(),
             .args = try self.store.addLocalSpan(args),
+            .frame_locals = try self.store.addLocalSpan(frame_locals.items),
             .body = body,
             .ret_layout = ret_layout,
         });
@@ -3553,7 +3755,260 @@ const CertifyTest = struct {
     fn certifyWith(self: *CertifyTest, sigs: arc_sig.SigTable) CertifyError!void {
         return certifyStore(self.allocator, &self.store, &self.layouts, sigs, &.{}, &self.diag);
     }
+
+    fn certifyUniqueArgsOnly(self: *CertifyTest) CertifyError!void {
+        const rc_local = try self.allocator.alloc(bool, self.store.localCount());
+        defer self.allocator.free(rc_local);
+        for (0..self.store.localCount()) |index| {
+            const lir_local = self.store.getLocal(@enumFromInt(@as(u32, @intCast(index))));
+            rc_local[index] = self.layouts.layoutContainsRefcounted(self.layouts.getLayout(lir_local.layout_idx));
+        }
+        return certifyUniqueArgs(self.allocator, &self.store, rc_local, arc_sig.SigTable.all_owned, &self.diag);
+    }
+
+    fn certifyProcAbiMetadataOnly(self: *CertifyTest) CertifyError!void {
+        return certifyProcAbiMetadata(&self.store, &self.layouts, &self.diag);
+    }
 };
+
+test "certify accepts consistent erased-callable proc ABI metadata" {
+    {
+        var f = try CertifyTest.init(testing.allocator);
+        defer f.deinit();
+
+        const erased_callable = try f.layouts.insertErasedCallable();
+        const capture = try f.local(.opaque_ptr);
+        const reuse = try f.local(erased_callable);
+        const result = try f.local(.i64);
+        const body = try f.ret(result);
+        _ = try f.store.addProcSpec(.{
+            .name = f.store.freshSyntheticSymbol(),
+            .args = try f.store.addLocalSpan(&.{ capture, reuse }),
+            .erased_reuse_arg = reuse,
+            .body = body,
+            .ret_layout = .i64,
+            .abi = .erased_callable,
+        });
+
+        try f.certifyProcAbiMetadataOnly();
+    }
+
+    {
+        var f = try CertifyTest.init(testing.allocator);
+        defer f.deinit();
+
+        const erased_callable = try f.layouts.insertErasedCallable();
+        const capture = try f.local(.opaque_ptr);
+        const reuse = try f.local(erased_callable);
+        const body = try f.ret(reuse);
+        _ = try f.store.addProcSpec(.{
+            .name = f.store.freshSyntheticSymbol(),
+            .args = try f.store.addLocalSpan(&.{ capture, reuse }),
+            .erased_reuse_arg = reuse,
+            .body = body,
+            .ret_layout = erased_callable,
+            .abi = .erased_callable,
+        });
+
+        try f.certifyProcAbiMetadataOnly();
+    }
+}
+
+test "certify rejects erased-callable proc ABI metadata mismatches" {
+    {
+        var f = try CertifyTest.init(testing.allocator);
+        defer f.deinit();
+
+        const result = try f.local(.i64);
+        const body = try f.ret(result);
+        _ = try f.store.addProcSpec(.{
+            .name = f.store.freshSyntheticSymbol(),
+            .args = LIR.LocalSpan.empty(),
+            .body = body,
+            .ret_layout = .i64,
+            .abi = .erased_callable,
+        });
+
+        try testing.expectError(error.Certification, f.certifyProcAbiMetadataOnly());
+        try testing.expect(std.mem.find(u8, f.diag.message(), "requires trailing capture and reuse arguments") != null);
+    }
+
+    {
+        var f = try CertifyTest.init(testing.allocator);
+        defer f.deinit();
+
+        const erased_callable = try f.layouts.insertErasedCallable();
+        const capture = try f.local(.i64);
+        const reuse = try f.local(erased_callable);
+        const result = try f.local(.i64);
+        const body = try f.ret(result);
+        _ = try f.store.addProcSpec(.{
+            .name = f.store.freshSyntheticSymbol(),
+            .args = try f.store.addLocalSpan(&.{ capture, reuse }),
+            .erased_reuse_arg = reuse,
+            .body = body,
+            .ret_layout = .i64,
+            .abi = .erased_callable,
+        });
+
+        try testing.expectError(error.Certification, f.certifyProcAbiMetadataOnly());
+        try testing.expect(std.mem.find(u8, f.diag.message(), "capture argument must have opaque-pointer layout") != null);
+    }
+
+    {
+        var f = try CertifyTest.init(testing.allocator);
+        defer f.deinit();
+
+        const erased_callable = try f.layouts.insertErasedCallable();
+        const capture = try f.local(.opaque_ptr);
+        const marked_reuse = try f.local(erased_callable);
+        const final_reuse = try f.local(.opaque_ptr);
+        const body = try f.ret(marked_reuse);
+        _ = try f.store.addProcSpec(.{
+            .name = f.store.freshSyntheticSymbol(),
+            .args = try f.store.addLocalSpan(&.{ capture, marked_reuse, final_reuse }),
+            .erased_reuse_arg = marked_reuse,
+            .body = body,
+            .ret_layout = erased_callable,
+            .abi = .erased_callable,
+        });
+
+        try testing.expectError(error.Certification, f.certifyProcAbiMetadataOnly());
+        try testing.expect(std.mem.find(u8, f.diag.message(), "marker must name the final argument") != null);
+    }
+
+    {
+        var f = try CertifyTest.init(testing.allocator);
+        defer f.deinit();
+
+        const capture = try f.local(.opaque_ptr);
+        const reuse = try f.local(.opaque_ptr);
+        const result = try f.local(.i64);
+        const body = try f.ret(result);
+        _ = try f.store.addProcSpec(.{
+            .name = f.store.freshSyntheticSymbol(),
+            .args = try f.store.addLocalSpan(&.{ capture, reuse }),
+            .erased_reuse_arg = reuse,
+            .body = body,
+            .ret_layout = .i64,
+            .abi = .erased_callable,
+        });
+
+        try testing.expectError(error.Certification, f.certifyProcAbiMetadataOnly());
+        try testing.expect(std.mem.find(u8, f.diag.message(), "must have erased-callable layout") != null);
+    }
+
+    {
+        var f = try CertifyTest.init(testing.allocator);
+        defer f.deinit();
+
+        const erased_callable = try f.layouts.insertErasedCallable();
+        const capture = try f.local(.opaque_ptr);
+        const reuse = try f.local(erased_callable);
+        const body = try f.ret(reuse);
+        _ = try f.store.addProcSpec(.{
+            .name = f.store.freshSyntheticSymbol(),
+            .args = try f.store.addLocalSpan(&.{ capture, reuse }),
+            .body = body,
+            .ret_layout = erased_callable,
+            .abi = .erased_callable,
+        });
+
+        try testing.expectError(error.Certification, f.certifyProcAbiMetadataOnly());
+        try testing.expect(std.mem.find(u8, f.diag.message(), "must carry its ownership marker") != null);
+    }
+}
+
+test "unique-argument certification isolates shared locals between procedures" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+
+    const left = try f.local(.str);
+    const right = try f.local(.str);
+    const fresh = try f.local(.str);
+    const result = try f.local(.str);
+    const args = try f.store.addLocalSpan(&.{ left, right });
+    const checked_args = try f.store.addLocalSpan(&.{ fresh, right });
+
+    // Model base and specialized ARC emissions: both procedure bodies bind
+    // the same source LocalIds, but each body has its own statement clones.
+    // A sibling's definitions and uses must not turn this procedure's one
+    // fresh binding into a flow-sensitive multi-definition.
+    for (0..2) |_| {
+        const ret = try f.ret(result);
+        const checked = try f.store.addCFStmt(.{ .assign_low_level = .{
+            .target = result,
+            .op = .str_concat,
+            .rc_effect = LIR.LowLevel.str_concat.rcEffect(),
+            .args = checked_args,
+            .unique_args = 1,
+            .next = ret,
+        } });
+        const birth = try f.store.addCFStmt(.{ .assign_low_level = .{
+            .target = fresh,
+            .op = .str_concat,
+            .rc_effect = LIR.LowLevel.str_concat.rcEffect(),
+            .args = args,
+            .next = checked,
+        } });
+        _ = try f.addProc(&.{ left, right }, birth, .str);
+    }
+
+    // An unrelated sibling may bind that shared numeric LocalId from a
+    // foreign/static origin. Its origin is irrelevant to the two procedures
+    // above and must not poison their check-free claims.
+    const foreign_ret = try f.ret(fresh);
+    const foreign_body = try f.assignStr(fresh, foreign_ret);
+    _ = try f.addProc(&.{}, foreign_body, .str);
+
+    try f.certifyUniqueArgsOnly();
+}
+
+test "unique-argument certification rejects multiple births in one procedure" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+
+    const cond = try f.local(.bool);
+    const left = try f.local(.str);
+    const right = try f.local(.str);
+    const fresh = try f.local(.str);
+    const result = try f.local(.str);
+    const args = try f.store.addLocalSpan(&.{ left, right });
+    const checked_args = try f.store.addLocalSpan(&.{ fresh, right });
+    const ret = try f.ret(result);
+    const checked = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = result,
+        .op = .str_concat,
+        .rc_effect = LIR.LowLevel.str_concat.rcEffect(),
+        .args = checked_args,
+        .unique_args = 1,
+        .next = ret,
+    } });
+    const first_birth = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = fresh,
+        .op = .str_concat,
+        .rc_effect = LIR.LowLevel.str_concat.rcEffect(),
+        .args = args,
+        .next = checked,
+    } });
+    const second_birth = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = fresh,
+        .op = .str_concat,
+        .rc_effect = LIR.LowLevel.str_concat.rcEffect(),
+        .args = args,
+        .next = checked,
+    } });
+    const body = try f.store.addCFStmt(.{ .switch_stmt = .{
+        .cond = cond,
+        .branches = try f.store.addCFSwitchBranches(&.{.{ .value = 1, .body = first_birth }}),
+        .default_branch = second_birth,
+        .continuation = checked,
+    } });
+    _ = try f.addProc(&.{ cond, left, right }, body, .str);
+
+    try testing.expectError(error.Certification, f.certifyUniqueArgsOnly());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "without a unique birth") != null);
+}
 
 test "certify accepts owned binding released once" {
     var f = try CertifyTest.init(testing.allocator);
@@ -3566,6 +4021,94 @@ test "certify accepts owned binding released once" {
     const body = try f.assignStr(value, result_assign);
     _ = try f.addProc(&.{}, body, .i64);
     try f.certify();
+}
+
+test "certify rejects inconsistent erased call reuse fields" {
+    {
+        var f = try CertifyTest.init(testing.allocator);
+        defer f.deinit();
+        const erased_callable = try f.layouts.insertErasedCallable();
+        const closure = try f.local(erased_callable);
+        const result = try f.local(erased_callable);
+        const ret = try f.ret(result);
+        const body = try f.store.addCFStmt(.{ .assign_call_erased = .{
+            .target = result,
+            .closure = closure,
+            .args = LIR.LocalSpan.empty(),
+            .reuse_closure = true,
+            .reuse_source = null,
+            .next = ret,
+        } });
+        _ = try f.addProc(&.{closure}, body, erased_callable);
+        try testing.expectError(error.Certification, f.certify());
+        try testing.expect(std.mem.find(u8, f.diag.message(), "reuse flag and ownership source disagreed") != null);
+    }
+
+    {
+        var f = try CertifyTest.init(testing.allocator);
+        defer f.deinit();
+        const erased_callable = try f.layouts.insertErasedCallable();
+        const closure = try f.local(erased_callable);
+        const result = try f.local(erased_callable);
+        const ret = try f.ret(result);
+        const body = try f.store.addCFStmt(.{ .assign_call_erased = .{
+            .target = result,
+            .closure = closure,
+            .args = LIR.LocalSpan.empty(),
+            .reuse_closure = false,
+            .reuse_source = closure,
+            .next = ret,
+        } });
+        _ = try f.addProc(&.{closure}, body, erased_callable);
+        try testing.expectError(error.Certification, f.certify());
+        try testing.expect(std.mem.find(u8, f.diag.message(), "reuse flag and ownership source disagreed") != null);
+    }
+}
+
+test "certify accepts erased call reuse from a transparent outer owner" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const owner = try f.local(erased_callable);
+    const closure = try f.local(erased_callable);
+    const result = try f.local(erased_callable);
+    const ret = try f.ret(result);
+    const call = try f.store.addCFStmt(.{ .assign_call_erased = .{
+        .target = result,
+        .closure = closure,
+        .args = LIR.LocalSpan.empty(),
+        .reuse_closure = true,
+        .reuse_source = owner,
+        .next = ret,
+    } });
+    const body = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = closure,
+        .op = .{ .nominal = .{ .backing_ref = owner } },
+        .next = call,
+    } });
+    _ = try f.addProc(&.{owner}, body, erased_callable);
+    try f.certify();
+}
+
+test "certify rejects erased call reuse from a different allocation" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const closure = try f.local(erased_callable);
+    const unrelated = try f.local(erased_callable);
+    const result = try f.local(erased_callable);
+    const ret = try f.ret(result);
+    const body = try f.store.addCFStmt(.{ .assign_call_erased = .{
+        .target = result,
+        .closure = closure,
+        .args = LIR.LocalSpan.empty(),
+        .reuse_closure = true,
+        .reuse_source = unrelated,
+        .next = ret,
+    } });
+    _ = try f.addProc(&.{ closure, unrelated }, body, erased_callable);
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "do not denote the same allocation") != null);
 }
 
 test "certify flags a leaked binding" {

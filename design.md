@@ -5742,6 +5742,15 @@ use after death, no release of a borrow. A certifier failure is a compiler
 bug and stops compilation. Release builds compile the certifier away
 entirely, like every other debug-only boundary check.
 
+Final-LIR unique-origin certification is proc-local. It collects each emitted
+procedure's reachable statement inventory once and indexes only the
+reference-counted locals in that procedure's explicit argument and
+`frame_locals` spans. Specialized siblings may share source `LocalId`s, but
+their definitions remain separate inventories. The certifier allocates no
+store-wide statement or local bitset per procedure; one reusable store-local to
+dense-proc-local table maps the explicit inventories into compact analysis
+sets.
+
 ### Thread-Confined Reference Counts
 
 Reference counts are atomic today because the host may share a Roc value
@@ -5944,9 +5953,12 @@ proc:
   by appending into a caller-provided unique accumulator.
 
 These variants are keyed by proc id, result demand, and committed layouts.
-Identical keys share one variant. Root procs and ABI-pinned procs keep their
-ordinary signature; wrappers may call an internal destination variant, but the
-ABI-facing signature is not changed by this optimization.
+Identical keys share one variant. Except for erased-callable entrypoints, root
+procs and ABI-pinned procs keep their ordinary signature; wrappers may call an
+internal destination variant. An erased-callable entrypoint always has the
+uniform `(ops, ret, args, capture, reuse)` ABI described below, so every host and
+compiled caller can explicitly opt into or out of the erased-callable result
+destination without specializing the function-pointer type.
 
 `return_slot(T)` is selected by layout representation, not by source syntax.
 Scalar, pointer, and zero-sized result layouts keep ordinary returns.
@@ -5998,6 +6010,46 @@ callable payloads. Broader reuse across different capture layouts requires an
 explicit capacity or size input; it must not be guessed from the erased function
 type alone, because an arbitrary `Box(a -> b)` value does not identify the
 stored capture layout.
+
+Every erased-callable function pointer has five arguments: `ops`, caller-owned
+result storage, packed arguments, borrowed capture bytes, and a nullable reuse
+data pointer. The fifth argument is an ownership-transfer channel, not a second
+borrow of the capture. Null transfers nothing. A non-null value must be the
+data pointer of the erased-callable allocation that contains the borrowed
+`capture` bytes; unrelated erased-callable allocations cannot be reused because
+the function pointer does not carry their capture size or alignment. Non-null
+transfers exactly one owned reference to that allocation, and the caller must
+not use or decref that ownership unit after the call. On every normal return
+path the callee consumes the unit exactly once: it either moves the allocation
+into the single statically selected erased-callable result slot (repacking in
+place only when uniqueness permits) or decrefs it. This remains true for a
+runtime tag variant that does not contain a callable. A shared allocation takes
+the fresh allocation path and decrefs the transferred reference; uniqueness
+affects only whether allocation can be avoided, never the ownership contract.
+Capture bytes needed to construct the result are snapshotted before an in-place
+overwrite.
+
+The direct LIR builder carries the current return destination while recursively
+lowering the selected aggregate or tag payload. That producer-authored context,
+plus the explicit result-demand classification, is the only basis for selecting
+an erased return-reuse specialization. Later stages must not scan emitted LIR to
+reconstruct whether a local eventually flows to a return. A proc with this
+hidden ownership input records its exact argument local in
+`LirProcSpec.erased_reuse_arg`; every erased-callable entry records that marker
+even when its result has no reusable callable slot, because a non-null transfer
+must still be decrefed exactly once. Transforms that clone proc arguments must
+preserve and remap the marker. Debug LIR certification verifies that every
+erased-callable proc's hidden capture and reuse arguments, the reuse argument's
+layout, and the ownership marker remain structurally consistent.
+
+An owned erased call records both the callable local used to load the function
+and capture pointers and the local whose ownership unit is transferred. Those
+locals must denote the same erased-callable allocation. The ownership local may
+be an outer nominal or zero-discriminant tag wrapper only when the emitted
+`assign_ref` chain proves exact pointer representation at every edge. Debug LIR
+certification derives that exact allocation identity from those explicit
+producer operations and rejects a call that would pass one allocation to the
+machine ABI while consuming another in ARC.
 
 Destination-aware aggregate construction is required for the full benefit of
 box reuse. A record update or tag construction whose result is demanded in a
@@ -7263,6 +7315,18 @@ field-offset assertions lock aggregate layout. Cross-language tests compile the
 generated C, Zig, and Rust output and call every direct and aggregate shape in
 both directions, so a host compiler and Roc must independently choose the same
 ABI.
+
+An owning tag-union payload is never projected through a borrowed accessor
+that returns an owning value. Generated host glue exposes an unsafe raw
+tag payload move operation which takes mutable access to one owned union shell,
+moves the active payload out, and leaves the shell logically uninitialized.
+The caller must first validate the explicit discriminant and must neither read
+nor destroy the shell after the move. A host language with affine or RAII
+ownership puts this primitive behind a non-copying owner whose failed
+tag-specific payload move returns the still-owned shell. Borrowed inspection, if
+needed, returns only a pointer or reference and never fabricates another owning
+payload descriptor. The 32-bit aligned-byte representation and native union
+representation provide the same move contract.
 
 ABI class assignment, LLVM carrier selection, and concrete argument/result
 placement are separate explicit steps. Every register placement records both

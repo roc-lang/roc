@@ -14,6 +14,12 @@ Model : [
 	Game(GameState),
 ]
 
+UnitToU64 : {} -> U64
+UnitToBoxedUnitToU64 : {} -> Box(UnitToU64)
+
+boxed_callable_transition : UnitToBoxedUnitToU64
+boxed_callable_transition = |_| Box.box(|_| 42)
+
 update_frame_count = |prev|
 	{ ..prev, frame_count: prev.frame_count + 1 }
 
@@ -34,12 +40,14 @@ update_box = |boxed| {
 }
 
 main! = |_seed| {
+	inner_box = Box.unbox(Box.box(boxed_callable_transition))({})
+	callable_result = Box.unbox(inner_box)({})
 	first = update_box(Box.box(Title({ frame_count: 5 })))
 	first_model = Box.unbox(first)
 	model = update_model(first_model)
 
 	match model {
-		Game(game) if game.frame_count == 7 and game.last_generated == 6 => "ok"
+		Game(game) if game.frame_count == 7 and game.last_generated == 6 and callable_result == 42 => "ok"
 		Game(game) if game.frame_count == 7 => "frame-ok"
 		Game(game) if game.frame_count == 1000000000000000006 and game.last_generated == 6 => "bad-val"
 		Game(game) if game.frame_count - game.last_generated == 1 => "diff-ok"
