@@ -1193,6 +1193,9 @@ const Lowerer = struct {
         if (capture.capture_id) |capture_id| {
             if (self.recursive_value_capture_ids.contains(capture_id)) return true;
         }
+        if (capture.checked_capture_id) |capture_id| {
+            if (self.recursive_value_capture_ids.contains(capture_id)) return true;
+        }
         return false;
     }
 
@@ -2086,8 +2089,7 @@ const Lowerer = struct {
                 .slot = @intCast(index),
                 .ty = try self.constTypeOfType(field.ty),
                 .plan = try self.constPlanOfType(field.ty),
-                .recursive_const = self.recursive_value_capture_ids.contains(checked_capture_id) or
-                    if (field.capture_id) |capture_id| self.recursive_value_capture_ids.contains(capture_id) else false,
+                .storage = if (field.storage_ty == field.ty) .value else .recursive_box,
             };
         }
         return slots;
