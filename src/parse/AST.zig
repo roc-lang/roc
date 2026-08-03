@@ -2104,11 +2104,13 @@ pub const ExposedItem = union(enum) {
     lower_ident: struct {
         as: ?Token.Idx,
         ident: Token.Idx,
+        qualifiers: Token.Span,
         region: TokenizedRegion,
     },
     upper_ident: struct {
         as: ?Token.Idx,
         ident: Token.Idx,
+        qualifiers: Token.Span,
         region: TokenizedRegion,
     },
     upper_ident_star: struct {

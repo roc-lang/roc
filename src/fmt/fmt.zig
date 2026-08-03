@@ -2270,6 +2270,10 @@ const Formatter = struct {
         switch (item) {
             .lower_ident => |i| {
                 region = i.region;
+                for (fmt.ast.store.tokenSlice(i.qualifiers)) |qualifier| {
+                    try fmt.pushTokenText(qualifier);
+                    try fmt.push('.');
+                }
                 try fmt.pushTokenText(i.ident);
                 if (i.as) |a| {
                     try fmt.pushAll(" as ");
@@ -2278,6 +2282,10 @@ const Formatter = struct {
             },
             .upper_ident => |i| {
                 region = i.region;
+                for (fmt.ast.store.tokenSlice(i.qualifiers)) |qualifier| {
+                    try fmt.pushTokenText(qualifier);
+                    try fmt.push('.');
+                }
                 try fmt.pushTokenText(i.ident);
                 if (i.as) |a| {
                     try fmt.pushAll(" as ");
@@ -3997,6 +4005,14 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) FormatPar
         std.debug.print("Formatted:\n==========\n{s}\n==========\n\n", .{result.written()});
     }
     return try result.toOwnedSlice();
+}
+
+test "issue 10480: package qualifier preserved in exposed aliased imports" {
+    // Repro for https://github.com/roc-lang/roc/issues/10480
+    const result = try moduleFmtsStable(std.testing.allocator, "module[o as n,F.s as I]", false);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings("module [o as n, F.s as I]\n", result);
 }
 
 test "issue 10431: wrapped declaration has no trailing whitespace" {
