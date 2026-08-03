@@ -1098,12 +1098,10 @@ pub const Store = struct {
     /// arguments denote the same named type, because a named type's backing is
     /// a function of its declaration and arguments.
     fn writeNamedIdentityHead(
-        self: *const Store,
         name_store: *const names.NameStore,
         hasher: *std.crypto.hash.sha2.Sha256,
         named: NamedContent,
     ) void {
-        _ = self;
         hasher.update(&named.named_type.module.bytes);
         writeBytes(hasher, name_store.moduleIdentityBytes(named.def.module));
         writeOptionalU32(hasher, named.def.source_decl);
@@ -1125,12 +1123,11 @@ pub const Store = struct {
     }
 
     fn namedIdentityHead(
-        self: *const Store,
         name_store: *const names.NameStore,
         named: NamedContent,
     ) [32]u8 {
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        self.writeNamedIdentityHead(name_store, &hasher, named);
+        writeNamedIdentityHead(name_store, &hasher, named);
         return hasher.finalResult();
     }
 
@@ -1147,7 +1144,7 @@ pub const Store = struct {
         const lhs_args = self.span(lhs.args);
         const rhs_args = self.span(rhs.args);
         if (lhs_args.len != rhs_args.len) return false;
-        if (!std.mem.eql(u8, &self.namedIdentityHead(name_store, lhs), &self.namedIdentityHead(name_store, rhs))) {
+        if (!std.mem.eql(u8, &namedIdentityHead(name_store, lhs), &namedIdentityHead(name_store, rhs))) {
             return false;
         }
         for (0..lhs_args.len) |index| {
