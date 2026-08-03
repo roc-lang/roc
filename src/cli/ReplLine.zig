@@ -10,19 +10,18 @@ const Unix = @import("Unix.zig");
 const Windows = @import("Windows.zig");
 const base = @import("base");
 
-const SupportedOS = enum { windows, linux, macos };
+const SupportedOS = enum { windows, posix };
 
 /// The operating system this build is targeting.
 pub const SUPPORTED_OS = switch (builtin.os.tag) {
     .windows => SupportedOS.windows,
-    .linux => SupportedOS.linux,
-    .macos => SupportedOS.macos,
-    else => |tag| @compileError(@tagName(tag) ++ " is not a support OS for ReplLine!"),
+    .linux, .macos, .freebsd, .openbsd, .netbsd, .dragonfly => SupportedOS.posix,
+    else => |tag| @compileError(@tagName(tag) ++ " is not a supported OS for ReplLine!"),
 };
 
 /// Platform-specific newline sequence.
 pub const NEW_LINE = switch (SUPPORTED_OS) {
-    .linux, .macos => "\n",
+    .posix => "\n",
     .windows => "\r\n",
 };
 
@@ -616,7 +615,7 @@ pub const ReadLineError =
     std.Io.Writer.Error ||
     CommandError ||
     switch (SUPPORTED_OS) {
-        .linux, .macos => Unix.Error,
+        .posix => Unix.Error,
         .windows => Windows.Error,
     };
 
@@ -714,7 +713,7 @@ fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u
     };
 
     const old = switch (SUPPORTED_OS) {
-        .linux, .macos => try Unix.init(),
+        .posix => try Unix.init(),
         .windows => try Windows.init(),
     };
     defer old.deinit();

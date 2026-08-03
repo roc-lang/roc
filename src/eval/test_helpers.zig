@@ -59,7 +59,7 @@ pub const TestHelperError = Allocator.Error || std.Thread.SpawnError || std.DynL
     UnsupportedTarget,
     UnsupportedPlatform,
     UnwindRegistrationFailed,
-    SysctlFailed,
+    PageSizeQueryFailed,
     CreateFileMappingFailed,
     OpenFileMappingFailed,
     MapViewOfFileFailed,

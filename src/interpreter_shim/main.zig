@@ -45,7 +45,7 @@ const ShimError = error{
 };
 
 const RuntimeStateError = ipc.CoordinationError || ipc.platform.SharedMemoryError || lir.LirImage.ImageError || error{
-    SysctlFailed,
+    PageSizeQueryFailed,
     UnsupportedPlatform,
 };
 
