@@ -538,6 +538,16 @@ const NestedSpecEvidence = union(enum) {
     synthesize,
 };
 
+/// Whether checked evidence is being materialized for Monotype body lowering
+/// or only to close a specialization request's type interface. A local method's
+/// checked declaration is sufficient for specialization-interface relation
+/// replay; Monotype body uses must additionally carry the exact BodyDraft local
+/// capture context.
+const EvidenceMaterializationPurpose = enum {
+    body_lowering,
+    specialization_interface,
+};
+
 /// The evidence supplied to a callee specialization request.
 const SpecEvidenceVector = union(enum) {
     resolved: []const SpecEvidence,
@@ -2829,18 +2839,6 @@ const Builder = struct {
         };
     }
 
-    fn retainStoredConstFnEvidence(
-        self: *Builder,
-        evidence: StoredConstFnEvidence,
-    ) Allocator.Error!StoredConstFnEvidence {
-        const arena = self.evidence_arena.allocator();
-        return .{
-            .nodes = try arena.dupe(check.ConstStore.ConstFnEvidence, evidence.nodes),
-            .frames = try arena.dupe(check.ConstStore.ConstFnEvidenceFrame, evidence.frames),
-            .head = evidence.head,
-        };
-    }
-
     fn appendConstFnEvidence(
         self: *Builder,
         nodes: *std.ArrayList(check.ConstStore.ConstFnEvidence),
@@ -2884,6 +2882,23 @@ const Builder = struct {
         template: checked.CheckedProcedureTemplate,
         partial: []const SpecEvidence,
     ) Allocator.Error![]const SpecEvidence {
+        return self.completeRootTemplateEvidenceForPurpose(
+            view,
+            template_ref,
+            template,
+            partial,
+            .body_lowering,
+        );
+    }
+
+    fn completeRootTemplateEvidenceForPurpose(
+        self: *Builder,
+        view: ModuleView,
+        template_ref: names.ProcTemplate,
+        template: checked.CheckedProcedureTemplate,
+        partial: []const SpecEvidence,
+        purpose: EvidenceMaterializationPurpose,
+    ) Allocator.Error![]const SpecEvidence {
         var timing_scope = ProcedureTimingScope.begin(self.timing, .dispatch_evidence);
         defer timing_scope.end();
 
@@ -2894,7 +2909,7 @@ const Builder = struct {
         var ctx = try BodyContext.init(self.allocator, self, view, template_ref, graph, &draft);
         defer ctx.deinit();
         ctx.evidence = rootEvidence(template_ref, partial);
-        return (try ctx.rootEdgeEvidence(view, template)) orelse
+        return (try ctx.rootEdgeEvidenceForPurpose(view, template, purpose)) orelse
             Common.invariant("procedure specialization did not receive its complete checked evidence vector");
     }
 
@@ -3306,33 +3321,14 @@ const Builder = struct {
             try source_ctx.activeTypeFromNode(request_fn_node)
         else
             null;
-        // An unresolved procedure interface is not yet a durable
-        // specialization key. Its callee body must contribute all of its
-        // checked constraints before this graph applies row defaults, so the
-        // entire connected open dependency group lowers in this graph and
-        // seals together. The initial open shape is still an explicit
-        // graph-local identity for reusing a completed member of that group.
-        const open_group_member = resolved_request_ty == null and
-            !local_context_dependent and
-            template.target != .hosted;
-        const open_request_shape: ?solve.OpenFunctionInterfaceShape = if (open_group_member)
-            try source_ctx.graph.openFunctionInterfaceShape(request_fn_node)
-        else
-            null;
         // Resolved requests key directly on their structural type digest, so a
-        // repeat of an already-answered resolved request skips both scans
-        // below.
+        // repeat of an already-answered resolved request skips the graph-native
+        // recursive lookup below.
         const resolved_lookup_address: ?DraftTemplateLookupAddress = if (resolved_request_ty) |request_fn_ty| .{
             .family = family,
             .evidence_digest = evidence_digest.bytes,
             .request_kind = 0,
             .request_fn_key = self.specializationTypeDigest(request_fn_ty).bytes,
-        } else null;
-        const open_shape_lookup_address: ?DraftTemplateLookupAddress = if (open_request_shape) |shape| .{
-            .family = family,
-            .evidence_digest = evidence_digest.bytes,
-            .request_kind = 2,
-            .request_fn_key = shape.digest.bytes,
         } else null;
         if (resolved_lookup_address) |address| {
             if (source_ctx.draft.template_spec_lookup.get(address)) |candidates| {
@@ -3344,22 +3340,6 @@ const Builder = struct {
                     const spec_fn_ty = try source_ctx.activeTypeFromNode(spec.request_fn_node);
                     if (!try self.program.types.typeEql(&self.program.names, spec_fn_ty, resolved_request_ty.?)) continue;
                     if (!selection.add(raw_spec, true)) unreachable;
-                }
-            }
-        }
-        if (selection.selected() == null) {
-            if (open_shape_lookup_address) |address| {
-                if (source_ctx.draft.template_spec_lookup.get(address)) |candidates| {
-                    for (candidates.items) |raw_spec| {
-                        const spec = &source_ctx.draft.template_specs.items[raw_spec];
-                        if (spec.state != .lowered) continue;
-                        if (!spec.open_group_member) continue;
-                        if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
-                        if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
-                        const spec_shape = spec.open_request_shape orelse continue;
-                        if (!std.mem.eql(u8, spec_shape, open_request_shape.?.bytes)) continue;
-                        if (!selection.add(raw_spec, true)) unreachable;
-                    }
                 }
             }
         }
@@ -3418,9 +3398,8 @@ const Builder = struct {
             // graph cells with the specialization currently being lowered. Once
             // both requests are fully resolved, exact structural type equality is
             // the durable proof that they are the same specialization request.
-            // Completed unresolved requests already had their alpha-normalized
-            // open shapes checked above; this scan retains graph-interface
-            // identity for active recursive and partially overlapping requests.
+            // This scan retains graph-interface identity for active recursive
+            // and partially overlapping requests.
             if (resolved_request_ty) |request_fn_ty| {
                 for (source_ctx.draft.template_specs.items, 0..) |*spec, raw_spec_usize| {
                     const raw_spec: u32 = @intCast(raw_spec_usize);
@@ -3445,8 +3424,7 @@ const Builder = struct {
             // its new body instance are not joined until that edge is related,
             // so join the complete request before returning the in-progress
             // definition. Completed specializations reach here through exact
-            // resolved identity or a complete alpha-normalized open shape, never
-            // through a partial interface overlap.
+            // resolved identity, never through a partial interface overlap.
             const spec = &source_ctx.draft.template_specs.items[raw_spec];
             self.count("template_hits");
             const active_recursive_edge = spec.state == .lowering and
@@ -3476,9 +3454,6 @@ const Builder = struct {
                 });
             }
             if (resolved_lookup_address) |address| {
-                try registerTemplateSpecLookup(source_ctx.draft, self.allocator, address, raw_spec);
-            }
-            if (open_shape_lookup_address) |address| {
                 try registerTemplateSpecLookup(source_ctx.draft, self.allocator, address, raw_spec);
             }
             return .{ .local = .{ .draft = spec.fn_id } };
@@ -3526,7 +3501,7 @@ const Builder = struct {
         };
         const demand_boundary: u32 = @intCast(source_ctx.draft.runtime_value_demands.items.len);
         try source_ctx.draft.template_specs.append(self.allocator, .{
-            .state = if (local_context_dependent or open_group_member) .lowering else .deferred,
+            .state = if (local_context_dependent) .lowering else .deferred,
             .template_ref = template_ref,
             .method_scope = source_ctx.method_scope.key,
             .source_fn_ty = source_fn_ty,
@@ -3544,8 +3519,6 @@ const Builder = struct {
             .lexical = lexical,
             .lexical_context_key = lexical_context_key,
             .fn_id = fn_id,
-            .open_group_member = open_group_member,
-            .open_request_shape = if (open_request_shape) |shape| shape.bytes else null,
         });
         try source_ctx.draft.template_spec_by_fn.put(fn_id, @intCast(spec_index));
         lexical_needs_cleanup = false;
@@ -3568,10 +3541,6 @@ const Builder = struct {
         if (resolved_lookup_address) |address| {
             try registerTemplateSpecLookup(source_ctx.draft, self.allocator, address, @intCast(spec_index));
         }
-        if (open_shape_lookup_address) |address| {
-            try registerTemplateSpecLookup(source_ctx.draft, self.allocator, address, @intCast(spec_index));
-        }
-
         const owner_scope = try source_ctx.draft.enterOwner(.{ .draft_fn = fn_id });
         defer owner_scope.leave();
         try self.registerDraftProcDebugNameForTemplate(source_ctx.draft, symbol, view, template_ref);
@@ -3586,7 +3555,6 @@ const Builder = struct {
         if (lexical) |captured| try body_ctx.restoreCodecLexicalContext(captured);
         const root_node = try body_ctx.instNode(template.checked_fn_root);
         if (!local_context_dependent and
-            !open_group_member and
             signature_relation == .independent_roots and
             template.target != .hosted)
         {
@@ -3609,8 +3577,12 @@ const Builder = struct {
                 try source_ctx.graph.unify(root_node, request_fn_node);
             }
         }
+        if (!local_context_dependent and template.target != .hosted) {
+            try relateFunctionRequestInterface(source_ctx.graph, root_node, request_fn_node);
+        }
         try body_ctx.instantiateTemplateDispatchRelations(template, null);
-        if (!local_context_dependent and !open_group_member) {
+        try body_ctx.applyCheckedTemplateInterfaceRelations(template, root_node);
+        if (!local_context_dependent) {
             return .{ .local = .{ .draft = fn_id } };
         }
         if (template.target == .hosted) {
@@ -3638,27 +3610,14 @@ const Builder = struct {
 
         var completed_template = source_ctx.draft.fns.items[@intFromEnum(fn_id)].source;
         completed_template.mono_fn_ty = DraftTypeCell.fromGraphNode(completed_fn_node);
-        if (open_group_member) {
-            const def_id = try source_ctx.draft.reserveDef(.{ .draft_fn = fn_id });
-            source_ctx.draft.setDef(def_id, .{
-                .symbol = symbol,
-                .fn_def = completed_template,
-                .fn_id = .{ .draft = fn_id },
-                .args = lowered.args,
-                .body = .{ .roc = lowered.body },
-                .ret = completed_ret_cell,
-            });
-            source_ctx.draft.template_specs.items[spec_index].root_def = def_id;
-        } else {
-            _ = try source_ctx.draft.addNestedDef(.{
-                .symbol = symbol,
-                .fn_def = completed_template,
-                .fn_id = .{ .draft = fn_id },
-                .args = lowered.args,
-                .body = lowered.body,
-                .ret = completed_ret_cell,
-            });
-        }
+        _ = try source_ctx.draft.addNestedDef(.{
+            .symbol = symbol,
+            .fn_def = completed_template,
+            .fn_id = .{ .draft = fn_id },
+            .args = lowered.args,
+            .body = lowered.body,
+            .ret = completed_ret_cell,
+        });
         source_ctx.draft.fns.items[@intFromEnum(fn_id)].source = completed_template;
         source_ctx.draft.template_specs.items[spec_index].request_fn_node = completed_fn_node;
         try registerTemplateSpecInterfaceLookups(
@@ -6527,7 +6486,6 @@ const Builder = struct {
             try graph.assertTypeHasNoActiveSnapshots(sealed);
             break :blk sealed;
         } else null;
-        try self.finalizeDraftTemplateSpecs(body_draft, body_ids);
         try self.markDraftNestedReady(body_draft, body_ids);
         verifyDraftTemplateSpecsResolved(body_draft);
         try self.finalizeDraftNestedSpecs(body_draft, body_ids);
@@ -6607,63 +6565,11 @@ const Builder = struct {
         }
     }
 
-    fn finalizeDraftTemplateSpecs(
-        self: *Builder,
-        body_draft: *const BodyDraftStore,
-        ids: FinalIdOffsets,
-    ) Allocator.Error!void {
-        for (body_draft.template_specs.items) |spec| {
-            if (spec.state != .lowered or spec.local_context_dependent) continue;
-            if (!spec.open_group_member) {
-                Common.invariant("context-free procedure body was lowered outside its open specialization group");
-            }
-            const root_def = spec.root_def orelse
-                Common.invariant("root-owned procedure specialization had no definition");
-            const fn_id = switch (ids.fnSlot(spec.fn_id)) {
-                .imported => continue,
-                .local => |local| local,
-            };
-            const fn_template = self.program.fnSource(fn_id);
-            const fn_ty = fn_template.mono_fn_ty;
-            const digest = self.specializationTypeDigest(fn_ty);
-            const evidence = programViewFnEvidence(self.program.view(), fn_template);
-            const identity = templateSpecIdentity(
-                spec.template_ref,
-                spec.method_scope,
-                spec.source_fn_key,
-                fn_template.evidence_digest,
-                fn_ty,
-                digest,
-            );
-            const existing = try self.spec_store.findLocal(identity, specializationEvidenceView(evidence));
-            if (existing != null) continue;
-            const def_id = ids.def(root_def);
-            const retained_evidence = try self.retainStoredConstFnEvidence(evidence);
-            const spec_id = try self.addTemplateSpecRecord(
-                spec.template_ref,
-                spec.method_scope,
-                spec.source_fn_key,
-                evidence,
-                fn_ty,
-                digest,
-                fn_id,
-                .lowering,
-            );
-            try self.lowered_templates.put(fn_id, .{
-                .def = def_id,
-                .spec = spec_id,
-                .evidence = spec.evidence,
-                .topology = retained_evidence,
-            });
-            try self.markTemplateReady(fn_id, fn_ty);
-        }
-    }
-
     fn verifyDraftTemplateSpecsResolved(body_draft: *const BodyDraftStore) void {
         for (body_draft.template_specs.items) |spec| {
             switch (spec.state) {
                 .resolved => {},
-                .lowered => if (!spec.local_context_dependent and !spec.open_group_member)
+                .lowered => if (!spec.local_context_dependent)
                     Common.invariant("context-free procedure body was lowered into its caller's draft"),
                 .deferred => Common.invariant("deferred template specialization reached commit before resolution"),
                 .lowering => Common.invariant("caller-owned template specialization reached commit before its body lowered"),
@@ -9695,14 +9601,6 @@ const DraftTemplateSpec = struct {
     lexical: ?DraftCodecLexicalContext = null,
     lexical_context_key: ?names.TypeDigest = null,
     fn_id: DraftFnId,
-    /// This context-free specialization joined its requester's live solve
-    /// group because its interface was not closed enough to be a durable key.
-    open_group_member: bool,
-    /// Exact alpha-normalized shape of the unresolved request before this
-    /// specialization body contributed its relations. This graph-local snapshot
-    /// is the collision authority and never becomes durable specialization identity.
-    open_request_shape: ?[]const u8 = null,
-    root_def: ?DraftDefId = null,
     resolved_slot: ?Ast.FnSlot = null,
 };
 
@@ -11894,6 +11792,42 @@ const ActiveConstBindingScope = struct {
     previous_local: ?DraftLocalId = null,
     bound_in_current_view: bool = false,
     entered: bool = false,
+};
+
+const InterfaceReplayStatus = enum { expanding, ready };
+
+const InterfaceReplayAddress = struct {
+    family: DraftTemplateFamilyAddress,
+    evidence_digest: [32]u8,
+    provisional_digest: [32]u8,
+};
+
+const InterfaceReplayEntry = struct {
+    evidence: StoredConstFnEvidence,
+    provisional_ty: Type.TypeId,
+    representative: NodeId,
+    duplicates: std.ArrayList(NodeId) = .empty,
+    status: InterfaceReplayStatus = .expanding,
+};
+
+const InterfaceReplayState = struct {
+    entries: std.ArrayList(InterfaceReplayEntry),
+    buckets: std.AutoHashMap(InterfaceReplayAddress, std.ArrayList(u32)),
+
+    fn init(allocator: Allocator) InterfaceReplayState {
+        return .{
+            .entries = .empty,
+            .buckets = std.AutoHashMap(InterfaceReplayAddress, std.ArrayList(u32)).init(allocator),
+        };
+    }
+
+    fn deinit(self: *InterfaceReplayState, allocator: Allocator) void {
+        for (self.entries.items) |*entry| entry.duplicates.deinit(allocator);
+        self.entries.deinit(allocator);
+        var buckets = self.buckets.valueIterator();
+        while (buckets.next()) |bucket| bucket.deinit(allocator);
+        self.buckets.deinit();
+    }
 };
 
 const BodyContext = struct {
@@ -15179,6 +15113,310 @@ const BodyContext = struct {
                 };
             },
         };
+    }
+
+    fn applyCheckedTemplateInterfaceRelations(
+        self: *BodyContext,
+        template: checked.CheckedProcedureTemplate,
+        root_node: NodeId,
+    ) Allocator.Error!void {
+        var replay_state = InterfaceReplayState.init(self.allocator);
+        defer replay_state.deinit(self.allocator);
+        var active_local_scopes = std.AutoHashMap(checked.DispatchScopeId, NodeId).init(self.allocator);
+        defer active_local_scopes.deinit();
+        try self.applyCheckedTemplateInterfaceScopeRelations(
+            template,
+            null,
+            root_node,
+            &active_local_scopes,
+            &replay_state,
+        );
+        try self.finishCheckedTemplateInterfaceReplay(&replay_state);
+    }
+
+    fn applyCheckedTemplateInterfaceScopeRelations(
+        self: *BodyContext,
+        template: checked.CheckedProcedureTemplate,
+        scope_id: ?checked.DispatchScopeId,
+        scope_root_node: NodeId,
+        active_local_scopes: *std.AutoHashMap(checked.DispatchScopeId, NodeId),
+        replay_state: *InterfaceReplayState,
+    ) Allocator.Error!void {
+        const PendingDependency = struct {
+            target: checked.ResolvedValueId,
+            source_fn_ty: checked.CheckedTypeId,
+            request_fn_node: NodeId,
+            provisional_ty: Type.TypeId,
+        };
+        var pending_dependencies = std.ArrayList(PendingDependency).empty;
+        defer pending_dependencies.deinit(self.allocator);
+
+        const relations = self.view.templates.specializationRelations(&template);
+        for (relations) |relation| {
+            if (!dispatchRefBelongsToScope(relation.scope, scope_id)) continue;
+            switch (relation.data) {
+                .type_equality => |equality| try relateRequestComponent(
+                    self.graph,
+                    try self.instNode(equality.left),
+                    try self.instNode(equality.right),
+                ),
+                .procedure => |procedure| {
+                    const fn_node = try self.instNode(procedure.fn_ty);
+                    if (procedure.owns_scope) {
+                        try relateFunctionRequestInterface(self.graph, fn_node, scope_root_node);
+                    }
+                    const function = try self.graph.functionNodes(fn_node);
+                    try relateRequestComponent(
+                        self.graph,
+                        function.ret,
+                        try self.instNode(procedure.body_ret_ty),
+                    );
+                },
+                .call => |call| {
+                    const source_fn_ty = if (call.direct_target) |target|
+                        self.directCallInstantiationSourceFnType(target, call.callable_ty)
+                    else
+                        call.callable_ty;
+                    const fn_node = try self.instNode(source_fn_ty);
+                    try relateRequestComponent(self.graph, fn_node, try self.instNode(call.callee_ty));
+                    const function = try self.graph.functionNodes(fn_node);
+                    const arg_tys = self.view.templates.specializationRelationTypes(call.args);
+                    if (function.args.len != arg_tys.len) {
+                        Common.invariant("checked specialization call relation changed arity");
+                    }
+                    for (function.args, arg_tys) |arg_node, arg_ty| {
+                        try relateRequestComponent(self.graph, arg_node, try self.instNode(arg_ty));
+                    }
+                    try relateRequestComponent(self.graph, function.ret, try self.instNode(call.ret_ty));
+                    if (call.direct_target) |target| {
+                        try pending_dependencies.append(self.allocator, .{
+                            .target = target,
+                            .source_fn_ty = source_fn_ty,
+                            .request_fn_node = fn_node,
+                            .provisional_ty = undefined,
+                        });
+                    }
+                },
+                .local_proc_use => |ref_id| {
+                    const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
+                    const local = switch (record.ref) {
+                        .local_proc => |local| local,
+                        else => Common.invariant("checked local specialization relation targeted a non-local procedure"),
+                    };
+                    const local_scope = local.dispatch_scope orelse
+                        Common.invariant("generalized local specialization relation had no checked scope");
+                    const request_node = try self.instNode(record.checked_ty);
+                    if (active_local_scopes.get(local_scope)) |active_root| {
+                        try relateFunctionRequestInterface(self.graph, active_root, request_node);
+                        continue;
+                    }
+                    var local_ctx = try BodyContext.initWithMethodScope(
+                        self.allocator,
+                        self.builder,
+                        self.view,
+                        self.method_scope,
+                        self.owner_template,
+                        self.graph,
+                        self.draft,
+                    );
+                    defer local_ctx.deinit();
+                    local_ctx.owner_context_fn_key = self.owner_context_fn_key;
+                    local_ctx.current_fn_key = self.current_fn_key;
+                    const local_root_node = try local_ctx.checkedTemplateInterfaceScopeRootNode(local_scope);
+                    try active_local_scopes.put(local_scope, local_root_node);
+                    defer _ = active_local_scopes.remove(local_scope);
+
+                    const use_evidence = try self.evidenceForUseSiteForPurpose(
+                        record.expr,
+                        .specialization_interface,
+                    );
+                    local_ctx.evidence = try enterEvidenceScope(
+                        self.builder,
+                        self.evidence,
+                        local_scope,
+                        local.expr,
+                        use_evidence,
+                    );
+                    try local_ctx.instantiateTemplateDispatchRelations(template, local_scope);
+                    try local_ctx.applyCheckedTemplateInterfaceScopeRelations(
+                        template,
+                        local_scope,
+                        local_root_node,
+                        active_local_scopes,
+                        replay_state,
+                    );
+                    try relateFunctionRequestInterface(self.graph, local_root_node, request_node);
+                },
+            }
+        }
+
+        for (pending_dependencies.items) |*pending| {
+            pending.provisional_ty = try self.graph.provisionalTypeViewForNode(pending.request_fn_node);
+        }
+        for (pending_dependencies.items) |pending| {
+            try self.applyDirectCalleeInterfaceRelations(
+                pending.target,
+                pending.source_fn_ty,
+                pending.request_fn_node,
+                pending.provisional_ty,
+                replay_state,
+            );
+        }
+    }
+
+    fn checkedTemplateInterfaceScopeRootNode(
+        self: *BodyContext,
+        scope_id: checked.DispatchScopeId,
+    ) Allocator.Error!NodeId {
+        const raw_scope = @intFromEnum(scope_id);
+        if (raw_scope >= self.view.templates.dispatch_scopes.len) {
+            Common.invariant("checked specialization relation named an unknown local scope");
+        }
+        const scheme_root = self.view.templates.dispatch_scopes[raw_scope].scheme_root;
+        return try self.instNode(scheme_root);
+    }
+
+    fn applyDirectCalleeInterfaceRelations(
+        self: *BodyContext,
+        target: checked.ResolvedValueId,
+        source_fn_ty: checked.CheckedTypeId,
+        request_fn_node: NodeId,
+        provisional_ty: Type.TypeId,
+        replay_state: *InterfaceReplayState,
+    ) Allocator.Error!void {
+        const record = self.view.resolved_refs.records[@intFromEnum(target)];
+        const procedure, const root_evidence = switch (record.ref) {
+            .top_level_proc,
+            .imported_proc,
+            .hosted_proc,
+            .promoted_top_level_proc,
+            => |procedure| .{ procedure, @as(?checked.CheckedEvidenceSpan, null) },
+            .platform_required_proc => |required| .{ required.procedure, required.root_evidence },
+            .local_proc => return,
+            else => Common.invariant("checked specialization call relation targeted a non-procedure"),
+        };
+        const template_ref = self.builder.templateRefForProcedureUse(procedure);
+        const callee_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(template_ref));
+        const template = callee_view.templates.get(template_ref.template);
+        const partial_evidence = if (root_evidence) |producer_evidence|
+            try self.builder.materializeCheckedProcedureEvidence(template_ref, producer_evidence)
+        else
+            try self.evidenceForUseSiteForPurpose(record.expr, .specialization_interface);
+        const evidence = if (partial_evidence.len == template.evidence_params.len)
+            partial_evidence
+        else
+            try self.builder.completeRootTemplateEvidenceForPurpose(
+                callee_view,
+                template_ref,
+                template,
+                partial_evidence,
+                .specialization_interface,
+            );
+        const stored_evidence = try self.builder.constFnEvidence(rootEvidence(template_ref, evidence));
+        const evidence_digest = Ast.fnEvidenceDigest(
+            stored_evidence.nodes,
+            stored_evidence.frames,
+            stored_evidence.head,
+        );
+        const source_fn_key = self.view.types.rootKey(source_fn_ty);
+        const provisional_digest = self.builder.specializationTypeDigest(provisional_ty);
+        const address = InterfaceReplayAddress{
+            .family = DraftTemplateFamilyAddress.init(template_ref, self.method_scope.key, source_fn_key),
+            .evidence_digest = evidence_digest.bytes,
+            .provisional_digest = provisional_digest.bytes,
+        };
+
+        if (replay_state.buckets.get(address)) |candidates| for (candidates.items) |raw_entry| {
+            const entry = &replay_state.entries.items[raw_entry];
+            if (!storedConstFnEvidenceEql(entry.evidence, stored_evidence) or
+                !try self.builder.program.types.typeEql(
+                    &self.builder.program.names,
+                    entry.provisional_ty,
+                    provisional_ty,
+                ))
+            {
+                continue;
+            }
+            switch (entry.status) {
+                .expanding => try relateFunctionRequestInterface(
+                    self.graph,
+                    entry.representative,
+                    request_fn_node,
+                ),
+                .ready => try entry.duplicates.append(self.allocator, request_fn_node),
+            }
+            return;
+        };
+
+        const replay_index = replay_state.entries.items.len;
+        try replay_state.entries.append(self.allocator, .{
+            .evidence = stored_evidence,
+            .provisional_ty = provisional_ty,
+            .representative = request_fn_node,
+        });
+        const bucket = try replay_state.buckets.getOrPut(address);
+        if (!bucket.found_existing) bucket.value_ptr.* = .empty;
+        try bucket.value_ptr.append(self.allocator, @intCast(replay_index));
+
+        var callee_ctx = try BodyContext.initWithMethodScope(
+            self.allocator,
+            self.builder,
+            callee_view,
+            self.method_scope,
+            template_ref,
+            self.graph,
+            self.draft,
+        );
+        defer callee_ctx.deinit();
+        callee_ctx.owner_context_fn_key = self.owner_context_fn_key;
+        callee_ctx.current_fn_key = self.current_fn_key;
+        callee_ctx.evidence = rootEvidence(template_ref, evidence);
+        const root_node = try callee_ctx.instNode(template.checked_fn_root);
+        if (template.target == .hosted) {
+            try relateHostedFunctionRequestInterface(
+                self.graph,
+                try self.builder.hostedTryAdapterCapability(callee_view, template.hosted_try_adapter),
+                root_node,
+                request_fn_node,
+            );
+        } else {
+            try relateFunctionRequestInterface(self.graph, root_node, request_fn_node);
+        }
+        try callee_ctx.instantiateTemplateDispatchRelations(template, null);
+
+        var active_local_scopes = std.AutoHashMap(checked.DispatchScopeId, NodeId).init(self.allocator);
+        defer active_local_scopes.deinit();
+        try callee_ctx.applyCheckedTemplateInterfaceScopeRelations(
+            template,
+            null,
+            root_node,
+            &active_local_scopes,
+            replay_state,
+        );
+        replay_state.entries.items[replay_index].status = .ready;
+    }
+
+    fn finishCheckedTemplateInterfaceReplay(
+        self: *BodyContext,
+        replay_state: *InterfaceReplayState,
+    ) Allocator.Error!void {
+        const final_types = try self.allocator.alloc(Type.TypeId, replay_state.entries.items.len);
+        defer self.allocator.free(final_types);
+        for (replay_state.entries.items, final_types) |entry, *final_ty| {
+            if (entry.status != .ready) {
+                Common.invariant("checked specialization interface replay did not finish");
+            }
+            final_ty.* = try self.graph.provisionalTypeViewForNode(entry.representative);
+        }
+        for (replay_state.entries.items, final_types) |entry, final_ty| {
+            for (entry.duplicates.items) |duplicate| {
+                try relateFunctionRequestInterface(
+                    self.graph,
+                    try self.graph.importMono(final_ty),
+                    duplicate,
+                );
+            }
+        }
     }
 
     fn lowerEntryWrapperAtCell(
@@ -26590,27 +26828,40 @@ const BodyContext = struct {
         root_expr: checked.CheckedExprId,
         template: checked.CheckedProcedureTemplate,
     ) Allocator.Error!?[]const SpecEvidence {
+        return self.rootEdgeEvidenceByExprForPurpose(
+            view,
+            root_expr,
+            template,
+            .body_lowering,
+        );
+    }
+
+    fn rootEdgeEvidenceByExprForPurpose(
+        self: *BodyContext,
+        view: ModuleView,
+        root_expr: checked.CheckedExprId,
+        template: checked.CheckedProcedureTemplate,
+        purpose: EvidenceMaterializationPurpose,
+    ) Allocator.Error!?[]const SpecEvidence {
         const refs = view.static_dispatch_plans.siteEvidence(root_expr) orelse return null;
         if (refs.len != template.evidence_params.len) {
             Common.invariant("compile-time root evidence length differed from its procedure template");
         }
-        return try self.materializeEvidence(refs);
+        return try self.materializeEvidenceForPurpose(refs, purpose);
     }
 
-    /// Root-edge evidence for a template that is (or evaluates) a
-    /// compile-time root: an entry wrapper, or a checked body whose root
-    /// expression is a root's body (the root drain requests those directly).
-    fn rootEdgeEvidence(
+    fn rootEdgeEvidenceForPurpose(
         self: *BodyContext,
         view: ModuleView,
         template: checked.CheckedProcedureTemplate,
+        purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error!?[]const SpecEvidence {
         const root_expr = switch (template.body) {
             .entry_wrapper => |wrapper_id| view.compile_time_roots.root(view.entry_wrappers.get(wrapper_id).root).expr,
             .checked_body => |body_id| view.bodies.body(body_id).root_expr,
             .intrinsic_wrapper => return null,
         };
-        return try self.rootEdgeEvidenceByExpr(view, root_expr, template);
+        return try self.rootEdgeEvidenceByExprForPurpose(view, root_expr, template, purpose);
     }
 
     fn lowerConstEvalTemplateUse(
@@ -31870,11 +32121,19 @@ const BodyContext = struct {
     /// substituting `constraint(k)` refs from this context's own chain. The
     /// result feeds a callee specialization's vector.
     fn materializeEvidence(self: *BodyContext, refs: []const static_dispatch.CheckedEvidence) Allocator.Error![]const SpecEvidence {
+        return self.materializeEvidenceForPurpose(refs, .body_lowering);
+    }
+
+    fn materializeEvidenceForPurpose(
+        self: *BodyContext,
+        refs: []const static_dispatch.CheckedEvidence,
+        purpose: EvidenceMaterializationPurpose,
+    ) Allocator.Error![]const SpecEvidence {
         if (refs.len == 0) return &.{};
         const arena = self.builder.evidence_arena.allocator();
         const out = try arena.alloc(SpecEvidence, refs.len);
         for (refs, 0..) |ref, i| {
-            out[i] = try self.materializeEvidenceRef(ref);
+            out[i] = try self.materializeEvidenceRef(ref, purpose);
         }
         return out;
     }
@@ -31912,17 +32171,21 @@ const BodyContext = struct {
                         component_node,
                     );
                 },
-                else => try self.materializeEvidenceRef(ref),
+                else => try self.materializeEvidenceRef(ref, .body_lowering),
             };
         }
         return out;
     }
 
-    fn materializeEvidenceRef(self: *BodyContext, ref: static_dispatch.CheckedEvidence) Allocator.Error!SpecEvidence {
+    fn materializeEvidenceRef(
+        self: *BodyContext,
+        ref: static_dispatch.CheckedEvidence,
+        purpose: EvidenceMaterializationPurpose,
+    ) Allocator.Error!SpecEvidence {
         switch (ref) {
             .direct => |node_id| {
                 const node = self.view.static_dispatch_plans.evidenceNode(node_id);
-                return .{ .target = try self.materializeEvidenceTarget(node) };
+                return .{ .target = try self.materializeEvidenceTarget(node, purpose) };
             },
             .constraint => |constraint_ref| {
                 const entry = self.evidence.at(constraint_ref) orelse
@@ -31936,10 +32199,17 @@ const BodyContext = struct {
         }
     }
 
-    fn materializeEvidenceTarget(self: *BodyContext, node: static_dispatch.EvidenceNode) Allocator.Error!*const SpecEvidenceTarget {
+    fn materializeEvidenceTarget(
+        self: *BodyContext,
+        node: static_dispatch.EvidenceNode,
+        purpose: EvidenceMaterializationPurpose,
+    ) Allocator.Error!*const SpecEvidenceTarget {
         const arena = self.builder.evidence_arena.allocator();
         const out = try arena.create(SpecEvidenceTarget);
-        const lookup = try self.withLocalProcContext(self.methodLookupForResolvedTarget(node.target));
+        const lookup = try self.methodLookupForEvidencePurpose(
+            self.methodLookupForResolvedTarget(node.target),
+            purpose,
+        );
         out.* = .{
             .view = lookup.view,
             .target = node.target,
@@ -31949,7 +32219,10 @@ const BodyContext = struct {
             },
             .local_proc_context = lookup.local_proc_context,
             .nested = switch (node.nested) {
-                .resolved => .{ .resolved = try self.materializeEvidence(self.view.static_dispatch_plans.nestedEvidence(node)) },
+                .resolved => .{ .resolved = try self.materializeEvidenceForPurpose(
+                    self.view.static_dispatch_plans.nestedEvidence(node),
+                    purpose,
+                ) },
                 .from_callable => .synthesize,
             },
         };
@@ -32096,8 +32369,16 @@ const BodyContext = struct {
     /// value use resolved in this context's module), or empty when the use
     /// carries no requirements.
     fn evidenceForUseSite(self: *BodyContext, expr: checked.CheckedExprId) Allocator.Error![]const SpecEvidence {
+        return self.evidenceForUseSiteForPurpose(expr, .body_lowering);
+    }
+
+    fn evidenceForUseSiteForPurpose(
+        self: *BodyContext,
+        expr: checked.CheckedExprId,
+        purpose: EvidenceMaterializationPurpose,
+    ) Allocator.Error![]const SpecEvidence {
         const refs = self.view.static_dispatch_plans.siteEvidence(expr) orelse return &.{};
-        return self.materializeEvidence(refs);
+        return self.materializeEvidenceForPurpose(refs, purpose);
     }
 
     /// Evidence vector for a dispatch plan's chosen target (the target's own
@@ -32500,6 +32781,22 @@ const BodyContext = struct {
             },
         }
         return contextual;
+    }
+
+    fn methodLookupForEvidencePurpose(
+        self: *BodyContext,
+        lookup: MethodLookup,
+        purpose: EvidenceMaterializationPurpose,
+    ) Allocator.Error!MethodLookup {
+        return switch (purpose) {
+            .body_lowering => try self.withLocalProcContext(lookup),
+            .specialization_interface => blk: {
+                if (lookup.local_proc_context != null) {
+                    Common.invariant("checked specialization-interface evidence unexpectedly carried a draft-local context");
+                }
+                break :blk lookup;
+            },
+        };
     }
 
     fn validateLocalProcContext(

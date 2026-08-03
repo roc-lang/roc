@@ -1843,6 +1843,70 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
     });
 }
 
+test "issue 10529 open Try chain with named local callback stays bounded" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\take0 = |b| {
+        \\    to_end = |_| End
+        \\    Ok({ val: b.get(0).map_err(to_end)?, rest: b.drop_first(1) })
+        \\}
+        \\take1 = |b| Ok({ val: take0(b)?.val, rest: take0(b)?.rest })
+        \\take2 = |b| Ok({ val: take1(b)?.val, rest: take1(b)?.rest })
+        \\take3 = |b| Ok({ val: take2(b)?.val, rest: take2(b)?.rest })
+        \\take4 = |b| Ok({ val: take3(b)?.val, rest: take3(b)?.rest })
+        \\take5 = |b| Ok({ val: take4(b)?.val, rest: take4(b)?.rest })
+        \\take6 = |b| Ok({ val: take5(b)?.val, rest: take5(b)?.rest })
+        \\
+        \\main : {} -> Try({ val : U8, rest : List(U8) }, [End, ..])
+        \\main = |_| take6([1, 2, 3])
+    ;
+
+    const counters = try monotypeCountersForModule(allocator, source);
+    try std.testing.expect(counters.template_misses <= 20);
+    try std.testing.expect(counters.nominal_backing_instantiations <= 300);
+}
+
+test "specialization interface replay follows returned local functions through wrappers" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\mk = |f| {
+        \\    show = || f({}).map_err(|_| ShowFailed)
+        \\    show
+        \\}
+        \\
+        \\wrap = |f| mk(f)
+        \\
+        \\main : {} -> Try({}, [ShowFailed])
+        \\main = |_| {
+        \\    f : {} -> Try({}, [Empty])
+        \\    f = |_| Ok({})
+        \\    wrap(f)()
+        \\}
+    ;
+
+    _ = try monotypeCountersForModule(allocator, source);
+}
+
+test "specialization interface replay keeps unequal generic requests distinct" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\make = |value| {
+        \\    get = || value
+        \\    get
+        \\}
+        \\
+        \\pair = |left, right| {
+        \\    left: make(left)(),
+        \\    right: make(right)(),
+        \\}
+        \\
+        \\main : {} -> { left : U64, right : Str }
+        \\main = |_| pair(1, "one")
+    ;
+
+    _ = try monotypeCountersForModule(allocator, source);
+}
+
 test "issue 9802 growing-structural map2 specialization counters are bounded" {
     const allocator = std.testing.allocator;
     const source =
