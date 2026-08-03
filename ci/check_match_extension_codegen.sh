@@ -38,9 +38,15 @@ trap 'rm -rf -- "$tmp_dir"' EXIT
 cd "$repo_root"
 
 # target:expected-instruction-count
+# arm64musl dropped from 91 to 82 when the aarch64 CPU model moved from
+# cortex_a76 to generic plus the named AES and DotProd features, so that
+# arm64musl binaries run on Armv8.0-A hardware. The whole count is one
+# procedure, and the loop it pins is unchanged; what went away is scheduling
+# driven by the cortex_a76 model, which unrolled this loop one step further.
+# Fewer instructions here means less unrolling, not less work per byte.
 expectations=(
     "x64musl:95"
-    "arm64musl:91"
+    "arm64musl:82"
 )
 
 failed=0

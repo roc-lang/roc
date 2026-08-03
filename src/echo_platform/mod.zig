@@ -62,6 +62,10 @@ pub const build_platform_main_source =
     \\        arm64musl: { inputs: [app] },
     \\        x64glibc: { inputs: [app] },
     \\        arm64glibc: { inputs: [app] },
+    \\        x64v1musl: { inputs: [app] },
+    \\        arm64v1musl: { inputs: [app] },
+    \\        x64v1glibc: { inputs: [app] },
+    \\        arm64v1glibc: { inputs: [app] },
     \\    }
     \\
     \\import Echo
@@ -92,6 +96,9 @@ pub const build_c_platform_main_source =
     \\        arm64mac: { inputs: [app] },
     \\        x64win: { inputs: [app] },
     \\        arm64win: { inputs: [app] },
+    \\        x64v1mac: { inputs: [app] },
+    \\        x64v1win: { inputs: [app] },
+    \\        arm64v1win: { inputs: [app] },
     \\    }
     \\
     \\import Echo
@@ -119,6 +126,7 @@ pub const build_wasm_archive_platform_main_source =
     \\    targets: {
     \\        inputs_dir: "targets/",
     \\        wasm32: { inputs: [app], output: Archive },
+    \\        wasm32v1: { inputs: [app], output: Archive },
     \\    }
     \\
     \\import Echo

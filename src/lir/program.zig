@@ -58,10 +58,13 @@ pub const CaptureSlot = struct {
     slot: u32,
     ty: const_store.ConstTypeId,
     plan: ConstPlanId,
-    /// This slot is the boxed runtime back-edge of an explicit recursive
-    /// constant binding. ConstStore records the checked identity instead of
-    /// traversing the runtime value back into itself.
-    recursive_const: bool = false,
+    storage: CaptureSlotStorage,
+};
+
+/// Physical storage used by a callable capture slot while storing its value.
+pub const CaptureSlotStorage = enum(u8) {
+    value,
+    recursive_box,
 };
 
 /// One runtime tag variant for a finite callable value.

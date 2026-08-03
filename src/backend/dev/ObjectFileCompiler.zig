@@ -260,6 +260,7 @@ fn compileWithCodeGen(
         layout_store,
         static_strings.entries,
         .preserve,
+        target.cpuLevel(),
     ) catch return CompilationError.OutOfMemory;
     defer codegen.deinit();
 
@@ -690,6 +691,11 @@ fn compileStaticDataObjectBytes(
 
 /// Runtime-to-comptime dispatch for compilation.
 /// Uses inline for over RocTarget enum fields to select the correct LirCodeGen instantiation.
+///
+/// Only default-CPU targets are instantiated. A `v1` target compiles through
+/// its default twin's instantiation and carries its CPU level as a runtime
+/// field, so the baseline targets cost no extra monomorphizations: they select
+/// different instruction sequences, not a different code generator.
 fn crossCompileDispatch(
     allocator: Allocator,
     lir_store: *const LirStore,
@@ -701,9 +707,11 @@ fn crossCompileDispatch(
     timing: ?*ObjectFileCompiler.Timing,
 ) CompilationError!CompilationResult {
     const enum_info = @typeInfo(RocTarget).@"enum";
+    const default_target = target.defaultCpuTarget();
     inline for (enum_info.fields) |field| {
         const comptime_target: RocTarget = @enumFromInt(field.value);
-        if (target == comptime_target) {
+        if (comptime comptime_target.defaultCpuTarget() != comptime_target) continue;
+        if (default_target == comptime_target) {
             const arch = comptime comptime_target.toCpuArch();
             if (comptime (arch == .x86_64 or arch == .aarch64 or arch == .aarch64_be)) {
                 return compileWithCodeGen(
@@ -714,7 +722,7 @@ fn crossCompileDispatch(
                     entrypoints,
                     static_data_exports,
                     proc_specs,
-                    comptime_target,
+                    target,
                     timing,
                 );
             } else {

@@ -1417,23 +1417,30 @@ pub fn listConcat(
     update_mode_b: UpdateMode,
     roc_ops: *RocOps,
 ) callconv(.c) RocList {
-    // Early return for empty lists - avoid unnecessary allocations
+    // Early return for empty lists - avoid unnecessary allocations.
+    //
+    // The surviving side is handed back as the result, so it has to satisfy the
+    // op's `result_unique` claim (`base/LowLevel.zig`): `makeUnique` returns it
+    // as-is when nobody else holds its allocation, and clones it when they do.
+    // Returning a shared allocation here would let ARC treat it as freshly
+    // owned and hand a later op a static in-place path into memory someone else
+    // is reading.
     if (list_a.isEmpty()) {
         if (list_b.isEmpty()) {
             // Both are empty, return list_a and clean up list_b
             list_b.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
-            return list_a;
+            return list_a.makeUnique(alignment, element_width, elements_refcounted, inc_context, inc, dec_context, dec, roc_ops);
         } else {
             // list_a is empty, list_b has elements - return list_b
             // list_a might still need decref if it has capacity
             list_a.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
-            return list_b;
+            return list_b.makeUnique(alignment, element_width, elements_refcounted, inc_context, inc, dec_context, dec, roc_ops);
         }
     } else if (list_b.isEmpty()) {
         // list_b is empty, list_a has elements - return list_a
         // list_b might still need decref if it has capacity
         list_b.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
-        return list_a;
+        return list_a.makeUnique(alignment, element_width, elements_refcounted, inc_context, inc, dec_context, dec, roc_ops);
     }
 
     // Check if both lists share the same underlying allocation.

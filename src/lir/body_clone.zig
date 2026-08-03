@@ -207,6 +207,7 @@ fn countStmtReads(store: *LirStore, counts: []u32, stmt: LIR.CFStmt) void {
         },
         .assign_call_erased => |s| {
             noteRead(counts, s.closure);
+            if (s.reuse_source) |reuse_source| noteRead(counts, reuse_source);
             const args = store.getLocalSpan(s.args);
             for (0..args.len) |index| noteRead(counts, GuardedList.at(args, index));
         },
@@ -388,6 +389,8 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .target = try self.mapLocal(s.target),
                     .closure = try self.mapLocal(s.closure),
                     .args = try self.mapLocalSpan(s.args),
+                    .reuse_closure = s.reuse_closure,
+                    .reuse_source = try self.mapMaybeLocal(s.reuse_source),
                     .next = try self.cloneStmt(s.next),
                 } }),
                 .assign_packed_erased_fn => |s| try self.store.addCFStmt(.{ .assign_packed_erased_fn = .{

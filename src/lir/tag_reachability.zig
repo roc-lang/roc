@@ -470,6 +470,7 @@ const Pass = struct {
             },
             .assign_call_erased => |s| {
                 self.noteUse(s.closure);
+                if (s.reuse_source) |reuse_source| self.noteUse(reuse_source);
                 const args = self.store.getLocalSpan(s.args);
                 for (0..args.len) |index| self.noteUse(GuardedList.at(args, index));
             },

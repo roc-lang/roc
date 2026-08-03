@@ -604,9 +604,9 @@ generate_platform_type_aliases_rust = |hosted_functions, provides_list, type_tab
 name_to_snake : Str -> Str
 name_to_snake = |name| {
 	name
-		->str_replace_all(".", "_")
-		->str_replace_all("!", "")
-		->to_lower_snake_case()
+		|> str_replace_all(".", "_")
+		|> str_replace_all("!", "")
+		|> to_lower_snake_case
 }
 
 ## Checks `name_to_snake` for this representative case.
@@ -626,7 +626,7 @@ name_to_rust_fn_suffix : Str -> Str
 name_to_rust_fn_suffix = |name| {
 	suffix =
 		RocName.from_str(name).to_lower_snake_identifier()
-			->RocName.strip_leading_underscores()
+			|> RocName.strip_leading_underscores
 
 	if suffix == "" or suffix == "_" {
 		"anon"
@@ -648,9 +648,9 @@ expect name_to_rust_fn_suffix("__AnonStruct10") == "anon_struct10"
 name_to_screaming_snake : Str -> Str
 name_to_screaming_snake = |name| {
 	name
-		->str_replace_all(".", "_")
-		->str_replace_all("!", "")
-		->to_screaming_snake_case()
+		|> str_replace_all(".", "_")
+		|> str_replace_all("!", "")
+		|> to_screaming_snake_case
 }
 
 ## Checks `name_to_screaming_snake` for this representative case.
@@ -1087,7 +1087,13 @@ generate_host_abi_types_rust =
 	\\}
 	\\
 	\\/// Uniform ABI function pointer stored in `RocErasedCallablePayload`.
-	\\pub type RocErasedCallableFn = extern "C" fn(*mut RocHost, *mut u8, *const u8, *mut u8);
+	\\///
+	\\/// The final `reuse` pointer is nullable. Non-null must be the callable data
+	\\/// pointer whose inline capture begins at `capture`; it transfers one owned
+	\\/// reference to the callee. The caller must not use or decref that ownership
+	\\/// unit after the call. The callee consumes it exactly once, whether or not the
+	\\/// result can reuse the allocation.
+	\\pub type RocErasedCallableFn = extern "C" fn(*mut RocHost, *mut u8, *const u8, *mut u8, *mut u8);
 	\\
 	\\/// Final-drop callback for inline erased-callable captures.
 	\\pub type RocErasedCallableOnDrop = extern "C" fn(*mut u8, *mut RocHost);
@@ -1955,14 +1961,14 @@ generate_single_tag_union_rust = |type_table, duplicate_names, preferred_names, 
 				$union_fields = Str.concat($union_fields, "    pub ${snake}: core::mem::ManuallyDrop<${rust_type}>,\n")
 				$payload_accessors = Str.concat(
 					$payload_accessors,
-					"    #[cfg(target_pointer_width = \"32\")]\n    pub fn payload_${snake}(&self) -> ${rust_type} {\n        unsafe { core::ptr::read(self.payload.as_ptr() as *const ${rust_type}) }\n    }\n\n    #[cfg(not(target_pointer_width = \"32\"))]\n    pub fn payload_${snake}(&self) -> ${rust_type} {\n        unsafe { core::mem::ManuallyDrop::into_inner(self.payload.${snake}) }\n    }\n\n",
+					"    /// Borrow the `${union_tag.name}` payload without creating another owner.\n    ///\n    /// # Safety\n    /// `self.tag` must be `${struct_name}Tag::${capitalize_first(union_tag.name)}` and the payload must still be initialized.\n    #[cfg(target_pointer_width = \"32\")]\n    pub unsafe fn borrow_payload_${snake}_unchecked(&self) -> &${rust_type} {\n        unsafe { &*(self.payload.as_ptr() as *const ${rust_type}) }\n    }\n\n    /// Borrow the `${union_tag.name}` payload without creating another owner.\n    ///\n    /// # Safety\n    /// `self.tag` must be `${struct_name}Tag::${capitalize_first(union_tag.name)}` and the payload must still be initialized.\n    #[cfg(not(target_pointer_width = \"32\"))]\n    pub unsafe fn borrow_payload_${snake}_unchecked(&self) -> &${rust_type} {\n        unsafe { &*(&self.payload.${snake} as *const core::mem::ManuallyDrop<${rust_type}> as *const ${rust_type}) }\n    }\n\n    /// Move the `${union_tag.name}` payload out of one owned tag-union shell.\n    ///\n    /// # Safety\n    /// `self.tag` must be `${struct_name}Tag::${capitalize_first(union_tag.name)}`. After this call, `self` is logically uninitialized and must not be read or destroyed.\n    #[cfg(target_pointer_width = \"32\")]\n    pub unsafe fn take_payload_${snake}_unchecked(&mut self) -> ${rust_type} {\n        unsafe { core::ptr::read(self.payload.as_ptr() as *const ${rust_type}) }\n    }\n\n    /// Move the `${union_tag.name}` payload out of one owned tag-union shell.\n    ///\n    /// # Safety\n    /// `self.tag` must be `${struct_name}Tag::${capitalize_first(union_tag.name)}`. After this call, `self` is logically uninitialized and must not be read or destroyed.\n    #[cfg(not(target_pointer_width = \"32\"))]\n    pub unsafe fn take_payload_${snake}_unchecked(&mut self) -> ${rust_type} {\n        unsafe { core::mem::ManuallyDrop::take(&mut self.payload.${snake}) }\n    }\n\n",
 				)
 			} else {
 				tuple_name = "${struct_name}${capitalize_first(union_tag.name)}Payload"
 				$union_fields = Str.concat($union_fields, "    pub ${snake}: core::mem::ManuallyDrop<${tuple_name}>,\n")
 				$payload_accessors = Str.concat(
 					$payload_accessors,
-					"    #[cfg(target_pointer_width = \"32\")]\n    pub fn payload_${snake}(&self) -> ${tuple_name} {\n        unsafe { core::ptr::read(self.payload.as_ptr() as *const ${tuple_name}) }\n    }\n\n    #[cfg(not(target_pointer_width = \"32\"))]\n    pub fn payload_${snake}(&self) -> ${tuple_name} {\n        unsafe { core::mem::ManuallyDrop::into_inner(self.payload.${snake}) }\n    }\n\n",
+					"    /// Borrow the `${union_tag.name}` payload without creating another owner.\n    ///\n    /// # Safety\n    /// `self.tag` must be `${struct_name}Tag::${capitalize_first(union_tag.name)}` and the payload must still be initialized.\n    #[cfg(target_pointer_width = \"32\")]\n    pub unsafe fn borrow_payload_${snake}_unchecked(&self) -> &${tuple_name} {\n        unsafe { &*(self.payload.as_ptr() as *const ${tuple_name}) }\n    }\n\n    /// Borrow the `${union_tag.name}` payload without creating another owner.\n    ///\n    /// # Safety\n    /// `self.tag` must be `${struct_name}Tag::${capitalize_first(union_tag.name)}` and the payload must still be initialized.\n    #[cfg(not(target_pointer_width = \"32\"))]\n    pub unsafe fn borrow_payload_${snake}_unchecked(&self) -> &${tuple_name} {\n        unsafe { &*(&self.payload.${snake} as *const core::mem::ManuallyDrop<${tuple_name}> as *const ${tuple_name}) }\n    }\n\n    /// Move the `${union_tag.name}` payload out of one owned tag-union shell.\n    ///\n    /// # Safety\n    /// `self.tag` must be `${struct_name}Tag::${capitalize_first(union_tag.name)}`. After this call, `self` is logically uninitialized and must not be read or destroyed.\n    #[cfg(target_pointer_width = \"32\")]\n    pub unsafe fn take_payload_${snake}_unchecked(&mut self) -> ${tuple_name} {\n        unsafe { core::ptr::read(self.payload.as_ptr() as *const ${tuple_name}) }\n    }\n\n    /// Move the `${union_tag.name}` payload out of one owned tag-union shell.\n    ///\n    /// # Safety\n    /// `self.tag` must be `${struct_name}Tag::${capitalize_first(union_tag.name)}`. After this call, `self` is logically uninitialized and must not be read or destroyed.\n    #[cfg(not(target_pointer_width = \"32\"))]\n    pub unsafe fn take_payload_${snake}_unchecked(&mut self) -> ${tuple_name} {\n        unsafe { core::mem::ManuallyDrop::take(&mut self.payload.${snake}) }\n    }\n\n",
 				)
 			}
 			$union_tag_idx = $union_tag_idx + 1
@@ -2249,7 +2255,12 @@ generate_tag_payload_refcount_branch_rust = |type_table, duplicate_names, prefer
 		if body == "" {
 			"        ${struct_name}Tag::${variant} => {},\n"
 		} else {
-			"        ${struct_name}Tag::${variant} => {\n            let payload = value.payload_${snake}();\n${indent_lines(body, "        ")}        },\n"
+			payload_binding = if mode == "decref" {
+				"            let payload = unsafe { value.take_payload_${snake}_unchecked() };\n"
+			} else {
+				"            let payload = unsafe { core::ptr::read(value.borrow_payload_${snake}_unchecked()) };\n"
+			}
+			"        ${struct_name}Tag::${variant} => {\n${payload_binding}${indent_lines(body, "        ")}        },\n"
 		}
 	} else {
 		var $statements = ""
@@ -2268,7 +2279,12 @@ generate_tag_payload_refcount_branch_rust = |type_table, duplicate_names, prefer
 		if $statements == "" {
 			"        ${struct_name}Tag::${variant} => {},\n"
 		} else {
-			"        ${struct_name}Tag::${variant} => {\n            let payload = value.payload_${snake}();\n${$statements}        },\n"
+			payload_binding = if mode == "decref" {
+				"            let payload = unsafe { value.take_payload_${snake}_unchecked() };\n"
+			} else {
+				"            let payload = unsafe { core::ptr::read(value.borrow_payload_${snake}_unchecked()) };\n"
+			}
+			"        ${struct_name}Tag::${variant} => {\n${payload_binding}${$statements}        },\n"
 		}
 	}
 }
@@ -2288,8 +2304,22 @@ generate_tag_union_refcount_helpers_rust = |type_table, duplicate_names, preferr
 		$decref_branches = Str.concat($decref_branches, generate_tag_payload_refcount_branch_rust(type_table, duplicate_names, preferred_names, struct_name, tag, "decref"))
 		$incref_branches = Str.concat($incref_branches, generate_tag_payload_refcount_branch_rust(type_table, duplicate_names, preferred_names, struct_name, tag, "incref"))
 	}
+	decref_moves_payload = List.any(
+		tu.tags,
+		|tag|
+			List.any(
+				tag.payload,
+				|payload_id|
+					decref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, payload_id, "payload") != "",
+			),
+	)
+	decref_value_binding = if decref_moves_payload {
+		"        let mut value = self;\n"
+	} else {
+		"        let value = self;\n"
+	}
 
-	"impl ${struct_name} {\n    /// Recursively decrement Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must own one live Roc reference for each refcounted payload.\n    pub unsafe fn decref(self, roc_host: &RocHost) {\n        let value = self;\n        let _ = roc_host;\n        match value.tag {\n${indent_lines($decref_branches, "    ")}        }\n    }\n\n    /// Increment Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must point at live Roc allocations. The retained references must\n    /// be balanced by later decrefs.\n    pub unsafe fn incref(self, amount: isize) {\n        let value = self;\n        let _ = amount;\n        match value.tag {\n${indent_lines($incref_branches, "    ")}        }\n    }\n}\n\n"
+	"impl ${struct_name} {\n    /// Recursively decrement Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must own one live Roc reference for each refcounted payload.\n    pub unsafe fn decref(self, roc_host: &RocHost) {\n${decref_value_binding}        let _ = roc_host;\n        match value.tag {\n${indent_lines($decref_branches, "    ")}        }\n    }\n\n    /// Increment Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must point at live Roc allocations. The retained references must\n    /// be balanced by later decrefs.\n    pub unsafe fn incref(self, amount: isize) {\n        let value = self;\n        let _ = amount;\n        match value.tag {\n${indent_lines($incref_branches, "    ")}        }\n    }\n}\n\n"
 }
 
 generate_box_payload_decref_helpers_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames -> Str

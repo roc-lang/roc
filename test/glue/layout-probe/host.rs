@@ -342,11 +342,11 @@ fn check_provided_abi() {
         }
 
         let tag = abi::roc_make_vector_tag();
-        let tag_back = abi::roc_provide_vector_tag(tag);
+        let mut tag_back = abi::roc_provide_vector_tag(tag);
         if tag_back.tag != abi::ProbeVectorTagTag::Pair {
             fail("provided vector tag discriminant mismatch");
         } else {
-            let pair = tag_back.payload_pair();
+            let pair = tag_back.take_payload_pair_unchecked();
             if pair._0 != 0x1020304050607080
                 || vector_bits(pair._1) != 0x00112233445566778899aabbccddeeff
             {

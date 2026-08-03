@@ -182,11 +182,11 @@ r = {
 				(ty-args
 					(ty-underscore)
 					(ty-rigid-var (name "b")))))
-		(alias (type "D")
+		(alias (type "Error")
 			(ty-header (name "D")))
-		(alias (type "E")
+		(alias (type "Error")
 			(ty-header (name "E")))
-		(alias (type "F")
+		(alias (type "Error")
 			(ty-header (name "F"))))
 	(expressions
 		(expr (type "{}"))))
