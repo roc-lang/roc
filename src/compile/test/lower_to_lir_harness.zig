@@ -123,6 +123,17 @@ pub fn expectLirInspection(app_body: []const u8, inspect: LirInspectFn) LowerToL
     try runToLir(app_body, null, .{}, inspect);
 }
 
+/// Lower an app whose body is `app_body` to LIR with explicit lowering
+/// options, then run a focused invariant check against the actual lowered
+/// store and layout store.
+pub fn expectLirInspectionWithOptions(
+    app_body: []const u8,
+    opts: LirLoweringOptions,
+    inspect: LirInspectFn,
+) LowerToLirHarnessError!void {
+    try runToLir(app_body, null, opts, inspect);
+}
+
 /// Lower `app_body` twice and assert the two LIR dumps are byte-identical, so
 /// a regression that made lowering (e.g. capture order) depend on iteration or
 /// scheduling order would fail here rather than silently.
