@@ -10118,7 +10118,7 @@ fn generateRemainingWhereConstraintOwners(
 ) std.mem.Allocator.Error!bool {
     var invalid_receiver = false;
     for (self.cir.store.sliceWhereClauseOwners(where_span)) |owner| {
-        if (owner.introduced_in_scope) {
+        if (owner.owned_by_annotation) {
             try self.generateAnnoTypeInPlace(@enumFromInt(owner.rigid_var), env, ctx);
             continue;
         }
@@ -10201,7 +10201,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 .annotation => |mb_where| blk: {
                     const where_span = mb_where orelse break :blk &.{};
                     for (self.cir.store.sliceWhereClauseOwners(where_span)) |owner| {
-                        if (owner.rigid_var == @intFromEnum(anno_idx) and owner.introduced_in_scope) {
+                        if (owner.rigid_var == @intFromEnum(anno_idx) and owner.owned_by_annotation) {
                             break :blk self.cir.store.sliceWhereClausesForOwner(owner);
                         }
                     }
