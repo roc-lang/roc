@@ -252,8 +252,8 @@ active_decl_import_aliases: std.AutoHashMapUnmanaged(Ident.Idx, usize) = .{},
 active_decl_import_alias_entries: std.ArrayListUnmanaged(ActiveDeclImportAliasEntry) = .empty,
 /// Import aliases already prepared from parser declarations before source-order canonicalization.
 forward_prepared_import_aliases: std.AutoHashMapUnmanaged(AST.Statement.Idx, void) = .{},
-/// Special scope for rigid type variables in annotations
-type_vars_scope: base.Scratch(TypeVarScope),
+/// Active rigid type variables in annotations, indexed for expected constant-time lookup.
+type_var_scopes: TypeVarScopes = .{},
 /// Set of identifiers exposed from this module header (values not used)
 exposed_idents: std.AutoHashMapUnmanaged(Ident.Idx, void) = .{},
 /// Set of types exposed from this module header (values not used)
@@ -600,7 +600,7 @@ pub fn deinit(
     // Use self.env.gpa for consistency with internal methods that populate these structures
     const gpa = self.env.gpa;
 
-    self.type_vars_scope.deinit();
+    self.type_var_scopes.deinit(gpa);
     self.exposed_idents.deinit(gpa);
     self.exposed_types.deinit(gpa);
     self.exposed_ident_texts.deinit(gpa);
@@ -740,7 +740,7 @@ fn initInternal(
         .scratch_seen_tags = try base.Scratch(SeenTag).init(gpa),
         .scratch_expr_ids = try base.Scratch(Expr.Idx).init(gpa),
         .scratch_pattern_ids = try base.Scratch(Pattern.Idx).init(gpa),
-        .type_vars_scope = try base.Scratch(TypeVarScope).init(gpa),
+        .type_var_scopes = .{},
         .scratch_tags = try base.Scratch(types.Tag).init(gpa),
         .scratch_free_vars = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_captures = try base.Scratch(Pattern.Idx).init(gpa),
@@ -3763,17 +3763,10 @@ fn canonicalizeAssociatedItems(
                     continue;
                 };
 
-                // First, make the top of our scratch list
-                const type_vars_top: u32 = @intCast(self.scratch_idents.top());
-
-                // Extract type variables from the AST annotation
-                try self.extractTypeVarIdentsFromASTAnno(ta.anno, type_vars_top);
-
                 // Enter a new type var scope
                 const type_var_scope = self.scopeEnterTypeVar();
                 var keep_type_var_scope_for_body = false;
                 defer if (!keep_type_var_scope_for_body) self.scopeExitTypeVar(type_var_scope);
-                std.debug.assert(type_var_scope.idx == 0);
 
                 // Now canonicalize the annotation with type variables in scope
                 const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .local_anno);
@@ -4332,16 +4325,10 @@ pub fn canonicalizeFile(
                     continue;
                 };
 
-                // First, make the top of our scratch list
-                const type_vars_top: u32 = @intCast(self.scratch_idents.top());
-
-                // Extract type variables from the AST annotation
-                try self.extractTypeVarIdentsFromASTAnno(ta.anno, type_vars_top);
-
                 // Enter a new type var scope
                 const type_var_scope = self.scopeEnterTypeVar();
                 defer self.scopeExitTypeVar(type_var_scope);
-                std.debug.assert(type_var_scope.idx == 0);
+                std.debug.assert(type_var_scope.depth == 0);
 
                 // Now canonicalize the annotation with type variables in scope
                 const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .local_anno);
@@ -9519,12 +9506,10 @@ fn canonicalizeStandaloneTypeAnnoStatement(
         };
     };
 
-    const type_vars_top: u32 = @intCast(self.scratch_idents.top());
     const type_var_scope = self.scopeEnterTypeVar();
     defer self.scopeExitTypeVar(type_var_scope);
 
     const type_anno_idx = try self.canonicalizeTypeAnno(type_anno.anno, .local_anno);
-    try self.extractTypeVarIdentsFromASTAnno(type_anno.anno, type_vars_top);
 
     const where_clauses = if (type_anno.where) |where_coll| inner_blk: {
         const where_slice = self.parse_ir.store.whereClauseSlice(.{ .span = self.parse_ir.store.getCollection(where_coll).span });
@@ -11241,13 +11226,11 @@ fn runExprKernel(
                         break :type_anno_blk;
                     };
 
-                    const type_vars_top: u32 = @intCast(self.scratch_idents.top());
                     const type_var_scope = self.scopeEnterTypeVar();
                     var keep_type_var_scope_for_body = false;
                     defer if (!keep_type_var_scope_for_body) self.scopeExitTypeVar(type_var_scope);
 
                     const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .local_anno);
-                    try self.extractTypeVarIdentsFromASTAnno(ta.anno, type_vars_top);
 
                     const where_clauses = if (ta.where) |where_coll| inner_blk: {
                         const where_slice = self.parse_ir.store.whereClauseSlice(.{ .span = self.parse_ir.store.getCollection(where_coll).span });
@@ -19385,23 +19368,79 @@ const CanonicalizedStatement = struct {
 
 // special type var scope //
 
-/// A type variable in scope
-const TypeVarScope = struct {
-    ident: Ident.Idx,
-    anno_idx: CIR.TypeAnno.Idx,
+/// A LIFO marker into the scoped type-variable change log.
+const TypeVarScopeIdx = struct {
+    change_top: usize,
+    depth: usize,
 };
 
-/// Marker into the type var scope array, provided on scope enter, used on scope exit
-const TypeVarScopeIdx = struct { idx: u32 };
+/// Active rigid variables with an undo log for allocation-free scope exit.
+const TypeVarScopes = struct {
+    active: std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx) = .{},
+    changes: std.ArrayListUnmanaged(Ident.Idx) = .empty,
+    depth: usize = 0,
+
+    fn deinit(self: *TypeVarScopes, gpa: std.mem.Allocator) void {
+        self.active.deinit(gpa);
+        self.changes.deinit(gpa);
+    }
+
+    fn enter(self: *TypeVarScopes) TypeVarScopeIdx {
+        const scope_idx = TypeVarScopeIdx{
+            .change_top = self.changes.items.len,
+            .depth = self.depth,
+        };
+        self.depth += 1;
+        return scope_idx;
+    }
+
+    fn exit(self: *TypeVarScopes, scope_idx: TypeVarScopeIdx) void {
+        std.debug.assert(self.depth == scope_idx.depth + 1);
+        std.debug.assert(self.changes.items.len >= scope_idx.change_top);
+
+        while (self.changes.items.len > scope_idx.change_top) {
+            const ident = self.changes.pop().?;
+            const removed = self.active.remove(ident);
+            std.debug.assert(removed);
+        }
+
+        self.depth = scope_idx.depth;
+    }
+
+    fn lookup(self: *const TypeVarScopes, ident: Ident.Idx) ?CIR.TypeAnno.Idx {
+        return self.active.get(ident);
+    }
+
+    fn introduce(
+        self: *TypeVarScopes,
+        gpa: std.mem.Allocator,
+        ident: Ident.Idx,
+        anno_idx: CIR.TypeAnno.Idx,
+    ) std.mem.Allocator.Error!TypeVarIntroduceResult {
+        const entry = try self.active.getOrPut(gpa, ident);
+        if (entry.found_existing) {
+            return .{ .already_in_scope = entry.value_ptr.* };
+        }
+
+        entry.value_ptr.* = anno_idx;
+        errdefer {
+            const removed = self.active.remove(ident);
+            std.debug.assert(removed);
+        }
+
+        try self.changes.append(gpa, ident);
+        return .success;
+    }
+};
 
 /// Enter a type var scope
 fn scopeEnterTypeVar(self: *Self) TypeVarScopeIdx {
-    return .{ .idx = self.type_vars_scope.top() };
+    return self.type_var_scopes.enter();
 }
 
 /// Exit a type var scope
 fn scopeExitTypeVar(self: *Self, scope_idx: TypeVarScopeIdx) void {
-    self.type_vars_scope.clearFrom(scope_idx.idx);
+    self.type_var_scopes.exit(scope_idx);
 }
 
 /// Result of looking up a type variable
@@ -19412,13 +19451,8 @@ const TypeVarLookupResult = union(enum) {
 
 /// Lookup a type variable in the scope hierarchy
 fn scopeLookupTypeVar(self: *const Self, name_ident: Ident.Idx) TypeVarLookupResult {
-    var i = self.type_vars_scope.items.items.len;
-    while (i > 0) {
-        i -= 1;
-        const entry = self.type_vars_scope.items.items[i];
-        if (entry.ident.eql(name_ident)) {
-            return TypeVarLookupResult{ .found = entry.anno_idx };
-        }
+    if (self.type_var_scopes.lookup(name_ident)) |anno_idx| {
+        return .{ .found = anno_idx };
     }
     return .not_found;
 }
@@ -19431,15 +19465,7 @@ const TypeVarIntroduceResult = union(enum) {
 
 /// Introduce a type variable into the current scope
 fn scopeIntroduceTypeVar(self: *Self, name_ident: Ident.Idx, type_var_anno: TypeAnno.Idx) std.mem.Allocator.Error!TypeVarIntroduceResult {
-    // Check if it's already in scope
-    for (self.type_vars_scope.items.items) |entry| {
-        if (entry.ident.eql(name_ident)) {
-            return .{ .already_in_scope = entry.anno_idx };
-        }
-    }
-
-    try self.type_vars_scope.append(TypeVarScope{ .ident = name_ident, .anno_idx = type_var_anno });
-    return .success;
+    return self.type_var_scopes.introduce(self.env.gpa, name_ident, type_var_anno);
 }
 
 // scope //
@@ -19565,101 +19591,6 @@ fn introduceTypeParametersFromHeader(self: *Self, header_idx: CIR.TypeHeader.Idx
         const param = self.env.store.getTypeAnno(param_idx);
         if (param == .rigid_var) {
             _ = try self.scopeIntroduceTypeVar(param.rigid_var.name, param_idx);
-        }
-    }
-}
-
-fn extractTypeVarIdentsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, idents_start_idx: u32) std.mem.Allocator.Error!void {
-    var stack_allocator_state = std.heap.stackFallback(1024, self.env.gpa);
-    const stack_allocator = stack_allocator_state.get();
-    var pending: std.ArrayList(AST.TypeAnno.Idx) = .empty;
-    defer pending.deinit(stack_allocator);
-
-    try pending.append(stack_allocator, anno_idx);
-    while (pending.pop()) |current_idx| {
-        switch (self.parse_ir.store.getTypeAnno(current_idx)) {
-            .ty_var => |ty_var| {
-                if (self.parse_ir.tokens.resolveIdentifier(ty_var.tok)) |ident| {
-                    var already_added = false;
-                    for (self.scratch_idents.sliceFromStart(idents_start_idx)) |existing| {
-                        if (existing.eql(ident)) {
-                            already_added = true;
-                            break;
-                        }
-                    }
-                    if (!already_added) {
-                        try self.scratch_idents.append(ident);
-                    }
-                }
-            },
-            .underscore_type_var => |underscore_ty_var| {
-                if (self.parse_ir.tokens.resolveIdentifier(underscore_ty_var.tok)) |ident| {
-                    var already_added = false;
-                    for (self.scratch_idents.sliceFromStart(idents_start_idx)) |existing| {
-                        if (existing.eql(ident)) {
-                            already_added = true;
-                            break;
-                        }
-                    }
-                    if (!already_added) {
-                        try self.scratch_idents.append(ident);
-                    }
-                }
-            },
-            .apply => |apply| {
-                const args = self.parse_ir.store.typeAnnoSlice(apply.args);
-                var i = args.len;
-                while (i > 0) {
-                    i -= 1;
-                    try pending.append(stack_allocator, args[i]);
-                }
-            },
-            .@"fn" => |fn_anno| {
-                try pending.append(stack_allocator, fn_anno.ret);
-                const args = self.parse_ir.store.typeAnnoSlice(fn_anno.args);
-                var i = args.len;
-                while (i > 0) {
-                    i -= 1;
-                    try pending.append(stack_allocator, args[i]);
-                }
-            },
-            .tuple => |tuple| {
-                const elems = self.parse_ir.store.typeAnnoSlice(tuple.annos);
-                var i = elems.len;
-                while (i > 0) {
-                    i -= 1;
-                    try pending.append(stack_allocator, elems[i]);
-                }
-            },
-            .parens => |parens| {
-                try pending.append(stack_allocator, parens.anno);
-            },
-            .record => |record| {
-                if (record.ext == .named) {
-                    try pending.append(stack_allocator, record.ext.named.anno);
-                }
-                const fields = self.parse_ir.store.annoRecordFieldSlice(record.fields);
-                var i = fields.len;
-                while (i > 0) {
-                    i -= 1;
-                    const field = self.parse_ir.store.getAnnoRecordField(fields[i]) catch |err| switch (err) {
-                        error.MalformedNode => continue,
-                    };
-                    try pending.append(stack_allocator, field.ty);
-                }
-            },
-            .tag_union => |tag_union| {
-                if (tag_union.ext == .named) {
-                    try pending.append(stack_allocator, tag_union.ext.named.anno);
-                }
-                const tags = self.parse_ir.store.typeAnnoSlice(tag_union.tags);
-                var i = tags.len;
-                while (i > 0) {
-                    i -= 1;
-                    try pending.append(stack_allocator, tags[i]);
-                }
-            },
-            .ty, .underscore, .malformed => {},
         }
     }
 }
