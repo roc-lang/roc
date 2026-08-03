@@ -292,6 +292,7 @@ fn runWasm(allocator: Allocator, program: Program) WasmError!Result {
         allocator,
         program.store,
         program.layouts,
+        .default,
     );
     defer codegen.deinit();
 

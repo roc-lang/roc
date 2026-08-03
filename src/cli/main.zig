@@ -501,7 +501,13 @@ const BuiltinsObjects = struct {
     const arm64mac_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/roc_builtins_extern.o");
 
     /// Get the appropriate builtins object bytes for the given target
-    pub fn forTarget(target: RocTarget) []const u8 {
+    ///
+    /// A `v1` target uses its default twin's object. The cross-compile target
+    /// queries in `build.zig` name no CPU model, so Zig resolves them to the
+    /// architecture baseline and these objects already contain no instruction
+    /// above it. `assertCrossTargetsAreBaseline` in `build.zig` keeps that true.
+    pub fn forTarget(requested: RocTarget) []const u8 {
+        const target = requested.defaultCpuTarget();
         return switch (target) {
             .x64musl => x64musl,
             .arm64musl => arm64musl,
@@ -517,8 +523,10 @@ const BuiltinsObjects = struct {
         };
     }
 
-    /// Get the extern-symbol-mode builtins object bytes for the given target
-    pub fn forTargetExtern(target: RocTarget) []const u8 {
+    /// Get the extern-symbol-mode builtins object bytes for the given target.
+    /// See `forTarget` for why a `v1` target shares its twin's object.
+    pub fn forTargetExtern(requested: RocTarget) []const u8 {
+        const target = requested.defaultCpuTarget();
         return switch (target) {
             .x64musl => x64musl_extern,
             .arm64musl => arm64musl_extern,
@@ -562,7 +570,8 @@ fn DefaultPlatformObjects(comptime base_name: []const u8) type {
         const x64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/" ++ base_name ++ ".obj");
         const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/" ++ base_name ++ ".obj");
 
-        pub fn forTarget(target: RocTarget) ?[]const u8 {
+        pub fn forTarget(requested: RocTarget) ?[]const u8 {
+            const target = requested.defaultCpuTarget();
             return switch (target) {
                 .x64musl => x64musl,
                 .arm64musl => arm64musl,
@@ -7366,8 +7375,10 @@ fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, original_source: [
 
 fn defaultBuildPlatformSource(args: cli_args.BuildArgs) []const u8 {
     if (args.target) |target_str| {
-        if (RocTarget.fromString(target_str)) |target| {
-            return switch (target) {
+        if (RocTarget.fromString(target_str)) |requested| {
+            // Which default platform a target gets follows from its OS and
+            // architecture, which a `v1` target shares with its default twin.
+            return switch (requested.defaultCpuTarget()) {
                 .x64mac, .arm64mac, .x64win, .arm64win => echo_platform.build_c_platform_main_source,
                 .wasm32 => echo_platform.build_wasm_archive_platform_main_source,
                 else => echo_platform.build_platform_main_source,
@@ -8015,6 +8026,7 @@ fn writeDevWasmObject(
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
     static_data_exports: []const backend.StaticDataExport,
+    cpu_level: roc_target.CpuLevel,
 ) CliMainError![]const u8 {
     if (entrypoints.len == 0) {
         if (builtin.mode == .Debug) {
@@ -8037,6 +8049,7 @@ fn writeDevWasmObject(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
         &wasm_module,
+        cpu_level,
     );
     wasm_module_owned_here = false;
     defer codegen.deinit();
@@ -8128,7 +8141,7 @@ fn rocBuildWasmSurgical(
     if (link_type == .archive) {
         // Archives package whatever inputs the platform declared (possibly
         // just the app); no platform wasm file is required.
-        const obj_path = try writeDevWasmObject(ctx, build_cache_dir, lowered, entrypoints, static_data_exports);
+        const obj_path = try writeDevWasmObject(ctx, build_cache_dir, lowered, entrypoints, static_data_exports, target.cpuLevel());
         try writeArchiveOutput(ctx, .wasm32, final_output_path, link_inputs, &.{obj_path});
         return;
     }
@@ -8142,7 +8155,7 @@ fn rocBuildWasmSurgical(
     defer freeOwnedWasmInputs(ctx, &owned_inputs);
 
     if (link_inputs.wasm != null) {
-        const obj_path = try writeDevWasmObject(ctx, build_cache_dir, lowered, entrypoints, static_data_exports);
+        const obj_path = try writeDevWasmObject(ctx, build_cache_dir, lowered, entrypoints, static_data_exports, target.cpuLevel());
         const object_files = try ctx.arena.alloc([]const u8, 1);
         object_files[0] = obj_path;
         const wasm_exports = try collectWasmPlatformExports(ctx, link_inputs, &owned_inputs);
@@ -8218,6 +8231,7 @@ fn rocBuildWasmSurgical(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
         &wasm_module,
+        target.cpuLevel(),
     );
     defer codegen.deinit();
     loaded_module = false;

@@ -1460,6 +1460,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!ValueLocation {
             const args = self.store.getLocalSpan(ll.args);
 
+            // A baseline target computes the SIMD ops whose native instructions
+            // are above its architecture's oldest revision by calling the
+            // target-independent implementation instead of emitting them.
+            if (self.simdOpUsesBaselineBuiltin(ll.op)) {
+                return self.generateSimdViaBuiltin(ll, args);
+            }
+
             switch (ll.op) {
                 .num_plus_wrap, .num_minus_wrap, .num_times_wrap => unreachable,
                 .list_len => {
@@ -4737,6 +4744,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.codegen.emitLoadImm(low_reg, @bitCast(low));
             try self.codegen.emitLoadImm(high_reg, @bitCast(high));
             if (comptime target.toCpuArch() == .x86_64) {
+                if (self.cpu_level == .v1) {
+                    // PINSRQ is SSE4.1. Assembling the constant in a stack slot
+                    // and loading it back uses only baseline instructions.
+                    const slot = self.codegen.allocStackSlot(16);
+                    try self.codegen.emitStoreStack(.w64, slot, low_reg);
+                    try self.codegen.emitStoreStack(.w64, slot + 8, high_reg);
+                    try self.codegen.emitLoadStackV128(result, slot);
+                    return .{ .reg = result, .temporary = true };
+                }
                 try self.codegen.emit.movVectorFromGeneral(result, low_reg, true);
                 try self.codegen.emit.insertQword(result, high_reg, 1);
             } else {
@@ -4825,6 +4841,30 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!void {
             if (comptime target.toCpuArch() == .x86_64) {
                 try self.codegen.emit.movVectorFromGeneral(dst, src, kind.laneBits() == 64);
+                if (self.cpu_level == .v1) {
+                    // VPBROADCAST is AVX2. SSE2 widens the scalar to the full
+                    // register by repeatedly interleaving it with itself, then
+                    // copying the resulting dword across all four lanes.
+                    switch (kind.laneBits()) {
+                        // punpcklbw, punpcklwd, pshufd
+                        8 => {
+                            try self.codegen.emit.sseRegReg(.map_0f, .p66, 0x60, dst, dst);
+                            try self.codegen.emit.sseRegReg(.map_0f, .p66, 0x61, dst, dst);
+                            try self.codegen.emit.sseRegRegImm8(.map_0f, .p66, 0x70, dst, dst, 0x00);
+                        },
+                        // punpcklwd, pshufd
+                        16 => {
+                            try self.codegen.emit.sseRegReg(.map_0f, .p66, 0x61, dst, dst);
+                            try self.codegen.emit.sseRegRegImm8(.map_0f, .p66, 0x70, dst, dst, 0x00);
+                        },
+                        // pshufd
+                        32 => try self.codegen.emit.sseRegRegImm8(.map_0f, .p66, 0x70, dst, dst, 0x00),
+                        // punpcklqdq
+                        64 => try self.codegen.emit.sseRegReg(.map_0f, .p66, 0x6C, dst, dst),
+                        else => unreachable,
+                    }
+                    return;
+                }
                 try self.codegen.emit.vexRegReg(
                     .map_0f38,
                     .p66,
@@ -5836,6 +5876,143 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.codegen.emit.extractQword(high, vector.reg, 1);
                 try self.emitAddRegs(.w64, result, result, high);
             }
+            return .{ .general_reg = result };
+        }
+
+        /// How many leading vector locals and trailing scalar locals a SIMD op
+        /// passes to `builtins.simd.eval`, in `a`, `b`, `c` order.
+        const SimdBuiltinArity = struct { vectors: u8, scalars: u8 };
+
+        /// Whether a SIMD op reaches its native instructions only above the
+        /// architecture's oldest revision, and so is computed by calling the
+        /// target-independent builtin when compiling for a baseline target.
+        ///
+        /// The x86 list is broad because legacy SSE stops at SSE2: variable
+        /// byte shuffles, 64-bit lane compares, the SSE4.1 min/max forms, the
+        /// SSSE3 multiply-accumulate forms, and carryless multiply all sit
+        /// above it. Converting these to baseline vector sequences one at a
+        /// time is tracked in roc-lang/roc#10552.
+        fn simdOpUsesBaselineBuiltin(self: *Self, op: lir.LowLevel) bool {
+            if (self.cpu_level != .v1) return false;
+            if (comptime target.toCpuArch() != .x86_64) {
+                // NEON is mandatory in Armv8.0-A, so every other op already has
+                // a baseline instruction. Carryless multiply is PMULL64, which
+                // the AES extension supplies rather than base NEON.
+                return op == .simd_clmul_lo or op == .simd_clmul_hi;
+            }
+            return simdBuiltinArity(op) != null;
+        }
+
+        fn simdBuiltinArity(op: lir.LowLevel) ?SimdBuiltinArity {
+            return switch (op) {
+                .simd_abs_wrap,
+                .simd_reverse_lanes,
+                .simd_widen_lo,
+                .simd_widen_hi,
+                .simd_pairwise_add_widen,
+                .simd_sum_lanes,
+                .simd_sum_lanes_wrap,
+                .simd_bitmask,
+                => .{ .vectors = 1, .scalars = 0 },
+
+                .simd_min,
+                .simd_max,
+                .simd_eq_lanes,
+                .simd_gt_lanes,
+                .simd_gte_lanes,
+                .simd_even_lanes,
+                .simd_odd_lanes,
+                .simd_table_lookup,
+                .simd_narrow_wrap,
+                .simd_narrow_sat,
+                .simd_dot_pairs_sat,
+                .simd_mul_q15_sat,
+                .simd_mul_wide_lo,
+                .simd_mul_wide_hi,
+                .simd_clmul_lo,
+                .simd_clmul_hi,
+                // SSE2 multiplies 16-bit lanes but not 32-bit ones, and the
+                // widening forms it does have are unsigned only.
+                .simd_mul_wrap,
+                .simd_mul_high,
+                => .{ .vectors = 2, .scalars = 0 },
+
+                .simd_shl_wrap,
+                .simd_shr_wrap,
+                .simd_shr_zf_wrap,
+                .simd_shr_rounded,
+                // Extracting a runtime-indexed lane goes through PSHUFB, which
+                // is SSSE3. This one returns an integer rather than a vector.
+                .simd_get_lane_unchecked,
+                => .{ .vectors = 1, .scalars = 1 },
+
+                .simd_concat_shift_bytes => .{ .vectors = 2, .scalars = 1 },
+
+                else => null,
+            };
+        }
+
+        /// Compute a SIMD op by calling the target-independent implementation
+        /// in `builtins/simd.zig`.
+        ///
+        /// That implementation defines each op's bit-exact meaning without
+        /// reference to any architecture and is the oracle the interpreter,
+        /// compile-time evaluator, and differential corpus already agree with,
+        /// so its answer is the same one a native sequence produces. Operands
+        /// travel through a stack buffer because three `u128` arguments and a
+        /// `u128` result do not fit the integer argument registers.
+        fn generateSimdViaBuiltin(self: *Self, ll: anytype, args: anytype) Allocator.Error!ValueLocation {
+            const arity = simdBuiltinArity(ll.op) orelse unreachable;
+            const op_index = ll.op.simdOpIndex() orelse unreachable;
+
+            const first_local = GuardedList.at(args, 0);
+            const arg_kind = self.simdKindForLayout(self.localLayout(first_local)) orelse unreachable;
+            const ret_vector = self.simdKindForLayout(ll.ret_layout);
+            const ret_kind = ret_vector orelse arg_kind;
+
+            const args_offset = self.codegen.allocStackSlot(3 * 16);
+            const zero = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(zero);
+            try self.codegen.emitLoadImm(zero, 0);
+            for (0..3) |slot_index| {
+                const slot_offset = args_offset + @as(i32, @intCast(slot_index)) * 16;
+                try self.codegen.emitStoreStack(.w64, slot_offset, zero);
+                try self.codegen.emitStoreStack(.w64, slot_offset + 8, zero);
+            }
+
+            var slot: u8 = 0;
+            while (slot < arity.vectors) : (slot += 1) {
+                const local = GuardedList.at(args, slot);
+                const vector = try self.acquireVectorLocal(local, arg_kind, 0);
+                defer self.releaseAcquiredVector(vector);
+                try self.codegen.emitStoreStackV128(args_offset + @as(i32, slot) * 16, vector.reg);
+            }
+            while (slot < arity.vectors + arity.scalars) : (slot += 1) {
+                const scalar_loc = try self.emitValueLocal(GuardedList.at(args, slot));
+                const scalar = try self.ensureInGeneralReg(scalar_loc);
+                defer self.codegen.freeGeneral(scalar);
+                try self.codegen.emitStoreStack(.w64, args_offset + @as(i32, slot) * 16, scalar);
+            }
+
+            const result_offset = self.codegen.allocStackSlot(16);
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(frame_ptr, result_offset);
+            try builder.addImmArg(op_index);
+            try builder.addImmArg(@intFromEnum(arg_kind));
+            try builder.addImmArg(@intFromEnum(ret_kind));
+            try builder.addLeaArg(frame_ptr, args_offset);
+            try self.callBuiltin(&builder, .simd_eval);
+
+            if (ret_vector) |kind| {
+                const result = try self.allocTempVector(0);
+                try self.codegen.emitLoadStackV128(result, result_offset);
+                return .{ .vector_reg = .{ .reg = result, .kind = kind } };
+            }
+
+            // `simd_bitmask` is the one routed op whose result is an integer;
+            // it lands in the low bits of the returned value.
+            const result = try self.allocTempGeneral();
+            try self.codegen.emitLoadStack(.w64, result, result_offset);
             return .{ .general_reg = result };
         }
 
