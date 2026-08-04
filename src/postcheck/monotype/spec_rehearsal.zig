@@ -5156,6 +5156,27 @@ pub const Rehearsal = struct {
         // A ground scheme has exactly one instantiation, so the declared root
         // emitted under the empty binding is the requested callable itself.
         frame.request_root = frame.interface_root;
+        if (comptime census.enabled) provisional: {
+            const drafts = self.allocator.create(direct_translate.MonoDraftStore) catch break :provisional;
+            drafts.* = direct_translate.MonoDraftStore.init(self.allocator);
+            var provisional_reason: direct_translate.SkipReason = undefined;
+            const provisional_root = self.translator.translateProvisionalUnderEnvironment(
+                start.cursor,
+                frame.environment(),
+                scheme.owner_node,
+                scheme.root,
+                drafts,
+                .{ .context = @ptrCast(self), .open = openJoinableSlotInEngine },
+                &provisional_reason,
+            ) catch {
+                drafts.deinit();
+                self.allocator.destroy(drafts);
+                break :provisional;
+            };
+            frame.request_provisional = provisional_root;
+            frame.request_drafts = drafts;
+            census.bump("rehearsal_request_provisional_emitted");
+        }
     }
 
     /// Bind a specialization whose requesting site names its callee scheme
@@ -5291,6 +5312,27 @@ pub const Rehearsal = struct {
                 frame.request_ret_checked = @intFromEnum(request_function.ret);
             },
             else => {},
+        }
+        if (comptime census.enabled) provisional: {
+            const drafts = self.allocator.create(direct_translate.MonoDraftStore) catch break :provisional;
+            drafts.* = direct_translate.MonoDraftStore.init(self.allocator);
+            var provisional_reason: direct_translate.SkipReason = undefined;
+            const provisional_root = self.translator.translateProvisionalUnderEnvironment(
+                caller,
+                caller_env,
+                caller_owner_node,
+                site.instantiated_root,
+                drafts,
+                .{ .context = @ptrCast(self), .open = openJoinableSlotInEngine },
+                &provisional_reason,
+            ) catch {
+                drafts.deinit();
+                self.allocator.destroy(drafts);
+                break :provisional;
+            };
+            frame.request_provisional = provisional_root;
+            frame.request_drafts = drafts;
+            census.bump("rehearsal_request_provisional_emitted");
         }
         census.bump("rehearsal_env_resolved");
         census.bump("rehearsal_env_resolved_foreign_scheme");
