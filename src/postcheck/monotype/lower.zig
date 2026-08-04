@@ -3665,6 +3665,11 @@ const Builder = struct {
             .request_kind = 0,
             .request_fn_key = self.specializationTypeDigest(request_fn_ty).bytes,
         } else null;
+        if (resolved_lookup_address != null) {
+            census.bump("template_dedup_request_resolved");
+        } else {
+            census.bump("template_dedup_request_unresolved");
+        }
         if (resolved_lookup_address) |address| {
             if (source_ctx.draft.template_spec_lookup.get(address)) |candidates| {
                 for (candidates.items) |raw_spec| {
@@ -3679,6 +3684,7 @@ const Builder = struct {
             }
         }
         if (selection.selected() == null) {
+            census.bump("template_dedup_graph_walk");
             var seen_specs = std.AutoHashMap(u32, void).init(self.allocator);
             defer seen_specs.deinit();
             var interface = try source_ctx.graph.functionInterfaceIterator(request_fn_node);
