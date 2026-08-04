@@ -14974,9 +14974,10 @@ fn takeValueForwardReference(
     const parser_decl = self.parse_ir.decl_index.decls.items[@intFromEnum(parser_decl_idx)];
     std.debug.assert(parser_decl.name_ident != null and parser_decl.name_ident.?.eql(ident));
 
-    const active_owner = self.active_decl_scopes.get(parser_decl.scope) orelse unreachable;
-    const owner_scope = &self.scopes.items[active_owner.canonical_scope];
-    std.debug.assert(owner_scope.idents.get(ident) == kv.value.pattern_idx);
+    if (self.active_decl_scopes.get(parser_decl.scope)) |active_owner| {
+        const owner_scope = &self.scopes.items[active_owner.canonical_scope];
+        owner_scope.idents.put(self.env.gpa, ident, kv.value.pattern_idx) catch {};
+    }
     return kv.value.pattern_idx;
 }
 
