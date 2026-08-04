@@ -2282,6 +2282,43 @@ fn rejectRunTargetNotExecutable(ctx: *CliCtx, target: RocTarget) error{ WriteFai
     return error.UnsupportedTarget;
 }
 
+fn rejectTargetCpuIncompatible(
+    ctx: *CliCtx,
+    target: RocTarget,
+    targets_config: roc_target.TargetsConfig,
+    platform_source: ?[]const u8,
+) error{ WriteFailed, UnsupportedTarget }!void {
+    try ctx.io.stderr().print(
+        "Error: the {s} target requires CPU features this host does not support.\n\n",
+        .{@tagName(target)},
+    );
+
+    if (target.baselineCpuTarget()) |baseline_target| {
+        if (targets_config.getLinkSpec(baseline_target)) |link_spec| {
+            if (link_spec.output == .exe) {
+                try ctx.io.stderr().print(
+                    "Use `--target={s}` to select the platform's baseline-CPU executable.\n",
+                    .{@tagName(baseline_target)},
+                );
+            } else {
+                try ctx.io.stderr().print(
+                    "This host needs {s}, but that platform target produces {s} rather than an executable.\n",
+                    .{ @tagName(baseline_target), @tagName(link_spec.output) },
+                );
+            }
+        } else {
+            const result = platform_validation.createUnsupportedTargetResult(
+                platform_source orelse "<unknown>",
+                baseline_target,
+                targets_config,
+            );
+            renderValidationError(ctx, result);
+        }
+    }
+
+    return error.UnsupportedTarget;
+}
+
 fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8) CliMainError!void {
     switch (install_store.classifySourceRef(args.path)) {
         .url => return rocRunUrl(ctx, args, arg0),
@@ -7585,6 +7622,10 @@ fn selectBuildPlatformTarget(
             renderValidationError(ctx, result);
             return error.UnsupportedTarget;
         },
+        .incompatible_cpu => |target| {
+            try rejectTargetCpuIncompatible(ctx, target, targets_config, platform_source);
+            unreachable;
+        },
         .requires_executable => unreachable,
         .no_default => {
             if (targets_config.targets.len == 0) {
@@ -7634,6 +7675,10 @@ fn selectRunPlatformTarget(
             );
             renderValidationError(ctx, result);
             return error.UnsupportedTarget;
+        },
+        .incompatible_cpu => |target| {
+            try rejectTargetCpuIncompatible(ctx, target, targets_config, platform_source);
+            unreachable;
         },
         .requires_executable => |selected| {
             try rejectRequiredExecutableOutput(ctx, selected);

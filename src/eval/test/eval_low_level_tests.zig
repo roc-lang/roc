@@ -699,6 +699,28 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "True" },
     },
     .{
+        .name = "low_level - Dec boundary rounding to integers",
+        .source =
+        \\{
+        \\Dec.round_to_i128_try(Dec.highest) == Ok(170141183460469231732)
+        \\    and Dec.floor_to_i128_try(Dec.lowest) == Ok(-170141183460469231732)
+        \\    and Dec.ceiling_to_i128_try(Dec.highest) == Ok(170141183460469231732)
+        \\    and Dec.round_to_i64_try(Dec.highest) == Err(OutOfRange)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - Dec.abs lowest crashes on overflow",
+        .source = "Dec.abs(Dec.lowest)",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        .name = "low_level - Dec.lowest divided by negative one crashes on overflow",
+        .source = "Dec.lowest / -1.0",
+        .expected = .{ .crash = {} },
+    },
+    .{
         .name = "low_level - Str.is_empty returns True for empty string",
         .source =
         \\{
