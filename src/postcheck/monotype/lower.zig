@@ -41861,11 +41861,21 @@ const BodyContext = struct {
                 expected_node,
                 .expression_lowering,
             ),
-            .field_access,
+            .field_access => try self.lowerExprTypeNode(checked_value),
+            // Lookups are use-sites. Once a generated-private request is
+            // selected, branch emission validates the lookup against that
+            // request; the prepass must not join the raw stored binding cell.
             .lookup_local,
             .lookup_external,
             .lookup_required,
-            => try self.lowerExprTypeNode(checked_value),
+            => if (try self.graph.containsGeneratedPrivate(expected_node))
+                expected_node
+            else
+                try self.lowerExprTypeNode(checked_value),
+            .block => |block| if (block.statements.len == 0)
+                try self.controlFlowResultEvidenceNode(block.final_expr, expected_node)
+            else
+                null,
             else => null,
         };
     }

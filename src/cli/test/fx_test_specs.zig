@@ -290,6 +290,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Repro: named outer direct map2 value dropped before static output",
     },
     .{
+        .roc_file = "test/fx/control_flow_selected_runtime_representation_repro.roc",
+        .io_spec = "1>ok",
+        .description = "Regression test: #10596 local if binding between iterator call and empty iterator",
+    },
+    .{
         .roc_file = "test/fx/drop_concat_unused_repro.roc",
         .io_spec = "1>done",
         .description = "Repro: dropped concat string before static output",
