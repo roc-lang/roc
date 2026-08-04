@@ -47522,7 +47522,7 @@ const BodyContext = struct {
                 const ty = try self.typeForCheckedPatternAtNode(pattern.ty, node);
                 break :blk try self.lowerStringLiteralPattern(str, ty);
             },
-            .str_interpolation => |str| try self.lowerStrPattern(str, try self.activeTypeFromNode(node)),
+            .str_interpolation => |str| try self.lowerStrPattern(str, try self.typeForCheckedPatternAtNode(pattern.ty, node)),
             .underscore => .wildcard,
         };
         return try self.addPatWithTypeCell(cell, data);
