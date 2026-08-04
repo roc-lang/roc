@@ -1132,25 +1132,30 @@ pub const Store = struct {
     }
 
     /// Whether two named nodes denote the same named type at the same
-    /// arguments. Arguments compare by id first because equal types usually
-    /// share one id; the digest comparison is the fallback for the duplicate
-    /// nodes this store deliberately admits.
+    /// arguments. Equal argument ids already prove the arguments equal, so that
+    /// check runs first and settles the common case without hashing; arguments
+    /// whose ids differ are decided by their digests, which is the exact
+    /// comparison this store needs because it admits duplicate ids per type.
     fn namedIdentityMatches(
         self: *const Store,
         name_store: *const names.NameStore,
         lhs: NamedContent,
         rhs: NamedContent,
+        rhs_head: [32]u8,
     ) bool {
         const lhs_args = self.span(lhs.args);
         const rhs_args = self.span(rhs.args);
         if (lhs_args.len != rhs_args.len) return false;
-        if (!std.mem.eql(u8, &namedIdentityHead(name_store, lhs), &namedIdentityHead(name_store, rhs))) {
-            return false;
-        }
+        if (!std.mem.eql(u8, &namedIdentityHead(name_store, lhs), &rhs_head)) return false;
         for (0..lhs_args.len) |index| {
             const lhs_arg = GuardedList.at(lhs_args, index);
             const rhs_arg = GuardedList.at(rhs_args, index);
             if (lhs_arg == rhs_arg) continue;
+            // Both sides digest through the uncached walk even when the caller
+            // is the cached one. The two walks hash by different constructions,
+            // so mixing them here would let the cached and uncached callers
+            // reach different fold decisions and disagree about which types are
+            // the same.
             const lhs_digest = self.typeDigest(name_store, lhs_arg);
             const rhs_digest = self.typeDigest(name_store, rhs_arg);
             if (!std.mem.eql(u8, &lhs_digest.bytes, &rhs_digest.bytes)) return false;
@@ -1174,13 +1179,14 @@ pub const Store = struct {
             else => return null,
         };
         if (named.kind == .alias) return null;
+        const head = namedIdentityHead(name_store, named);
         for (open, 0..) |open_ty, position| {
             const open_named = switch (self.get(open_ty)) {
                 .named => |open_named| open_named,
                 else => continue,
             };
             if (open_named.kind == .alias) continue;
-            if (self.namedIdentityMatches(name_store, open_named, named)) return position;
+            if (self.namedIdentityMatches(name_store, open_named, named, head)) return position;
         }
         return null;
     }
