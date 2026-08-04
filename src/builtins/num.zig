@@ -8,6 +8,7 @@
 const std = @import("std");
 const i128h = @import("compiler_rt_128.zig");
 const parse_float = @import("vendor_parse_float");
+const decimal_parse = @import("decimal_parse.zig");
 const float_bits = @import("float_bits.zig");
 const float_math_f32 = @import("float_math/f32.zig");
 const float_math_f64 = @import("float_math/f64.zig");
@@ -88,7 +89,15 @@ pub fn mul_u128(a: u128, b: u128) U256 {
 
 /// Parses an integer from a RocStr
 pub fn parseIntFromStr(comptime T: type, buf: RocStr) NumParseResult(T) {
-    if (parseIntNoFmt(T, buf.asSlice())) |success| {
+    const bytes = buf.asSlice();
+    const parsed = if (hasExplicitRadix(bytes))
+        parseIntNoFmt(T, bytes)
+    else if (decimal_parse.parseInt(T, bytes)) |value|
+        value
+    else
+        error.InvalidCharacter;
+
+    if (parsed) |success| {
         return .{ .errorcode = 0, .value = success };
     } else |_| {
         return .{ .errorcode = 1, .value = 0 };
@@ -99,6 +108,16 @@ const ParseIntError = error{
     InvalidCharacter,
     Overflow,
 };
+
+fn hasExplicitRadix(bytes: []const u8) bool {
+    if (bytes.len == 0) return false;
+    const start: usize = @intFromBool(bytes[0] == '-' or bytes[0] == '+');
+    if (bytes.len - start < 2 or bytes[start] != '0') return false;
+    return switch (bytes[start + 1]) {
+        'b', 'B', 'o', 'O', 'x', 'X' => true,
+        else => false,
+    };
+}
 
 fn parseIntNoFmt(comptime T: type, bytes: []const u8) ParseIntError!T {
     if (bytes.len == 0) return error.InvalidCharacter;
@@ -1329,6 +1348,43 @@ test "parseIntFromStr validates radix prefixes and underscores at boundaries" {
     try expectParseIntReject(i32, "_1", test_env.getOps());
     try expectParseIntReject(i32, "1__0", test_env.getOps());
     try expectParseIntReject(i32, "10_", test_env.getOps());
+}
+
+test "parseIntFromStr accepts decimal exponent notation issue 10550" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // Repro for https://github.com/roc-lang/roc/issues/10550.
+    try expectParseIntText(u32, "2e5", 200_000, test_env.getOps());
+
+    inline for (.{ u8, u16, u32, u64, u128, i8, i16, i32, i64, i128 }) |T| {
+        try expectParseIntText(T, "2e1", 20, test_env.getOps());
+        try expectParseIntText(T, "+2E1", 20, test_env.getOps());
+    }
+
+    inline for (.{ i8, i16, i32, i64, i128 }) |T| {
+        try expectParseIntText(T, "-2e1", -20, test_env.getOps());
+    }
+
+    try expectParseIntText(u64, "2e1_0", 20_000_000_000, test_env.getOps());
+    try expectParseIntText(u32, "4294967295e0", std.math.maxInt(u32), test_env.getOps());
+    try expectParseIntText(i128, "-170141183460469231731687303715884105728e0", std.math.minInt(i128), test_env.getOps());
+    try expectParseIntText(u128, "340282366920938463463374607431768211455e0", std.math.maxInt(u128), test_env.getOps());
+    try expectParseIntText(u8, "0e999999999999999999999999999999999999", 0, test_env.getOps());
+}
+
+test "parseIntFromStr rejects fractional malformed and overflowing exponent notation" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    inline for (.{ "2e-1", "20e-1", "2.0e5", "2e", "2e+", "2_e5", "2e_5", "2e5_", "2ee5" }) |text| {
+        try expectParseIntReject(i64, text, test_env.getOps());
+    }
+
+    try expectParseIntReject(u32, "4294967296e0", test_env.getOps());
+    try expectParseIntReject(u32, "4294967295e1", test_env.getOps());
+    try expectParseIntReject(i128, "-170141183460469231731687303715884105729e0", test_env.getOps());
+    try expectParseIntReject(u128, "340282366920938463463374607431768211456e0", test_env.getOps());
 }
 
 test "integer overflow helpers match Zig overflow intrinsics across widths" {
