@@ -7310,6 +7310,12 @@ fn rocBuild(ctx: *CliCtx, args_in: cli_args.BuildArgs, arg0: []const u8) CliMain
 fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, original_source: []const u8) CliMainError!void {
     defer ctx.gpa.free(original_source);
 
+    if (defaultBuildTarget(args).toOsTag() == .openbsd) {
+        return ctx.fail(.{ .unsupported_default_platform_target = .{
+            .target = "x64openbsd",
+        } });
+    }
+
     const temp_dir = createUniqueTempDir(ctx) catch |err| {
         return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
     };
@@ -7372,9 +7378,7 @@ fn defaultBuildPlatformSource(args: cli_args.BuildArgs) []const u8 {
                 .arm64mac,
                 .x64win,
                 .arm64win,
-                .x64freebsd,
                 .x64openbsd,
-                .x64netbsd,
                 => echo_platform.build_c_platform_main_source,
                 .wasm32 => echo_platform.build_wasm_archive_platform_main_source,
                 else => echo_platform.build_platform_main_source,
@@ -7385,9 +7389,16 @@ fn defaultBuildPlatformSource(args: cli_args.BuildArgs) []const u8 {
     }
 
     return switch (RocTarget.detectNative().toOsTag()) {
-        .macos, .windows, .freebsd, .openbsd, .netbsd => echo_platform.build_c_platform_main_source,
+        .macos, .windows, .openbsd => echo_platform.build_c_platform_main_source,
         else => echo_platform.build_platform_main_source,
     };
+}
+
+fn defaultBuildTarget(args: cli_args.BuildArgs) RocTarget {
+    if (args.target) |target_str| {
+        if (RocTarget.fromString(target_str)) |requested| return requested.defaultCpuTarget();
+    }
+    return RocTarget.detectNative().defaultCpuTarget();
 }
 
 /// Build using the dev backend to generate native machine code.
@@ -7668,8 +7679,12 @@ fn linkerOutputKind(output: roc_target.OutputKind) linker.OutputKind {
 }
 
 fn llvmBuildLinkAbi(target: RocTarget, synthetic_default_platform: bool) linker.TargetAbi {
-    if (synthetic_default_platform and target.toOsTag() == .linux) {
-        return .musl;
+    if (synthetic_default_platform) {
+        return switch (target.toOsTag()) {
+            .linux => .musl,
+            .freebsd, .netbsd => .freestanding,
+            else => linker.TargetAbi.fromRocTarget(target),
+        };
     }
     return linker.TargetAbi.fromRocTarget(target);
 }

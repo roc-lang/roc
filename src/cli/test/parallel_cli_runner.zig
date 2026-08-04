@@ -375,6 +375,9 @@ const CustomCase = enum {
     default_platform_linux_disassembly,
     default_platform_build_x64glibc,
     default_platform_build_arm64glibc,
+    default_platform_build_x64freebsd,
+    default_platform_build_x64netbsd,
+    default_platform_build_x64openbsd_rejected,
     default_platform_build_wasm32,
     default_platform_wasm32_archive_reproducible,
     macos_output_basename_reproducible,
@@ -1129,6 +1132,9 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform x64musl matches direct write assembly", .skip = .{ .always = "TODO: direct-write default-platform codegen" }, .body = .{ .custom = .default_platform_linux_disassembly } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform x64glibc succeeds", .body = .{ .custom = .default_platform_build_x64glibc } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform arm64glibc succeeds", .body = .{ .custom = .default_platform_build_arm64glibc } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10598: roc build default platform x64freebsd succeeds", .body = .{ .custom = .default_platform_build_x64freebsd } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10598: roc build default platform x64netbsd succeeds", .body = .{ .custom = .default_platform_build_x64netbsd } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10598: roc build default platform x64openbsd explains unsupported cross-link", .body = .{ .custom = .default_platform_build_x64openbsd_rejected } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform wasm32 archive succeeds", .body = .{ .custom = .default_platform_build_wasm32 } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform wasm32 archive output is reproducible", .body = .{ .custom = .default_platform_wasm32_archive_reproducible } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build macOS output basename does not affect bytes", .body = .{ .custom = .macos_output_basename_reproducible } },
@@ -2484,6 +2490,9 @@ fn runCustomCase(
         .default_platform_linux_disassembly => customDefaultPlatformLinuxDisassembly(io, allocator, &env, &timer, timeout_ms),
         .default_platform_build_x64glibc => customDefaultPlatformBuild(io, allocator, &env, &timer, timeout_ms, .x64glibc),
         .default_platform_build_arm64glibc => customDefaultPlatformBuild(io, allocator, &env, &timer, timeout_ms, .arm64glibc),
+        .default_platform_build_x64freebsd => customDefaultPlatformBuild(io, allocator, &env, &timer, timeout_ms, .x64freebsd),
+        .default_platform_build_x64netbsd => customDefaultPlatformBuild(io, allocator, &env, &timer, timeout_ms, .x64netbsd),
+        .default_platform_build_x64openbsd_rejected => customDefaultPlatformOpenBsdRejected(io, allocator, &env, &timer, timeout_ms),
         .default_platform_build_wasm32 => customDefaultPlatformBuild(io, allocator, &env, &timer, timeout_ms, .wasm32),
         .default_platform_wasm32_archive_reproducible => customDefaultPlatformWasm32ArchiveReproducible(io, allocator, &env, &timer, timeout_ms),
         .macos_output_basename_reproducible => customMacosOutputBasenameReproducible(io, allocator, &env, &timer, timeout_ms),
@@ -4541,6 +4550,9 @@ const DefaultPlatformTarget = enum {
     arm64mac,
     x64win,
     arm64win,
+    x64freebsd,
+    x64netbsd,
+    x64openbsd,
     wasm32,
 
     fn cliName(self: DefaultPlatformTarget) []const u8 {
@@ -4696,6 +4708,31 @@ fn customDefaultPlatformBuild(
     }
 
     return null;
+}
+
+fn customDefaultPlatformOpenBsdRejected(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const app_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "default_platform_build_x64openbsd.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate default platform app path: {}", .{err});
+
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_path, .data = default_platform_echo_app }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write default platform app: {}", .{err});
+
+    return runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--opt=speed", "--no-cache", "--target=x64openbsd" },
+        .roc_file = app_path,
+        .exit = .failure,
+        .contains = &.{
+            .{ .stream = .stderr, .text = "UNSUPPORTED DEFAULT PLATFORM TARGET" },
+            .{ .stream = .stderr, .text = "OpenBSD requires its system C runtime" },
+        },
+        .not_contains = &.{.{ .stream = .stderr, .text = "UNREPORTED ERROR" }},
+    });
 }
 
 fn customDefaultPlatformWasm32ArchiveReproducible(
