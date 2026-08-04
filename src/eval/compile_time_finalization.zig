@@ -1185,13 +1185,15 @@ fn lowerDevEvalAndFinishRoots(
     if (options.timing) |timing| timing.finish(static_data_started_ns, .static_data);
 
     const code_generation_started_ns = if (options.timing) |timing| timing.start() else 0;
+    // Compile-time code runs in this process, so it is generated for the CPU
+    // of the machine compiling, not for the CPU the program is compiled for.
     var codegen = try backend.HostLirCodeGen.init(
         allocator,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
         static_strings.entries,
         .normalize,
-        .default,
+        roc_target.host_cpu.level(),
     );
     defer codegen.deinit();
     codegen.setNativeStaticData(native_static_data);
