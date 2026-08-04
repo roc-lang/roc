@@ -6162,6 +6162,16 @@ affects only whether allocation can be avoided, never the ownership contract.
 Capture bytes needed to construct the result are snapshotted before an in-place
 overwrite.
 
+The packed arguments are one fixed-arity struct whose fields remain in source
+parameter order and use each runtime representation's natural alignment. The
+struct size is rounded up to its maximum field alignment. Post-check lowering
+computes and interns the exact field offsets, size, and alignment as an erased
+call argument plan. Every erased call and erased-callable procedure names such
+a plan, and LIR certification verifies that the plan exactly matches the call
+arguments or explicit procedure parameters. Backends consume these offsets
+directly for both packing and unpacking; they must not reorder arguments, round
+individual fields to backend-private slots, or reconstruct the plan.
+
 The direct LIR builder carries the current return destination while recursively
 lowering the selected aggregate or tag payload. That producer-authored context,
 plus the explicit result-demand classification, is the only basis for selecting
