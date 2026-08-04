@@ -1227,8 +1227,8 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
     ctx.initIo(); // Must be called after ctx is at its final stack location
     defer ctx.deinit(); // deinit flushes I/O
 
-    try switch (parsed_args) {
-        .run => |run_args| {
+    (switch (parsed_args) {
+        .run => |run_args| run_blk: {
             if (std.mem.eql(u8, run_args.path, "main.roc")) {
                 std.Io.Dir.cwd().access(ctx.io.std_io, run_args.path, .{}) catch |err| switch (err) {
                     error.FileNotFound => {
@@ -1259,45 +1259,20 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
                 };
             }
 
-            rocRun(&ctx, run_args, args[0]) catch |err| switch (err) {
-                error.CliError => {
-                    // Problems already recorded in context, render them below
-                },
-                else => return err,
-            };
+            break :run_blk rocRun(&ctx, run_args, args[0]);
         },
         .check => |check_args| rocCheck(&ctx, check_args, args[0]),
-        .build => |build_args| rocBuild(&ctx, build_args, args[0]) catch |err| switch (err) {
-            error.CliError => {
-                // Problems already recorded in context, render them below
-            },
-            else => return err,
-        },
+        .build => |build_args| rocBuild(&ctx, build_args, args[0]),
         .bundle => |bundle_args| rocBundle(&ctx, bundle_args),
         .unbundle => |unbundle_args| rocUnbundle(&ctx, unbundle_args),
         .fmt => |format_args| rocFormat(&ctx, format_args),
         .test_cmd => |test_args| try rocTest(&ctx, test_args, args[0]),
         .repl => |repl_args| rocRepl(&ctx, repl_args),
-        .glue => |glue_args| rocGlue(&ctx, glue_args) catch |err| switch (err) {
-            error.CliError => {
-                // Problems already recorded in context, render them below
-            },
-            else => return err,
-        },
+        .glue => |glue_args| rocGlue(&ctx, glue_args),
         .version => ctx.io.stdout().print("Roc compiler version {s}\n", .{build_options.compiler_version}),
         .docs => |docs_args| rocDocs(&ctx, docs_args),
-        .bump => |bump_args| rocBump(&ctx, bump_args) catch |err| switch (err) {
-            error.CliError => {
-                // Problems already recorded in context, render them below
-            },
-            else => return err,
-        },
-        .install => |install_args| rocInstall(&ctx, install_args, args[0]) catch |err| switch (err) {
-            error.CliError => {
-                // Problems already recorded in context, render them below
-            },
-            else => return err,
-        },
+        .bump => |bump_args| rocBump(&ctx, bump_args),
+        .install => |install_args| rocInstall(&ctx, install_args, args[0]),
         .experimental_lsp => |lsp_args| try lsp.runWithStdIo(gpa, std_io, .{
             .transport = lsp_args.debug_io,
             .build = lsp_args.debug_build,
@@ -1322,6 +1297,17 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
             };
             return error.InvalidArguments;
         },
+    }) catch |err| {
+        // Commands report by recording a problem and returning `CliError`, and
+        // a few print straight to stderr instead. Either way the user has been
+        // told something. An error that arrives here having produced no output
+        // at all is a compiler bug, and exiting 1 in silence hides it behind
+        // what looks like a crash, so name the error rather than let it pass.
+        if (ctx.io.bytesWritten() == 0 and !ctx.hasProblems()) {
+            ctx.addProblemIgnoreError(.{ .unreported_error = .{ .err_name = @errorName(err) } });
+        }
+        try ctx.renderProblemsTo(ctx.io.stderr());
+        return err;
     };
 
     // Render any problems accumulated during command execution

@@ -95,6 +95,16 @@ pub const Io = struct {
         return &self.stderr_writer.interface;
     }
 
+    /// Total bytes handed to stdout and stderr so far, counting both what has
+    /// already reached the OS and what is still sitting in the buffers. The top
+    /// level uses this to tell "the command explained itself" apart from "the
+    /// command exited non-zero in silence", without every reporting site having
+    /// to announce that it reported.
+    pub fn bytesWritten(self: *const Self) u64 {
+        return self.stdout_writer.pos + self.stdout_writer.interface.end +
+            self.stderr_writer.pos + self.stderr_writer.interface.end;
+    }
+
     /// Flush both stdout and stderr buffers
     pub fn flush(self: *Self) void {
         self.stdout_writer.interface.flush() catch {};

@@ -228,6 +228,13 @@ pub const CliProblem = union(enum) {
         error_count: usize,
     },
 
+    /// A command failed without reporting anything. Recorded by the top level
+    /// so the process never exits non-zero having printed nothing, which is
+    /// indistinguishable to the user from a crash.
+    unreported_error: struct {
+        err_name: []const u8,
+    },
+
     /// Linker failed
     linker_failed: struct {
         err: ReportedError,
@@ -388,6 +395,7 @@ pub const CliProblem = union(enum) {
             .build_not_supported_for_headerless,
             .unsupported_opt_level,
             .compilation_failed,
+            .unreported_error,
             .linker_failed,
             .missing_host_symbols,
             => .fatal,
@@ -454,6 +462,7 @@ pub const CliProblem = union(enum) {
             .build_not_supported_for_headerless => |info| try createBuildNotSupportedForHeaderlessReport(allocator, info),
             .unsupported_opt_level => |info| try createUnsupportedOptLevelReport(allocator, info),
             .compilation_failed => |info| try createCompilationFailedReport(allocator, info),
+            .unreported_error => |info| try createUnreportedErrorReport(allocator, info),
             .linker_failed => |info| try createLinkerFailedReport(allocator, info),
             .missing_host_symbols => |info| try createMissingHostSymbolsReport(allocator, info),
             .object_compilation_failed => |info| try createObjectCompilationFailedReport(allocator, info),
@@ -745,6 +754,23 @@ fn createCompilationFailedReport(allocator: Allocator, info: anytype) Allocator.
     try report.document.addText("Found ");
     try report.document.addAnnotated(count_str, .error_highlight);
     try report.document.addText(" error(s). See above for details.");
+
+    return report;
+}
+
+fn createUnreportedErrorReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(
+        allocator,
+        "The compiler stopped with the error {s} but did not say why.",
+        .{info.err_name},
+    );
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Unreported Error", headline, .fatal);
+
+    try report.document.addText(
+        "This is a bug in the compiler: whatever failed should have explained itself. " ++
+            "Please report it at https://github.com/roc-lang/roc/issues, including the command you ran.",
+    );
 
     return report;
 }
