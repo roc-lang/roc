@@ -66,6 +66,12 @@ test "a pin that names the running compiler is not reported" {
     try std.testing.expect(found == null);
 }
 
+test "a pin is not reported when the running compiler was built from source" {
+    const allocator = std.testing.allocator;
+    try std.testing.expect(try mismatchDiagnostic(allocator, pinned_app, "debug-c6dfe61b") == null);
+    try std.testing.expect(try mismatchDiagnostic(allocator, pinned_app, "release-fast-7fdb318d") == null);
+}
+
 test "a pin is not checked when the caller does not say which compiler is running" {
     const allocator = std.testing.allocator;
     const found = try mismatchDiagnostic(allocator, pinned_app, null);
