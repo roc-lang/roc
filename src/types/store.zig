@@ -711,7 +711,7 @@ pub const Store = struct {
         const resolved = self.resolveVar(target_var);
         var desc = resolved.desc;
         desc.content = content;
-        desc.empty_tag_union_is_default = false;
+        desc.flags.empty_tag_union_is_default = false;
         try self.setDesc(resolved.desc_idx, desc);
     }
 
@@ -722,8 +722,31 @@ pub const Store = struct {
         const resolved = self.resolveVar(target_var);
         var desc = resolved.desc;
         desc.content = .{ .structure = .empty_tag_union };
-        desc.empty_tag_union_is_default = true;
+        desc.flags.empty_tag_union_is_default = true;
         try self.setDesc(resolved.desc_idx, desc);
+    }
+
+    /// Record that checking rejected a static-dispatch obligation whose
+    /// constraint function type is `target_var`'s equivalence class. This is
+    /// evidence metadata: the class's content is left exactly as the unifier
+    /// left it. Returns whether this call is what rejected the class, so a
+    /// caller mirroring the marker into a durable record writes one entry per
+    /// class rather than one per occurrence.
+    pub fn markVarStaticDispatchRejected(self: *Self, target_var: Var) Allocator.Error!bool {
+        std.debug.assert(@intFromEnum(target_var) < self.len());
+        const resolved = self.resolveVar(target_var);
+        if (resolved.desc.flags.static_dispatch_rejected) return false;
+        var desc = resolved.desc;
+        desc.flags.static_dispatch_rejected = true;
+        try self.setDesc(resolved.desc_idx, desc);
+        return true;
+    }
+
+    /// Whether checking rejected a static-dispatch obligation on `target_var`'s
+    /// equivalence class.
+    pub fn varStaticDispatchRejected(self: *const Self, target_var: Var) bool {
+        std.debug.assert(@intFromEnum(target_var) < self.len());
+        return self.resolveVar(target_var).desc.flags.static_dispatch_rejected;
     }
 
     /// The declared rule a `dangerousSetVarRedirect` call site bends the solved
@@ -1449,18 +1472,23 @@ pub const Store = struct {
         };
         if (merged_is_empty_tag_union) {
             const a_is_explicit_empty = switch (a_data.desc.content) {
-                .structure => |flat| flat == .empty_tag_union and !a_data.desc.empty_tag_union_is_default,
+                .structure => |flat| flat == .empty_tag_union and !a_data.desc.flags.empty_tag_union_is_default,
                 else => false,
             };
             const b_is_explicit_empty = switch (b_data.desc.content) {
-                .structure => |flat| flat == .empty_tag_union and !b_data.desc.empty_tag_union_is_default,
+                .structure => |flat| flat == .empty_tag_union and !b_data.desc.flags.empty_tag_union_is_default,
                 else => false,
             };
-            merged_desc.empty_tag_union_is_default = !a_is_explicit_empty and !b_is_explicit_empty and
-                (a_data.desc.empty_tag_union_is_default or b_data.desc.empty_tag_union_is_default);
+            merged_desc.flags.empty_tag_union_is_default = !a_is_explicit_empty and !b_is_explicit_empty and
+                (a_data.desc.flags.empty_tag_union_is_default or b_data.desc.flags.empty_tag_union_is_default);
         } else {
-            merged_desc.empty_tag_union_is_default = false;
+            merged_desc.flags.empty_tag_union_is_default = false;
         }
+        // A rejected dispatch edge is a fact about the constraint callable's
+        // equivalence class, so merging two classes rejects the result if
+        // either side was rejected.
+        merged_desc.flags.static_dispatch_rejected = a_data.desc.flags.static_dispatch_rejected or
+            b_data.desc.flags.static_dispatch_rejected;
 
         if (a_data.storage_var == b_data.storage_var) {
             try self.setDesc(a_data.desc_idx, merged_desc);
@@ -1488,7 +1516,13 @@ pub const Store = struct {
     pub fn poisonOnMismatch(self: *Self, a_var: Var, b_var: Var) Allocator.Error!void {
         var a = self.resolveStorageRoot(a_var);
         const b = self.resolveStorageRoot(b_var);
-        const err_desc = Desc{ .content = .err, .rank = Rank.generalized };
+        // Poisoning replaces the content, not the rejection history: a class
+        // whose dispatch check was already rejected stays rejected.
+        const err_desc = Desc{
+            .content = .err,
+            .rank = Rank.generalized,
+            .flags = .{ .static_dispatch_rejected = a.desc.flags.static_dispatch_rejected or b.desc.flags.static_dispatch_rejected },
+        };
 
         if (a.storage_var == b.storage_var) {
             try self.setDesc(a.desc_idx, err_desc);

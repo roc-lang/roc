@@ -210,9 +210,6 @@ int_unbound_vars: std.AutoHashMap(Var, void),
 /// constraint failing in multiple passes (or reachable through several aliased
 /// type variables) is reported once.
 reported_constraint_errors: std.AutoHashMap(ReportedConstraintError, void),
-/// Raw constraint function vars whose dispatch obligations checking rejected.
-/// The map deduplicates the durable records published through `ModuleEnv`.
-rejected_static_dispatches: std.AutoHashMap(Var, void),
 /// Constraint fn vars already reported as effectful dispatches in an expect
 /// body, so a constraint revisited across passes is reported once (replaces the
 /// old expect_region side table's fetchRemove dedup).
@@ -1510,11 +1507,11 @@ fn initAssumePrepared(
 
     const node_count: usize = @intCast(cir.store.nodes.len());
 
-    var rejected_static_dispatches = std.AutoHashMap(Var, void).init(gpa);
-    errdefer rejected_static_dispatches.deinit();
-    try rejected_static_dispatches.ensureTotalCapacity(@intCast(cir.rejectedStaticDispatches().len));
+    // Rehydrate the durable rejection records onto their constraint callables'
+    // equivalence classes, so a re-check of an env that already carries them
+    // sees the same rejections a fresh check would.
     for (cir.rejectedStaticDispatches()) |rejected| {
-        rejected_static_dispatches.putAssumeCapacity(rejected.fnVar(), {});
+        _ = try types.markVarStaticDispatchRejected(rejected.fnVar());
     }
 
     const self: Self = .{
@@ -1565,7 +1562,6 @@ fn initAssumePrepared(
         .checked_interpolation_part_constraints = std.AutoHashMap(Var, void).init(gpa),
         .int_unbound_vars = std.AutoHashMap(Var, void).init(gpa),
         .reported_constraint_errors = std.AutoHashMap(ReportedConstraintError, void).init(gpa),
-        .rejected_static_dispatches = rejected_static_dispatches,
         .reported_effectful_expect = std.AutoHashMap(Var, void).init(gpa),
         .current_expect_region = null,
         .top_level_ptrns = try initNodeSlots(?DefProcessed, gpa, node_count, null),
@@ -1710,7 +1706,6 @@ pub fn deinit(self: *Self) void {
     self.checked_interpolation_part_constraints.deinit();
     self.int_unbound_vars.deinit();
     self.reported_constraint_errors.deinit();
-    self.rejected_static_dispatches.deinit();
     self.reported_effectful_expect.deinit();
     self.top_level_ptrns.deinit(self.gpa);
     self.platform_required_defs.deinit(self.gpa);
@@ -7123,7 +7118,7 @@ fn selectAmbiguityConstraint(
             var only_where_clause_contracts = true;
             for (constraints) |c| {
                 if (c.origin != .where_clause) only_where_clause_contracts = false;
-                if (self.rejected_static_dispatches.contains(c.fn_var)) continue;
+                if (self.types.varStaticDispatchRejected(c.fn_var)) continue;
                 if (self.constraintIsLiteralConversion(c)) {
                     has_literal_constraint = true;
                 } else if (c.fn_name.eql(self.cir.idents.is_eq)) {
@@ -7137,7 +7132,7 @@ fn selectAmbiguityConstraint(
             // Prefer an explicit where-clause obligation that this program must
             // execute. Phantom contracts do not hide a later body-required one.
             for (constraints) |constraint| {
-                if (self.rejected_static_dispatches.contains(constraint.fn_var)) continue;
+                if (self.types.varStaticDispatchRejected(constraint.fn_var)) continue;
                 if (constraint.origin != .where_clause) continue;
                 if (self.constraintIsLiteralConversion(constraint)) continue;
                 if (constraint.fn_name.eql(self.cir.idents.is_eq)) continue;
@@ -17972,11 +17967,9 @@ const Probe = struct {
         // vars the savepoint rollback just discarded.
         self.check.cir.scheme_uses.items.shrinkRetainingCapacity(self.scheme_uses_len);
         self.check.cir.scheme_use_pairs.items.shrinkRetainingCapacity(self.scheme_use_pairs_len);
-        while (self.check.cir.rejected_static_dispatches.items.items.len > self.rejected_static_dispatches_len) {
-            const rejected = self.check.cir.rejected_static_dispatches.items.pop().?;
-            const did_remove = self.check.rejected_static_dispatches.remove(rejected.fnVar());
-            std.debug.assert(did_remove);
-        }
+        // The durable records drop here; the rejection markers they mirror live
+        // on descriptors the savepoint rollback above already restored.
+        self.check.cir.rejected_static_dispatches.items.shrinkRetainingCapacity(self.rejected_static_dispatches_len);
         while (self.check.dispatch_target_instantiations.items.len > self.dispatch_target_instantiations_len) {
             const removed = self.check.dispatch_target_instantiations.pop().?;
             const did_remove = self.check.dispatch_target_instantiation_by_fn_var.remove(removed.constraint_fn_var);
@@ -20099,7 +20092,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     // Re-fetch by index each iteration because nested unification can append
                     // constraints and reallocate the backing array.
                     const constraint = self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i];
-                    if (self.rejected_static_dispatches.contains(constraint.fn_var)) continue;
+                    if (self.types.varStaticDispatchRejected(constraint.fn_var)) continue;
                     const constraint_fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
                     if (constraint_fn_resolved == .err) {
                         // If this constraint is already an error, the skip this pass
@@ -20412,7 +20405,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                 var constraint_i: usize = 0;
                 while (constraint_i < constraints_len) : (constraint_i += 1) {
                     const constraint = self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i];
-                    if (self.rejected_static_dispatches.contains(constraint.fn_var)) continue;
+                    if (self.types.varStaticDispatchRejected(constraint.fn_var)) continue;
                     const constraint_fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
                     if (constraint_fn_resolved == .err) continue;
 
@@ -22503,7 +22496,7 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
         const resolution: can.NodeStore.LiteralDispatchPlan.Resolution = resolution: {
             // A dispatch-specific rejection is stronger than a concrete
             // builtin target (for example, an out-of-range U8 literal).
-            if (self.rejected_static_dispatches.contains(fn_var)) {
+            if (self.types.varStaticDispatchRejected(fn_var)) {
                 break :resolution .checked_error;
             }
 
@@ -25418,9 +25411,11 @@ fn markStaticDispatchRejected(self: *Self, constraint: StaticDispatchConstraint)
     return self.markStaticDispatchFnRejected(constraint.fn_var);
 }
 
+/// The marker rides the constraint callable's equivalence class, so a site whose
+/// callable unified into an already-rejected class is rejected too and needs no
+/// second durable record.
 fn markStaticDispatchFnRejected(self: *Self, fn_var: Var) Allocator.Error!void {
-    const entry = try self.rejected_static_dispatches.getOrPut(fn_var);
-    if (entry.found_existing) return;
+    if (!try self.types.markVarStaticDispatchRejected(fn_var)) return;
     try self.cir.recordRejectedStaticDispatch(fn_var);
 }
 

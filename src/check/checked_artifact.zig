@@ -6874,7 +6874,7 @@ const SourceTypeGraphFactsContext = struct {
         const resolved = types_store.resolveVar(root);
         std.debug.assert(resolved.var_ == root);
 
-        if (resolved.desc.empty_tag_union_is_default) {
+        if (resolved.desc.flags.empty_tag_union_is_default) {
             return .{ .contains_identity_variables = true };
         }
 
@@ -7013,7 +7013,7 @@ fn appendCheckedTypeRootWithRowDefault(
     // The checker explicitly marks an otherwise-unresolved identity when it
     // closes that identity to `[]`. Preserve the surviving root as a checked
     // variable and carry `[]` only as its row default.
-    if (resolved.desc.empty_tag_union_is_default) {
+    if (resolved.desc.flags.empty_tag_union_is_default) {
         if (active.get(resolved_var)) |id| {
             applyCheckedTypeRowDefault(store, id, row_default);
             return id;
@@ -7869,7 +7869,7 @@ test "checker marks exhaustiveness-defaulted empty payload provenance" {
     try std.testing.expectEqual(@as(usize, 2), args.len);
     const err_desc = test_env.module_env.types.resolveVar(args[1]).desc;
     try std.testing.expectEqual(types.Content{ .structure = .empty_tag_union }, err_desc.content);
-    try std.testing.expect(err_desc.empty_tag_union_is_default);
+    try std.testing.expect(err_desc.flags.empty_tag_union_is_default);
 }
 
 test "checked output retains defaulted identity inside parent function digest" {
@@ -14771,8 +14771,6 @@ const EvidencePass = struct {
     value_use_by_node: std.AutoHashMap(u32, u32),
     /// dispatch_target record index by the discharged edge's raw fn var.
     target_by_fn_var: std.AutoHashMap(u32, u32),
-    /// Raw constraint function vars checking explicitly rejected.
-    rejected_static_dispatches: std.AutoHashMap(u32, void),
     /// Source node by checked expr (reverse of `exprIdForSource`).
     source_by_checked_expr: std.AutoHashMap(u32, u32),
     /// Generalized local VALUE decls (non-lambda exprs, e.g. an `if` choosing
@@ -14864,7 +14862,6 @@ const EvidencePass = struct {
             .types = module.typeStoreConst(),
             .value_use_by_node = std.AutoHashMap(u32, u32).init(allocator),
             .target_by_fn_var = std.AutoHashMap(u32, u32).init(allocator),
-            .rejected_static_dispatches = std.AutoHashMap(u32, void).init(allocator),
             .source_by_checked_expr = std.AutoHashMap(u32, u32).init(allocator),
             .local_value_scheme_by_var = std.AutoHashMap(u32, u32).init(allocator),
             .value_use_record_by_pattern = std.AutoHashMap(u32, u32).init(allocator),
@@ -14890,7 +14887,6 @@ const EvidencePass = struct {
         self.deferred_use_sites.deinit(self.allocator);
         self.value_use_by_node.deinit();
         self.target_by_fn_var.deinit();
-        self.rejected_static_dispatches.deinit();
         self.source_by_checked_expr.deinit();
         self.local_value_scheme_by_var.deinit();
         self.value_use_record_by_pattern.deinit();
@@ -15127,12 +15123,6 @@ const EvidencePass = struct {
 
     fn buildIndexes(self: *EvidencePass) Allocator.Error!void {
         const module_env = self.module.moduleEnvConst();
-        for (module_env.rejectedStaticDispatches()) |rejected| {
-            const entry = try self.rejected_static_dispatches.getOrPut(rejected.constraint_fn_var);
-            if (entry.found_existing) {
-                checkedArtifactInvariant("duplicate rejected static-dispatch obligation", .{});
-            }
-        }
         for (module_env.scheme_uses.items.items, 0..) |record, i| {
             switch (@as(ModuleEnv.SchemeUseRecord.Slot, @enumFromInt(record.slot_kind))) {
                 .value_use, .shared_value_use => {
@@ -15431,7 +15421,7 @@ const EvidencePass = struct {
         commit_unpinned: bool,
     ) Allocator.Error!?static_dispatch.CheckedCallResolution {
         if (constraint_fn_var) |fn_var| {
-            if (self.rejected_static_dispatches.contains(@intFromEnum(fn_var))) return .checked_error;
+            if (self.types.varStaticDispatchRejected(fn_var)) return .checked_error;
         }
 
         const resolved = self.types.resolveVar(dispatcher_var);
