@@ -519,6 +519,8 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
                 "roc_builtins_list_append_unsafe",
                 "roc_builtins_list_append_range_within_unsafe",
                 "roc_builtins_list_slack_unique",
+                "roc_builtins_list_replace",
+                "roc_builtins_list_owned_unique",
             };
             var builtin_func = externs.LLVMGetFirstFunction(builtins_module);
             while (builtin_func) |fv| : (builtin_func = externs.LLVMGetNextFunction(fv)) {
